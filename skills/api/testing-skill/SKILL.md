@@ -5,9 +5,11 @@ description: Supertest, Vitest, and Shield verification standards for [PROJECT_N
 
 # Testing Skill
 
+## Overview
+
 This skill ensures every [PROJECT_NAME] feature is robust, regression-free, and secure. All new features **must** include tests that follow these rules.
 
-## Rules (MUST FOLLOW)
+## Workflow
 
 - **[TEST-001] Security Shield Verification**
   - Integration tests must verify the entire "Security Shield":

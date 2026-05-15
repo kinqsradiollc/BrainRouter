@@ -5,9 +5,11 @@ description: Identity, JWT rules, and "Kill Switch" logic for [PROJECT_NAME] aut
 
 # Authentication & Security Skill
 
+## Overview
+
 This skill governs the identity and session lifecycle of [PROJECT_NAME]. Failure to adhere to these rules results in an automatic security violation `[SEC-202]`.
 
-## Rules (MUST FOLLOW)
+## Workflow
 
 - **[AUTH-001] JWT Payload Hygiene**
   - Only include: `sub` (userId), `sid` (sessionId), `role`, and `exp`.

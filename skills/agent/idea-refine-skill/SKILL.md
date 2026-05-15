@@ -5,9 +5,11 @@ description: Refines raw ideas into sharp, actionable concepts through structure
 
 # Idea Refine
 
+## Overview
+
 Refines raw ideas into sharp, actionable concepts worth building through structured divergent and convergent thinking.
 
-## How It Works
+## Workflow
 
 1.  **Understand & Expand (Divergent):** Restate the idea, ask sharpening questions, and generate variations.
 2.  **Evaluate & Converge:** Cluster ideas, stress-test them, and surface hidden assumptions.

@@ -5,9 +5,11 @@ description: WCAG 2.1 AA accessibility mandates for the [PROJECT_NAME] frontend.
 
 # Accessibility (A11Y) Skill
 
+## Overview
+
 [PROJECT_NAME] must meet WCAG 2.1 Level AA standards. Accessibility is a first-class citizen in our design system.
 
-## Rules (MUST FOLLOW)
+## Workflow
 
 - **Semantic HTML Only**
   - Use `<button>` for actions, `<a>` for navigation.

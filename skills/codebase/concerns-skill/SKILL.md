@@ -5,9 +5,11 @@ description: Framework for surfacing and tracking tech debt, known bugs, and sec
 
 # Codebase Concerns Skill
 
+## Overview
+
 This skill governs how known risks, tech debt, and codebase health issues are surfaced and maintained. Load this before making changes to high-risk areas, during phase planning, or when onboarding a new agent context.
 
-## Rules (MUST FOLLOW)
+## Workflow
 
 - **[CONCERN-001] Always Check Before Changing**
   - Before modifying a flagged area, read its concern entry to understand risk, workarounds, and safe modification paths.

@@ -1,3 +1,8 @@
+---
+name: skill-authoring
+description: Defines the canonical structure, format, and writing principles for BrainRouter SKILL.md files. Use when creating a new skill, reviewing an existing skill for compliance, or understanding what sections a skill must contain.
+---
+
 # Skill Anatomy
 
 This document describes the structure and format of agent-skills skill files. Use this as a guide when contributing new skills or understanding existing ones.

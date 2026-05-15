@@ -5,6 +5,8 @@ description: Roleplay the most difficult, tech-resistant user for your product. 
 
 # Adversarial UX Test
 
+## Overview
+
 Roleplay the worst-case user for your product — the person who hates technology, doesn't want your software, and will find every reason to complain. Then filter their feedback through a pragmatism layer to separate real UX problems from "I hate computers" noise.
 
 Think of it as an automated "mom test" — but angry.
@@ -21,7 +23,7 @@ Most QA finds bugs. This finds **friction**. A technically correct app can still
 
 The **pragmatism filter** (Phase 3) is what makes this useful instead of just entertaining. Without it, you'd add a "print this page" button to every screen because Grandpa can't figure out PDFs.
 
-## How to Use
+## Workflow
 
 Tell the agent:
 ```

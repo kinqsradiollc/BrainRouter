@@ -123,27 +123,15 @@ See [agents/README.md](./agents/README.md) for the full decision matrix.
 ---
 
 ## 🛠️ Creating a New Skill
-Maintain the standard directory structure:
+Follow the **[Skill Authoring Skill](./skills/agent/skill-authoring/SKILL.md)** for the full canonical format, writing principles, and compliance checklist.
 
+Quick reference — required directory structure:
 ```
 skills/
-  {skill-name}/           # kebab-case
+  {skill-name}/           # kebab-case, must match frontmatter name
     SKILL.md              # Skill definition (Mandatory)
     scripts/              # Executable helpers (Optional)
-      {name}.sh           # Bash scripts
-```
-
-### SKILL.md Template
-```markdown
----
-name: {skill-name}
-description: {One sentence description + "Use when" triggers}
----
-# {Skill Title}
-## Workflow
-{Numbered list of steps}
-## Usage
-{Example script calls or commands}
+      {name}.sh
 ```
 
 ---

@@ -1,0 +1,103 @@
+// ─────────────────────────────────────────────
+// BrainRouter MCP Server — Root Resolver
+// Determines globalRoot and localRoot at startup.
+// ─────────────────────────────────────────────
+
+import { existsSync, readFileSync } from 'fs';
+import { resolve, dirname, join, basename } from 'path';
+import { fileURLToPath } from 'url';
+import type { RegistryConfig, BrainRouterConfig } from './types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Find the repo root by looking for AGENT.md or package.json
+function findRepoRoot(start: string): string {
+  let current = start;
+  while (current !== resolve('/')) {
+    if (existsSync(join(current, 'AGENT.md')) || existsSync(join(current, 'package.json'))) {
+      // If we found it, but we are inside the mcp folder, go one up to reach the BrainRouter root
+      if (basename(current) === 'mcp') {
+        return dirname(current);
+      }
+      return current;
+    }
+    current = dirname(current);
+  }
+  return resolve(__dirname, '../../'); // Fallback
+}
+
+const GLOBAL_ROOT = findRepoRoot(__dirname);
+
+/**
+ * Parse --root <path> from process.argv.
+ */
+function parseRootFlag(): string | undefined {
+  const idx = process.argv.indexOf('--root');
+  if (idx !== -1 && process.argv[idx + 1]) {
+    return resolve(process.argv[idx + 1]);
+  }
+  return undefined;
+}
+
+/**
+ * Walk up from startDir looking for brainrouter.config.json or AGENT.md.
+ * Returns the directory where it was found, or undefined.
+ */
+function autoDetectLocalRoot(startDir: string): string | undefined {
+  let current = startDir;
+  const root = resolve('/');
+
+  while (current !== root) {
+    if (
+      existsSync(join(current, 'brainrouter.config.json')) ||
+      existsSync(join(current, 'AGENT.md'))
+    ) {
+      // Make sure it's not the BrainRouter repo itself
+      if (resolve(current) !== resolve(GLOBAL_ROOT)) {
+        return current;
+      }
+    }
+    current = dirname(current);
+  }
+  return undefined;
+}
+
+/**
+ * Read and parse brainrouter.config.json from a directory, if present.
+ */
+export function readBrainRouterConfig(dir: string): BrainRouterConfig {
+  const configPath = join(dir, 'brainrouter.config.json');
+  if (!existsSync(configPath)) return {};
+
+  try {
+    const raw = readFileSync(configPath, 'utf-8');
+    return JSON.parse(raw) as BrainRouterConfig;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve the final RegistryConfig.
+ *
+ * Priority:
+ *   1. --root <path> CLI flag
+ *   2. BRAINROUTER_LOCAL_ROOT env var
+ *   3. Auto-detect by walking up from CWD
+ *   4. Fallback: single-repo mode (localRoot = globalRoot)
+ */
+export function resolveRegistryConfig(): RegistryConfig {
+  const localRoot =
+    parseRootFlag() ??
+    (process.env.BRAINROUTER_LOCAL_ROOT
+      ? resolve(process.env.BRAINROUTER_LOCAL_ROOT)
+      : undefined) ??
+    autoDetectLocalRoot(process.cwd()) ??
+    GLOBAL_ROOT; // single-repo fallback
+
+  return {
+    globalRoot: GLOBAL_ROOT,
+    localRoot,
+  };
+}

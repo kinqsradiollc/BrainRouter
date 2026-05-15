@@ -5,9 +5,11 @@ description: Redis caching and Postgres replication rules for [PROJECT_NAME] per
 
 # Performance & Scalability Skill
 
+## Overview
+
 This skill ensures [PROJECT_NAME] remains fast and responsive as the user base and data volume grows.
 
-## Rules (MUST FOLLOW)
+## Workflow
 
 - **[PERF-001] Cache-Aside Pattern**
   - Use the "Cache-Aside" strategy for frequently read, slowly changing data (e.g., Vibe lists, Spot details).

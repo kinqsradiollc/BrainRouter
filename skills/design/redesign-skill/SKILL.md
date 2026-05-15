@@ -5,7 +5,11 @@ description: Upgrades existing websites and apps to premium quality. Audits curr
 
 # Redesign Skill
 
-## How This Works
+## Overview
+
+Upgrades existing websites and apps to premium quality. Audits current design, identifies generic AI patterns, and applies high-end design standards without breaking functionality.
+
+## Workflow
 
 When applied to an existing project, follow this sequence:
 

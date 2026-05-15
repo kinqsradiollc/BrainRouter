@@ -5,9 +5,13 @@ description: Mandatory middleware and validation boilerplate for fast, consisten
 
 # API Standards Skill
 
+## Overview
+
 This skill ensures every [PROJECT_NAME] endpoint is fast, consistent, and secure.
 
-## 🛡️ The "Security Shield" Boilerplate
+## Workflow
+
+### 🛡️ The "Security Shield" Boilerplate
 
 New developers **must** use this pattern for every new route. AI agents will reject any PR missing these components.
 

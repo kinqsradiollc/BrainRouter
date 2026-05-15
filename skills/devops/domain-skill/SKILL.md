@@ -5,6 +5,8 @@ description: Architect production-ready domain routing. Configure Traefik ingres
 
 # Custom Domain & Networking
 
+## Overview
+
 Connect `api.[PROJECT_DOMAIN]` (Cloudflare-managed) to the [PROJECT_NAME] Node.js backend running in Docker via Traefik.
 
 ## Architecture
@@ -81,7 +83,7 @@ Traefik will auto-issue a Let's Encrypt cert once `api.[PROJECT_DOMAIN]` is publ
 
 ---
 
-## Procedure: Activating Cloudflare Tunnel
+## Workflow
 
 ### Step 1 — Create the tunnel
 

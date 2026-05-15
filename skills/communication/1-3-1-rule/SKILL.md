@@ -5,6 +5,8 @@ description: Professional communication for high-agency engineers. Enforces the 
 
 # 1-3-1 Communication Rule
 
+## Overview
+
 Structured decision-making format for when a task has multiple viable approaches and the user needs a clear recommendation. Produces a concise problem framing, three options with trade-offs, and an actionable plan for the recommended path.
 
 ## When to Use
@@ -16,7 +18,7 @@ Structured decision-making format for when a task has multiple viable approaches
 
 Do NOT use for simple questions with one obvious answer, debugging sessions, or tasks where the user has already decided on an approach.
 
-## Procedure
+## Workflow
 
 1. **Problem** (one sentence)
    - State the core decision or desired outcome in a single concise sentence.

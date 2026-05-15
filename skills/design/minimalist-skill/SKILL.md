@@ -5,7 +5,7 @@ description: Clean editorial-style interfaces. Warm monochrome palette, typograp
 
 # Protocol: Premium Utilitarian Minimalism UI Architect
 
-## 1. Protocol Overview
+## Overview
 Name: Premium Utilitarian Minimalism & Editorial UI
 Description: An advanced frontend engineering directive for generating highly refined, ultra-minimalist, "document-style" web interfaces analogous to top-tier workspace platforms. This protocol strictly enforces a high-contrast warm monochrome palette, bespoke typographic hierarchies, meticulous structural macro-whitespace, bento-grid layouts, and an ultra-flat component architecture with deliberate muted pastel accents. It actively rejects standard generic SaaS design trends.
 
@@ -74,7 +74,7 @@ Motion should feel invisible — present but never distracting. The goal is quie
 - Background Ambient Motion: Optional. A single, very slow-moving radial gradient blob (`animation-duration: 20s+`, `opacity: 0.02-0.04`) drifting behind hero sections. Must be applied to a `position: fixed; pointer-events: none` layer. Never on scrolling containers.
 - Performance: Animate exclusively via `transform` and `opacity`. No layout-triggering properties (`top`, `left`, `width`, `height`). Use `will-change: transform` sparingly and only on actively animating elements.
 
-## 8. Execution Protocol
+## Workflow
 When tasked with writing frontend code (HTML, React, Tailwind, Vue) or designing a layout:
 1. Establish the macro-whitespace first. Use massive vertical padding between sections (e.g., `py-24` or `py-32` in Tailwind).
 2. Constrain the main typography content width to `max-w-4xl` or `max-w-5xl`.

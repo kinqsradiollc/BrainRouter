@@ -13,7 +13,7 @@ Git is your safety net. Treat commits as save points, branches as sandboxes, and
 
 Always. Every code change flows through git.
 
-## Core Principles
+## Workflow
 
 ### Trunk-Based Development (Recommended)
 

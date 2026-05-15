@@ -5,6 +5,8 @@ description: Senior DevOps Engineer. Containerize applications using Docker. Enf
 
 # Docker Management
 
+## Overview
+
 Manage Docker containers, images, volumes, networks, and Compose stacks using standard Docker CLI commands. No additional dependencies beyond Docker itself.
 
 ## When to Use
@@ -44,7 +46,7 @@ docker --version && docker compose version
 | Disk usage | `docker system df` |
 | Cleanup dangling | `docker image prune && docker container prune` |
 
-## Procedure
+## Workflow
 
 ### 1. Identify the domain
 

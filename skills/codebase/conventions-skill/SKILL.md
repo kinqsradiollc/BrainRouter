@@ -5,9 +5,11 @@ description: Naming patterns, formatting rules, import order, and module design 
 
 # Coding Conventions Skill
 
+## Overview
+
 This skill ensures all new code written in [PROJECT_NAME] matches existing style and patterns. Load this before writing new files, adding features, or conducting code reviews.
 
-## Rules (MUST FOLLOW)
+## Workflow
 
 - **[CONV-001] Naming**
   - Files: `kebab-case` for all files (`user-service.ts`, `location-controller.ts`)
