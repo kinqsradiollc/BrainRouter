@@ -1,6 +1,7 @@
 import type { SqliteMemoryStore } from "./store/sqlite.js";
 import type { L0Record, CaptureResult, LLMRunner } from "./types.js";
 import { extractL1Memories } from "./pipeline/l1-extractor.js";
+import { deduplicateMemories } from "./pipeline/l1-dedup.js";
 import { detectContradictions } from "./pipeline/l1-contradiction.js";
 import { distillScenes } from "./pipeline/l2-scene.js";
 import { distillPersona } from "./pipeline/l3-distiller.js";
@@ -78,9 +79,21 @@ export class MemoryCapturePipeline {
       });
 
       if (extractionResult.success && extractionResult.records.length > 0) {
-        l1ExtractedCount = extractionResult.records.length;
+        // Run active deduplication BEFORE storing
+        const { uniqueRecords, droppedCount } = await deduplicateMemories({
+          records: extractionResult.records,
+          store: this.store,
+          userId
+        });
+
+        l1ExtractedCount = uniqueRecords.length;
+        
+        if (droppedCount > 0) {
+          console.log(`[BrainRouter] Dropped ${droppedCount} identical duplicate memories.`);
+        }
+
         // Write to store
-        for (const record of extractionResult.records) {
+        for (const record of uniqueRecords) {
           this.store.upsertL1(record);
 
           // Non-blocking background embedding (Slice A)

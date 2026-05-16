@@ -25,7 +25,7 @@ Call `memory_recall` before generating your response. This injects:
 ```
 memory_recall({
   userId: "<user-id>",
-  sessionKey: "<session-key>",
+  sessionKey: "<conversation-id>", // USE THE CONVERSATION ID AS SESSION KEY
   query: "<summary of current user message>",
   activeSkill: "<current skill name, if any>"
 })
@@ -37,7 +37,7 @@ Call `memory_capture_turn` after generating your response. Pass both the user's 
 ```
 memory_capture_turn({
   userId: "<user-id>",
-  sessionKey: "<session-key>",
+  sessionKey: "<conversation-id>", // USE THE CONVERSATION ID AS SESSION KEY
   messages: [
     { role: "user", content: "<user message>", timestamp: <unix ms> },
     { role: "assistant", content: "<your response>", timestamp: <unix ms> }
@@ -45,6 +45,12 @@ memory_capture_turn({
   activeSkill: "<current skill name, if any>"
 })
 ```
+
+## Scoping the `sessionKey`
+
+The `sessionKey` is the primary grouping mechanism for episodic memory. 
+- **Recommendation**: Always use the **Conversation ID** (e.g. `8af8ea2c-...`) as the `sessionKey` to ensure memories are pinned to the correct session.
+- **Project-Wide**: For project-wide continuity across sessions, use a stable project identifier (e.g. `project-kinqs-radio`).
 
 ## The 5 Memory Tools
 

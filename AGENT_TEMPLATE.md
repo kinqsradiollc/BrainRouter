@@ -30,18 +30,18 @@
 ## ⚖️ Core Rules
 
 - **Skill-First Mindset**: If a task matches a skill, you MUST invoke it using the `mcp_brainrouter_get_skill` tool. Never implement directly if a skill applies.
-- **Memory-First Habit**: Before every response, you MUST call `memory_recall`. After every response, you MUST call `memory_capture_turn`.
+- **Memory-First Habit**: Before every response, you MUST call `memory_recall`. After every response, you MUST call `memory_capture_turn`. Use the **Conversation ID** as the `sessionKey` for session-specific continuity.
 - **Strict Adherence**: Follow skill instructions exactly. Do not partially apply them or "skip ahead" to code.
 - **No Shortcuts**: Avoid "this is too small for a skill" or "I'll just quickly fix it" rationalization.
 
 ## 🔄 Execution Model
 
 For every request:
-1. **Recall Context**: Call `memory_recall` with the current query to load persona, scenes, and relevant history.
+1. **Recall Context**: Call `memory_recall` using the **Conversation ID** as the `sessionKey`. Use the current query to load persona, scenes, and relevant history.
 2. **Detect Intent**: Map the user's request to a scenario below using the recalled context.
 3. **Select Skill**: Identify the most relevant skill name.
 4. **Execute**: Fetch the skill using `mcp_brainrouter_get_skill` and follow the skill workflow strictly.
-5. **Record Outcome**: Call `memory_capture_turn` after your response to persist the turn and any new decisions.
+5. **Record Outcome**: Call `memory_capture_turn` using the **Conversation ID** as the `sessionKey` after your response to persist the turn and any new decisions.
 6. **Iterate**: Return to step 1 if the scenario changes or a new request arrives.
 
 ## 🗺️ Lifecycle Mapping
