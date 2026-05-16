@@ -32,7 +32,7 @@ Before writing any code, operate in read-only mode:
 - Map dependencies between components
 - Note risks and unknowns
 
-**Do NOT write code during planning.** The output is a plan document, not implementation.
+**Do NOT write code during planning.** The output MUST be a plan documented in a markdown file (e.g., `IMPLEMENTATION_PLAN.md`), not implementation.
 
 ### Step 2: Identify the Dependency Graph
 
@@ -122,6 +122,34 @@ Add explicit checkpoints:
 - [ ] Application builds without errors
 - [ ] Core user flow works end-to-end
 - [ ] Review with human before proceeding
+
+### Step 6: Persist the Plan to a Markdown File
+
+Always write your full plan to a markdown file in the project root before starting any implementation.
+
+**Why?**
+- **Durability:** Large language models have limited context windows. A written plan serves as external memory.
+- **Collaboration:** Allows a human or another agent to review and approve the strategy.
+- **Tracking:** You can check off tasks as you complete them, maintaining a clear state of progress.
+
+**Recommended Path:** `IMPLEMENTATION_PLAN.md` in the project root.
+
+### Step 7: Initialize the Task Tracker (task.md)
+
+For any non-trivial implementation, create a dedicated `task.md` file. While the `IMPLEMENTATION_PLAN.md` is for approval and architecture, `task.md` is for active execution.
+
+**Format:**
+```markdown
+# Task Tracker: [Feature Name]
+
+- [ ] Task 1: [Title]
+  - [ ] Sub-task A
+  - [ ] Sub-task B
+- [/] Task 2: [In Progress Task]
+- [x] Task 3: [Completed Task]
+```
+
+Copy the approved task list from your plan into `task.md`. This becomes your source of truth for "what's next."
 ```
 
 ## Task Sizing Guidelines
@@ -225,8 +253,13 @@ Before starting implementation, confirm:
 - [ ] The human has reviewed and approved the plan
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+1. **Context Loading:** Run `list_docs` and `get_doc` to retrieve project constraints.
+2. **Research:** Read relevant codebase sections and map the dependency graph.
+3. **Drafting:** Structure the work into small, vertically sliced tasks with acceptance criteria.
+4. **Persist:** Write the plan to `IMPLEMENTATION_PLAN.md` (or similar) in the project root.
+5. **Approval:** STOP and wait for human approval of the plan file.
+6. **Track:** Once approved, initialize `task.md` by copying the task list from the plan.
+7. **Execute:** Implement tasks one-by-one, marking progress in `task.md`. Update the human after major milestones.
 
 ## Verification
 After completing the skill, confirm:

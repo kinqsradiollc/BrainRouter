@@ -9,3 +9,30 @@
    Health    : http://localhost:3747/health
    Root      : /Users/anhdang/Documents/Github/BrainRouter
 
+[MCP Error] Error: Bad Request: Server not initialized
+    at WebStandardStreamableHTTPServerTransport.validateSession (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:592:28)
+    at WebStandardStreamableHTTPServerTransport.handlePostRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:445:43)
+    at WebStandardStreamableHTTPServerTransport.handleRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:150:29)
+    at getRequestListener.overrideGlobalObjects (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js:136:47)
+    at file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@hono/node-server/dist/index.mjs:609:13
+    at StreamableHTTPServerTransport.handleRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js:143:15)
+    at handleMcp (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/dist/index.js:233:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[MCP Error] Error: Bad Request: Server not initialized
+    at WebStandardStreamableHTTPServerTransport.validateSession (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:592:28)
+    at WebStandardStreamableHTTPServerTransport.handlePostRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:445:43)
+    at WebStandardStreamableHTTPServerTransport.handleRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:150:29)
+    at getRequestListener.overrideGlobalObjects (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js:136:47)
+    at file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@hono/node-server/dist/index.mjs:609:13
+    at StreamableHTTPServerTransport.handleRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js:143:15)
+    at handleMcp (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/dist/index.js:233:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[MCP Error] Error: Bad Request: Server not initialized
+    at WebStandardStreamableHTTPServerTransport.validateSession (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:592:28)
+    at WebStandardStreamableHTTPServerTransport.handlePostRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:445:43)
+    at WebStandardStreamableHTTPServerTransport.handleRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:150:29)
+    at getRequestListener.overrideGlobalObjects (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js:136:47)
+    at file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@hono/node-server/dist/index.mjs:609:13
+    at StreamableHTTPServerTransport.handleRequest (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js:143:15)
+    at handleMcp (file:///Users/anhdang/Documents/Github/BrainRouter/mcp/dist/index.js:233:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)

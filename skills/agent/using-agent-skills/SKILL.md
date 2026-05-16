@@ -35,6 +35,7 @@ Task arrives
     ├── Committing/branching? ─────────→ git-workflow-and-versioning
     ├── CI/CD pipeline work? ──────────→ ci-cd-and-automation
     ├── Writing docs/ADRs? ───────────→ documentation-and-adrs
+    ├── Finishing a task/feature? ────→ project-handover-and-walkthrough
     └── Deploying/launching? ─────────→ shipping-and-launch
 ```
 
@@ -149,7 +150,8 @@ For a complete feature, the typical skill sequence is:
 10. code-review-and-quality     → Review before merge
 11. git-workflow-and-versioning → Clean commit history
 12. documentation-and-adrs      → Document decisions
-13. shipping-and-launch         → Deploy safely
+13. project-handover-and-walkthrough → Summarize work with walkthrough.md
+14. shipping-and-launch         → Deploy safely
 ```
 
 Not every task needs every skill. A bug fix might only need: `debugging-and-error-recovery` → `test-driven-development` → `code-review-and-quality`.
@@ -161,7 +163,7 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Define | [interview-skill](../interview-skill/SKILL.md) | Surface what the user actually wants before any plan, spec, or code exists |
 | Define | [idea-refine-skill](../idea-refine-skill/SKILL.md) | Refine ideas through structured divergent and convergent thinking |
 | Define | [spec-driven-skill](../spec-driven-skill/SKILL.md) | Requirements and acceptance criteria before code |
-| Plan | [planning-skill](../planning-skill/SKILL.md) | Decompose into small, verifiable tasks |
+| Plan | [planning-skill](../planning-skill/SKILL.md) | Decompose into tasks and track progress via task.md |
 | Build | [incremental-skill](../../lifecycle/incremental-skill/SKILL.md) | Thin vertical slices, test each before expanding |
 | Build | [source-driven-skill](../source-driven-skill/SKILL.md) | Verify against official docs before implementing |
 | Build | [doubt-driven-skill](../doubt-driven-skill/SKILL.md) | Adversarial fresh-context review of every non-trivial decision |
@@ -176,6 +178,7 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Ship | [git-workflow-skill](../../codebase/git-workflow-skill/SKILL.md) | Atomic commits, clean history |
 | Ship | [ci-cd-skill](../../devops/ci-cd-skill/SKILL.md) | Automated quality gates on every change |
 | Ship | [adr-skill](../adr-skill/SKILL.md) | Document the why, not just the what |
+| Ship | [handover-skill](../handover-skill/SKILL.md) | Final walkthrough and handover via walkthrough.md |
 | Ship | [shipping-skill](../../lifecycle/shipping-skill/SKILL.md) | Pre-launch checklist, monitoring, rollback plan |
 
 ## When to Use
