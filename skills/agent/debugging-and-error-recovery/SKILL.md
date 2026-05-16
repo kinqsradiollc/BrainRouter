@@ -1,6 +1,12 @@
 ---
 name: debugging-and-error-recovery
 description: Guides systematic root-cause debugging. Use when tests fail, builds break, behavior doesn't match expectations, or you encounter any unexpected error. Use when you need a systematic approach to finding and fixing the root cause rather than guessing.
+memory_hints: |
+  - Extract recurring error patterns the user encounters in this project (e.g. "SQLite busy_timeout errors when running tests").
+  - Note if user tends to skip the reproduce step and jump directly to fixing.
+  - Capture environment-specific bugs that are hard to reproduce (document the conditions).
+  - Remember which debugging tools or commands the user prefers for this stack.
+  - Extract any known flaky tests in this project and why they are flaky.
 ---
 
 # Debugging and Error Recovery

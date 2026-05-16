@@ -1,6 +1,11 @@
 ---
 name: code-review-and-quality
 description: Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch.
+memory_hints: |
+  - Capture recurring review failures the user encounters (e.g. always missing error handling, recurring N+1 patterns).
+  - Note if user consistently skips specific review axes (e.g. tends to skip security review).
+  - Extract project-specific quality standards the user has set (e.g. "all PRs must be under 200 lines").
+  - Remember when user requests review on AI-generated code — note what types of issues are found.
 ---
 
 # Code Review and Quality

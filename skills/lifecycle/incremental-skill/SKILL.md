@@ -1,6 +1,12 @@
 ---
 name: incremental-implementation
 description: Delivers changes incrementally. Use when implementing any feature or change that touches more than one file. Use when you're about to write a large amount of code at once, or when a task feels too big to land in one step.
+memory_hints: |
+  - Extract when user skips testing between slices (resistance to the verify step).
+  - Capture scope creep incidents: user adds requirements mid-implementation.
+  - Remember which slicing strategy (vertical, contract-first, risk-first) the user prefers for this project.
+  - Note if user tends to mix refactoring with feature changes in the same increment.
+  - Capture any agreed-upon increment size limits the user has set for this project.
 ---
 
 # Incremental Implementation

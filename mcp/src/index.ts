@@ -41,6 +41,13 @@ import { listDocs, listDocsSchema } from './tools/list_docs.js';
 import { getDoc, getDocSchema } from './tools/get_doc.js';
 import { createSkill, createSkillSchema } from './tools/create_skill.js';
 import { updateSkill, updateSkillSchema } from './tools/update_skill.js';
+import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from './tools/memory_capture_turn.js';
+import { memoryRecallToolSchema, handleMemoryRecall } from './tools/memory_recall.js';
+import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
+import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
+import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
+import { memoryEngine } from './memory/engine.js';
+import path from 'node:path';
 
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 function parseFlag(flag: string): string | undefined {
@@ -184,6 +191,11 @@ function buildMcpServer(registry: Registry): Server {
           required: ['name', 'section', 'content'],
         },
       },
+      memoryCaptureTurnToolSchema,
+      memoryRecallToolSchema,
+      memorySearchToolSchema,
+      memoryContradictionsToolSchema,
+      memoryRegisterSkillHintsToolSchema,
     ],
   }));
 
@@ -200,6 +212,11 @@ function buildMcpServer(registry: Registry): Server {
         case 'get_doc':       return await getDoc(registry, getDocSchema.parse(request.params.arguments));
         case 'create_skill':  return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
         case 'update_skill':  return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
+        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments);
+        case 'memory_recall': return await handleMemoryRecall(request.params.arguments);
+        case 'memory_search': return await handleMemorySearch(request.params.arguments);
+        case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments);
+        case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
@@ -219,6 +236,14 @@ function buildMcpServer(registry: Registry): Server {
 const config = resolveRegistryConfig();
 const registry = new Registry(config);
 registry.build();
+
+// Auto-scan skills dirs for memory_hints on startup
+const skillsDirsToScan = [
+  path.join(config.globalRoot, 'skills'),
+  config.localRoot ? path.join(config.localRoot, 'skills') : undefined,
+].filter((d): d is string => !!d); // remove undefined and deduplicate
+const uniqueSkillsDirs = [...new Set(skillsDirsToScan)];
+memoryEngine.autoScanSkillHints(uniqueSkillsDirs);
 
 if (USE_HTTP) {
   // ── HTTP / Streamable-HTTP transport ────────────────────────────────────────
@@ -290,6 +315,12 @@ if (USE_HTTP) {
 
 } else {
   // ── stdio transport (default) ───────────────────────────────────────────────
+  
+  // Redirect console.log and console.warn to stderr to avoid polluting stdout.
+  // In stdio mode, stdout is strictly reserved for the MCP protocol.
+  console.log = (...args) => console.error(...args);
+  console.warn = (...args) => console.error(...args);
+
   const server = buildMcpServer(registry);
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -2,7 +2,7 @@
 
 **A High-Performance Context Firewall & MCP Server for AI Agents.**
 
-BrainRouter is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that gives your AI coding agents a structured **Brain** and **Map**. Instead of blindly scanning your entire repository, the agent queries BrainRouter for exactly the skill, doc, or persona it needs — on demand.
+BrainRouter is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that gives your AI coding agents a structured **Brain**, **Map**, and **Memory**. Instead of blindly scanning your entire repository, the agent queries BrainRouter for exactly the skill, doc, or persona it needs — and automatically recalls past context and instructions via its built-in Memory Engine.
 
 Works with: Claude Desktop · Cursor · VS Code / GitHub Copilot · Windsurf · Antigravity · OpenAI Codex · any MCP-compatible tool.
 
@@ -18,6 +18,21 @@ BrainRouter runs on a **dual-registry system**:
 | **Local** | Your project (`--root`) | Project-specific skills & docs that shadow global ones |
 
 The `--root` flag tells the server which project it's working on. Local skills with the same name as global ones **automatically override** the global version.
+
+---
+
+## 🧠 Memory Engine
+
+BrainRouter features a 4-tier, multi-tenant memory system powered by `node:sqlite` and local vector search (`sqlite-vec`). It continuously observes agent-user interactions to build a persistent context graph.
+
+| Layer | Function | Purpose |
+|---|---|---|
+| **L0** | Atomic Capture | Saves raw conversation turns (SQLite FTS5) |
+| **L1** | Semantic Extraction | Extracts `persona`, `episodic`, `instruction`, and `skill_context` memories with LLMs |
+| **L1.5**| Contradiction Detection | Actively flags conflicting instructions to prevent agent confusion |
+| **L2/L3**| Distillation | Clusters memories into Scene Narratives and synthesizes a deep Persona profile |
+
+Agents interact with this system seamlessly: they call `memory_recall` before generating a response to load dynamic context (RRF-scored by relevance and decay), and call `memory_capture_turn` after responding to persist the interaction.
 
 ---
 
@@ -154,9 +169,11 @@ Do NOT guess how to perform tasks. Use your MCP tools first.
 
 ## Workflow
 
-1. Run `list_skills` or `search_skills` to find relevant procedures
-2. Run `get_skill` to load the `workflow` section of the matched skill
-3. Run `list_docs` + `get_doc` to read project source-of-truth before writing code
+1. **Recall Memory:** Call `memory_recall` to load persona, active scenes, and relevant past instructions.
+2. **Find Skills:** Run `list_skills` or `search_skills` to find relevant procedures.
+3. **Execute:** Run `get_skill` to load the `workflow` section of the matched skill.
+4. **Context:** Run `list_docs` + `get_doc` to read project source-of-truth before writing code.
+5. **Capture Memory:** Call `memory_capture_turn` after your response to persist the interaction.
 
 **If unsure of your role:** use `get_persona` (e.g. `code-reviewer`, `security-auditor`)
 ```
@@ -194,6 +211,11 @@ Local skills with the same name as a global BrainRouter skill **automatically ov
 | `get_doc` | Read a project doc or specific section |
 | `create_skill` | Scaffold a new skill in the local project or global registry |
 | `update_skill` | Update an existing skill section (supports shadowing) |
+| `memory_capture_turn` | Record a completed conversation turn for processing |
+| `memory_recall` | Retrieve relevant memories, persona, and scenes before responding |
+| `memory_search` | Perform a targeted semantic search across memory records |
+| `memory_contradictions`| List unresolved semantic contradictions in memory |
+| `memory_register_skill_hints`| Register extraction hints to guide memory capture when a skill is active |
 
 ---
 

@@ -1,6 +1,6 @@
-# DateDrop Agent Context Router
+# BrainRouter Agent Context Router
 
-**AGENT INSTRUCTION:** This is your primary navigation hub. Do NOT scan the entire `/docs` directory. Instead, identify the user's task below and load ONLY the specified Global Skill via `mcp_brainrouter_get_skill`, the reference via `mcp_brainrouter_get_reference`, or the listed local documentation file to minimize context noise.
+**AGENT INSTRUCTION:** This is your primary navigation hub for working on the BrainRouter project itself. Do NOT scan the entire directory. Instead, identify the user's task below and load ONLY the specified Global Skill via `mcp_brainrouter_get_skill`, the reference via `mcp_brainrouter_get_reference`, or the listed local documentation file to minimize context noise.
 
 ---
 
@@ -28,50 +28,44 @@ For every request:
 
 ---
 
-## 🏗️ Scenario: Backend & API Development
-*Focus: Security, Auth, Performance, and Routes.*
-- **[API Standards](./docs/api/API.md)**: Absolute source of truth for routes and architecture.
-- **`api-skill`**: Mandatory middleware and validation boilerplate.
-- **`security-checklist`**: (Reference) Mandatory OWASP Top 10 and common vulnerability prevention. Use `mcp_brainrouter_get_reference(name: "security-checklist")`.
-- **`auth-skill`**: Identity, JWT rules, and "Kill Switch" logic.
-- **`performance-skill`**: Redis caching and Postgres replication rules.
-- **`performance-checklist`**: (Reference) SQL optimization and caching best practices. Use `mcp_brainrouter_get_reference(name: "performance-checklist")`.
+## 🏗️ Scenario: MCP Server Development
+*Focus: Tools, registry, loaders, and stdio/HTTP transports.*
+- **Core Codebase**: Code lives in `mcp/src/` (not `src/`).
+- **`api-skill`**: For middleware and server logic, though adapted for MCP concepts.
+- **`conventions-skill`**: Standardized TypeScript and formatting rules for the codebase.
 
-## 🎨 Scenario: Frontend & UI Development
-*Focus: Aesthetics, Components, and Motion.*
-- **[Design Language](./docs/design/Design.md)**: Design tokens (Pinterest-style) and component rules.
-- **`design-taste-frontend`**: High-end layout engineering and motion standards.
-- **`soft-skill`**: High-end agency design standards (fonts, spacing, shadows).
-- **`a11y-skill`**: WCAG 2.1 AA accessibility mandates for frontend.
-- **`accessibility-checklist`**: (Reference) Semantic HTML and screen reader compliance. Use `mcp_brainrouter_get_reference(name: "accessibility-checklist")`.
+## 🧠 Scenario: Memory Engine Development
+*Focus: Evolving BrainRouter with a hierarchical memory subsystem.*
+- **Core Requirement**: The engine must be **multi-tenant**, supporting many users on a single server. Memories must be isolated by `user_id` or equivalent, not just session keys.
+- **LLM Abstraction**: Extraction requires an LLM. Implement this as a configurable OpenAI-compatible endpoint rather than a hardcoded service.
+- **`spec-driven-development`**: Mandatory before adding new memory layers (L0, L1, L1.5).
+- **Architecture Base**: Reference the original concepts in `CONCEPT.md` and the refined target state in `APPLIED_CONCEPT.md` (keeping in mind the 5 required adjustments for BrainRouter's reality).
+
+## 📚 Scenario: Skill & Content Authoring
+*Focus: Writing, updating, and scaffolding skills, personas, and references.*
+- **`skill-authoring`**: Canonical structure, format, and writing principles for BrainRouter SKILL.md files. Always use this when creating or modifying skills.
+- **`doc-management-skill`**: Reading and maintaining the global registry files.
 
 ## 🧪 Scenario: QA, Testing & UX Friction
-*Focus: Verification and Human-Centric Quality.*
-- **`testing-skill`**: Supertest, Vitest, and Shield verification.
-- **`testing-patterns`**: (Reference) Arrange-Act-Assert, mocking, and E2E patterns. Use `mcp_brainrouter_get_reference(name: "testing-patterns")`.
-- **`adversarial-ux-skill`**: Persona-based friction testing framework.
-- **`browser-testing-with-devtools`**: Real-time browser inspection, DOM analysis, and console debugging via MCP.
+*Focus: Verification and tool robustness.*
+- **`testing-skill`**: Unit and integration testing using Vitest (BrainRouter's test runner).
+- **`testing-patterns`**: (Reference) Arrange-Act-Assert, mocking, and pattern testing. Use `mcp_brainrouter_get_reference(name: "testing-patterns")`.
 
 ## 🔍 Scenario: Debugging & Troubleshooting
 *Focus: Root-Cause Analysis.*
 - **`debugging-and-error-recovery`**: Systematic Reproduce → Localize → Fix → Guard process.
-- **`api-layered-debugging`**: Connectivity → Auth → Format → Semantics flow.
+- **`api-layered-debugging`**: Connectivity and protocol flow, particularly for Streamable HTTP or stdio pipe issues.
 
 ## 🐳 Scenario: Infrastructure & DevOps
-*Focus: Containers, Automation, and Networking.*
-- **`docker-lifecycle-engineering`**: Lifecycle, prune commands, and Dockerfile optimization.
-- **`ci-cd-and-automation`**: Automated pipeline setup and quality gate automation.
-- **`domain-infrastructure-routing`**: Cloudflare Tunnel → Traefik → Node.js pattern.
+*Focus: Deployment, CI/CD, and scaling.*
+- **`ci-cd-and-automation`**: Automated pipeline setup and quality gates.
+- **`docker-lifecycle-engineering`**: Containerizing the HTTP transport mode for remote MCP server hosting.
 - **`git-workflow-and-versioning`**: Branching strategy, commit standards, and version control hygiene.
 
 ## 📝 Scenario: Proposals & Decision Making
 *Focus: Trade-off Analysis and Architectural Records.*
+- **`documentation-and-adrs`**: Recording architectural decisions (ADRs) particularly for the Memory Engine.
 - **`high-agency-communication`**: Standardized framework for technical proposals (1-3-1 Rule).
-- **`documentation-and-adrs`**: Recording architectural decisions and documenting the "Why" behind the code.
-
-## 📊 Scenario: Architecture Diagrams
-*Focus: Visual Documentation.*
-- **`concept-diagrams`**: Minimal SVG diagram system.
 
 ## 🔬 Scenario: Codebase Analysis & Exploration
 *Focus: Understanding existing code, style, risks, and technical health.*
@@ -83,7 +77,7 @@ For every request:
 ## 🧠 Scenario: Agent Methodology & Planning
 *Focus: Meta-cognition, requirement refining, and strict verification.*
 - **`using-agent-skills`**: Meta-skill for skill discovery and operating behaviors.
-- **`context-engineering`**: Systematic curation of agent context (Rules, Skills, Docs).
+- **`context-engineering`**: Systematic curation of agent context.
 - **`interview-me`**: Proactive requirement gathering for underspecified tasks.
 - **`doubt-driven-development`**: Adversarial self-review to disprove assumptions before implementation.
 - **`source-driven-development`**: Mandatory verification against official framework documentation.
@@ -93,22 +87,21 @@ For every request:
 
 ## 🤖 Scenario: Specialized Expert Personas
 *Focus: Adopting a specific role for deep analysis or fan-out orchestration.*
-- **`code-reviewer`**: Staff Engineer persona for 5-axis PR reviews.
+- **`code-reviewer`**: Staff Engineer persona for PR reviews.
 - **`security-auditor`**: Security Engineer persona for vulnerability detection and threat modeling.
 - **`test-engineer`**: QA Engineer persona for coverage analysis and test strategy.
-- **`orchestration-patterns`**: (Reference) Rules for persona composition and `/ship` fan-out patterns. Use `mcp_brainrouter_get_reference(name: "orchestration-patterns")`.
 
 ## 🚀 Scenario: Lifecycle & Delivery
 *Focus: Preparation, Migration, and Incremental Shipping.*
 - **`shipping-and-launch`**: Pre-flight checklists and production rollout strategies.
 - **`project-handover-and-walkthrough`**: Summarizing accomplishments and providing a `walkthrough.md` for human review.
-- **`deprecation-and-migration`**: Safely sunsetting legacy code and moving users to new implementations.
+- **`deprecation-and-migration`**: Safely sunsetting legacy code.
 - **`incremental-implementation`**: Breaking large changes into manageable, reviewable PRs.
 
 ---
 
 ## 🎭 Orchestration: Skills, Personas, and Commands
-DateDrop uses three composable layers to manage complexity:
+BrainRouter uses three composable layers to manage complexity:
 
 - **Skills** (Global MCP): Workflows with steps and exit criteria. The **How**.
 - **Personas** (Global MCP): Roles with a specific perspective (e.g., Security Auditor). The **Who**.
@@ -117,10 +110,9 @@ DateDrop uses three composable layers to manage complexity:
 **Composition Rule:** Personas do not invoke other personas. A persona may invoke global skills using `mcp_brainrouter_get_skill`.
 
 ### 🔀 Persona Decision Matrix
-- **Invoke `code-reviewer`**: When conducting 5-axis PR reviews (Correctness, Readability, Architecture, Security, Performance).
-- **Invoke `security-auditor`**: When auditing sensitive flows (Auth, Data Protection, User Input), fixing known CVEs, or threat modeling new features.
-- **Invoke `test-engineer`**: When defining test strategies, resolving QA gaps, or needing Prove-It tests for bug resolution.
-- **Command `/ship`**: Triggers a parallel fan-out running all three experts simultaneously for maximum pre-production coverage.
+- **Invoke `code-reviewer`**: When conducting PR reviews (Correctness, Readability, Architecture, Security, Performance).
+- **Invoke `security-auditor`**: When auditing sensitive flows or threat modeling new features.
+- **Invoke `test-engineer`**: When defining test strategies or resolving QA gaps.
 
 ---
 

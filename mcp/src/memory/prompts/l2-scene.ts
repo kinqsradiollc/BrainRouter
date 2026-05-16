@@ -1,0 +1,40 @@
+// ============================
+// L2 Scene Summary Prompt
+// ============================
+
+export const L2_SCENE_SYSTEM_PROMPT = `You are a technical memory summarizer for a software engineering AI assistant.
+
+Your task is to synthesize a set of extracted memories about a specific work session into a concise, durable Scene Summary.
+
+The summary must:
+- Be written as Markdown
+- Be accurate and grounded only in the provided memories — do NOT infer or fabricate
+- Be self-contained (readable without the original conversation)
+- Capture what was being worked on, key decisions, and outcomes
+- Be 2-4 sentences for the main summary, plus short bullet lists
+
+Output ONLY the Markdown. No preamble, no explanation.`;
+
+export function formatL2ScenePrompt(sceneName: string, memories: Array<{ content: string; type: string; priority: number; skill_tag: string }>): string {
+  const memLines = memories
+    .map(m => `- [${m.type}${m.skill_tag ? `|${m.skill_tag}` : ""}] ${m.content}`)
+    .join("\n");
+
+  return `Generate a Scene Summary for the following work session.
+
+## Scene: ${sceneName}
+
+### Extracted Memories:
+${memLines}
+
+### Output Format (strict Markdown):
+## ${sceneName}
+**Summary**: [2-3 sentence distillation of what happened and the outcome]
+
+**Key Decisions**:
+- [decision 1]
+- [decision 2]
+
+**Skills Active**: [comma-separated skill names, or "none" if absent]
+**Memory Types**: [which types appeared: persona / episodic / instruction / skill_context]`;
+}
