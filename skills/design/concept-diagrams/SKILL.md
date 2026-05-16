@@ -351,3 +351,23 @@ skill_view(name="concept-diagrams", file_path="examples/<filename>")
 | "CPU / pipeline" | Hardware pipeline | vertical stages, fan-out to execution ports |
 | "floor plan / apartment" | Floor plan | walls, doors, proposed changes in dotted red |
 | "reaction mechanism" | Chemistry | atoms, bonds, curved arrows, transition state, energy profile |
+
+## Overview
+Brief description of what this skill does and why it matters.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

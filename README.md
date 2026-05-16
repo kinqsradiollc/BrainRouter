@@ -170,7 +170,7 @@ your-project/
   skills/     ← project-specific skills (shadow global ones by name)
   agents/     ← project personas
   references/ ← project reference docs
-  docs/       ← structured markdown docs (read via get_doc / update_doc)
+  docs/       ← structured markdown docs (read via get_doc)
 ```
 
 Local skills with the same name as a global BrainRouter skill **automatically override** the global version for that project.
@@ -188,7 +188,6 @@ Local skills with the same name as a global BrainRouter skill **automatically ov
 | `get_reference` | Fetch a reference document |
 | `list_docs` | List project docs |
 | `get_doc` | Read a project doc or specific section |
-| `update_doc` | Write/update a section in a project doc |
 | `create_skill` | Scaffold a new skill in the local project |
 | `update_skill` | Update an existing skill section |
 

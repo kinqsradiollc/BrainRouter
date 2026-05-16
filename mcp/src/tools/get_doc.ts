@@ -14,6 +14,7 @@ export async function getDoc(registry: Registry, args: z.infer<typeof getDocSche
   }
 
   const fragment = loadDocSection(manifest.filePath, args.section);
+
   return {
     content: [
       {
@@ -22,7 +23,6 @@ export async function getDoc(registry: Registry, args: z.infer<typeof getDocSche
       },
     ],
     metadata: {
-      source: fragment.source,
       tokenEstimate: fragment.tokenEstimate,
     },
   };

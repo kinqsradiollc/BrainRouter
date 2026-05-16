@@ -180,3 +180,20 @@ Apply changes in this order for maximum visual impact with minimum risk:
 - If the project uses Tailwind, check the version (v3 vs v4) before modifying config.
 - If the project has no framework, use vanilla CSS.
 - Keep changes reviewable and focused. Small, targeted improvements over big rewrites.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

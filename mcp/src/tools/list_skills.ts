@@ -9,11 +9,14 @@ export const listSkillsSchema = z.object({
 
 export async function listSkills(registry: Registry, args: z.infer<typeof listSkillsSchema>) {
   const skills = registry.listSkills(args.category, args.scope as SkillScope | 'all');
+  
+  const sanitized = skills.map(({ filePath, ...rest }) => rest);
+
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(skills, null, 2),
+        text: JSON.stringify(sanitized, null, 2),
       },
     ],
   };

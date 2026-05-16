@@ -47,3 +47,27 @@ Before finalizing any response, verify:
 - Every item the user requested is present and finished
 - Code blocks contain actual runnable code, not descriptions of what code would do
 - Nothing was shortened to save space
+
+## Overview
+Brief description of what this skill does and why it matters.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Workflow
+1. [Step one]
+2. [Step two]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

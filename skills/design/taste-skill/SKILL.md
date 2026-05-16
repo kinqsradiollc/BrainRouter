@@ -15,6 +15,7 @@ description: Senior UI/UX Engineer. Architect digital interfaces overriding defa
 ## 2. DEFAULT ARCHITECTURE & CONVENTIONS
 Unless the user explicitly specifies a different stack, adhere to these structural constraints to maintain consistency:
 
+* **DOCUMENTATION VERIFICATION [MANDATORY]:** Before making design decisions, you MUST run `list_docs` and use `get_doc` to read target design or theme constraints (e.g., from `docs/design` or `docs/theme`). The design documentation must guide your architectural choices.
 * **DEPENDENCY VERIFICATION [MANDATORY]:** Before importing ANY 3rd party library (e.g. `framer-motion`, `lucide-react`, `zustand`), you MUST check `package.json`. If the package is missing, you MUST output the installation command (e.g. `npm install package-name`) before providing the code. **Never** assume a library exists.
 * **Framework & Interactivity:** React or Next.js. Default to Server Components (`RSC`). 
     * **RSC SAFETY:** Global state works ONLY in Client Components. In Next.js, wrap providers in a `"use client"` component.
@@ -224,3 +225,27 @@ Evaluate your code against this matrix before outputting. This is the **last** f
 - [ ] Are empty, loading, and error states provided?
 - [ ] Are cards omitted in favor of spacing where possible?
 - [ ] Did you strictly isolate CPU-heavy perpetual animations in their own Client Components?
+
+## Overview
+Brief description of what this skill does and why it matters.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Workflow
+1. [Step one]
+2. [Step two]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

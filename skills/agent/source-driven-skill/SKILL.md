@@ -192,3 +192,12 @@ After implementing with source-driven development:
 - [ ] No deprecated APIs are used (checked against migration guides)
 - [ ] Conflicts between docs and existing code were surfaced to the user
 - [ ] Anything that could not be verified is explicitly flagged as unverified
+
+## Workflow
+1. [Step one]
+2. [Step two]
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

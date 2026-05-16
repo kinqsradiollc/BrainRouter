@@ -21,7 +21,7 @@ This skill is primarily an interactive dialogue. Invoke it with an idea, and the
 
 ```bash
 # Optional: Initialize the ideas directory
-bash /mnt/skills/user/idea-refine/scripts/idea-refine.sh
+mkdir -p ideas
 ```
 
 **Trigger Phrases:**
@@ -178,3 +178,17 @@ After completing an ideation session:
 - [ ] A "Not Doing" list makes trade-offs explicit
 - [ ] The output is a concrete artifact (markdown one-pager), not just conversation
 - [ ] The user confirmed the final direction before any implementation work
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

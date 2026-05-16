@@ -9,17 +9,28 @@ This document describes the structure and format of agent-skills skill files. Us
 
 ## File Location
 
-Every skill lives in its own directory under `skills/`:
+Skills live in the following directory structure depending on their scope:
+
+- **Universal Skills**: `skills/<category>/<skill-name>/SKILL.md`
+- **Project-Specific Skills**: `projects/<project-name>/skills/<category>/<skill-name>/SKILL.md`
+
+In the global MCP repository (BrainRouter), both folders are used to organize universal and project-level knowledge. In a local project repository, skills are typically stored in the `skills/` directory.
 
 ```
-skills/
-  skill-name/
-    SKILL.md           # Required: The skill definition
-    scripts/           # Optional: Runnable helpers used by the skill workflow
-    supporting-file.md # Optional: Reference material loaded on demand
+[root]/
+  skills/
+    api/
+      auth-skill/
+        SKILL.md
+  projects/
+    DateDrop/
+      skills/
+        api/
+          storage-skill/
+            SKILL.md
 ```
 
-`SKILL.md` is the only required file. Add `scripts/` only when the skill actually ships runnable helpers, and omit the directory entirely for markdown-only skills.
+`SKILL.md` is the only required file. You can also include a `scripts/` directory for runnable helpers or additional supporting markdown files.
 
 ## SKILL.md Format
 

@@ -1,13 +1,13 @@
 ---
 name: a11y-skill
-description: WCAG 2.1 AA accessibility mandates for the [PROJECT_NAME] frontend.
+description: WCAG 2.1 AA accessibility mandates for the frontend.
 ---
 
 # Accessibility (A11Y) Skill
 
 ## Overview
 
-[PROJECT_NAME] must meet WCAG 2.1 Level AA standards. Accessibility is a first-class citizen in our design system.
+must meet WCAG 2.1 Level AA standards. Accessibility is a first-class citizen in our design system.
 
 ## Workflow
 
@@ -54,3 +54,20 @@ description: WCAG 2.1 AA accessibility mandates for the [PROJECT_NAME] frontend.
 - [ ] Alt text is provided for all informative images.
 - [ ] Modals correctly trap and restore focus.
 - [ ] Contrast ratios meet WCAG AA standards.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

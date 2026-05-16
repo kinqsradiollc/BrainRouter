@@ -11,11 +11,15 @@ import type { RegistryConfig, BrainRouterConfig } from './types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Find the repo root by looking for AGENT.md or package.json
+// Find the repo root by looking for key markers: skills/, docs/, or package.json
 function findRepoRoot(start: string): string {
   let current = start;
   while (current !== resolve('/')) {
-    if (existsSync(join(current, 'AGENT.md')) || existsSync(join(current, 'package.json'))) {
+    if (
+      existsSync(join(current, 'skills')) ||
+      existsSync(join(current, 'docs')) ||
+      existsSync(join(current, 'package.json'))
+    ) {
       // If we found it, but we are inside the mcp folder, go one up to reach the BrainRouter root
       if (basename(current) === 'mcp') {
         return dirname(current);
@@ -24,7 +28,8 @@ function findRepoRoot(start: string): string {
     }
     current = dirname(current);
   }
-  return resolve(__dirname, '../../'); // Fallback
+  // Fallback to two levels up from dist/ (where this file usually lives)
+  return resolve(__dirname, '../../');
 }
 
 const GLOBAL_ROOT = findRepoRoot(__dirname);
@@ -50,8 +55,7 @@ function autoDetectLocalRoot(startDir: string): string | undefined {
 
   while (current !== root) {
     if (
-      existsSync(join(current, 'brainrouter.config.json')) ||
-      existsSync(join(current, 'AGENT.md'))
+      existsSync(join(current, 'brainrouter.config.json'))
     ) {
       // Make sure it's not the BrainRouter repo itself
       if (resolve(current) !== resolve(GLOBAL_ROOT)) {
@@ -96,8 +100,15 @@ export function resolveRegistryConfig(): RegistryConfig {
     autoDetectLocalRoot(process.cwd()) ??
     GLOBAL_ROOT; // single-repo fallback
 
+  let localProjectName: string | undefined;
+  if (localRoot) {
+    const config = readBrainRouterConfig(localRoot);
+    localProjectName = config.project ?? basename(localRoot);
+  }
+
   return {
     globalRoot: GLOBAL_ROOT,
     localRoot,
+    localProjectName,
   };
 }

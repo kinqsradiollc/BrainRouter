@@ -1,4 +1,4 @@
-# [PROJECT_NAME] Deployment Guide
+# Deployment Guide
 
 Instructions for deploying the project using Docker and related infrastructure.
 
@@ -11,7 +11,7 @@ docker-compose up -d
 
 ### Production Build
 ```bash
-docker build -t [PROJECT_NAME]-api .
+docker build -t-api .
 ```
 
 ---

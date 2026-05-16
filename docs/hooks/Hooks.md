@@ -1,12 +1,12 @@
-# [PROJECT_NAME] Custom Hooks
+# Custom Hooks
 
-This document provides an overview of all the custom React hooks available in the `@[PROJECT_NAME]/hooks` package. These hooks encapsulate the core business logic, API interactions, and state management used across both the Web and Mobile clients.
+This document provides an overview of all the custom React hooks available in the `@the project/hooks` package. These hooks encapsulate the core business logic, API interactions, and state management used across both the Web and Mobile clients.
 
 ---
 
 ## 🏗️ Architecture
 
-The hook layer sits between the UI components and the `@[PROJECT_NAME]/sdk` services. Hooks are designed to be:
+The hook layer sits between the UI components and the `@the project/sdk` services. Hooks are designed to be:
 - **Composable**: Build complex logic from simpler hooks.
 - **Reusable**: Share logic between different platforms (Web/Mobile).
 - **Testable**: Easily mockable for unit testing.
@@ -27,4 +27,4 @@ The hook layer sits between the UI components and the `@[PROJECT_NAME]/sdk` serv
 
 ## 📦 SDK Integration
 
-For modules like **Storage** and **Analytics**, the logic is handled via the `@[PROJECT_NAME]/sdk` services. Hooks provide a reactive interface to these services.
+For modules like **Storage** and **Analytics**, the logic is handled via the `@the project/sdk` services. Hooks provide a reactive interface to these services.

@@ -7,7 +7,7 @@ description: Architect production-ready domain routing. Configure Traefik ingres
 
 ## Overview
 
-Connect `api.[PROJECT_DOMAIN]` (Cloudflare-managed) to the [PROJECT_NAME] Node.js backend running in Docker via Traefik.
+Connect `api.the project domain` (Cloudflare-managed) to the Node.js backend running in Docker via Traefik.
 
 ## Architecture
 
@@ -15,16 +15,16 @@ Connect `api.[PROJECT_DOMAIN]` (Cloudflare-managed) to the [PROJECT_NAME] Node.j
 Browser
   │  HTTPS (TLS terminated by Cloudflare)
   ▼
-Cloudflare Edge (api.[PROJECT_DOMAIN])
+Cloudflare Edge (api.the project domain)
   │  Outbound tunnel (no open ports needed)
   ▼
 cloudflared daemon  ← Docker container, profile: production
   │  HTTP  http://traefik:80
   ▼
-Traefik v3          ← [PROJECT_NAME]-traefik container
+Traefik v3          ←-traefik container
   │  HTTP  :3001
   ▼
-Node.js / Express   ← [PROJECT_NAME]-backend container
+Node.js / Express   ←-backend container
 ```
 
 > Local dev skips cloudflared entirely. Traefik routes `Host(\`localhost\`)` directly.
@@ -35,13 +35,13 @@ Node.js / Express   ← [PROJECT_NAME]-backend container
 
 | Variable | Dev value | Prod value | Purpose |
 |---|---|---|---|
-| `DOMAIN` | `api.[PROJECT_DOMAIN]` | `api.[PROJECT_DOMAIN]` | Traefik HTTPS router host rule |
-| `ACME_EMAIL` | `admin@[PROJECT_DOMAIN]` | same | Let's Encrypt certificate contact |
+| `DOMAIN` | `api.the project domain` | `api.the project domain` | Traefik HTTPS router host rule |
+| `ACME_EMAIL` | `admin@the project domain` | same | Let's Encrypt certificate contact |
 | `CLOUDFLARE_TUNNEL_TOKEN` | *(blank)* | `<token from CF dashboard>` | Authenticates cloudflared to Cloudflare |
-| `FRONTEND_URL` | `http://localhost:3000` | `https://[PROJECT_DOMAIN]` | Email link base URL |
-| `CORS_ORIGIN` | `http://localhost:3000,https://[PROJECT_DOMAIN]` | `https://[PROJECT_DOMAIN]` | Allowed CORS origins |
-| `PASSKEY_RP_ID` | `localhost` | `[PROJECT_DOMAIN]` | WebAuthn Relying Party ID |
-| `PASSKEY_ORIGIN` | `http://localhost:3000` | `https://[PROJECT_DOMAIN]` | WebAuthn allowed origin |
+| `FRONTEND_URL` | `http://localhost:3000` | `https://the project domain` | Email link base URL |
+| `CORS_ORIGIN` | `http://localhost:3000,https://the project domain` | `https://the project domain` | Allowed CORS origins |
+| `PASSKEY_RP_ID` | `localhost` | `the project domain` | WebAuthn Relying Party ID |
+| `PASSKEY_ORIGIN` | `http://localhost:3000` | `https://the project domain` | WebAuthn allowed origin |
 
 ---
 
@@ -52,22 +52,22 @@ Two routers exist in `docker-compose.yml` on the `backend` service:
 ### HTTP Router (always active)
 
 ```yaml
-- "traefik.http.routers.backend.rule=Host(`localhost`) || Host(`api.[PROJECT_DOMAIN]`)"
+- "traefik.http.routers.backend.rule=Host(`localhost`) || Host(`api.the project domain`)"
 - "traefik.http.routers.backend.entrypoints=web"
 ```
 
-Accepts both `localhost` (dev) and `api.[PROJECT_DOMAIN]` (prod via cloudflared HTTP passthrough).
+Accepts both `localhost` (dev) and `api.the project domain` (prod via cloudflared HTTP passthrough).
 
 ### HTTPS Router (activates with Cloudflare Full strict)
 
 ```yaml
-- "traefik.http.routers.backend-secure.rule=Host(`api.[PROJECT_DOMAIN]`)"
+- "traefik.http.routers.backend-secure.rule=Host(`api.the project domain`)"
 - "traefik.http.routers.backend-secure.entrypoints=websecure"
 - "traefik.http.routers.backend-secure.tls=true"
 - "traefik.http.routers.backend-secure.tls.certresolver=letsencrypt"
 ```
 
-Traefik will auto-issue a Let's Encrypt cert once `api.[PROJECT_DOMAIN]` is publicly resolvable.
+Traefik will auto-issue a Let's Encrypt cert once `api.the project domain` is publicly resolvable.
 
 ---
 
@@ -89,7 +89,7 @@ Traefik will auto-issue a Let's Encrypt cert once `api.[PROJECT_DOMAIN]` is publ
 
 1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com) → **Networks → Tunnels → Create a tunnel**
 2. Choose **Cloudflared** connector
-3. Name the tunnel `[PROJECT_NAME]-tunnel`
+3. Name the tunnel `the project-tunnel`
 4. Copy the **tunnel token** — this is your `CLOUDFLARE_TUNNEL_TOKEN`
 
 ### Step 2 — Configure Public Hostname
@@ -99,7 +99,7 @@ In the tunnel settings, add a Public Hostname:
 | Field | Value |
 |---|---|
 | Subdomain | `api` |
-| Domain | `[PROJECT_DOMAIN]` |
+| Domain | `the project domain` |
 | Service Type | `HTTP` |
 | Service URL | `traefik:80` |
 
@@ -123,7 +123,7 @@ CLOUDFLARE_TUNNEL_TOKEN=<paste token here>
 docker compose --profile production up -d cloudflared
 
 # Verify connection
-docker logs [PROJECT_NAME]-cloudflared --tail 20
+docker logs-cloudflared --tail 20
 # Expected: "Connection established" / "Registered tunnel connection"
 ```
 
@@ -131,7 +131,7 @@ docker logs [PROJECT_NAME]-cloudflared --tail 20
 
 ```bash
 # Health check through the full tunnel
-curl https://api.[PROJECT_DOMAIN]/health
+curl https://api.the project domain/health
 # Expected: { "status": "ok", ... }
 
 # Check Traefik picked up the new router
@@ -186,8 +186,25 @@ The Traefik labels and ACME config in docker-compose remain identical — only t
 | Problem | Cause | Fix |
 |---|---|---|
 | `curl: (6) Could not resolve host` | DNS not propagated | Wait 1–5 min after Cloudflare saves the CNAME |
-| Tunnel connected but 502 | cloudflared can't reach `traefik:80` | Verify both are on `[PROJECT_NAME]-network`; check `docker network inspect` |
+| Tunnel connected but 502 | cloudflared can't reach `traefik:80` | Verify both are on `the project-network`; check `docker network inspect` |
 | Let's Encrypt cert not issued | Domain not publicly reachable on port 80 | Use Flexible SSL mode until tunnel is confirmed working |
-| CORS errors in browser | `CORS_ORIGIN` missing `https://[PROJECT_DOMAIN]` | Add to `.env` and restart backend |
-| WebAuthn fails on prod | `PASSKEY_RP_ID` still set to `localhost` | Update to `[PROJECT_DOMAIN]` and redeploy |
+| CORS errors in browser | `CORS_ORIGIN` missing `https://the project domain` | Add to `.env` and restart backend |
+| WebAuthn fails on prod | `PASSKEY_RP_ID` still set to `localhost` | Update to `the project domain` and redeploy |
 | `--profile production` not recognized | Old Docker Compose version | Upgrade to Docker Compose v2.x (`docker compose version`) |
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

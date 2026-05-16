@@ -39,7 +39,6 @@ import { getPersona, getPersonaSchema } from './tools/get_persona.js';
 import { getReference, getReferenceSchema } from './tools/get_reference.js';
 import { listDocs, listDocsSchema } from './tools/list_docs.js';
 import { getDoc, getDocSchema } from './tools/get_doc.js';
-import { updateDoc, updateDocSchema } from './tools/update_doc.js';
 import { createSkill, createSkillSchema } from './tools/create_skill.js';
 import { updateSkill, updateSkillSchema } from './tools/update_skill.js';
 
@@ -75,7 +74,7 @@ function buildMcpServer(registry: Registry): Server {
       },
       {
         name: 'get_skill',
-        description: 'Fetch a specific section of a skill (default: workflow).',
+        description: 'Fetch a specific section of a skill (default: workflow) or read an auxiliary file within the skill directory.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -89,6 +88,7 @@ function buildMcpServer(registry: Registry): Server {
               ],
               description: 'Section to load',
             },
+            file: { type: 'string', description: 'Optional filename to read instead of a section (e.g. "examples.md")' },
           },
           required: ['name'],
         },
@@ -150,22 +150,8 @@ function buildMcpServer(registry: Registry): Server {
         },
       },
       {
-        name: 'update_doc',
-        description: 'Update a section in a project document.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            name: { type: 'string' },
-            section: { type: 'string' },
-            content: { type: 'string' },
-            createIfMissing: { type: 'boolean' },
-          },
-          required: ['name', 'section', 'content'],
-        },
-      },
-      {
         name: 'create_skill',
-        description: 'Scaffold a new skill in the local project.',
+        description: 'Scaffold a new skill. If scope is "global", ensure content is universal (replace project-specific terms like "DateDrop" with generic ones like "the project") UNLESS the category is a project name.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -177,19 +163,23 @@ function buildMcpServer(registry: Registry): Server {
             workflow: { type: 'array', items: { type: 'string' } },
             usage: { type: 'string' },
             checklist: { type: 'array', items: { type: 'string' } },
+            scope: { type: 'string', enum: ['global', 'local'], description: 'Where to save: "local" (default) or "global" (BrainRouter repo)' },
+            project: { type: 'string', description: 'Optional project name for project-specific skills (e.g. "DateDrop")' },
           },
           required: ['name', 'category', 'description'],
         },
       },
       {
         name: 'update_skill',
-        description: 'Update an existing skill section.',
+        description: 'Update an existing skill section. Supports "shadowing" global skills locally or updating global skills directly.',
         inputSchema: {
           type: 'object',
           properties: {
             name: { type: 'string' },
             section: { type: 'string', enum: ['overview', 'workflow', 'usage', 'detailed_instructions', 'checklist', 'full'] },
             content: { type: 'string' },
+            targetScope: { type: 'string', enum: ['global', 'local'], description: 'Override where to save the update' },
+            project: { type: 'string', description: 'Optional project name if elevating to global' },
           },
           required: ['name', 'section', 'content'],
         },
@@ -208,7 +198,6 @@ function buildMcpServer(registry: Registry): Server {
         case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
         case 'list_docs':     return await listDocs(registry, listDocsSchema.parse(request.params.arguments));
         case 'get_doc':       return await getDoc(registry, getDocSchema.parse(request.params.arguments));
-        case 'update_doc':    return await updateDoc(registry, updateDocSchema.parse(request.params.arguments));
         case 'create_skill':  return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
         case 'update_skill':  return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
         default:

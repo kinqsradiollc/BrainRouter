@@ -21,7 +21,7 @@ This skill guides you through the process of transforming this template into a s
 3.  **Path B: Existing Project (Retrofit)**:
     - **Analyze**: Scan routes, components, and logic to understand the current architecture.
     - **Align**: Update `docs/api/API.md` and `docs/schema/Schema.md` to reflect the actual code.
-    - **Sanitize**: Replace any legacy project names with `[PROJECT_NAME]` or the new name.
+    - **Sanitize**: Replace any legacy project names with `the project` or the new name.
 
 4.  **Theme Selection (Common)**:
     - List available themes in `docs/design/themes/`.
@@ -59,7 +59,27 @@ If dropping this template into an existing project:
 4.  **Adopt Theme**: Choose a theme from `docs/design/themes/` and create a "Migration Plan" to update existing UI to the new standard incrementally.
 
 ### Phase 4: Sanitization
-Scan the repository and replace all instances of `[PROJECT_NAME]` and `[PROJECT_DOMAIN]` with the actual values.
+Scan the repository and replace all instances of `the project` and `the project domain` with the actual values.
 
 ### Phase 5: Next Steps
 Once the foundation is laid, direct the user to the `Spec-Driven Skill` or `Planning Skill` to start building features.
+
+## Overview
+Brief description of what this skill does and why it matters.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

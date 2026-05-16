@@ -1,11 +1,10 @@
 // ─────────────────────────────────────────────
 // BrainRouter MCP Server — Safe Writer
-// Creates and updates markdown files in localRoot only.
-// NEVER writes to globalRoot (BrainRouter repo skills).
+// Creates and updates markdown files in localRoot or globalRoot.
 // ─────────────────────────────────────────────
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { resolve, join, relative, dirname } from 'path';
+import { resolve, join, relative, dirname, basename } from 'path';
 import matter from 'gray-matter';
 import type { SkillSection } from './types.js';
 
@@ -13,14 +12,24 @@ import type { SkillSection } from './types.js';
 
 /**
  * Throws if targetPath is not inside allowedRoot.
- * Prevents writes to the global BrainRouter registry.
+ * Prevents unauthorized writes outside project roots.
  */
 function assertInsideRoot(targetPath: string, allowedRoot: string): void {
-  const rel = relative(resolve(allowedRoot), resolve(targetPath));
-  if (rel.startsWith('..') || resolve(targetPath) === resolve(allowedRoot)) {
+  const resolvedTarget = resolve(targetPath);
+  const resolvedRoot = resolve(allowedRoot);
+  const rel = relative(resolvedRoot, resolvedTarget);
+
+  if (rel.startsWith('..') || resolvedTarget === resolvedRoot) {
     throw new Error(
-      `WRITE BLOCKED: "${targetPath}" is outside the allowed local root "${allowedRoot}". ` +
-        `Global BrainRouter skills are read-only. Create a local skill instead.`,
+      `WRITE BLOCKED: "${targetPath}" is outside the allowed root "${allowedRoot}".`,
+    );
+  }
+
+  // Block writes to the universal skills folder to prevent agents from modifying core skills
+  const firstPart = rel.split('/')[0];
+  if (firstPart === 'skills') {
+    throw new Error(
+      `WRITE BLOCKED: Modifying the universal "skills/" folder is not allowed. All skills must be stored in "projects/".`,
     );
   }
 }
@@ -32,6 +41,7 @@ function assertInsideRoot(targetPath: string, allowedRoot: string): void {
  */
 function buildSkillTemplate(params: {
   name: string;
+  category: string;
   description: string;
   overview?: string;
   when_to_use?: string;
@@ -39,7 +49,7 @@ function buildSkillTemplate(params: {
   usage?: string;
   checklist?: string[];
 }): string {
-  const { name, description, overview, when_to_use, workflow, usage, checklist } = params;
+  const { name, category, description, overview, when_to_use, workflow, usage, checklist } = params;
 
   const workflowSection = workflow?.length
     ? workflow.map((step, i) => `${i + 1}. ${step}`).join('\n')
@@ -51,6 +61,7 @@ function buildSkillTemplate(params: {
 
   return `---
 name: ${name}
+category: ${category}
 description: ${description}
 ---
 
@@ -95,7 +106,8 @@ export interface ScaffoldSkillParams {
   name: string;
   category: string;
   description: string;
-  localRoot: string;
+  targetRoot: string;
+  project?: string;
   overview?: string;
   when_to_use?: string;
   workflow?: string[];
@@ -104,15 +116,24 @@ export interface ScaffoldSkillParams {
 }
 
 /**
- * Create a new SKILL.md in the local registry.
+ * Create a new SKILL.md in the specified registry.
  * Returns the absolute path of the created file.
  */
 export function scaffoldSkill(params: ScaffoldSkillParams): string {
-  const { name, category, localRoot, ...rest } = params;
-  const skillDir = join(localRoot, 'skills', category, name);
+  const { name, category, targetRoot, project, ...rest } = params;
+  
+  // Skills MUST follow projects/<project_name>/skills/<category>/<name>/ structure
+  if (!project) {
+    throw new Error('Project name is required to create a skill.');
+  }
+
+  const baseFolder = 'projects';
+  const projectFolder = project;
+  
+  const skillDir = join(targetRoot, baseFolder, projectFolder, 'skills', category, name);
   const skillPath = join(skillDir, 'SKILL.md');
 
-  assertInsideRoot(skillPath, localRoot);
+  assertInsideRoot(skillPath, targetRoot);
 
   if (existsSync(skillPath)) {
     throw new Error(
@@ -121,7 +142,7 @@ export function scaffoldSkill(params: ScaffoldSkillParams): string {
   }
 
   mkdirSync(skillDir, { recursive: true });
-  const content = buildSkillTemplate({ name, ...rest });
+  const content = buildSkillTemplate({ name, category, ...rest });
   writeFileSync(skillPath, content, 'utf-8');
   return skillPath;
 }
@@ -145,9 +166,9 @@ export function updateSkillSection(
   filePath: string,
   section: Extract<SkillSection, 'overview' | 'workflow' | 'usage' | 'detailed_instructions' | 'checklist' | 'full'>,
   newContent: string,
-  localRoot: string,
+  targetRoot: string,
 ): string {
-  assertInsideRoot(filePath, localRoot);
+  assertInsideRoot(filePath, targetRoot);
 
   const raw = readFileSync(filePath, 'utf-8');
   const parsed = matter(raw);
@@ -210,12 +231,24 @@ export function updateDocSection(
   filePath: string,
   sectionHeading: string,
   newContent: string,
-  localRoot: string,
+  targetRoot: string,
   createIfMissing = true,
 ): string {
-  assertInsideRoot(filePath, localRoot);
+  assertInsideRoot(filePath, targetRoot);
 
-  const raw = readFileSync(filePath, 'utf-8');
+  mkdirSync(dirname(filePath), { recursive: true });
+
+  let raw = '';
+  if (existsSync(filePath)) {
+    raw = readFileSync(filePath, 'utf-8');
+  } else {
+    if (!createIfMissing) {
+      throw new Error(`File "${filePath}" not found.`);
+    }
+    const name = basename(filePath, '.md').toUpperCase();
+    raw = `# ${name}\n`;
+  }
+
   const lines = raw.split('\n');
   const result: string[] = [];
   let inTarget = false;

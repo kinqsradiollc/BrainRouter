@@ -177,3 +177,24 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Ship | [ci-cd-skill](../../devops/ci-cd-skill/SKILL.md) | Automated quality gates on every change |
 | Ship | [adr-skill](../adr-skill/SKILL.md) | Document the why, not just the what |
 | Ship | [shipping-skill](../../lifecycle/shipping-skill/SKILL.md) | Pre-launch checklist, monitoring, rollback plan |
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Workflow
+1. [Step one]
+2. [Step two]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

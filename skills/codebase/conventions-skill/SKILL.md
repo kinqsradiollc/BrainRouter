@@ -1,13 +1,13 @@
 ---
 name: conventions-skill
-description: Naming patterns, formatting rules, import order, and module design standards for [PROJECT_NAME].
+description: Naming patterns, formatting rules, import order, and module design standards for.
 ---
 
 # Coding Conventions Skill
 
 ## Overview
 
-This skill ensures all new code written in [PROJECT_NAME] matches existing style and patterns. Load this before writing new files, adding features, or conducting code reviews.
+This skill ensures all new code written in matches existing style and patterns. Load this before writing new files, adding features, or conducting code reviews.
 
 ## Workflow
 
@@ -66,3 +66,20 @@ This skill ensures all new code written in [PROJECT_NAME] matches existing style
 - [ ] Imports are ordered and grouped per `CONV-003`.
 - [ ] All async code uses `try/catch`.
 - [ ] Functions stay under 50 lines.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

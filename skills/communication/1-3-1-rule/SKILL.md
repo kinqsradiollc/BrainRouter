@@ -89,3 +89,16 @@ Agent:
 3. Wrap existing API calls in `api_client.py` with the retry utility.
 4. Add unit tests mocking HTTP responses for each retry scenario.
 5. Verify under load with a simple stress test against a flaky endpoint mock.
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

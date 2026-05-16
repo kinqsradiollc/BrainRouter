@@ -1,6 +1,6 @@
 ---
 name: concerns-skill
-description: Framework for surfacing and tracking tech debt, known bugs, and security gaps in [PROJECT_NAME].
+description: Framework for surfacing and tracking tech debt, known bugs, and security gaps in.
 ---
 
 # Codebase Concerns Skill
@@ -60,3 +60,20 @@ This skill governs how known risks, tech debt, and codebase health issues are su
 - [ ] Bugs include a reproduction trigger.
 - [ ] Resolved concerns are removed or marked fixed with a date.
 - [ ] New concerns added after any audit or incident.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

@@ -1,13 +1,13 @@
 ---
 name: testing-skill
-description: Supertest, Vitest, and Shield verification standards for [PROJECT_NAME].
+description: Supertest, Vitest, and Shield verification standards for.
 ---
 
 # Testing Skill
 
 ## Overview
 
-This skill ensures every [PROJECT_NAME] feature is robust, regression-free, and secure. All new features **must** include tests that follow these rules.
+This skill ensures every feature is robust, regression-free, and secure. All new features **must** include tests that follow these rules.
 
 ## Workflow
 
@@ -62,3 +62,20 @@ describe('POST /api/v1/resource', () => {
 - [ ] Database and External Services are mocked.
 - [ ] 100% of error paths are exercised.
 - [ ] Snapshots or object matching verify response structure.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

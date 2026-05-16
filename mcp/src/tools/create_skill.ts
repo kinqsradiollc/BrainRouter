@@ -11,12 +11,19 @@ export const createSkillSchema = z.object({
   workflow: z.array(z.string()).optional(),
   usage: z.string().optional(),
   checklist: z.array(z.string()).optional(),
+  scope: z.enum(['global', 'local']).optional().default('local'),
+  project: z.string().optional(),
 });
 
 export async function createSkill(registry: Registry, args: z.infer<typeof createSkillSchema>) {
   const localRoot = registry.getLocalRoot();
-  if (!localRoot) {
-    throw new Error('No local root detected. Skill creation is only allowed in project repositories.');
+  const globalRoot = registry.getGlobalRoot();
+  const localProjectName = registry.getLocalProjectName();
+  
+  const targetRoot = args.scope === 'global' ? globalRoot : localRoot;
+
+  if (!targetRoot) {
+    throw new Error(`No ${args.scope} root detected.`);
   }
 
   // Check if skill exists
@@ -24,9 +31,12 @@ export async function createSkill(registry: Registry, args: z.infer<typeof creat
     throw new Error(`Skill "${args.name}" already exists.`);
   }
 
-  const createdPath = scaffoldSkill({
+  const project = args.project || localProjectName;
+
+  scaffoldSkill({
     ...args,
-    localRoot,
+    project,
+    targetRoot,
   });
 
   registry.refresh();
@@ -35,11 +45,12 @@ export async function createSkill(registry: Registry, args: z.infer<typeof creat
     content: [
       {
         type: 'text',
-        text: `Successfully created skill "${args.name}" in category "${args.category}".`,
+        text: `Successfully created ${args.scope} skill "${args.name}"${project ? ` for project "${project}"` : ` in category "${args.category}"`}.`,
       },
     ],
     metadata: {
-      path: createdPath,
+      scope: args.scope,
+      project,
     },
   };
 }

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { readFileSync } from 'fs';
+import { dirname, normalize, resolve } from 'path';
 import type { Registry } from '../registry.js';
 import { loadSkillSection } from '../loader.js';
 import type { SkillSection } from '../types.js';
@@ -18,6 +20,7 @@ export const getSkillSchema = z.object({
     'rationalizations',
     'full',
   ]).optional().default('workflow'),
+  file: z.string().optional(),
 });
 
 export async function getSkill(registry: Registry, args: z.infer<typeof getSkillSchema>) {
@@ -26,7 +29,35 @@ export async function getSkill(registry: Registry, args: z.infer<typeof getSkill
     throw new Error(`Skill "${args.name}" not found.`);
   }
 
+  if (args.file) {
+    const skillDir = dirname(manifest.filePath);
+    const targetPath = resolve(skillDir, normalize(args.file));
+    if (!targetPath.startsWith(resolve(skillDir))) {
+      throw new Error('Directory traversal is not allowed.');
+    }
+    
+    let content: string;
+    try {
+      content = readFileSync(targetPath, 'utf-8');
+    } catch (err: any) {
+      throw new Error(`Could not read file "${args.file}" in skill "${args.name}": ${err.message}`);
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: content,
+        },
+      ],
+      metadata: {
+        scope: manifest.scope,
+      },
+    };
+  }
+
   const fragment = loadSkillSection(manifest.filePath, args.section as SkillSection, manifest.scope);
+  
   return {
     content: [
       {
@@ -35,7 +66,6 @@ export async function getSkill(registry: Registry, args: z.infer<typeof getSkill
       },
     ],
     metadata: {
-      source: fragment.source,
       scope: fragment.scope,
       tokenEstimate: fragment.tokenEstimate,
     },

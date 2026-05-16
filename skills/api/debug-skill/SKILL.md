@@ -504,3 +504,23 @@ Missing required field `email`. Server validation rejects before processing.
 
 - `systematic-debugging` — once the failing API layer is isolated, root-cause your code
 - `test-driven-development` — write the regression test before shipping the fix
+
+## Overview
+Brief description of what this skill does and why it matters.
+
+## Workflow
+1. [Step one]
+2. [Step two]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

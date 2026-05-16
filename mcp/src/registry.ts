@@ -69,12 +69,16 @@ function deriveCategory(filePath: string, skillsRoot: string): string {
 /**
  * Parse frontmatter from a SKILL.md. Returns name + description.
  */
-function parseSkillFrontmatter(filePath: string): { name: string; description: string } | null {
+function parseSkillFrontmatter(filePath: string): { name: string; description: string; category?: string } | null {
   try {
     const raw = readFileSync(filePath, 'utf-8');
     const { data } = matter(raw);
     if (data.name && data.description) {
-      return { name: String(data.name), description: String(data.description) };
+      return { 
+        name: String(data.name), 
+        description: String(data.description),
+        category: data.category ? String(data.category) : undefined
+      };
     }
   } catch {
     // Skip unparseable files
@@ -135,7 +139,10 @@ export class Registry {
       this.indexSkills(this.config.localRoot, 'local');
       this.indexPersonas(this.config.localRoot);
       this.indexReferences(this.config.localRoot);
-      // Local docs (project-specific source-of-truth)
+    }
+
+    // Local docs (project-specific source-of-truth)
+    if (this.config.localRoot) {
       this.indexDocs(this.config.localRoot);
     }
   }
@@ -143,23 +150,52 @@ export class Registry {
   // ─── Indexing ───────────────────────────
 
   private indexSkills(root: string, scope: SkillScope): void {
-    const skillsDir = join(root, 'skills');
-    const skillFiles = findFiles(skillsDir, 'SKILL.md');
+    const universalSkillsDir = join(root, 'skills');
+    const projectSkillsDir = join(root, 'projects');
 
-    for (const filePath of skillFiles) {
-      const meta = parseSkillFrontmatter(filePath);
-      if (!meta) continue; // Skip skills without valid frontmatter
+    // Index Universal Skills
+    if (existsSync(universalSkillsDir)) {
+      const skillFiles = findFiles(universalSkillsDir, 'SKILL.md');
+      for (const filePath of skillFiles) {
+        const meta = parseSkillFrontmatter(filePath);
+        if (!meta) continue;
 
-      const category = deriveCategory(filePath, skillsDir);
-      const manifest: SkillManifest = {
-        name: meta.name,
-        category,
-        description: meta.description,
-        filePath,
-        scope,
-      };
+        const category = deriveCategory(filePath, universalSkillsDir);
+        this.skills.set(meta.name, {
+          name: meta.name,
+          category,
+          description: meta.description,
+          filePath,
+          scope,
+        });
+      }
+    }
 
-      this.skills.set(meta.name, manifest);
+    // Index Project-Specific Skills
+    if (existsSync(projectSkillsDir)) {
+      const skillFiles = findFiles(projectSkillsDir, 'SKILL.md');
+      for (const filePath of skillFiles) {
+        const meta = parseSkillFrontmatter(filePath);
+        if (!meta) continue;
+
+        const rel = relative(projectSkillsDir, filePath);
+        const parts = rel.split('/');
+        // project should normally always exist since parts > 1 for valid structure
+        const project = parts.length > 0 ? parts[0] : '';
+        
+        // New structure: <project>/skills/<category>/<name>/SKILL.md
+        // parts[0]=project, parts[1]=skills, parts[2]=category, parts[3]=name
+        const category = meta.category || (parts.length >= 4 ? parts[2] : 'api');
+
+        this.skills.set(meta.name, {
+          name: meta.name,
+          category,
+          project,
+          description: meta.description,
+          filePath,
+          scope,
+        });
+      }
     }
   }
 
@@ -228,11 +264,25 @@ export class Registry {
   // ─── Queries ────────────────────────────
 
   getSkill(name: string): SkillManifest | undefined {
-    return this.skills.get(name);
+    const skill = this.skills.get(name);
+    if (!skill) return undefined;
+
+    // Filter by project: allow if universal (!skill.project) or matches current project
+    if (this.config.localProjectName && skill.project && skill.project !== this.config.localProjectName) {
+      return undefined;
+    }
+
+    return skill;
   }
 
   listSkills(category?: string, scope?: SkillScope | 'all'): SkillManifest[] {
     let all = Array.from(this.skills.values());
+    
+    // Filter by project
+    if (this.config.localProjectName) {
+      all = all.filter((s) => !s.project || s.project === this.config.localProjectName);
+    }
+
     if (category) all = all.filter((s) => s.category === category);
     if (scope && scope !== 'all') all = all.filter((s) => s.scope === scope);
     return all.sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
@@ -241,6 +291,12 @@ export class Registry {
   searchSkills(query: string, scope?: SkillScope | 'all'): Array<SkillManifest & { relevance: string }> {
     const q = query.toLowerCase();
     let all = Array.from(this.skills.values());
+
+    // Filter by project
+    if (this.config.localProjectName) {
+      all = all.filter((s) => !s.project || s.project === this.config.localProjectName);
+    }
+
     if (scope && scope !== 'all') all = all.filter((s) => s.scope === scope);
 
     return all
@@ -290,5 +346,10 @@ export class Registry {
   /** The global root (BrainRouter repo). */
   getGlobalRoot(): string {
     return this.config.globalRoot;
+  }
+
+  /** The local project name. */
+  getLocalProjectName(): string | undefined {
+    return this.config.localProjectName;
   }
 }

@@ -1,13 +1,13 @@
 ---
 name: auth-skill
-description: Identity, JWT rules, and "Kill Switch" logic for [PROJECT_NAME] authentication.
+description: Identity, JWT rules, and "Kill Switch" logic for authentication.
 ---
 
 # Authentication & Security Skill
 
 ## Overview
 
-This skill governs the identity and session lifecycle of [PROJECT_NAME]. Failure to adhere to these rules results in an automatic security violation `[SEC-202]`.
+This skill governs the identity and session lifecycle of. Failure to adhere to these rules results in an automatic security violation `[SEC-202]`.
 
 ## Workflow
 
@@ -43,3 +43,20 @@ When revoking a session, perform these steps:
 - [ ] Password reset invalidates all tokens.
 - [ ] Passkey counter is verified.
 - [ ] Refresh tokens are in `httpOnly` cookies.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

@@ -43,6 +43,8 @@ export interface SkillManifest {
   filePath: string;
   /** global = BrainRouter repo; local = downstream project repo */
   scope: SkillScope;
+  /** Optional project name for project-specific skills */
+  project?: string;
 }
 
 export interface DocManifest {
@@ -87,6 +89,8 @@ export interface RegistryConfig {
   globalRoot: string;
   /** Absolute path to downstream project repo root (optional) */
   localRoot?: string;
+  /** Name of the local project (from brainrouter.config.json) */
+  localProjectName?: string;
 }
 
 /** Shape of brainrouter.config.json in a downstream repo */

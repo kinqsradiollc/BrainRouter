@@ -64,3 +64,23 @@ After syncing:
 - [ ] No placeholder values remain in the synchronized sections.
 - [ ] The human has reviewed and approved the documentation changes.
 - [ ] Related files (e.g., `README.md`) were checked for consistency.
+
+## Overview
+Brief description of what this skill does and why it matters.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

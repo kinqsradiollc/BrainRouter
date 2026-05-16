@@ -1,10 +1,10 @@
-# [PROJECT_NAME] API Documentation
+# API Documentation
 
 This document outlines the API endpoints, authentication, and data structures for the project.
 
 ## 🚀 Base URL
 - Development: `http://localhost:3001/api`
-- Production: `https://api.[PROJECT_DOMAIN].com`
+- Production: `https://api.the project domain.com`
 
 ---
 

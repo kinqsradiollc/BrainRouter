@@ -9,11 +9,14 @@ export const searchSkillsSchema = z.object({
 
 export async function searchSkills(registry: Registry, args: z.infer<typeof searchSkillsSchema>) {
   const results = registry.searchSkills(args.query, args.scope as SkillScope | 'all');
+  
+  const sanitized = results.map(({ filePath, ...rest }) => rest);
+
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(results, null, 2),
+        text: JSON.stringify(sanitized, null, 2),
       },
     ],
   };

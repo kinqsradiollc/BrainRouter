@@ -25,6 +25,8 @@ Decompose work into small, verifiable tasks with explicit acceptance criteria. G
 
 Before writing any code, operate in read-only mode:
 
+- Run `list_docs` to see what structural constraints and project conventions exist.
+- Run `get_doc` to retrieve any project-specific constraints from the `docs/` folder (such as design themes, API structures, or schemas).
 - Read the spec and relevant codebase sections
 - Identify existing patterns and conventions
 - Map dependencies between components
@@ -221,3 +223,12 @@ Before starting implementation, confirm:
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases
 - [ ] The human has reviewed and approved the plan
+
+## Workflow
+1. [Step one]
+2. [Step two]
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

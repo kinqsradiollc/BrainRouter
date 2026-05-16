@@ -8,11 +8,14 @@ export const listDocsSchema = z.object({
 
 export async function listDocs(registry: Registry, args: z.infer<typeof listDocsSchema>) {
   const docs = registry.listDocs(args.category as DocCategory);
+  
+  const sanitized = docs.map(({ filePath, ...rest }) => rest);
+
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(docs, null, 2),
+        text: JSON.stringify(sanitized, null, 2),
       },
     ],
   };

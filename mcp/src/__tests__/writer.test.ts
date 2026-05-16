@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { scaffoldSkill, updateSkillSection, updateDocSection } from '../writer.js';
-import { readFileSync, mkdirSync, rmSync, existsSync } from 'fs';
+import { readFileSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 
@@ -15,33 +15,70 @@ describe('writer.ts', () => {
     mkdirSync(globalRoot, { recursive: true });
   });
 
-  it('should scaffold a new skill in localRoot', () => {
+  it('should scaffold a new skill in targetRoot (local)', () => {
     const params = {
       name: 'new-skill',
       category: 'agent',
       description: 'New description',
-      localRoot,
+      targetRoot: localRoot,
+      project: 'TestProject',
     };
-    
+
     const path = scaffoldSkill(params);
     expect(existsSync(path)).toBe(true);
     expect(path).toContain(localRoot);
-    
+    expect(path).toContain(join('projects', 'TestProject', 'skills', 'agent', 'new-skill', 'SKILL.md'));
+
     const content = readFileSync(path, 'utf-8');
     expect(content).toContain('name: new-skill');
     expect(content).toContain('description: New description');
   });
 
-  it('should block writes outside of localRoot', () => {
+  it('should scaffold a new skill in targetRoot (global)', () => {
+    const params = {
+      name: 'global-skill',
+      category: 'universal',
+      description: 'Global description',
+      targetRoot: globalRoot,
+      project: 'Universal',
+    };
+
+    const path = scaffoldSkill(params);
+    expect(existsSync(path)).toBe(true);
+    expect(path).toContain(globalRoot);
+    expect(path).toContain(join('projects', 'Universal', 'skills', 'universal', 'global-skill', 'SKILL.md'));
+
+    const content = readFileSync(path, 'utf-8');
+    expect(content).toContain('name: global-skill');
+  });
+
+  it('should scaffold a new project-specific skill in targetRoot (global)', () => {
+    const params = {
+      name: 'storage-skill',
+      category: 'api',
+      description: 'Storage description',
+      targetRoot: globalRoot,
+      project: 'DateDrop',
+    };
+
+    const path = scaffoldSkill(params);
+    expect(existsSync(path)).toBe(true);
+    expect(path).toContain(join(globalRoot, 'projects', 'DateDrop', 'skills', 'api', 'storage-skill', 'SKILL.md'));
+
+    const content = readFileSync(path, 'utf-8');
+    expect(content).toContain('name: storage-skill');
+  });
+
+  it('should block writes outside of targetRoot', () => {
     const outsidePath = resolve('/tmp/not-my-project/SKILL.md');
-    
+
     expect(() => {
-        updateSkillSection(outsidePath, 'workflow', 'content', localRoot);
+      updateSkillSection(outsidePath, 'workflow', 'content', localRoot);
     }).toThrow(/WRITE BLOCKED/);
   });
 
   it('should update a skill section and preserve frontmatter', () => {
-    const skillDir = join(localRoot, 'skills', 'agent', 'test-skill');
+    const skillDir = join(localRoot, 'projects', 'TestProject', 'skills', 'agent', 'test-skill');
     mkdirSync(skillDir, { recursive: true });
     const skillPath = join(skillDir, 'SKILL.md');
     const initial = `---
@@ -52,9 +89,9 @@ description: old desc
 Old step.
 `;
     writeFileSync(skillPath, initial);
-    
+
     updateSkillSection(skillPath, 'workflow', 'New step.', localRoot);
-    
+
     const updated = readFileSync(skillPath, 'utf-8');
     expect(updated).toContain('description: old desc');
     expect(updated).toContain('New step.');
@@ -66,13 +103,11 @@ Old step.
     mkdirSync(docDir, { recursive: true });
     const docPath = join(docDir, 'API.md');
     writeFileSync(docPath, '## Endpoints\n- GET /old');
-    
+
     updateDocSection(docPath, 'Endpoints', '- GET /new', localRoot);
-    
+
     const updated = readFileSync(docPath, 'utf-8');
     expect(updated).toContain('- GET /new');
     expect(updated).not.toContain('- GET /old');
   });
 });
-
-import { writeFileSync } from 'fs';

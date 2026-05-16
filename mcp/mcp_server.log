@@ -1,0 +1,11 @@
+
+> @brainrouter/mcp-server@0.1.0 start:http
+> node dist/index.js --http --port 3747
+
+
+🧠 BrainRouter MCP Server
+   Transport : HTTP (Streamable)
+   Endpoint  : http://localhost:3747/mcp
+   Health    : http://localhost:3747/health
+   Root      : /Users/anhdang/Documents/Github/BrainRouter
+

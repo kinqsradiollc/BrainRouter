@@ -1,13 +1,13 @@
 ---
 name: performance-skill
-description: Redis caching and Postgres replication rules for [PROJECT_NAME] performance and scalability.
+description: Redis caching and Postgres replication rules for performance and scalability.
 ---
 
 # Performance & Scalability Skill
 
 ## Overview
 
-This skill ensures [PROJECT_NAME] remains fast and responsive as the user base and data volume grows.
+This skill ensures remains fast and responsive as the user base and data volume grows.
 
 ## Workflow
 
@@ -63,3 +63,20 @@ export const getVibes = async (req: Request, res: Response) => {
 - [ ] `readQuery` vs `writeQuery` is used correctly.
 - [ ] No `SELECT *` is used; only required columns are fetched.
 - [ ] Queries are optimized with proper indices.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

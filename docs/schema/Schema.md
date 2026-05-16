@@ -1,4 +1,4 @@
-# [PROJECT_NAME] Database Schema
+# Database Schema
 
 This document describes the data models and relationships for the project.
 

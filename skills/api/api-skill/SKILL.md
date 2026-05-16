@@ -1,15 +1,18 @@
 ---
 name: api-skill
-description: Mandatory middleware and validation boilerplate for fast, consistent, and secure [PROJECT_NAME] endpoints.
+description: Mandatory middleware and validation boilerplate for fast, consistent, and secure endpoints.
 ---
 
 # API Standards Skill
 
 ## Overview
 
-This skill ensures every [PROJECT_NAME] endpoint is fast, consistent, and secure.
+This skill ensures every endpoint is fast, consistent, and secure.
 
 ## Workflow
+
+### 0️⃣ Mandatory Documentation Check
+Before crafting or modifying any endpoint, you **must** run `list_docs` and use `get_doc` to retrieve any project-specific API documentation (e.g., from `docs/api`). Your API design must adhere exactly to the defined schemas and conventions in the living documentation.
 
 ### 🛡️ The "Security Shield" Boilerplate
 
@@ -79,3 +82,20 @@ export const myNewEndpoint = [
 - [ ] Zod schema covers all inputs.
 - [ ] No internal system errors are leaked.
 - [ ] Cursor pagination is used for lists.
+
+## When to Use
+- Use when: [trigger condition]
+- NOT for: [exclusion]
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I can skip this | Following the defined process prevents regressions |
+
+## Red Flags
+- Observable signs that this skill is being violated.
+
+## Verification
+After completing the skill, confirm:
+- [ ] The process was followed correctly.
+- [ ] Required outcomes are met.

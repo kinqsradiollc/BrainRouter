@@ -1,4 +1,4 @@
-# [PROJECT_NAME] Scaling Strategy
+# Scaling Strategy
 
 Roadmap for handling growth and ensuring system performance at scale.
 
