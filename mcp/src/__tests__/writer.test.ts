@@ -58,12 +58,12 @@ describe('writer.ts', () => {
       category: 'api',
       description: 'Storage description',
       targetRoot: globalRoot,
-      project: 'DateDrop',
+      project: 'TestProject',
     };
 
     const path = scaffoldSkill(params);
     expect(existsSync(path)).toBe(true);
-    expect(path).toContain(join(globalRoot, 'projects', 'DateDrop', 'skills', 'api', 'storage-skill', 'SKILL.md'));
+    expect(path).toContain(join(globalRoot, 'projects', 'TestProject', 'skills', 'api', 'storage-skill', 'SKILL.md'));
 
     const content = readFileSync(path, 'utf-8');
     expect(content).toContain('name: storage-skill');

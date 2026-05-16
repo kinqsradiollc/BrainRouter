@@ -16,7 +16,6 @@
  *
  * Usage:
  *   node scripts/setup-mcp.js /path/to/your/project
- *   node scripts/setup-mcp.js /Users/anhdang/Documents/Github/DateDrop
  *
  * Or via npm (defaults to the BrainRouter repo root):
  *   npm run setup:mcp

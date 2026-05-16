@@ -48,7 +48,7 @@ If you want to run BrainRouter as an HTTP server (shareable over a network or vi
 ### Step 1 — Clone & Build
 
 ```bash
-git clone https://github.com/[YOUR_USERNAME]/BrainRouter.git
+git clone https://github.com/kinqsradiollc/BrainRouter.git
 cd BrainRouter/mcp
 npm install
 npm run build
@@ -63,13 +63,13 @@ Run the setup script pointing at the project you want BrainRouter to work on:
 npm run setup:mcp -- /path/to/your/project
 
 # Example:
-npm run setup:mcp -- /Users/anhdang/Documents/Github/DateDrop
+npm run setup:mcp -- /path/to/your/project
 ```
 
 This writes ready-to-paste config files into `<your-project>/.brainrouter/`:
 
 ```
-DateDrop/
+YourProject/
   .brainrouter/
     mcp.cursor.json        ← ⚡ Cursor
     mcp.vscode.json        ← 🐙 VS Code / GitHub Copilot
@@ -117,24 +117,28 @@ Fully restart the tool after editing its config. It will spawn the BrainRouter s
 
 ## 📡 Remote MCP / HTTP (Optional)
 
-> Use this if you want BrainRouter accessible via a URL (e.g. shared across machines, or via Docker).
+Use this if you want BrainRouter accessible via a URL (e.g. shared across machines, or via Docker).
 
-The MCP spec supports a **Streamable HTTP** transport. To use it, configure your tool with a `serverUrl` instead of `command`:
+BrainRouter supports the **Streamable HTTP** transport. To use it, first start the server in HTTP mode:
+
+```bash
+# Start BrainRouter as an HTTP server
+node dist/index.js --root /path/to/project --http --port 3747
+```
+
+Then configure your tool with a `serverUrl` instead of `command`:
 
 ```json
 {
   "mcpServers": {
     "brainrouter": {
-      "serverUrl": "http://localhost:3747/mcp",
-      "headers": {
-        "Content-Type": "application/json"
-      }
+      "serverUrl": "http://localhost:3747/mcp"
     }
   }
 }
 ```
 
-> ⚠️ **HTTP transport is not yet implemented** in this build. The current server only supports stdio. A future release will add `--http` / `--port` flags to start the HTTP server.
+You can also use the `/health` endpoint to verify the server is running: `curl http://localhost:3747/health`.
 
 ---
 
@@ -188,8 +192,8 @@ Local skills with the same name as a global BrainRouter skill **automatically ov
 | `get_reference` | Fetch a reference document |
 | `list_docs` | List project docs |
 | `get_doc` | Read a project doc or specific section |
-| `create_skill` | Scaffold a new skill in the local project |
-| `update_skill` | Update an existing skill section |
+| `create_skill` | Scaffold a new skill in the local project or global registry |
+| `update_skill` | Update an existing skill section (supports shadowing) |
 
 ---
 

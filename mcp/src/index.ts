@@ -151,7 +151,7 @@ function buildMcpServer(registry: Registry): Server {
       },
       {
         name: 'create_skill',
-        description: 'Scaffold a new skill. If scope is "global", ensure content is universal (replace project-specific terms like "DateDrop" with generic ones like "the project") UNLESS the category is a project name.',
+        description: 'Scaffold a new skill. If scope is "global", ensure content is universal (replace project-specific terms like "YourProject" with generic ones like "the project") UNLESS the category is a project name.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -164,7 +164,7 @@ function buildMcpServer(registry: Registry): Server {
             usage: { type: 'string' },
             checklist: { type: 'array', items: { type: 'string' } },
             scope: { type: 'string', enum: ['global', 'local'], description: 'Where to save: "local" (default) or "global" (BrainRouter repo)' },
-            project: { type: 'string', description: 'Optional project name for project-specific skills (e.g. "DateDrop")' },
+            project: { type: 'string', description: 'Optional project name for project-specific skills (e.g. "YourProject")' },
           },
           required: ['name', 'category', 'description'],
         },

@@ -23,7 +23,7 @@ In the global MCP repository (BrainRouter), both folders are used to organize un
       auth-skill/
         SKILL.md
   projects/
-    DateDrop/
+    YourProject/
       skills/
         api/
           storage-skill/
