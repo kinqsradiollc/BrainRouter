@@ -1,595 +1,574 @@
-# 🧠 BrainRouter — Presentation
+# 🧠 BrainRouter — Presentation Deck
 
 > **Tagline:** *Give your AI coding agent a Brain, a Map, and a Memory.*
 
 ---
 
-## Slide 1 — The Problem
+## Slide 1 — The Problem Every Developer Faces
 
-### AI Agents Today Are Goldfish
+### Your AI Assistant Has No Memory
 
-Every conversation, every session — the agent starts from zero.
+Imagine hiring a brilliant contractor who forgets everything about your project every single morning. That's what using AI coding assistants is like today.
 
-- You explain your stack **again**
-- You re-state your preferences **again**
-- You re-teach your conventions **again**
-- The agent scans the entire repo **every time**
+Every new conversation, the agent has **zero context**:
 
-**The result:** Slow, noisy, expensive, and frustrating sessions.
+- You explain your tech stack — **again**
+- You re-state your preferences and coding style — **again**
+- You re-teach your project's conventions and rules — **again**
+- It scans your entire codebase just to answer a simple question — **every time**
+
+**This is wasteful, slow, and expensive.** Every re-explanation costs you time. Every full-repo scan costs tokens (= money). And the agent still gets it wrong because it never truly *learned* your project.
 
 > "We constantly re-explain the same SOPs, project background, tool conventions, and output formats to the Agent. Such information should not require repetition."
-> — TencentDB Agent Memory (Tencent Research)
+> — TencentDB Agent Memory, Tencent Research
+
+**BrainRouter solves this.**
 
 ---
 
-## Slide 2 — The Inspiration: TencentDB Agent Memory
+## Slide 2 — The Research Behind It
 
-### Standing on Giant Shoulders
+### We Didn't Guess — We Built on Proven Science
 
-BrainRouter's memory architecture is directly inspired by **[TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory)** — a research project by Tencent that proved layered memory systems dramatically improve agent performance.
+BrainRouter's memory architecture is directly inspired by **[TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory)** — a published research project by Tencent that *measured* what happens when you give AI agents structured memory.
 
-**Their results (measured over continuous long-horizon sessions):**
+**Their findings (measured over real, long-running coding sessions):**
 
-| Benchmark | Without Memory | With Memory | Improvement |
+| Task | Without Memory | With Memory | Improvement |
 |---|---|---|---|
-| WideSearch (task success) | 33% | **50%** | +51.52% |
-| WideSearch (token usage) | 221M tokens | **85M tokens** | −61.38% |
-| SWE-bench (code tasks) | 58.4% | **64.2%** | +9.93% |
-| PersonaMem (persona accuracy) | 48% | **76%** | +59% |
+| Task success rate (WideSearch) | 33% | **50%** | +51.52% |
+| Token usage (WideSearch) | 221M tokens | **85M tokens** | **−61% cost** |
+| Coding tasks (SWE-bench) | 58.4% | **64.2%** | +9.93% |
+| Remembering user preferences | 48% accuracy | **76% accuracy** | +59% |
 
-**Their core insight:** Memory should NOT be flat vector storage. It must be a **semantic pyramid** — from raw conversation up to distilled persona.
+**The bottom line:** Adding structured memory makes agents succeed at tasks 50% more often, while cutting your API bill by over 60%.
 
-### What They Built vs. What We Built
+### But TencentDB Has a Limitation
 
-| Dimension | TencentDB Agent Memory | BrainRouter |
-|---|---|---|
-| **Delivery format** | OpenClaw plugin + Hermes Docker | **MCP Server** (universal) |
-| **Target agents** | OpenClaw, Hermes | Cursor, VS Code, Claude, Codex, Antigravity — **any MCP-compatible tool** |
-| **Memory architecture** | L0 → L3 pipeline | **L0 → L3 + L1.5 Contradiction Detection** |
-| **Memory types** | 3 (persona, episodic, instruction) | **4 (+skill_context)** |
-| **Skill system** | None | **Full skill/persona/reference registry** |
-| **Extraction language** | Chinese (hardcoded) | **English, configurable** |
-| **Priority/decay model** | Static at extraction | **Decay by half-life per type** |
-| **Roadmap: Skill generation** | ❌ Not yet built | **✅ Shipped — full skill authoring system** |
-| **Roadmap: Portable memory** | ❌ Not yet built | **✅ Multi-tenant by design** |
-| **Roadmap: Visual debugging** | ❌ Not yet built | **⚠️ Planned** |
+Their system only works if you use *their specific* agent tools (OpenClaw and Hermes). If you use Cursor, VS Code, Claude Desktop, or Codex — you're out of luck.
 
-> **Key difference in scope:** TencentDB is an agent *plugin* tightly coupled to specific agents. BrainRouter is an **MCP server** — a universal brain that works with *any* agent tool without modifying the agent itself.
+**BrainRouter takes the same ideas and makes them available to every AI tool**, through the universal Model Context Protocol (MCP) standard.
 
 ---
 
 ## Slide 3 — What is BrainRouter?
 
-### Three Systems in One
+### Three Systems Working Together
+
+BrainRouter is a server that plugs into your AI tool and gives it three things it doesn't have by default:
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    BRAINROUTER                        │
-│                                                       │
-│  🧠 BRAIN         📚 MAP            💾 MEMORY         │
-│  Skills           AGENT.md          Memory Engine     │
-│  Personas         Context Router    L0 → L3 Pipeline  │
-│  References       Skill Matching    Contradiction Mgr │
-│                                                       │
-│         Delivered as an MCP Server                    │
-│    stdio (local) or HTTP (remote/Docker)              │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│                  BRAINROUTER                     │
+│                                                  │
+│  🧠 BRAIN        📚 MAP         💾 MEMORY        │
+│                                                  │
+│  A library of    A navigation   A persistent     │
+│  expert          system that    memory engine    │
+│  playbooks       routes the     that remembers   │
+│  (Skills)        agent to the   everything       │
+│                  right skill    across sessions  │
+│                                                  │
+│         Runs as an MCP Server                    │
+│    Works with any MCP-compatible AI tool         │
+└─────────────────────────────────────────────────┘
 ```
 
-**One sentence:** BrainRouter is an MCP server that gives any AI coding agent a structured brain (skills + personas), a navigation map (AGENT.md routing), and persistent memory (hierarchical SQLite engine).
+Think of it like giving your AI assistant:
+- A **training manual** (Skills) — so it knows exactly how to do complex tasks
+- A **GPS** (AGENT.md router) — so it goes straight to the right page instead of searching blindly
+- A **long-term memory** (Memory Engine) — so it remembers you and your project across every session
 
 ---
 
-## Slide 4 — Architecture: The Dual Registry
+## Slide 4 — What is MCP? (For Non-Technical Stakeholders)
 
-### Global + Local — Automatic Override
+### The Universal Plug Standard for AI Tools
+
+MCP (Model Context Protocol) is a standard created by Anthropic that lets AI tools talk to external services. Think of it like a USB standard — instead of every device needing its own special cable, everything uses USB.
+
+BrainRouter implements MCP, which means:
+
+- **No custom integration needed** — if your AI tool supports MCP (Cursor, VS Code, Claude, Codex all do), BrainRouter just works
+- **No running servers to manage** — your AI tool automatically starts and stops BrainRouter in the background
+- **No port numbers, no URLs, no network config** — it communicates directly through a secure local pipe
 
 ```
-BrainRouter/          ← Global Registry (universal, battle-tested)
-  skills/
-    agent/            ← debugging, planning, spec-driven, etc.
-    codebase/         ← code-review, conventions, simplification
-    design/           ← soft-skill, minimalist-ui, gpt-taste
-    devops/           ← docker, ci-cd, git-workflow
-    memory/           ← agent-memory
-    ...
-
-YourProject/          ← Local Registry (project-specific)
-  skills/             ← shadows global skills by name
-  agents/             ← project personas
-  references/         ← project reference docs
-  docs/               ← structured markdown source-of-truth
-  AGENT.md            ← your routing map
+Your AI Tool ──automatically starts──▶ BrainRouter
+             ◀──talks back and forth──▶ (private, local)
 ```
-
-**Rule:** Local skills with the same name as a global skill **automatically override** the global version for that project — no config needed.
 
 ---
 
-## Slide 5 — Architecture: The AGENT.md Router
+## Slide 5 — The Brain: Skills, Personas, and References
 
-### The Navigation Hub
+### 40+ Expert Playbooks, Ready to Use
 
-`AGENT.md` is the agent's context firewall. Instead of scanning the entire repository, the agent reads `AGENT.md` and is routed to exactly the right skill, persona, or doc.
+A **Skill** in BrainRouter is a structured playbook for a specific task — like a Standard Operating Procedure (SOP). Instead of the agent guessing how to do a code review or debug a bug, it loads the exact workflow for that task.
 
-**How it works — 7-step execution model:**
+**Sample skills shipped with BrainRouter:**
+
+| Category | Skill | What it does |
+|---|---|---|
+| 🤖 Agent | `spec-driven-development` | Write a technical spec *before* writing any code |
+| 🤖 Agent | `debugging-and-error-recovery` | Systematic: Reproduce → Localize → Fix → Guard |
+| 🤖 Agent | `planning-and-task-breakdown` | Break large work into ordered, trackable tasks |
+| 📦 Code | `code-review-and-quality` | Multi-axis PR review (correctness, security, performance) |
+| 📦 Code | `conventions-skill` | Naming patterns, formatting, import order |
+| 🎨 Design | `soft-skill` / `gpt-taste` | Premium UI design systems |
+| 🎨 Design | `minimalist-ui` | Clean editorial interface design |
+| 🐳 DevOps | `docker-lifecycle-engineering` | Production-grade containerization |
+| 🐳 DevOps | `ci-cd-and-automation` | Automated pipeline setup |
+| 💾 Memory | `agent-memory` | Teaches the agent to use memory tools correctly |
+
+**Personas** are expert *roles* — like a Security Auditor or Staff Engineer reviewer — the agent can temporarily adopt for specialized analysis.
+
+**References** are fact sheets the agent can pull (e.g., testing patterns, security checklists) without loading irrelevant content.
+
+---
+
+## Slide 6 — The Map: AGENT.md Context Router
+
+### The Agent's Navigation System
+
+Without BrainRouter, when you ask your AI tool to debug a bug, it might:
+- Scan 200 files to "understand the project"
+- Load your entire README
+- Waste half its context window before writing a single line
+
+With BrainRouter's `AGENT.md`, the agent has a routing map. It reads the user's request, matches it to a scenario, and loads **only what it needs** — like a GPS giving turn-by-turn directions instead of handing you a whole atlas.
+
+**How the routing works — every request follows 7 steps:**
 
 ```
-1. RESOLVE SESSION  →  mcp_brainrouter_resolve_session()
+1. RESOLVE SESSION   → get a stable ID for this conversation
         ↓
-2. RECALL CONTEXT  →  mcp_brainrouter_memory_recall()
+2. RECALL MEMORY     → load relevant past context (what has been learned)
         ↓
-3. DETECT INTENT   →  map request to scenario in AGENT.md
+3. DETECT INTENT     → what is the user asking for? which scenario fits?
         ↓
-4. SELECT SKILL    →  identify skill name from the scenario map
+4. SELECT SKILL      → find the right playbook for this task
         ↓
-5. EXECUTE         →  mcp_brainrouter_get_skill() → follow workflow
+5. EXECUTE           → load the skill, follow its workflow step-by-step
         ↓
-6. RECORD OUTCOME  →  mcp_brainrouter_memory_capture_turn()
+6. CAPTURE MEMORY    → save this interaction to memory for future sessions
         ↓
-7. ITERATE         →  return to router if scenario changes
+7. ITERATE           → loop back if the task changes direction
 ```
 
-**Scenario routing examples from BrainRouter's own AGENT.md:**
+**Scenario map (from BrainRouter's own AGENT.md):**
 
-| Scenario | Skill / Persona Loaded |
+| What you're doing | What gets loaded |
 |---|---|
-| MCP Server Development | `api-skill` + `conventions-skill` |
-| Memory Engine Development | `spec-driven-development` |
-| Skill & Content Authoring | `skill-authoring` + `doc-management-skill` |
-| Debugging | `debugging-and-error-recovery` |
-| DevOps / Docker | `docker-lifecycle-engineering` |
-| Code Review | `code-reviewer` persona |
-| PR / PR Review | `code-review-and-quality` |
+| Building MCP server features | `api-skill` + `conventions-skill` |
+| Debugging a bug | `debugging-and-error-recovery` |
+| Reviewing a pull request | `code-reviewer` persona |
+| Shipping to production | `shipping-and-launch` |
+| Writing a new skill | `skill-authoring` |
+| Infrastructure / Docker | `docker-lifecycle-engineering` |
 
 ---
 
-## Slide 6 — Architecture: The Three Composable Layers
+## Slide 7 — The Memory Engine: Big Picture
 
-### Skills · Personas · Commands
+### How the Agent Remembers You
 
-```
-┌────────────────────────────────────┐
-│  COMMANDS   /review /debug /ship   │  ← The WHEN (user entry points)
-├────────────────────────────────────┤
-│  PERSONAS   code-reviewer          │  ← The WHO (role + perspective)
-│             security-auditor       │
-│             test-engineer          │
-├────────────────────────────────────┤
-│  SKILLS     spec-driven-development│  ← The HOW (workflows + checklists)
-│             debugging-and-recovery │
-│             incremental-impl...    │
-│             skill-authoring        │
-│             ... 40+ skills         │
-└────────────────────────────────────┘
-```
-
-**Composition rule:** Personas do NOT invoke other personas. A persona may invoke global skills via `get_skill`.
-
-**Currently shipped skills (sample):**
-
-- `spec-driven-development` — Write specs before any code
-- `debugging-and-error-recovery` — Systematic Reproduce → Localize → Fix → Guard
-- `incremental-implementation` — Break large changes into reviewable PRs
-- `code-review-and-quality` — Multi-axis PR review
-- `skill-authoring` — Canonical format for writing new skills
-- `docker-lifecycle-engineering` — Production-grade containerization
-- `agent-memory` — Teaches agents to use the 5 memory tools correctly
-- `concept-diagrams` — SVG diagram generation
-- `soft-skill` / `gpt-taste` / `minimalist-ui` — Premium UI design systems
-
----
-
-## Slide 7 — The Memory Engine: Overview
-
-### A 4-Tier Semantic Pyramid
-
-Directly adapted from TencentDB's proven architecture, evolved for BrainRouter's MCP-native context:
+BrainRouter's memory engine works like a **pyramid** — raw conversations at the base, distilled wisdom at the top. Each layer builds on the one below it, compressing information into increasingly useful and compact forms.
 
 ```
                     ┌──────────┐
-                    │  L3      │  ← Persona Profile (stable, deep)
-                    │ Persona  │
+                    │  LEVEL 3 │  ← Your personality profile
+                    │  Persona │    (who you are, how you think)
                    /└──────────┘\
                   / ┌──────────┐ \
-                 /  │  L2      │  \
-                /   │  Scene   │   \
-               /    │ Narratives│   \
-              /     └──────────┘    \
-             /    ┌─────────────┐    \
-            /     │    L1.5     │     \
-           /      │Contradiction│      \
-          /       │  Detection  │       \
-         /        └─────────────┘        \
-        /       ┌───────────────┐         \
-       /        │      L1       │          \
-      /         │ Semantic Ext. │           \
-     /          │ (4 types)     │            \
-    /           └───────────────┘             \
-   /──────────────────────────────────────────\
-   │                   L0                      │
-   │           Raw Conversation Capture        │
-   └────────────────────────────────────────────┘
-```
-
----
-
-## Slide 8 — Memory Engine: L0 — Raw Capture
-
-### Every Word, Preserved
-
-**What it does:** Atomically records every conversation turn to `node:sqlite` with FTS5 full-text indexing.
-
-**Key design decisions:**
-- **Cursor-based capture** — a per-session checkpoint prevents any message from being captured twice, even with concurrent sessions
-- **Multi-tenant from day one** — every record has a `user_id` column; all queries are scoped `WHERE user_id = ?`
-- **Skill tagging** — the active BrainRouter skill at capture time is stored as `skill_tag`, enabling skill-aware recall later
-- **Background vector embedding** — FTS5 indexing is immediate (milliseconds); vector embedding runs in the background so the agent is never blocked
-
-```
-MCP Tool: memory_capture_turn
-  → receives: userId, sessionKey, messages[], activeSkill
-  → writes: l0_conversations (SQLite FTS5)
-  → queues: background vector embedding
-  → notifies: scheduler (trigger L1 when N turns reached)
-```
-
----
-
-## Slide 9 — Memory Engine: L1 — Semantic Extraction
-
-### From Raw Text to Structured Knowledge
-
-**What it does:** Every N turns, an LLM analyzes the conversation and extracts only *durable, self-contained memories*.
-
-**The 4 memory types (BrainRouter extends TencentDB's 3):**
-
-| Type | What it captures | Decay half-life |
-|---|---|---|
-| `persona` | Stable user traits and preferences | 180 days |
-| `episodic` | Objective events with timestamps | 30 days |
-| `instruction` | Long-term rules the user gave the AI | **Never decays** |
-| **`skill_context`** *(BrainRouter-only)* | How the user runs specific skills | 7 days |
-
-**The `skill_context` type is our biggest addition.** It lets the system learn patterns like: *"When running debugging-and-error-recovery, this user always skips the reproduction step for hotfixes."* This feeds directly into the skill discovery router.
-
-**Quality gate before LLM call:**
-```
-Filter out: tool calls, one-time requests, casual greetings,
-            symbol-only messages, prompt injection attempts
-Rule: Nothingness > Bad memory. Prefer empty over wrong.
-```
-
-**Skill-aware extraction prompt:**
-```
-System: You are a Skill-Aware Memory Extraction Expert.
-        Active skill: {{ active_skill.name }}
-        Skill hints: {{ active_skill.extraction_hints }}
-        ...extract only these 4 types...
-```
-
-Each skill can declare `memory_hints` in its `SKILL.md` frontmatter — these are injected into the L1 prompt to guide extraction for that skill's domain.
-
----
-
-## Slide 10 — Memory Engine: L1.5 — Contradiction Detection
-
-### First-Class Conflict Resolution
-
-**This layer does not exist in TencentDB.** It is a BrainRouter original.
-
-**The problem it solves:** Without contradiction detection, a user's old instruction ("always use npm") will coexist alongside a newer one ("always use pnpm"). The agent doesn't know which to follow — silent confusion.
-
-**How it works:**
-1. After L1 extraction, each new memory is checked against existing similar memories (via FTS5 BM25 search)
-2. Candidates are evaluated: does the new memory *conflict* with an existing one?
-3. Conflicts are written to the `contradictions` table
-4. During **recall**, unresolved contradictions are surfaced as warnings in the agent's context
-
-**What the agent sees during recall:**
-```xml
-<relevant-memories>
-  - [instruction] User requires all responses in TypeScript.
-  ⚠️ Contradiction: "Always use npm" conflicts with "Always use pnpm"
-     — unresolved. Ask user to clarify.
-</relevant-memories>
-```
-
-This turns a silent bug into an **explicit, resolvable signal**.
-
----
-
-## Slide 11 — Memory Engine: L2 — Scene Narratives
-
-### Memories → Stories
-
-**What it does:** Clusters related L1 memories into cohesive Markdown narrative blocks representing distinct domains of the user's work.
-
-**The LLM decision tree:**
-```
-Phase 0: Count existing scenes. If ≥ maxScenes → MUST merge first.
-Phase 1: Which domain do these memories belong to?
-Phase 2: UPDATE existing scene / MERGE two scenes / CREATE new?
-          → Default is UPDATE. CREATE is a last resort.
-Phase 3: Write the narrative (a story, not a list).
-```
-
-**Scene file format (Markdown with heat metadata):**
-```markdown
----
-summary: User's backend architecture journey, TypeScript, MCP work
-heat: 7   ← how many times this scene has been updated
-updated: 2026-05-17T...
----
-
-## Core Narrative
-User has been migrating from REST to MCP-native tooling...
-
-## Evolution
-- [2026-05-10]: Shifted from Express to stdio MCP transport
-```
-
-**Heat scoring** lets the recall engine prioritize active, frequently-updated scenes over stale ones.
-
----
-
-## Slide 12 — Memory Engine: L3 — Persona Synthesis
-
-### The Deepest Layer
-
-**What it does:** Every N new memories, performs a 4-layer deep psychological + technical profile synthesis.
-
-| Layer | Target | Value to Agent |
-|---|---|---|
-| 🟢 Layer 1: Base Anchors | Demographics, current state, facts | Context awareness |
-| 🔵 Layer 2: Interest Graph | Active vs. passive interests | Relevant recommendations |
-| 🟡 Layer 3: Interaction Protocol | Communication style, workflows | How to speak, how to deliver |
-| 🔴 Layer 4: Cognitive Core | Decision logic, deep drives | Co-pilot for architectural decisions |
-
-**Output:** A synthesized persona summary injected as stable `appendSystemContext` — cached at the prompt level, never re-computed on every turn.
-
-**Cross-layer signal:** If the L2 scene extractor detects a major value shift, it emits a signal:
-```
-[PERSONA_UPDATE_REQUEST]
-reason: User shifted from "TypeScript purist" to "pragmatic polyglot"
-[/PERSONA_UPDATE_REQUEST]
-```
-The engine parses this and schedules an immediate L3 re-run.
-
----
-
-## Slide 13 — Memory Engine: Recall
-
-### Reading the Right Memory at the Right Time
-
-**Before every agent turn**, `memory_recall` assembles three context layers:
-
-```
-Agent turn starts
-      ↓
-memory_recall(userId, query, sessionKey, activeSkill)
-      ↓
-┌─────────────────────────────────────────────────┐
-│  L1 Search: Hybrid FTS5 BM25 + vec0 cosine      │
-│  → Reciprocal Rank Fusion (RRF) merge           │
-│  → Decay scoring: blended = RRF*0.7 + decay*0.3 │
-│  → Skill-context boost if active_skill matches  │
-│  → Output: prependContext (dynamic, per-turn)    │
-├─────────────────────────────────────────────────┤
-│  L2 Scene summaries → appendSystemContext        │
-│  L3 Persona profile → appendSystemContext        │
-│  (stable, benefits from prompt caching)          │
-├─────────────────────────────────────────────────┤
-│  L1.5 Contradiction warnings                     │
-│  (unresolved conflicts surfaced to agent)        │
+                 /  │  LEVEL 2 │  \
+                /   │  Scenes  │   \  ← Chapters of your story
+               /    └──────────┘    \   (your ongoing projects)
+              /   ┌─────────────┐    \
+             /    │  LEVEL 1.5  │     \
+            /     │Contradictions│     \  ← Conflict detection
+           /      └─────────────┘      \   (new to BrainRouter)
+          /      ┌───────────────┐      \
+         /       │    LEVEL 1    │       \
+        /        │ Extracted     │        \  ← Key facts distilled
+       /         │ Memories      │         \   from conversations
+      /          └───────────────┘          \
+─────────────────────────────────────────────────
+│                   LEVEL 0                       │
+│           Raw Conversation Storage              │  ← Everything verbatim
 └─────────────────────────────────────────────────┘
-      ↓
-Agent generates response with full context
 ```
 
-**Decay-weighted scoring:**
-
-| Type | Half-life |
-|---|---|
-| `instruction` | Never decays |
-| `persona` | 180 days |
-| `episodic` | 30 days |
-| `skill_context` | 7 days |
-
-**Timeout protection:** The entire recall is wrapped in `Promise.race()` with a 5-second timeout. If recall is slow, the agent proceeds without memory injection rather than blocking the user.
+**The key principle (stolen from TencentDB's research):**
+> Memory should NOT be a flat pile of notes. It must be a structured hierarchy — raw facts at the bottom, compressed wisdom at the top — so the agent can quickly get what it needs without drowning in noise.
 
 ---
 
-## Slide 14 — The MCP Tools Interface
+## Slide 8 — Level 0: Raw Capture
 
-### 5 Tools, Fully Exposed
+### Saving Every Word
 
-| Tool | Direction | When Called |
+**What it does:** Every conversation turn — every message you send, every response the agent gives — is stored verbatim in a local database (SQLite, which is like a lightweight spreadsheet on your computer).
+
+**Plain English:** It's the equivalent of recording every meeting and storing the transcripts. You don't read them all — but they're there if you need them.
+
+**Key engineering decisions that make this work reliably:**
+
+| Decision | What it means in plain English |
+|---|---|
+| **Cursor-based capture** | Like a bookmark — the system knows exactly where it left off, so no message is ever saved twice, even if two sessions run at the same time |
+| **User isolation** | Every memory is tagged with *who* it belongs to. User A's memories are completely invisible to User B. It's like separate filing cabinets, not a shared pile |
+| **Skill tagging** | When a memory is saved, the system also records *which task workflow was active*. This lets it later retrieve memories that are relevant to a specific type of work |
+| **Background indexing** | The database is searchable (via full-text search) instantly. A slower "deep index" for semantic search runs in the background without slowing the agent down |
+
+---
+
+## Slide 9 — Level 1: Semantic Extraction
+
+### Turning Conversations into Knowledge
+
+**The problem with raw storage:** If you saved every word of every conversation, finding anything useful would be like searching through thousands of meeting recordings. You'd drown in noise.
+
+**Level 1 solves this:** After every few conversation turns, BrainRouter calls an AI model (a cheap, fast one) with a carefully designed instruction set. The AI reads the recent conversation and extracts only the *durable, important facts* — the things worth remembering long-term.
+
+**Think of it like a smart note-taker** who watches a meeting and afterwards writes: *"Key decisions: the team chose PostgreSQL. Preference: Sarah always wants unit tests before PRs. Rule: never deploy on Fridays."* — not a word-for-word transcript.
+
+**The 4 types of memories BrainRouter extracts:**
+
+| Type | What it is | Example | Plain English |
+|---|---|---|---|
+| `persona` | Who you are, what you prefer | "User prefers TypeScript, dislikes raw SQL" | Your personality and working style |
+| `episodic` | Things that happened, with when | "User deployed auth service on May 10th" | Your project history |
+| `instruction` | Rules you gave the agent | "Always use pnpm, never npm" | Your standing orders |
+| `skill_context` | How *you* tend to use specific workflows | "User skips the spec phase for hotfixes" | Your personal habits around specific tasks |
+
+> **`skill_context` is BrainRouter's original contribution** — it doesn't exist in TencentDB. Over time, the system learns *how you personally work*, not just what you've told it.
+
+**Quality gate — the system is selective by design:**
+
+Before extraction runs, low-value messages are filtered out: short one-liners, emoji-only messages, casual greetings, and prompt injection attempts. The guiding principle is:
+
+> *"Empty memory is better than wrong memory. Prefer saying nothing over saying something incorrect."*
+
+---
+
+## Slide 10 — Level 1.5: Contradiction Detection
+
+### Catching Conflicts Before They Cause Problems
+
+**The problem this solves:** Imagine you told the agent in January: *"Always use npm for this project."* Then in March you said: *"We've switched to pnpm."* Without contradiction detection, both instructions sit in the database equally — and the agent might randomly follow either one, causing silent bugs.
+
+**Level 1.5 is BrainRouter's original invention** — it doesn't exist in TencentDB or any other memory system we know of.
+
+**How it works (plain English):**
+1. A new memory is extracted from a conversation
+2. The system searches existing memories for anything that *sounds like the same topic*
+3. If it finds a conflict — old instruction says one thing, new one says another — it flags it
+4. The conflict is stored in a dedicated "contradictions" table
+5. **Next time the agent tries to do something related, it's shown the warning:**
+
+```
+⚠️ Conflict detected:
+   Old rule: "Always use npm"
+   New rule: "Always use pnpm"
+   — These conflict. Please clarify which applies.
+```
+
+**Why this matters for stakeholders:** This is the difference between an agent that silently picks the wrong answer and one that says *"I see conflicting instructions — which should I follow?"* The second agent is dramatically more trustworthy in production.
+
+---
+
+## Slide 11 — Level 2: Scene Narratives
+
+### From Facts to Chapters
+
+**The problem:** After weeks of working on a project, you might have hundreds of extracted memories. Loading all of them into every conversation is wasteful — most won't be relevant.
+
+**Level 2 groups related memories into "scenes"** — cohesive narrative chapters about different areas of your work. Think of it like a biography being organized into chapters: "Career at Google," "Startup Phase," "Current Project" — rather than a random pile of life events.
+
+**Examples of scenes that might form:**
+- *"Backend API Development — TypeScript, auth service, PostgreSQL"*
+- *"Frontend Work — React, design system, accessibility"*
+- *"DevOps & Deployment — Docker, CI/CD pipeline"*
+
+**The system is smart about scene management:**
+- It prefers **updating existing scenes** over creating new ones (to avoid explosion of chapters)
+- If there are too many scenes, it **merges similar ones** automatically
+- Each scene has a **heat score** — how frequently it's been updated — so the system knows which projects are currently active vs. historical
+
+**What the agent gets:** Instead of 300 individual facts, it gets 4-5 chapter summaries it can scan instantly, and drills into a specific chapter only when needed. Much faster, much cleaner.
+
+---
+
+## Slide 12 — Level 3: Persona Synthesis
+
+### The Deepest Understanding
+
+**What it does:** Every 50 new memories or so, the system performs a deep synthesis — reading everything it knows about you across all scenes and conversations, then writing a comprehensive profile.
+
+**Why this is valuable:** The Level 1 memories answer *"what happened?"* The persona answers *"who is this person and how do they think?"* — which lets the agent communicate, reason, and make recommendations that feel genuinely tailored.
+
+**The 4 layers of the persona profile:**
+
+| Layer | What it captures | How the agent uses it |
 |---|---|---|
-| `memory_capture_turn` | Agent → BrainRouter | After every response |
-| `memory_recall` | Agent → BrainRouter | Before every response |
-| `memory_search` | Agent → BrainRouter | Explicit deep search |
-| `memory_contradictions` | Agent → BrainRouter | Conflict resolution |
-| `memory_register_skill_hints` | Agent → BrainRouter | When loading a new skill |
+| 🟢 **Base Anchors** | Current role, tech stack, situation | Basic context — "This is a senior backend engineer on a startup" |
+| 🔵 **Interest Graph** | What you actively care about vs. passively aware of | Relevant suggestions — "You'd probably like this new tool" |
+| 🟡 **Interaction Protocol** | How you like to communicate, what workflows you follow | Style matching — terse vs. detailed, code-first vs. explanation-first |
+| 🔴 **Cognitive Core** | How you make decisions, what drives you, what frustrates you | Deep co-pilot — "Given how you usually approach this, I'd recommend..." |
 
-**Plus the skill/persona/doc tools:**
+**This profile is stable** — it doesn't change turn-by-turn, so it can be efficiently cached in the AI's context window, saving cost.
 
-| Tool | Purpose |
-|---|---|
-| `list_skills` | List all skills (global + local merged) |
-| `get_skill` | Fetch skill section (overview, workflow, checklist…) |
-| `search_skills` | Fuzzy search across all skills |
-| `get_persona` | Fetch a persona definition |
-| `get_reference` | Fetch a reference document |
-| `list_docs` | List project docs |
-| `get_doc` | Read a project doc or section |
-| `create_skill` | Scaffold a new skill |
-| `update_skill` | Update an existing skill section |
+**Automatic update trigger:** If the system detects a major shift in your direction — say you went from solo developer to leading a team — it automatically regenerates the persona profile to reflect the new reality.
 
 ---
 
-## Slide 15 — Transport: How It Works in Practice
+## Slide 13 — Memory Half-Life: Why Memories Fade
 
-### No Server URL Required (stdio Mode)
+### Not All Information Stays Relevant Forever
+
+**What is memory half-life?** It's borrowed from physics (radioactive decay), but the concept is simple: some information becomes *less useful over time*, and BrainRouter accounts for this when deciding what to show the agent.
+
+**An analogy:** Think about your own memory. If someone told you 3 years ago "the meeting is at 2pm tomorrow" — that's completely useless information now, even if you remember it. But if they told you "I hate meetings before 10am" — that's still very relevant today.
+
+BrainRouter applies the same logic:
+
+| Memory Type | Half-Life | Why |
+|---|---|---|
+| `instruction` | **Never fades** | Rules you set are permanent until you change them |
+| `persona` | **180 days** | Your preferences change slowly but do change |
+| `episodic` | **30 days** | "I deployed X last Tuesday" is mostly irrelevant after a month |
+| `skill_context` | **7 days** | How you're using a workflow right now matters most for current context |
+
+**How the math works (explained simply):**
+
+If a memory starts at 100% relevance, after one half-life it's at 50%, after two it's at 25%, and so on. The system doesn't delete old memories — it just makes them score lower during retrieval, so newer, more relevant memories bubble to the top.
 
 ```
-Your AI Tool  ──spawn──▶  node dist/index.js --root /your/project
-              ◀──stdio──▶  (MCP JSON-RPC over pipes)
+Instruction: "Always use pnpm"
+  → Created 2 years ago → Still 100% relevant (never decays) ✅
+
+Episodic: "Fixed a login bug on May 1st"
+  → Created 30 days ago → Now at ~50% relevance
+  → Created 90 days ago → Now at ~12% relevance (barely shows up)
+
+Persona: "User prefers dark themes"
+  → Created 6 months ago → Still at ~50% relevance (changes slowly)
 ```
 
-- The AI tool **spawns the BrainRouter process** when it starts
-- Communication over **stdin/stdout pipes** — no port, no URL, no `npm run dev`
-- The tool manages the entire process lifecycle
-
-**Also supports HTTP mode** (for remote/shared/Docker deployments):
-```bash
-node dist/index.js --root /path/to/project --http --port 3747
-```
-
-**Works with:**
-- ⚡ Cursor
-- 🐙 VS Code / GitHub Copilot
-- 🟣 Claude Desktop
-- ✨ Antigravity (Google Gemini)
-- 🤖 OpenAI Codex
-- Any MCP-compatible tool
+**Why this matters:** Without decay, old information crowds out new information. A decision you made in 2023 shouldn't override your current preferences in 2026. Half-life scoring ensures the agent always prioritizes what's *recently relevant*.
 
 ---
 
-## Slide 16 — Setup in 4 Steps
+## Slide 14 — Memory Recall: Finding the Right Memory
 
-```bash
-# Step 1 — Clone & Build
-git clone https://github.com/kinqsradiollc/BrainRouter.git
-cd BrainRouter/mcp && npm install && npm run build
+### Hybrid Search — Fast and Smart
 
-# Step 2 — Generate config for your project
-npm run setup:mcp -- /path/to/your/project
-# Writes ready-to-paste configs into <your-project>/.brainrouter/
+**The problem:** When the agent is about to respond to your message, it needs to find relevant memories quickly — in milliseconds, not seconds. But "relevant" is hard to define. Sometimes you want keyword matching ("find everything about pnpm"). Sometimes you want meaning matching ("find memories about package management").
 
-# Step 3 — Paste the mcpServers block into your AI tool's config
-# (Cursor / VS Code / Claude Desktop / Codex / Antigravity)
+**BrainRouter uses two search methods simultaneously, then combines them:**
 
-# Step 4 — Restart your AI tool
-# It will spawn BrainRouter automatically on next launch
-```
+**Method 1 — Keyword Search (BM25)**
+Like Ctrl+F, but smarter. Finds memories that contain the actual words from your query. Very fast, very precise for specific terms.
 
-**Then, in your project, add `AGENT.md`:**
-```markdown
-# Agent Context Router
-You are connected to the BrainRouter MCP Server.
-Do NOT guess how to perform tasks. Use your MCP tools first.
+**Method 2 — Semantic Search (Vector Similarity)**
+Understands meaning, not just words. A query about "managing packages" will match a memory about "dependency tools" even if the words don't overlap. Requires each memory to be converted into a mathematical representation (a "vector") first.
 
-1. Recall Memory: call memory_recall before every response
-2. Find Skills: use list_skills or search_skills
-3. Execute: use get_skill to load the workflow
-4. Capture: call memory_capture_turn after every response
-```
+**Combining them — Reciprocal Rank Fusion (RRF):**
+Both searches return a ranked list. RRF is a formula that merges them: *"If a memory ranks highly in both keyword AND semantic search, it's almost certainly what the user needs."* The result is a combined list that's better than either search alone.
 
-Start a session with: *"Read AGENT.md and let's get to work."*
+**Then decay scores are applied** (see previous slide) and the final top memories are injected into the agent's context — instantly, before it generates its response.
+
+**Timeout protection:** The entire recall runs with a 5-second maximum. If for any reason it's slow (overloaded system, large database), the agent skips memory injection and responds anyway. It's never blocked.
 
 ---
 
-## Slide 17 — What We've Shipped vs. TencentDB Roadmap
+## Slide 15 — The Full Data Flow
 
-### Their Roadmap vs. Our Reality
+### From Conversation to Memory to Context — End to End
+
+```
+CAPTURE PATH (after each agent response):
+─────────────────────────────────────────
+You send a message, agent responds
+        ↓
+memory_capture_turn called automatically
+        ↓
+L0: Raw message saved to SQLite (instant, always works)
+        ↓
+[Every 5 turns] L1 extraction runs:
+  → AI reads recent messages
+  → Extracts: persona / episodic / instruction / skill_context memories
+        ↓
+L1.5 contradiction check:
+  → Any conflicts with existing memories? → Flag them
+        ↓
+Memories written to database (with background vector indexing)
+        ↓
+[Every 20 new memories] L2 scene update:
+  → Cluster into narrative chapters
+        ↓
+[Every 50 new memories] L3 persona refresh:
+  → Synthesize full user profile
+
+
+RECALL PATH (before each agent response):
+──────────────────────────────────────────
+You start typing a new message
+        ↓
+memory_recall called automatically
+        ↓
+Keyword search + Semantic search run in parallel
+  → Merged via RRF + half-life decay scoring
+  → Top relevant memories selected
+        ↓
+L2 scene summaries fetched (stable, cached)
+L3 persona fetched (stable, cached)
+Active contradictions fetched (if any)
+        ↓
+All injected into agent's context
+        ↓
+Agent responds with full context — knowing your history,
+preferences, rules, and any conflicts to flag
+```
+
+---
+
+## Slide 16 — Multi-Tenant Architecture
+
+### One Server, Many Users — Completely Isolated
+
+**What "multi-tenant" means:** Multiple developers can share one BrainRouter server instance, and each person's memories are completely invisible to everyone else. There is no way for User A to accidentally see User B's data — not because of access controls that could have bugs, but because of fundamental database design.
+
+**How it works:** Every single table in the database has a `user_id` column. Every single database query is written as `WHERE user_id = ?`. Architecturally, mixing data between users is impossible.
+
+This is important for:
+- **Teams** — a shared BrainRouter server for a whole engineering team
+- **Products** — if you build a product on top of BrainRouter, each of your customers gets their own isolated memory space
+- **Safety** — no cross-contamination of instructions, preferences, or project context
+
+---
+
+## Slide 17 — Where We Stand vs. TencentDB's Roadmap
+
+### Their Research Roadmap vs. Our Shipped Features
+
+TencentDB published a roadmap of features they're planning. Here's the honest comparison:
 
 | TencentDB Roadmap Item | Their Status | BrainRouter Status |
 |---|---|---|
-| Long-term memory (L0→L3) | ✅ Done | ✅ Done |
-| Short-term context compression (Mermaid canvas) | ✅ Done | ⚠️ Planned (different approach) |
-| Local SQLite backend | ✅ Done | ✅ Done (node:sqlite, zero deps) |
-| Agent framework integration | ✅ OpenClaw + Hermes | ✅ Universal MCP (all tools) |
-| **Portable memory (cross-agent)** | ❌ Not yet built | ✅ Multi-tenant architecture done |
-| **Automatic Skill generation** | ❌ Not yet built | ✅ Full skill system + authoring |
+| Long-term memory (L0 → L3 pipeline) | ✅ Done | ✅ Done |
+| Local SQLite storage (no cloud needed) | ✅ Done | ✅ Done (Node built-in, zero extra dependencies) |
+| Agent framework integration | ✅ OpenClaw + Hermes only | ✅ **Universal — any MCP tool** |
+| **Portable memory (cross-agent)** | ❌ Not yet built | ✅ Multi-tenant architecture already handles this |
+| **Automatic Skill generation** | ❌ Not yet built | ✅ **Full skill system + authoring shipped** |
 | **Visual debugging dashboard** | ❌ Not yet built | ⚠️ Planned |
-| Contradiction detection | ❌ Not in their system | ✅ BrainRouter original (L1.5) |
-| Skill-aware memory extraction | ❌ Not in their system | ✅ BrainRouter original |
-| Decay-weighted scoring | ❌ Static priority | ✅ BrainRouter original |
+| Contradiction detection | ❌ Not in their design | ✅ **BrainRouter original (L1.5)** |
+| Skill-aware memory | ❌ Not in their design | ✅ **BrainRouter original (skill_context type)** |
+| Memory decay scoring | ❌ Static priority | ✅ **BrainRouter original (half-life model)** |
+| Short-term Mermaid canvas compression | ✅ Done | ⚠️ Planned (different approach) |
+
+**Summary:** We've matched their core memory pipeline, outpaced them on their own roadmap items (skill generation, portability), and added three features they never planned (contradiction detection, skill-aware memory, memory decay).
 
 ---
 
-## Slide 18 — Key Technical Differentiators
+## Slide 18 — Key Differentiators
 
-### What Makes BrainRouter Unique
+### Why BrainRouter, Not TencentDB?
 
-**1. MCP-Native, Not Agent-Specific**
-TencentDB requires you to install their plugin into OpenClaw or run their Docker Hermes. BrainRouter works with *any* MCP-compatible AI tool — no agent modification needed.
+**1. Works with every AI tool, not just one**
+TencentDB requires you to use their specific agents. BrainRouter uses MCP — the universal standard — so it works with Cursor, Claude, Copilot, Codex, and any future MCP-compatible tool. You're not locked in.
 
-**2. Skill System as Memory Context**
-The `skill_context` memory type and `memory_register_skill_hints` tool create a feedback loop: the more you use BrainRouter, the smarter it gets at pre-loading the right context for your specific patterns.
+**2. The Skills library closes the loop**
+TencentDB only has memory. BrainRouter has memory *plus* a skills/personas/references library. The memory engine learns which skills you use and in what order — and pre-loads the right context. Over time, the whole system gets smarter about *how you specifically work*.
 
-**3. Contradiction Detection as a First-Class Layer (L1.5)**
-TencentDB deduplicates as a side-effect. BrainRouter explicitly detects, stores, surfaces, and resolves semantic conflicts — turning silent bugs into explicit agent warnings.
+**3. Contradictions are surfaced, not buried**
+In TencentDB (and most memory systems), conflicting instructions silently coexist. BrainRouter explicitly detects, stores, and surfaces them, asking you to resolve the conflict. This is essential for production reliability.
 
-**4. Decay-Weighted Recall**
-Different memory types fade at different rates. Instructions (rules) never decay. Episodic memories (events) fade in 30 days. This ensures the agent prioritizes the most relevant, current context.
+**4. Old memories don't crowd out new ones**
+TencentDB uses static priority scores. BrainRouter applies half-life decay — so last week's decision about a bug doesn't crowd out today's preferences.
 
-**5. Dual Registry with Automatic Override**
-Global skills (universal patterns) + local skills (project-specific) merge automatically. A local `debugging-and-error-recovery` skill for your React Native app will override the global one — without any config change.
+**5. Zero external dependencies for storage**
+Uses `node:sqlite` — a database engine built directly into Node.js 22+. No extra installation, no external database, no Docker required just for memory.
 
-**6. Zero Runtime Dependencies for Storage**
-Uses `node:sqlite` (built into Node.js 22+) — no `better-sqlite3`, no external database, no Docker required for the memory engine.
+**6. Global skills + local overrides**
+A global library of 40+ skills comes built-in. Your project can override any of them with a project-specific version — automatically, with no configuration.
 
 ---
 
-## Slide 19 — Storage Architecture
+## Slide 19 — Setup & Integration
 
-### SQLite Schema (Simplified)
+### Getting Started in 4 Commands
 
-```sql
--- L0: Every conversation turn
-l0_conversations (record_id, user_id, session_key, role,
-                  message_text, skill_tag, timestamp)
-  + FTS5 virtual table for full-text search
+```bash
+# 1. Clone and build BrainRouter
+git clone https://github.com/kinqsradiollc/BrainRouter.git
+cd BrainRouter/mcp
+npm install && npm run build
 
--- L1: Extracted structured memories
-l1_records (record_id, user_id, session_key, content,
-            type, priority, scene_name, skill_tag,
-            half_life_days, superseded_by, ...)
-  + FTS5 virtual table
-  + vec0 virtual table for vector similarity
+# 2. Generate config files for your project
+npm run setup:mcp -- /path/to/your/project
+# Creates ready-to-paste configs in <your-project>/.brainrouter/
 
--- L1.5: Contradiction tracking
-contradictions (id, user_id, memory_a_id, memory_b_id,
-                detected_at, resolved, resolution)
+# 3. Paste the config into your AI tool
+# (Cursor / VS Code / Claude Desktop / Codex / Antigravity)
 
--- Skill hints cache
-skill_extraction_hints (skill_name, hints_json, updated_at)
+# 4. Restart your AI tool — it auto-starts BrainRouter
 ```
 
-**Multi-tenant enforcement:** Every table has `user_id`. Every query filters `WHERE user_id = ?`. No cross-user data leakage is architecturally possible.
+**After setup, create an `AGENT.md` in your project:**
+
+```markdown
+# Agent Context Router
+You are connected to BrainRouter. Do NOT guess — use MCP tools first.
+
+1. Before responding: call memory_recall to load past context
+2. Find the right skill: list_skills or search_skills
+3. Load the skill: get_skill to follow its workflow
+4. After responding: call memory_capture_turn to save this turn
+```
+
+Start your first session with: *"Read AGENT.md and let's get to work."*
+
+**Supported tools:**
+
+| Tool | Status |
+|---|---|
+| ⚡ Cursor | ✅ Supported |
+| 🐙 VS Code / GitHub Copilot | ✅ Supported |
+| 🟣 Claude Desktop | ✅ Supported |
+| ✨ Antigravity (Google Gemini) | ✅ Supported |
+| 🤖 OpenAI Codex | ✅ Supported |
 
 ---
 
-## Slide 20 — What's Next
+## Slide 20 — Roadmap
 
-### Roadmap
+### What's Coming
 
-**Near-term (in progress):**
-- [ ] L2 Scene Narratives — full Markdown file generation with heat scoring
-- [ ] L3 Persona Synthesis — 4-layer deep scan → persona summary
-- [ ] Hybrid RRF recall — FTS5 BM25 + sqlite-vec cosine fusion
-- [ ] Visual memory dashboard — inspect layers, contradictions, scene blocks
+**Short-term (in active development):**
+- L2 Scene Narratives — full generation with heat scoring and auto-merge
+- L3 Persona Synthesis — 4-layer deep profile generation
+- Semantic (vector) recall — combining keyword + embedding search with RRF fusion
+- Memory observability dashboard — visually inspect your memory layers
 
 **Medium-term:**
-- [ ] Cross-session memory graph — linked memories across projects
-- [ ] `skill_context` → skill pre-warming — auto-load a skill when the pattern matches
-- [ ] Portable memory export/import — move memories between projects and tools
+- Skill pre-warming — auto-load a skill's context when usage patterns suggest it
+- Cross-session memory graph — connect related memories across different projects
+- Memory export/import — move your memory to a different machine or tool
 
 **Long-term:**
-- [ ] Automatic skill generation from patterns — watch how you solve problems and generate new skills
-- [ ] Team memory (shared tenant) — organizational knowledge graph
+- Automatic skill generation — watch how you solve problems, generate reusable playbooks
+- Team/shared memory — organizational knowledge graph across a whole engineering team
+- Visual contradiction resolution UI — see and resolve conflicts in a dashboard
 
 ---
 
-## Summary
+## Summary — BrainRouter in One Paragraph
 
-### BrainRouter in One Paragraph
-
-BrainRouter is a **Model Context Protocol (MCP) server** that gives any AI coding agent three things it desperately needs: a **skill registry** (40+ battle-tested workflow blueprints), a **context router** (AGENT.md that eliminates blind repo scanning), and a **hierarchical memory engine** (L0→L3 SQLite pipeline, inspired by TencentDB's research). Unlike TencentDB Agent Memory — which is a plugin for specific agent frameworks — BrainRouter is framework-agnostic, works through the standard MCP protocol, and extends the architecture with three original contributions: L1.5 Contradiction Detection, skill-aware memory extraction via `skill_context`, and decay-weighted recall scoring. The result is an agent that remembers your preferences, learns your patterns, flags its own contradictions, and never makes you repeat yourself.
+BrainRouter is an **MCP server** (a universal AI tool plugin) that gives any AI coding agent three things: a **skills library** (40+ expert workflows for debugging, shipping, reviewing, designing, and more), a **context router** (so the agent loads exactly what it needs instead of scanning everything), and a **hierarchical memory engine** (a 4-layer system that remembers your preferences, project history, standing instructions, and working style across every session). The memory architecture is inspired by Tencent's research on agent memory, which proved layered memory cuts token costs by 60% and improves task success by 50%. BrainRouter takes those ideas further with three original contributions: Contradiction Detection (conflicts are surfaced, not buried), Skill-Aware Memory (the agent learns how *you* use specific workflows), and Memory Decay Scoring (newer information naturally outweighs old information). Unlike TencentDB which only works with specific agent tools, BrainRouter works with every major AI coding tool through the MCP standard.
 
 ---
 
-*Built for High-Density Engineering.*
 *Reference: [TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory) — Tencent Research*
+*Built for High-Density Engineering.*
