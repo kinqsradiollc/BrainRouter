@@ -79,27 +79,21 @@ The memory engine runs completely orthogonally to your agent turns via standardi
 
 ```mermaid
 graph TD
-    %% Capture Pipeline
-    subgraph Capture["Capture Path (Post-Turn)"]
-        A["Agent Turn Ends"] --> B["MCP Tool: memory_capture_turn"]
-        B --> C["Engine.capture()"]
-        C --> D["L0: Raw Turn Storage\n(node:sqlite FTS5)"]
-        D --> E["Scheduler\n(Evaluates Turn Thresholds)"]
-        E -- "every ~5 turns" --> F["L1 Extractor\n(4 Types + activeSkill tag)"]
-        F --> G["L1.5 Contradiction Detection"]
-        G --> H[(SQLite Store\n+ Background sqlite-vec)]
-        E -- "every ~10 L1s" --> I["L2 Scene Distiller\n(Narrative Chapters)"]
-        E -- "every ~50 L1s" --> J["L3 Persona Distiller\n(4-Layer Profile Synthesis)"]
-    end
-    
-    %% Recall Pipeline
-    subgraph Recall["Recall Path (Pre-Turn)"]
-        K["User Inputs Message"] --> L["MCP Tool: memory_recall"]
-        L --> M["Engine.recall()"]
-        M --> N["Hybrid Search\n(FTS5 BM25 + Vector + RRF)"]
-        N --> O["Inject Prepend (L1)\n& Append (L2/L3) Context"]
-        O --> P["Agent Processes & Responds"]
-    end
+    A["Agent Turn Ends"] --> B["MCP Tool: memory_capture_turn"]
+    B --> C["Engine.capture()"]
+    C --> D["L0: Raw Turn Written to SQLite FTS5"]
+    D --> E["Scheduler (Evaluates Turn Thresholds)"]
+    E -- "every ~5 turns" --> F["L1 Extractor (4 Types + activeSkill tag)"]
+    F --> G["L1.5 Contradiction Detection"]
+    G --> H[("SQLite Store + Background sqlite-vec Indexing")]
+    E -- "every ~10 L1s" --> I["L2 Scene Distiller (Narrative Chapters)"]
+    E -- "every ~50 L1s" --> J["L3 Persona Distiller (4-Layer Profile)"]
+
+    K["User Inputs Message"] --> L["MCP Tool: memory_recall"]
+    L --> M["Engine.recall()"]
+    M --> N["Hybrid Search: FTS5 BM25 + Vector + RRF"]
+    N --> O["Inject: L1 Prepend + L2/L3 Append to Context"]
+    O --> P["Agent Processes and Responds"]
 ```
 
 ### The 4 Memory Layers

@@ -9,30 +9,17 @@
 
 ```mermaid
 graph TD
-    %% Shipped Base
-    subgraph Shipped["Shipped Core & Memory Engine"]
-        MCP["MCP Server\n(Stdio + HTTP)"] --> Reg["Dual Registry\n(Global + Local Shadowing)"]
-        Reg --> Tools["Skill & Doc Tools\n(create/update/search)"]
-        Tools --> MemCore["Memory Engine\n(L0 / L1 / L1.5 / L2 / L3)"]
-        MemCore --> Hybrid["Hybrid Recall\n(FTS5 + Vector + RRF + Decay)"]
-    end
+    MCP["MCP Server (Stdio + HTTP) ✅ Shipped"] --> Reg["Dual Registry (Global + Local Shadowing) ✅ Shipped"]
+    Reg --> Tools["Skill & Doc Tools — create / update / search ✅ Shipped"]
+    Tools --> MemCore["Memory Engine: L0 / L1 / L1.5 / L2 / L3 ✅ Shipped"]
+    MemCore --> Hybrid["Hybrid Recall: FTS5 + Vector + RRF + Decay ✅ Shipped"]
 
-    %% In-Progress / Next
-    subgraph Phase1["Phase 1: Pipeline Completion (Near)"]
-        Hybrid -.-> Rerank["Stage 3 Reranker\n(Cohere / Qwen3 / BGE) [PLANNED]"]
-        Hybrid -.-> Dash["Observability Dashboard\n(Local Web UI) [PLANNED]"]
-    end
+    Hybrid -.-> Rerank["Stage 3 Reranker — Cohere / Qwen3 / BGE ⚠ Phase 1"]
+    Hybrid -.-> Dash["Observability Dashboard — Local Web UI ⚠ Phase 1"]
 
-    %% Medium / Future
-    subgraph Phase2["Phase 2 & Beyond: Intelligence (Medium/Future)"]
-        Rerank -.-> Graph["Graph Memory\n(GraphRAG)"]
-        Rerank -.-> Auto["Autonomous Skill Detection\n(Pattern Mining)"]
-        Rerank -.-> ACE["ACE Feedback Loop\n(Citation Tracking)"]
-    end
-
-    style Shipped fill:#052e16,stroke:#16a34a,color:#fff
-    style Phase1 fill:#1e1b4b,stroke:#6366f1,color:#fff
-    style Phase2 fill:#2e1065,stroke:#9333ea,color:#fff
+    Rerank -.-> Graph["Graph Memory (GraphRAG) ⏳ Phase 2"]
+    Rerank -.-> Auto["Autonomous Skill Detection (Pattern Mining) ⏳ Phase 2"]
+    Rerank -.-> ACE["ACE Feedback Loop (Citation Tracking) ⏳ Phase 2"]
 ```
 
 - [x] MCP Server — stdio transport
