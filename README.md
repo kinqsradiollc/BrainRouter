@@ -48,27 +48,29 @@ The `--root` flag tells the server which project it's working on. Local skills w
 BrainRouter's memory engine is a 4-layer semantic pyramid. Raw conversations are saved at the base; distilled wisdom lives at the top. Each layer is progressively more compact and useful.
 
 ```
-               ┌──────────┐
-               │  L3      │  ← Your personality profile (who you are, how you think)
-               │ Persona  │
-              /└──────────┘\
-             / ┌──────────┐ \
-            /  │  L2      │  \  ← Narrative chapters of your projects
-           /   │  Scenes  │   \
-          /    └──────────┘    \
-         /  ┌─────────────┐    \
-        /   │    L1.5     │     \  ← Contradiction detection (BrainRouter original)
-       /    │ Conflicts   │      \
-      /     └─────────────┘       \
-     /    ┌───────────────┐        \
-    /     │      L1       │         \  ← Extracted facts (4 memory types)
-   /      │ Extracted     │          \
-  /       │ Memories      │           \
- /        └───────────────┘            \
-─────────────────────────────────────────
-│                   L0                   │  ← Every conversation, verbatim
-│         Raw Conversation Storage       │
-└────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      L3 — Persona                        │
+│ ← Who you are, how you think, how you work               │
+│ ← Every ~50 memories, cross-session LLM synthesis        │
+├──────────────────────────────────────────────────────────┤
+│                   L2 — Scene Narratives                  │
+│ ← Narrative chapters of your ongoing work                │
+│ ← Every ~10 L1s; heat-scored by update frequency         │
+├──────────────────────────────────────────────────────────┤
+│                L1.5 — Contradiction Detection            │
+│ ← BrainRouter original — surfaces conflicting            │
+│   instructions for explicit agent/user resolution        │
+├──────────────────────────────────────────────────────────┤
+│                   L1 — Extracted Memories                │
+│ ← persona / episodic / instruction / skill_context       │
+│ ← LLM reads recent messages every N turns                │
+│ ← Deduplicated before write, tagged with skill_tag       │
+├──────────────────────────────────────────────────────────┤
+│                L0 — Raw Conversation Storage             │
+│ ← Every message, verbatim, cursor-based (no dupes)       │
+│ ← FTS5 indexed + sqlite-vec for hybrid recall            │
+│ ← All queries scoped: WHERE user_id = ?                  │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ### The 4 Memory Layers

@@ -141,19 +141,23 @@ With BrainRouter's `AGENT.md`, the agent has a routing map. It reads the user's 
 **How the routing works — every request follows 7 steps:**
 
 ```
-1. RESOLVE SESSION   → get a stable ID for this conversation
-        ↓
-2. RECALL MEMORY     → load relevant past context (what has been learned)
-        ↓
-3. DETECT INTENT     → what is the user asking for? which scenario fits?
-        ↓
-4. SELECT SKILL      → find the right playbook for this task
-        ↓
-5. EXECUTE           → load the skill, follow its workflow step-by-step
-        ↓
-6. CAPTURE MEMORY    → save this interaction to memory for future sessions
-        ↓
-7. ITERATE           → loop back if the task changes direction
+┌────────────────────────────────────────────────────────┐
+│             BRAINROUTER AGENT REQUEST FLOW             │
+├────────────────────────────────────────────────────────┤
+│ 1. RESOLVE SESSION  →  get a stable conversation ID    │
+│         ↓                                              │
+│ 2. RECALL MEMORY    →  load relevant past context      │
+│         ↓                                              │
+│ 3. DETECT INTENT    →  which scenario fits this task?  │
+│         ↓                                              │
+│ 4. SELECT SKILL     →  find the right playbook         │
+│         ↓                                              │
+│ 5. EXECUTE          →  load skill, follow workflow     │
+│         ↓                                              │
+│ 6. CAPTURE MEMORY   →  save this turn for future       │
+│         ↓                                              │
+│ 7. ITERATE          →  loop back if task changes       │
+└────────────────────────────────────────────────────────┘
 ```
 
 **Scenario map (from BrainRouter's own AGENT.md):**
@@ -176,27 +180,28 @@ With BrainRouter's `AGENT.md`, the agent has a routing map. It reads the user's 
 BrainRouter's memory engine works like a **pyramid** — raw conversations at the base, distilled wisdom at the top. Each layer builds on the one below it, compressing information into increasingly useful and compact forms.
 
 ```
-                    ┌──────────┐
-                    │  LEVEL 3 │  ← Your personality profile
-                    │  Persona │    (who you are, how you think)
-                   /└──────────┘\
-                  / ┌──────────┐ \
-                 /  │  LEVEL 2 │  \
-                /   │  Scenes  │   \  ← Chapters of your story
-               /    └──────────┘    \   (your ongoing projects)
-              /   ┌─────────────┐    \
-             /    │  LEVEL 1.5  │     \
-            /     │Contradictions│     \  ← Conflict detection
-           /      └─────────────┘      \   (new to BrainRouter)
-          /      ┌───────────────┐      \
-         /       │    LEVEL 1    │       \
-        /        │ Extracted     │        \  ← Key facts distilled
-       /         │ Memories      │         \   from conversations
-      /          └───────────────┘          \
-─────────────────────────────────────────────────
-│                   LEVEL 0                       │
-│           Raw Conversation Storage              │  ← Everything verbatim
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│                 LEVEL 3 — Persona                  │
+│ ← Who you are, how you think                       │
+│ ← Every ~50 memories, cross-session synthesis      │
+├────────────────────────────────────────────────────┤
+│             LEVEL 2 — Scene Narratives             │
+│ ← Chapters of your ongoing work                    │
+│ ← Every ~10 L1s; heat-scored by recency            │
+├────────────────────────────────────────────────────┤
+│          LEVEL 1.5 — Contradiction Detection       │
+│ ← BrainRouter original — flags conflicting         │
+│   instructions so the agent never silently picks   │
+├────────────────────────────────────────────────────┤
+│             LEVEL 1 — Extracted Memories           │
+│ ← persona / episodic / instruction /               │
+│   skill_context (4 memory types)                   │
+│ ← LLM reads recent messages every N turns          │
+├────────────────────────────────────────────────────┤
+│               LEVEL 0 — Raw Storage                │
+│ ← Every message, verbatim, multi-tenant            │
+│   FTS5 indexed + sqlite-vec for hybrid recall      │
+└────────────────────────────────────────────────────┘
 ```
 
 **The key principle (stolen from TencentDB's research):**
@@ -388,48 +393,38 @@ Both searches return a ranked list. RRF is a formula that merges them: *"If a me
 ### From Conversation to Memory to Context — End to End
 
 ```
-CAPTURE PATH (after each agent response):
-─────────────────────────────────────────
-You send a message, agent responds
-        ↓
-memory_capture_turn called automatically
-        ↓
-L0: Raw message saved to SQLite (instant, always works)
-        ↓
-[Every 5 turns] L1 extraction runs:
-  → AI reads recent messages
-  → Extracts: persona / episodic / instruction / skill_context memories
-        ↓
-L1.5 contradiction check:
-  → Any conflicts with existing memories? → Flag them
-        ↓
-Memories written to database (with background vector indexing)
-        ↓
-[Every 20 new memories] L2 scene update:
-  → Cluster into narrative chapters
-        ↓
-[Every 50 new memories] L3 persona refresh:
-  → Synthesize full user profile
-
-
-RECALL PATH (before each agent response):
-──────────────────────────────────────────
-You start typing a new message
-        ↓
-memory_recall called automatically
-        ↓
-Keyword search + Semantic search run in parallel
-  → Merged via RRF + half-life decay scoring
-  → Top relevant memories selected
-        ↓
-L2 scene summaries fetched (stable, cached)
-L3 persona fetched (stable, cached)
-Active contradictions fetched (if any)
-        ↓
-All injected into agent's context
-        ↓
-Agent responds with full context — knowing your history,
-preferences, rules, and any conflicts to flag
+┌──────────────────────────────────────────────────────────────────┐
+│             CAPTURE PATH (after each agent response)             │
+├──────────────────────────────────────────────────────────────────┤
+│ You send a message, agent responds                               │
+│         ↓                                                        │
+│ L0: Raw message saved to SQLite (instant, always works)          │
+│         ↓ [every N turns]                                        │
+│ L1: Extraction — AI reads recent messages                        │
+│     → Extracts: persona / episodic / instruction / skill_context │
+│     → Dedup: drops identical memories before write               │
+│         ↓                                                        │
+│ L1.5: Contradiction check — conflicts with existing? → flag      │
+│         ↓                                                        │
+│ Memories written + background vector indexing (non-blocking)     │
+│         ↓ [every ~10 new L1 memories]                            │
+│ L2: Scene update — cluster into chapters (heat-scored)           │
+│         ↓ [every ~50 new L1 memories]                            │
+│ L3: Persona refresh — synthesize profile (cross-session)         │
+├──────────────────────────────────────────────────────────────────┤
+│             RECALL PATH (before each agent response)             │
+├──────────────────────────────────────────────────────────────────┤
+│ You start typing a new message                                   │
+│         ↓                                                        │
+│ BM25 keyword search + vector search run in parallel              │
+│     → Merged via RRF + 70/30 decay blend → top 5 memories        │
+│         ↓                                                        │
+│ L2 scene summaries + L3 persona fetched (stable, cached)         │
+│ Active contradictions fetched (if any)                           │
+│         ↓                                                        │
+│ All injected into agent context before response                  │
+│     → Agent knows your history, rules, preferences, conflicts    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---

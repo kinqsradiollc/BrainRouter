@@ -12,20 +12,23 @@ This document is a living record of where BrainRouter is going, why, and how eac
 ## The Big Picture
 
 ```
-Today (shipped)          Near-term (Phase 1)       Medium-term (Phase 2)
-──────────────────       ───────────────────       ──────────────────────
-MCP Server         →     L2 Scene Narratives   →   Graph Memory (GraphRAG)
-Skills & Personas  →     L3 Persona Synthesis  →   Auto Skill Generation
-L0–L1 Memory       →     Hybrid + Reranked     →   Autonomous Memory Mgmt
-L1.5 Contradictions→     Memory Dashboard      →   Skill Pre-warming
-Decay Scoring      →     Skill Pre-warming     →   Model Routing (cost opt)
-
-Longer-term (Phase 3)                Future (Phase 4)
-──────────────────────               ─────────────────
-Team / Shared Memory        →        BrainRouter Hub (skill marketplace)
-Memory Export / Import      →        Multimodal Memory
-Cross-session Graph         →        Self-evolving skill generation
-Swarm agent support         →        Memory benchmarks (LoCoMo, LongMemEval)
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                       BRAINROUTER DEVELOPMENT ROADMAP                        │
+├──────────────────┬──────────────────┬─────────────────┬──────────────────────┤
+│ TODAY (SHIPPED)  │ PHASE 1 (NEAR)   │ PHASE 2 (MED)   │ PHASE 3-4 (FUTURE)   │
+├──────────────────┼──────────────────┼─────────────────┼──────────────────────┤
+│ MCP Server       │ (done — shipped  │ Graph Memory    │ Team / Shared Memory │
+│ Skills & Personas│  with rest of    │  (GraphRAG)     │ Memory Export/Import │
+│ L0–L1 Memory     │  codebase)       │ Auto Skill      │ Swarm Agent Support  │
+│ L1.5 Contradicts │                  │  Detection      │ Cross-Session Graph  │
+│ L2 Scenes        │ Memory Dashboard │ Autonomous Mgmt │ BrainRouter Hub      │
+│ L3 Persona       │ Reranker Support │ Skill Pre-warm  │ Multimodal Memory    │
+│ Hybrid RRF Recall│                  │ Model Routing   │ LoCoMo/LongMemEval   │
+│ Vector Embedding │                  │ Temporal Windows│  Benchmarks          │
+│ Decay Scoring    │                  │                 │                      │
+│ create_skill     │                  │                 │                      │
+│ update_skill     │                  │                 │                      │
+└──────────────────┴──────────────────┴─────────────────┴──────────────────────┘
 ```
 
 ---
@@ -102,15 +105,25 @@ The core memory architecture is designed and partially implemented. These items 
 **The three-stage retrieval pipeline:**
 
 ```
-Stage 1 — Wide Net (fast, cheap)
-  BM25 keyword search  →  top 50 candidates
-  Vector similarity    →  top 50 candidates
-         ↓
-Stage 2 — Fusion (fast, no LLM)
-  RRF merge           →  top 20 merged candidates
-         ↓
-Stage 3 — Reranking (slower, high precision)
-  Cross-encoder       →  top 5 final memories injected
+┌─────────────────────────────────────────────────────────┐
+│            3-STAGE MEMORY RETRIEVAL PIPELINE            │
+├─────────────────────────────────────────────────────────┤
+│ Stage 1 — Wide Net  (fast, cheap, no LLM)               │
+│ ────────────────────────────────────────                │
+│ BM25 keyword search   →  top 15 candidates              │
+│ Vector similarity     →  top 15 candidates              │
+│                             ↓                           │
+│ Stage 2 — Fusion  (fast, no LLM)                        │
+│ ───────────────────────────────                         │
+│ RRF merge (Σ 1/(60+rank))  →  top 20 merged             │
+│ + 70% RRF / 30% decay blend                             │
+│ + skill-tag boost ×1.2                                  │
+│                             ↓                           │
+│ Stage 3 — Reranking  (slower, high precision) [PLANNED] │
+│ ─────────────────────────────────────────────           │
+│ Cross-encoder reads query + each candidate              │
+│ → top 5 final memories injected into context            │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Why each stage matters:**
@@ -492,13 +505,21 @@ In 2026, "context engineering" has replaced "prompt engineering" as the core dis
 In 2026, complex software development tasks are increasingly handled by *swarms* of specialized agents rather than one general-purpose agent. A typical setup:
 
 ```
-Planner Agent  →  decomposes requirements into tasks
-    ↓
-Coder Agent    →  implements the code
-    ↓
-Researcher Agent → fetches docs, context, examples
-    ↓
-Validator Agent  → checks correctness, security, style
+┌──────────────────────────────────────────────────────────┐
+│        MULTI-AGENT SWARM (2026 STANDARD PATTERN)         │
+├──────────────────────────────────────────────────────────┤
+│ Planner Agent    →  decomposes requirements into tasks   │
+│      ↓                                                   │
+│ Coder Agent      →  implements the code                  │
+│      ↓                                                   │
+│ Researcher Agent →  fetches docs, context, examples      │
+│      ↓                                                   │
+│ Validator Agent  →  checks correctness, security, style  │
+│                                                          │
+│ ──────────────────────────────────────────────────────── │
+│ All agents read/write shared memory via BrainRouter MCP  │
+│ (team tenant — WHERE user_id = 'team:<org>')             │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **Why this matters for BrainRouter:** Right now, BrainRouter serves a single agent talking to a single human. But as multi-agent coding workflows become standard, each specialized agent needs access to the same shared memory — project decisions, user preferences, conventions. BrainRouter's multi-tenant architecture is already designed for this: a "team tenant" where all agents in a swarm read from a shared memory space.
@@ -515,11 +536,20 @@ Validator Agent  → checks correctness, security, style
 ACE is a framework where agents use a closed feedback loop to improve their own context over time:
 
 ```
-Generator  →  produces candidate context (distilled from raw history)
-    ↓
-Reflector  →  evaluates: was this context useful? did the agent use it?
-    ↓
-Curator    →  keeps high-utility context, discards low-utility context
+┌──────────────────────────────────────────────────────────┐
+│          ACE — AGENTIC CONTEXT ENGINEERING LOOP          │
+├──────────────────────────────────────────────────────────┤
+│ Generator  →  distills raw history → candidate context   │
+│      ↓                                                   │
+│ Reflector  →  was this context cited in the response?    │
+│               did the agent actually use it?             │
+│      ↓                                                   │
+│ Curator    →  keep high-utility context                  │
+│               archive zero-reference context             │
+│      ↓                                                   │
+│ → feeds usage signal back into decay scoring             │
+│ → feeds pattern data into autonomous skill detection     │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **The insight:** Agents can learn *what context is useful* without retraining the underlying model. The "curriculum" is built from real usage data — which memories actually got referenced in responses?
