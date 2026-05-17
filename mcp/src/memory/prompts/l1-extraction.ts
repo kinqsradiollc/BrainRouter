@@ -10,8 +10,9 @@ Your task is to analyze a conversation and extract durable, self-contained memor
 
 ### Scene Segmentation
 Determine if the topic has changed since the previous scene.
-If it has, assign a new scene name: "AI helping [user role] with [goal activity]" (unique, max 50 words).
-If not, inherit the previous scene name.
+If there are existing scenes, PREFER to reuse the most relevant existing scene name — only create a new name if the topic is genuinely different from ALL existing scenes.
+If reusing, use the EXACT existing name (no paraphrasing).
+If creating new, format: "AI helping [user role] with [goal activity]" (unique, max 50 chars).
 
 ### Memory Types (extract ONLY these 4)
 
@@ -67,10 +68,11 @@ export function formatExtractionPrompt(params: {
   newMessages: L0Record[];
   backgroundMessages?: L0Record[];
   previousSceneName?: string;
+  existingSceneNames?: string[];
   activeSkill?: string;
   skillHints?: string;
 }): string {
-  const { newMessages, backgroundMessages = [], previousSceneName = "None", activeSkill = "None", skillHints = "None" } = params;
+  const { newMessages, backgroundMessages = [], previousSceneName = "None", existingSceneNames = [], activeSkill = "None", skillHints = "None" } = params;
 
   const bgText = backgroundMessages.length > 0
     ? backgroundMessages
@@ -82,7 +84,12 @@ export function formatExtractionPrompt(params: {
     .map((m) => `[${m.id}] [${m.role}] [${new Date(m.timestamp).toISOString()}]: ${m.messageText}`)
     .join("\n\n");
 
+  const existingScenesNote = existingSceneNames.length > 0
+    ? `[EXISTING SCENES] (reuse one of these if the topic matches):\n${existingSceneNames.map(n => `  - ${n}`).join("\n")}`
+    : "[EXISTING SCENES]: None yet";
+
   return `[PREVIOUS SCENE]: ${previousSceneName}
+${existingScenesNote}
 [ACTIVE SKILL]: ${activeSkill}
 [SKILL EXTRACTION HINTS]: ${skillHints}
 

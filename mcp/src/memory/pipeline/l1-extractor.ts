@@ -28,13 +28,14 @@ export async function extractL1Memories(params: {
   maxMessagesPerExtraction?: number;
   maxBackgroundMessages?: number;
   previousSceneName?: string;
+  existingSceneNames?: string[];
   activeSkill?: string;
   skillHints?: string;
 }): Promise<L1ExtractionResult> {
   const { 
     messages, userId, sessionKey, sessionId, llmRunner, 
     maxMessagesPerExtraction = 10, maxBackgroundMessages = 5,
-    previousSceneName, activeSkill, skillHints
+    previousSceneName, existingSceneNames, activeSkill, skillHints
   } = params;
 
   if (messages.length === 0) {
@@ -56,6 +57,7 @@ export async function extractL1Memories(params: {
     newMessages,
     backgroundMessages,
     previousSceneName,
+    existingSceneNames,
     activeSkill,
     skillHints
   });

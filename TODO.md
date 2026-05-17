@@ -69,16 +69,17 @@ graph TD
   - [x] Decides: update existing scene / create new scene (upserts by scene name)
   - [x] Stores scenes with heat score (boosts by +30 on each distillation; decays each cycle)
   - [x] Scene summaries injected in `recall.ts` as `<scene-navigation>` block
-  - [ ] Scene auto-merge when scene count exceeds threshold *(not yet built)*
-  - [ ] Auto-trigger regeneration on major direction shift *(not yet built — currently only count-based)*
+  - [x] Scene auto-merge when scene count exceeds threshold *(implemented — `pipeline/l2-scene.ts` `mergeScenes()`, configurable via `BRAINROUTER_L2_MAX_SCENES`)*
+  - [x] Auto-trigger regeneration on major direction shift *(implemented — `pipeline/l2-direction-shift.ts` LLM judge, fires before count-based trigger)*
+  - [ ] Scene consolidation on fresh sessions *(cold-start: L1 extractor is given existing scene names to reuse, but first run has none — scenes fragment then eventually merge via `mergeScenes` as they cool)*
 
 - [x] **L3 Persona Synthesis** *(fully implemented — `pipeline/l3-distiller.ts`)*
   - [x] Triggers every `BRAINROUTER_L3_TRIGGER_N` L1 extractions (default: 50)
   - [x] Reads all `persona` + `instruction` L1 memories cross-session
   - [x] Synthesizes via LLM with 90s timeout
   - [x] Persona injected in recall as `<user-persona>` block
-  - [ ] 4-layer profile structure (Base Anchors, Interest Graph, etc.) *(depends on L3 prompt quality — check `prompts/l3-persona.ts`)*
-  - [ ] Cache persona at prompt level as stable system context *(currently injected per-turn, not cached)*
+  - [x] 4-layer profile structure (Base Anchors, Interest Graph, Skill Map, Behavioural Patterns) *(implemented — `prompts/l3-persona.ts` prompt rewrite)*
+  - [x] Cache persona at prompt level as stable system context *(implemented — in-memory cache in `MemoryEngine`, TTL via `BRAINROUTER_PERSONA_CACHE_TTL_MS`, invalidated on L3 distillation)*
 
 - [x] **Hybrid Vector + Keyword Recall** *(fully implemented — `recall.ts`)*
   - [x] Stage 1: BM25 FTS5 keyword search → top 15 candidates

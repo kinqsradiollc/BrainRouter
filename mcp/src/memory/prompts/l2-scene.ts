@@ -15,12 +15,20 @@ The summary must:
 
 Output ONLY the Markdown. No preamble, no explanation.`;
 
-export function formatL2ScenePrompt(sceneName: string, memories: Array<{ content: string; type: string; priority: number; skill_tag: string }>): string {
+export function formatL2ScenePrompt(
+  sceneName: string,
+  memories: Array<{ content: string; type: string; priority: number; skill_tag: string }>,
+  existingSceneNames: string[] = []
+): string {
   const memLines = memories
     .map(m => `- [${m.type}${m.skill_tag ? `|${m.skill_tag}` : ""}] ${m.content}`)
     .join("\n");
 
-  return `Generate a Scene Summary for the following work session.
+  const existingNote = existingSceneNames.length > 0
+    ? `\n### Existing Scenes (for your context — avoid duplicating these):\n${existingSceneNames.map(s => `- ${s}`).join("\n")}`
+    : "";
+
+  return `Generate a Scene Summary for the following work session.${existingNote}
 
 ## Scene: ${sceneName}
 

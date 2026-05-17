@@ -570,6 +570,44 @@ export class SqliteMemoryStore {
     return stmt.all(userId, sceneName, limit) as any[];
   }
 
+  public getL2SceneCount(userId: string): number {
+    const stmt = this.db.prepare("SELECT COUNT(*) as count FROM l2_scenes WHERE user_id = ?");
+    const row = stmt.get(userId) as any;
+    return row?.count || 0;
+  }
+
+  public getColdL2Scenes(userId: string, limit: number): L2SceneRecord[] {
+    const stmt = this.db.prepare(
+      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM l2_scenes WHERE user_id = ? ORDER BY heat_score ASC LIMIT ?"
+    );
+    const rows = stmt.all(userId, limit) as any[];
+    return rows.map(r => ({
+      id: r.id, userId: r.user_id, sceneName: r.scene_name,
+      summaryMd: r.summary_md, heatScore: r.heat_score,
+      lastActiveTime: r.last_active_time, createdTime: r.created_time, updatedTime: r.updated_time
+    }));
+  }
+
+  public deleteL2Scenes(userId: string, sceneIds: string[]) {
+    if (sceneIds.length === 0) return;
+    const placeholders = sceneIds.map(() => "?").join(",");
+    const stmt = this.db.prepare(`DELETE FROM l2_scenes WHERE user_id = ? AND id IN (${placeholders})`);
+    stmt.run(userId, ...sceneIds);
+  }
+
+  public getL2SceneByName(userId: string, sceneName: string): L2SceneRecord | null {
+    const stmt = this.db.prepare(
+      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM l2_scenes WHERE user_id = ? AND scene_name = ?"
+    );
+    const row = stmt.get(userId, sceneName) as any;
+    if (!row) return null;
+    return {
+      id: row.id, userId: row.user_id, sceneName: row.scene_name,
+      summaryMd: row.summary_md, heatScore: row.heat_score,
+      lastActiveTime: row.last_active_time, createdTime: row.created_time, updatedTime: row.updated_time
+    };
+  }
+
   public getDistinctSceneNames(userId: string): string[] {
     const stmt = this.db.prepare("SELECT DISTINCT scene_name FROM l1_records WHERE user_id = ? AND scene_name != ''");
     const rows = stmt.all(userId) as any[];

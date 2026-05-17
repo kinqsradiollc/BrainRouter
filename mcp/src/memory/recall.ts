@@ -133,15 +133,10 @@ export class MemoryRecallPipeline {
 
     const prependContext = `<relevant-memories>\n  The following memories are relevant to this query. Reference only if helpful:\n\n  ${memoryLines.join("\n  ")}\n</relevant-memories>`;
 
-    // Build appendSystemContext with L3 Persona + L2 Scene Navigation + tools guide
-    const persona = this.store.getL3Persona(userId);
+    // Build appendSystemContext with L2 Scene Navigation + tools guide
     const topScenes = this.store.getTopL2Scenes(userId, 3);
 
     let appendSystemContext = "";
-
-    if (persona) {
-      appendSystemContext += `<user-persona>\n${persona.personaMd}\n</user-persona>\n\n`;
-    }
 
     if (topScenes.length > 0) {
       const sceneNav = topScenes
@@ -171,7 +166,6 @@ export class MemoryRecallPipeline {
       recallStrategy: vecResults.length > 0 
         ? (usedReranker ? "hybrid+rerank" : "hybrid") 
         : (usedReranker ? "keyword+rerank" : "keyword"),
-      personaSummary: persona?.personaMd,
       activeScene: topScenes[0]?.sceneName,
     };
   }

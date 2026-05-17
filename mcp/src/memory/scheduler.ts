@@ -9,6 +9,9 @@ export const L2_TRIGGER_EVERY_N = parseInt(process.env.BRAINROUTER_L2_TRIGGER_N 
 /** L3 distillation fires every N new L1 extractions per user (default: 50). */
 export const L3_TRIGGER_EVERY_N = parseInt(process.env.BRAINROUTER_L3_TRIGGER_N ?? "50", 10);
 
+/** L2 auto-merge max scenes threshold (default: 20). */
+export const L2_MAX_SCENES = parseInt(process.env.BRAINROUTER_L2_MAX_SCENES ?? "20", 10);
+
 import type { SchedulerState } from "./types.js";
 
 export function shouldRunL2(state: SchedulerState): boolean {

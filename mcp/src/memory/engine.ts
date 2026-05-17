@@ -59,6 +59,11 @@ export class MemoryEngine {
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
   private llmRunner: LLMRunner;
+
+  private personaCache: Map<string, { personaMd: string; cachedAt: number }> = new Map();
+  private readonly PERSONA_CACHE_TTL_MS = parseInt(
+    process.env.BRAINROUTER_PERSONA_CACHE_TTL_MS ?? String(60 * 60 * 1000), 10
+  );
   
   constructor(dbPath: string = defaultDbPath) {
     const dir = path.dirname(dbPath);
@@ -98,7 +103,20 @@ export class MemoryEngine {
   }
 
   public get recall() {
-    return this.recallPipeline.recall.bind(this.recallPipeline);
+    return async (params: Parameters<MemoryRecallPipeline['recall']>[0]) => {
+      const result = await this.recallPipeline.recall(params);
+      
+      // Inject persona from cache — prepend so it's stable at the top of appendSystemContext
+      // Guard against undefined (returned on empty-recall fast-path)
+      const persona = this.getPersona(params.userId);
+      if (persona) {
+        const existing = result.appendSystemContext ?? "";
+        result.appendSystemContext = `<user-persona>\n${persona.personaMd}\n</user-persona>\n\n` + existing;
+        result.personaSummary = persona.personaMd;
+      }
+      
+      return result;
+    };
   }
 
   public getPendingContradictions(userId: string) {
@@ -144,12 +162,25 @@ export class MemoryEngine {
 
   /** On-demand L3 persona distillation — cross-session synthesis of persona+instruction L1s. */
   public async distillPersona(userId: string) {
-    return distillPersona({ userId, store: this.store, llmRunner: this.llmRunner });
+    const result = await distillPersona({ userId, store: this.store, llmRunner: this.llmRunner });
+    if (result.success && result.personaMd) {
+      this.personaCache.set(userId, { personaMd: result.personaMd, cachedAt: Date.now() });
+    }
+    return result;
   }
 
-  /** Get the current L3 persona for a user (null if not yet distilled). */
+  /** Get the current L3 persona for a user, using prompt-level in-memory cache. */
   public getPersona(userId: string) {
-    return this.store.getL3Persona(userId);
+    const cached = this.personaCache.get(userId);
+    if (cached && (Date.now() - cached.cachedAt) < this.PERSONA_CACHE_TTL_MS) {
+      return { personaMd: cached.personaMd };
+    }
+    
+    const persona = this.store.getL3Persona(userId);
+    if (persona) {
+      this.personaCache.set(userId, { personaMd: persona.personaMd, cachedAt: Date.now() });
+    }
+    return persona;
   }
 
   /** Get the top N active scenes for a user (ordered by heat score). */

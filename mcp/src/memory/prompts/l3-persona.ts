@@ -4,13 +4,14 @@
 
 export const L3_PERSONA_SYSTEM_PROMPT = `You are a user profiling expert for a software engineering AI assistant.
 
-Your task is to synthesize a set of durable user memories (persona traits and instructions) into a concise, structured Narrative Profile.
+Your task is to synthesize a set of durable user memories (persona traits and instructions) into a concise, structured 4-layer Narrative Profile.
 
 Rules:
 - Be STRICTLY grounded in the provided memories. Do NOT infer or fabricate traits.
 - If a trait appears only once and is ambiguous, omit it.
 - Prefer concrete observations over vague generalizations.
 - Instructions (hard rules the user gave) must be listed verbatim in "Hard Rules".
+- DEDUPLICATE Hard Rules: if multiple instruction memories express the same constraint (even with different wording), merge them into one canonical rule. Prefer the most specific and complete version.
 - Output ONLY the Markdown profile. No preamble.`;
 
 export function formatL3PersonaPrompt(memories: Array<{ content: string; type: string; priority: number }>): string {
@@ -26,7 +27,7 @@ export function formatL3PersonaPrompt(memories: Array<{ content: string; type: s
     .map(m => `- ${m.content}`)
     .join("\n");
 
-  return `Synthesize a Narrative Profile from the following user memories.
+  return `Synthesize a structured Narrative Profile from the following user memories.
 
 ### Persona Memories (stable traits, preferences):
 ${personaLines || "- (none)"}
@@ -36,19 +37,28 @@ ${instructionLines || "- (none)"}
 
 ### Output Format (strict Markdown):
 ## User Narrative Profile
-**Archetype**: [1 sentence characterizing this user's engineering style]
 
-**Working Style**:
-- [trait 1]
-- [trait 2]
+### Layer 1 — Base Anchors
+(Stable identity: role, years of experience, core domain, language preferences)
+- [anchor 1]
+- [anchor 2]
 
-**Tech Preferences**:
-- [preference 1]
+### Layer 2 — Interest Graph
+(Topics they care about most: architecture, performance, DX, shipping speed, etc.)
+- [interest 1]
+- [interest 2]
 
-**Hard Rules** (must never be violated):
-- [rule 1]
-- [rule 2]
+### Layer 3 — Skill Map  
+(Concrete tools, frameworks, languages, and patterns they use or prefer)
+- [skill/tool 1]
+- [skill/tool 2]
 
-**Recurring Patterns**:
-- [observable pattern 1]`;
+### Layer 4 — Behavioural Patterns
+(Observable working styles: how they iterate, what they avoid, what they reward)
+- [pattern 1]
+- [pattern 2]
+
+### Hard Rules (must never be violated)
+- [verbatim instruction 1]
+- [verbatim instruction 2]`;
 }
