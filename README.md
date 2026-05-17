@@ -314,7 +314,8 @@ Local skills with the same name as a global BrainRouter skill **automatically ov
 |---|---|
 | `memory_capture_turn` | Record a completed conversation turn for memory processing |
 | `memory_recall` | Retrieve relevant memories, persona, and scenes before responding |
-| `memory_search` | Perform a targeted search across memory records |
+| `memory_mark_cited` | (Required after response) Signal which recalled memories were used, driving ACE rank boost/auto-archive |
+| `memory_search` | Perform a targeted search across memory records (supports `asOf` point-in-time ISO param) |
 | `memory_contradictions` | List or resolve conflicting instructions in memory |
 | `memory_register_skill_hints` | Register extraction hints to guide memory capture when a skill is active |
 

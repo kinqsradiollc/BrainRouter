@@ -47,6 +47,8 @@ import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_searc
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
 import { memoryResolveSessionToolSchema, handleMemoryResolveSession } from './tools/memory_resolve_session.js';
+import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from './tools/memory_graph_query.js';
+import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from './tools/memory_mark_cited.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 
@@ -198,6 +200,8 @@ function buildMcpServer(registry: Registry): Server {
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
       memoryResolveSessionToolSchema,
+      memoryGraphQueryToolSchema,
+      memoryMarkCitedToolSchema,
     ],
   }));
 
@@ -220,6 +224,8 @@ function buildMcpServer(registry: Registry): Server {
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments);
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
         case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
+        case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments);
+        case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments);
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

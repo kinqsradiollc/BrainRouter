@@ -102,7 +102,12 @@ export async function extractL1Memories(params: {
         timestampEnd: "",
         createdTime: nowStr,
         updatedTime: nowStr,
-        metadata: mem.metadata
+        metadata: mem.metadata,
+        // ACE fields — zero on creation, updated by citation tracking
+        citationCount: 0,
+        lastCitedAt: null,
+        neverCitedCount: 0,
+        archived: false,
       });
     }
   }

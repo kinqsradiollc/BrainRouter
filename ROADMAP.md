@@ -232,7 +232,7 @@ These features add intelligence *on top of* the working memory pipeline. Each ca
 
 ---
 
-### 2.2 — Temporal Validity Windows (inspired by Zep/Graphiti)
+### 2.2 — Temporal Validity Windows (Shipped)
 
 **What it is:** Every `instruction`-type memory gets `valid_from` / `valid_to` / `invalid_at` timestamps. When a new instruction supersedes an old one, the old is *invalidated but preserved* — not deleted.
 
@@ -257,7 +257,7 @@ ALTER TABLE l1_records ADD COLUMN superseded_by TEXT;  -- FK to newer record
 
 ---
 
-### 2.3 — ACE Feedback Loop (Citation Tracking)
+### 2.3 — ACE Feedback Loop / Citation Tracking (Shipped)
 
 **What it is:** Track which recalled memories the agent actually cited in its responses. Use that signal to up-rank useful memories and auto-archive noise.
 
@@ -313,7 +313,7 @@ ALTER TABLE l1_records ADD COLUMN superseded_by TEXT;  -- FK to newer record
 
 ---
 
-### 2.5 — Skill Pre-warming
+### 2.5 — Skill Pre-warming (Shipped)
 
 **What it is:** When `skill_context` patterns predict you're about to use a particular skill, BrainRouter pre-loads that skill's context before you ask.
 
@@ -325,7 +325,7 @@ ALTER TABLE l1_records ADD COLUMN superseded_by TEXT;  -- FK to newer record
 
 ---
 
-### 2.6 — Model Routing (Cost Optimisation)
+### 2.6 — Model Routing / Cost Optimisation (Shipped)
 
 **What it is:** Use a cheap/fast model for L1 extraction and a smarter model for L3 persona synthesis.
 

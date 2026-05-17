@@ -50,12 +50,18 @@ export interface L1Record {
   skillTag: string;
   halfLifeDays: number | null; // null = never decays (e.g. instruction)
   supersededBy: string | null;
+  invalidAt?: string | null;
   timestampStr: string;
   timestampStart: string;
   timestampEnd: string;
   createdTime: string;
   updatedTime: string;
   metadata: Record<string, unknown>;
+  // ACE Feedback Loop
+  citationCount: number;
+  lastCitedAt: string | null;
+  neverCitedCount: number;
+  archived: boolean;
 }
 
 // ============================
@@ -97,6 +103,8 @@ export interface L1FtsResult {
   session_id: string;
   metadata_json: string;
   created_time: string;
+  /** ACE feedback: number of times this memory was cited by the agent. */
+  citation_count?: number;
 }
 
 export interface RecalledMemory {
@@ -202,4 +210,31 @@ export interface SchedulerState {
   l1CountSinceLastL2: number;
   l1CountSinceLastL3: number;
   totalL1Count: number;
+}
+
+// ============================
+// GraphRAG Types
+// ============================
+
+export interface GraphNode {
+  id: string;
+  userId: string;
+  entity: string;
+  entityType: string;
+  skillTag: string;
+  confidence: number;
+  sourceRecordId: string;
+  createdTime: string;
+}
+
+export interface GraphEdge {
+  id: string;
+  userId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  relation: string;
+  skillTag: string;
+  confidence: number;
+  sourceRecordId: string;
+  createdTime: string;
 }

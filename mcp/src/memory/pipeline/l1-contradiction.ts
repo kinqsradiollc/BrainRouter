@@ -1,5 +1,5 @@
 import type { SqliteMemoryStore } from "../store/sqlite.js";
-import type { LLMRunner, L1Record } from "../types.js";
+import type { LLMRunner, L1Record, L1FtsResult } from "../types.js";
 import { L1_CONTRADICTION_PROMPT } from "../prompts/l1-contradiction.js";
 import crypto from "node:crypto";
 
@@ -14,6 +14,17 @@ export async function detectContradictions(params: {
   // We use keyword search on the content of the new record to find similar existing ones
   const candidates = store.searchL1Fts(newRecord.userId, newRecord.content, 5);
   
+  const evaluations: Array<{
+    candidate: L1FtsResult;
+    isContradiction: boolean;
+    confidence: number;
+    kind: "temporal_update" | "genuine_conflict";
+    reason: string;
+  }> = [];
+
+  const _parsedContradictionTimeout = parseInt(process.env.BRAINROUTER_CONTRADICTION_TIMEOUT_MS || "", 10);
+  const contradictionTimeoutMs = isNaN(_parsedContradictionTimeout) ? 60000 : _parsedContradictionTimeout;
+
   for (const candidate of candidates) {
     // Don't compare with self
     if (candidate.record_id === newRecord.id) continue;
@@ -29,7 +40,7 @@ export async function detectContradictions(params: {
       const response = await llmRunner.run({
         prompt,
         taskId: `contradiction-check-${newRecord.id}-${candidate.record_id}`,
-        timeoutMs: 30000
+        timeoutMs: contradictionTimeoutMs
       });
 
       // Simple JSON extraction (flexible for local models)
@@ -38,19 +49,39 @@ export async function detectContradictions(params: {
 
       const data = JSON.parse(jsonMatch[0]);
       if (data.isContradiction && data.confidence > 0.7) {
-        console.error(`[BrainRouter] CONTRADICTION DETECTED: ${newRecord.id} vs ${candidate.record_id}`);
-        
-        store.upsertContradiction({
-          id: `conflict_${crypto.randomBytes(4).toString("hex")}`,
-          userId: newRecord.userId,
-          recordIdA: candidate.record_id,
-          recordIdB: newRecord.id,
-          reason: data.reason,
-          confidence: data.confidence
+        evaluations.push({
+          candidate,
+          isContradiction: true,
+          confidence: data.confidence,
+          kind: data.kind || "genuine_conflict",
+          reason: data.reason
         });
       }
     } catch (e) {
       console.error(`[BrainRouter] Contradiction check failed for ${newRecord.id} vs ${candidate.record_id}:`, (e as Error).message);
+    }
+  }
+
+  // If ANY evaluation is a temporal_update, then the entire batch of contradictions represents a temporal transition!
+  const hasTemporalUpdate = evaluations.some(ev => ev.kind === "temporal_update");
+
+  for (const ev of evaluations) {
+    if (hasTemporalUpdate) {
+      // Treat all conflicting old records as superseded by the new record
+      console.error(`[BrainRouter] TEMPORAL UPDATE DETECTED (transition): Superseding memory ${ev.candidate.record_id} with new memory ${newRecord.id}`);
+      store.invalidateL1Record(newRecord.userId, ev.candidate.record_id, newRecord.id);
+    } else {
+      // Genuine conflict
+      console.error(`[BrainRouter] CONTRADICTION DETECTED: ${newRecord.id} vs ${ev.candidate.record_id}`);
+      
+      store.upsertContradiction({
+        id: `conflict_${crypto.randomBytes(4).toString("hex")}`,
+        userId: newRecord.userId,
+        recordIdA: ev.candidate.record_id,
+        recordIdB: newRecord.id,
+        reason: ev.reason,
+        confidence: ev.confidence
+      });
     }
   }
 }

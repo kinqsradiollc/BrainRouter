@@ -2,6 +2,8 @@ import type { SqliteMemoryStore } from "./store/sqlite.js";
 import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult } from "./types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
+import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
+import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
 
 // Decay half-lives from APPLIED_CONCEPT.md
 const DECAY_HALF_LIFE_DAYS = {
@@ -11,7 +13,7 @@ const DECAY_HALF_LIFE_DAYS = {
   skill_context: 7
 };
 
-function effectivePriority(memory: L1FtsResult): number {
+function effectivePriority(memory: L1FtsResult & { citation_count?: number }): number {
   const halfLife = DECAY_HALF_LIFE_DAYS[memory.type as keyof typeof DECAY_HALF_LIFE_DAYS];
 
   if (!halfLife) {
@@ -20,9 +22,12 @@ function effectivePriority(memory: L1FtsResult): number {
 
   const ageMs = Date.now() - new Date(memory.created_time).getTime();
   const ageDays = ageMs / 86_400_000;
-
   const decayFactor = Math.pow(0.5, ageDays / halfLife);
-  return memory.priority * decayFactor;
+  const decayedPriority = memory.priority * decayFactor;
+
+  // ACE citation boost: each citation adds +5% effective priority, capped at +30%
+  const citationBoost = Math.min((memory.citation_count ?? 0) * 0.05, 0.30);
+  return decayedPriority * (1 + citationBoost);
 }
 
 export class MemoryRecallPipeline {
@@ -150,6 +155,36 @@ export class MemoryRecallPipeline {
   Use memory_contradictions to review unresolved conflicts.
   Max 3 memory tool calls per turn.
 </memory-tools-guide>`;
+
+    // Graph context expansion (2-hop BFS from matched entities)
+    const graphContext = expandRecallWithGraph({
+      topL1Results: topResults.map(r => r.record),
+      query,
+      userId,
+      activeSkill,
+      store: this.store
+    });
+    if (graphContext) {
+      appendSystemContext += `\n${graphContext}`;
+    }
+
+    // Skill pre-warming injection (opt-in via BRAINROUTER_PREWARM_ENABLED)
+    if (process.env.BRAINROUTER_PREWARM_ENABLED === "true") {
+      try {
+        const prewarmResults = detectPrewarmSkills({
+          userId,
+          store: this.store,
+          excludeSkill: activeSkill, // don't duplicate hints already provided by active skill
+        });
+        const prewarmBlock = buildPrewarmBlock(prewarmResults);
+        if (prewarmBlock) {
+          appendSystemContext += `\n${prewarmBlock}`;
+        }
+      } catch (e) {
+        // Pre-warming is best-effort — never block recall on failure
+        console.error("[BrainRouter] Skill pre-warming skipped:", (e as Error).message);
+      }
+    }
 
     const recalledL1Memories: RecalledMemory[] = topResults.map(r => ({
       content: r.record.content,

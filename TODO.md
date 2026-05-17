@@ -15,11 +15,12 @@ graph TD
     MemCore --> Hybrid["Hybrid Recall: FTS5 + Vector + RRF + Decay ✅ Shipped"]
 
     Hybrid --> Rerank["Stage 3 Reranker — Cohere / Qwen3 / BGE ✅ Shipped"]
+    Rerank --> Graph["GraphRAG: graph_nodes / graph_edges / 2-hop BFS ✅ Shipped Phase 2"]
+    Rerank --> Temporal["Temporal Validity: invalid_at / superseded_by ✅ Shipped Phase 2"]
     Hybrid -.-> Dash["Observability Dashboard — Local Web UI ⚠ Phase 1"]
 
-    Rerank -.-> Graph["Graph Memory (GraphRAG) ⏳ Phase 2"]
-    Rerank -.-> Auto["Autonomous Skill Detection (Pattern Mining) ⏳ Phase 2"]
-    Rerank -.-> ACE["ACE Feedback Loop (Citation Tracking) ⏳ Phase 2"]
+    Graph -.-> Auto["Autonomous Skill Detection (Pattern Mining) ⏳ Next"]
+    Graph -.-> ACE["ACE Feedback Loop (Citation Tracking) ⏳ Next"]
 ```
 
 - [x] MCP Server — stdio transport
@@ -38,24 +39,32 @@ graph TD
 - [x] `create_skill` tool — scaffolds a canonical SKILL.md, local or global scope
 - [x] `update_skill` tool — updates any section; handles global→local shadowing
 - [x] `memory_capture_turn` tool
-- [x] `memory_recall` tool
+- [x] `memory_recall` tool (3-stage retrieval + GraphRAG context expansion + L2/L3 injection)
 - [x] `memory_search` tool
-- [x] `memory_contradictions` tool (list + resolve)
+- [x] `memory_contradictions` tool (list + resolve genuine conflicts)
 - [x] `memory_register_skill_hints` tool
 - [x] `memory_resolve_session` tool
+- [x] **`memory_graph_query` tool** — query knowledge graph by entity name, hop depth, skill filter *(Phase 2)*
 - [x] L0 Memory — raw conversation capture, FTS5 indexed, cursor-based (no duplicates)
 - [x] L1 Memory — LLM extraction pipeline (persona, episodic, instruction, skill_context types)
-- [x] L1.5 Contradiction Detection — conflict flagging, agent-visible warnings
+- [x] **L1.5 Contradiction Detection** — two-pass evaluation: temporal updates auto-invalidate old records; genuine conflicts surfaced as agent-visible `⚠️` warnings
+- [x] **Temporal Validity Windows** — `invalid_at` + `superseded_by` columns; self-healing; all recall queries filter `WHERE invalid_at IS NULL` *(Phase 2)*
 - [x] L1 Deduplication — FTS-based dedup before writing, drops identical memories
 - [x] **L2 Scene Narratives** — auto-triggered every 10 L1s; heat-scored; injected as `<scene-navigation>` in recall
-- [x] **L3 Persona Synthesis** — cross-session distillation, auto-triggered every 50 L1s; injected as `<user-persona>` in recall
+- [x] **L2 Scene Cold-Start Consolidation** — L1 extractor snaps to existing scene names; LLM clustering pass prevents fragmentation *(Phase 2)*
+- [x] **L2 Scene Direction-Shift Trigger** — LLM judge fires L2 early on major topic transitions (≥0.75 confidence) *(Phase 2)*
+- [x] **L2 Scene Auto-Merge** — cold scenes merged when count exceeds `BRAINROUTER_L2_MAX_SCENES` *(Phase 2)*
+- [x] **L3 Persona Synthesis** — cross-session distillation, auto-triggered every 50 L1s; 4-layer profile; injected as `<user-persona>` in recall
+- [x] **L3 Persona Prompt-Level Cache** — TTL-based in-memory cache, invalidated on L3 distillation *(Phase 2)*
 - [x] Memory decay scoring — per-type half-life model (instruction never fades, episodic 30d, persona 180d, skill_context 7d)
 - [x] **Vector Embedding** — `EmbeddingService` with configurable endpoint/model/dimensions; background non-blocking; graceful FTS fallback
 - [x] **Hybrid Recall (RRF)** — BM25 FTS5 + vector merged via Reciprocal Rank Fusion; 70% RRF / 30% decay blend; skill-tag boost ×1.2
 - [x] **Stage 3 Reranker** — `RerankerService` with configurable endpoint, model, and topN (Cohere/vLLM/BGE compatible)
+- [x] **GraphRAG** — skill-conditioned `graph_nodes` / `graph_edges`; non-blocking extraction; 2-hop BFS hybrid recall expansion *(Phase 2)*
 - [x] Keyword recall — BM25 FTS5 + decay blending (FTS-only fallback mode)
 - [x] Multi-tenant isolation — `user_id` on all tables, all queries scoped
 - [x] 5-second recall timeout (agent never blocked)
+- [x] Local LLM support — configurable timeouts (`BRAINROUTER_GRAPH_TIMEOUT_MS`, `BRAINROUTER_CONTRADICTION_TIMEOUT_MS`); `BRAINROUTER_GRAPH_ENABLED` opt-out *(Phase 2)*
 - [x] `setup:mcp` script — generates tool config files for all major AI tools
 
 
@@ -71,7 +80,7 @@ graph TD
   - [x] Scene summaries injected in `recall.ts` as `<scene-navigation>` block
   - [x] Scene auto-merge when scene count exceeds threshold *(implemented — `pipeline/l2-scene.ts` `mergeScenes()`, configurable via `BRAINROUTER_L2_MAX_SCENES`)*
   - [x] Auto-trigger regeneration on major direction shift *(implemented — `pipeline/l2-direction-shift.ts` LLM judge, fires before count-based trigger)*
-  - [ ] Scene consolidation on fresh sessions *(cold-start: L1 extractor is given existing scene names to reuse, but first run has none — scenes fragment then eventually merge via `mergeScenes` as they cool)*
+  - [x] Scene consolidation on fresh sessions *(implemented — L1 extractor receives existing scene names; LLM clustering pass in `canonicalizeSceneNames()` remaps fragmented names to a single canonical)*
 
 - [x] **L3 Persona Synthesis** *(fully implemented — `pipeline/l3-distiller.ts`)*
   - [x] Triggers every `BRAINROUTER_L3_TRIGGER_N` L1 extractions (default: 50)
@@ -117,40 +126,43 @@ graph TD
 ## Phase 2 — Intelligence Upgrades
 ### Target: Medium-term
 
-- [ ] **Skill-Conditioned Knowledge Graph (GraphRAG)** *(next level beyond agentmemory's entity BFS)*
-  - [ ] Define entity/relationship schema with `skill_tag` on every edge
-  - [ ] v1: SQLite adjacency tables (`graph_nodes`, `graph_edges` with `skill_tag`, `confidence`)
-  - [ ] Build graph construction pipeline from L1 memories post-extraction
-  - [ ] Implement skill-conditioned graph traversal queries
-  - [ ] Hybrid recall: vector entry point → graph traversal
-  - [ ] New tool: `memory_graph_query` (entity + relation + skill filter)
+- [x] **Skill-Conditioned Knowledge Graph (GraphRAG)** *(v1 shipped — skill-tagged entities/relations, 2-hop BFS, `memory_graph_query` tool)*
+  - [x] Define entity/relationship schema with `skill_tag` on every edge
+  - [x] v1: SQLite adjacency tables (`graph_nodes`, `graph_edges` with `skill_tag`, `confidence`)
+  - [x] Build graph construction pipeline from L1 memories post-extraction (`pipeline/graph-builder.ts`)
+  - [x] Implement skill-conditioned graph traversal queries (`store/sqlite.ts` `getGraphNeighbors()`)
+  - [x] Hybrid recall: BFS entry point → graph traversal → `<graph-context>` injected in system prompt
+  - [x] New tool: `memory_graph_query` (entity + hop depth + skill filter)
+  - [x] Local LLM support: `BRAINROUTER_GRAPH_ENABLED` opt-out, `BRAINROUTER_GRAPH_TIMEOUT_MS` (default 120s)
   - [ ] v2 upgrade path: FalkorDB or Neo4j for larger teams
 
-- [ ] **Temporal Validity Windows** *(inspired by Zep/Graphiti — self-healing contradictions)*
-  - [ ] Schema migration: add `valid_from`, `valid_to`, `invalid_at`, `superseded_by` to `l1_records`
-  - [ ] When new `instruction` memory conflicts: mark old as `invalid_at = NOW()`, set `superseded_by`
-  - [ ] Update L1.5: distinguish temporal updates (auto-resolve) vs. genuine contradictions (flag)
-  - [ ] Recall: filter `WHERE valid_to IS NULL` by default (current state)
-  - [ ] Optional query: `memory_search` with `asOf` param for point-in-time recall
+- [x] **Temporal Validity Windows** *(shipped — self-healing L1.5, audit trail preserved)*
+  - [x] Schema migration: add `invalid_at`, `superseded_by` to `l1_records` (auto-migrated on startup)
+  - [x] When new `instruction` memory is a temporal update: mark old as `invalid_at = NOW()`, set `superseded_by`
+  - [x] L1.5 two-pass evaluation: classify as `temporal_update` (auto-resolve all candidates) vs. `genuine_conflict` (flag)
+  - [x] Recall: filter `WHERE invalid_at IS NULL` in FTS, vector, and scene queries
+  - [x] Configurable contradiction timeout: `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` (default 60s for local LLMs)
+  - [x] **Point-in-time recall:** `memory_search` with `asOf` param — SQL filters `created_time <= asOf AND (invalid_at IS NULL OR invalid_at > asOf)` *(Phase 3)*
 
-- [ ] **ACE Feedback Loop** *(citation tracking — neither competitor has this)*
-  - [ ] Schema: add `citation_count`, `last_cited_at`, `never_cited_count` to `l1_records`
-  - [ ] New tool: `memory_mark_cited` — agent calls with `recordIds[]` when memory used in response
-  - [ ] Adjust decay scoring: cited memories get boosted effective priority
-  - [ ] Auto-archive threshold: `never_cited_count > N` → set `archived = true`, exclude from active pool
-  - [ ] Archive is queryable but not injected automatically
-  - [ ] Feed `skill_context` citation signals into autonomous skill detection (2.4)
+- [x] **ACE Feedback Loop** *(Phase 3 — shipped)*
+  - [x] Schema: `citation_count`, `last_cited_at`, `never_cited_count`, `archived` columns (idempotent migrations, run before prepared statements)
+  - [x] New tool: `memory_mark_cited` — agent calls after each response with cited + all-recalled IDs
+  - [x] Decay scoring boost: each citation +5% effective priority, capped at +30%
+  - [x] Auto-archive: `never_cited_count >= BRAINROUTER_ACE_ARCHIVE_THRESHOLD` (default 10) → `archived = 1`
+  - [x] Archived memories excluded from `searchL1Fts` and `searchL1Vec` (`WHERE archived = 0`); upsert-safe (citation fields not in ON CONFLICT UPDATE)
+  - [ ] Feed `skill_context` citation signals into autonomous skill detection (future)
 
-- [ ] **Model Routing** *(60–80% cost reduction)*
-  - [ ] Add `BRAINROUTER_EXTRACTION_MODEL` env var — used for L1, L1.5 (cheap/fast)
-  - [ ] Add `BRAINROUTER_SYNTHESIS_MODEL` env var — used for L2, L3 (smarter)
-  - [ ] Two LLMRunner instances in engine, selected by task type
-  - [ ] Default: same model for both (backward-compatible)
+- [x] **Model Routing** *(Phase 3 — shipped)*
+  - [x] `BRAINROUTER_EXTRACTION_MODEL` — used for L1, L1.5, GraphRAG (fast/cheap)
+  - [x] `BRAINROUTER_SYNTHESIS_MODEL` — used for L2, L3 (smarter)
+  - [x] `ModelLLMRunner(modelOverride?)` — fallback chain: env override → `BRAINROUTER_LLM_MODEL` → `"gpt-4o-mini"`
+  - [x] Two instances in `MemoryEngine` (`extractionRunner`, `synthesisRunner`); default: same model (backward-compatible)
 
-- [ ] **Skill Pre-warming**
-  - [ ] Analyse `skill_context` memories for temporal patterns (e.g., always runs spec on Mondays)
-  - [ ] Pattern confidence threshold → inject matching skill hints into `appendSystemContext` proactively
-  - [ ] Configurable: opt-in per project
+- [x] **Skill Pre-warming** *(Phase 3 — shipped)*
+  - [x] Scans last N `skill_context` L1s (configurable via `BRAINROUTER_PREWARM_WINDOW`, default 10)
+  - [x] Skills with ≥ `BRAINROUTER_PREWARM_MIN_HITS` (default 3) occurrences load their registered hints
+  - [x] `<skill-prewarm>` block injected into `appendSystemContext`; opt-in via `BRAINROUTER_PREWARM_ENABLED=true`
+  - [x] Active skill excluded from pre-warm (already injected by capture pipeline)
 
 - [ ] **Autonomous Skill Detection from Patterns** *(detection layer — `create_skill` itself is shipped)*
   - [ ] Background scheduler: scan `skill_context` memories grouped by `scene_name`

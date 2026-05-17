@@ -62,9 +62,12 @@ async function runDemo() {
   console.log("\n👤 [L3 USER PERSONA]");
   console.log(recall.personaSummary || "Persona distillation still in progress...");
 
-  console.log("\n🎬 [L2 ACTIVE SCENES]");
-  const sceneNav = recall.appendSystemContext?.match(/<scene-navigation>([\s\S]*?)<\/scene-navigation>/)?.[1];
-  console.log(sceneNav?.trim() || "No scenes active.");
+  console.log("\n🎬 [L2 ACTIVE SCENES & KNOWLEDGE GRAPH]");
+  console.log(recall.appendSystemContext || "No system context.");
+
+  console.log("\n🕸️ [KNOWLEDGE GRAPH DIRECT QUERY - 'Lucide icons']");
+  const graphResult = memoryEngine.queryGraph(userId, "Lucide icons");
+  console.log(JSON.stringify(graphResult, null, 2));
 
   console.log("\n💾 [L1 RELEVANT MEMORIES]");
   console.log(recall.prependContext);
@@ -82,6 +85,61 @@ async function runDemo() {
   } else {
     console.log("No pending conflicts detected.");
   }
+
+  // ── PHASE 3 FEATURE DEMOS ───────────────────────────────────────────────
+
+  console.log("\n==================================================");
+  console.log("🆕 PHASE 3: ACE FEEDBACK LOOP DEMO");
+  console.log("==================================================");
+
+  const recalledIds = (recall.recalledL1Memories ?? []).map((m: any) => m.recordId);
+  if (recalledIds.length > 0) {
+    // Simulate: agent used the first memory, ignored the rest
+    const cited = [recalledIds[0]];
+    const aceResult = memoryEngine.markCited(userId, cited, recalledIds);
+    console.log("\n✅ [memory_mark_cited] Called after response generation:");
+    console.log(`  - Cited:          ${aceResult.cited} memory  (citation_count++ + never_cited reset)`);
+    console.log(`  - Not cited:      ${aceResult.nonCited} memories (never_cited_count++)`);
+    console.log(`  - Archive threshold: ${aceResult.archiveThreshold === 0 ? "disabled" : aceResult.archiveThreshold}`);
+
+    // Second recall to prove citation boost is applied
+    const recall2 = await memoryEngine.recall({ userId, sessionKey, query: "monorepo UI standards" });
+    const topMemory = recall2.recalledL1Memories?.[0];
+    console.log(`\n  ↑ Re-recalled top memory after citation boost:`);
+    console.log(`    "${topMemory?.content?.slice(0, 80)}..."`);
+    console.log(`    score: ${topMemory?.score?.toFixed(4)}`);
+  } else {
+    console.log("  (No recalled memories to cite — skip ACE demo)");
+  }
+
+  console.log("\n==================================================");
+  console.log("⏱️  PHASE 3: POINT-IN-TIME RECALL (asOf) DEMO");
+  console.log("==================================================");
+
+  // asOf set to 1 minute ago — should still catch memories captured in this demo
+  const oneMinAgo = new Date(Date.now() - 60_000).toISOString();
+  const asOfResult = memoryEngine.searchAsOf(userId, "monorepo pnpm turborepo", oneMinAgo, 5);
+  console.log(`\n🔎 Memories valid at ${oneMinAgo}:`);
+  if (asOfResult.count > 0) {
+    asOfResult.memories.forEach((m: any, i: number) => {
+      console.log(`  ${i + 1}. [${m.type}] ${m.content.slice(0, 90)}`);
+    });
+  } else {
+    console.log("  No memories found at that timestamp.");
+  }
+
+  // asOf set far in the past — should return nothing
+  const wayBack = "2020-01-01T00:00:00.000Z";
+  const asOfOld = memoryEngine.searchAsOf(userId, "monorepo", wayBack, 5);
+  console.log(`\n🔎 Memories valid at ${wayBack} (expect 0): count=${asOfOld.count}`);
+
+  console.log("\n==================================================");
+  console.log("⚙️  PHASE 3: MODEL ROUTING CONFIRMATION");
+  console.log("==================================================");
+  const extractionModel = process.env.BRAINROUTER_EXTRACTION_MODEL || process.env.BRAINROUTER_LLM_MODEL || "gpt-4o-mini (default)";
+  const synthesisModel  = process.env.BRAINROUTER_SYNTHESIS_MODEL  || process.env.BRAINROUTER_LLM_MODEL || "gpt-4o-mini (default)";
+  console.log(`  Extraction runner: ${extractionModel}`);
+  console.log(`  Synthesis runner:  ${synthesisModel}`);
 
   console.log("\n==================================================");
   console.log("✅ DEMO COMPLETE: The Brain is fully synchronized.");

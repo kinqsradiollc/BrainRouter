@@ -1,8 +1,47 @@
 import type { SqliteMemoryStore } from "../store/sqlite.js";
 import type { LLMRunner, L2SceneRecord } from "../types.js";
 import { L2_SCENE_SYSTEM_PROMPT, formatL2ScenePrompt } from "../prompts/l2-scene.js";
+import { L2_SCENE_CLUSTER_SYSTEM_PROMPT, formatSceneClusterPrompt } from "../prompts/l2-scene-cluster.js";
 import { L2_MAX_SCENES } from "../scheduler.js";
 import crypto from "node:crypto";
+
+async function canonicalizeSceneNames(params: {
+  userId: string;
+  store: SqliteMemoryStore;
+  llmRunner: LLMRunner;
+}) {
+  const { userId, store, llmRunner } = params;
+  const sceneNames = store.getDistinctSceneNames(userId);
+  if (sceneNames.length < 2) return;
+
+  try {
+    const rawCluster = await llmRunner.run({
+      prompt: formatSceneClusterPrompt(sceneNames),
+      systemPrompt: L2_SCENE_CLUSTER_SYSTEM_PROMPT,
+      taskId: "l2-scene-clustering",
+      timeoutMs: 45_000,
+    });
+
+    const jsonMatch = rawCluster.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return;
+
+    const clusters = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(clusters)) return;
+
+    for (const cluster of clusters) {
+      const canonical = String(cluster.canonical || "").trim();
+      const aliases = Array.isArray(cluster.aliases) ? cluster.aliases.map((a: any) => String(a).trim()) : [];
+      if (!canonical || aliases.length === 0) continue;
+
+      for (const alias of aliases) {
+        if (alias === canonical) continue;
+        store.renameSceneInL1Records(userId, alias, canonical);
+      }
+    }
+  } catch (err) {
+    console.error(`[BrainRouter] Scene canonicalization failed for "${userId}":`, (err as Error).message);
+  }
+}
 
 /**
  * L2 Scene Pipeline
@@ -15,6 +54,9 @@ export async function distillScenes(params: {
   llmRunner: LLMRunner;
 }): Promise<{ scenesDistilled: number; sceneNames: string[] }> {
   const { userId, store, llmRunner } = params;
+
+  // Run scene canonicalization/clustering pass to prevent cold-start fragmentation
+  await canonicalizeSceneNames({ userId, store, llmRunner });
 
   // Decay all existing heat scores (each distillation cycle = time passing)
   store.decayL2HeatScores(userId);

@@ -3,6 +3,7 @@ import type { L0Record, CaptureResult, LLMRunner } from "./types.js";
 import { extractL1Memories } from "./pipeline/l1-extractor.js";
 import { deduplicateMemories } from "./pipeline/l1-dedup.js";
 import { detectContradictions } from "./pipeline/l1-contradiction.js";
+import { buildGraphFromL1 } from "./pipeline/graph-builder.js";
 import { distillScenes } from "./pipeline/l2-scene.js";
 import { distillPersona } from "./pipeline/l3-distiller.js";
 import { detectDirectionShift } from "./pipeline/l2-direction-shift.js";
@@ -111,6 +112,15 @@ export class MemoryCapturePipeline {
             llmRunner: this.llmRunner
           }).catch(err => {
             console.error(`[BrainRouter] Background contradiction check failed for ${record.id}:`, err.message);
+          });
+
+          // Non-blocking graph extraction (GraphRAG Slice)
+          buildGraphFromL1({
+            record,
+            store: this.store,
+            llmRunner: this.llmRunner
+          }).catch(err => {
+            console.error(`[BrainRouter] Background graph extraction failed for ${record.id}:`, err.message);
           });
         }
 

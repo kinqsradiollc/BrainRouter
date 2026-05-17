@@ -515,22 +515,23 @@ Start your first session with: *"Read AGENT.md and let's get to work."*
 
 ### What's Coming
 
-**Shipped Features (Phase 1 Complete):**
-- L2 Scene Narratives — full generation with heat scoring
-- L3 Persona Synthesis — cross-session profile generation
-- Hybrid 3-Stage Recall — BM25 + Vector Similarity + Reciprocal Rank Fusion
-- Cross-Encoder Reranker — precision sorting via Cohere, Voyage, vLLM, or BGE
+**Shipped Features (Phase 1-3 Complete):**
+- L2 Scene Narratives & L3 Persona Synthesis
+- Hybrid 3-Stage Recall (BM25 + Vector + RRF + Reranker)
+- Contradiction Detection (L1.5) & Temporal Validity Windows (`asOf` recall)
+- ACE Feedback Loop (Citation tracking, automatic memory ranking & archiving)
+- Skill Pre-warming & Model Routing cost optimizations
+- Skill-Conditioned Knowledge Graph (GraphRAG)
 
 **Short-term (in active development):**
 - Memory observability dashboard — visually inspect your memory layers
 
 **Medium-term:**
-- Skill pre-warming — auto-load a skill's context when usage patterns suggest it
+- Autonomous skill generation — watch how you solve problems, generate reusable playbooks
 - Cross-session memory graph — connect related memories across different projects
 - Memory export/import — move your memory to a different machine or tool
 
 **Long-term:**
-- Automatic skill generation — watch how you solve problems, generate reusable playbooks
 - Team/shared memory — organizational knowledge graph across a whole engineering team
 - Visual contradiction resolution UI — see and resolve conflicts in a dashboard
 

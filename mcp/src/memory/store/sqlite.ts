@@ -1,5 +1,5 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import type { L0Record, L1Record, L1FtsResult, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState } from "../types.js";
+import type { L0Record, L1Record, L1FtsResult, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge } from "../types.js";
 import * as sqliteVec from "sqlite-vec";
 
 // Ensure Node version has node:sqlite (v22+)
@@ -164,6 +164,7 @@ export class SqliteMemoryStore {
         skill_tag TEXT DEFAULT '',
         half_life_days INTEGER,
         superseded_by TEXT,
+        invalid_at TEXT DEFAULT NULL,
         timestamp_str TEXT DEFAULT '',
         timestamp_start TEXT DEFAULT '',
         timestamp_end TEXT DEFAULT '',
@@ -173,15 +174,32 @@ export class SqliteMemoryStore {
       )
     `);
 
+    try {
+      this.db.exec("ALTER TABLE l1_records ADD COLUMN invalid_at TEXT DEFAULT NULL");
+    } catch (_) {
+      // Column already exists, ignore
+    }
+
+    // ── ACE Feedback Loop columns — added before prepared statements so queries can reference them ──
+    const aceColumns = [
+      "ALTER TABLE l1_records ADD COLUMN citation_count INTEGER DEFAULT 0",
+      "ALTER TABLE l1_records ADD COLUMN last_cited_at TEXT",
+      "ALTER TABLE l1_records ADD COLUMN never_cited_count INTEGER DEFAULT 0",
+      "ALTER TABLE l1_records ADD COLUMN archived INTEGER DEFAULT 0",
+    ];
+    for (const sql of aceColumns) {
+      try { this.db.exec(sql); } catch { /* column already exists — safe to ignore */ }
+    }
+
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_user_type ON l1_records(user_id, type)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_user_session ON l1_records(user_id, session_key)");
 
     this.stmtL1UpsertMeta = this.db.prepare(`
       INSERT INTO l1_records (
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
-        half_life_days, superseded_by, timestamp_str, timestamp_start, timestamp_end,
+        half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -190,11 +208,15 @@ export class SqliteMemoryStore {
         skill_tag=excluded.skill_tag,
         half_life_days=excluded.half_life_days,
         superseded_by=excluded.superseded_by,
+        invalid_at=excluded.invalid_at,
         timestamp_str=excluded.timestamp_str,
         timestamp_start=excluded.timestamp_start,
         timestamp_end=excluded.timestamp_end,
         updated_time=excluded.updated_time,
         metadata_json=excluded.metadata_json
+        -- NOTE: citation_count, last_cited_at, never_cited_count, archived intentionally excluded
+        -- They are managed exclusively by ACE methods (markCited, incrementNeverCited, archiveL1Record)
+        -- to prevent re-upserts from resetting citation signals
     `);
 
     this.stmtL1GetMeta = this.db.prepare(`
@@ -227,11 +249,12 @@ export class SqliteMemoryStore {
 
     this.stmtL1FtsSearch = this.db.prepare(`
       SELECT 
-        record_id, user_id, content_original as content, type, priority, scene_name,
-        skill_tag, session_key, timestamp_str, created_time,
-        rank
-      FROM l1_fts
-      WHERE user_id = ? AND l1_fts MATCH ?
+        f.record_id, f.user_id, f.content_original as content, f.type, f.priority, f.scene_name,
+        f.skill_tag, f.session_key, f.timestamp_str, f.created_time,
+        f.rank, r.citation_count
+      FROM l1_fts f
+      JOIN l1_records r ON f.record_id = r.record_id
+      WHERE f.user_id = ? AND l1_fts MATCH ? AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY rank
       LIMIT ?
     `);
@@ -296,6 +319,40 @@ export class SqliteMemoryStore {
         total_l1_count INTEGER DEFAULT 0
       )
     `);
+
+    // ── GraphRAG Nodes ──
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS graph_nodes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        skill_tag TEXT DEFAULT '',
+        confidence REAL DEFAULT 1.0,
+        source_record_id TEXT,
+        created_time TEXT DEFAULT '',
+        UNIQUE(user_id, entity)
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_graph_nodes_user ON graph_nodes(user_id)");
+
+    // ── GraphRAG Edges ──
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS graph_edges (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        from_node_id TEXT NOT NULL,
+        to_node_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        skill_tag TEXT DEFAULT '',
+        confidence REAL DEFAULT 1.0,
+        source_record_id TEXT,
+        created_time TEXT DEFAULT '',
+        UNIQUE(user_id, from_node_id, to_node_id, relation)
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_node_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_node_id)");
   }
 
   // ============================
@@ -352,7 +409,7 @@ export class SqliteMemoryStore {
       this.stmtL1UpsertMeta.run(
         record.id, record.userId, record.sessionKey, record.sessionId, record.content,
         record.type, record.priority, record.sceneName, record.skillTag,
-        record.halfLifeDays, record.supersededBy, record.timestampStr,
+        record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
         record.timestampStart, record.timestampEnd, record.createdTime,
         record.updatedTime, JSON.stringify(record.metadata)
       );
@@ -374,11 +431,63 @@ export class SqliteMemoryStore {
     }
   }
 
+  public invalidateL1Record(userId: string, recordId: string, supersededById: string) {
+    const stmt = this.db.prepare(
+      "UPDATE l1_records SET invalid_at = ?, superseded_by = ? WHERE user_id = ? AND record_id = ?"
+    );
+    stmt.run(new Date().toISOString(), supersededById, userId, recordId);
+  }
+
   public searchL1Fts(userId: string, query: string, limit: number): L1FtsResult[] {
     const ftsQuery = buildFtsQuery(query);
     if (!ftsQuery) return [];
 
     const rows = this.stmtL1FtsSearch.all(userId, ftsQuery, limit) as any[];
+    return rows.map(r => ({
+      record_id: r.record_id,
+      user_id: r.user_id,
+      content: r.content,
+      type: r.type,
+      priority: r.priority,
+      scene_name: r.scene_name,
+      skill_tag: r.skill_tag,
+      score: bm25RankToScore(r.rank),
+      timestamp_str: r.timestamp_str,
+      timestamp_start: "",
+      timestamp_end: "",
+      session_key: r.session_key,
+      session_id: "",
+      metadata_json: "{}",
+      created_time: r.created_time,
+      citation_count: r.citation_count ?? 0
+    }));
+  }
+
+  /**
+   * Point-in-time FTS search: returns memories that existed AND were valid at `asOf` ISO timestamp.
+   * Surfaces what the engine "knew" at a specific moment in time.
+   */
+  public searchL1FtsAsOf(userId: string, query: string, limit: number, asOf: string): L1FtsResult[] {
+    const ftsQuery = buildFtsQuery(query);
+    if (!ftsQuery) return [];
+
+    const stmt = this.db.prepare(`
+      SELECT 
+        f.record_id, f.user_id, f.content_original as content, f.type, f.priority, f.scene_name,
+        f.skill_tag, f.session_key, f.timestamp_str, f.created_time,
+        f.rank
+      FROM l1_fts f
+      JOIN l1_records r ON f.record_id = r.record_id
+      WHERE f.user_id = ?
+        AND l1_fts MATCH ?
+        AND r.created_time <= ?          -- memory must have existed at asOf
+        AND (r.invalid_at IS NULL OR r.invalid_at > ?)  -- must have been valid at asOf
+        AND r.archived = 0
+      ORDER BY rank
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(userId, ftsQuery, asOf, asOf, limit) as any[];
     return rows.map(r => ({
       record_id: r.record_id,
       user_id: r.user_id,
@@ -424,7 +533,7 @@ export class SqliteMemoryStore {
         r.session_key, r.timestamp_str, r.created_time
       FROM l1_vec v
       JOIN l1_records r ON v.record_id = r.record_id
-      WHERE v.embedding MATCH ? AND k = ? AND r.user_id = ?
+      WHERE v.embedding MATCH ? AND k = ? AND r.user_id = ? AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY distance
     `);
 
@@ -504,11 +613,6 @@ export class SqliteMemoryStore {
     stmt.run(skillName, hints, sourceFile, new Date().toISOString());
   }
 
-  public getSkillHints(skillName: string): string | null {
-    const stmt = this.db.prepare("SELECT hints FROM skill_extraction_hints WHERE skill_name = ?");
-    const row = stmt.get(skillName) as any;
-    return row ? row.hints : null;
-  }
 
   public listSkillHints(): SkillHintsRecord[] {
     const stmt = this.db.prepare("SELECT skill_name, hints, source_file, registered_at FROM skill_extraction_hints ORDER BY registered_at DESC");
@@ -565,7 +669,7 @@ export class SqliteMemoryStore {
 
   public getL1sByScene(userId: string, sceneName: string, limit = 30): any[] {
     const stmt = this.db.prepare(
-      "SELECT record_id, content, type, priority, skill_tag, created_time FROM l1_records WHERE user_id = ? AND scene_name = ? ORDER BY priority DESC LIMIT ?"
+      "SELECT record_id, content, type, priority, skill_tag, created_time FROM l1_records WHERE user_id = ? AND scene_name = ? AND invalid_at IS NULL ORDER BY priority DESC LIMIT ?"
     );
     return stmt.all(userId, sceneName, limit) as any[];
   }
@@ -614,6 +718,28 @@ export class SqliteMemoryStore {
     return rows.map(r => r.scene_name);
   }
 
+  public renameSceneInL1Records(userId: string, oldName: string, canonicalName: string) {
+    this.db.exec("BEGIN");
+    try {
+      // 1. Update all L1 records using this scene name
+      const stmtUpdateL1 = this.db.prepare(
+        "UPDATE l1_records SET scene_name = ?, updated_time = ? WHERE user_id = ? AND scene_name = ?"
+      );
+      stmtUpdateL1.run(canonicalName, new Date().toISOString(), userId, oldName);
+
+      // 2. Remove the old scene record from l2_scenes so it doesn't linger
+      const stmtDeleteL2 = this.db.prepare(
+        "DELETE FROM l2_scenes WHERE user_id = ? AND scene_name = ?"
+      );
+      stmtDeleteL2.run(userId, oldName);
+
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
   // ============================
   // L3 Persona Methods
   // ============================
@@ -643,7 +769,7 @@ export class SqliteMemoryStore {
 
   public getPersonaAndInstructionL1s(userId: string, limit = 100): any[] {
     const stmt = this.db.prepare(
-      "SELECT record_id, content, type, priority, skill_tag, created_time FROM l1_records WHERE user_id = ? AND type IN ('persona','instruction') ORDER BY priority DESC, created_time DESC LIMIT ?"
+      "SELECT record_id, content, type, priority, skill_tag, created_time FROM l1_records WHERE user_id = ? AND type IN ('persona','instruction') AND invalid_at IS NULL ORDER BY priority DESC, created_time DESC LIMIT ?"
     );
     return stmt.all(userId, limit) as any[];
   }
@@ -683,5 +809,246 @@ export class SqliteMemoryStore {
   public resetSchedulerL3Count(userId: string) {
     const stmt = this.db.prepare("UPDATE scheduler_state SET l1_count_since_last_l3 = 0 WHERE user_id = ?");
     stmt.run(userId);
+  }
+
+  // ============================
+  // GraphRAG Methods
+  // ============================
+
+  public getAllGraphNodes(userId: string): GraphNode[] {
+    const stmt = this.db.prepare("SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ?");
+    const rows = stmt.all(userId) as any[];
+    return rows.map(r => ({
+      id: r.id, userId: r.user_id, entity: r.entity,
+      entityType: r.entity_type, skillTag: r.skill_tag,
+      confidence: r.confidence, sourceRecordId: r.source_record_id,
+      createdTime: r.created_time
+    }));
+  }
+
+  public upsertGraphNode(node: GraphNode) {
+    const stmt = this.db.prepare(`
+      INSERT INTO graph_nodes (id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        entity_type=excluded.entity_type,
+        skill_tag=excluded.skill_tag,
+        confidence=excluded.confidence,
+        source_record_id=excluded.source_record_id
+    `);
+    stmt.run(
+      node.id, node.userId, node.entity, node.entityType, node.skillTag || "",
+      node.confidence, node.sourceRecordId, node.createdTime
+    );
+  }
+
+  public upsertGraphEdge(edge: GraphEdge) {
+    const stmt = this.db.prepare(`
+      INSERT INTO graph_edges (id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, from_node_id, to_node_id, relation) DO UPDATE SET
+        skill_tag=excluded.skill_tag,
+        confidence=excluded.confidence,
+        source_record_id=excluded.source_record_id,
+        created_time=excluded.created_time
+    `);
+    stmt.run(
+      edge.id, edge.userId, edge.fromNodeId, edge.toNodeId, edge.relation,
+      edge.skillTag || "", edge.confidence, edge.sourceRecordId, edge.createdTime
+    );
+  }
+
+  public getGraphNodeByEntity(userId: string, entity: string): GraphNode | null {
+    const stmt = this.db.prepare(
+      "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ? AND LOWER(entity) = LOWER(?)"
+    );
+    const row = stmt.get(userId, entity) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId: row.user_id,
+      entity: row.entity,
+      entityType: row.entity_type,
+      skillTag: row.skill_tag,
+      confidence: row.confidence,
+      sourceRecordId: row.source_record_id,
+      createdTime: row.created_time
+    };
+  }
+
+  public getGraphNeighbors(userId: string, entityId: string, skillTag?: string, maxHops = 2): { nodes: GraphNode[]; edges: GraphEdge[] } {
+    const visitedNodes = new Map<string, GraphNode>();
+    const visitedEdges = new Map<string, GraphEdge>();
+    
+    // Look up the starting node
+    const stmtNodeById = this.db.prepare(
+      "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ? AND id = ?"
+    );
+    const startRow = stmtNodeById.get(userId, entityId) as any;
+    if (!startRow) return { nodes: [], edges: [] };
+    
+    const startNode: GraphNode = {
+      id: startRow.id,
+      userId: startRow.user_id,
+      entity: startRow.entity,
+      entityType: startRow.entity_type,
+      skillTag: startRow.skill_tag,
+      confidence: startRow.confidence,
+      sourceRecordId: startRow.source_record_id,
+      createdTime: startRow.created_time
+    };
+    visitedNodes.set(startNode.id, startNode);
+
+    let queue = [startNode.id];
+    let currentHop = 0;
+
+    while (queue.length > 0 && currentHop < maxHops) {
+      const nextQueue: string[] = [];
+      
+      for (const nodeId of queue) {
+        // Query edges from/to this node
+        const queryParams: any[] = [userId, nodeId, nodeId];
+        
+        let edgeSql = `
+          SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time
+          FROM graph_edges
+          WHERE user_id = ? AND (from_node_id = ? OR to_node_id = ?)
+        `;
+        if (skillTag) {
+          edgeSql += " AND (skill_tag = ? OR skill_tag = '')";
+          queryParams.push(skillTag);
+        }
+        
+        const stmtEdges = this.db.prepare(edgeSql);
+        const edgeRows = stmtEdges.all(...queryParams) as any[];
+        
+        for (const row of edgeRows) {
+          const edge: GraphEdge = {
+            id: row.id,
+            userId: row.user_id,
+            fromNodeId: row.from_node_id,
+            toNodeId: row.to_node_id,
+            relation: row.relation,
+            skillTag: row.skill_tag,
+            confidence: row.confidence,
+            sourceRecordId: row.source_record_id,
+            createdTime: row.created_time
+          };
+          visitedEdges.set(edge.id, edge);
+          
+          const neighborId = edge.fromNodeId === nodeId ? edge.toNodeId : edge.fromNodeId;
+          if (!visitedNodes.has(neighborId)) {
+            const neighborRow = stmtNodeById.get(userId, neighborId) as any;
+            if (neighborRow) {
+              const neighborNode: GraphNode = {
+                id: neighborRow.id,
+                userId: neighborRow.user_id,
+                entity: neighborRow.entity,
+                entityType: neighborRow.entity_type,
+                skillTag: neighborRow.skill_tag,
+                confidence: neighborRow.confidence,
+                sourceRecordId: neighborRow.source_record_id,
+                createdTime: neighborRow.created_time
+              };
+              visitedNodes.set(neighborId, neighborNode);
+              nextQueue.push(neighborId);
+            }
+          }
+        }
+      }
+      
+      queue = nextQueue;
+      currentHop++;
+    }
+
+    return {
+      nodes: Array.from(visitedNodes.values()),
+      edges: Array.from(visitedEdges.values())
+    };
+  }
+
+  // ============================
+  // ACE Feedback Loop Methods
+  // ============================
+
+  /**
+   * Mark a set of record IDs as cited — increments citation_count, sets last_cited_at,
+   * and resets never_cited_count to 0 (a citation cancels accumulated non-citation signal).
+   */
+  public markCited(userId: string, recordIds: string[]): void {
+    if (recordIds.length === 0) return;
+    const now = new Date().toISOString();
+    const placeholders = recordIds.map(() => "?").join(",");
+    const stmt = this.db.prepare(`
+      UPDATE l1_records
+      SET citation_count = citation_count + 1,
+          last_cited_at = ?,
+          never_cited_count = 0,
+          updated_time = ?
+      WHERE user_id = ? AND record_id IN (${placeholders})
+    `);
+    stmt.run(now, now, userId, ...recordIds);
+  }
+
+  /**
+   * Increment never_cited_count for records that were recalled but NOT cited.
+   * Returns the updated never_cited_count for each affected record (used for auto-archive).
+   */
+  public incrementNeverCited(userId: string, recordIds: string[]): { recordId: string; neverCitedCount: number }[] {
+    if (recordIds.length === 0) return [];
+    const now = new Date().toISOString();
+    const placeholders = recordIds.map(() => "?").join(",");
+
+    this.db.prepare(`
+      UPDATE l1_records
+      SET never_cited_count = never_cited_count + 1, updated_time = ?
+      WHERE user_id = ? AND record_id IN (${placeholders})
+    `).run(now, userId, ...recordIds);
+
+    const rows = this.db.prepare(`
+      SELECT record_id, never_cited_count FROM l1_records
+      WHERE user_id = ? AND record_id IN (${placeholders})
+    `).all(userId, ...recordIds) as any[];
+
+    return rows.map(r => ({ recordId: r.record_id, neverCitedCount: r.never_cited_count }));
+  }
+
+  /**
+   * Archive a single L1 record — excluded from future active recall queries.
+   * The record is preserved for explicit archive queries.
+   */
+  public archiveL1Record(userId: string, recordId: string): void {
+    this.db.prepare(
+      "UPDATE l1_records SET archived = 1, updated_time = ? WHERE user_id = ? AND record_id = ?"
+    ).run(new Date().toISOString(), userId, recordId);
+  }
+
+  // ============================
+  // Skill Pre-warming Helpers
+  // ============================
+
+  /**
+   * Get the most recent N skill_context L1 records for a user.
+   * Used by the skill pre-warming pipeline to detect recent skill patterns.
+   */
+  public getRecentSkillContextL1s(userId: string, limit: number): { skillTag: string; createdTime: string }[] {
+    const rows = this.db.prepare(`
+      SELECT skill_tag, created_time FROM l1_records
+      WHERE user_id = ? AND type = 'skill_context' AND skill_tag != '' AND invalid_at IS NULL AND archived = 0
+      ORDER BY created_time DESC
+      LIMIT ?
+    `).all(userId, limit) as any[];
+    return rows.map(r => ({ skillTag: r.skill_tag, createdTime: r.created_time }));
+  }
+
+  /**
+   * Get the registered extraction hints for a specific skill name.
+   * Returns null if no hints are registered.
+   */
+  public getSkillHints(skillName: string): string | null {
+    const row = this.db.prepare(
+      "SELECT hints FROM skill_extraction_hints WHERE skill_name = ?"
+    ).get(skillName) as any;
+    return row?.hints ?? null;
   }
 }
