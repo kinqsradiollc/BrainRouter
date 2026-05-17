@@ -357,24 +357,23 @@ Persona: "User prefers dark themes"
 
 ## Slide 14 — Memory Recall: Finding the Right Memory
 
-### Hybrid Search — Fast and Smart
+### 3-Stage Hybrid Search & Reranking
 
 **The problem:** When the agent is about to respond to your message, it needs to find relevant memories quickly — in milliseconds, not seconds. But "relevant" is hard to define. Sometimes you want keyword matching ("find everything about pnpm"). Sometimes you want meaning matching ("find memories about package management").
 
-**BrainRouter uses two search methods simultaneously, then combines them:**
+**BrainRouter executes a robust 3-stage retrieval and reranking pipeline:**
 
-**Method 1 — Keyword Search (BM25)**
-Like Ctrl+F, but smarter. Finds memories that contain the actual words from your query. Very fast, very precise for specific terms.
+**Stage 1 — Parallel Retrieval**
+- **Keyword Search (BM25):** Like Ctrl+F, but smarter. Finds memories containing exact words via FTS5 (Top 15 candidates).
+- **Semantic Search (Vector Similarity):** Understands meaning via mathematical embeddings stored in `sqlite-vec` (Top 15 candidates).
 
-**Method 2 — Semantic Search (Vector Similarity)**
-Understands meaning, not just words. A query about "managing packages" will match a memory about "dependency tools" even if the words don't overlap. Requires each memory to be converted into a mathematical representation (a "vector") first.
+**Stage 2 — Reciprocal Rank Fusion (RRF) & Decay Blend**
+Both searches return ranked lists. RRF merges them using a mathematical formula: *"If a memory ranks highly in both keyword AND semantic search, it's almost certainly what the user needs."* The combined RRF score is then blended with half-life freshness (70% relevance / 30% freshness) and boosted 1.2x if it matches the active skill tag.
 
-**Combining them — Reciprocal Rank Fusion (RRF):**
-Both searches return a ranked list. RRF is a formula that merges them: *"If a memory ranks highly in both keyword AND semantic search, it's almost certainly what the user needs."* The result is a combined list that's better than either search alone.
+**Stage 3 — Cross-Encoder Reranking**
+Precision-sorts the top 20 candidates using cross-encoder models (Cohere, Voyage, vLLM, or BGE) to select the absolute top 5 memories for context injection.
 
-**Then decay scores are applied** (see previous slide) and the final top memories are injected into the agent's context — instantly, before it generates its response.
-
-**Timeout protection:** The entire recall runs with a 5-second maximum. If for any reason it's slow (overloaded system, large database), the agent skips memory injection and responds anyway. It's never blocked.
+**Timeout protection:** The entire recall runs with a 5-second maximum. If for any reason it's slow, the agent skips memory injection and responds anyway. It's never blocked.
 
 ---
 
@@ -396,7 +395,7 @@ graph TD
 
     K["User Inputs Message"] --> L["MCP Tool: memory_recall"]
     L --> M["Engine.recall()"]
-    M --> N["Hybrid Search: FTS5 BM25 + Vector + RRF"]
+    M --> N["3-Stage Hybrid Search: FTS5 BM25 + Vector + RRF + Reranker"]
     N --> O["Inject: L1 Prepend + L2/L3 Append to Context"]
     O --> P["Agent Processes and Responds"]
 ```
@@ -516,10 +515,13 @@ Start your first session with: *"Read AGENT.md and let's get to work."*
 
 ### What's Coming
 
+**Shipped Features (Phase 1 Complete):**
+- L2 Scene Narratives — full generation with heat scoring
+- L3 Persona Synthesis — cross-session profile generation
+- Hybrid 3-Stage Recall — BM25 + Vector Similarity + Reciprocal Rank Fusion
+- Cross-Encoder Reranker — precision sorting via Cohere, Voyage, vLLM, or BGE
+
 **Short-term (in active development):**
-- L2 Scene Narratives — full generation with heat scoring and auto-merge
-- L3 Persona Synthesis — 4-layer deep profile generation
-- Semantic (vector) recall — combining keyword + embedding search with RRF fusion
 - Memory observability dashboard — visually inspect your memory layers
 
 **Medium-term:**

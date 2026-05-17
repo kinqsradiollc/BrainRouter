@@ -14,7 +14,7 @@ graph TD
     Tools --> MemCore["Memory Engine: L0 / L1 / L1.5 / L2 / L3 ✅ Shipped"]
     MemCore --> Hybrid["Hybrid Recall: FTS5 + Vector + RRF + Decay ✅ Shipped"]
 
-    Hybrid -.-> Rerank["Stage 3 Reranker — Cohere / Qwen3 / BGE ⚠ Phase 1"]
+    Hybrid --> Rerank["Stage 3 Reranker — Cohere / Qwen3 / BGE ✅ Shipped"]
     Hybrid -.-> Dash["Observability Dashboard — Local Web UI ⚠ Phase 1"]
 
     Rerank -.-> Graph["Graph Memory (GraphRAG) ⏳ Phase 2"]
@@ -52,6 +52,7 @@ graph TD
 - [x] Memory decay scoring — per-type half-life model (instruction never fades, episodic 30d, persona 180d, skill_context 7d)
 - [x] **Vector Embedding** — `EmbeddingService` with configurable endpoint/model/dimensions; background non-blocking; graceful FTS fallback
 - [x] **Hybrid Recall (RRF)** — BM25 FTS5 + vector merged via Reciprocal Rank Fusion; 70% RRF / 30% decay blend; skill-tag boost ×1.2
+- [x] **Stage 3 Reranker** — `RerankerService` with configurable endpoint, model, and topN (Cohere/vLLM/BGE compatible)
 - [x] Keyword recall — BM25 FTS5 + decay blending (FTS-only fallback mode)
 - [x] Multi-tenant isolation — `user_id` on all tables, all queries scoped
 - [x] 5-second recall timeout (agent never blocked)
@@ -87,20 +88,20 @@ graph TD
   - [x] Skill-tag boost (×1.2 for memories matching active skill)
   - [x] Top 5 results injected as `<relevant-memories>` block
   - [x] Graceful fallback to FTS-only if embedding not configured
-  - [ ] Stage 3 (Reranker) → not yet implemented
+  - [x] Stage 3 (Reranker) precision sorting → top 5 results
 
-- [x] **Vector Embedding** *(implemented — `store/embedding.ts`)*
+- [x] **Vector Embedding** *(fully implemented — `store/embedding.ts` & `store/sqlite.ts`)*
   - [x] `EmbeddingService` class with configurable endpoint, model, dimensions
   - [x] Defaults to `text-embedding-3-small` / OpenAI-compatible
   - [x] Graceful fallback — if no API key, falls back to FTS-only silently
   - [x] Background embedding after L1 capture (non-blocking `.then()/.catch()`)
-  - [ ] `sqlite-vec` vector storage *(check whether `store.initVec()` and `upsertL1Vec()` are working in SQLite schema — `store/sqlite.ts`)*
+  - [x] `sqlite-vec` vector storage (`store.initVec()` and `upsertL1Vec()` fully functional)
 
-- [ ] **Reranker support** *(not yet implemented)*
-  - [ ] Configurable reranker endpoint
-  - [ ] Default: disabled (RRF-only)
-  - [ ] Opt-in: Cohere Rerank 4 / Voyage AI via API key
-  - [ ] Opt-in: local Qwen3-Reranker (0.6B) or BGE v2-m3 via Ollama
+- [x] **Reranker support** *(fully implemented — `store/reranker.ts`)*
+  - [x] Configurable reranker endpoint (`endpoint`, `apiKey`, `model`, `topN`)
+  - [x] Default: disabled (RRF-only)
+  - [x] Opt-in: Cohere Rerank 4 / Voyage AI via API key
+  - [x] Opt-in: local Qwen3-Reranker (0.6B) or BGE v2-m3 via Ollama
 
 - [ ] **Memory Observability Dashboard**
   - [ ] Local web UI at `http://localhost:3747/dashboard`

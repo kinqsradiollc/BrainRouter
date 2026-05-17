@@ -91,7 +91,7 @@ graph TD
 
     K["User Inputs Message"] --> L["MCP Tool: memory_recall"]
     L --> M["Engine.recall()"]
-    M --> N["Hybrid Search: FTS5 BM25 + Vector + RRF"]
+    M --> N["3-Stage Hybrid Search: FTS5 BM25 + Vector + RRF + Reranker"]
     N --> O["Inject: L1 Prepend + L2/L3 Append to Context"]
     O --> P["Agent Processes and Responds"]
 ```
@@ -118,13 +118,15 @@ graph TD
 
 > **Memory decay:** Different memory types fade in relevance over time (like forgetting an old meeting but remembering a long-standing rule). BrainRouter applies half-life scoring so recent, relevant context always bubbles to the top — old noise doesn't crowd out new signal.
 
-### Recall: Hybrid Search
+### Recall: 3-Stage Hybrid Search & Reranking
 
-Before every response, BrainRouter runs two searches in parallel and merges them:
-- **Keyword search (BM25)** — finds memories containing your exact words
-- **Semantic search (vector similarity)** — finds memories with the same *meaning*, even if the words differ
+Before every response, BrainRouter executes a robust 3-stage retrieval and reranking pipeline:
+1. **Keyword search (BM25)** — finds memories containing your exact words via FTS5 (Top 15).
+2. **Semantic search (vector similarity)** — finds memories with the same *meaning* using `sqlite-vec` (Top 15).
+3. **Reciprocal Rank Fusion (RRF) & Decay Blend** — merges both streams and scores them by combining 70% relevance with 30% half-life freshness, applying a 1.2x boost for memories matching the active skill tag.
+4. **Stage 3 Cross-Encoder Reranking** — precision-sorts the top 20 candidates using Cohere, Voyage, vLLM, or BGE models to select the absolute top 5 memories for context injection.
 
-Results are merged using Reciprocal Rank Fusion (RRF) and scored with half-life decay. The top memories are injected into the agent's context in milliseconds. A 5-second timeout ensures the agent is never blocked.
+A 5-second timeout ensures the agent is never blocked.
 
 ### Contradiction Detection (L1.5)
 

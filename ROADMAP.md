@@ -44,8 +44,10 @@ BrainRouter currently ships:
 - [x] **L0 Memory** — raw conversation capture, multi-tenant, FTS5 indexed
 - [x] **L1 Memory** — LLM-based extraction of 4 memory types (persona, episodic, instruction, skill_context)
 - [x] **L1.5 Contradiction Detection** — conflict flagging and agent-visible warnings
+- [x] **Vector Embedding** — Background non-blocking embedding extraction and storage in `sqlite-vec`
+- [x] **Hybrid Recall (RRF)** — BM25 FTS5 + Vector similarity search merged via Reciprocal Rank Fusion
+- [x] **Stage 3 Reranker** — Precision sorting via Cohere/vLLM/BGE reranker endpoints
 - [x] **Decay Scoring** — half-life based relevance scoring per memory type
-- [x] **Keyword Recall** — BM25 FTS5 search with decay blending
 - [x] **Multi-tenant Isolation** — `user_id` on all tables, every query scoped
 - [x] **`create_skill` tool** — agent can scaffold a new SKILL.md from a canonical template, local or global scope
 - [x] **`update_skill` tool** — agent can update any section of an existing skill, with global/local shadowing support
@@ -98,9 +100,9 @@ The core memory architecture is designed and partially implemented. These items 
 
 ---
 
-### 1.3 — Hybrid Vector + Keyword Recall with Reranking
+### 1.3 — Hybrid Vector + Keyword Recall with Reranking *(✅ Fully Shipped)*
 
-**What it is:** Currently, BrainRouter uses keyword search (BM25) only. This phase adds vector/semantic search, merges both results using **Reciprocal Rank Fusion (RRF)**, and then applies a **reranker** to precision-sort the final candidates.
+**What it is:** BrainRouter implements a complete 3-stage retrieval pipeline combining keyword search (BM25), vector/semantic search (`sqlite-vec`), Reciprocal Rank Fusion (RRF), and Stage 3 cross-encoder reranking (`RerankerService`).
 
 **The three-stage retrieval pipeline:**
 
@@ -116,14 +118,14 @@ graph TD
 
     RRF --> Blend["Stage 2 — Score Blend\n70% RRF + 30% Half-Life Decay\n+ Skill Tag Boost ×1.2"]
 
-    Blend --> Rerank["Stage 3 — Cross-Encoder Reranker\nReads Query + Each Candidate ⚠ PLANNED"]
+    Blend --> Rerank["Stage 3 — Cross-Encoder Reranker\nReads Query + Each Candidate ✅ SHIPPED"]
 
     Rerank --> Out["Top 5 Memories Injected into Context"]
 ```
 
 **Why each stage matters:**
-- **Keyword search** — catches exact terms (e.g., "pnpm", "auth service")
-- **Vector search** — catches *meaning* (e.g., "package manager" → surfaces pnpm memories)
+- **Keyword search** — catches exact terms (e.g., "pnpm", "auth service") via FTS5
+- **Vector search** — catches *meaning* (e.g., "package manager" → surfaces pnpm memories) via `sqlite-vec`
 - **RRF** — if a memory ranks high in *both* searches, it's almost certainly relevant
 - **Reranker** — reads the query AND each candidate memory together to score true relevance, not just similarity
 
@@ -139,7 +141,7 @@ graph TD
 | **BGE Reranker v2-m3** | Open-source, self-hosted | Strong multilingual, Apache 2.0 |
 | **No reranker (RRF only)** | Built-in | Fastest option, no extra model |
 
-**BrainRouter's approach:** Make the reranker configurable — default to no reranker (RRF-only, zero extra cost), with opt-in support for Cohere/Voyage via API key or a local Qwen3/BGE model via Ollama.
+**BrainRouter's approach (Fully Implemented in `recall.ts`):** Reranking is fully configurable. If configured with an API key/endpoint in `RerankerService`, it precision-sorts the top candidates. If no key is set, it gracefully defaults to RRF-only mode without blocking or erroring.
 
 **Research basis:** 2026 production RAG pipelines consistently show reranking produces 15–40% improvement in precision (NDCG@10) on top of RRF. The hybrid retrieve → rerank pattern is now the industry standard baseline.
 
@@ -371,10 +373,10 @@ These features add intelligence *on top of* the working memory pipeline. Each ca
 
 | Feature | Impact | Buildability | Phase |
 |---|---|---|---|
-| L2 Scene Narratives | 🔴 High | 🟢 Easy | **1 — Now** |
-| L3 Persona Synthesis | 🔴 High | 🟢 Easy | **1 — Now** |
-| Hybrid RRF Recall | 🔴 High | 🟡 Medium | **1 — Now** |
-| Reranker (Qwen3/BGE/Cohere) | 🔴 High | 🟡 Medium | **1 — Now** |
+| L2 Scene Narratives | 🔴 High | 🟢 Easy | **✅ Shipped** |
+| L3 Persona Synthesis | 🔴 High | 🟢 Easy | **✅ Shipped** |
+| Hybrid RRF Recall | 🔴 High | 🟡 Medium | **✅ Shipped** |
+| Reranker (Qwen3/BGE/Cohere) | 🔴 High | 🟡 Medium | **✅ Shipped** |
 | Memory Dashboard | 🟡 Medium | 🟡 Medium | **1 — Next** |
 | Graph Memory Layer (GraphRAG) | 🔴 High | 🔴 Hard | **2 — Next** |
 | Skill Pre-warming | 🟡 Medium | 🟢 Easy | **2 — Next** |
