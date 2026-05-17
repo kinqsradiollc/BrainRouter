@@ -104,26 +104,23 @@ The core memory architecture is designed and partially implemented. These items 
 
 **The three-stage retrieval pipeline:**
 
-```
-┌─────────────────────────────────────────────────────────┐
-│            3-STAGE MEMORY RETRIEVAL PIPELINE            │
-├─────────────────────────────────────────────────────────┤
-│ Stage 1 — Wide Net  (fast, cheap, no LLM)               │
-│ ────────────────────────────────────────                │
-│ BM25 keyword search   →  top 15 candidates              │
-│ Vector similarity     →  top 15 candidates              │
-│                             ↓                           │
-│ Stage 2 — Fusion  (fast, no LLM)                        │
-│ ───────────────────────────────                         │
-│ RRF merge (Σ 1/(60+rank))  →  top 20 merged             │
-│ + 70% RRF / 30% decay blend                             │
-│ + skill-tag boost ×1.2                                  │
-│                             ↓                           │
-│ Stage 3 — Reranking  (slower, high precision) [PLANNED] │
-│ ─────────────────────────────────────────────           │
-│ Cross-encoder reads query + each candidate              │
-│ → top 5 final memories injected into context            │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Stage1["Stage 1: Wide Net (Fast, Cheap, No LLM)"]
+        Q["User Query"] --> BM25["BM25 Keyword Search\n(Top 15 Candidates)"]
+        Q --> Vec["Vector Semantic Search\n(Top 15 Candidates)"]
+    end
+
+    subgraph Stage2["Stage 2: Fusion (Fast, No LLM)"]
+        BM25 --> RRF["RRF Merge: Σ 1/(60+rank)\n(Top 20 Merged List)"]
+        Vec --> RRF
+        RRF --> Blend["70% RRF Score + 30% Half-Life Decay\n(+ Active Skill Tag ×1.2 Boost)"]
+    end
+
+    subgraph Stage3["Stage 3: Reranking (Slower, High Precision) [PLANNED]"]
+        Blend --> Rerank["Cross-Encoder Reranker\nReads Query + Each Candidate"]
+        Rerank --> Output["Top 5 Final Memories Injected into Context"]
+    end
 ```
 
 **Why each stage matters:**
@@ -504,22 +501,22 @@ In 2026, "context engineering" has replaced "prompt engineering" as the core dis
 
 In 2026, complex software development tasks are increasingly handled by *swarms* of specialized agents rather than one general-purpose agent. A typical setup:
 
-```
-┌──────────────────────────────────────────────────────────┐
-│        MULTI-AGENT SWARM (2026 STANDARD PATTERN)         │
-├──────────────────────────────────────────────────────────┤
-│ Planner Agent    →  decomposes requirements into tasks   │
-│      ↓                                                   │
-│ Coder Agent      →  implements the code                  │
-│      ↓                                                   │
-│ Researcher Agent →  fetches docs, context, examples      │
-│      ↓                                                   │
-│ Validator Agent  →  checks correctness, security, style  │
-│                                                          │
-│ ──────────────────────────────────────────────────────── │
-│ All agents read/write shared memory via BrainRouter MCP  │
-│ (team tenant — WHERE user_id = 'team:<org>')             │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Swarm["Multi-Agent Swarm (2026 Standard)"]
+        Plan["Planner Agent\n(Decomposes Requirements)"] --> Code["Coder Agent\n(Implements Code)"]
+        Code --> Research["Researcher Agent\n(Fetches Docs & Context)"]
+        Research --> Validate["Validator Agent\n(Checks Correctness & Security)"]
+    end
+
+    subgraph Memory["BrainRouter MCP Shared Memory"]
+        Store[("Team Shared Tenant\nWHERE user_id = 'team:<org>'")]
+    end
+
+    Plan <-->|Read / Write| Store
+    Code <-->|Read / Write| Store
+    Research <-->|Read / Write| Store
+    Validate <-->|Read / Write| Store
 ```
 
 **Why this matters for BrainRouter:** Right now, BrainRouter serves a single agent talking to a single human. But as multi-agent coding workflows become standard, each specialized agent needs access to the same shared memory — project decisions, user preferences, conventions. BrainRouter's multi-tenant architecture is already designed for this: a "team tenant" where all agents in a swarm read from a shared memory space.
@@ -535,21 +532,17 @@ In 2026, complex software development tasks are increasingly handled by *swarms*
 
 ACE is a framework where agents use a closed feedback loop to improve their own context over time:
 
-```
-┌──────────────────────────────────────────────────────────┐
-│          ACE — AGENTIC CONTEXT ENGINEERING LOOP          │
-├──────────────────────────────────────────────────────────┤
-│ Generator  →  distills raw history → candidate context   │
-│      ↓                                                   │
-│ Reflector  →  was this context cited in the response?    │
-│               did the agent actually use it?             │
-│      ↓                                                   │
-│ Curator    →  keep high-utility context                  │
-│               archive zero-reference context             │
-│      ↓                                                   │
-│ → feeds usage signal back into decay scoring             │
-│ → feeds pattern data into autonomous skill detection     │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph ACE["Agentic Context Engineering (ACE) Loop"]
+        Gen["Generator\n(Distills Raw History)"] --> Ref["Reflector\n(Was Context Cited / Used?)"]
+        Ref --> Cur["Curator\n(Keep High-Utility / Archive Zero-Ref)"]
+    end
+
+    subgraph Feedback["Feedback Loops"]
+        Cur -->|Usage Signal| Decay["Decay Scoring\n(Up-rank Useful Memories)"]
+        Cur -->|Pattern Signal| Auto["Autonomous Skill Detection\n(Generate New Playbooks)"]
+    end
 ```
 
 **The insight:** Agents can learn *what context is useful* without retraining the underlying model. The "curriculum" is built from real usage data — which memories actually got referenced in responses?

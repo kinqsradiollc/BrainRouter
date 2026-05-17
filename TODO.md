@@ -7,6 +7,34 @@
 
 ## Shipped ✓
 
+```mermaid
+graph TD
+    %% Shipped Base
+    subgraph Shipped["Shipped Core & Memory Engine"]
+        MCP["MCP Server\n(Stdio + HTTP)"] --> Reg["Dual Registry\n(Global + Local Shadowing)"]
+        Reg --> Tools["Skill & Doc Tools\n(create/update/search)"]
+        Tools --> MemCore["Memory Engine\n(L0 / L1 / L1.5 / L2 / L3)"]
+        MemCore --> Hybrid["Hybrid Recall\n(FTS5 + Vector + RRF + Decay)"]
+    end
+
+    %% In-Progress / Next
+    subgraph Phase1["Phase 1: Pipeline Completion (Near)"]
+        Hybrid -.-> Rerank["Stage 3 Reranker\n(Cohere / Qwen3 / BGE) [PLANNED]"]
+        Hybrid -.-> Dash["Observability Dashboard\n(Local Web UI) [PLANNED]"]
+    end
+
+    %% Medium / Future
+    subgraph Phase2["Phase 2 & Beyond: Intelligence (Medium/Future)"]
+        Rerank -.-> Graph["Graph Memory\n(GraphRAG)"]
+        Rerank -.-> Auto["Autonomous Skill Detection\n(Pattern Mining)"]
+        Rerank -.-> ACE["ACE Feedback Loop\n(Citation Tracking)"]
+    end
+
+    style Shipped fill:#052e16,stroke:#16a34a,color:#fff
+    style Phase1 fill:#1e1b4b,stroke:#6366f1,color:#fff
+    style Phase2 fill:#2e1065,stroke:#9333ea,color:#fff
+```
+
 - [x] MCP Server — stdio transport
 - [x] MCP Server — Streamable HTTP transport (`--http --port`)
 - [x] Dual registry — global skills + local project overrides with automatic shadowing

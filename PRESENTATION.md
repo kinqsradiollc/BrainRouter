@@ -140,24 +140,14 @@ With BrainRouter's `AGENT.md`, the agent has a routing map. It reads the user's 
 
 **How the routing works — every request follows 7 steps:**
 
-```
-┌────────────────────────────────────────────────────────┐
-│             BRAINROUTER AGENT REQUEST FLOW             │
-├────────────────────────────────────────────────────────┤
-│ 1. RESOLVE SESSION  →  get a stable conversation ID    │
-│         ↓                                              │
-│ 2. RECALL MEMORY    →  load relevant past context      │
-│         ↓                                              │
-│ 3. DETECT INTENT    →  which scenario fits this task?  │
-│         ↓                                              │
-│ 4. SELECT SKILL     →  find the right playbook         │
-│         ↓                                              │
-│ 5. EXECUTE          →  load skill, follow workflow     │
-│         ↓                                              │
-│ 6. CAPTURE MEMORY   →  save this turn for future       │
-│         ↓                                              │
-│ 7. ITERATE          →  loop back if task changes       │
-└────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    A["1. RESOLVE SESSION\n(Get Stable ID)"] --> B["2. RECALL MEMORY\n(Load Context)"]
+    B --> C["3. DETECT INTENT\n(Match Scenario)"]
+    C --> D["4. SELECT SKILL\n(Find Playbook)"]
+    D --> E["5. EXECUTE\n(Run Workflow)"]
+    E --> F["6. CAPTURE MEMORY\n(Save Turn)"]
+    F --> G["7. ITERATE\n(Loop if Changed)"]
 ```
 
 **Scenario map (from BrainRouter's own AGENT.md):**
@@ -392,39 +382,29 @@ Both searches return a ranked list. RRF is a formula that merges them: *"If a me
 
 ### From Conversation to Memory to Context — End to End
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│             CAPTURE PATH (after each agent response)             │
-├──────────────────────────────────────────────────────────────────┤
-│ You send a message, agent responds                               │
-│         ↓                                                        │
-│ L0: Raw message saved to SQLite (instant, always works)          │
-│         ↓ [every N turns]                                        │
-│ L1: Extraction — AI reads recent messages                        │
-│     → Extracts: persona / episodic / instruction / skill_context │
-│     → Dedup: drops identical memories before write               │
-│         ↓                                                        │
-│ L1.5: Contradiction check — conflicts with existing? → flag      │
-│         ↓                                                        │
-│ Memories written + background vector indexing (non-blocking)     │
-│         ↓ [every ~10 new L1 memories]                            │
-│ L2: Scene update — cluster into chapters (heat-scored)           │
-│         ↓ [every ~50 new L1 memories]                            │
-│ L3: Persona refresh — synthesize profile (cross-session)         │
-├──────────────────────────────────────────────────────────────────┤
-│             RECALL PATH (before each agent response)             │
-├──────────────────────────────────────────────────────────────────┤
-│ You start typing a new message                                   │
-│         ↓                                                        │
-│ BM25 keyword search + vector search run in parallel              │
-│     → Merged via RRF + 70/30 decay blend → top 5 memories        │
-│         ↓                                                        │
-│ L2 scene summaries + L3 persona fetched (stable, cached)         │
-│ Active contradictions fetched (if any)                           │
-│         ↓                                                        │
-│ All injected into agent context before response                  │
-│     → Agent knows your history, rules, preferences, conflicts    │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    %% Capture Pipeline
+    subgraph Capture["Capture Path (Post-Turn)"]
+        A["Agent Turn Ends"] --> B["MCP Tool: memory_capture_turn"]
+        B --> C["Engine.capture()"]
+        C --> D["L0: Raw Turn Storage\n(node:sqlite FTS5)"]
+        D --> E["Scheduler\n(Evaluates Turn Thresholds)"]
+        E -- "every ~5 turns" --> F["L1 Extractor\n(4 Types + activeSkill tag)"]
+        F --> G["L1.5 Contradiction Detection"]
+        G --> H[(SQLite Store\n+ Background sqlite-vec)]
+        E -- "every ~10 L1s" --> I["L2 Scene Distiller\n(Narrative Chapters)"]
+        E -- "every ~50 L1s" --> J["L3 Persona Distiller\n(4-Layer Profile Synthesis)"]
+    end
+    
+    %% Recall Pipeline
+    subgraph Recall["Recall Path (Pre-Turn)"]
+        K["User Inputs Message"] --> L["MCP Tool: memory_recall"]
+        L --> M["Engine.recall()"]
+        M --> N["Hybrid Search\n(FTS5 BM25 + Vector + RRF)"]
+        N --> O["Inject Prepend (L1)\n& Append (L2/L3) Context"]
+        O --> P["Agent Processes & Responds"]
+    end
 ```
 
 ---
