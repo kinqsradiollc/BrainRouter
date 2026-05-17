@@ -26,6 +26,8 @@ After setup, your agent will:
 
 > Inspired by [TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory) research, which showed structured memory improves agent task success by 51% and cuts token costs by 61%.
 
+→ **See [ROADMAP.md](./ROADMAP.md)** for the full feature roadmap and research behind each planned feature.
+
 ---
 
 ## 🏗️ Architecture

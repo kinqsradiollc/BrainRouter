@@ -461,7 +461,8 @@ TencentDB published a roadmap of features they're planning. Here's the honest co
 | Local SQLite storage (no cloud needed) | ✅ Done | ✅ Done (Node built-in, zero extra dependencies) |
 | Agent framework integration | ✅ OpenClaw + Hermes only | ✅ **Universal — any MCP tool** |
 | **Portable memory (cross-agent)** | ❌ Not yet built | ✅ Multi-tenant architecture already handles this |
-| **Automatic Skill generation** | ❌ Not yet built | ✅ **Full skill system + authoring shipped** |
+| **Skill authoring tools** (`create_skill`, `update_skill`) | ❌ Not yet built | ✅ **Shipped — agents scaffold & edit skills via MCP** |
+| **Autonomous skill detection** (from memory patterns) | ❌ Not yet built | ⚠️ Planned (Phase 2) — `create_skill` exists, auto-detection doesn't |
 | **Visual debugging dashboard** | ❌ Not yet built | ⚠️ Planned |
 | Contradiction detection | ❌ Not in their design | ✅ **BrainRouter original (L1.5)** |
 | Skill-aware memory | ❌ Not in their design | ✅ **BrainRouter original (skill_context type)** |
