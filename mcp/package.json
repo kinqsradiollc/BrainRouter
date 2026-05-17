@@ -14,7 +14,12 @@
     "start": "node dist/index.js",
     "start:http": "node dist/index.js --http --port 3747",
     "test": "vitest run",
-    "setup:mcp": "node scripts/setup-mcp.js"
+    "setup:mcp": "node scripts/setup-mcp.js",
+    "bench:longmemeval": "npx tsx benchmark/longmemeval-bench.ts fts",
+    "bench:longmemeval:hybrid": "npx tsx benchmark/longmemeval-bench.ts hybrid",
+    "bench:quality": "npx tsx benchmark/quality-eval.ts",
+    "bench:e2e": "npx tsx benchmark/end-to-end-bench.ts",
+    "bench:download-data": "node benchmark/lib/download-data.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",
@@ -31,6 +36,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
+    "@xenova/transformers": "^2.17.2",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",
     "vitest": "^1.4.0"

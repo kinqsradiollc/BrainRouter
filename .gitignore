@@ -35,3 +35,5 @@ projects
 conceptCode
 mcp/brain.db
 TENCENTDB_AGENT_MEMORY.md
+mcp/benchmark/data/longmemeval_s_cleaned.json
+mcp/benchmark/results/
