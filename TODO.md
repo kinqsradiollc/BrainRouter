@@ -116,48 +116,54 @@ graph TD
 ## Phase 2 — Intelligence Upgrades
 ### Target: Medium-term
 
-- [ ] **Graph Memory Layer (GraphRAG)**
-  - [ ] Choose graph backend (SQLite adjacency tables for v1; FalkorDB or Neo4j for scale)
-  - [ ] Define entity/relationship schema (`User → prefers → Technology`, `Decision → resulted in → Outcome`, etc.)
-  - [ ] Build graph construction pipeline from L1 memories
-  - [ ] Implement graph traversal for multi-hop queries
+- [ ] **Skill-Conditioned Knowledge Graph (GraphRAG)** *(next level beyond agentmemory's entity BFS)*
+  - [ ] Define entity/relationship schema with `skill_tag` on every edge
+  - [ ] v1: SQLite adjacency tables (`graph_nodes`, `graph_edges` with `skill_tag`, `confidence`)
+  - [ ] Build graph construction pipeline from L1 memories post-extraction
+  - [ ] Implement skill-conditioned graph traversal queries
   - [ ] Hybrid recall: vector entry point → graph traversal
+  - [ ] New tool: `memory_graph_query` (entity + relation + skill filter)
+  - [ ] v2 upgrade path: FalkorDB or Neo4j for larger teams
 
-- [ ] **Temporal Validity Windows** (inspired by Zep/Graphiti)
-  - [ ] Add `valid_from`, `valid_to`, `invalid_at` timestamps to L1 memories
-  - [ ] When a new `instruction` memory supersedes an old one, mark old as `invalid_at` (not deleted)
-  - [ ] Agent can query "what was the rule in March?" vs "what is the rule now?"
-  - [ ] Integrate with L1.5 — contradiction becomes a temporal update, not a conflict flag
+- [ ] **Temporal Validity Windows** *(inspired by Zep/Graphiti — self-healing contradictions)*
+  - [ ] Schema migration: add `valid_from`, `valid_to`, `invalid_at`, `superseded_by` to `l1_records`
+  - [ ] When new `instruction` memory conflicts: mark old as `invalid_at = NOW()`, set `superseded_by`
+  - [ ] Update L1.5: distinguish temporal updates (auto-resolve) vs. genuine contradictions (flag)
+  - [ ] Recall: filter `WHERE valid_to IS NULL` by default (current state)
+  - [ ] Optional query: `memory_search` with `asOf` param for point-in-time recall
+
+- [ ] **ACE Feedback Loop** *(citation tracking — neither competitor has this)*
+  - [ ] Schema: add `citation_count`, `last_cited_at`, `never_cited_count` to `l1_records`
+  - [ ] New tool: `memory_mark_cited` — agent calls with `recordIds[]` when memory used in response
+  - [ ] Adjust decay scoring: cited memories get boosted effective priority
+  - [ ] Auto-archive threshold: `never_cited_count > N` → set `archived = true`, exclude from active pool
+  - [ ] Archive is queryable but not injected automatically
+  - [ ] Feed `skill_context` citation signals into autonomous skill detection (2.4)
+
+- [ ] **Model Routing** *(60–80% cost reduction)*
+  - [ ] Add `BRAINROUTER_EXTRACTION_MODEL` env var — used for L1, L1.5 (cheap/fast)
+  - [ ] Add `BRAINROUTER_SYNTHESIS_MODEL` env var — used for L2, L3 (smarter)
+  - [ ] Two LLMRunner instances in engine, selected by task type
+  - [ ] Default: same model for both (backward-compatible)
 
 - [ ] **Skill Pre-warming**
   - [ ] Analyse `skill_context` memories for temporal patterns (e.g., always runs spec on Mondays)
-  - [ ] Proactively inject matching skill's extraction hints before the agent asks
+  - [ ] Pattern confidence threshold → inject matching skill hints into `appendSystemContext` proactively
   - [ ] Configurable: opt-in per project
 
-- [ ] **Model Routing (cost optimisation)**
-  - [ ] Use cheap/fast model (Haiku, GPT-4o-mini) for L1 extraction
-  - [ ] Use smarter model for L3 persona synthesis
-  - [ ] Configurable: separate `extractionModel` and `synthesisModel` in config
-  - [ ] Target: 60–80% reduction in LLM API cost for memory operations
-
-- [ ] **Autonomous Skill Detection from Patterns** *(not `create_skill` — that's shipped)*
-  - [ ] Background scheduler: scan `skill_context` memories for recurring N-step patterns
-  - [ ] Threshold: same pattern detected 3+ times → surface proposal
-  - [ ] Output proposal via MCP tool response (agent surfaces to user for approval)
-  - [ ] On approval: call `create_skill` with the detected workflow automatically
+- [ ] **Autonomous Skill Detection from Patterns** *(detection layer — `create_skill` itself is shipped)*
+  - [ ] Background scheduler: scan `skill_context` memories grouped by `scene_name`
+  - [ ] Semantic clustering: same N-step structure seen 3+ times → candidate pattern
+  - [ ] Surface proposal via `memory_skill_proposals` tool
+  - [ ] On approval: auto-call `create_skill` with the detected workflow steps
   - [ ] On dismiss: suppress same proposal for configurable cooldown period
 
-- [ ] **ACE Feedback Loop** (Agentic Context Engineering)
-  - [ ] Track which recalled memories were actually referenced in agent responses
-  - [ ] Up-rank frequently useful memories in decay scoring
-  - [ ] Auto-archive memories never referenced after N recalls
-  - [ ] Feed reference signals into autonomous skill detection
-
-- [ ] **Autonomous Memory Management** (AgeMem/MemRL-inspired)
-  - [ ] Track capture/recall telemetry (which sessions, which memory types, which skills active)
+- [ ] **ACE-Driven Autonomous Memory Management** *(requires ACE feedback loop first)*
+  - [ ] Track capture/recall telemetry: session density, memory type distribution, skill activity
   - [ ] Adaptive L1 trigger: dense sessions → trigger earlier; sparse sessions → trigger later
-  - [ ] Adaptive pruning: archive memories with consistently low recall scores
-  - [ ] Privacy-first: all telemetry stays local
+  - [ ] Adaptive pruning: auto-archive memories with consistently low recall + zero citations
+  - [ ] Privacy-first: all telemetry stays local, never sent externally
+
 
 ---
 
@@ -228,25 +234,29 @@ graph TD
 
 ## Documentation & Accuracy
 
-- [x] `ROADMAP.md` — created with 4-phase plan and research landscape
-- [x] `PRESENTATION.md` — 20-slide stakeholder deck with plain-English explanations
+- [x] `ROADMAP.md` — 4-phase plan, research landscape, new Phase 2 innovations
+- [x] `BRAINROUTER.md` — rewritten: shipped state + all planned innovations with competitive framing
+- [x] `TODO.md` — this file, synced with ROADMAP
 - [x] `README.md` — updated with memory architecture, decay model, tools table
-- [x] `TODO.md` — this file
-- [ ] `APPLIED_CONCEPT.md` — verify L2/L3 schema matches current implementation plan
-- [ ] `BRAINROUTER.md` — sync with latest shipped features (add create_skill, update_skill, decay scoring)
-- [ ] Add `CHANGELOG.md` — track what shipped in each milestone
+- [ ] `APPLIED_CONCEPT.md` — add Temporal Validity, ACE Feedback Loop, Model Routing schema sections
+- [ ] `CHANGELOG.md` — track what shipped in each milestone
 
 ---
 
 ## Nice-to-Have / Under Consideration
 
-- [ ] `memory_export` MCP tool (single-tool export without CLI)
+- [ ] `memory_mark_cited` MCP tool — signal which recalled memories were cited in the response
+- [ ] `memory_skill_proposals` MCP tool — list/approve/dismiss auto-detected skill patterns
+- [ ] `memory_graph_query` MCP tool — traverse knowledge graph by entity or relation+skill_tag
+- [ ] `memory_export` MCP tool — single-tool export without CLI
 - [ ] `memory_import` MCP tool
 - [ ] `memory_prune` MCP tool — manually archive low-relevance memories
-- [ ] `memory_stats` MCP tool — returns counts by type, total size, oldest memory, etc.
+- [ ] `memory_stats` MCP tool — returns counts by type, total size, oldest memory, citation rate
 - [ ] Session resume in L0 capture (MCP 2026 spec feature)
+- [ ] L3 persona injected as stable system prompt prefix (prompt-cache-friendly, not per-turn)
+- [ ] Scene auto-merge when scene count exceeds configurable threshold
 - [ ] Enterprise auth (SSO/Cross-App Access) for team deployments
-- [ ] Interactive UI components via MCP (for dashboard integration)
+- [ ] MCP Server Card at `.well-known/mcp.json` for ecosystem discoverability
 
 ---
 

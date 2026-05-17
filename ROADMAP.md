@@ -14,21 +14,22 @@ This document is a living record of where BrainRouter is going, why, and how eac
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                       BRAINROUTER DEVELOPMENT ROADMAP                        │
-├──────────────────┬──────────────────┬─────────────────┬──────────────────────┤
-│ TODAY (SHIPPED)  │ PHASE 1 (NEAR)   │ PHASE 2 (MED)   │ PHASE 3-4 (FUTURE)   │
-├──────────────────┼──────────────────┼─────────────────┼──────────────────────┤
-│ MCP Server       │ (done — shipped  │ Graph Memory    │ Team / Shared Memory │
-│ Skills & Personas│  with rest of    │  (GraphRAG)     │ Memory Export/Import │
-│ L0–L1 Memory     │  codebase)       │ Auto Skill      │ Swarm Agent Support  │
-│ L1.5 Contradicts │                  │  Detection      │ Cross-Session Graph  │
-│ L2 Scenes        │ Memory Dashboard │ Autonomous Mgmt │ BrainRouter Hub      │
-│ L3 Persona       │ Reranker Support │ Skill Pre-warm  │ Multimodal Memory    │
-│ Hybrid RRF Recall│                  │ Model Routing   │ LoCoMo/LongMemEval   │
-│ Vector Embedding │                  │ Temporal Windows│  Benchmarks          │
-│ Decay Scoring    │                  │                 │                      │
-│ create_skill     │                  │                 │                      │
-│ update_skill     │                  │                 │                      │
-└──────────────────┴──────────────────┴─────────────────┴──────────────────────┘
+├──────────────────┬──────────────────┬────────────────────┬───────────────────┤
+│ SHIPPED ✅        │ PHASE 1 (NEAR)   │ PHASE 2 (MED)      │ PHASE 3-4 (FUTURE)│
+├──────────────────┼──────────────────┼────────────────────┼───────────────────┤
+│ MCP Server       │ Memory Dashboard │ Skill-Conditioned  │ Team Memory       │
+│ Skills & Personas│ Scene auto-merge │   Graph (GraphRAG) │ Memory Export     │
+│ L0 / L1 / L1.5  │ L3 prompt cache  │ Temporal Validity  │ Swarm Agent Sync  │
+│ L2 Scenes        │                  │   Windows          │ Cross-Session Link│
+│ L3 Persona       │                  │ ACE Feedback Loop  │ BrainRouter Hub   │
+│ Hybrid RRF Recall│                  │ Auto Skill Detect. │ Multimodal Memory │
+│ Cross-Encoder    │                  │ Skill Pre-warming  │ LoCoMo Benchmarks │
+│   Reranker       │                  │ Model Routing      │                   │
+│ Vector Embedding │                  │ Autonomous Mgmt    │                   │
+│ Decay Scoring    │                  │ memory_mark_cited  │                   │
+│ create_skill     │                  │                    │                   │
+│ update_skill     │                  │                    │                   │
+└──────────────────┴──────────────────┴────────────────────┴───────────────────┘
 ```
 
 ---
@@ -41,16 +42,22 @@ BrainRouter currently ships:
 - [x] **Dual Registry** — global skills + local project overrides with automatic shadowing
 - [x] **40+ Skills** — agent workflows, code quality, design, devops, testing, communication
 - [x] **Personas** — code-reviewer, security-auditor, test-engineer
-- [x] **L0 Memory** — raw conversation capture, multi-tenant, FTS5 indexed
-- [x] **L1 Memory** — LLM-based extraction of 4 memory types (persona, episodic, instruction, skill_context)
-- [x] **L1.5 Contradiction Detection** — conflict flagging and agent-visible warnings
-- [x] **Vector Embedding** — Background non-blocking embedding extraction and storage in `sqlite-vec`
-- [x] **Hybrid Recall (RRF)** — BM25 FTS5 + Vector similarity search merged via Reciprocal Rank Fusion
-- [x] **Stage 3 Reranker** — Precision sorting via Cohere/vLLM/BGE reranker endpoints
-- [x] **Decay Scoring** — half-life based relevance scoring per memory type
-- [x] **Multi-tenant Isolation** — `user_id` on all tables, every query scoped
-- [x] **`create_skill` tool** — agent can scaffold a new SKILL.md from a canonical template, local or global scope
-- [x] **`update_skill` tool** — agent can update any section of an existing skill, with global/local shadowing support
+- [x] **L0 Memory** — raw conversation capture, multi-tenant, FTS5 indexed, cursor-based dedup
+- [x] **L1 Memory** — LLM-based extraction of 4 memory types (persona, episodic, instruction, **skill_context**)
+- [x] **L1.5 Contradiction Detection** — first-class conflict layer; unresolved flags surfaced to agent/user during recall
+- [x] **L2 Scene Narratives** — heat-scored narrative chapters, triggered every ~10 L1s
+- [x] **L3 Persona Synthesis** — 4-layer cross-session profile, triggered every ~50 L1s
+- [x] **Vector Embedding** — Background non-blocking embedding in `sqlite-vec`, configurable endpoint
+- [x] **Hybrid Recall (RRF)** — BM25 FTS5 + Vector merged via Reciprocal Rank Fusion + decay blend + skill-tag ×1.2 boost
+- [x] **Stage 3 Reranker** — Cross-encoder precision sorting (Cohere / Qwen3 / BGE) — graceful fallback to RRF-only
+- [x] **Decay Scoring** — half-life per type: instruction never, persona 180d, episodic 30d, skill_context 7d
+- [x] **Multi-tenant Isolation** — `user_id` on all tables, every query strictly scoped
+- [x] **`create_skill` tool** — scaffolds canonical SKILL.md, local or global scope
+- [x] **`update_skill` tool** — updates any section; global→local shadowing
+- [x] **`memory_resolve_session`** — stable session UUID across conversation reloads
+
+> **vs. TencentDB:** We added `skill_context` type, L1.5 as first-class layer, English prompt, MCP-native transport, multi-tenant enforcement, cross-encoder reranking.
+> **vs. agentmemory:** We have explicit contradiction surfacing (not silent eviction), skill-conditioned extraction, cross-encoder reranking, and zero daemon dependency. Their lead areas: auto-hooks, knowledge graph, real-time viewer — all on our roadmap.
 
 ---
 
@@ -181,9 +188,27 @@ These features add intelligence *on top of* the working memory pipeline. Each ca
 
 ---
 
-### 2.1 — Graph Memory Layer
+### 2.1 — Skill-Conditioned Knowledge Graph (GraphRAG)
 
-**What it is:** A knowledge graph that captures *relationships* between memories, not just individual facts.
+**What it is:** A knowledge graph that captures *relationships* between memories — and annotates every edge with *which BrainRouter skill was active* when the relationship was established.
+
+**Why it's better than agentmemory's graph:** agentmemory does entity extraction and BFS traversal. Our graph goes further by tagging every edge with the active skill, enabling queries neither competitor supports:
+> *"What architectural decisions were made during debugging sessions that we should revisit?"*
+> *"Which technologies did we evaluate during spec-driven-development vs. actually adopt?"*
+
+**Relationship types:**
+- `User --[prefers | skill: conventions-skill]--> TypeScript`
+- `Project --[uses | skill: docker-lifecycle]--> Docker`
+- `Decision --[resulted-in | skill: debugging]--> Fix`
+- `Bug --[was-fixed-by | skill: debugging]--> Solution`
+- `Skill --[was-used-during]--> Session`
+
+**v1 implementation:** SQLite adjacency tables (no external dependency).  
+**v2:** FalkorDB (in-memory, sub-100ms) or Neo4j (enterprise, audit trails).
+
+**Research basis:** Microsoft GraphRAG (2024), Mem0 hybrid vector+graph, agentmemory's entity BFS.
+
+**Estimated complexity:** High (1–2 weeks). Graph query design is the hardest part.
 
 **The problem with flat memory:** Current memories are independent atoms. "User uses TypeScript" and "User's API project uses Zod for validation" and "Zod is used in the auth service" are three separate records. A graph connects them: `User → uses → TypeScript → used in → API project → validated by → Zod → used in → auth service`.
 
@@ -207,21 +232,133 @@ These features add intelligence *on top of* the working memory pipeline. Each ca
 
 ---
 
-### 2.2 — Autonomous Memory Management
+### 2.2 — Temporal Validity Windows (inspired by Zep/Graphiti)
 
-**What it is:** Instead of fixed rules for when to trigger L1/L2/L3, the system learns *when* it's most useful to do memory operations based on how you actually use it.
+**What it is:** Every `instruction`-type memory gets `valid_from` / `valid_to` / `invalid_at` timestamps. When a new instruction supersedes an old one, the old is *invalidated but preserved* — not deleted.
 
-**The problem:** Right now, L1 runs every 5 turns regardless. Sometimes 5 turns is a lot of context (a long debugging session). Sometimes it's almost nothing (quick clarification questions). A rigid schedule misses the nuance.
+**The problem it solves:** Our L1.5 currently flags "always use npm" vs. "always use pnpm" as an unresolved contradiction requiring user action. But most of the time it's just an *update over time* — the user changed their mind. Temporal validity makes the system self-healing: the newer instruction automatically supersedes the older one, the audit trail is preserved, and the contradiction flag never fires.
 
-**How autonomous management works:**
-1. The system tracks: which memory retrievals were actually useful (did the agent reference them?)
-2. It learns: when are captures high-value vs. low-value?
-3. It adjusts: trigger extraction earlier for dense technical conversations, later for casual chat
-4. It prunes: automatically archive memories that consistently score near zero in recall results
+**What it enables:**
+- Agent can query: *"what was the rule in March?"* vs. *"what is the rule now?"*
+- L1.5 becomes smarter: only flag genuine simultaneous contradictions, not temporal updates
+- Full audit trail: nothing is deleted, recency determines validity
 
-**Research basis:** RL-driven memory management (AgeMem, MemRL frameworks, 2026). The agent learns *how* to manage its own context as a policy — not just what to store.
+**Schema additions:**
+```sql
+ALTER TABLE l1_records ADD COLUMN valid_from TEXT;     -- ISO 8601, set on creation
+ALTER TABLE l1_records ADD COLUMN valid_to TEXT;       -- null = currently valid
+ALTER TABLE l1_records ADD COLUMN invalid_at TEXT;     -- set when superseded
+ALTER TABLE l1_records ADD COLUMN superseded_by TEXT;  -- FK to newer record
+```
 
-**Estimated complexity:** High (1–2 weeks). Requires telemetry collection first (tracking which memories were used).
+**Research basis:** Zep/Graphiti temporal graph engine — scored ~63.8% on LongMemEval temporal reasoning tasks.
+
+**Estimated complexity:** Medium (2–3 days). Schema migration + updated L1.5 judgment logic.
+
+---
+
+### 2.3 — ACE Feedback Loop (Citation Tracking)
+
+**What it is:** Track which recalled memories the agent actually cited in its responses. Use that signal to up-rank useful memories and auto-archive noise.
+
+**The gap neither competitor has:** agentmemory and TencentDB both store memories but never measure whether retrieved memories were actually *used*. This means:
+- Stale memories keep resurfacing (waste tokens, mislead agent)
+- Useful memories aren't reinforced
+- There's no signal for when to prune
+
+**The mechanism:**
+1. `memory_recall` returns each memory with its `record_id`
+2. If agent uses a memory in its response → call `memory_mark_cited` with that record ID
+3. `citation_count` and `last_cited_at` updated on the record
+4. `never_cited_count` incremented on each recall where NOT cited
+5. After `never_cited_count > N` → auto-archive flag set, excluded from active pool
+
+**Downstream effects:**
+- Frequently cited memories → boosted effective priority in recall scoring
+- Never-cited memories → auto-archived (still queryable, not deleted)
+- `skill_context` citation patterns → feed autonomous skill detection (Phase 2.4)
+
+**New tool:** `memory_mark_cited` — lightweight, called passively by agent after responding.
+
+**Research basis:** Agentic Context Engineering (ACE) — Generator → Reflector → Curator closed loop.
+
+**Estimated complexity:** Low–Medium (2–3 days). Schema additions + new MCP tool + adjusted scoring.
+
+---
+
+### 2.4 — Autonomous Skill Detection from Patterns
+
+**What's already shipped:** `create_skill` and `update_skill` MCP tools — any agent can already scaffold a full SKILL.md instantly.
+
+**What's NOT built yet:** The *autonomous detection* layer — BrainRouter scanning `skill_context` memories in the background, recognizing you've solved the same problem 3+ times, and *proactively proposing* a new skill.
+
+**The detection pipeline:**
+1. Background scheduler queries `skill_context` memories grouped by `scene_name`
+2. Semantic clustering: same N-step structure seen 3+ times → candidate pattern
+3. Surface proposal via `memory_skill_proposals` tool
+4. On approval → auto-call `create_skill` with the detected workflow
+5. On dismiss → suppress same proposal for configurable cooldown period
+
+**Example output:**
+```
+🔍 Pattern detected across 4 sessions:
+   You've solved React hydration bugs with a consistent 4-step process.
+   → Proposed skill: "react-hydration-debugging"
+   → Call create_skill to save, or dismiss for 30 days.
+```
+
+**Research basis:** Memento-Skills (2025–2026), TencentDB "Automatic Skill generation" roadmap, PRAXIS procedural memory.
+
+**Estimated complexity:** High (1–2 weeks). Detection pipeline is the hard part; scaffolding already exists.
+
+---
+
+### 2.5 — Skill Pre-warming
+
+**What it is:** When `skill_context` patterns predict you're about to use a particular skill, BrainRouter pre-loads that skill's context before you ask.
+
+**Example:** You always open `spec-driven-development` at the start of a new feature. BrainRouter detects the pattern; on the next session starting with a new feature description, the spec skill's extraction hints and workflow summary are already in `appendSystemContext` — before you say anything.
+
+**Why it matters:** Eliminates the "read AGENT.md → find the skill → load it" dance. Zero latency, zero agent effort.
+
+**Estimated complexity:** Low–Medium (2–3 days). Pattern matching on `skill_context` + proactive injection.
+
+---
+
+### 2.6 — Model Routing (Cost Optimisation)
+
+**What it is:** Use a cheap/fast model for L1 extraction and a smarter model for L3 persona synthesis.
+
+| Task | Model tier | Rationale |
+|---|---|---|
+| L1 extraction | Haiku, GPT-4o-mini, DeepSeek-V3 | Structured JSON — smaller model sufficient |
+| L1.5 contradiction judgment | Haiku, GPT-4o-mini | Binary classification task |
+| L2 scene distillation | Sonnet, GPT-4o | Narrative quality matters |
+| L3 persona synthesis | Sonnet, GPT-4o | Deep reasoning over long context |
+
+**Target:** 60–80% reduction in LLM API cost for memory operations.
+
+**Research basis:** Context Engineering discipline — use the right tool for the right job.
+
+**Estimated complexity:** Low (1–2 days). Two env vars, two LLMRunner instances.
+
+---
+
+### 2.7 — Autonomous Memory Management
+
+**What it is:** Instead of fixed rules for when to trigger L1/L2/L3, the system adapts based on conversation density.
+
+**The problem:** L1 runs every 5 turns regardless. A long debugging session generates far more extractable signal than 5 quick clarification questions. A rigid schedule misses this nuance.
+
+**How it works:**
+1. Track capture/recall telemetry: which sessions, which memory types, which skills active
+2. Adaptive L1 trigger: dense technical sessions → trigger earlier; casual chat → trigger later
+3. Adaptive pruning: archive memories with consistently low recall scores
+4. Privacy-first: all telemetry stays local
+
+**Research basis:** AgeMem / MemRL — memory management as a learned policy (GRPO, 2026).
+
+**Estimated complexity:** High (1–2 weeks). Requires telemetry collection first (ACE feedback loop is a prerequisite).
 
 ---
 
@@ -377,22 +514,26 @@ These features add intelligence *on top of* the working memory pipeline. Each ca
 | L3 Persona Synthesis | 🔴 High | 🟢 Easy | **✅ Shipped** |
 | Hybrid RRF Recall | 🔴 High | 🟡 Medium | **✅ Shipped** |
 | Reranker (Qwen3/BGE/Cohere) | 🔴 High | 🟡 Medium | **✅ Shipped** |
-| Memory Dashboard | 🟡 Medium | 🟡 Medium | **1 — Next** |
-| Graph Memory Layer (GraphRAG) | 🔴 High | 🔴 Hard | **2 — Next** |
+| Memory Dashboard (Observability) | 🟡 Medium | 🟡 Medium | **1 — Next** |
+| Scene auto-merge at threshold | 🟡 Medium | 🟢 Easy | **1 — Next** |
+| L3 persona prompt caching | 🟡 Medium | 🟢 Easy | **1 — Next** |
+| **ACE Feedback Loop** (citation tracking) | 🔴 High | 🟢 Easy | **2 — Next** |
+| **Temporal Validity Windows** | 🔴 High | 🟡 Medium | **2 — Next** |
+| **Model Routing** (cost opt.) | 🟡 Medium | 🟢 Easy | **2 — Next** |
 | Skill Pre-warming | 🟡 Medium | 🟢 Easy | **2 — Next** |
-| Model Routing (cost opt.) | 🟡 Medium | 🟢 Easy | **2 — Next** |
-| **Autonomous** Skill Detection | 🔴 High | 🔴 Hard | **2 — Later** |
-| Autonomous Memory Mgmt | 🟡 Medium | 🔴 Hard | **2 — Later** |
-| Temporal Validity Windows | 🔴 High | 🟡 Medium | **2 — Later** |
+| **Skill-Conditioned Graph** (GraphRAG) | 🔴 High | 🔴 Hard | **2 — Later** |
+| **Autonomous Skill Detection** | 🔴 High | 🔴 Hard | **2 — Later** |
+| Autonomous Memory Mgmt (AgeMem) | 🟡 Medium | 🔴 Hard | **2 — Later** |
 | Team / Shared Memory | 🔴 High | 🔴 Hard | **3 — Later** |
 | Memory Export/Import | 🟡 Medium | 🟡 Medium | **3 — Later** |
 | Swarm Agent Support | 🔴 High | 🟡 Medium | **3 — Later** |
-| Cross-session Graph | 🟡 Medium | 🔴 Hard | **3 — Future** |
-| BrainRouter Hub | 🔴 High | 🔴 Very Hard | **4 — Future** |
+| Cross-session Memory Graph | 🟡 Medium | 🔴 Hard | **3 — Future** |
+| BrainRouter Hub (Skill Marketplace) | 🔴 High | 🔴 Very Hard | **4 — Future** |
 | Multimodal Memory | 🟡 Medium | 🔴 Very Hard | **4 — Future** |
-| LoCoMo / LongMemEval Evals | 🔴 High | 🟡 Medium | **4 — Future** |
+| LoCoMo / LongMemEval Benchmarks | 🔴 High | 🟡 Medium | **4 — Future** |
 
-> **Note:** `create_skill` and `update_skill` are already shipped MCP tools. This row tracks only the *autonomous background detection* that proposes skills from patterns without being asked.
+> **ACE, Temporal Validity, and Model Routing** are the highest-leverage near-term items — each is low-complexity but addresses a core gap vs. both competitors.
+> **Skill-Conditioned Graph** is what ultimately puts us beyond agentmemory's knowledge graph capability.
 
 ---
 
