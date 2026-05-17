@@ -146,6 +146,13 @@ export interface EmbeddingServiceConfig {
   dimensions?: number;
 }
 
+export interface RerankerServiceConfig {
+  endpoint?: string;
+  apiKey?: string;
+  model?: string;
+  topN?: number;
+}
+
 export interface SkillHintsRecord {
   skillName: string;
   hints: string;

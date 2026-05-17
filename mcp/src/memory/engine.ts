@@ -2,6 +2,7 @@ import { SqliteMemoryStore } from "./store/sqlite.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { EmbeddingService } from "./store/embedding.js";
+import { RerankerService } from "./store/reranker.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillScenes } from "./pipeline/l2-scene.js";
 import { distillPersona } from "./pipeline/l3-distiller.js";
@@ -77,10 +78,19 @@ export class MemoryEngine {
       dimensions: process.env.BRAINROUTER_EMBEDDING_DIMENSIONS ? parseInt(process.env.BRAINROUTER_EMBEDDING_DIMENSIONS, 10) : undefined,
     });
 
+    const rerankerService = new RerankerService({
+      endpoint: process.env.BRAINROUTER_RERANKER_ENDPOINT,
+      apiKey: process.env.BRAINROUTER_RERANKER_API_KEY,
+      model: process.env.BRAINROUTER_RERANKER_MODEL,
+      topN: process.env.BRAINROUTER_RERANKER_TOP_N 
+        ? parseInt(process.env.BRAINROUTER_RERANKER_TOP_N, 10) 
+        : undefined,
+    });
+
     this.store.initVec(embeddingService.getDimensions());
     
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.llmRunner, embeddingService, 1);
-    this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService);
+    this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService);
   }
 
   public get capture() {

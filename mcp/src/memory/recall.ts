@@ -1,6 +1,7 @@
 import type { SqliteMemoryStore } from "./store/sqlite.js";
 import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult } from "./types.js";
 import type { EmbeddingService } from "./store/embedding.js";
+import type { RerankerService } from "./store/reranker.js";
 
 // Decay half-lives from APPLIED_CONCEPT.md
 const DECAY_HALF_LIFE_DAYS = {
@@ -12,14 +13,14 @@ const DECAY_HALF_LIFE_DAYS = {
 
 function effectivePriority(memory: L1FtsResult): number {
   const halfLife = DECAY_HALF_LIFE_DAYS[memory.type as keyof typeof DECAY_HALF_LIFE_DAYS];
-  
+
   if (!halfLife) {
     return memory.priority; // e.g. instruction
   }
 
   const ageMs = Date.now() - new Date(memory.created_time).getTime();
   const ageDays = ageMs / 86_400_000;
-  
+
   const decayFactor = Math.pow(0.5, ageDays / halfLife);
   return memory.priority * decayFactor;
 }
@@ -27,8 +28,9 @@ function effectivePriority(memory: L1FtsResult): number {
 export class MemoryRecallPipeline {
   constructor(
     private store: SqliteMemoryStore,
-    private embeddingService: EmbeddingService
-  ) {}
+    private embeddingService: EmbeddingService,
+    private rerankerService: RerankerService
+  ) { }
 
   public async recall(params: {
     userId: string;
@@ -40,7 +42,7 @@ export class MemoryRecallPipeline {
 
     // 1. FTS5 BM25 search (Top 15)
     const ftsResults = this.store.searchL1Fts(userId, query, 15);
-    
+
     // 2. Vector search (Top 15, if enabled)
     let vecResults: VectorSearchResult[] = [];
     if (this.embeddingService.isReady()) {
@@ -59,7 +61,7 @@ export class MemoryRecallPipeline {
     // 3. RRF Merge (Reciprocal Rank Fusion)
     // Formula: score = Σ 1 / (60 + rank)
     const rrfMap = new Map<string, { record: L1FtsResult | VectorSearchResult, rrfScore: number }>();
-    
+
     ftsResults.forEach((r, idx) => {
       const rank = idx + 1;
       rrfMap.set(r.record_id, { record: r, rrfScore: 1 / (60 + rank) });
@@ -79,16 +81,16 @@ export class MemoryRecallPipeline {
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // Scale RRF score (which is typically small, e.g. 1/60 + 1/60 ≈ 0.033) to 0-1ish range
       // For top 1/1, max possible is 2/61 ≈ 0.0327. Let's multiply by 30 to get ~1.0
-      const baseScore = rrfScore * 30; 
-      
+      const baseScore = rrfScore * 30;
+
       // Decay priority (0-100) contributes to the final blend
       const priorityScore = (effectivePriority(record as L1FtsResult) / 100);
-      
+
       // Blend: 70% relevance (RRF), 30% priority/freshness
       let finalScore = (baseScore * 0.7) + (priorityScore * 0.3);
 
       if (activeSkill && record.skill_tag === activeSkill) {
-        finalScore *= 1.2; 
+        finalScore *= 1.2;
       }
 
       return { record, score: finalScore };
@@ -96,7 +98,28 @@ export class MemoryRecallPipeline {
 
     // Sort by final score descending
     scoredResults.sort((a, b) => b.score - a.score);
-    const topResults = scoredResults.slice(0, 5);
+    
+    let topResults = scoredResults.slice(0, 5);
+    
+    // Stage 3 — Reranker (Top 20 from RRF)
+    const rerankCandidates = scoredResults.slice(0, 20);
+    let usedReranker = false;
+    
+    if (this.rerankerService.isReady()) {
+      try {
+        const documents = rerankCandidates.map(r => r.record.content);
+        const ranked = await this.rerankerService.rerank({ 
+          query, 
+          documents, 
+          topN: this.rerankerService.getTopN() 
+        });
+        
+        topResults = ranked.map(r => rerankCandidates[r.index]);
+        usedReranker = true;
+      } catch (e) {
+        console.error("[BrainRouter] Reranker failed during recall, falling back to RRF:", (e as Error).message);
+      }
+    }
 
     // 5. Format for context
     const memoryLines = topResults.map(({ record }) => {
@@ -145,7 +168,9 @@ export class MemoryRecallPipeline {
       prependContext,
       appendSystemContext,
       recalledL1Memories,
-      recallStrategy: vecResults.length > 0 ? "hybrid" : "keyword",
+      recallStrategy: vecResults.length > 0 
+        ? (usedReranker ? "hybrid+rerank" : "hybrid") 
+        : (usedReranker ? "keyword+rerank" : "keyword"),
       personaSummary: persona?.personaMd,
       activeScene: topScenes[0]?.sceneName,
     };
