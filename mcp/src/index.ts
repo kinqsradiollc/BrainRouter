@@ -46,6 +46,7 @@ import { memoryRecallToolSchema, handleMemoryRecall } from './tools/memory_recal
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
+import { memoryResolveSessionToolSchema, handleMemoryResolveSession } from './tools/memory_resolve_session.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 
@@ -196,6 +197,7 @@ function buildMcpServer(registry: Registry): Server {
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
+      memoryResolveSessionToolSchema,
     ],
   }));
 
@@ -217,6 +219,7 @@ function buildMcpServer(registry: Registry): Server {
         case 'memory_search': return await handleMemorySearch(request.params.arguments);
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments);
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
+        case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

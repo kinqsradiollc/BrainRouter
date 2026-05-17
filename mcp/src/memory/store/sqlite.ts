@@ -332,6 +332,16 @@ export class SqliteMemoryStore {
     }));
   }
 
+  public getUnextractedL0Count(userId: string, sessionKey: string): number {
+    const stmtLatestL1 = this.db.prepare("SELECT MAX(created_time) as maxTime FROM l1_records WHERE user_id = ? AND session_key = ?");
+    const latestL1 = stmtLatestL1.get(userId, sessionKey) as any;
+    const lastExtractionTime = latestL1?.maxTime || "";
+
+    const stmtCount = this.db.prepare("SELECT COUNT(*) as count FROM l0_conversations WHERE user_id = ? AND session_key = ? AND recorded_at > ?");
+    const row = stmtCount.get(userId, sessionKey, lastExtractionTime) as any;
+    return row?.count || 0;
+  }
+
   // ============================
   // L1 Methods
   // ============================

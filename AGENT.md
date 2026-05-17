@@ -6,18 +6,22 @@
 
 ## ⚖️ Core Rules
 
-- **Memory-First Habit**: Before every response, you MUST call `memory_recall`. After every response, you MUST call `memory_capture_turn`. Use the **Conversation ID** as the `sessionKey` for session-specific continuity.
+- **Memory-First Habit**: Before doing anything, you MUST call `mcp_brainrouter_resolve_session` passing the current workspace path and the **Conversation ID** (as the `suggestedKey` if present). Use the returned `sessionKey` UUID for all subsequent `recall`, `capture_turn`, and `search` operations to ensure session continuity.
+- **Proactive Memory Retrieval**: If `memory_recall` returns insufficient context, you MUST call `mcp_brainrouter_memory_search` with specific keywords.
+- **Skill Context Registration**: When loading or updating a skill, proactively call `mcp_brainrouter_memory_register_skill_hints` to ensure the memory engine knows what to extract.
+- **Resolve Contradictions**: Periodically, especially when starting a new task, call `mcp_brainrouter_memory_contradictions` to check for and resolve any conflicting instructions or memories.
 - **No Shortcuts**: Avoid "this is too small for a skill" or "I'll just quickly fix it" rationalization.
 
 ## 🔄 Execution Model
 
 For every request:
-1. **Recall Context**: Call `memory_recall` using the **Conversation ID** as the `sessionKey`. Use the query to load persona, scenes, and relevant history.
-2. **Detect Intent**: Map the user's request to a scenario below using the recalled context.
-3. **Select Skill**: Identify the most relevant skill name.
-4. **Execute**: Fetch the skill using `mcp_brainrouter_get_skill` and follow the skill workflow strictly.
-5. **Record Outcome**: Call `memory_capture_turn` using the **Conversation ID** as the `sessionKey` after your response to persist the turn.
-6. **Iterate**: Return to this router if the scenario changes (e.g., from Debugging to Shipping).
+1. **Resolve Session**: Proactively call `mcp_brainrouter_resolve_session` with your current workspace path and the **Conversation ID** (as `suggestedKey`) to get a standardized `sessionKey` UUID.
+2. **Recall Context**: Call `mcp_brainrouter_memory_recall` using the resolved `sessionKey`. If the recalled context is missing key details, immediately call `mcp_brainrouter_memory_search`.
+3. **Detect Intent**: Map the user's request to a scenario below using the recalled context. Check `mcp_brainrouter_memory_contradictions` if there is ambiguity.
+4. **Select Skill**: Identify the most relevant skill name.
+5. **Execute**: Fetch the skill using `mcp_brainrouter_get_skill`. If this is a newly invoked skill, call `mcp_brainrouter_memory_register_skill_hints`. Follow the skill workflow strictly.
+6. **Record Outcome**: Call `mcp_brainrouter_memory_capture_turn` using the resolved `sessionKey` as your *final tool call* to persist the turn. Do NOT attempt to call this after your text response.
+7. **Iterate**: Return to this router if the scenario changes (e.g., from Debugging to Shipping).
 
 ## 🗺️ Lifecycle Mapping
 - **DEFINE** → `spec-driven-development` (Global Skill)

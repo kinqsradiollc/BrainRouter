@@ -95,6 +95,10 @@ export class MemoryEngine {
     return this.store.getPendingContradictions(userId);
   }
 
+  public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {
+    return this.store.resolveContradiction(id, userId, status);
+  }
+
   public registerSkillHints(skillName: string, hints: string, sourceFile = "") {
     this.store.upsertSkillHints(skillName, hints, sourceFile);
   }

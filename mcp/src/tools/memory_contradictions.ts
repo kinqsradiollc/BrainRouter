@@ -1,16 +1,16 @@
 import { z } from 'zod';
 import { memoryEngine } from '../memory/engine.js';
-import { SqliteMemoryStore } from '../memory/store/sqlite.js';
-import path from 'node:path';
-import os from 'node:os';
 
 export const memoryContradictionsToolSchema = {
   name: 'memory_contradictions',
-  description: 'List unresolved semantic contradictions in memory for a user.',
+  description: 'List unresolved semantic contradictions in memory or resolve them. Default action is "list". If action is "resolve", provide contradictionId and resolutionStatus.',
   inputSchema: {
     type: 'object',
     properties: {
       userId: { type: 'string', description: 'User identifier' },
+      action: { type: 'string', enum: ['list', 'resolve'], description: 'Action to perform. Default is list.' },
+      contradictionId: { type: 'string', description: 'ID of the contradiction to resolve (required if action is resolve)' },
+      resolutionStatus: { type: 'string', enum: ['resolved', 'dismissed'], description: 'Status to set (required if action is resolve)' },
     },
     required: ['userId'],
   },
@@ -18,20 +18,33 @@ export const memoryContradictionsToolSchema = {
 
 export const memoryContradictionsSchema = z.object({
   userId: z.string(),
+  action: z.enum(['list', 'resolve']).default('list'),
+  contradictionId: z.string().optional(),
+  resolutionStatus: z.enum(['resolved', 'dismissed']).optional(),
 });
 
 export async function handleMemoryContradictions(args: unknown) {
-  const { userId } = memoryContradictionsSchema.parse(args);
+  const { userId, action, contradictionId, resolutionStatus } = memoryContradictionsSchema.parse(args);
 
-  // We need direct access to the store for this specialized query
-  // MemoryEngine doesn't yet expose getPendingContradictions directly on its facade
-  // but we can add it or access it if we exported it.
-  
-  // For now, let's assume MemoryEngine has a getStore() or we add it to MemoryEngine.
-  // Actually, I'll just add it to MemoryEngine now to be clean.
-  
-  // @ts-ignore - Assuming we add this to MemoryEngine
-  const results = await memoryEngine.getPendingContradictions(userId);
+  if (action === 'resolve') {
+    if (!contradictionId || !resolutionStatus) {
+      throw new Error('contradictionId and resolutionStatus are required when action is "resolve"');
+    }
+    
+    memoryEngine.resolveContradiction(contradictionId, userId, resolutionStatus);
+    
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Successfully marked contradiction ${contradictionId} as ${resolutionStatus}.`,
+        },
+      ],
+    };
+  }
+
+  // Handle 'list' action
+  const results = memoryEngine.getPendingContradictions(userId);
   
   return {
     content: [

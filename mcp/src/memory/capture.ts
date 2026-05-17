@@ -51,20 +51,14 @@ export class MemoryCapturePipeline {
     }
 
     // 2. Decide if we should trigger L1 extraction
-    // In a real system, we'd persist a turn counter per session.
-    // For this MVP, we fetch the recent L0 messages for this session
-    // and if the count modulo `extractEveryNTurns` matches, we extract.
-    // Here we'll just extract if we got new messages, but we only send the last N.
-    
-    // Actually, to simulate proper triggering: get recent messages for the session.
+    const unextractedCount = this.store.getUnextractedL0Count(userId, sessionKey);
     const recentL0 = this.store.getRecentL0Messages(userId, sessionKey, 20);
     
     let l1ExtractionTriggered = false;
     let l1ExtractedCount = 0;
 
-    // Simple trigger logic: if there are more than `extractEveryNTurns` since last extraction, do it.
-    // Since we don't have a robust cursor tracker in MVP, we just run extraction on every Nth message
-    if (recentL0.length > 0 && recentL0.length % this.extractEveryNTurns === 0) {
+    // Trigger L1 extraction if the unextracted message count meets or exceeds the threshold
+    if (unextractedCount >= this.extractEveryNTurns && recentL0.length > 0) {
       l1ExtractionTriggered = true;
       
       const extractionResult = await extractL1Memories({
