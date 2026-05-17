@@ -18,8 +18,12 @@
     "bench:longmemeval": "npx tsx benchmark/longmemeval-bench.ts fts",
     "bench:longmemeval:hybrid": "npx tsx benchmark/longmemeval-bench.ts hybrid",
     "bench:quality": "npx tsx benchmark/quality-eval.ts",
+    "bench:scale": "npx tsx benchmark/scale-eval.ts",
+    "bench:load": "npx tsx benchmark/load-100k-bench.ts",
+    "bench:real-embeddings": "npx tsx benchmark/real-embeddings-eval.ts",
     "bench:e2e": "npx tsx benchmark/end-to-end-bench.ts",
-    "bench:download-data": "node benchmark/lib/download-data.mjs"
+    "bench:download-data": "node benchmark/lib/download-data.mjs",
+    "bench:overnight": "npx tsx benchmark/run-overnight.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",

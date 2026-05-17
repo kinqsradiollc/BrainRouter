@@ -403,6 +403,41 @@ export class SqliteMemoryStore {
   // L1 Methods
   // ============================
 
+  public upsertL1Batch(entries: Array<{ record: L1Record; embedding?: Float32Array }>) {
+    this.db.exec("BEGIN");
+    try {
+      const deleteFts = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ? AND user_id = ?");
+      for (const entry of entries) {
+        const record = entry.record;
+        this.stmtL1UpsertMeta.run(
+          record.id, record.userId, record.sessionKey, record.sessionId, record.content,
+          record.type, record.priority, record.sceneName, record.skillTag,
+          record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
+          record.timestampStart, record.timestampEnd, record.createdTime,
+          record.updatedTime, JSON.stringify(record.metadata)
+        );
+
+        // FTS5 Insert
+        deleteFts.run(record.id, record.userId);
+        this.stmtL1FtsInsert.run(
+          record.content, record.content, record.id, record.userId, record.type,
+          record.priority, record.sceneName, record.skillTag, record.sessionKey,
+          record.timestampStr, record.createdTime
+        );
+
+        // Vector Insert
+        if (entry.embedding && this.vecLoaded && this.stmtL1VecInsert && this.stmtL1VecDelete) {
+          this.stmtL1VecDelete.run(record.id);
+          this.stmtL1VecInsert.run(record.id, entry.embedding);
+        }
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
   public upsertL1(record: L1Record) {
     this.db.exec("BEGIN");
     try {

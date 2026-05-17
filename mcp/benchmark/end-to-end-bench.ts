@@ -1,6 +1,7 @@
 import * as dotenv from "dotenv";
 import * as path from "path";
 import * as fs from "fs";
+import { getIncrementalOutputDir } from "./lib/output-dir.js";
 import crypto from "node:crypto";
 import { performance } from "perf_hooks";
 import { generateDataset, type CompressedObservation } from "./lib/dataset.js";
@@ -162,6 +163,30 @@ async function ensureDbSeeded(store: SqliteMemoryStore, embedder: EmbeddingServi
         createdTime: obs.timestamp,
       };
       store.upsertGraphNode(node);
+    }
+
+    // Link concepts with edges
+    const cappedConcepts = obs.concepts.slice(0, 10);
+    for (let i = 0; i < cappedConcepts.length; i++) {
+      for (let j = i + 1; j < cappedConcepts.length; j++) {
+        const fromNode = store.getGraphNodeByEntity(USER_ID, cappedConcepts[i].toLowerCase().trim());
+        const toNode = store.getGraphNodeByEntity(USER_ID, cappedConcepts[j].toLowerCase().trim());
+
+        if (fromNode && toNode && fromNode.id !== toNode.id) {
+          const edge: GraphEdge = {
+            id: `ge_${crypto.randomBytes(6).toString("hex")}`,
+            userId: USER_ID,
+            fromNodeId: fromNode.id,
+            toNodeId: toNode.id,
+            relation: "related_to",
+            skillTag: record.skillTag,
+            confidence: 1.0,
+            sourceRecordId: recordId,
+            createdTime: obs.timestamp,
+          };
+          store.upsertGraphEdge(edge);
+        }
+      }
     }
   }
 }
@@ -409,7 +434,8 @@ ${brainRouterRes.text}
   const brainRouterThroughput = avgBrainRouterCompletionTokens / (avgBrainRouterLatency / 1000);
 
   const todayStr = new Date().toISOString().split("T")[0];
-  const reportPath = path.join(process.cwd(), "benchmark", `E2E_GENERATION_${todayStr}.md`);
+  const outDir = getIncrementalOutputDir();
+  const reportPath = path.join(outDir, "END-TO-END.md");
   const reportContent = `# BrainRouter End-to-End Generative Evaluation Report (${todayStr})
 
 **Date:** ${new Date().toISOString()}

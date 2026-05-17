@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { SqliteMemoryStore } from "../src/memory/store/sqlite.js";
 import { recallAny, ndcg, mrr, aggregate, type BenchResult } from "./lib/metrics.js";
+import { getIncrementalOutputDir } from "./lib/output-dir.js";
 import { TransformersEmbedder } from "./lib/transformers-embedder.js";
 import { EmbeddingService } from "../src/memory/store/embedding.js";
 import { RerankerService } from "../src/memory/store/reranker.js";
@@ -315,13 +316,9 @@ async function runBenchmark(mode: "fts" | "hybrid" | "hybrid+rerank") {
     console.log(`  ${type.padEnd(30)} R@5: ${(data.recall_any_at_5 * 100).toFixed(1)}%  R@10: ${(data.recall_any_at_10 * 100).toFixed(1)}%  (n=${data.count})`);
   }
 
-  const resultsDir = resolve(__dirname, "results");
-  if (!existsSync(resultsDir)) {
-    mkdirSync(resultsDir, { recursive: true });
-  }
-
+  const resultsDir = getIncrementalOutputDir();
   const todayStr = new Date().toISOString().split("T")[0];
-  const outPath = resolve(resultsDir, `longmemeval_${mode}_${todayStr}.json`);
+  const outPath = resolve(resultsDir, `longmemeval_${mode}.json`);
   import("node:fs").then(fs => {
     fs.writeFileSync(outPath, JSON.stringify({ mode, date: todayStr, ...stats, per_question: results }, null, 2));
   });

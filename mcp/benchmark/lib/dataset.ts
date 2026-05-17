@@ -285,3 +285,22 @@ export function generateDataset(): {
 
   return { observations, queries, sessions };
 }
+
+export function generateScaleDataset(count: number): CompressedObservation[] {
+  const base = generateDataset().observations;
+  const result: CompressedObservation[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const src = base[i % base.length];
+    result.push({
+      ...src,
+      id: `obs_scale_${i.toString().padStart(6, "0")}`,
+      sessionId: `ses_${Math.floor(i / 8).toString().padStart(4, "0")}`,
+      timestamp: ts(Math.random() * 90),
+      title: `${src.title} (iteration ${i})`,
+      narrative: `${src.narrative} [Scale test variant ${i}, session group ${Math.floor(i / 8)}]`,
+    });
+  }
+  return result;
+}
+

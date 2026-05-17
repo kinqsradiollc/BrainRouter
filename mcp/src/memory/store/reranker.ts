@@ -52,6 +52,17 @@ export class RerankerService {
 
     const requestTopN = params.topN ?? this.topN;
 
+    // Graceful truncation: Ensure inputs do not exceed typical 512-token context length (approx 2000 chars).
+    // To be absolutely safe and prevent HTTP 400 Bad Request errors from local rerankers
+    // with strict 512-token limits, we limit the query to 200 characters (~50 tokens)
+    // and each document to 700 characters (~180 tokens).
+    const safeDocuments = params.documents.map(doc => 
+      doc.length > 700 ? doc.substring(0, 700) + "..." : doc
+    );
+    const safeQuery = params.query.length > 200 
+      ? params.query.substring(0, 200) + "..." 
+      : params.query;
+
     const res = await fetch(this.endpoint, {
       method: "POST",
       headers: {
@@ -59,8 +70,8 @@ export class RerankerService {
         "Authorization": `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        query: params.query,
-        documents: params.documents,
+        query: safeQuery,
+        documents: safeDocuments,
         model: this.model,
         top_n: requestTopN,
       }),
