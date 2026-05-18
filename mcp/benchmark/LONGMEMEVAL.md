@@ -45,7 +45,7 @@ BrainRouter evaluates various levels of search complexity to optimize speed, acc
 
 ```bash
 # Download dataset (264 MB)
-npm run bench:download-data
+npm run bench:download
 
 # Run FTS-only (LongMemEval)
 npm run bench:longmemeval
