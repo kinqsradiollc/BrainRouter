@@ -1,5 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import type { CursorPaginationOptions, ExtractionStatus, L0Record, L1Record, L1FtsResult, MemoryListFilters, MemoryListItem, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
+import { randomUUID } from "node:crypto";
+import type { CursorPaginationOptions, ExtractionStatus, ImportResult, L0Record, L1Record, L1FtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@brainrouter/types";
 
@@ -26,6 +27,87 @@ function buildFtsQuery(raw: string): string | null {
   if (tokens.length === 0) return null;
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" OR ");
+}
+
+function parseJsonObject(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function l1RowToRecord(row: any): L1Record {
+  return {
+    id: row.record_id,
+    userId: row.user_id,
+    sessionKey: row.session_key ?? "",
+    sessionId: row.session_id ?? "",
+    content: row.content,
+    type: row.type || "episodic",
+    priority: row.priority ?? 50,
+    sceneName: row.scene_name ?? "",
+    skillTag: row.skill_tag ?? "",
+    halfLifeDays: row.half_life_days ?? null,
+    supersededBy: row.superseded_by ?? null,
+    invalidAt: row.invalid_at ?? null,
+    timestampStr: row.timestamp_str ?? "",
+    timestampStart: row.timestamp_start ?? "",
+    timestampEnd: row.timestamp_end ?? "",
+    createdTime: row.created_time ?? "",
+    updatedTime: row.updated_time ?? "",
+    metadata: parseJsonObject(row.metadata_json),
+    confidence: typeof row.confidence === "number" ? row.confidence : 0.65,
+    status: row.status ?? (row.archived ? "archived" : "active"),
+    sourceKind: row.source_kind ?? "",
+    verificationStatus: row.verification_status ?? "",
+    repoPaths: parseJsonArray(row.repo_paths_json),
+    filePaths: parseJsonArray(row.file_paths_json),
+    commands: parseJsonArray(row.commands_json),
+    citationCount: row.citation_count ?? 0,
+    lastCitedAt: row.last_cited_at ?? null,
+    neverCitedCount: row.never_cited_count ?? 0,
+    archived: Boolean(row.archived),
+  };
+}
+
+function evidenceRowToRecord(row: any): MemoryEvidence {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    recordId: row.record_id,
+    kind: row.kind,
+    ref: row.ref,
+    excerpt: row.excerpt ?? "",
+    observedAt: row.observed_at ?? "",
+    metadata: parseJsonObject(row.metadata_json),
+  };
+}
+
+function operationRowToRecord(row: any): MemoryOperation {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    recordId: row.record_id ?? null,
+    operation: row.operation,
+    actor: row.actor ?? "",
+    sessionKey: row.session_key ?? "",
+    reason: row.reason ?? "",
+    createdAt: row.created_at ?? "",
+    metadata: parseJsonObject(row.metadata_json),
+  };
 }
 
 export class SqliteMemoryStore implements IMemoryStore {
@@ -234,6 +316,61 @@ export class SqliteMemoryStore implements IMemoryStore {
       try { this.db.exec(sql); } catch { /* column already exists — safe to ignore */ }
     }
 
+    const trustColumns = [
+      "ALTER TABLE l1_records ADD COLUMN confidence REAL DEFAULT 0.65",
+      "ALTER TABLE l1_records ADD COLUMN status TEXT DEFAULT 'active'",
+      "ALTER TABLE l1_records ADD COLUMN source_kind TEXT DEFAULT ''",
+      "ALTER TABLE l1_records ADD COLUMN verification_status TEXT DEFAULT ''",
+      "ALTER TABLE l1_records ADD COLUMN repo_paths_json TEXT DEFAULT '[]'",
+      "ALTER TABLE l1_records ADD COLUMN file_paths_json TEXT DEFAULT '[]'",
+      "ALTER TABLE l1_records ADD COLUMN commands_json TEXT DEFAULT '[]'",
+    ];
+    for (const sql of trustColumns) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_evidence (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        excerpt TEXT DEFAULT '',
+        observed_at TEXT NOT NULL,
+        metadata_json TEXT DEFAULT '{}'
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_evidence_record ON memory_evidence(user_id, record_id)");
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_operations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        record_id TEXT DEFAULT NULL,
+        operation TEXT NOT NULL,
+        actor TEXT DEFAULT '',
+        session_key TEXT DEFAULT '',
+        reason TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        metadata_json TEXT DEFAULT '{}'
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_operations_user_time ON memory_operations(user_id, created_at DESC, id ASC)");
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_file_index (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        symbol TEXT DEFAULT '',
+        created_time TEXT NOT NULL
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_file_index_path ON memory_file_index(user_id, file_path, created_time DESC)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_file_index_record ON memory_file_index(user_id, record_id)");
+
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_user_type ON l1_records(user_id, type)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_user_session ON l1_records(user_id, session_key)");
 
@@ -241,8 +378,9 @@ export class SqliteMemoryStore implements IMemoryStore {
       INSERT INTO l1_records (
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
-        created_time, updated_time, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
+        repo_paths_json, file_paths_json, commands_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -256,7 +394,14 @@ export class SqliteMemoryStore implements IMemoryStore {
         timestamp_start=excluded.timestamp_start,
         timestamp_end=excluded.timestamp_end,
         updated_time=excluded.updated_time,
-        metadata_json=excluded.metadata_json
+        metadata_json=excluded.metadata_json,
+        confidence=excluded.confidence,
+        status=excluded.status,
+        source_kind=excluded.source_kind,
+        verification_status=excluded.verification_status,
+        repo_paths_json=excluded.repo_paths_json,
+        file_paths_json=excluded.file_paths_json,
+        commands_json=excluded.commands_json
         -- NOTE: citation_count, last_cited_at, never_cited_count, archived intentionally excluded
         -- They are managed exclusively by ACE methods (markCited, incrementNeverCited, archiveL1Record)
         -- to prevent re-upserts from resetting citation signals
@@ -480,7 +625,10 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.type, record.priority, record.sceneName, record.skillTag,
           record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
           record.timestampStart, record.timestampEnd, record.createdTime,
-          record.updatedTime, JSON.stringify(record.metadata)
+          record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
+          record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
+          JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
+          JSON.stringify(record.commands ?? [])
         );
 
         // FTS5 Insert
@@ -496,6 +644,18 @@ export class SqliteMemoryStore implements IMemoryStore {
           this.stmtL1VecDelete.run(record.id);
           this.stmtL1VecInsert.run(record.id, entry.embedding);
         }
+        this.replaceFileIndex(record);
+        this.insertOperation({
+          id: randomUUID(),
+          userId: record.userId,
+          recordId: record.id,
+          operation: "l1_upsert",
+          actor: "system",
+          sessionKey: record.sessionKey,
+          reason: "",
+          createdAt: new Date().toISOString(),
+          metadata: { batch: true, type: record.type },
+        });
       }
       this.db.exec("COMMIT");
     } catch (e) {
@@ -512,7 +672,10 @@ export class SqliteMemoryStore implements IMemoryStore {
         record.type, record.priority, record.sceneName, record.skillTag,
         record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
         record.timestampStart, record.timestampEnd, record.createdTime,
-        record.updatedTime, JSON.stringify(record.metadata)
+        record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
+        record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
+        JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
+        JSON.stringify(record.commands ?? [])
       );
 
       // FTS5 Insert (delete old first if it exists to emulate UPSERT)
@@ -524,6 +687,19 @@ export class SqliteMemoryStore implements IMemoryStore {
         record.priority, record.sceneName, record.skillTag, record.sessionKey,
         record.timestampStr, record.createdTime
       );
+      this.replaceFileIndex(record);
+
+      this.insertOperation({
+        id: randomUUID(),
+        userId: record.userId,
+        recordId: record.id,
+        operation: "l1_upsert",
+        actor: "system",
+        sessionKey: record.sessionKey,
+        reason: "",
+        createdAt: new Date().toISOString(),
+        metadata: { type: record.type },
+      });
 
       this.db.exec("COMMIT");
     } catch (e) {
@@ -534,9 +710,232 @@ export class SqliteMemoryStore implements IMemoryStore {
 
   public invalidateL1Record(userId: string, recordId: string, supersededById: string) {
     const stmt = this.db.prepare(
-      "UPDATE l1_records SET invalid_at = ?, superseded_by = ? WHERE user_id = ? AND record_id = ?"
+      "UPDATE l1_records SET invalid_at = ?, superseded_by = ?, status = 'superseded' WHERE user_id = ? AND record_id = ?"
     );
-    stmt.run(new Date().toISOString(), supersededById, userId, recordId);
+    const now = new Date().toISOString();
+    stmt.run(now, supersededById, userId, recordId);
+    this.insertOperation({
+      id: randomUUID(),
+      userId,
+      recordId,
+      operation: "l1_supersede",
+      actor: "system",
+      sessionKey: "",
+      reason: `Superseded by ${supersededById}`,
+      createdAt: now,
+      metadata: { supersededById },
+    });
+  }
+
+  public getMemoryById(userId: string, recordId: string): L1Record | null {
+    const row = this.stmtL1GetMeta.get(recordId, userId) as any;
+    return row ? l1RowToRecord(row) : null;
+  }
+
+  public getMemoriesByFilePath(userId: string, filePath: string, limit: number): L1Record[] {
+    const rows = this.db.prepare(`
+      SELECT r.*
+      FROM memory_file_index i
+      JOIN l1_records r ON r.user_id = i.user_id AND r.record_id = i.record_id
+      WHERE i.user_id = ?
+        AND (i.file_path = ? OR i.file_path LIKE ?)
+        AND r.invalid_at IS NULL
+        AND r.archived = 0
+      ORDER BY i.created_time DESC, r.priority DESC
+      LIMIT ?
+    `).all(userId, filePath, `%${filePath}%`, limit) as any[];
+    return rows.map(l1RowToRecord);
+  }
+
+  public updateL1Confidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void {
+    const now = new Date().toISOString();
+    this.db.prepare(
+      "UPDATE l1_records SET confidence = ?, status = ?, archived = CASE WHEN ? = 'archived' THEN 1 ELSE archived END, updated_time = ? WHERE user_id = ? AND record_id = ?"
+    ).run(confidence, status, status, now, userId, recordId);
+    this.insertOperation({
+      id: randomUUID(),
+      userId,
+      recordId,
+      operation: "l1_status_update",
+      actor: "system",
+      sessionKey: "",
+      reason: "",
+      createdAt: now,
+      metadata: { confidence, status },
+    });
+  }
+
+  public insertEvidence(ev: MemoryEvidence): void {
+    this.db.prepare(`
+      INSERT INTO memory_evidence (id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        kind=excluded.kind,
+        ref=excluded.ref,
+        excerpt=excluded.excerpt,
+        observed_at=excluded.observed_at,
+        metadata_json=excluded.metadata_json
+    `).run(ev.id, ev.userId, ev.recordId, ev.kind, ev.ref, ev.excerpt, ev.observedAt, JSON.stringify(ev.metadata ?? {}));
+    this.insertOperation({
+      id: randomUUID(),
+      userId: ev.userId,
+      recordId: ev.recordId,
+      operation: "evidence_add",
+      actor: "system",
+      sessionKey: "",
+      reason: "",
+      createdAt: new Date().toISOString(),
+      metadata: { evidenceId: ev.id, kind: ev.kind, ref: ev.ref },
+    });
+  }
+
+  public getEvidenceByRecord(userId: string, recordId: string): MemoryEvidence[] {
+    const rows = this.db.prepare(`
+      SELECT id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json
+      FROM memory_evidence
+      WHERE user_id = ? AND record_id = ?
+      ORDER BY observed_at DESC, id ASC
+    `).all(userId, recordId) as any[];
+    return rows.map(evidenceRowToRecord);
+  }
+
+  public insertOperation(op: MemoryOperation): void {
+    this.db.prepare(`
+      INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        operation=excluded.operation,
+        actor=excluded.actor,
+        session_key=excluded.session_key,
+        reason=excluded.reason,
+        metadata_json=excluded.metadata_json
+    `).run(
+      op.id,
+      op.userId,
+      op.recordId,
+      op.operation,
+      op.actor,
+      op.sessionKey,
+      op.reason,
+      op.createdAt,
+      JSON.stringify(op.metadata ?? {})
+    );
+  }
+
+  public getOperationLog(userId: string, options?: CursorPaginationOptions<{ createdAt: string; id: string }>): MemoryOperation[] {
+    const where = ["user_id = ?"];
+    const args: any[] = [userId];
+    if (options?.cursor) {
+      where.push("(created_at < ? OR (created_at = ? AND id > ?))");
+      args.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+    }
+    args.push(options?.limit ?? 100);
+    const rows = this.db.prepare(`
+      SELECT id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json
+      FROM memory_operations
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, id ASC
+      LIMIT ?
+    `).all(...args) as any[];
+    return rows.map(operationRowToRecord);
+  }
+
+  public exportMemories(userId: string): MemoryExport {
+    const memoryRows = this.db.prepare("SELECT * FROM l1_records WHERE user_id = ? ORDER BY created_time ASC, record_id ASC").all(userId) as any[];
+    const evidenceRows = this.db.prepare("SELECT * FROM memory_evidence WHERE user_id = ? ORDER BY observed_at ASC, id ASC").all(userId) as any[];
+    const operationRows = this.db.prepare("SELECT * FROM memory_operations WHERE user_id = ? ORDER BY created_at ASC, id ASC").all(userId) as any[];
+    return {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      userId,
+      memories: memoryRows.map(l1RowToRecord),
+      evidence: evidenceRows.map(evidenceRowToRecord),
+      operations: operationRows.map(operationRowToRecord),
+    };
+  }
+
+  public importMemories(userId: string, data: MemoryImport): ImportResult {
+    let importedMemories = 0;
+    let importedEvidence = 0;
+    let importedOperations = 0;
+
+    this.db.exec("BEGIN");
+    try {
+      for (const record of data.memories ?? []) {
+        this.stmtL1UpsertMeta.run(
+          record.id, userId, record.sessionKey, record.sessionId, record.content,
+          record.type, record.priority, record.sceneName, record.skillTag,
+          record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
+          record.timestampStart, record.timestampEnd, record.createdTime,
+          record.updatedTime, JSON.stringify(record.metadata ?? {}), record.confidence ?? 0.65,
+          record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
+          JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
+          JSON.stringify(record.commands ?? [])
+        );
+        this.db.prepare("DELETE FROM l1_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
+        this.stmtL1FtsInsert.run(
+          record.content, record.content, record.id, userId, record.type,
+          record.priority, record.sceneName, record.skillTag, record.sessionKey,
+          record.timestampStr, record.createdTime
+        );
+        this.replaceFileIndex({ ...record, userId });
+        importedMemories++;
+      }
+      for (const ev of data.evidence ?? []) {
+        this.db.prepare(`
+          INSERT INTO memory_evidence (id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            kind=excluded.kind,
+            ref=excluded.ref,
+            excerpt=excluded.excerpt,
+            observed_at=excluded.observed_at,
+            metadata_json=excluded.metadata_json
+        `).run(ev.id, userId, ev.recordId, ev.kind, ev.ref, ev.excerpt, ev.observedAt, JSON.stringify(ev.metadata ?? {}));
+        importedEvidence++;
+      }
+      for (const op of data.operations ?? []) {
+        this.db.prepare(`
+          INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO NOTHING
+        `).run(op.id, userId, op.recordId, op.operation, op.actor, op.sessionKey, op.reason, op.createdAt, JSON.stringify(op.metadata ?? {}));
+        importedOperations++;
+      }
+      const now = new Date().toISOString();
+      this.db.prepare(`
+        INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
+        VALUES (?, ?, NULL, 'import', 'system', '', '', ?, ?)
+      `).run(randomUUID(), userId, now, JSON.stringify({ importedMemories, importedEvidence, importedOperations }));
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+
+    return { importedMemories, importedEvidence, importedOperations };
+  }
+
+  public hardDeleteMemory(userId: string, recordId: string, reason: string): void {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM memory_evidence WHERE user_id = ? AND record_id = ?").run(userId, recordId);
+      this.db.prepare("DELETE FROM memory_file_index WHERE user_id = ? AND record_id = ?").run(userId, recordId);
+      this.db.prepare("DELETE FROM l1_fts WHERE user_id = ? AND record_id = ?").run(userId, recordId);
+      if (this.stmtL1VecDelete) {
+        this.stmtL1VecDelete.run(recordId);
+      }
+      this.db.prepare("DELETE FROM l1_records WHERE user_id = ? AND record_id = ?").run(userId, recordId);
+      this.db.prepare(`
+        INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
+        VALUES (?, ?, ?, 'governance_delete', 'system', '', ?, ?, '{}')
+      `).run(randomUUID(), userId, recordId, reason, now);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   public searchL1Fts(userId: string, query: string, limit: number): L1FtsResult[] {
@@ -718,6 +1117,17 @@ export class SqliteMemoryStore implements IMemoryStore {
   public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {
     const stmt = this.db.prepare("UPDATE contradictions SET status = ? WHERE id = ? AND user_id = ?");
     stmt.run(status, id, userId);
+    this.insertOperation({
+      id: randomUUID(),
+      userId,
+      recordId: id,
+      operation: "contradiction_resolve",
+      actor: "system",
+      sessionKey: "",
+      reason: status,
+      createdAt: new Date().toISOString(),
+      metadata: { contradictionId: id, status },
+    });
   }
 
   // ============================
@@ -1242,9 +1652,21 @@ export class SqliteMemoryStore implements IMemoryStore {
    * The record is preserved for explicit archive queries.
    */
   public archiveL1Record(userId: string, recordId: string): void {
+    const now = new Date().toISOString();
     this.db.prepare(
-      "UPDATE l1_records SET archived = 1, updated_time = ? WHERE user_id = ? AND record_id = ?"
-    ).run(new Date().toISOString(), userId, recordId);
+      "UPDATE l1_records SET archived = 1, status = 'archived', updated_time = ? WHERE user_id = ? AND record_id = ?"
+    ).run(now, userId, recordId);
+    this.insertOperation({
+      id: randomUUID(),
+      userId,
+      recordId,
+      operation: "archive",
+      actor: "system",
+      sessionKey: "",
+      reason: "",
+      createdAt: now,
+      metadata: {},
+    });
   }
 
   // ============================
@@ -1405,6 +1827,9 @@ export class SqliteMemoryStore implements IMemoryStore {
       this.db.prepare("DELETE FROM scheduler_state WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM graph_nodes WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM graph_edges WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM memory_evidence WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM memory_operations WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM memory_file_index WHERE user_id = ?").run(userId);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -1480,5 +1905,19 @@ export class SqliteMemoryStore implements IMemoryStore {
       lastRecallAt: lastRecall?.last_at ?? null,
       extraction: this.getExtractionStatus(userId),
     };
+  }
+
+  private replaceFileIndex(record: L1Record): void {
+    this.db.prepare("DELETE FROM memory_file_index WHERE user_id = ? AND record_id = ?").run(record.userId, record.id);
+    const filePaths = [...new Set((record.filePaths ?? []).map((filePath) => filePath.trim()).filter(Boolean))];
+    if (filePaths.length === 0) return;
+
+    const stmt = this.db.prepare(`
+      INSERT INTO memory_file_index (id, user_id, record_id, file_path, symbol, created_time)
+      VALUES (?, ?, ?, ?, '', ?)
+    `);
+    for (const filePath of filePaths) {
+      stmt.run(randomUUID(), record.userId, record.id, filePath, record.createdTime);
+    }
   }
 }

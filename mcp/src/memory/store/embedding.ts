@@ -12,7 +12,7 @@ export class EmbeddingService {
     this.endpoint = config.endpoint ?? "https://api.openai.com/v1/embeddings";
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "text-embedding-3-small";
-    this.dimensions = config.dimensions ?? 1536;
+    this.dimensions = config.dimensions ?? 768;
 
     // Graceful fallback: If no API key is provided, we disable the embedding service.
     this.ready = !!this.apiKey;

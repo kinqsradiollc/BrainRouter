@@ -116,7 +116,7 @@ async function benchmarkScale(counts: number[]): Promise<ScaleResult[]> {
         neverCitedCount: 0,
         archived: false
       };
-      
+
       batch.push({
         record,
         embedding: deterministicEmbedding(record.content, dims)
@@ -146,7 +146,7 @@ async function benchmarkScale(counts: number[]): Promise<ScaleResult[]> {
       const s2 = performance.now();
       const ftsHits = store.searchL1Fts("benchmark_user", q, 15);
       const vecHits = store.searchL1Vec("benchmark_user", queryVec, 15);
-      
+
       // Combine using RRF
       const rrfMap = new Map<string, { rankFts: number; rankVec: number }>();
       ftsHits.forEach((r, idx) => {
@@ -160,14 +160,14 @@ async function benchmarkScale(counts: number[]): Promise<ScaleResult[]> {
           rrfMap.set(r.record_id, { rankFts: 999, rankVec: idx + 1 });
         }
       });
-      
+
       const scored = Array.from(rrfMap.entries()).map(([recordId, ranks]) => {
         const score = (1 / (60 + ranks.rankFts)) + (1 / (60 + ranks.rankVec));
         return { recordId, score };
       });
       scored.sort((a, b) => b.score - a.score);
       const top10 = scored.slice(0, 10);
-      
+
       hybridTotal += performance.now() - s2;
     }
 
@@ -175,21 +175,21 @@ async function benchmarkScale(counts: number[]): Promise<ScaleResult[]> {
     let dbSizeKb = 0;
     try {
       dbSizeKb = Math.round(statSync(dbPath).size / 1024);
-    } catch (_) {}
+    } catch (_) { }
 
     // Clean up DB
     try {
       // Close SQLite database properly before deleting
       (store as any).db?.close();
-    } catch (_) {}
+    } catch (_) { }
     try {
       unlinkSync(dbPath);
       // Clean up wal/shm if present
       unlinkSync(`${dbPath}-wal`);
-    } catch (_) {}
+    } catch (_) { }
     try {
       unlinkSync(`${dbPath}-shm`);
-    } catch (_) {}
+    } catch (_) { }
 
     // 4. Token metrics
     const allText = observations.map(o =>
@@ -203,7 +203,7 @@ async function benchmarkScale(counts: number[]): Promise<ScaleResult[]> {
     const builtin200Tokens = estimateTokens(truncatedText);
 
     // Top 10 results returned by hybrid search average size
-    const avgReturnedTokens = 450; 
+    const avgReturnedTokens = 450;
 
     results.push({
       scale: count,
@@ -274,19 +274,19 @@ async function benchmarkCrossSession(): Promise<CrossSessionResult[]> {
     targetSessionRange: [number, number];
     currentSession: number;
   }> = [
-    { query: "How did we set up OAuth providers?", targetConcepts: ["oauth", "nextauth"], targetSessionRange: [5, 9], currentSession: 29 },
-    { query: "What was the N+1 query fix?", targetConcepts: ["n+1", "eager-loading"], targetSessionRange: [10, 14], currentSession: 28 },
-    { query: "PostgreSQL full-text search setup", targetConcepts: ["full-text-search", "tsvector"], targetSessionRange: [10, 14], currentSession: 27 },
-    { query: "bcrypt password hashing configuration", targetConcepts: ["bcrypt", "password-hashing"], targetSessionRange: [5, 9], currentSession: 25 },
-    { query: "Vitest unit testing setup", targetConcepts: ["vitest", "unit-testing"], targetSessionRange: [20, 24], currentSession: 29 },
-    { query: "webhook retry exponential backoff", targetConcepts: ["webhooks", "exponential-backoff"], targetSessionRange: [15, 19], currentSession: 29 },
-    { query: "ESLint flat config migration", targetConcepts: ["eslint", "linting"], targetSessionRange: [0, 4], currentSession: 29 },
-    { query: "Kubernetes HPA autoscaling configuration", targetConcepts: ["hpa", "autoscaling", "kubernetes"], targetSessionRange: [25, 29], currentSession: 29 },
-    { query: "Prisma database seed script", targetConcepts: ["seeding", "faker", "prisma"], targetSessionRange: [10, 14], currentSession: 26 },
-    { query: "API cursor-based pagination", targetConcepts: ["cursor-based", "pagination"], targetSessionRange: [15, 19], currentSession: 29 },
-    { query: "CSRF protection double-submit cookie", targetConcepts: ["csrf", "cookies"], targetSessionRange: [5, 9], currentSession: 29 },
-    { query: "blue-green deployment rollback", targetConcepts: ["blue-green", "rollback", "zero-downtime"], targetSessionRange: [25, 29], currentSession: 29 },
-  ];
+      { query: "How did we set up OAuth providers?", targetConcepts: ["oauth", "nextauth"], targetSessionRange: [5, 9], currentSession: 29 },
+      { query: "What was the N+1 query fix?", targetConcepts: ["n+1", "eager-loading"], targetSessionRange: [10, 14], currentSession: 28 },
+      { query: "PostgreSQL full-text search setup", targetConcepts: ["full-text-search", "tsvector"], targetSessionRange: [10, 14], currentSession: 27 },
+      { query: "bcrypt password hashing configuration", targetConcepts: ["bcrypt", "password-hashing"], targetSessionRange: [5, 9], currentSession: 25 },
+      { query: "Vitest unit testing setup", targetConcepts: ["vitest", "unit-testing"], targetSessionRange: [20, 24], currentSession: 29 },
+      { query: "webhook retry exponential backoff", targetConcepts: ["webhooks", "exponential-backoff"], targetSessionRange: [15, 19], currentSession: 29 },
+      { query: "ESLint flat config migration", targetConcepts: ["eslint", "linting"], targetSessionRange: [0, 4], currentSession: 29 },
+      { query: "Kubernetes HPA autoscaling configuration", targetConcepts: ["hpa", "autoscaling", "kubernetes"], targetSessionRange: [25, 29], currentSession: 29 },
+      { query: "Prisma database seed script", targetConcepts: ["seeding", "faker", "prisma"], targetSessionRange: [10, 14], currentSession: 26 },
+      { query: "API cursor-based pagination", targetConcepts: ["cursor-based", "pagination"], targetSessionRange: [15, 19], currentSession: 29 },
+      { query: "CSRF protection double-submit cookie", targetConcepts: ["csrf", "cookies"], targetSessionRange: [5, 9], currentSession: 29 },
+      { query: "blue-green deployment rollback", targetConcepts: ["blue-green", "rollback", "zero-downtime"], targetSessionRange: [25, 29], currentSession: 29 },
+    ];
 
   for (const cq of crossQueries) {
     const targetObs = observations.filter(o =>
@@ -314,7 +314,7 @@ async function benchmarkCrossSession(): Promise<CrossSessionResult[]> {
         rrfMap.set(r.record_id, { rankFts: 999, rankVec: idx + 1 });
       }
     });
-    
+
     const scored = Array.from(rrfMap.entries()).map(([recordId, ranks]) => {
       const score = (1 / (60 + ranks.rankFts)) + (1 / (60 + ranks.rankVec));
       return { recordId, score };
@@ -346,14 +346,14 @@ async function benchmarkCrossSession(): Promise<CrossSessionResult[]> {
 
   try {
     (store as any).db?.close();
-  } catch (_) {}
+  } catch (_) { }
   try {
     unlinkSync(dbPath);
     unlinkSync(`${dbPath}-wal`);
-  } catch (_) {}
+  } catch (_) { }
   try {
     unlinkSync(`${dbPath}-shm`);
-  } catch (_) {}
+  } catch (_) { }
 
   return results;
 }
@@ -375,10 +375,10 @@ function generateReport(scale: ScaleResult[], cross: CrossSessionResult[]): stri
   w("|-------------|----------|------------|-------------|---------------|--------------|---------|--------------------------|-----------------------------|---------|--------------------|");
 
   for (const r of scale) {
-    const storageStr = r.db_size_kb > 1024 
-      ? `${(r.db_size_kb / 1024).toFixed(1)} MB` 
+    const storageStr = r.db_size_kb > 1024
+      ? `${(r.db_size_kb / 1024).toFixed(1)} MB`
       : `${r.db_size_kb.toLocaleString()} KB`;
-    
+
     w(`| ${r.scale.toLocaleString()} | ${r.sessions} | ${r.index_build_ms}ms | ${r.fts_search_ms}ms | ${r.hybrid_search_ms}ms | ${storageStr} | ${r.heap_mb}MB | ${r.builtin_tokens.toLocaleString()} | ${r.brainrouter_tokens.toLocaleString()} | ${r.token_savings_pct}% | ${r.builtin_unreachable_pct}% |`);
   }
 
@@ -446,7 +446,7 @@ async function main() {
   const report = generateReport(scaleResults, crossResults);
   const outDir = getIncrementalOutputDir();
   const reportPath = join(outDir, "SCALE.md");
-  
+
   writeFileSync(reportPath, report);
   console.log(`\nReport successfully written to ${reportPath}`);
 }

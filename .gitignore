@@ -40,3 +40,6 @@ mcp/benchmark/data/longmemeval_s_cleaned.json
 mcp/memory.db
 mcp/mcp_server.log
 .brainrouter/active_session.json
+alternative/BRAINROUTER_IMRPOVEMENT.MD
+CLAUDE_IMPLEMENTATION_PLAN.md
+Task.md

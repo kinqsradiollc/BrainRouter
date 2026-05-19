@@ -1,12 +1,18 @@
 import type {
   GraphEdge,
   GraphNode,
+  ImportResult,
   L0Record,
   L1FtsResult,
   L1Record,
   L2SceneRecord,
   L3PersonaRecord,
+  MemoryEvidence,
+  MemoryExport,
+  MemoryImport,
   ExtractionStatus,
+  MemoryOperation,
+  MemoryStatus,
   SchedulerState,
   SkillHintsRecord,
   StalledExtractionBacklog,
@@ -54,6 +60,16 @@ export interface IMemoryStore {
   markL0Extracted(userId: string, sessionKey: string, recordIds: string[], extractedAt?: string): void;
   upsertL1(record: L1Record): void;
   invalidateL1Record(userId: string, recordId: string, supersededById: string): void;
+  getMemoryById(userId: string, recordId: string): L1Record | null;
+  getMemoriesByFilePath(userId: string, filePath: string, limit: number): L1Record[];
+  updateL1Confidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void;
+  insertEvidence(ev: MemoryEvidence): void;
+  getEvidenceByRecord(userId: string, recordId: string): MemoryEvidence[];
+  insertOperation(op: MemoryOperation): void;
+  getOperationLog(userId: string, options?: CursorPaginationOptions<{ createdAt: string; id: string }>): MemoryOperation[];
+  exportMemories(userId: string): MemoryExport;
+  importMemories(userId: string, data: MemoryImport): ImportResult;
+  hardDeleteMemory(userId: string, recordId: string, reason: string): void;
   searchL1Fts(userId: string, query: string, limit: number): L1FtsResult[];
   searchL1FtsAsOf(userId: string, query: string, limit: number, asOf: string): L1FtsResult[];
   upsertL1Vec(recordId: string, embedding: Float32Array): void;

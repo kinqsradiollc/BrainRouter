@@ -14,7 +14,7 @@ If there are existing scenes, PREFER to reuse the most relevant existing scene n
 If reusing, use the EXACT existing name (no paraphrasing).
 If creating new, format: "AI helping [user role] with [goal activity]" (unique, max 50 chars).
 
-### Memory Types (extract ONLY these 4)
+### Memory Types
 
 1. **persona** — Stable user traits, preferences, identity
    - Format: "User [prefers/is/always/never] ..."
@@ -33,12 +33,33 @@ If creating new, format: "AI helping [user role] with [goal activity]" (unique, 
    - Format: "When running [skill], user tends to ..."
    - Only extract if a genuine behavioral pattern is visible, not a one-off.
 
+5. **tool_preference** — Stable preferences about tools, workflows, or command usage.
+6. **codebase_fact / api_contract / data_model** — Verified facts about code, public APIs, schemas, or storage models.
+7. **dependency_constraint / environment_constraint** — Version, runtime, platform, sandbox, or deployment constraints.
+8. **architecture_decision / implementation_decision / design_constraint** — Durable decisions and constraints that future agents must preserve.
+9. **security_policy / performance_baseline** — Security rules or measured performance facts. Extract only with direct evidence.
+10. **bug_finding / debug_trace / fix_summary / verification_result / failed_attempt / regression_risk** — Debugging history, fixes, checks, and risk notes.
+11. **task_state / handover_note / blocked_reason / review_comment / release_note** — Planning, review, release, and continuation state.
+12. **source_evidence / artifact_reference / file_history / command_knowledge** — Evidence-backed references to files, artifacts, file evolution, or command behavior.
+
+Allowed type values:
+persona, episodic, instruction, skill_context, tool_preference, codebase_fact, api_contract,
+data_model, dependency_constraint, environment_constraint, architecture_decision,
+implementation_decision, design_constraint, security_policy, performance_baseline,
+bug_finding, debug_trace, fix_summary, verification_result, failed_attempt, regression_risk,
+task_state, handover_note, blocked_reason, review_comment, release_note, source_evidence,
+artifact_reference, file_history, command_knowledge.
+
 ### Quality Rules
 - Nothingness > Bad memory. Prefer empty over wrong.
 - Memory must stand alone without the conversation.
 - Merge causally-linked facts into one memory.
 - Do not extract AI outputs — only user behavior and statements.
 - Filter out: tool calls, one-time requests, casual greetings.
+- Evidence-gated types (api_contract, data_model, security_policy, performance_baseline) require a cited file path, command, test result, or explicit user statement.
+- Use confidence from 0.0 to 1.0. Use lower confidence for model inference, higher confidence for direct source or command output.
+- Classify sourceKind as user_instruction, source_file, command_output, test_result, model_inference, or prior_memory.
+- Extract filePaths, repoPaths, and commands when explicitly mentioned; otherwise use empty arrays.
 
 ### Output
 Return ONLY a valid JSON array matching this format exactly:
@@ -48,11 +69,17 @@ Return ONLY a valid JSON array matching this format exactly:
     "message_ids": ["id1"],
     "memories": [
       {
-        "type": "persona|episodic|instruction|skill_context",
+        "type": "one allowed type value",
         "content": "self-contained memory statement",
         "priority": 85,
         "skill_tag": "the active skill",
         "source_message_ids": ["id1"],
+        "confidence": 0.75,
+        "sourceKind": "user_instruction|source_file|command_output|test_result|model_inference|prior_memory",
+        "verificationStatus": "verified|unverified|stale",
+        "repoPaths": [],
+        "filePaths": [],
+        "commands": [],
         "metadata": {}
       }
     ]

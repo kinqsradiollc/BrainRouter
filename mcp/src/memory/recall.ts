@@ -1,20 +1,13 @@
 import type { IMemoryStore } from "@brainrouter/types";
-import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult } from "@brainrouter/types";
+import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult, L1Record } from "@brainrouter/types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
-
-// Decay half-lives from APPLIED_CONCEPT.md
-const DECAY_HALF_LIFE_DAYS = {
-  instruction: null,
-  persona: 180,
-  episodic: 30,
-  skill_context: 7
-};
+import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
 
 function effectivePriority(memory: L1FtsResult & { citation_count?: number }): number {
-  const halfLife = DECAY_HALF_LIFE_DAYS[memory.type as keyof typeof DECAY_HALF_LIFE_DAYS];
+  const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
 
   if (!halfLife) {
     return memory.priority; // e.g. instruction
@@ -44,9 +37,11 @@ export class MemoryRecallPipeline {
     activeSkill?: string;
   }): Promise<RecallResult> {
     const { userId, sessionKey, query, activeSkill } = params;
+    const intent = detectTaskIntent(query);
 
     // 1. FTS5 BM25 search (Top 15)
     const ftsResults = this.store.searchL1Fts(userId, query, 15);
+    const filePathResults = this.expandWithFilePathMatches(userId, query);
 
     // 2. Vector search (Top 15, if enabled)
     let vecResults: VectorSearchResult[] = [];
@@ -59,7 +54,7 @@ export class MemoryRecallPipeline {
       }
     }
 
-    if (ftsResults.length === 0 && vecResults.length === 0) {
+    if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
       return { recallStrategy: this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty" };
     }
 
@@ -82,6 +77,16 @@ export class MemoryRecallPipeline {
       }
     });
 
+    filePathResults.forEach((r, idx) => {
+      const existing = rrfMap.get(r.record_id);
+      const filePathScore = 1 / (45 + idx + 1);
+      if (existing) {
+        existing.rrfScore += filePathScore;
+      } else {
+        rrfMap.set(r.record_id, { record: r, rrfScore: filePathScore });
+      }
+    });
+
     // 4. Combine RRF with Decay + Skill boost
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // Scale RRF score (which is typically small, e.g. 1/60 + 1/60 ≈ 0.033) to 0-1ish range
@@ -97,6 +102,8 @@ export class MemoryRecallPipeline {
       if (activeSkill && record.skill_tag === activeSkill) {
         finalScore *= 1.2;
       }
+
+      finalScore *= getMemoryTypeConfig(record.type).intentAffinity[intent] ?? 1;
 
       return { record, score: finalScore };
     });
@@ -200,8 +207,39 @@ export class MemoryRecallPipeline {
       recalledL1Memories,
       recallStrategy: vecResults.length > 0 
         ? (usedReranker ? "hybrid+rerank" : "hybrid") 
-        : (usedReranker ? "keyword+rerank" : "keyword"),
+        : (usedReranker ? "keyword+rerank" : (filePathResults.length > 0 ? "keyword+file" : "keyword")),
       activeScene: topScenes[0]?.sceneName,
     };
+  }
+
+  private expandWithFilePathMatches(userId: string, query: string): L1FtsResult[] {
+    const filePaths = extractFilePathHints(query);
+    if (filePaths.length === 0) return [];
+
+    const records = new Map<string, L1Record>();
+    for (const filePath of filePaths) {
+      for (const record of this.store.getMemoriesByFilePath(userId, filePath, 10)) {
+        records.set(record.id, record);
+      }
+    }
+
+    return Array.from(records.values()).map((record) => ({
+      record_id: record.id,
+      user_id: record.userId,
+      content: record.content,
+      type: record.type,
+      priority: record.priority,
+      scene_name: record.sceneName,
+      skill_tag: record.skillTag,
+      score: 1,
+      timestamp_str: record.timestampStr,
+      timestamp_start: record.timestampStart,
+      timestamp_end: record.timestampEnd,
+      session_key: record.sessionKey,
+      session_id: record.sessionId,
+      metadata_json: JSON.stringify(record.metadata),
+      created_time: record.createdTime,
+      citation_count: record.citationCount,
+    }));
   }
 }

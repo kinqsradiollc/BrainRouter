@@ -14,8 +14,10 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
-import type { UserRecord } from "@brainrouter/types";
+import { randomUUID } from "node:crypto";
+import type { L1Record, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, UserRecord } from "@brainrouter/types";
 import { hashPassword } from "../api/auth/crypto.js";
+import { getMemoryTypeConfig } from "./memory-type-config.js";
 
 // Configure default path
 const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");
@@ -303,6 +305,155 @@ export class MemoryEngine {
 
   public deleteMemory(userId: string, recordId: string) {
     this.store.archiveL1Record(userId, recordId);
+  }
+
+  public getMemoryById(userId: string, recordId: string) {
+    const memory = this.store.getMemoryById(userId, recordId);
+    if (!memory) return null;
+    return { memory, evidence: this.store.getEvidenceByRecord(userId, recordId) };
+  }
+
+  public upsertEngineeringMemory(params: {
+    userId: string;
+    sessionKey?: string;
+    sessionId?: string;
+    type: MemoryType;
+    content: string;
+    priority?: number;
+    activeSkill?: string;
+    confidence?: number;
+    sourceKind?: L1Record["sourceKind"];
+    verificationStatus?: L1Record["verificationStatus"];
+    repoPaths?: string[];
+    filePaths?: string[];
+    commands?: string[];
+    metadata?: Record<string, unknown>;
+  }): L1Record {
+    const now = new Date().toISOString();
+    const config = getMemoryTypeConfig(params.type);
+    const record: L1Record = {
+      id: `l1_manual_${randomUUID()}`,
+      userId: params.userId,
+      sessionKey: params.sessionKey ?? "",
+      sessionId: params.sessionId ?? "",
+      content: params.content,
+      type: params.type,
+      priority: params.priority ?? 75,
+      sceneName: "Software engineering memory",
+      skillTag: params.activeSkill ?? "",
+      halfLifeDays: config.halfLifeDays,
+      supersededBy: null,
+      invalidAt: null,
+      timestampStr: now,
+      timestampStart: now,
+      timestampEnd: now,
+      createdTime: now,
+      updatedTime: now,
+      metadata: params.metadata ?? {},
+      confidence: params.confidence ?? config.defaultConfidence,
+      status: "active",
+      sourceKind: params.sourceKind ?? "user_instruction",
+      verificationStatus: params.verificationStatus ?? "unverified",
+      repoPaths: params.repoPaths ?? [],
+      filePaths: params.filePaths ?? [],
+      commands: params.commands ?? [],
+      citationCount: 0,
+      lastCitedAt: null,
+      neverCitedCount: 0,
+      archived: false,
+    };
+    this.store.upsertL1(record);
+    return record;
+  }
+
+  public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): L1Record[] {
+    return this.store.getMemoriesByFilePath(userId, filePath, limit);
+  }
+
+  public searchMemoryRecords(userId: string, query: string, limit = 20) {
+    return this.store.searchL1Fts(userId, query, limit);
+  }
+
+  public updateMemory(userId: string, recordId: string, updates: {
+    content?: string;
+    status?: MemoryStatus;
+    confidence?: number;
+    verificationStatus?: L1Record["verificationStatus"];
+    note?: string;
+  }) {
+    const existing = this.store.getMemoryById(userId, recordId);
+    if (!existing) return null;
+    const now = new Date().toISOString();
+    const updated: L1Record = {
+      ...existing,
+      content: updates.content ?? existing.content,
+      status: updates.status ?? existing.status,
+      confidence: updates.confidence ?? existing.confidence,
+      verificationStatus: updates.verificationStatus ?? existing.verificationStatus,
+      updatedTime: now,
+      archived: updates.status === "archived" ? true : existing.archived,
+      metadata: updates.note
+        ? { ...existing.metadata, governanceNote: updates.note, governanceNoteAt: now }
+        : existing.metadata,
+    };
+    this.store.upsertL1(updated);
+    this.store.insertOperation({
+      id: randomUUID(),
+      userId,
+      recordId,
+      operation: "memory_update",
+      actor: "user",
+      sessionKey: existing.sessionKey,
+      reason: updates.note ?? "",
+      createdAt: now,
+      metadata: {
+        contentChanged: typeof updates.content === "string",
+        status: updates.status,
+        confidence: updates.confidence,
+        verificationStatus: updates.verificationStatus,
+      },
+    });
+    return this.getMemoryById(userId, recordId);
+  }
+
+  public updateMemoryStatus(userId: string, recordId: string, confidence: number, status: MemoryStatus) {
+    this.store.updateL1Confidence(userId, recordId, confidence, status);
+    return this.getMemoryById(userId, recordId);
+  }
+
+  public addEvidence(userId: string, recordId: string, evidence: Omit<MemoryEvidence, "id" | "userId" | "recordId" | "observedAt"> & { id?: string; observedAt?: string }) {
+    const ev: MemoryEvidence = {
+      id: evidence.id ?? randomUUID(),
+      userId,
+      recordId,
+      kind: evidence.kind,
+      ref: evidence.ref,
+      excerpt: evidence.excerpt ?? "",
+      observedAt: evidence.observedAt ?? new Date().toISOString(),
+      metadata: evidence.metadata ?? {},
+    };
+    this.store.insertEvidence(ev);
+    return ev;
+  }
+
+  public getEvidence(userId: string, recordId: string) {
+    return this.store.getEvidenceByRecord(userId, recordId);
+  }
+
+  public exportMemories(userId: string) {
+    return this.store.exportMemories(userId);
+  }
+
+  public importMemories(userId: string, data: MemoryImport) {
+    return this.store.importMemories(userId, data);
+  }
+
+  public governanceDelete(userId: string, recordId: string, reason: string) {
+    this.store.hardDeleteMemory(userId, recordId, reason);
+  }
+
+  public getOperationLog(userId: string, pagination?: CursorPaginationOptions<{ createdAt: string; id: string }>): MemoryOperation[] {
+    return this.store.getOperationLog(userId, pagination);
   }
 
   public getStats(userId: string) {

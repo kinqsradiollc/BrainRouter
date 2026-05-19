@@ -36,7 +36,57 @@ export interface L0Record {
   skillTag: string;
 }
 
-export type MemoryType = "persona" | "episodic" | "instruction" | "skill_context";
+export type MemoryType =
+  | "persona"
+  | "episodic"
+  | "instruction"
+  | "skill_context"
+  | "tool_preference"
+  | "codebase_fact"
+  | "api_contract"
+  | "data_model"
+  | "dependency_constraint"
+  | "environment_constraint"
+  | "architecture_decision"
+  | "implementation_decision"
+  | "design_constraint"
+  | "security_policy"
+  | "performance_baseline"
+  | "bug_finding"
+  | "debug_trace"
+  | "fix_summary"
+  | "verification_result"
+  | "failed_attempt"
+  | "regression_risk"
+  | "task_state"
+  | "handover_note"
+  | "blocked_reason"
+  | "review_comment"
+  | "release_note"
+  | "source_evidence"
+  | "artifact_reference"
+  | "file_history"
+  | "command_knowledge";
+
+export type MemoryStatus = "active" | "superseded" | "archived" | "needs_verification";
+
+export type MemorySourceKind =
+  | ""
+  | "user_instruction"
+  | "source_file"
+  | "command_output"
+  | "test_result"
+  | "model_inference"
+  | "prior_memory";
+
+export type MemoryVerificationStatus = "" | "verified" | "unverified" | "stale";
+
+export type EvidenceKind = "file" | "command" | "url" | "test" | "benchmark" | "memory" | "other";
+
+export interface EvidenceRef {
+  kind: EvidenceKind;
+  ref: string;
+}
 
 export interface L1Record {
   id: string;
@@ -57,11 +107,63 @@ export interface L1Record {
   createdTime: string;
   updatedTime: string;
   metadata: Record<string, unknown>;
+  confidence: number;
+  status: MemoryStatus;
+  sourceKind: MemorySourceKind;
+  verificationStatus: MemoryVerificationStatus;
+  repoPaths: string[];
+  filePaths: string[];
+  commands: string[];
   // ACE Feedback Loop
   citationCount: number;
   lastCitedAt: string | null;
   neverCitedCount: number;
   archived: boolean;
+}
+
+export interface MemoryEvidence {
+  id: string;
+  userId: string;
+  recordId: string;
+  kind: EvidenceKind;
+  ref: string;
+  excerpt: string;
+  observedAt: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface MemoryOperation {
+  id: string;
+  userId: string;
+  recordId: string | null;
+  operation: string;
+  actor: string;
+  sessionKey: string;
+  reason: string;
+  createdAt: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface MemoryExport {
+  version: 1;
+  exportedAt: string;
+  userId: string;
+  memories: L1Record[];
+  evidence: MemoryEvidence[];
+  operations: MemoryOperation[];
+}
+
+export interface MemoryImport {
+  version: 1;
+  memories: L1Record[];
+  evidence?: MemoryEvidence[];
+  operations?: MemoryOperation[];
+}
+
+export interface ImportResult {
+  importedMemories: number;
+  importedEvidence: number;
+  importedOperations: number;
 }
 
 // ============================
@@ -114,6 +216,17 @@ export interface RecalledMemory {
   recordId: string;
   skillTag?: string;
 }
+
+export type MemoryTaskIntent =
+  | "build"
+  | "debug"
+  | "review"
+  | "test"
+  | "plan"
+  | "refactor"
+  | "security"
+  | "performance"
+  | "release";
 
 // ============================
 // Result Types

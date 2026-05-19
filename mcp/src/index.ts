@@ -50,6 +50,8 @@ import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } fr
 import { memoryResolveSessionToolSchema, handleMemoryResolveSession } from './tools/memory_resolve_session.js';
 import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from './tools/memory_graph_query.js';
 import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from './tools/memory_mark_cited.js';
+import { memoryGovernanceToolSchemas, handleMemoryGovernanceTool } from './tools/memory-governance.js';
+import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from './tools/memory-engineering.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { usersRouter } from './api/routes/users.js';
@@ -60,6 +62,7 @@ import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
 import { graphRouter } from './api/routes/graph.js';
 import { authRouter } from './api/routes/auth.js';
+import { governanceRouter } from './api/routes/governance.js';
 import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -215,6 +218,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryResolveSessionToolSchema,
       memoryGraphQueryToolSchema,
       memoryMarkCitedToolSchema,
+      ...memoryGovernanceToolSchemas,
+      ...memoryEngineeringToolSchemas,
     ],
   }));
 
@@ -246,6 +251,24 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
         case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments, { defaultUserId });
         case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments, { defaultUserId });
+        case 'memory_get':
+        case 'memory_update':
+        case 'memory_evidence_add':
+        case 'memory_evidence_get':
+        case 'memory_export':
+        case 'memory_import':
+        case 'memory_governance_delete':
+        case 'memory_audit':
+          return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_debug_trace_save':
+        case 'memory_debug_trace_search':
+        case 'memory_failed_attempts':
+        case 'memory_file_history':
+        case 'memory_task_state':
+        case 'memory_task_update':
+        case 'memory_handover':
+        case 'memory_verify':
+          return await handleMemoryEngineeringTool(request.params.name, request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
@@ -311,6 +334,7 @@ if (USE_HTTP) {
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
   app.use("/api/graph", graphRouter);
+  app.use("/api", governanceRouter);
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream)
   async function handleMcp(req: Request, res: Response) {

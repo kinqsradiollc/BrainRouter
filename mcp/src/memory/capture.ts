@@ -9,6 +9,7 @@ import { distillPersona } from "./pipeline/l3-distiller.js";
 import { detectDirectionShift } from "./pipeline/l2-direction-shift.js";
 import { shouldRunL2, shouldRunL3 } from "./scheduler.js";
 import type { EmbeddingService } from "./store/embedding.js";
+import { redactSensitiveMemoryText } from "./redaction.js";
 import crypto from "node:crypto";
 
 export class MemoryCapturePipeline {
@@ -42,7 +43,7 @@ export class MemoryCapturePipeline {
         sessionKey,
         sessionId,
         role: msg.role,
-        messageText: msg.content,
+        messageText: redactSensitiveMemoryText(msg.content),
         recordedAt: nowStr,
         timestamp: msg.timestamp,
         skillTag: activeSkill || "",
