@@ -1,5 +1,5 @@
-import type { SqliteMemoryStore } from "../store/sqlite.js";
-import type { LLMRunner, L3PersonaRecord } from "../types.js";
+import type { IMemoryStore } from "@brainrouter/types";
+import type { LLMRunner, L3PersonaRecord } from "@brainrouter/types";
 import { L3_PERSONA_SYSTEM_PROMPT, formatL3PersonaPrompt } from "../prompts/l3-persona.js";
 
 /**
@@ -9,7 +9,7 @@ import { L3_PERSONA_SYSTEM_PROMPT, formatL3PersonaPrompt } from "../prompts/l3-p
  */
 export async function distillPersona(params: {
   userId: string;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   llmRunner: LLMRunner;
 }): Promise<{ success: boolean; personaMd?: string }> {
   const { userId, store, llmRunner } = params;

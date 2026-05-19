@@ -14,6 +14,15 @@ memory_hints: |
 
 BrainRouter's memory engine gives you persistent, cross-session awareness of the user. Use it consistently — an agent that doesn't recall context is worse than a stateless one because it appears to ignore the user.
 
+
+## Workflow
+
+1. Identify release scope (version range, commit range, or date range).
+2. Gather relevant commits and exclude maintenance noise.
+3. Group changes into user-facing categories.
+4. Rewrite each item in plain customer language.
+5. Format output as publish-ready markdown and verify clarity.
+
 ## The Two Non-Negotiable Habits
 
 ### 1. Before every response — recall memory

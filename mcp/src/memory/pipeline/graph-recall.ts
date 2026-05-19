@@ -1,4 +1,4 @@
-import type { SqliteMemoryStore } from "../store/sqlite.js";
+import type { IMemoryStore } from "@brainrouter/types";
 
 /**
  * Hybrid GraphRAG Recall Expansion
@@ -10,7 +10,7 @@ export function expandRecallWithGraph(params: {
   query: string;
   userId: string;
   activeSkill?: string;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
 }): string {
   const { topL1Results, query, userId, activeSkill, store } = params;
 

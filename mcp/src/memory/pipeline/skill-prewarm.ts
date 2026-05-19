@@ -9,7 +9,7 @@
  * This is opt-in via BRAINROUTER_PREWARM_ENABLED=true (disabled by default).
  */
 
-import type { SqliteMemoryStore } from "../store/sqlite.js";
+import type { IMemoryStore } from "@brainrouter/types";
 
 export interface PrewarmResult {
   skillName: string;
@@ -22,14 +22,14 @@ export interface PrewarmResult {
  * Returns an array of skill names and their hints, sorted by hit count (most active first).
  *
  * @param userId - The user to analyse
- * @param store - SqliteMemoryStore instance
+ * @param store - IMemoryStore instance
  * @param windowN - How many recent L1s to scan (default: BRAINROUTER_PREWARM_WINDOW or 10)
  * @param minHits - Min occurrences to qualify (default: BRAINROUTER_PREWARM_MIN_HITS or 3)
  * @param excludeSkill - Active skill to exclude (already injected via capture pipeline)
  */
 export function detectPrewarmSkills(params: {
   userId: string;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   windowN?: number;
   minHits?: number;
   excludeSkill?: string;

@@ -41,13 +41,13 @@ export const memoryCaptureTurnToolSchema = {
         description: "Skill-specific extraction hints provided by the active skill."
       }
     },
-    required: ["userId", "sessionKey", "messages"]
+    required: ["sessionKey", "messages"]
   }
 } as const;
 
-export async function handleMemoryCaptureTurn(args: any) {
+export async function handleMemoryCaptureTurn(args: any, options?: { defaultUserId?: string }) {
   const params = z.object({
-    userId: z.string(),
+    userId: z.string().optional(),
     sessionKey: z.string(),
     sessionId: z.string().optional(),
     messages: z.array(z.object({
@@ -58,10 +58,11 @@ export async function handleMemoryCaptureTurn(args: any) {
     activeSkill: z.string().optional(),
     skillHints: z.string().optional()
   }).parse(args);
+  const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
     const result = await memoryEngine.capture({
-      userId: params.userId,
+      userId: effectiveUserId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       messages: params.messages,

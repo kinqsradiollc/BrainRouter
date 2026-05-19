@@ -1,0 +1,10 @@
+{
+  "name": "brainrouter-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["packages/*", "mcp", "dashboard"],
+  "scripts": {
+    "build": "npm run build -ws --if-present",
+    "test": "npm run test -ws --if-present"
+  }
+}

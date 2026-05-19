@@ -30,22 +30,23 @@ export const memoryMarkCitedToolSchema = {
           "(recalledL1Memories[].recordId). This is the full set that was surfaced to you.",
       },
     },
-    required: ["userId", "citedRecordIds", "allRecalledRecordIds"],
+    required: ["citedRecordIds", "allRecalledRecordIds"],
   },
 } as const;
 
 const memoryMarkCitedSchema = z.object({
-  userId: z.string(),
+  userId: z.string().optional(),
   citedRecordIds: z.array(z.string()),
   allRecalledRecordIds: z.array(z.string()),
 });
 
-export async function handleMemoryMarkCited(args: unknown) {
+export async function handleMemoryMarkCited(args: unknown, options?: { defaultUserId?: string }) {
   const params = memoryMarkCitedSchema.parse(args);
+  const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
     const result = memoryEngine.markCited(
-      params.userId,
+      effectiveUserId,
       params.citedRecordIds,
       params.allRecalledRecordIds
     );

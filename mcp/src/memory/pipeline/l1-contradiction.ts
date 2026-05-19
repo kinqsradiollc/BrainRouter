@@ -1,11 +1,11 @@
-import type { SqliteMemoryStore } from "../store/sqlite.js";
-import type { LLMRunner, L1Record, L1FtsResult } from "../types.js";
+import type { IMemoryStore } from "@brainrouter/types";
+import type { LLMRunner, L1Record, L1FtsResult } from "@brainrouter/types";
 import { L1_CONTRADICTION_PROMPT } from "../prompts/l1-contradiction.js";
 import crypto from "node:crypto";
 
 export async function detectContradictions(params: {
   newRecord: L1Record;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   llmRunner: LLMRunner;
 }) {
   const { newRecord, store, llmRunner } = params;

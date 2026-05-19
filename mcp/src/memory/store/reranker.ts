@@ -1,4 +1,5 @@
-import type { RerankerServiceConfig } from "../types.js";
+import type { RerankerServiceConfig } from "@brainrouter/types";
+import { fetchWithExternalRetry } from "../retry.js";
 
 export interface RankedResult {
   index: number;
@@ -63,7 +64,7 @@ export class RerankerService {
       ? params.query.substring(0, 200) + "..." 
       : params.query;
 
-    const res = await fetch(this.endpoint, {
+    const res = await fetchWithExternalRetry(this.endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -75,6 +76,8 @@ export class RerankerService {
         model: this.model,
         top_n: requestTopN,
       }),
+    }, {
+      label: "Reranker API",
     });
 
     if (!res.ok) {

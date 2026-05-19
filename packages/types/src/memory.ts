@@ -168,6 +168,26 @@ export interface SkillHintsRecord {
   registeredAt: string;
 }
 
+export interface UserRecord {
+  userId: string;
+  apiKey: string;
+  passwordHash: string | null;
+  displayName: string;
+  email: string;
+  isAdmin: boolean;
+  status: "active" | "disabled";
+  createdAt: string;
+}
+
+export interface PublicUserRecord {
+  userId: string;
+  displayName: string;
+  email: string;
+  isAdmin: boolean;
+  status: "active" | "disabled";
+  createdAt: string;
+}
+
 // ============================
 // LLM Runner
 // ============================
@@ -210,6 +230,26 @@ export interface SchedulerState {
   l1CountSinceLastL2: number;
   l1CountSinceLastL3: number;
   totalL1Count: number;
+  extractionErrors: number;
+  lastErrorMessage: string | null;
+  lastErrorAt: string | null;
+}
+
+export interface StalledExtractionBacklog {
+  userId: string;
+  sessionKey: string;
+  sessionId: string;
+  unextractedCount: number;
+  latestRecordedAt: string;
+  extractionErrors: number;
+  lastErrorMessage: string | null;
+}
+
+export interface ExtractionStatus {
+  extractionErrors: number;
+  lastErrorMessage: string | null;
+  lastErrorAt: string | null;
+  syncPaused: boolean;
 }
 
 // ============================

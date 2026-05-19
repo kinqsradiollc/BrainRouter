@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import type { L0Record, L1Record, L1FtsResult, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge } from "../types.js";
+import type { CursorPaginationOptions, ExtractionStatus, L0Record, L1Record, L1FtsResult, MemoryListFilters, MemoryListItem, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
 import * as sqliteVec from "sqlite-vec";
+import type { IMemoryStore } from "@brainrouter/types";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
@@ -27,7 +28,7 @@ function buildFtsQuery(raw: string): string | null {
   return quoted.join(" OR ");
 }
 
-export class SqliteMemoryStore {
+export class SqliteMemoryStore implements IMemoryStore {
   private db: DatabaseSync;
 
   // L0 statements
@@ -85,16 +86,30 @@ export class SqliteMemoryStore {
       )
     `);
 
-    // Check if dimensions changed
-    const metaRow = this.db.prepare("SELECT dimensions FROM embedding_meta WHERE id = 1").get() as any;
-    if (metaRow && metaRow.dimensions !== dimensions) {
-      console.error(`[BrainRouter] Embedding dimensions changed (${metaRow.dimensions} -> ${dimensions}). Recreating vector tables.`);
-      this.db.exec("DROP TABLE IF EXISTS l1_vec");
+    // Robust dimension check: extract actual dimension from the virtual table schema
+    const tableInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'l1_vec'").get() as any;
+    let actualDimensions = -1;
+    if (tableInfo && tableInfo.sql) {
+      const match = tableInfo.sql.match(/float\[(\d+)\]/i);
+      if (match) actualDimensions = parseInt(match[1], 10);
+    }
+
+    if (actualDimensions !== -1 && actualDimensions !== dimensions) {
+      console.error(`[BrainRouter] Embedding dimensions changed (${actualDimensions} -> ${dimensions}). Recreating vector tables.`);
+      // Drop all shadow tables explicitly to avoid sqlite-vec edge cases, then drop the virtual table
+      try {
+        this.db.exec("DROP TABLE IF EXISTS l1_vec");
+      } catch (e) {
+        console.warn("[BrainRouter] Error dropping l1_vec:", e);
+      }
       this.db.prepare("UPDATE embedding_meta SET dimensions = ?, created_at = ? WHERE id = 1")
         .run(dimensions, new Date().toISOString());
-    } else if (!metaRow) {
-      this.db.prepare("INSERT INTO embedding_meta (id, dimensions, created_at) VALUES (1, ?, ?)")
-        .run(dimensions, new Date().toISOString());
+    } else {
+      const metaRow = this.db.prepare("SELECT dimensions FROM embedding_meta WHERE id = 1").get() as any;
+      if (!metaRow) {
+        this.db.prepare("INSERT INTO embedding_meta (id, dimensions, created_at) VALUES (1, ?, ?)")
+          .run(dimensions, new Date().toISOString());
+      }
     }
 
     this.db.exec(`
@@ -124,12 +139,40 @@ export class SqliteMemoryStore {
         message_text TEXT NOT NULL,
         recorded_at TEXT DEFAULT '',
         timestamp INTEGER DEFAULT 0,
-        skill_tag TEXT DEFAULT ''
+        skill_tag TEXT DEFAULT '',
+        extracted_at TEXT DEFAULT NULL
       )
     `);
+    try {
+      this.db.exec("ALTER TABLE l0_conversations ADD COLUMN extracted_at TEXT DEFAULT NULL");
+    } catch (_) {
+      // Column already exists, ignore
+    }
 
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_session ON l0_conversations(user_id, session_key)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_recorded ON l0_conversations(recorded_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_extracted ON l0_conversations(user_id, session_key, extracted_at)");
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        api_key TEXT NOT NULL UNIQUE,
+        password_hash TEXT DEFAULT NULL,
+        display_name TEXT DEFAULT '',
+        email TEXT DEFAULT '',
+        is_admin INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        created_at TEXT NOT NULL
+      )
+    `);
+    const userColumns = [
+      "ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'",
+    ];
+    for (const sql of userColumns) {
+      try { this.db.exec(sql); } catch { /* column exists */ }
+    }
 
     this.stmtL0UpsertMeta = this.db.prepare(`
       INSERT INTO l0_conversations (
@@ -145,7 +188,7 @@ export class SqliteMemoryStore {
       SELECT record_id as id, user_id as userId, session_key as sessionKey, session_id as sessionId,
              role, message_text as messageText, recorded_at as recordedAt, timestamp, skill_tag as skillTag
       FROM l0_conversations
-      WHERE user_id = ? AND session_key = ? AND recorded_at > ?
+      WHERE user_id = ? AND session_key = ? AND recorded_at > ? AND extracted_at IS NULL
       ORDER BY recorded_at DESC
       LIMIT ?
     `);
@@ -316,9 +359,20 @@ export class SqliteMemoryStore {
         user_id TEXT PRIMARY KEY,
         l1_count_since_last_l2 INTEGER DEFAULT 0,
         l1_count_since_last_l3 INTEGER DEFAULT 0,
-        total_l1_count INTEGER DEFAULT 0
+        total_l1_count INTEGER DEFAULT 0,
+        extraction_errors INTEGER DEFAULT 0,
+        last_error_message TEXT DEFAULT NULL,
+        last_error_at TEXT DEFAULT NULL
       )
     `);
+    const schedulerColumns = [
+      "ALTER TABLE scheduler_state ADD COLUMN extraction_errors INTEGER DEFAULT 0",
+      "ALTER TABLE scheduler_state ADD COLUMN last_error_message TEXT DEFAULT NULL",
+      "ALTER TABLE scheduler_state ADD COLUMN last_error_at TEXT DEFAULT NULL",
+    ];
+    for (const sql of schedulerColumns) {
+      try { this.db.exec(sql); } catch { /* column exists */ }
+    }
 
     // ── GraphRAG Nodes ──
     this.db.exec(`
@@ -390,13 +444,25 @@ export class SqliteMemoryStore {
   }
 
   public getUnextractedL0Count(userId: string, sessionKey: string): number {
-    const stmtLatestL1 = this.db.prepare("SELECT MAX(created_time) as maxTime FROM l1_records WHERE user_id = ? AND session_key = ?");
-    const latestL1 = stmtLatestL1.get(userId, sessionKey) as any;
-    const lastExtractionTime = latestL1?.maxTime || "";
-
-    const stmtCount = this.db.prepare("SELECT COUNT(*) as count FROM l0_conversations WHERE user_id = ? AND session_key = ? AND recorded_at > ?");
-    const row = stmtCount.get(userId, sessionKey, lastExtractionTime) as any;
+    const stmtCount = this.db.prepare("SELECT COUNT(*) as count FROM l0_conversations WHERE user_id = ? AND session_key = ? AND extracted_at IS NULL");
+    const row = stmtCount.get(userId, sessionKey) as any;
     return row?.count || 0;
+  }
+
+  public markL0Extracted(userId: string, sessionKey: string, recordIds: string[], extractedAt = new Date().toISOString()): void {
+    if (recordIds.length === 0) return;
+
+    this.db.exec("BEGIN");
+    try {
+      const stmt = this.db.prepare("UPDATE l0_conversations SET extracted_at = ? WHERE user_id = ? AND session_key = ? AND record_id = ?");
+      for (const recordId of recordIds) {
+        stmt.run(extractedAt, userId, sessionKey, recordId);
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   // ============================
@@ -543,7 +609,14 @@ export class SqliteMemoryStore {
   }
 
   public upsertL1Vec(recordId: string, embedding: Float32Array) {
-    if (!this.vecLoaded || !this.stmtL1VecInsert || !this.stmtL1VecDelete) return;
+    if (!this.vecLoaded) return;
+    
+    // Lazy schema recreation if dimensions dynamically shift from API
+    if (this.vecDimensions !== embedding.length) {
+      this.initVec(embedding.length);
+    }
+
+    if (!this.stmtL1VecInsert || !this.stmtL1VecDelete) return;
     
     this.db.exec("BEGIN");
     try {
@@ -558,7 +631,14 @@ export class SqliteMemoryStore {
   }
 
   public searchL1Vec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[] {
-    if (!this.vecLoaded || !this.vecDimensions) return [];
+    if (!this.vecLoaded) return [];
+
+    // Lazy schema recreation if dimensions dynamically shift from API
+    if (this.vecDimensions !== queryEmbedding.length) {
+      this.initVec(queryEmbedding.length);
+    }
+
+    if (!this.vecDimensions) return [];
 
     // vec0 cosine search
     const stmt = this.db.prepare(`
@@ -615,16 +695,24 @@ export class SqliteMemoryStore {
     stmt.run(data.id, data.userId, data.recordIdA, data.recordIdB, data.reason, data.confidence, new Date().toISOString());
   }
 
-  public getPendingContradictions(userId: string) {
+  public getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>) {
+    const where = ["c.user_id = ?", "c.status = 'pending'"];
+    const args: any[] = [userId];
+    if (pagination?.cursor) {
+      where.push("(c.confidence < ? OR (c.confidence = ? AND c.id > ?))");
+      args.push(pagination.cursor.confidence, pagination.cursor.confidence, pagination.cursor.id);
+    }
+    args.push(pagination?.limit ?? 20);
     const stmt = this.db.prepare(`
       SELECT c.*, r1.content as content_a, r2.content as content_b
       FROM contradictions c
       JOIN l1_records r1 ON c.record_id_a = r1.record_id
       JOIN l1_records r2 ON c.record_id_b = r2.record_id
-      WHERE c.user_id = ? AND c.status = 'pending'
-      ORDER BY c.confidence DESC
+      WHERE ${where.join(" AND ")}
+      ORDER BY c.confidence DESC, c.id ASC
+      LIMIT ?
     `);
-    return stmt.all(userId);
+    return stmt.all(...args);
   }
 
   public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {
@@ -680,11 +768,22 @@ export class SqliteMemoryStore {
     );
   }
 
-  public getTopL2Scenes(userId: string, limit = 3): L2SceneRecord[] {
+  public getTopL2Scenes(userId: string, limit = 3, cursor?: { heatScore: number; id: string }): L2SceneRecord[] {
+    const where = ["user_id = ?"];
+    const args: any[] = [userId];
+    if (cursor) {
+      where.push("(heat_score < ? OR (heat_score = ? AND id > ?))");
+      args.push(cursor.heatScore, cursor.heatScore, cursor.id);
+    }
+    args.push(limit);
     const stmt = this.db.prepare(
-      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM l2_scenes WHERE user_id = ? ORDER BY heat_score DESC LIMIT ?"
+      `SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time
+       FROM l2_scenes
+       WHERE ${where.join(" AND ")}
+       ORDER BY heat_score DESC, id ASC
+       LIMIT ?`
     );
-    const rows = stmt.all(userId, limit) as any[];
+    const rows = stmt.all(...args) as any[];
     return rows.map(r => ({
       id: r.id, userId: r.user_id, sceneName: r.scene_name,
       summaryMd: r.summary_md, heatScore: r.heat_score,
@@ -814,13 +913,25 @@ export class SqliteMemoryStore {
   // ============================
 
   public getSchedulerState(userId: string): SchedulerState {
-    const stmt = this.db.prepare("SELECT l1_count_since_last_l2, l1_count_since_last_l3, total_l1_count FROM scheduler_state WHERE user_id = ?");
+    const stmt = this.db.prepare("SELECT l1_count_since_last_l2, l1_count_since_last_l3, total_l1_count, extraction_errors, last_error_message, last_error_at FROM scheduler_state WHERE user_id = ?");
     const row = stmt.get(userId) as any;
-    if (!row) return { l1CountSinceLastL2: 0, l1CountSinceLastL3: 0, totalL1Count: 0 };
+    if (!row) {
+      return {
+        l1CountSinceLastL2: 0,
+        l1CountSinceLastL3: 0,
+        totalL1Count: 0,
+        extractionErrors: 0,
+        lastErrorMessage: null,
+        lastErrorAt: null,
+      };
+    }
     return {
       l1CountSinceLastL2: row.l1_count_since_last_l2,
       l1CountSinceLastL3: row.l1_count_since_last_l3,
-      totalL1Count: row.total_l1_count
+      totalL1Count: row.total_l1_count,
+      extractionErrors: row.extraction_errors ?? 0,
+      lastErrorMessage: row.last_error_message ?? null,
+      lastErrorAt: row.last_error_at ?? null,
     };
   }
 
@@ -844,6 +955,84 @@ export class SqliteMemoryStore {
   public resetSchedulerL3Count(userId: string) {
     const stmt = this.db.prepare("UPDATE scheduler_state SET l1_count_since_last_l3 = 0 WHERE user_id = ?");
     stmt.run(userId);
+  }
+
+  public recordExtractionFailure(userId: string, message: string): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT INTO scheduler_state (user_id, extraction_errors, last_error_message, last_error_at)
+      VALUES (?, 1, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        extraction_errors = COALESCE(extraction_errors, 0) + 1,
+        last_error_message = excluded.last_error_message,
+        last_error_at = excluded.last_error_at
+    `);
+    stmt.run(userId, message.slice(0, 1000), now);
+  }
+
+  public resetExtractionFailures(userId: string): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO scheduler_state (user_id, extraction_errors, last_error_message, last_error_at)
+      VALUES (?, 0, NULL, NULL)
+      ON CONFLICT(user_id) DO UPDATE SET
+        extraction_errors = 0,
+        last_error_message = NULL,
+        last_error_at = NULL
+    `);
+    stmt.run(userId);
+  }
+
+  public getExtractionStatus(userId: string): ExtractionStatus {
+    const state = this.getSchedulerState(userId);
+    return {
+      extractionErrors: state.extractionErrors,
+      lastErrorMessage: state.lastErrorMessage,
+      lastErrorAt: state.lastErrorAt,
+      syncPaused: state.extractionErrors >= 5,
+    };
+  }
+
+  public sweepUnextractedBacklog(options: {
+    olderThanMs: number;
+    minUnextracted?: number;
+    maxFailures?: number;
+    limit?: number;
+  }): StalledExtractionBacklog[] {
+    const cutoff = new Date(Date.now() - options.olderThanMs).toISOString();
+    const minUnextracted = options.minUnextracted ?? 1;
+    const maxFailures = options.maxFailures ?? 5;
+    const limit = options.limit ?? 20;
+
+    const rows = this.db.prepare(`
+      SELECT
+        l0.user_id,
+        l0.session_key,
+        COALESCE(MAX(l0.session_id), '') AS session_id,
+        COUNT(*) AS unextracted_count,
+        MAX(l0.recorded_at) AS latest_recorded_at,
+        COALESCE(ss.extraction_errors, 0) AS extraction_errors,
+        ss.last_error_message
+      FROM l0_conversations l0
+      LEFT JOIN scheduler_state ss ON ss.user_id = l0.user_id
+      WHERE l0.extracted_at IS NULL
+      GROUP BY l0.user_id, l0.session_key
+      HAVING
+        COUNT(*) >= ?
+        AND MAX(l0.recorded_at) <= ?
+        AND COALESCE(ss.extraction_errors, 0) < ?
+      ORDER BY MAX(l0.recorded_at) ASC
+      LIMIT ?
+    `).all(minUnextracted, cutoff, maxFailures, limit) as any[];
+
+    return rows.map((row) => ({
+      userId: row.user_id,
+      sessionKey: row.session_key,
+      sessionId: row.session_id ?? "",
+      unextractedCount: row.unextracted_count ?? 0,
+      latestRecordedAt: row.latest_recorded_at ?? "",
+      extractionErrors: row.extraction_errors ?? 0,
+      lastErrorMessage: row.last_error_message ?? null,
+    }));
   }
 
   // ============================
@@ -1085,5 +1274,211 @@ export class SqliteMemoryStore {
       "SELECT hints FROM skill_extraction_hints WHERE skill_name = ?"
     ).get(skillName) as any;
     return row?.hints ?? null;
+  }
+
+  public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO users (user_id, api_key, password_hash, display_name, email, is_admin, status, created_at)
+      VALUES (?, ?, NULL, ?, '', ?, 'active', ?)
+    `).run(userId, apiKey, displayName, isAdmin ? 1 : 0, createdAt);
+    return {
+      userId,
+      apiKey,
+      passwordHash: null,
+      displayName,
+      email: "",
+      isAdmin,
+      status: "active",
+      createdAt,
+    };
+  }
+
+  public getUserByApiKey(apiKey: string): UserRecord | null {
+    const row = this.db.prepare(
+      "SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE api_key = ?"
+    ).get(apiKey) as any;
+    if (!row) return null;
+    return {
+      userId: row.user_id,
+      apiKey: row.api_key,
+      passwordHash: row.password_hash ?? null,
+      displayName: row.display_name ?? "",
+      email: row.email ?? "",
+      isAdmin: Boolean(row.is_admin),
+      status: row.status === "disabled" ? "disabled" : "active",
+      createdAt: row.created_at,
+    };
+  }
+
+  public getUserByEmail(email: string): UserRecord | null {
+    const row = this.db.prepare(
+      "SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE lower(email) = lower(?)"
+    ).get(email) as any;
+    if (!row) return null;
+    return {
+      userId: row.user_id,
+      apiKey: row.api_key,
+      passwordHash: row.password_hash ?? null,
+      displayName: row.display_name ?? "",
+      email: row.email ?? "",
+      isAdmin: Boolean(row.is_admin),
+      status: row.status === "disabled" ? "disabled" : "active",
+      createdAt: row.created_at,
+    };
+  }
+
+  public getUserById(userId: string): UserRecord | null {
+    const row = this.db.prepare(
+      "SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE user_id = ?"
+    ).get(userId) as any;
+    if (!row) return null;
+    return {
+      userId: row.user_id,
+      apiKey: row.api_key,
+      passwordHash: row.password_hash ?? null,
+      displayName: row.display_name ?? "",
+      email: row.email ?? "",
+      isAdmin: Boolean(row.is_admin),
+      status: row.status === "disabled" ? "disabled" : "active",
+      createdAt: row.created_at,
+    };
+  }
+
+  public updateUserPassword(userId: string, passwordHash: string): void {
+    this.db.prepare("UPDATE users SET password_hash = ? WHERE user_id = ?").run(passwordHash, userId);
+  }
+
+  public updateUserEmail(userId: string, email: string): void {
+    this.db.prepare("UPDATE users SET email = ? WHERE user_id = ?").run(email, userId);
+  }
+
+  public updateUserDisplayName(userId: string, displayName: string): void {
+    this.db.prepare("UPDATE users SET display_name = ? WHERE user_id = ?").run(displayName, userId);
+  }
+
+  public updateUserStatus(userId: string, status: "active" | "disabled"): void {
+    this.db.prepare("UPDATE users SET status = ? WHERE user_id = ?").run(status, userId);
+  }
+
+  public updateUserApiKey(userId: string, apiKey: string): void {
+    this.db.prepare("UPDATE users SET api_key = ? WHERE user_id = ?").run(apiKey, userId);
+  }
+
+  public listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): UserRecord[] {
+    const where: string[] = [];
+    const args: any[] = [];
+    if (pagination?.cursor) {
+      where.push("(created_at < ? OR (created_at = ? AND user_id > ?))");
+      args.push(pagination.cursor.createdAt, pagination.cursor.createdAt, pagination.cursor.userId);
+    }
+    args.push(pagination?.limit ?? 500);
+    const rows = this.db.prepare(
+      `SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at
+       FROM users
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY created_at DESC, user_id ASC
+       LIMIT ?`
+    ).all(...args) as any[];
+    return rows.map((row) => ({
+      userId: row.user_id,
+      apiKey: row.api_key,
+      passwordHash: row.password_hash ?? null,
+      displayName: row.display_name ?? "",
+      email: row.email ?? "",
+      isAdmin: Boolean(row.is_admin),
+      status: row.status === "disabled" ? "disabled" : "active",
+      createdAt: row.created_at,
+    }));
+  }
+
+  public deleteUser(userId: string): void {
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM users WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM l0_conversations WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM l1_fts WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM l1_records WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM contradictions WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM l2_scenes WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM l3_persona WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM scheduler_state WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM graph_nodes WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM graph_edges WHERE user_id = ?").run(userId);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  public listMemories(
+    userId: string,
+    filters?: MemoryListFilters,
+    pagination?: CursorPaginationOptions<{ createdTime: string; recordId: string }>
+  ): MemoryListItem[] {
+    const where: string[] = ["user_id = ?"];
+    const args: any[] = [userId];
+    if (filters?.type) { where.push("type = ?"); args.push(filters.type); }
+    if (filters?.scene) { where.push("scene_name = ?"); args.push(filters.scene); }
+    if (filters?.skill) { where.push("skill_tag = ?"); args.push(filters.skill); }
+    if (typeof filters?.archived === "boolean") { where.push("archived = ?"); args.push(filters.archived ? 1 : 0); }
+    if (pagination?.cursor) {
+      where.push("(created_time < ? OR (created_time = ? AND record_id > ?))");
+      args.push(pagination.cursor.createdTime, pagination.cursor.createdTime, pagination.cursor.recordId);
+    }
+    args.push(pagination?.limit ?? 500);
+
+    const rows = this.db.prepare(`
+      SELECT record_id, content, type, priority, scene_name, skill_tag, created_time, citation_count, never_cited_count, archived
+      FROM l1_records
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_time DESC, record_id ASC
+      LIMIT ?
+    `).all(...args) as any[];
+
+    return rows.map((row) => ({
+      recordId: row.record_id,
+      content: row.content,
+      type: row.type,
+      priority: row.priority,
+      sceneName: row.scene_name ?? "",
+      skillTag: row.skill_tag ?? "",
+      createdTime: row.created_time,
+      citationCount: row.citation_count ?? 0,
+      neverCitedCount: row.never_cited_count ?? 0,
+      archived: Boolean(row.archived),
+    }));
+  }
+
+  public getMemoryStats(userId: string): {
+    total: number;
+    archived: number;
+    byType: Record<string, number>;
+    citationRate: number;
+    lastRecallAt: string | null;
+    extraction: ExtractionStatus;
+  } {
+    const totalRow = this.db.prepare("SELECT COUNT(*) as c FROM l1_records WHERE user_id = ?").get(userId) as any;
+    const archivedRow = this.db.prepare("SELECT COUNT(*) as c FROM l1_records WHERE user_id = ? AND archived = 1").get(userId) as any;
+    const typeRows = this.db.prepare("SELECT type, COUNT(*) as c FROM l1_records WHERE user_id = ? GROUP BY type").all(userId) as any[];
+    const citationRows = this.db.prepare("SELECT SUM(citation_count) as cited, COUNT(*) as total FROM l1_records WHERE user_id = ?").get(userId) as any;
+    const lastRecall = this.db.prepare(
+      "SELECT MAX(recorded_at) as last_at FROM l0_conversations WHERE user_id = ?"
+    ).get(userId) as any;
+
+    const byType: Record<string, number> = {};
+    for (const row of typeRows) byType[row.type] = row.c;
+
+    const totalRecords = totalRow?.c ?? 0;
+    const cited = citationRows?.cited ?? 0;
+    return {
+      total: totalRecords,
+      archived: archivedRow?.c ?? 0,
+      byType,
+      citationRate: totalRecords > 0 ? cited / totalRecords : 0,
+      lastRecallAt: lastRecall?.last_at ?? null,
+      extraction: this.getExtractionStatus(userId),
+    };
   }
 }

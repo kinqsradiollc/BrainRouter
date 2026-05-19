@@ -23,12 +23,12 @@ export const memorySearchToolSchema = {
           'Example: "2025-03-15T12:00:00.000Z"',
       },
     },
-    required: ['userId', 'query', 'sessionKey'],
+    required: ['query', 'sessionKey'],
   },
 };
 
 export const memorySearchSchema = z.object({
-  userId: z.string(),
+  userId: z.string().optional(),
   query: z.string(),
   sessionKey: z.string(),
   activeSkill: z.string().optional(),
@@ -36,14 +36,15 @@ export const memorySearchSchema = z.object({
   asOf: z.string().optional(),
 });
 
-export async function handleMemorySearch(args: unknown) {
+export async function handleMemorySearch(args: unknown, options?: { defaultUserId?: string }) {
   const params = memorySearchSchema.parse(args);
+  const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
     // Point-in-time search path
     if (params.asOf) {
       const result = memoryEngine.searchAsOf(
-        params.userId,
+        effectiveUserId,
         params.query,
         params.asOf,
         params.limit ?? 10
@@ -55,7 +56,7 @@ export async function handleMemorySearch(args: unknown) {
 
     // Standard recall path
     const result = await memoryEngine.recall({
-      userId: params.userId,
+      userId: effectiveUserId,
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill,

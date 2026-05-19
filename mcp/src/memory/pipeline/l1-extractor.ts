@@ -1,5 +1,5 @@
 import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/l1-extraction.js";
-import type { L0Record, L1Record, LLMRunner, MemoryType } from "../types.js";
+import type { L0Record, L1Record, LLMRunner, MemoryType } from "@brainrouter/types";
 import crypto from "node:crypto";
 
 export interface L1ExtractionResult {
@@ -7,6 +7,7 @@ export interface L1ExtractionResult {
   extractedCount: number;
   records: L1Record[];
   sceneNames: string[];
+  errorMessage?: string;
 }
 
 // Ensure the message has actual words to extract from, not just symbols or single letters.
@@ -71,8 +72,9 @@ export async function extractL1Memories(params: {
       timeoutMs: 120_000
     });
   } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("[BrainRouter] LLM extraction failed:", err);
-    return { success: false, extractedCount: 0, records: [], sceneNames: [] };
+    return { success: false, extractedCount: 0, records: [], sceneNames: [], errorMessage };
   }
 
   const parsedScenes = parseExtractionResult(rawResult);

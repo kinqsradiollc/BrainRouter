@@ -1,4 +1,4 @@
-import type { L0Record } from "../types.js";
+import type { L0Record } from "@brainrouter/types";
 
 // ============================
 // System Prompt

@@ -1,4 +1,4 @@
-import type { L1Record, L2SceneRecord, LLMRunner } from "../types.js";
+import type { L1Record, L2SceneRecord, LLMRunner } from "@brainrouter/types";
 import { L2_DIRECTION_SHIFT_SYSTEM_PROMPT, formatL2DirectionShiftPrompt } from "../prompts/l2-direction-shift.js";
 
 export async function detectDirectionShift(params: {
@@ -22,7 +22,11 @@ export async function detectDirectionShift(params: {
       timeoutMs: 30_000,
     });
 
-    const parsed = JSON.parse(response);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("No JSON object found in LLM response");
+    }
+    const parsed = JSON.parse(jsonMatch[0]);
     return {
       shift: Boolean(parsed.shift),
       confidence: Number(parsed.confidence) || 0,

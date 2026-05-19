@@ -1,5 +1,5 @@
-import type { SqliteMemoryStore } from "./store/sqlite.js";
-import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult } from "./types.js";
+import type { IMemoryStore } from "@brainrouter/types";
+import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult } from "@brainrouter/types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
@@ -32,7 +32,7 @@ function effectivePriority(memory: L1FtsResult & { citation_count?: number }): n
 
 export class MemoryRecallPipeline {
   constructor(
-    private store: SqliteMemoryStore,
+    private store: IMemoryStore,
     private embeddingService: EmbeddingService,
     private rerankerService: RerankerService
   ) { }

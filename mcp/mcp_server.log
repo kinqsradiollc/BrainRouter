@@ -12,3 +12,5 @@
    Health    : http://localhost:3747/health
    Root      : /Users/anhdang/Documents/Github/BrainRouter
 
+[BrainRouter] Contradiction check failed for l1_d:/onsyshealth/onsyshealth_1779100977920_f419742e vs l1_d:/onsyshealth/onsyshealth_1779100774679_b8f09550: LLM Error: 400 Bad Request - {"error":"Model is unloaded."}
+[BrainRouter] Contradiction check failed for l1_d:/onsyshealth/onsyshealth_1779100977923_edc3e736 vs l1_d:/onsyshealth/onsyshealth_1779100977920_f419742e: LLM Error: 400 Bad Request - {"error":"Model is unloaded."}

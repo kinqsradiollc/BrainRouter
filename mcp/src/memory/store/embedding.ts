@@ -1,4 +1,5 @@
-import type { EmbeddingServiceConfig } from "../types.js";
+import type { EmbeddingServiceConfig } from "@brainrouter/types";
+import { fetchWithExternalRetry } from "../retry.js";
 
 export class EmbeddingService {
   private readonly endpoint: string;
@@ -37,7 +38,7 @@ export class EmbeddingService {
       throw new Error("EmbeddingService is not ready (missing API key)");
     }
 
-    const res = await fetch(this.endpoint, {
+    const res = await fetchWithExternalRetry(this.endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -47,6 +48,8 @@ export class EmbeddingService {
         input: text,
         model: this.model,
       }),
+    }, {
+      label: "Embedding API",
     });
 
     if (!res.ok) {

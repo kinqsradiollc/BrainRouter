@@ -1,5 +1,5 @@
-import type { SqliteMemoryStore } from "../store/sqlite.js";
-import type { LLMRunner, L1Record, GraphNode, GraphEdge } from "../types.js";
+import type { IMemoryStore } from "@brainrouter/types";
+import type { LLMRunner, L1Record, GraphNode, GraphEdge } from "@brainrouter/types";
 import { GRAPH_EXTRACTION_SYSTEM_PROMPT, formatGraphExtractionPrompt } from "../prompts/graph-extraction.js";
 import crypto from "node:crypto";
 
@@ -9,7 +9,7 @@ import crypto from "node:crypto";
  */
 export async function buildGraphFromL1(params: {
   record: L1Record;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   llmRunner: LLMRunner;
 }) {
   const { record, store, llmRunner } = params;

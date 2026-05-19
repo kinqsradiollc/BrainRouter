@@ -26,6 +26,15 @@ This skill transforms technical git commits into polished, user-friendly changel
 5. **Filters Noise**: Excludes internal commits (refactoring, tests, etc.)
 6. **Follows Best Practices**: Applies changelog guidelines and your brand voice
 
+
+## Workflow
+
+1. Identify release scope (version range, commit range, or date range).
+2. Gather relevant commits and exclude maintenance noise.
+3. Group changes into user-facing categories.
+4. Rewrite each item in plain customer language.
+5. Format output as publish-ready markdown and verify clarity.
+
 ## Usage
 
 ### Basic Usage

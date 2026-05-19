@@ -23,7 +23,8 @@
     "bench:real-embeddings": "npx tsx benchmark/real-embeddings-eval.ts",
     "bench:e2e": "npx tsx benchmark/end-to-end-bench.ts",
     "bench:download": "npx tsx benchmark/lib/dataset-loader.ts",
-    "bench:overnight": "npx tsx benchmark/run-overnight.ts"
+    "bench:overnight": "npx tsx benchmark/run-overnight.ts",
+    "setup:admin": "node scripts/setup-admin.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",
@@ -32,7 +33,8 @@
     "glob": "^11.0.0",
     "gray-matter": "^4.0.3",
     "sqlite-vec": "^0.1.9",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "@brainrouter/types": "*"
   },
   "engines": {
     "node": ">=22.0.0"

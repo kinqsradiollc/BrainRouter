@@ -1,5 +1,5 @@
-import type { SqliteMemoryStore } from "../store/sqlite.js";
-import type { LLMRunner, L2SceneRecord } from "../types.js";
+import type { IMemoryStore } from "@brainrouter/types";
+import type { LLMRunner, L2SceneRecord } from "@brainrouter/types";
 import { L2_SCENE_SYSTEM_PROMPT, formatL2ScenePrompt } from "../prompts/l2-scene.js";
 import { L2_SCENE_CLUSTER_SYSTEM_PROMPT, formatSceneClusterPrompt } from "../prompts/l2-scene-cluster.js";
 import { L2_MAX_SCENES } from "../scheduler.js";
@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 
 async function canonicalizeSceneNames(params: {
   userId: string;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   llmRunner: LLMRunner;
 }) {
   const { userId, store, llmRunner } = params;
@@ -50,7 +50,7 @@ async function canonicalizeSceneNames(params: {
  */
 export async function distillScenes(params: {
   userId: string;
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   llmRunner: LLMRunner;
 }): Promise<{ scenesDistilled: number; sceneNames: string[] }> {
   const { userId, store, llmRunner } = params;
@@ -112,7 +112,7 @@ export async function distillScenes(params: {
   return { scenesDistilled: distilled.length, sceneNames: distilled };
 }
 
-async function mergeScenes(params: { userId: string; store: SqliteMemoryStore; llmRunner: LLMRunner }) {
+async function mergeScenes(params: { userId: string; store: IMemoryStore; llmRunner: LLMRunner }) {
   const { userId, store, llmRunner } = params;
   
   const sceneCount = store.getL2SceneCount(userId);

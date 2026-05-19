@@ -1,5 +1,5 @@
-import type { L1Record } from "../types.js";
-import type { SqliteMemoryStore } from "../store/sqlite.js";
+import type { L1Record } from "@brainrouter/types";
+import type { IMemoryStore } from "@brainrouter/types";
 
 /**
  * Result of the deduplication process
@@ -20,7 +20,7 @@ export interface DedupResult {
  */
 export async function deduplicateMemories(params: {
   records: L1Record[];
-  store: SqliteMemoryStore;
+  store: IMemoryStore;
   userId: string;
 }): Promise<DedupResult> {
   const { records, store, userId } = params;

@@ -12,21 +12,22 @@ export const memoryGraphQueryToolSchema = {
       skillTag: { type: 'string', description: 'Filter relationships matching this skill' },
       maxHops: { type: 'number', description: 'Max hops to traverse (default 2)' },
     },
-    required: ['userId', 'entity'],
+    required: ['entity'],
   },
 };
 
 export const memoryGraphQuerySchema = z.object({
-  userId: z.string(),
+  userId: z.string().optional(),
   entity: z.string(),
   skillTag: z.string().optional(),
   maxHops: z.number().optional(),
 });
 
-export async function handleMemoryGraphQuery(args: unknown) {
+export async function handleMemoryGraphQuery(args: unknown, options?: { defaultUserId?: string }) {
   const params = memoryGraphQuerySchema.parse(args);
+  const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
   const result = memoryEngine.queryGraph(
-    params.userId,
+    effectiveUserId,
     params.entity,
     params.skillTag,
     params.maxHops

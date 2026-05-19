@@ -27,6 +27,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import express, { type Request, type Response } from 'express';
 import { z } from 'zod';
+import fs from "node:fs";
 
 import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
@@ -51,6 +52,16 @@ import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from './tools/memo
 import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from './tools/memory_mark_cited.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
+import { usersRouter } from './api/routes/users.js';
+import { memoriesRouter } from './api/routes/memories.js';
+import { scenesRouter } from './api/routes/scenes.js';
+import { personaRouter } from './api/routes/persona.js';
+import { contradictionsRouter } from './api/routes/contradictions.js';
+import { statsRouter } from './api/routes/stats.js';
+import { graphRouter } from './api/routes/graph.js';
+import { authRouter } from './api/routes/auth.js';
+import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
+const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 function parseFlag(flag: string): string | undefined {
@@ -62,7 +73,9 @@ const USE_HTTP = process.argv.includes('--http');
 const PORT = parseInt(parseFlag('--port') ?? '3747', 10);
 
 // ─── Server factory ───────────────────────────────────────────────────────────
-function buildMcpServer(registry: Registry): Server {
+function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean }): Server {
+  const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
+  const isAdmin = options?.isAdmin ?? false;
   const server = new Server(
     { name: 'brainrouter-mcp-server', version: '0.1.0' },
     { capabilities: { tools: {} } }
@@ -216,16 +229,23 @@ function buildMcpServer(registry: Registry): Server {
         case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
         case 'list_docs':     return await listDocs(registry, listDocsSchema.parse(request.params.arguments));
         case 'get_doc':       return await getDoc(registry, getDocSchema.parse(request.params.arguments));
-        case 'create_skill':  return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
-        case 'update_skill':  return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
-        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments);
-        case 'memory_recall': return await handleMemoryRecall(request.params.arguments);
-        case 'memory_search': return await handleMemorySearch(request.params.arguments);
-        case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments);
+        case 'create_skill':
+        case 'update_skill':
+          if (!isAdmin) {
+            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
+          }
+          if (request.params.name === "create_skill") {
+            return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
+          }
+          return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
+        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
+        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
+        case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
+        case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
         case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
-        case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments);
-        case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments);
+        case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments, { defaultUserId });
+        case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
@@ -260,16 +280,57 @@ if (USE_HTTP) {
   const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
 
   const app = express();
+  
+  // Custom CORS middleware to support cross-origin requests from Dashboard
+  app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(200);
+      return;
+    }
+    next();
+  });
+
   app.use(express.json());
+  if (USING_FALLBACK_JWT_SECRET) {
+    console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
+  }
 
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', transport: 'http', root: config.localRoot });
   });
 
+  app.use("/api/auth", authRouter);
+  app.use("/api/users", usersRouter);
+  app.use("/api/memories", memoriesRouter);
+  app.use("/api/scenes", scenesRouter);
+  app.use("/api/persona", personaRouter);
+  app.use("/api/contradictions", contradictionsRouter);
+  app.use("/api/stats", statsRouter);
+  app.use("/api/graph", graphRouter);
+
   // MCP endpoint — handles POST (requests) and GET (SSE stream)
   async function handleMcp(req: Request, res: Response) {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    const authHeader = req.headers.authorization;
+    const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!bearerKey) {
+      res.status(401).json({ error: 'API key required. Set Authorization: Bearer <your_api_key>' });
+      return;
+    }
+    const user = memoryEngine.getUserByApiKey(bearerKey);
+    if (!user) {
+      res.status(403).json({ error: 'Invalid API key' });
+      return;
+    }
+    if (user.status === "disabled") {
+      res.status(403).json({ error: "Account disabled" });
+      return;
+    }
+    const effectiveUserId = user.userId;
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
@@ -280,7 +341,7 @@ if (USE_HTTP) {
         },
       });
 
-      const mcpServer = buildMcpServer(registry);
+      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin });
 
       transport.onclose = () => {
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];
@@ -312,7 +373,15 @@ if (USE_HTTP) {
     res.status(204).send();
   });
 
-  app.listen(PORT, () => {
+  const dashboardDist = path.resolve(process.cwd(), "..", "dashboard", "dist");
+  if (fs.existsSync(dashboardDist)) {
+    app.use("/dashboard", express.static(dashboardDist));
+    app.get("/dashboard/*", (_req: Request, res: Response) => {
+      res.sendFile(path.join(dashboardDist, "index.html"));
+    });
+  }
+
+  const httpServer = app.listen(PORT, () => {
     console.log(`\n🧠 BrainRouter MCP Server`);
     console.log(`   Transport : HTTP (Streamable)`);
     console.log(`   Endpoint  : http://localhost:${PORT}/mcp`);
@@ -320,7 +389,9 @@ if (USE_HTTP) {
     console.log(`   Root      : ${config.localRoot}\n`);
   });
 
-  process.on('SIGINT', () => process.exit(0));
+  process.on('SIGINT', () => {
+    httpServer.close(() => process.exit(0));
+  });
 
 } else {
   // ── stdio transport (default) ───────────────────────────────────────────────
@@ -330,7 +401,48 @@ if (USE_HTTP) {
   console.log = (...args) => console.error(...args);
   console.warn = (...args) => console.error(...args);
 
-  const server = buildMcpServer(registry);
+  // Authenticate user via environment variable or CLI flag
+  let stdioUserId = "";
+  let stdioIsAdmin = false;
+  
+  const stdioApiKey = (process.env.BRAINROUTER_API_KEY ?? parseFlag('--apiKey'))?.trim();
+  if (!stdioApiKey) {
+    console.error("[BrainRouter] FATAL: Connection aborted. Authentication is strictly required for all tool operations.");
+    console.error("[BrainRouter] To fix this, please configure BRAINROUTER_API_KEY inside your MCP client config environment variables.");
+    console.error("[BrainRouter] Example configuration:");
+    console.error(JSON.stringify({
+      mcpServers: {
+        brainrouter: {
+          command: "node",
+          args: [
+            "/Users/anhdang/Documents/Github/BrainRouter/mcp/dist/index.js",
+            "--root",
+            "/Users/anhdang/Documents/Github/DateDrop"
+          ],
+          env: {
+            BRAINROUTER_API_KEY: "br_YOUR_API_KEY"
+          }
+        }
+      }
+    }, null, 2));
+    process.exit(1);
+  }
+
+  const user = memoryEngine.getUserByApiKey(stdioApiKey);
+  if (!user) {
+    console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY is invalid. Connection aborted.");
+    process.exit(1);
+  }
+  if (user.status === "disabled") {
+    console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY belongs to a disabled account.");
+    process.exit(1);
+  }
+  
+  stdioUserId = user.userId;
+  stdioIsAdmin = user.isAdmin;
+  console.error(`[BrainRouter] Authenticated via BRAINROUTER_API_KEY. Mapping local session to user: ${user.displayName || user.userId}`);
+
+  const server = buildMcpServer(registry, { defaultUserId: stdioUserId, isAdmin: stdioIsAdmin });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('BrainRouter MCP server running on stdio');

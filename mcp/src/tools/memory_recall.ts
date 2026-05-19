@@ -24,21 +24,22 @@ export const memoryRecallToolSchema = {
         description: "The name of the BrainRouter skill currently being executed (if any)."
       }
     },
-    required: ["userId", "sessionKey", "query"]
+    required: ["sessionKey", "query"]
   }
 } as const;
 
-export async function handleMemoryRecall(args: any) {
+export async function handleMemoryRecall(args: any, options?: { defaultUserId?: string }) {
   const params = z.object({
-    userId: z.string(),
+    userId: z.string().optional(),
     sessionKey: z.string(),
     query: z.string(),
     activeSkill: z.string().optional()
   }).parse(args);
+  const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
     const result = await memoryEngine.recall({
-      userId: params.userId,
+      userId: effectiveUserId,
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill

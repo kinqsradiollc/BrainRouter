@@ -12,26 +12,27 @@ export const memoryContradictionsToolSchema = {
       contradictionId: { type: 'string', description: 'ID of the contradiction to resolve (required if action is resolve)' },
       resolutionStatus: { type: 'string', enum: ['resolved', 'dismissed'], description: 'Status to set (required if action is resolve)' },
     },
-    required: ['userId'],
+    required: [],
   },
 };
 
 export const memoryContradictionsSchema = z.object({
-  userId: z.string(),
+  userId: z.string().optional(),
   action: z.enum(['list', 'resolve']).default('list'),
   contradictionId: z.string().optional(),
   resolutionStatus: z.enum(['resolved', 'dismissed']).optional(),
 });
 
-export async function handleMemoryContradictions(args: unknown) {
+export async function handleMemoryContradictions(args: unknown, options?: { defaultUserId?: string }) {
   const { userId, action, contradictionId, resolutionStatus } = memoryContradictionsSchema.parse(args);
+  const effectiveUserId = userId ?? options?.defaultUserId ?? "default";
 
   if (action === 'resolve') {
     if (!contradictionId || !resolutionStatus) {
       throw new Error('contradictionId and resolutionStatus are required when action is "resolve"');
     }
     
-    memoryEngine.resolveContradiction(contradictionId, userId, resolutionStatus);
+    memoryEngine.resolveContradiction(contradictionId, effectiveUserId, resolutionStatus);
     
     return {
       content: [
@@ -44,7 +45,7 @@ export async function handleMemoryContradictions(args: unknown) {
   }
 
   // Handle 'list' action
-  const results = memoryEngine.getPendingContradictions(userId);
+  const results = memoryEngine.getPendingContradictions(effectiveUserId);
   
   return {
     content: [

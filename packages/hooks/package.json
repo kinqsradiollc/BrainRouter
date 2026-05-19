@@ -1,0 +1,20 @@
+{
+  "name": "@brainrouter/hooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@brainrouter/sdk": "*",
+    "@brainrouter/types": "*",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/react": "^18.3.3"
+  }
+}

@@ -1,4 +1,5 @@
 import { SqliteMemoryStore } from "./store/sqlite.js";
+import type { CursorPaginationOptions, IMemoryStore, MemoryListFilters } from "@brainrouter/types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { EmbeddingService } from "./store/embedding.js";
@@ -6,11 +7,15 @@ import { RerankerService } from "./store/reranker.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillScenes } from "./pipeline/l2-scene.js";
 import { distillPersona } from "./pipeline/l3-distiller.js";
-import type { LLMRunner, LLMRunParams } from "./types.js";
+import type { LLMRunner, LLMRunParams } from "@brainrouter/types";
+import { fetchWithExternalRetry } from "./retry.js";
 import "dotenv/config";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { randomBytes } from "node:crypto";
+import type { UserRecord } from "@brainrouter/types";
+import { hashPassword } from "../api/auth/crypto.js";
 
 // Configure default path
 const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");
@@ -44,7 +49,7 @@ class ModelLLMRunner implements LLMRunner {
     }
     messages.push({ role: "user", content: prompt });
 
-    const res = await fetch(endpoint, {
+    const res = await fetchWithExternalRetry(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -52,6 +57,8 @@ class ModelLLMRunner implements LLMRunner {
       },
       body: JSON.stringify({ model, messages }),
       signal: AbortSignal.timeout(timeoutMs),
+    }, {
+      label: `[BrainRouter:${taskId}] LLM API`,
     });
 
     if (!res.ok) {
@@ -66,27 +73,32 @@ class ModelLLMRunner implements LLMRunner {
 
 
 export class MemoryEngine {
-  private store: SqliteMemoryStore;
+  private store: IMemoryStore;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
   // Extraction runner: L1, L1.5, GraphRAG — should be fast/cheap
   private extractionRunner: LLMRunner;
   // Synthesis runner: L2 scenes, L3 persona — can be smarter/larger
   private synthesisRunner: LLMRunner;
+  private sweeperTimer?: NodeJS.Timeout;
 
   private personaCache: Map<string, { personaMd: string; cachedAt: number }> = new Map();
   private readonly PERSONA_CACHE_TTL_MS = parseInt(
     process.env.BRAINROUTER_PERSONA_CACHE_TTL_MS ?? String(60 * 60 * 1000), 10
   );
   
-  constructor(dbPath: string = defaultDbPath) {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+  constructor(storeOrDbPath: IMemoryStore | string = defaultDbPath) {
+    if (typeof storeOrDbPath === "string") {
+      const dir = path.dirname(storeOrDbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      this.store = new SqliteMemoryStore(storeOrDbPath);
+    } else {
+      this.store = storeOrDbPath;
     }
-
-    this.store = new SqliteMemoryStore(dbPath);
     this.store.init();
+    void this.ensureSeedAdminUser();
 
     // Extraction runner: BRAINROUTER_EXTRACTION_MODEL → BRAINROUTER_LLM_MODEL → "gpt-4o-mini"
     this.extractionRunner = new ModelLLMRunner(
@@ -118,6 +130,23 @@ export class MemoryEngine {
     
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService);
+    this.startExtractionSweeper();
+  }
+
+  private async ensureSeedAdminUser() {
+    const users = this.store.listUsers();
+    if (users.length > 0) return;
+    const seededUserId = process.env.BRAINROUTER_DEFAULT_ADMIN_USER_ID ?? "admin";
+    const seededEmail = process.env.BRAINROUTER_ADMIN_EMAIL ?? "admin";
+    const seededPassword = process.env.BRAINROUTER_ADMIN_PASSWORD?.trim();
+    const apiKey = `br_${randomBytes(24).toString("hex")}`;
+    this.store.createUser(seededUserId, apiKey, "Default Admin", true);
+    this.store.updateUserEmail(seededUserId, seededEmail);
+    if (seededPassword) {
+      const passwordHash = await hashPassword(seededPassword);
+      this.store.updateUserPassword(seededUserId, passwordHash);
+    }
+    console.error(`[BrainRouter] Admin seeded. Email: ${seededEmail}  API key (shown once): ${apiKey}`);
   }
 
   public get capture() {
@@ -141,8 +170,11 @@ export class MemoryEngine {
     };
   }
 
-  public getPendingContradictions(userId: string) {
-    return this.store.getPendingContradictions(userId);
+  public getPendingContradictions(
+    userId: string,
+    pagination?: CursorPaginationOptions<{ confidence: number; id: string }>
+  ) {
+    return this.store.getPendingContradictions(userId, pagination);
   }
 
   public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {
@@ -206,8 +238,8 @@ export class MemoryEngine {
   }
 
   /** Get the top N active scenes for a user (ordered by heat score). */
-  public getTopScenes(userId: string, limit = 3) {
-    return this.store.getTopL2Scenes(userId, limit);
+  public getTopScenes(userId: string, limit = 3, cursor?: { heatScore: number; id: string }) {
+    return this.store.getTopL2Scenes(userId, limit, cursor);
   }
 
   /** Expose the ability to query the knowledge graph for a user/entity. */
@@ -215,6 +247,111 @@ export class MemoryEngine {
     const node = this.store.getGraphNodeByEntity(userId, entity);
     if (!node) return { nodes: [], edges: [] };
     return this.store.getGraphNeighbors(userId, node.id, skillTag, maxHops);
+  }
+
+  public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {
+    return this.store.createUser(userId, apiKey, displayName, isAdmin);
+  }
+
+  public getUserByApiKey(apiKey: string): UserRecord | null {
+    return this.store.getUserByApiKey(apiKey);
+  }
+
+  public getUserByEmail(email: string): UserRecord | null {
+    return this.store.getUserByEmail(email);
+  }
+
+  public getUserById(userId: string): UserRecord | null {
+    return this.store.getUserById(userId);
+  }
+
+  public updatePassword(userId: string, hash: string): void {
+    this.store.updateUserPassword(userId, hash);
+  }
+
+  public updateUserEmail(userId: string, email: string): void {
+    this.store.updateUserEmail(userId, email);
+  }
+
+  public updateUserDisplayName(userId: string, displayName: string): void {
+    this.store.updateUserDisplayName(userId, displayName);
+  }
+
+  public updateUserStatus(userId: string, status: "active" | "disabled"): void {
+    this.store.updateUserStatus(userId, status);
+  }
+
+  public updateUserApiKey(userId: string, apiKey: string): void {
+    this.store.updateUserApiKey(userId, apiKey);
+  }
+
+  public listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): UserRecord[] {
+    return this.store.listUsers(pagination);
+  }
+
+  public deleteUser(userId: string): void {
+    this.store.deleteUser(userId);
+  }
+
+  public listMemories(
+    userId: string,
+    filters?: MemoryListFilters,
+    pagination?: CursorPaginationOptions<{ createdTime: string; recordId: string }>
+  ) {
+    return this.store.listMemories(userId, filters, pagination);
+  }
+
+  public deleteMemory(userId: string, recordId: string) {
+    this.store.archiveL1Record(userId, recordId);
+  }
+
+  public getStats(userId: string) {
+    return this.store.getMemoryStats(userId);
+  }
+
+  private startExtractionSweeper(): void {
+    if (process.env.BRAINROUTER_DISABLE_EXTRACTION_SWEEPER === "true") {
+      return;
+    }
+
+    const intervalMs = parseInt(process.env.BRAINROUTER_EXTRACTION_SWEEP_INTERVAL_MS ?? String(5 * 60 * 1000), 10);
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+      return;
+    }
+
+    this.sweeperTimer = setInterval(() => {
+      void this.sweepUnextractedBacklog().catch((err) => {
+        console.error("[BrainRouter] Extraction backlog sweeper failed:", err instanceof Error ? err.message : err);
+      });
+    }, intervalMs);
+    this.sweeperTimer.unref?.();
+  }
+
+  public async sweepUnextractedBacklog() {
+    const olderThanMs = parseInt(process.env.BRAINROUTER_EXTRACTION_SWEEP_MIN_AGE_MS ?? String(2 * 60 * 1000), 10);
+    const maxFailures = parseInt(process.env.BRAINROUTER_EXTRACTION_MAX_FAILURES ?? "5", 10);
+    const backlog = this.store.sweepUnextractedBacklog({
+      olderThanMs: Number.isFinite(olderThanMs) ? olderThanMs : 2 * 60 * 1000,
+      maxFailures: Number.isFinite(maxFailures) ? maxFailures : 5,
+      minUnextracted: 1,
+      limit: 20,
+    });
+
+    let processed = 0;
+    let extracted = 0;
+    for (const item of backlog) {
+      const result = await this.capturePipeline.processBacklog({
+        userId: item.userId,
+        sessionKey: item.sessionKey,
+        sessionId: item.sessionId,
+      });
+      if (result.triggered) {
+        processed += 1;
+        extracted += result.extractedCount;
+      }
+    }
+
+    return { candidates: backlog.length, processed, extracted };
   }
 
   // ============================
