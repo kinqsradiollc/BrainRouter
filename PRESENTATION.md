@@ -84,17 +84,20 @@ graph TD
     subgraph "Memory Hierarchy"
         L0["L0: Raw Turn Logs (Chat messages & tool outputs)"]
         L1["L1: Distilled Memories (Semantic facts & codebase files)"]
+        L1_5["L1.5: Contradictions (Logical conflict resolution)"]
         L2["L2: Scene Nodes (Clusters of active situational tasks)"]
         L3["L3: User Personas (Developer habits & preferences)"]
 
         L0 -->|Asynchronous Pipeline| L1
+        L1 -->|Pairwise Evaluation| L1_5
         L1 -->|Scene Clustering| L2
         L1 -->|Entity Compilation| L3
     end
 ```
 
 *   **L0:** Baseline raw logs, scrubbed of credentials before DB writes.
-*   **L1:** Extracted episodic facts, API contracts, and guidelines. Includes the L1.5 contradiction check.
+*   **L1:** Extracted episodic facts, API contracts, and guidelines.
+*   **L1.5:** Active contradiction checks and pairwise logical evaluations.
 *   **L2 / L3:** Situational clusters and user preference profiles.
 
 ---
