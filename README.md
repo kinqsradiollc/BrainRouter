@@ -2,33 +2,42 @@
 
 ### Dynamic Context Gateway & Multi-Agent Memory Core
 
-BrainRouter is a multi-tenant, hierarchical memory engine and context router designed to coordinate autonomous AI agents. By organizing and serving context dynamically, BrainRouter prevents context-window bloat, controls LLM latency, and allows multiple agents (e.g. CLI helpers, IDE plugins, and web dashboards) to maintain a synchronized, persistent memory and behavioral identity.
+**BrainRouter** is a multi-tenant, hierarchical memory engine and context router designed to coordinate autonomous AI agents. By organizing and serving context dynamically, BrainRouter prevents context-window bloat, controls LLM latency, and allows multiple agents (e.g., CLI helpers, IDE plugins, and web dashboards) to maintain a synchronized, persistent memory and behavioral identity.
 
-Rather than loading every checklist and instruction set into the prompt at once, BrainRouter utilizes **Spiking Skill Routing**—a dynamic activation score and decay mechanism that automatically pre-warms the agent's active context window with relevant rules and memories only when active tools or tasks warrant them.
+Unlike traditional RAG systems that passively retrieve documents or static prompts that overload the context window, BrainRouter actively manages agent attention using **Spiking Skill Routing**—a dynamic activation score and decay mechanism inspired by Spiking Neural Networks (SNNs). It automatically pre-warms the agent's active context window with relevant rules and memories *only* when the agent's current task warrants them.
+
+---
+
+## ✨ Key Features
+
+- **Dynamic SNN Context Pre-Warming**: Tracks agent tool calls as stimuli to spike skill potentials. When a skill crosses the activation threshold, its contextual rules are dynamically injected into the prompt. As time passes or turns advance, unused skills exponentially decay out of context, keeping prompts razor-sharp and token costs low.
+- **Hierarchical Memory Pipeline**: Processes raw chat logs (L0) through an asynchronous pipeline to extract distilled semantic facts (L1), resolve logical contradictions (L1.5), cluster situational scenes (L2), and build persistent user personas (L3).
+- **GraphRAG Entity Extraction**: Supports traversing 2-hop entity relationships to instantly map codebase architecture and implicit dependencies without dumping entire repositories into context.
+- **Local-First, High-Speed SQLite Store**: Built on a high-performance local SQLite WAL database using `sqlite-vec` for seamless vector embeddings and FTS5 for full-text search. Designed for local execution with zero dependency on expensive cloud vector databases.
+- **Multi-Tenant Workspace Synchronization**: Ensures that agents running in different environments (e.g., your IDE and your terminal) share the exact same contextual brain, preventing agent silos and fragmented workflows.
+- **Visual Task Compaction**: Offloads massive terminal payloads into a robust working memory system, compressing thousands of lines of output into clean, visual Mermaid task canvases.
 
 ---
 
 ## 🏗️ System Architecture
 
-BrainRouter is structured as a TypeScript monorepo using npm workspaces:
+BrainRouter is structured as a robust TypeScript monorepo using npm workspaces:
 
 ```mermaid
 graph TD
-    subgraph "Monorepo Workspace Map"
-        mcp_server["@brainrouter/mcp-server (mcp/)"]
-        web_dashboard["dashboard (web/)"]
-        sdk["@brainrouter/sdk (packages/sdk/)"]
-        hooks["@brainrouter/hooks (packages/hooks/)"]
-        types["@brainrouter/types (packages/types/)"]
-        
-        mcp_server -->|Imports| types
-        sdk -->|Imports| types
-        hooks -->|Imports| sdk
-        hooks -->|Imports| types
-        web_dashboard -->|Imports| hooks
-        web_dashboard -->|Imports| sdk
-        web_dashboard -->|Imports| types
-    end
+    mcp_server{{"@brainrouter/mcp-server (mcp/)"}}
+    web_dashboard{{"dashboard (web/)"}}
+    sdk{{"@brainrouter/sdk (packages/sdk/)"}}
+    hooks{{"@brainrouter/hooks (packages/hooks/)"}}
+    types{{"@brainrouter/types (packages/types/)"}}
+    
+    mcp_server -->|Imports| types
+    sdk -->|Imports| types
+    hooks -->|Imports| sdk
+    hooks -->|Imports| types
+    web_dashboard -->|Imports| hooks
+    web_dashboard -->|Imports| sdk
+    web_dashboard -->|Imports| types
 ```
 
 ### Monorepo Workspaces:
@@ -42,29 +51,33 @@ graph TD
 
 ## ⚡ Runtime Execution Flow
 
-Every agent turn operates through a Sensor-Analyzer-Reactor loop:
+Every agent turn operates through a rapid Sensor-Analyzer-Reactor loop:
 
 ```mermaid
 graph TD
-    subgraph "Active Turn Cycle"
-        action["Agent Action / Tool Trigger"] -->|Sensor| spike["Spike Skill Activation (+1.0)"]
-        spike -->|Store| db[(SQLite WAL Database)]
-        
-        recall["Prompt Recall Request"] -->|Analyzer| decay["Calculate In-Memory SNN Decay"]
-        db --> decay
-        decay -->|Evaluate| check{"Potential >= 1.5?"}
-        
-        check -->|Yes| prewarm["Reactor: Pre-Warm Prompt Context (Inject skill hints & records)"]
-        check -->|No| fallback["Reactor: Load Standard Prompt Context"]
-        
-        prewarm --> assemble["Assemble Final LLM Prompt"]
-        fallback --> assemble
-    end
+    action([Agent Tool Trigger])
+    spike((Spike +1.0))
+    db[(SQLite WAL Store)]
+    decay{{Calculate SNN Decay}}
+    check{Potential >= 1.5?}
+    prewarm[/Pre-Warm Prompt Context/]
+    fallback[/Standard Prompt Context/]
+    assemble([Assemble Final LLM Prompt])
+
+    action -->|Sensor| spike
+    spike -->|Store| db
+    recall["Prompt Recall Request"] -->|Analyzer| decay
+    db -.-> decay
+    decay -->|Evaluate| check
+    check -->|Yes| prewarm
+    check -->|No| fallback
+    prewarm --> assemble
+    fallback --> assemble
 ```
 
 ---
 
-## 🛠️ Getting Started
+## 🚀 Getting Started
 
 ### 1. Prerequisites
 - **Node.js:** v22+ (required for native `node:sqlite` support)
@@ -97,7 +110,7 @@ BRAINROUTER_SKILL_MAX_POTENTIAL=4.0
 ### 4. Running the Project
 
 #### Build the Monorepo
-Compile shared packages and compile the Next.js app:
+Compile shared packages and build the Next.js app:
 ```bash
 npm run build
 ```
@@ -117,13 +130,13 @@ Run the Next.js frontend in development mode:
 ```bash
 npm run dev -w dashboard
 ```
-Open [http://localhost:3000](http://localhost:3000) (the default port Next.js uses for the client dashboard web server) to view the visualizer dashboard.
+Open [http://localhost:3000](http://localhost:3000) (the default port Next.js uses for the client dashboard web server) to view the visualizer dashboard in real-time.
 
 ---
 
 ## 🧪 Testing
 
-To run the complete test suite:
+To run the complete test suite across all packages:
 ```bash
 npm test
 ```
