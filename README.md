@@ -1,105 +1,153 @@
 # 🧠 BrainRouter
 
-### Dynamic Context Gateway & Multi-Agent Memory Core
+**Dynamic Context Gateway & Multi-Agent Memory Core**
 
-**BrainRouter** is a multi-tenant, hierarchical memory engine and context router designed to coordinate autonomous AI agents. By organizing and serving context dynamically, BrainRouter prevents context-window bloat, controls LLM latency, and allows multiple agents (e.g., CLI helpers, IDE plugins, and web dashboards) to maintain a synchronized, persistent memory and behavioral identity.
+BrainRouter is a multi-tenant, hierarchical memory engine and context router for autonomous AI agents. It is built for **software engineers** who rely on AI coding assistants day-to-day — tools like Claude Code, Cursor, and Windsurf — and who constantly hit the same frustrations: agents that forget decisions made an hour ago, prompts bloated with every rule and guideline you've ever written, and IDE sessions that are completely blind to what your terminal agent just changed.
 
-Unlike traditional RAG systems that passively retrieve documents or static prompts that overload the context window, BrainRouter actively manages agent attention using **Spiking Skill Routing**—a dynamic activation score and decay mechanism inspired by Spiking Neural Networks (SNNs). It automatically pre-warms the agent's active context window with relevant rules and memories *only* when the agent's current task warrants them.
-
----
-
-## ✨ Key Features
-
-- **Dynamic SNN Context Pre-Warming**: Tracks agent tool calls as stimuli to spike skill potentials. When a skill crosses the activation threshold, its contextual rules are dynamically injected into the prompt. As time passes or turns advance, unused skills exponentially decay out of context, keeping prompts razor-sharp and token costs low.
-- **Hierarchical Memory Pipeline**: Processes raw chat logs (L0) through an asynchronous pipeline to extract distilled semantic facts (L1), resolve logical contradictions (L1.5), cluster situational scenes (L2), and build persistent user personas (L3).
-- **GraphRAG Entity Extraction**: Supports traversing 2-hop entity relationships to instantly map codebase architecture and implicit dependencies without dumping entire repositories into context.
-- **Local-First, High-Speed SQLite Store**: Built on a high-performance local SQLite WAL database using `sqlite-vec` for seamless vector embeddings and FTS5 for full-text search. Designed for local execution with zero dependency on expensive cloud vector databases.
-- **Multi-Tenant Workspace Synchronization**: Ensures that agents running in different environments (e.g., your IDE and your terminal) share the exact same contextual brain, preventing agent silos and fragmented workflows.
-- **Visual Task Compaction**: Offloads massive terminal payloads into a robust working memory system, compressing thousands of lines of output into clean, visual Mermaid task canvases.
+BrainRouter solves these problems by acting as a persistent, intelligent brain that all your agents share. Rather than loading everything into every prompt, it learns what you're actively working on and surgically injects only the context that matters, right when it matters.
 
 ---
 
-## 🏗️ System Architecture
+## Who This Is For
 
-BrainRouter is structured as a robust TypeScript monorepo using npm workspaces:
+BrainRouter is built specifically for **software engineers, AI engineers, and engineering teams** that:
 
-```mermaid
-graph TD
-    mcp_server{{"@brainrouter/mcp-server (mcp/)"}}
-    web_dashboard{{"dashboard (web/)"}}
-    sdk{{"@brainrouter/sdk (packages/sdk/)"}}
-    hooks{{"@brainrouter/hooks (packages/hooks/)"}}
-    types{{"@brainrouter/types (packages/types/)"}}
-    
-    mcp_server -->|Imports| types
-    sdk -->|Imports| types
-    hooks -->|Imports| sdk
-    hooks -->|Imports| types
-    web_dashboard -->|Imports| hooks
-    web_dashboard -->|Imports| sdk
-    web_dashboard -->|Imports| types
+- Use AI coding assistants heavily across multiple tools (CLI, IDE, browser)
+- Maintain complex codebases with architectural rules, API contracts, and design guidelines
+- Find that their AI agents frequently "forget" past decisions or repeat the same mistakes
+- Want agents that understand their personal coding style, preferences, and project context without manual re-prompting
+
+---
+
+## The Problem It Solves
+
+Standard AI prompt engineering has a fundamental ceiling. You write a `CLAUDE.md` or `AGENT.md` that describes your project conventions, then paste it into every session. The prompt bloats. The agent's attention dilutes. It starts ignoring your styling rules mid-task. Switch to a new terminal window and start from scratch.
+
+BrainRouter replaces the static prompt with an active memory engine. Your agents now share a synchronized brain that knows your history, your preferences, your current task, and what skills are relevant — and it delivers that context dynamically, exactly when needed.
+
+---
+
+## How Memory Works: The Layers
+
+BrainRouter organizes all information through a strict hierarchy. Every piece of knowledge is classified by how processed and distilled it is. This ensures that what gets injected into the agent's context is always signal, never noise.
+
+### Long-Term Memory Layers (Persistent across sessions)
+
+**L0 — Raw Turn Logs**
+Every agent interaction is recorded at this layer: your messages, the agent's responses, and every tool call output. This is the raw, unprocessed record of everything that happened. Sensitive data (API keys, tokens, passwords) is automatically scrubbed before being written to the database.
+
+**L1 — Distilled Memories**
+An asynchronous pipeline reads L0 logs and uses an LLM to extract high-value, isolated facts. These become your long-term episodic memories: an API contract you described, a database schema decision, a bug you fixed and how. Each memory is stored as a vector embedding using `sqlite-vec` for fast semantic retrieval. Duplicate and near-identical memories are automatically merged.
+
+**L1.5 — Contradiction Resolution**
+As L1 memories accumulate, they undergo pairwise logical evaluation. If a new instruction contradicts an existing one (e.g., "use Tailwind" vs. "use vanilla CSS"), the system flags it as an active contradiction and surfaces it on the dashboard for human review. This prevents the agent from silently holding two conflicting beliefs at once.
+
+**L2 — Scene Nodes**
+Memories are dynamically clustered into "Scenes" — situational contexts defined by what you were working on. If you're actively editing database schemas, the system clusters database-related memories into a hot Scene and elevates them during recall. Scenes cool down as you move to other tasks, and their associated memories fade from the active foreground.
+
+**L3 — User Personas**
+The highest distillation layer. Over time, the system builds a persistent profile of your technical preferences: the frameworks you favor, your code style tendencies, your preference for verbose versus terse explanations. This persona is maintained per-user, across all sessions.
+
+### Working Memory Tiers (Short-term, session-scoped)
+
+When an agent runs a command that returns thousands of lines — a massive `git diff`, a full directory listing, a long build log — it's impractical and wasteful to dump that raw output directly into the LLM context. BrainRouter uses a 4-tier compaction system to handle this cleanly.
+
+**W0 — Raw Refs**
+The full payload is saved to a local disk file (`.brainrouter/work/<session>/refs/*.md`) and the agent receives a compact reference ID instead. The raw data is preserved for retrieval but never floods the context window.
+
+**W1 — Step Logs**
+A compact JSONL-based execution history is maintained, tracking what the agent actually did (the steps and outcomes), not the raw output text.
+
+**W2 — Mermaid Canvas**
+The current state of complex tasks is translated into a lightweight Mermaid diagram. Instead of re-reading gigabytes of file diffs to understand where things stand, the agent reads a structured visual representation of the task graph.
+
+**W3 — Injected State**
+The final, maximally-compressed context block that actually gets injected into the LLM prompt. It contains the active goal, the W2 visual canvas, and any critical constraints — everything the agent needs to continue exactly where it left off, in as few tokens as possible.
+
+---
+
+## How Skills Work: The Agent Knowledge Layer
+
+Beyond memory, BrainRouter ships with a library of **Skills** — modular, markdown-based instruction sets that teach agents how to do specific engineering tasks well.
+
+A skill is not a static prompt. It is a structured workflow with defined steps, exit criteria, and acceptance checklists. When a skill becomes relevant to your current task, BrainRouter automatically injects it into the agent's context using the SNN pre-warming system. When the task is done and the skill goes unused, it decays out of context on its own.
+
+Skills cover the full software engineering lifecycle:
+
+| Domain | Examples |
+|---|---|
+| **Architecture & Planning** | `planning-and-task-breakdown`, `spec-driven-development`, `idea-refine` |
+| **Implementation** | `api-skill`, `conventions-skill`, `incremental-implementation` |
+| **Quality & Testing** | `testing-skill`, `code-review-and-quality`, `doubt-driven-development` |
+| **Debugging** | `debugging-and-error-recovery`, `api-layered-debugging` |
+| **Design** | `design-taste-frontend`, `doc-management-skill` |
+| **Memory & Context** | `agent-memory`, `context-engineering` |
+| **DevOps & Delivery** | `ci-cd-and-automation`, `docker-lifecycle-engineering`, `shipping-and-launch` |
+| **Agent Methodology** | `source-driven-development`, `interview-me`, `using-agent-skills` |
+
+Skills are global — they live in the BrainRouter server and are available to any agent connecting to it. They are loaded on-demand using `mcp_brainrouter_get_skill(name: "...")`, so they never bloat the base prompt.
+
+---
+
+## How Context Pre-Warming Works (SNN Routing)
+
+BrainRouter tracks what your agent is actively doing and builds an activation score for each relevant skill. This is inspired by Spiking Neural Networks (SNNs): each tool call or task type "spikes" the associated skill's activation potential. Potentials are capped at `4.0` and decay exponentially over time and turns when unused.
+
+When a skill's potential crosses the pre-warming threshold (`1.5` by default), its instruction set and associated memories are automatically injected into the next prompt. When you finish that task and move on, the skill naturally decays below threshold and stops taking up context space.
+
+You can tune the routing behavior via environment variables:
+
+```env
+BRAINROUTER_SKILL_HALF_LIFE_MINUTES=10   # How fast skills decay
+BRAINROUTER_SKILL_MIN_TURN_DECAY=0.05   # Minimum decay per turn
+BRAINROUTER_SKILL_PREWARM_THRESHOLD=1.5  # Injection threshold
+BRAINROUTER_SKILL_SPIKE_AMOUNT=1.0      # Spike per trigger
+BRAINROUTER_SKILL_MAX_POTENTIAL=4.0     # Ceiling potential
 ```
 
-### Monorepo Workspaces:
-*   **`mcp/` (`@brainrouter/mcp-server`):** Express HTTP / Streamable MCP Server hosting the core memory engine, L0/L1 pipelines, and SQLite store.
-*   **`packages/types/` (`@brainrouter/types`):** Centralized TypeScript interfaces for REST APIs, memory layers, and configurations.
-*   **`packages/sdk/` (`@brainrouter/sdk`):** Type-safe Client SDK (`BrainRouterClient`) for making REST API calls to the server.
-*   **`packages/hooks/` (`@brainrouter/hooks`):** React Hooks to sync dashboard panels with active memory logs and activations.
-*   **`web/` (`dashboard`):** Next.js dashboard client styled in Obsidian dark mode, visualising real-time activation potentials.
+---
+
+## Architecture Overview
+
+BrainRouter is a TypeScript monorepo. The server exposes both an MCP (Model Context Protocol) endpoint for direct agent integration and a REST API for the dashboard and SDK.
+
+| Package | Purpose |
+|---|---|
+| `mcp/` (`@brainrouter/mcp-server`) | Express + MCP server. Hosts the memory engine, distillation pipeline, and SQLite store |
+| `packages/types/` (`@brainrouter/types`) | Shared TypeScript interfaces across REST APIs, memory layers, and configs |
+| `packages/sdk/` (`@brainrouter/sdk`) | Type-safe client SDK (`BrainRouterClient`) for all REST API endpoints |
+| `packages/hooks/` (`@brainrouter/hooks`) | React Hooks for syncing dashboard panels with live memory and activations |
+| `web/` (`dashboard`) | Next.js Obsidian-theme dashboard visualising potentials, memories, and contradictions |
+
+For full architecture diagrams, pipeline flows, math, and API reference, see [BRAINROUTER.md](./BRAINROUTER.md).
 
 ---
 
-## ⚡ Runtime Execution Flow
+## Getting Started
 
-Every agent turn operates through a rapid Sensor-Analyzer-Reactor loop:
+### Prerequisites
+- **Node.js** v22+ (required for native `node:sqlite` support)
+- **npm** v10+
 
-```mermaid
-graph TD
-    action([Agent Tool Trigger])
-    spike((Spike +1.0))
-    db[(SQLite WAL Store)]
-    decay{{Calculate SNN Decay}}
-    check{Potential >= 1.5?}
-    prewarm[/Pre-Warm Prompt Context/]
-    fallback[/Standard Prompt Context/]
-    assemble([Assemble Final LLM Prompt])
+### Installation
 
-    action -->|Sensor| spike
-    spike -->|Store| db
-    recall["Prompt Recall Request"] -->|Analyzer| decay
-    db -.-> decay
-    decay -->|Evaluate| check
-    check -->|Yes| prewarm
-    check -->|No| fallback
-    prewarm --> assemble
-    fallback --> assemble
-```
-
----
-
-## 🚀 Getting Started
-
-### 1. Prerequisites
-- **Node.js:** v22+ (required for native `node:sqlite` support)
-- **npm:** v10+
-
-### 2. Installation
-Install dependencies in the monorepo root:
 ```bash
 npm install
 ```
 
-### 3. Environment Variables
-Create an `.env` file in the root directory:
+### Environment Variables
+
+Create a `.env` file in the root directory:
+
 ```env
-# Server configuration (default: 3747)
+# Server configuration
 PORT=3747
 USE_HTTP=true
 
 # Security
 BRAINROUTER_JWT_SECRET=your_secure_random_jwt_secret_here
 
-# Skill Routing parameters
+# Skill routing (tune to your workflow)
 BRAINROUTER_SKILL_HALF_LIFE_MINUTES=10
 BRAINROUTER_SKILL_MIN_TURN_DECAY=0.05
 BRAINROUTER_SKILL_PREWARM_THRESHOLD=1.5
@@ -107,41 +155,44 @@ BRAINROUTER_SKILL_SPIKE_AMOUNT=1.0
 BRAINROUTER_SKILL_MAX_POTENTIAL=4.0
 ```
 
-### 4. Running the Project
+### Running the MCP Server
 
-#### Build the Monorepo
-Compile shared packages and build the Next.js app:
-```bash
-npm run build
-```
-
-#### Run the MCP Server (Backend)
-Start the backend MCP server (runs Express and hosts the SQLite database):
 ```bash
 npm run dev -w @brainrouter/mcp-server
 ```
-Once started, the backend exposes:
+
+Once running:
 - **MCP SSE Transport:** `http://localhost:3747/mcp`
 - **REST API:** `http://localhost:3747/api`
 - **Health Check:** `http://localhost:3747/health`
 
-#### Run the Web Dashboard (Frontend)
-Run the Next.js frontend in development mode:
+### Running the Dashboard
+
 ```bash
 npm run dev -w dashboard
 ```
-Open [http://localhost:3000](http://localhost:3000) (the default port Next.js uses for the client dashboard web server) to view the visualizer dashboard in real-time.
 
----
+Open [http://localhost:3000](http://localhost:3000) to view the real-time skill activation curves, memory browser, and contradiction resolver.
 
-## 🧪 Testing
+### Running Tests
 
-To run the complete test suite across all packages:
 ```bash
 npm test
 ```
 
 ---
 
-## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+## Documentation
+
+| File | Description |
+|---|---|
+| [BRAINROUTER.md](./BRAINROUTER.md) | Deep-dive: SNN math, pipeline diagrams, API routes, package breakdown |
+| [AGENT.md](./AGENT.md) | Quick-start guide for agents: which skills to load per scenario |
+| [AGENT_TEMPLATE.md](./AGENT_TEMPLATE.md) | Template version of AGENT.md for use in your own projects |
+| [PRESENTATION.md](./PRESENTATION.md) | Slide-format overview for sharing the concept with your team |
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE)

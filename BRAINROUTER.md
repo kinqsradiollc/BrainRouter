@@ -1,74 +1,66 @@
-# 🧠 BrainRouter: Conceptual Architecture & Landscape Position
+# 🧠 BrainRouter: Technical Architecture Reference
 
-This document defines the core engineering architecture of BrainRouter, detailing its conceptual roots, SNN-inspired activation algorithms, and competitive positioning within the agent memory landscape.
+This document is the engineering deep-dive for BrainRouter. It covers the SNN-inspired activation mathematics, the full asynchronous distillation pipeline, the working memory compaction tiers, the monorepo package breakdown, and the REST API surface. For a human-readable overview, see [README.md](./README.md).
 
 ---
 
-## 🏗️ Landscape Comparison: BrainRouter vs. Competitors
-
-To understand BrainRouter's design choices, we position it relative to two major alternative agent-memory implementations: **agentmemory** and **TencentDB-Agent-Memory**.
+## 🏗️ Landscape Comparison
 
 | Feature | agentmemory | TencentDB-Agent-Memory | BrainRouter |
 | :--- | :--- | :--- | :--- |
-| **Primary Focus** | Collaborative agent mesh & administrative database control. | Enterprise cloud-native scaling & markdown-based debugging. | **Local-first developer workflow & active context pre-warming.** |
-| **Backend Store** | ChromaDB + Postgres/SQLite. | Tencent Cloud VectorDB + SQLite. | **SQLite (`sqlite-vec` + FTS5) local database.** |
-| **Tool Namespace** | Massive (51 administrative tools). | Small (~10 controller tools). | **Moderate (~40 developer-centric tools).** |
-| **Active Pruning** | Manual/Standard prompt truncation. | Short-term tool summaries. | **SNN-inspired decay and pre-warming thresholds.** |
-| **Context Offload** | None. | Mermaid execution flowchart. | **4-tier working memory offload (W0-W3 layers).** |
-
-### How BrainRouter Differs:
-1. **Local-First Simplicity:** Like TencentDB, we leverage local SQLite storage to keep deployments lightweight and fast, but we use native `sqlite-vec` for local vector operations instead of requiring remote cloud vector database connections.
-2. **Context Efficiency:** Unlike `agentmemory`, which relies on the LLM or standard truncation to handle huge prompts, BrainRouter actively manages the agent's active prompt. It dynamically scales up or down instructions and memories based on active tasks.
-3. **Software Engineering Taxonomy:** Rather than storing generic unstructured episodic logs, BrainRouter categorizes memories (e.g. codebase facts, architecture decisions, failed attempts, and verification results) to apply specialized query and decay weights.
+| **Primary Focus** | Collaborative agent mesh & administrative database control | Enterprise cloud-native scaling & markdown-based debugging | **Local-first developer workflow & active context pre-warming** |
+| **Backend Store** | ChromaDB + Postgres/SQLite | Tencent Cloud VectorDB + SQLite | **SQLite (`sqlite-vec` + FTS5) — fully local** |
+| **Tool Namespace** | Massive (51 administrative tools) | Small (~10 controller tools) | **Moderate (~40 developer-centric tools)** |
+| **Active Pruning** | Manual/standard prompt truncation | Short-term tool summaries | **SNN-inspired decay and pre-warming thresholds** |
+| **Context Offload** | None | Mermaid execution flowchart | **4-tier working memory offload (W0–W3)** |
+| **Memory Layers** | Flat episodic log | Flat episodic log | **Hierarchical: L0 → L1 → L1.5 → L2 → L3** |
 
 ---
 
-## ⚡ Prototype Inspirations (From `ei8/prototypes`)
+## ⚡ SNN Prototype Inspirations
 
-BrainRouter adapts biological modeling design patterns from the **ei8/prototypes** repository to build a robust, reactive agent context router:
+BrainRouter adapts biological modeling patterns from the **ei8/prototypes** repository:
 
-### 1. `HelloWorm` (Spiking Potential & Leakage)
-*   **The Prototype Concept:** Models C. elegans movement where sensory inputs trigger spiking nodes that accumulate potential, which then decay (leak) back to zero over time.
-*   **The BrainRouter Adaptation:** We map developer "skills" (such as `spec-driven-development` or `testing-skill`) to active nodes. When an agent calls a tool or works in a specific folder, it triggers an event that **spikes** the skill's activation score. If a skill goes unused, its score undergoes **exponential decay (leakage)**.
+### `HelloWorm` — Spiking Potential & Leakage
+Models C. elegans movement where sensory inputs trigger spiking nodes that accumulate potential, which then decay (leak) back to zero over time. BrainRouter maps developer skills (e.g., `spec-driven-development`, `testing-skill`) to these nodes. Tool calls spike activation. Inactivity causes exponential decay.
 
-### 2. `HeartRate` (Sensor-Analyzer-Reactor Loop)
-*   **The Prototype Concept:** A structured actor/control loop that senses heart rate spikes, analyzes threshold metrics, and triggers appropriate reactor state adjustments.
-*   **The BrainRouter Adaptation:** We structure prompt assembly using this closed loop:
-    *   **Sensor:** Tracks active tool invocations and user queries.
-    *   **Analyzer:** Performs in-memory decay and checks which skill scores cross the pre-warming threshold.
-    *   **Reactor:** Dynamically injects instructions and memory hints for threshold-exceeding skills into the agent's context window.
+### `HeartRate` — Sensor-Analyzer-Reactor Loop
+A closed control loop that senses spikes, analyzes thresholds, and triggers state adjustments:
+- **Sensor:** Tracks active tool invocations and user queries
+- **Analyzer:** Performs in-memory decay and checks which skill scores exceed the pre-warming threshold
+- **Reactor:** Dynamically injects instructions and memory hints for threshold-crossing skills into the active context window
 
 ---
 
-## 📐 Mathematical Formulation of Score Decay
+## 📐 Mathematical Formulation of Skill Decay
 
-The activation potential $P$ of any skill is capped within the range $[0, P_{max}]$ and is updated during tool execution and prompt assembly.
+Activation potential $P$ is capped within $[0, P_{max}]$ and updated on each tool execution and prompt assembly.
 
-### 1. The Spike Step
-When a skill is triggered or used:
+### Spike Step
+When a skill is triggered:
 $$P_{new} = \min(P_{max}, P_{old} + \Delta P_{spike})$$
-*(where default $\Delta P_{spike} = 1.0$ and $P_{max} = 4.0$)*
+*(default $\Delta P_{spike} = 1.0$, $P_{max} = 4.0$)*
 
-### 2. The Hybrid Decay Step
-To prevent write bottlenecks, decay is calculated lazily in-memory on read. Given a half-life $T_{1/2}$ (in minutes), the decay constant $\lambda$ is:
+### Hybrid Decay (Lazy On-Read)
+To avoid constant DB writes, decay is calculated in-memory at read time. Given half-life $T_{1/2}$ in minutes:
 $$\lambda = \frac{\ln(2)}{T_{1/2}}$$
 
-For an elapsed time $\Delta t$ in minutes, the decay due to clock time is:
+**Temporal decay** (for elapsed time $\Delta t$):
 $$P_{time} = P_{old} \times e^{-\lambda \Delta t}$$
 
-To handle rapid agent turns where clock time elapsed is near zero ($\Delta t \approx 0$), we also enforce a minimum per-turn decay factor $D_{turn}$ (e.g., $5\%$):
+**Per-turn minimum decay** (guards against rapid turns with $\Delta t \approx 0$):
 $$P_{turn} = P_{old} \times (1 - D_{turn})$$
 
-The final decayed potential returned to the routing pipeline is the minimum of these two decay models:
+**Final decayed value:**
 $$P_{decayed} = \max(0, \min(P_{time}, P_{turn}))$$
 
-Skills with a decayed potential exceeding the **Pre-Warming Threshold** (e.g. $1.5$) have their documentation and memory registers loaded into the active prompt.
+Skills with $P_{decayed} \ge \text{Threshold}$ (default `1.5`) have their documentation and memory registers loaded into the active prompt.
 
 ---
 
 ## 🔄 The Routing Execution Loop
 
-Every agent interaction turn follows a structured cycle:
+Every agent turn follows this structured cycle:
 
 ```
 [Agent Tool Invocation]
@@ -91,56 +83,12 @@ Every agent interaction turn follows a structured cycle:
          ▼
  6. Capture Turn    ──► Write raw L0 log and trigger async L1 memory distillation
 ```
-This loop ensures prompt sizes scale dynamically with active developer focus, keeping LLM attention sharp and context footprints low.
-
----
-
-## 🗺️ Monorepo Package Breakdown
-
-BrainRouter is organized as a TypeScript monorepo using npm workspaces. Here is the detailed breakdown of the workspaces and their files:
-
-```mermaid
-graph TD
-    subgraph "Monorepo Workspace Architecture"
-        mcp["mcp/ (MCP Server Core)"]
-        sdk["packages/sdk/ (Client SDK)"]
-        hooks["packages/hooks/ (React Hook Sync)"]
-        types["packages/types/ (TS Schema definitions)"]
-        web["web/ (Next.js Obsidian Surfaces Dashboard)"]
-        
-        mcp -->|Depends on| types
-        sdk -->|Depends on| types
-        hooks -->|Depends on| sdk
-        hooks -->|Depends on| types
-        web -->|Depends on| hooks
-        web -->|Depends on| sdk
-        web -->|Depends on| types
-    end
-```
-
-### 1. `packages/types/`
-Defines the standard schemas and interfaces used across the frontend, SDK, and server layers:
-*   [api.ts](./packages/types/src/api.ts): REST request and response interfaces (e.g. `/api/skills/activations` payloads).
-*   [memory.ts](./packages/types/src/memory.ts): Interfaces for episodic memory hierarchies (L0 raw messages, L1 records, L2 scenes, and L3 persona states).
-*   [store.ts](./packages/types/src/store.ts): Database interface contracts defining storage methods for L0/L1 memories, SQLite operations, and state variables.
-
-### 2. `packages/sdk/`
-*   [client.ts](./packages/sdk/src/client.ts): Outlines the `BrainRouterClient` class, exposing promise-based wrapper methods for all REST APIs, authentication endpoints, memory management, and skill activations.
-
-### 3. `packages/hooks/`
-Provides React Hooks that fetch and cache state from the REST API:
-*   `useSkillActivations.ts`: Syncs real-time skill potential curves and manual spike actions.
-*   `useMemories.ts`: Fetches, searches, and paginates L1 episodic/semantic memories.
-*   `useContradictions.ts`: Manages active semantic contradictions between L1 instructions.
-*   `useWorkingMemory.ts`: Exposes short-term working context files and Mermaid canvas states.
-*   `useScenes.ts` / `usePersona.ts`: Syncs scene nodes and L3 persona profiles.
-*   `useHookStatus.ts` / `useOperations.ts` / `useStats.ts` / `useDiagnostics.ts`: System diagnostics hooks.
 
 ---
 
 ## 🔄 The Memory & Cognitive Pipeline
 
-When turns are captured, they pass through a series of asynchronous processing stages inside `mcp/src/memory/pipeline/`:
+When turns are captured, they pass through asynchronous processing stages inside `mcp/src/memory/pipeline/`:
 
 ```mermaid
 sequenceDiagram
@@ -174,34 +122,19 @@ sequenceDiagram
     Pipeline->>Store: Write Distilled records to DB
 ```
 
-### Core Pipeline Stages:
-1.  **L1 Extraction ([l1-extractor.ts](./mcp/src/memory/pipeline/l1-extractor.ts)):** Distills conversation logs into structured episodic facts and general rules.
-2.  **L1 Dedup ([l1-dedup.ts](./mcp/src/memory/pipeline/l1-dedup.ts)):** Merges overlapping memories using vector similarity comparison.
-3.  **Contradictions ([l1-contradiction.ts](./mcp/src/memory/pipeline/l1-contradiction.ts)):** Identifies conflicting rules or instructions. Conflicting nodes are flagged as active contradictions for human review on the dashboard.
-4.  **Scene Clustering ([l2-scene.ts](./mcp/src/memory/pipeline/l2-scene.ts)):** Groups episodic memories by situational affinity scores (scene heat).
-5.  **Persona Compilation ([l3-distiller.ts](./mcp/src/memory/pipeline/l3-distiller.ts)):** Aggregates technical preferences and preference rules to compile the user profile.
+### Core Pipeline Stages
 
----
-
-## ⚡ Spiking Skill Routing & Decay Mechanics
-
-Located in [skill-prewarm.ts](./mcp/src/memory/pipeline/skill-prewarm.ts), this models active state charge and decay:
-
-### 1. In-Memory Exponential Decay
-To avoid constant DB updates, skill decay is calculated lazily on-read. When querying activations, we decay the last known potential based on clock time and a minimum per-turn rate:
-*   **Temporal decay:** $P_{time} = P_{old} \times e^{-\lambda \Delta t}$
-*   **Per-Turn decay:** $P_{turn} = P_{old} \times (1 - D_{turn})$
-*   **Decayed value:** $P_{decayed} = \max(0, \min(P_{time}, P_{turn}))$
-
-### 2. Pre-Warming Trigger
-*   If $P_{decayed} \ge \text{Threshold}$ (default: $1.5$), the system flags the skill's associated instructions and hints for inclusion in the active context.
-*   The pre-warmed context is appended to the prompt during the `memory_recall` step, making the agent instantly aware of active specifications.
+1. **L1 Extraction (`l1-extractor.ts`):** Distills conversation logs into structured episodic facts and general rules.
+2. **L1 Dedup (`l1-dedup.ts`):** Merges overlapping memories using vector similarity comparison.
+3. **Contradictions (`l1-contradiction.ts`):** Identifies conflicting rules or instructions. Flagged for human review on the dashboard.
+4. **Scene Clustering (`l2-scene.ts`):** Groups episodic memories by situational affinity scores (scene heat).
+5. **Persona Compilation (`l3-distiller.ts`):** Aggregates technical preferences to compile the user profile.
 
 ---
 
 ## 📥 Short-Term Working Memory Offloading
 
-To handle large terminal payloads, BrainRouter uses a 4-tier offloader defined in [offload.ts](./mcp/src/memory/working/offload.ts):
+To handle large terminal payloads, BrainRouter uses a 4-tier compaction pipeline (`offload.ts`):
 
 ```mermaid
 graph TD
@@ -218,16 +151,53 @@ graph TD
     W2 -->|Assemble State Block| W3
 ```
 
-*   **W0 (Raw Refs):** Saves full text payloads to `.brainrouter/work/<session>/refs/*.md` and returns a placeholder.
-*   **W1 (Step Logs):** Log of sequential execution steps.
-*   **W2 (Mermaid Canvas):** A structured task diagram rendered inside [canvas.ts](./mcp/src/memory/working/canvas.ts).
-*   **W3 (Injected State):** A compact summary string containing active goals and visual diagrams injected into the prompt.
+- **W0 (Raw Refs):** Saves full payloads to `.brainrouter/work/<session>/refs/*.md` and returns a reference ID.
+- **W1 (Step Logs):** A JSONL log of sequential execution steps.
+- **W2 (Mermaid Canvas):** A structured task diagram rendered via `canvas.ts`.
+- **W3 (Injected State):** A compact summary string containing active goals and visual diagrams, injected into the active prompt.
 
 ---
 
-## 🔌 API Routes Reference (`mcp/src/api/routes/`)
+## 🗺️ Monorepo Package Breakdown
 
-The Express server exposes the REST API layer under `/api`:
+```mermaid
+graph TD
+    mcp{{"mcp/ (MCP Server Core)"}}
+    sdk{{"packages/sdk/ (Client SDK)"}}
+    hooks{{"packages/hooks/ (React Hook Sync)"}}
+    types{{"packages/types/ (TS Schema Definitions)"}}
+    web{{"web/ (Next.js Obsidian Surfaces Dashboard)"}}
+    
+    mcp -->|Depends on| types
+    sdk -->|Depends on| types
+    hooks -->|Depends on| sdk
+    hooks -->|Depends on| types
+    web -->|Depends on| hooks
+    web -->|Depends on| sdk
+    web -->|Depends on| types
+```
+
+### `packages/types/`
+Defines shared schemas and interfaces across frontend, SDK, and server:
+- `api.ts` — REST request/response interfaces (e.g., `/api/skills/activations` payloads)
+- `memory.ts` — Interfaces for L0 raw messages, L1 records, L2 scenes, and L3 persona states
+- `store.ts` — Database interface contracts for storage methods and state variables
+
+### `packages/sdk/`
+- `client.ts` — `BrainRouterClient` class with promise-based wrappers for all REST APIs, auth, memory, and skill activations
+
+### `packages/hooks/`
+React Hooks that fetch and cache state from the REST API:
+- `useSkillActivations.ts` — Real-time skill potential curves and manual spike actions
+- `useMemories.ts` — Fetches, searches, and paginates L1 episodic/semantic memories
+- `useContradictions.ts` — Manages active semantic contradictions between L1 instructions
+- `useWorkingMemory.ts` — Exposes short-term working context files and Mermaid canvas states
+- `useScenes.ts` / `usePersona.ts` — Syncs scene nodes and L3 persona profiles
+- `useHookStatus.ts` / `useOperations.ts` / `useStats.ts` / `useDiagnostics.ts` — System diagnostics hooks
+
+---
+
+## 🔌 REST API Reference (`mcp/src/api/routes/`)
 
 ```mermaid
 graph LR
@@ -250,10 +220,10 @@ graph LR
     client --> persona
 ```
 
-*   **[auth.ts](./mcp/src/api/routes/auth.ts):** Authenticates users and registers API keys.
-*   **[skills.ts](./mcp/src/api/routes/skills.ts):** Exposes `GET /api/skills/activations` to return SNN activation values and `POST /api/skills/spike` to manually increment potentials.
-*   **[memories.ts](./mcp/src/api/routes/memories.ts):** Supports CRUD operations, vector searches, and ACE citation counts for L1 records.
-*   **[contradictions.ts](./mcp/src/api/routes/contradictions.ts):** Exposes contradictions flagged during distillation.
-*   **[working.ts](./mcp/src/api/routes/working.ts):** Exposes the Mermaid canvas and compression methods.
-*   **[scenes.ts](./mcp/src/api/routes/scenes.ts) / [persona.ts](./mcp/src/api/routes/persona.ts):** Configures L2 situation boundaries and L3 profiles.
-*   **[hooks.ts](./mcp/src/api/routes/hooks.ts):** Registers passive lifecycle events.
+- **`auth.ts`** — Authenticates users and registers API keys
+- **`skills.ts`** — `GET /api/skills/activations` returns SNN values; `POST /api/skills/spike` manually increments
+- **`memories.ts`** — CRUD, vector search, and ACE citation counts for L1 records
+- **`contradictions.ts`** — Surfaces contradictions flagged during distillation
+- **`working.ts`** — Exposes the Mermaid canvas and compression methods
+- **`scenes.ts`** / **`persona.ts`** — Configures L2 situation boundaries and L3 profiles
+- **`hooks.ts`** — Registers passive lifecycle events
