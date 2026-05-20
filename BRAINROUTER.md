@@ -145,41 +145,33 @@ When turns are captured, they pass through a series of asynchronous processing s
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Host as MCP Host (Claude)
-    participant Engine as Memory Engine
-    participant Store as SQLite WAL Store
+    participant Host as MCP Client
+    participant Engine as MCP Server
+    participant Store as SQLite Store
     participant Pipeline as Async Pipeline
 
-    Host->>Engine: memory_capture_turn(turnData)
-    Engine->>Store: Write L0 Turn (scrubbed of keys/tokens)
-    Engine->>Store: Spike Active Skill Potential (+1.0)
-    Engine-->>Host: Acknowledge Turn Saved
+    Host->>Engine: memory_capture_turn()
+    Engine->>Store: Write L0 Turn
+    Engine->>Store: Spike Skill (+1.0)
+    Engine-->>Host: Acknowledge
     
-    Note over Engine, Pipeline: Async Distillation Pipeline Triggers
+    Note over Engine, Pipeline: Async Distillation Triggers
     
-    Pipeline->>Store: Read recent L0 turns & active skills
+    Pipeline->>Store: Read L0 turns & active skills
     
-    rect rgb(20, 20, 25)
-        Note over Pipeline: Pipeline Stage 1: Extractor (L1)
-        Pipeline->>Pipeline: Extract semantic memories & codebase facts (l1-extractor.ts)
-    end
+    Note over Pipeline: Stage 1: Extractor (L1)
+    Pipeline->>Pipeline: Extract facts
     
-    rect rgb(30, 25, 25)
-        Note over Pipeline: Pipeline Stage 2: Contradiction Check (L1.5)
-        Pipeline->>Pipeline: Run pairwise logical evaluations (l1-contradiction.ts)
-    end
+    Note over Pipeline: Stage 2: Contradictions (L1.5)
+    Pipeline->>Pipeline: Pairwise logical checks
     
-    rect rgb(25, 30, 25)
-        Note over Pipeline: Pipeline Stage 3: Scene Clustering (L2)
-        Pipeline->>Pipeline: Dynamic situational clustering (l2-scene.ts)
-    end
+    Note over Pipeline: Stage 3: Scene Clustering (L2)
+    Pipeline->>Pipeline: Dynamic clustering
     
-    rect rgb(25, 25, 30)
-        Note over Pipeline: Pipeline Stage 4: Persona Compilation (L3)
-        Pipeline->>Pipeline: Distill developer habits & tech preferences (l3-distiller.ts)
-    end
+    Note over Pipeline: Stage 4: Personas (L3)
+    Pipeline->>Pipeline: Distill developer habits
 
-    Pipeline->>Store: Write Distilled L1/L2/L3 records to DB
+    Pipeline->>Store: Write Distilled records to DB
 ```
 
 ### Core Pipeline Stages:
@@ -213,19 +205,17 @@ To handle large terminal payloads, BrainRouter uses a 4-tier offloader defined i
 
 ```mermaid
 graph TD
-    subgraph "Working Memory Compaction Pipeline"
-        payload["Raw Command Output / File Diff"]
-        
-        W0["W0: Offloaded Refs (.brainrouter/work/<session>/refs/*.md)"]
-        W1["W1: Step Logs (JSONL Execution History)"]
-        W2["W2: Mermaid Canvas (Visual Task Flow Chart)"]
-        W3["W3: Compact Context Injected into Prompt"]
+    payload[/"Raw Command Output / File Diff"/]
+    
+    W0[(W0: Offloaded Refs)]
+    W1[(W1: Step Logs)]
+    W2([W2: Mermaid Canvas])
+    W3{{W3: Compact Context Injected}}
 
-        payload -->|Exceeds Token Limits| W0
-        W0 -->|Distill Metadata| W1
-        W1 -->|Summarize Dependencies| W2
-        W2 -->|Assemble State Block| W3
-    end
+    payload -->|Exceeds Token Limits| W0
+    W0 -->|Distill Metadata| W1
+    W1 -->|Summarize Dependencies| W2
+    W2 -->|Assemble State Block| W3
 ```
 
 *   **W0 (Raw Refs):** Saves full text payloads to `.brainrouter/work/<session>/refs/*.md` and returns a placeholder.
@@ -241,15 +231,23 @@ The Express server exposes the REST API layer under `/api`:
 
 ```mermaid
 graph LR
-    subgraph "Express Route Mappings"
-        direction LR
-        client["Dashboard / SDK Client"] --> auth["/api/auth"]
-        client --> skills["/api/skills/activations"]
-        client --> memories["/api/memories"]
-        client --> contradictions["/api/contradictions"]
-        client --> working["/api/working"]
-        client --> scenes["/api/scenes"]
-    end
+    client([Dashboard / SDK Client])
+    
+    auth{{"/api/auth"}}
+    skills{{"/api/skills/activations"}}
+    memories{{"/api/memories"}}
+    contradictions{{"/api/contradictions"}}
+    working{{"/api/working"}}
+    scenes{{"/api/scenes"}}
+    persona{{"/api/persona"}}
+
+    client --> auth
+    client --> skills
+    client --> memories
+    client --> contradictions
+    client --> working
+    client --> scenes
+    client --> persona
 ```
 
 *   **[auth.ts](./mcp/src/api/routes/auth.ts):** Authenticates users and registers API keys.

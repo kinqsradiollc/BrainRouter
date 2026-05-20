@@ -20,17 +20,15 @@
 
 ```mermaid
 graph LR
-    subgraph "Adaptation Model"
-        sensory["Agent Action / Tool Call (Stimulus)"]
-        node["Skill Activation Score (Potential)"]
-        decay["In-Memory Exponential Leakage"]
-        trigger["Threshold Pre-Warming (> 1.5)"]
+    sensory([Agent Action / Tool Call])
+    node((Skill Potential))
+    decay{{Exponential Leakage}}
+    trigger[/Threshold Pre-Warming/]
 
-        sensory -->|Spikes +1.0| node
-        node -->|Clock / Turn Passing| decay
-        decay -->|Re-evaluates| node
-        node -->|Crosses Boundary| trigger
-    end
+    sensory -->|Spikes +1.0| node
+    node -->|Time / Turns| decay
+    decay -->|Re-evaluates| node
+    node -->|> 1.5| trigger
 ```
 
 *   **Active State Accumulation (`HelloWorm` Concept):** Tool executions act as stimuli, spiking specific skill potentials. Unused potentials decay back to zero over time.
@@ -58,15 +56,17 @@ $$P_{decayed} = \max(0, \min(P_{time}, P_{turn}))$$
 
 ```mermaid
 graph TD
-    subgraph "Landscape Characteristics"
-        AM["agentmemory: Collaborative Mesh"]
-        TC["TencentDB-Agent-Memory: Cloud Vector"]
-        BR["BrainRouter: Local Context Pre-Warming"]
+    AM{{agentmemory}}
+    TC{{TencentDB-Agent-Memory}}
+    BR{{BrainRouter}}
 
-        AM -->|Focus| P2P["P2P mesh synchronization & 51 admin database tools"]
-        TC -->|Focus| Cloud["Tencent Cloud VectorDB + Markdown diagnostics mirrors"]
-        BR -->|Focus| Local["Local SQLite vector + Dynamic SNN activation pre-warming"]
-    end
+    P2P[P2P Mesh Synchronization]
+    Cloud[Tencent Cloud VectorDB]
+    Local[Local SQLite + SNN Pre-Warming]
+
+    AM -->|Focus| P2P
+    TC -->|Focus| Cloud
+    BR -->|Focus| Local
 ```
 
 *   **agentmemory:** Best for multi-agent P2P mesh synchronization with transactional locks (leases).
@@ -81,18 +81,16 @@ graph TD
 
 ```mermaid
 graph TD
-    subgraph "Memory Hierarchy"
-        L0["L0: Raw Turn Logs (Chat messages & tool outputs)"]
-        L1["L1: Distilled Memories (Semantic facts & codebase files)"]
-        L1_5["L1.5: Contradictions (Logical conflict resolution)"]
-        L2["L2: Scene Nodes (Clusters of active situational tasks)"]
-        L3["L3: User Personas (Developer habits & preferences)"]
+    L0[(L0: Raw Turn Logs)]
+    L1[(L1: Distilled Memories)]
+    L1_5{{L1.5: Contradictions}}
+    L2([L2: Scene Nodes])
+    L3([L3: User Personas])
 
-        L0 -->|Asynchronous Pipeline| L1
-        L1 -->|Pairwise Evaluation| L1_5
-        L1 -->|Scene Clustering| L2
-        L1 -->|Entity Compilation| L3
-    end
+    L0 -->|Async Pipeline| L1
+    L1 -->|Pairwise Check| L1_5
+    L1 -->|Clustering| L2
+    L1 -->|Entity Distillation| L3
 ```
 
 *   **L0:** Baseline raw logs, scrubbed of credentials before DB writes.
@@ -108,19 +106,19 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant CLI as Agent CLI (Claude Code)
-    participant Server as BrainRouter MCP Server
-    participant DB as SQLite WAL Store
-    participant Dashboard as React Web UI
+    participant CLI as Agent CLI
+    participant Server as BrainRouter MCP
+    participant DB as SQLite Store
+    participant Dashboard as React UI
 
-    CLI->>Server: POST /api/skills/spike (spec-driven-development)
+    CLI->>Server: POST /api/skills/spike
     Server->>DB: Increment potential (+1.0)
     Server-->>CLI: Acknowledge spike
     
-    Dashboard->>Server: GET /api/skills/activations (Polls state)
-    Server->>DB: Read & apply in-memory decay
-    Server-->>Dashboard: Return active potentials
-    Note over Dashboard: Render real-time activation curves
+    Dashboard->>Server: GET /api/skills/activations
+    Server->>DB: Apply in-memory decay
+    Server-->>Dashboard: Return potentials
+    Note over Dashboard: Render activation curves
 ```
 
 *   **`@brainrouter/sdk`:** Type-safe wrapper client matching the `/api` routes.
