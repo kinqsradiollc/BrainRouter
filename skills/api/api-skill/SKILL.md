@@ -12,7 +12,7 @@ This skill ensures every endpoint is fast, consistent, and secure.
 ## Workflow
 
 ### 0️⃣ Mandatory Documentation Check
-Before crafting or modifying any endpoint, you **must** run `list_docs` and use `get_doc` to retrieve any project-specific API documentation (e.g., from `docs/api`). Your API design must adhere exactly to the defined schemas and conventions in the living documentation.
+Before crafting or modifying any endpoint, you **must** run `list_template_docs` and use `get_template_doc` to retrieve any project-specific API documentation (e.g., from `docs/api`). Your API design must adhere exactly to the defined schemas and conventions in the living documentation.
 
 ### 🛡️ The "Security Shield" Boilerplate
 

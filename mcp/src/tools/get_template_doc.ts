@@ -2,12 +2,12 @@ import { z } from 'zod';
 import type { Registry } from '../registry.js';
 import { loadDocSection } from '../loader.js';
 
-export const getDocSchema = z.object({
+export const getTemplateDocSchema = z.object({
   name: z.string(),
   section: z.string().optional(),
 });
 
-export async function getDoc(registry: Registry, args: z.infer<typeof getDocSchema>) {
+export async function getTemplateDoc(registry: Registry, args: z.infer<typeof getTemplateDocSchema>) {
   const manifest = registry.getDoc(args.name);
   if (!manifest) {
     throw new Error(`Document "${args.name}" not found.`);

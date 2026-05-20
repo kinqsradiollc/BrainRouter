@@ -15,6 +15,7 @@ import type {
   MemoryOperation,
   MemoryStatus,
   SchedulerState,
+  SkillActivationRecord,
   SkillHintsRecord,
   StalledExtractionBacklog,
   UserRecord,
@@ -118,6 +119,8 @@ export interface IMemoryStore {
   upsertSkillHints(skillName: string, hints: string, sourceFile?: string): void;
   listSkillHints(): SkillHintsRecord[];
   getSkillHints(skillName: string): string | null;
+  getSkillActivations(userId: string): SkillActivationRecord[];
+  upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): void;
   upsertL2Scene(record: L2SceneRecord): void;
   getTopL2Scenes(userId: string, limit?: number, cursor?: { heatScore: number; id: string }): L2SceneRecord[];
   decayL2HeatScores(userId: string, decayFactor?: number): void;

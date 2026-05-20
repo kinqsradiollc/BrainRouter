@@ -35,6 +35,7 @@ import {
   WorkingResetResponse,
   ActiveSessionsResponse,
   L3PersonaRecord,
+  SkillActivationsResponse,
 } from "@brainrouter/types";
 
 export class BrainRouterClient {
@@ -135,6 +136,7 @@ export class BrainRouterClient {
 
   // Telemetry & L1/L2 Memory Operations
   getStats() { return this.get<MemoryStatsResponse>("/api/stats"); }
+  getSkillActivations() { return this.get<SkillActivationsResponse>("/api/skills/activations"); }
   getDiagnostics(userId?: string) { return this.get<DiagnosticsBundle>("/api/governance/diagnostics", { userId }); }
   getMemories(params?: CursorPaginationParams & { type?: string; scene?: string; skill?: string; archived?: boolean }) {
     return this.get<MemoriesResponse>("/api/memories", params);

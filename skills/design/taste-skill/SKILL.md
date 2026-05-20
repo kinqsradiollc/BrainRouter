@@ -15,7 +15,7 @@ description: Senior UI/UX Engineer. Architect digital interfaces overriding defa
 ## 2. DEFAULT ARCHITECTURE & CONVENTIONS
 Unless the user explicitly specifies a different stack, adhere to these structural constraints to maintain consistency:
 
-* **DOCUMENTATION VERIFICATION [MANDATORY]:** Before making design decisions, you MUST run `list_docs` and use `get_doc` to read target design or theme constraints (e.g., from `docs/design` or `docs/theme`). The design documentation must guide your architectural choices.
+* **DOCUMENTATION VERIFICATION [MANDATORY]:** Before making design decisions, you MUST run `list_template_docs` and use `get_template_doc` to read target design or theme constraints (e.g., from `docs/design` or `docs/theme`). The design documentation must guide your architectural choices.
 * **DEPENDENCY VERIFICATION [MANDATORY]:** Before importing ANY 3rd party library (e.g. `framer-motion`, `lucide-react`, `zustand`), you MUST check `package.json`. If the package is missing, you MUST output the installation command (e.g. `npm install package-name`) before providing the code. **Never** assume a library exists.
 * **Framework & Interactivity:** React or Next.js. Default to Server Components (`RSC`). 
     * **RSC SAFETY:** Global state works ONLY in Client Components. In Next.js, wrap providers in a `"use client"` component.

@@ -25,7 +25,7 @@ Structure context from most persistent to most transient:
 ┌─────────────────────────────────────┐
 │  1. Local AGENT.md                  │ ← Entry point & Global overrides
 ├─────────────────────────────────────┤
-│  2. BrainRouter Skills & Docs       │ ← Focused task context (get_skill/get_doc)
+│  2. BrainRouter Skills & Docs       │ ← Focused task context (get_skill/get_template_doc)
 ├─────────────────────────────────────┤
 │  3. Relevant Source Files           │ ← Implementation context (view_file)
 ├─────────────────────────────────────┤
@@ -176,15 +176,16 @@ Key files: validation.ts, errors.ts, db.ts
 Load only the relevant section when working on a specific area.
 
 ## The BrainRouter Context Strategy
-
-In this ecosystem, context management is optimized via BrainRouter MCP tools. Instead of manual file loading, use the following sequence:
-
-1. **`list_skills`**: Identify the workflow that matches the task.
-2. **`mcp_brainrouter_get_skill(name, section)`**: Load ONLY the `workflow` or `detailed_instructions` section. Avoid loading the `full` skill unless necessary.
-3. **`mcp_brainrouter_list_docs` / `mcp_brainrouter_get_doc`**: Access project-specific source of truth (APIs, Schemas, Architecture) without scanning the filesystem.
-4. **`mcp_brainrouter_get_reference`**: Load stable patterns (e.g. `security-checklist`) instead of assuming general knowledge.
-
-**The Golden Rule:** Never start a task by reading all files. Start by reading the **Map** (`AGENT.md`) and then the relevant **Skill**.
+ 
+In this ecosystem, context management is optimized via BrainRouter MCP tools and automatic L2 pre-warming. Instead of manual file loading, context is loaded and routed through:
+ 
+1. **L2 Skill Pre-Warming (Automatic)**: The server automatically detects active skill potentials (spiked via actions, decaying over turns) and injects `<skill-prewarm>` hints into the system prompt. Check this block first before loading full skill files.
+2. **`list_skills`**: Identify the workflow that matches the task if not already pre-warmed.
+3. **`mcp_brainrouter_get_skill(name, section)`**: Load ONLY the `workflow` or `detailed_instructions` section. Avoid loading the `full` skill unless necessary.
+4. **`mcp_brainrouter_list_template_docs` / `mcp_brainrouter_get_template_doc`**: Access project-specific source of truth (APIs, Schemas, Architecture) without scanning the filesystem.
+5. **`mcp_brainrouter_get_reference`**: Load stable patterns (e.g. `security-checklist`) instead of assuming general knowledge.
+ 
+**The Golden Rule:** Never start a task by reading all files. Start by reviewing the pre-warmed hints (`<skill-prewarm>`), reading the **Map** (`AGENT.md`), and loading the relevant **Skill** if needed.
 
 ## MCP Integrations
 

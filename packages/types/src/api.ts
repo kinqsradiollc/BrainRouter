@@ -11,6 +11,7 @@ import type {
   MemoryOperation,
   MemoryStatus,
   RecallResult,
+  SkillActivationRecord,
 } from "./memory.js";
 import type { MemoryListItem } from "./store.js";
 import { PublicUserRecord } from "./memory.js";
@@ -299,3 +300,5 @@ export interface ActiveSessionInfo {
 export interface ActiveSessionsResponse {
   sessions: ActiveSessionInfo[];
 }
+
+export type SkillActivationsResponse = SkillActivationRecord[];

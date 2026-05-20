@@ -46,36 +46,84 @@ const workflowExamples = [
     label: "Frontend Dev",
     request: "\"Generate a new marketing landing page for the enterprise tier.\"",
     l3: { title: "CORE PREFERENCES", detail: "Prefers TailwindCSS code" },
-    l1: { title: "RECENT CONTEXT", detail: "Discussed 'Obsidian Dark Theme'" },
-    execution: "The AI effortlessly outputs a landing page using Tailwind code in a dark theme. It gets it right on the very first try because BrainRouter provided the exact memory layers it needed.",
-    feedback: { metric: "What memory was useful?", action: "↑ L1 Score Boosted" },
-    distill: { metric: "What new facts happened?", action: "+ Saved to L1 Memory" }
+    l2: { title: "ACTIVE SKILL PRE-WARM (L2)", name: "UI-Styling", potential: 3.5, hints: "Always inject Tailwind responsive grids..." },
+    l1: { title: "RECENT CONTEXT (L1)", detail: "Discussed 'Obsidian Dark Theme'" },
+    execution: "The AI outputs a landing page using Tailwind code in a dark theme. It gets it right on the very first try because BrainRouter provided the exact memory layers and pre-warmed skill rules it needed.",
+    feedback: { metric: "What memory was useful?", action: "↑ UI-Styling Spike (+1.0)" },
+    distill: { metric: "What new facts happened?", action: "UI-Styling potential refreshed" }
   },
   {
     id: "analyst",
     label: "Data Analyst",
     request: "\"Write a script to visualize the Q3 Revenue data.\"",
     l3: { title: "CORE PREFERENCES", detail: "Prefers Python & Pandas" },
-    l1: { title: "RECENT CONTEXT", detail: "Always use Hex #cc9166 in charts" },
-    execution: "The AI outputs a perfect Python script using Pandas, and automatically styles the charts using the exact golden hex code, avoiding any generic blue defaults.",
-    feedback: { metric: "What memory was useful?", action: "↑ L3 Score Boosted" },
-    distill: { metric: "What new facts happened?", action: "+ Saved to L1 Memory" }
+    l2: { title: "ACTIVE SKILL PRE-WARM (L2)", name: "Data-Visualization", potential: 3.2, hints: "Use seaborn, hex #cc9166 for accent curves..." },
+    l1: { title: "RECENT CONTEXT (L1)", detail: "Always use Hex #cc9166 in charts" },
+    execution: "The AI outputs a perfect Python script using Pandas, and automatically styles the charts using seaborn and the golden hex code, avoiding generic blue defaults.",
+    feedback: { metric: "What memory was useful?", action: "↑ Data-Visualization Spike (+1.0)" },
+    distill: { metric: "What new facts happened?", action: "Data-Visualization potential refreshed" }
   },
   {
     id: "sales",
     label: "Customer Success",
     request: "\"Draft a reply to this frustrated user about the bug.\"",
     l3: { title: "CORE PREFERENCES", detail: "Empathetic, professional tone" },
-    l1: { title: "RECENT CONTEXT", detail: "User has been subscribed for 3 years" },
-    execution: "The AI writes a highly empathetic email acknowledging their 3-year loyalty on the Enterprise plan, immediately de-escalating the situation without needing a prompt rewrite.",
-    feedback: { metric: "What memory was useful?", action: "↑ L3 Score Boosted" },
-    distill: { metric: "What new facts happened?", action: "+ Saved to L1 Memory" }
+    l2: { title: "ACTIVE SKILL PRE-WARM (L2)", name: "Customer-Relations", potential: 3.8, hints: "Include subscription tier & de-escalation checklist..." },
+    l1: { title: "RECENT CONTEXT (L1)", detail: "User has been subscribed for 3 years" },
+    execution: "The AI writes a highly empathetic email acknowledging their 3-year loyalty on the Enterprise plan, immediately de-escalating the situation without needing manual prompt rewrites.",
+    feedback: { metric: "What memory was useful?", action: "↑ Customer-Relations Spike (+1.0)" },
+    distill: { metric: "What new facts happened?", action: "Customer-Relations potential refreshed" }
   }
 ];
 
 export default function HomePage() {
   const [activeExampleId, setActiveExampleId] = useState("frontend");
   const activeExample = workflowExamples.find(ex => ex.id === activeExampleId) || workflowExamples[0];
+
+  // Interactive Mock SNN Simulator State
+  const [mockSkills, setMockSkills] = useState([
+    { name: "UI-Styling", potential: 0.15, threshold: 0.3, hints: "Always inject Tailwind responsive grids..." },
+    { name: "Data-Visualization", potential: 0.25, threshold: 0.3, hints: "Use seaborn, hex #cc9166 for accent curves..." },
+    { name: "Customer-Relations", potential: 0.05, threshold: 0.3, hints: "Include subscription tier & de-escalation checklist..." }
+  ]);
+  const [consoleLogs, setConsoleLogs] = useState<string[]>([
+    "SNN routing potentials initialized.",
+    "System listening for active skill tool triggers."
+  ]);
+
+  const spikeSkill = (name: string) => {
+    setMockSkills(prev => prev.map(skill => {
+      if (skill.name === name) {
+        const newPotential = Math.min(4.0, skill.potential + 1.2);
+        const didCross = newPotential >= 0.3 && skill.potential < 0.3;
+        
+        setConsoleLogs(logs => [
+          ...logs,
+          `[SNN SPIKER] Spiked potential for '${name}' by +1.2. New charge: ${newPotential.toFixed(2)}/4.0`,
+          ...(didCross ? [`[L2 PREWARM] '${name}' crossed 0.3 threshold! Guidelines now ACTIVE.`] : [])
+        ]);
+        return { ...skill, potential: newPotential };
+      }
+      return skill;
+    }));
+  };
+
+  const decaySkills = () => {
+    setMockSkills(prev => prev.map(skill => {
+      const newPotential = Math.max(0.0, skill.potential * 0.7);
+      const didDeactivate = newPotential < 0.3 && skill.potential >= 0.3;
+      
+      setConsoleLogs(logs => [
+        ...logs,
+        `[SNN DECAY] Applied turn decay to potentials.`,
+        ...(didDeactivate ? [`[L2 PREWARM] '${skill.name}' potential fell below 0.3. Guidelines DEACTIVATED.`] : [])
+      ]);
+      return { ...skill, potential: newPotential };
+    }));
+  };
+
+  const prewarmedSkills = mockSkills.filter(s => s.potential >= 0.3);
+
   return (
     <motion.div
       style={{ display: "flex", flexDirection: "column", gap: "52px", paddingBottom: "60px" }}
@@ -200,6 +248,198 @@ export default function HomePage() {
               <span>GitHub</span>
             </PremiumButton>
           </a>
+        </div>
+      </motion.section>
+
+      {/* Live Interactive SNN Simulator Monitor */}
+      <motion.section
+        variants={itemVariants}
+        style={{
+          background: "rgba(255, 255, 255, 0.01)",
+          border: "1px solid var(--border-med)",
+          borderRadius: "16px",
+          padding: "28px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "24px",
+          boxShadow: "0 4px 30px rgba(0, 0, 0, 0.2)"
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-dim)", paddingBottom: "16px" }}>
+          <div>
+            <h3 className="serif-display" style={{ fontSize: "22px", margin: 0, fontWeight: 500, color: "var(--color-pure-white)" }}>
+              SNN Skill Pre-Warming Simulator
+            </h3>
+            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", margin: "4px 0 0 0" }}>
+              Click triggers to spike skill charge potentials, watch decay, and inspect dynamic LLM prompt context injection.
+            </p>
+          </div>
+          <button
+            onClick={decaySkills}
+            style={{
+              padding: "8px 16px",
+              borderRadius: "20px",
+              background: "transparent",
+              border: "1px solid var(--border-strong)",
+              color: "var(--color-silver-text)",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.2s ease"
+            }}
+            onMouseOver={e => {
+              e.currentTarget.style.borderColor = "var(--color-golden-accent)";
+              e.currentTarget.style.color = "var(--color-pure-white)";
+            }}
+            onMouseOut={e => {
+              e.currentTarget.style.borderColor = "var(--border-strong)";
+              e.currentTarget.style.color = "var(--color-silver-text)";
+            }}
+          >
+            ⏳ Apply Turn Decay
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.8fr", gap: "32px" }}>
+          {/* Left Panel: Active Routing Potentials & Spikers */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>ACTIVE ROUTING POTENTIALS</span>
+            
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {mockSkills.map(skill => {
+                const maxPotential = 4.0;
+                const percentage = Math.min(100, (skill.potential / maxPotential) * 100);
+                const isPrewarmed = skill.potential >= 0.3;
+                return (
+                  <div 
+                    key={skill.name} 
+                    style={{ 
+                      background: "rgba(255, 255, 255, 0.02)", 
+                      border: "1px solid var(--border-dim)", 
+                      borderRadius: "10px", 
+                      padding: "14px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "10px"
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ color: "var(--color-pure-white)", fontWeight: 600, fontSize: "14px" }}>{skill.name}</span>
+                      <span style={{ 
+                        fontSize: "9px", 
+                        padding: "2px 6px", 
+                        borderRadius: "10px", 
+                        background: isPrewarmed ? "rgba(174, 147, 87, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                        color: isPrewarmed ? "var(--color-golden-accent)" : "var(--color-stone-text)",
+                        border: isPrewarmed ? "1px solid rgba(174, 147, 87, 0.2)" : "1px solid transparent"
+                      }}>
+                        {isPrewarmed ? "PRE-WARMED" : "DECAYED"}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--color-stone-text)" }}>
+                        <span>Charge potential</span>
+                        <span>{skill.potential.toFixed(2)} / 4.00</span>
+                      </div>
+                      <div style={{ width: "100%", height: "4px", background: "rgba(255, 255, 255, 0.05)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ 
+                          width: `${percentage}%`, 
+                          height: "100%", 
+                          background: isPrewarmed ? "var(--color-golden-accent)" : "var(--color-stone-text)",
+                          transition: "width 0.3s ease-out"
+                        }} />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => spikeSkill(skill.name)}
+                      style={{
+                        marginTop: "4px",
+                        width: "100%",
+                        padding: "6px 0",
+                        borderRadius: "6px",
+                        background: "rgba(174, 147, 87, 0.1)",
+                        border: "1px solid rgba(174, 147, 87, 0.2)",
+                        color: "var(--color-golden-accent)",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        transition: "all 0.2s ease"
+                      }}
+                      onMouseOver={e => {
+                        e.currentTarget.style.background = "rgba(174, 147, 87, 0.2)";
+                      }}
+                      onMouseOut={e => {
+                        e.currentTarget.style.background = "rgba(174, 147, 87, 0.1)";
+                      }}
+                    >
+                      ⚡ Spike potential (+1.2)
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right Panel: Live Context Preview & Logs */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>LLM SYSTEM CONTEXT INJECTION</span>
+            
+            <div 
+              style={{ 
+                background: "var(--surface-pewter-accent)", 
+                border: "1px solid var(--border-med)", 
+                borderRadius: "10px", 
+                padding: "16px",
+                fontFamily: "monospace",
+                fontSize: "12px",
+                color: "var(--color-silver-text)",
+                height: "180px",
+                overflowY: "auto",
+                whiteSpace: "pre-wrap"
+              }}
+            >
+              {prewarmedSkills.length === 0 ? (
+                <span style={{ color: "var(--color-stone-text)", fontStyle: "italic" }}>
+                  {"<!-- No skills currently pre-warmed. Spike a skill to see context injection -->"}
+                </span>
+              ) : (
+                <span style={{ color: "var(--color-golden-accent)" }}>
+                  {`<skill-prewarm>
+  Skills detected as currently active — hints pre-loaded:
+
+${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
+  ${s.hints}`).join("\n\n---\n\n")}
+</skill-prewarm>`}
+                </span>
+              )}
+            </div>
+
+            <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>SIMULATOR CONSOLE LOGS</span>
+            <div 
+              style={{ 
+                background: "#000", 
+                border: "1px solid var(--border-dim)", 
+                borderRadius: "10px", 
+                padding: "12px 16px",
+                fontFamily: "monospace",
+                fontSize: "11px",
+                color: "#10b981",
+                height: "100px",
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px"
+              }}
+            >
+              {consoleLogs.slice(-6).map((log, i) => (
+                <div key={i} style={{ opacity: i === 5 ? 1 : 0.65 }}>
+                  {log}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </motion.section>
 
@@ -339,13 +579,13 @@ export default function HomePage() {
               step: "02",
               title: "Context & Relation Retrieval",
               desc: "Simultaneously searches for exact query words and general semantic meanings from your memory timeline, loading the most relevant context for your AI.",
-              duration: "Completed in 30ms"
+              duration: "Highly Responsive Search"
             },
             {
               step: "03",
               title: "Task-Specific Rule Matching",
               desc: "Identifies the current topic and automatically loads specialized checklists and task guidelines matching your precise work scenarios.",
-              duration: "Completed in 5ms"
+              duration: "Fast Context Assembly"
             },
             {
               step: "04",
@@ -556,6 +796,7 @@ export default function HomePage() {
                 BRAINROUTER INSTANT RECALL
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {/* L3 Persona */}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
                   <span style={{ background: "var(--color-golden-accent)", color: "#000", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>L3</span>
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -563,6 +804,28 @@ export default function HomePage() {
                     <span style={{ color: "var(--color-white-frost)", fontSize: "12px", fontFamily: "var(--font-inter)" }}>{activeExample.l3.detail}</span>
                   </div>
                 </div>
+
+                {/* L2 Pre-warm */}
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
+                  <span style={{ background: "#4f46e5", color: "#fff", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>L2</span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", width: "100%" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ color: "var(--color-stone-text)", fontSize: "10px", fontWeight: 600 }}>{activeExample.l2.title}</span>
+                      <span style={{ color: "var(--color-golden-accent)", fontSize: "10px", fontWeight: 700 }}>{activeExample.l2.name}</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                      <span style={{ color: "var(--color-white-frost)", fontSize: "11px", fontStyle: "italic" }}>"{activeExample.l2.hints}"</span>
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "2px" }}>
+                        <div style={{ flex: 1, height: "3px", background: "rgba(255,255,255,0.08)", borderRadius: "2px", overflow: "hidden" }}>
+                          <div style={{ width: `${(activeExample.l2.potential / 4.0) * 100}%`, height: "100%", background: "var(--color-golden-accent)" }} />
+                        </div>
+                        <span style={{ color: "var(--color-ash-text)", fontSize: "9px" }}>{activeExample.l2.potential.toFixed(1)}/4.0</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* L1 Context */}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
                   <span style={{ background: "var(--color-silver-text)", color: "#000", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>L1</span>
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -709,7 +972,7 @@ export default function HomePage() {
             The Omnichannel Brain
           </h2>
           <p style={{ color: "var(--color-stone-text)", fontSize: "14px", margin: 0, marginTop: "4px" }}>
-            BrainRouter syncs state, memory, and persona across your entire device ecosystem and workflow architecture in real-time.
+            BrainRouter syncs state, memory, skills, and persona across your entire device ecosystem and workflow architecture in real-time.
           </p>
         </div>
 
@@ -737,13 +1000,13 @@ export default function HomePage() {
             <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="card" style={{ background: "var(--surface-pewter-accent)", padding: "20px", border: "1px solid var(--border-med)", boxShadow: "0 8px 30px var(--overlay-bg)", textAlign: "center" }}>
               <div style={{ fontSize: "20px", marginBottom: "8px" }}>🤖</div>
               <div style={{ color: "var(--color-pure-white)", fontSize: "13px", fontWeight: 600 }}>Cloud Workflows</div>
-              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>Background Agents & Cron</div>
+              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>Background Agents & Scheduled Skill Distillation</div>
             </motion.div>
             
             <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="card" style={{ background: "var(--surface-pewter-accent)", padding: "20px", border: "1px solid var(--border-med)", boxShadow: "0 8px 30px var(--overlay-bg)", textAlign: "center" }}>
               <div style={{ fontSize: "20px", marginBottom: "8px" }}>🖥️</div>
               <div style={{ color: "var(--color-pure-white)", fontSize: "13px", fontWeight: 600 }}>Desktop IDEs</div>
-              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>VS Code, Cursor, Web</div>
+              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>VS Code, Cursor & Local Skill Pre-Warming</div>
             </motion.div>
           </div>
 
@@ -906,13 +1169,13 @@ export default function HomePage() {
             <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="card" style={{ background: "var(--surface-pewter-accent)", padding: "20px", border: "1px solid var(--border-med)", boxShadow: "0 8px 30px var(--overlay-bg)", textAlign: "center" }}>
               <div style={{ fontSize: "20px", marginBottom: "8px" }}>⌨️</div>
               <div style={{ color: "var(--color-pure-white)", fontSize: "13px", fontWeight: 600 }}>CLI & Scripts</div>
-              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>Headless Workflows</div>
+              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>Headless Workflows & Manual Skill Spikes</div>
             </motion.div>
             
             <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="card" style={{ background: "var(--surface-pewter-accent)", padding: "20px", border: "1px solid var(--border-med)", boxShadow: "0 8px 30px var(--overlay-bg)", textAlign: "center" }}>
               <div style={{ fontSize: "20px", marginBottom: "8px" }}>📱</div>
               <div style={{ color: "var(--color-pure-white)", fontSize: "13px", fontWeight: 600 }}>Mobile Clients</div>
-              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>iOS / Android Apps</div>
+              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", marginTop: "4px" }}>iOS / Android Apps & Cross-Device Skill Sync</div>
             </motion.div>
           </div>
 
@@ -953,7 +1216,7 @@ export default function HomePage() {
             }}
           >
             <span style={{ color: "var(--color-stone-text)" }}>Average Budget Savings</span>
-            <span style={{ color: "var(--color-golden-accent)", fontWeight: 600 }}>60% – 80% Reduction</span>
+            <span style={{ color: "var(--color-golden-accent)", fontWeight: 600 }}>Significant Token Savings</span>
           </div>
         </motion.div>
 
@@ -986,7 +1249,7 @@ export default function HomePage() {
             }}
           >
             <span style={{ color: "var(--color-stone-text)" }}>Interaction Overhead</span>
-            <span style={{ color: "var(--color-golden-accent)", fontWeight: 600 }}>0ms Client Latency</span>
+            <span style={{ color: "var(--color-golden-accent)", fontWeight: 600 }}>Zero Client Latency</span>
           </div>
         </motion.div>
       </motion.section>

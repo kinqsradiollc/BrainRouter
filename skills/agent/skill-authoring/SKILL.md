@@ -40,14 +40,20 @@ In the global MCP repository (BrainRouter), both folders are used to organize un
 ---
 name: skill-name-with-hyphens
 description: Guides agents through [task/workflow]. Use when [specific trigger conditions].
+hints: |
+  - Always execute step A before step B.
+  - Assert that all tests pass before completing.
 ---
 ```
 
 **Rules:**
 - `name`: Lowercase, hyphen-separated. Must match the directory name.
 - `description`: Start with what the skill does in third person, then include one or more clear "Use when" trigger conditions. Include both *what* and *when*. Maximum 1024 characters.
+- `hints`: (Recommended for L2 Pre-warming) A concise, bulleted list of essential instructions that should be injected into the LLM system prompt context when this skill is pre-warmed. Keep this under 5-6 bullet points (approx. 300 characters) to optimize token consumption.
 
 **Why this matters:** Agents discover skills by reading descriptions. The description is injected into the system prompt, so it must tell the agent both what the skill provides and when to activate it. Do not summarize the workflow — if the description contains process steps, the agent may follow the summary instead of reading the full skill.
+
+The `hints` field is parsed by BrainRouter's L2 pre-warming engine. When the skill's activation potential is spiked, these hints are automatically injected into the LLM prompt context to keep the model primed with core rules.
 
 ### Standard Sections (Recommended Pattern)
 
@@ -131,6 +137,18 @@ If a skill does not need runnable helpers, do not create an empty `scripts/` dir
 4. **Anti-rationalization.** Every skip-worthy step needs a counter-argument in the rationalizations table.
 5. **Progressive disclosure.** Main SKILL.md is the entry point. Supporting files are loaded only when needed.
 6. **Token-conscious.** Every section must justify its inclusion. If removing it wouldn't change agent behavior, remove it.
+
+## L2 Skill Pre-Warming & SNN Routing
+
+BrainRouter implements a Spiking Neural Network (SNN) model to dynamically pre-warm skills. This mechanism keeps relevant skills active in the agent's prompt context without blowing up the token window:
+1. **Spikes**: Invoking a skill or querying memories related to it spikes its activation potential by `+1.0` (up to a maximum cap of `4.0`).
+2. **Decay**: The potential decays exponentially over idle turns and time ($Potential_{new} = Potential_{old} \times e^{-\lambda \Delta t}$).
+3. **Threshold Gate**: If a skill's potential is `>= 0.3`, it crosses the gate and is considered "active."
+4. **Context Injection**: Active skills automatically have their `hints` frontmatter or registered memory hints injected into the LLM system prompt context under the `<skill-prewarm>` block.
+
+When writing or updating skills, authors should:
+- Ensure that the frontmatter `hints` are present, concise, and target specific error prevention or structural patterns.
+- Register newly-added dynamic skill hints by invoking `mcp_brainrouter_memory_register_skill_hints` if the skill relies on user-customized memory overrides.
 
 ## Naming Conventions
 

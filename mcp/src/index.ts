@@ -38,8 +38,8 @@ import { getSkill, getSkillSchema } from './tools/get_skill.js';
 import { searchSkills, searchSkillsSchema } from './tools/search_skills.js';
 import { getPersona, getPersonaSchema } from './tools/get_persona.js';
 import { getReference, getReferenceSchema } from './tools/get_reference.js';
-import { listDocs, listDocsSchema } from './tools/list_docs.js';
-import { getDoc, getDocSchema } from './tools/get_doc.js';
+import { listTemplateDocs, listTemplateDocsSchema } from './tools/list_template_docs.js';
+import { getTemplateDoc, getTemplateDocSchema } from './tools/get_template_doc.js';
 import { createSkill, createSkillSchema } from './tools/create_skill.js';
 import { updateSkill, updateSkillSchema } from './tools/update_skill.js';
 import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from './tools/memory_capture_turn.js';
@@ -69,6 +69,7 @@ import { governanceRouter } from './api/routes/governance.js';
 import { evidenceRouter } from './api/routes/evidence.js';
 import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
+import { skillsRouter } from './api/routes/skills.js';
 import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -160,8 +161,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         },
       },
       {
-        name: 'list_docs',
-        description: 'List all project-specific documentation.',
+        name: 'list_template_docs',
+        description: 'List all project-specific template documentation.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -170,8 +171,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         },
       },
       {
-        name: 'get_doc',
-        description: 'Read a project document or section.',
+        name: 'get_template_doc',
+        description: 'Read a project template document or section.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -241,8 +242,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'search_skills': return await searchSkills(registry, searchSkillsSchema.parse(request.params.arguments));
         case 'get_persona':   return await getPersona(registry, getPersonaSchema.parse(request.params.arguments));
         case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
-        case 'list_docs':     return await listDocs(registry, listDocsSchema.parse(request.params.arguments));
-        case 'get_doc':       return await getDoc(registry, getDocSchema.parse(request.params.arguments));
+        case 'list_template_docs': return await listTemplateDocs(registry, listTemplateDocsSchema.parse(request.params.arguments));
+        case 'get_template_doc':   return await getTemplateDoc(registry, getTemplateDocSchema.parse(request.params.arguments));
         case 'create_skill':
         case 'update_skill':
           if (!isAdmin) {
@@ -357,6 +358,7 @@ if (USE_HTTP) {
   app.use("/api/evidence", evidenceRouter);
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
+  app.use("/api/skills", skillsRouter);
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream)
   async function handleMcp(req: Request, res: Response) {

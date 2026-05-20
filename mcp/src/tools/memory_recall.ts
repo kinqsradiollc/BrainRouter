@@ -38,6 +38,10 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
+    if (params.activeSkill) {
+      memoryEngine.spikeSkill(effectiveUserId, params.activeSkill);
+    }
+
     const result = await memoryEngine.recall({
       userId: effectiveUserId,
       sessionKey: params.sessionKey,

@@ -334,6 +334,12 @@ export interface SkillHintsRecord {
   registeredAt: string;
 }
 
+export interface SkillActivationRecord {
+  skillName: string;
+  potential: number;
+  lastDecayTime: string;
+}
+
 export interface UserRecord {
   userId: string;
   apiKey: string;

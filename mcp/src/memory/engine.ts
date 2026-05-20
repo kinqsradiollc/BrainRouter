@@ -7,6 +7,7 @@ import { RerankerService } from "./store/reranker.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillScenes } from "./pipeline/l2-scene.js";
 import { distillPersona } from "./pipeline/l3-distiller.js";
+import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@brainrouter/types";
 import { fetchWithExternalRetry } from "./retry.js";
 import "dotenv/config";
@@ -231,6 +232,24 @@ export class MemoryEngine {
 
   public listSkillHints() {
     return this.store.listSkillHints();
+  }
+
+  public spikeSkill(userId: string, skillName: string) {
+    return spikeSkillActivation({ userId, skillName, store: this.store });
+  }
+
+  public getSkillActivations(userId: string) {
+    const raw = this.store.getSkillActivations(userId);
+    const now = new Date();
+    return raw.map(r => ({
+      skillName: r.skillName,
+      potential: decayPotential({
+        potential: r.potential,
+        lastDecayTime: r.lastDecayTime,
+        now,
+      }),
+      lastDecayTime: r.lastDecayTime,
+    })).sort((a, b) => b.potential - a.potential);
   }
 
   /**

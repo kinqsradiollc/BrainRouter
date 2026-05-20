@@ -25,8 +25,8 @@ Decompose work into small, verifiable tasks with explicit acceptance criteria. G
 
 Before writing any code, operate in read-only mode:
 
-- Run `list_docs` to see what structural constraints and project conventions exist.
-- Run `get_doc` to retrieve any project-specific constraints from the `docs/` folder (such as design themes, API structures, or schemas).
+- Run `list_template_docs` to see what structural constraints and project conventions exist.
+- Run `get_template_doc` to retrieve any project-specific constraints from the `docs/` folder (such as design themes, API structures, or schemas).
 - Read the spec and relevant codebase sections
 - Identify existing patterns and conventions
 - Map dependencies between components
@@ -253,7 +253,7 @@ Before starting implementation, confirm:
 - [ ] The human has reviewed and approved the plan
 
 ## Workflow
-1. **Context Loading:** Run `list_docs` and `get_doc` to retrieve project constraints.
+1. **Context Loading:** Run `list_template_docs` and `get_template_doc` to retrieve project constraints.
 2. **Research:** Read relevant codebase sections and map the dependency graph.
 3. **Drafting:** Structure the work into small, vertically sliced tasks with acceptance criteria.
 4. **Persist:** Write the plan to `IMPLEMENTATION_PLAN.md` (or similar) in the project root.

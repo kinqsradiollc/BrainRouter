@@ -204,7 +204,7 @@ export function loadSkillSection(
 }
 
 /**
- * Load a named ## heading from any markdown doc file (used for get_doc).
+ * Load a named ## heading from any markdown doc file (used for get_template_doc).
  */
 export function loadDocSection(filePath: string, sectionHeading?: string): Fragment {
   const raw = readFileSync(filePath, 'utf-8');

@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, L0Record, L1Record, L1FtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
+import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, L0Record, L1Record, L1FtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@brainrouter/types";
 
@@ -506,6 +506,16 @@ export class SqliteMemoryStore implements IMemoryStore {
         hints TEXT NOT NULL,
         source_file TEXT DEFAULT '',
         registered_at TEXT DEFAULT ''
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_activations (
+        user_id TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        potential REAL DEFAULT 0.0,
+        last_decay_time TEXT NOT NULL,
+        PRIMARY KEY (user_id, skill_name)
       )
     `);
 
@@ -1797,6 +1807,41 @@ export class SqliteMemoryStore implements IMemoryStore {
       "SELECT hints FROM skill_extraction_hints WHERE skill_name = ?"
     ).get(skillName) as any;
     return row?.hints ?? null;
+  }
+
+  public getSkillActivations(userId: string): SkillActivationRecord[] {
+    const rows = this.db.prepare(`
+      SELECT skill_name, potential, last_decay_time
+      FROM skill_activations
+      WHERE user_id = ?
+      ORDER BY potential DESC, skill_name ASC
+    `).all(userId) as any[];
+    return rows.map((row) => ({
+      skillName: row.skill_name,
+      potential: row.potential,
+      lastDecayTime: row.last_decay_time,
+    }));
+  }
+
+  public upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): void {
+    if (activations.length === 0) return;
+    const stmt = this.db.prepare(`
+      INSERT INTO skill_activations (user_id, skill_name, potential, last_decay_time)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, skill_name) DO UPDATE SET
+        potential=excluded.potential,
+        last_decay_time=excluded.last_decay_time
+    `);
+    this.db.exec("BEGIN");
+    try {
+      for (const record of activations) {
+        stmt.run(userId, record.skillName, record.potential, record.lastDecayTime);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {

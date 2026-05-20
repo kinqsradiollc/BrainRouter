@@ -1,7 +1,7 @@
 ---
 name: agent-memory
 description: Teaches agents how and when to use BrainRouter's memory engine (including Long-Term L1/L3, Short-Term Working Memory offloads, and Software Engineering-specific tools). Ensures the agent maintains context-awareness while proactively keeping context limits low.
-memory_hints: |
+hints: |
   - Extract if the user disables or opts out of memory capture (respect this as a hard rule).
   - Note if the user prefers a specific recall strategy (keyword vs. hybrid).
   - Capture if the user requests the agent to "forget" specific information.
@@ -17,19 +17,20 @@ BrainRouter's memory engine gives you persistent, cross-session awareness of the
 
 With the new Memory Systems, you have access to:
 1. **Long-Term Memory:** Retrieval-Augmented Generation (RAG) based on L1/L3 database entries.
-2. **Short-Term Working Memory:** Active task canvases and reference-offloading to keep your prompt context clean and small during long conversations.
-3. **Software Engineering Tools:** Structured memory types (e.g., failed attempts, debug traces, file histories, task handovers).
+2. **L2 Pre-Warming Context (SNN):** Spiking Neural Network-inspired skill potentials. Invoking skills/tools charges potentials (up to `4.0`), while idle turns/time apply exponential decay. Active skill hints (potential `>= 0.3`) are dynamically injected under `<skill-prewarm>` system prompt blocks.
+3. **Short-Term Working Memory:** Active task canvases and reference-offloading to keep your prompt context clean and small during long conversations.
+4. **Software Engineering Tools:** Structured memory types (e.g., failed attempts, debug traces, file histories, task handovers).
 
 ---
 
 ## Workflow
 
 1. **Resolve and Start:** Call `mcp_brainrouter_resolve_session` at the beginning of a turn.
-2. **Context Setup:** Invoke `memory_recall` and `memory_working_context` to inject long-term and short-term working state.
+2. **Context Setup & Pre-Warming:** Scan your system prompt for `<skill-prewarm>` XML tags and apply those pre-warmed instructions immediately. Then, invoke `memory_recall` and `memory_working_context` to inject long-term and short-term working state.
 3. **Payload Inspection:** Look up any referenced `nodeId` from the Mermaid canvas.
 4. **Execution & Offloading:** If executing a tool with output >1,000 tokens, offload via `memory_working_offload`.
 5. **Citational Signals:** Record memory citation outcomes via `memory_mark_cited`.
-6. **Passive or Manual Logging:** Capture the final turn state via passive hooks or manual `memory_capture_turn`.
+6. **Passive or Manual Logging:** Capture the final turn state via passive hooks or manual `memory_capture_turn`. This turn logging spikes the activation potentials of related skills, keeping active context charged.
 
 ## The Non-Negotiable Habits
 

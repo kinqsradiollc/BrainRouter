@@ -1,9 +1,8 @@
 /**
  * Skill Pre-warming Pipeline
  *
- * Analyses recent `skill_context` L1 memories to detect which skills the user
- * has been working with heavily. When a skill appears ≥ minHits times within
- * the last `windowN` L1 captures, its registered extraction hints are proactively
+ * Tracks persistent skill activation potential. When a skill potential crosses
+ * the configured threshold, its registered extraction hints are proactively
  * injected into `appendSystemContext` as a `<skill-prewarm>` block.
  *
  * This is opt-in via BRAINROUTER_PREWARM_ENABLED=true (disabled by default).
@@ -13,62 +12,153 @@ import type { IMemoryStore } from "@brainrouter/types";
 
 export interface PrewarmResult {
   skillName: string;
-  hitCount: number;
+  potential: number;
   hints: string;
 }
 
+export interface SkillActivationConfig {
+  halfLifeMinutes: number;
+  minTurnDecay: number;
+  threshold: number;
+  spikeAmount: number;
+  maxPotential: number;
+}
+
+function parseNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getActivationConfig(overrides: Partial<SkillActivationConfig> = {}): SkillActivationConfig {
+  const halfLifeMinutes = overrides.halfLifeMinutes
+    ?? parseNumber(process.env.BRAINROUTER_SKILL_HALF_LIFE_MINUTES, 10);
+  const minTurnDecay = overrides.minTurnDecay
+    ?? parseNumber(process.env.BRAINROUTER_SKILL_MIN_TURN_DECAY, 0.05);
+  const threshold = overrides.threshold
+    ?? parseNumber(process.env.BRAINROUTER_SKILL_PREWARM_THRESHOLD, 0.3);
+  const spikeAmount = overrides.spikeAmount
+    ?? parseNumber(process.env.BRAINROUTER_SKILL_SPIKE_AMOUNT, 1.0);
+  const maxPotential = overrides.maxPotential
+    ?? parseNumber(process.env.BRAINROUTER_SKILL_MAX_POTENTIAL, 4.0);
+
+  return {
+    halfLifeMinutes: halfLifeMinutes > 0 ? halfLifeMinutes : 10,
+    minTurnDecay: minTurnDecay >= 0 && minTurnDecay < 1 ? minTurnDecay : 0.05,
+    threshold: threshold >= 0 ? threshold : 0.3,
+    spikeAmount: spikeAmount >= 0 ? spikeAmount : 1.0,
+    maxPotential: maxPotential > 0 ? maxPotential : 4.0,
+  };
+}
+
+export function decayPotential(params: {
+  potential: number;
+  lastDecayTime: string;
+  now?: Date;
+  halfLifeMinutes?: number;
+  minTurnDecay?: number;
+}): number {
+  const config = getActivationConfig({
+    halfLifeMinutes: params.halfLifeMinutes,
+    minTurnDecay: params.minTurnDecay,
+  });
+  const lastDecayMs = Date.parse(params.lastDecayTime);
+  if (!Number.isFinite(params.potential) || params.potential <= 0) return 0;
+
+  const nowMs = (params.now ?? new Date()).getTime();
+  const elapsedMinutes = Number.isFinite(lastDecayMs)
+    ? Math.max(0, (nowMs - lastDecayMs) / 60_000)
+    : 0;
+  const lambda = Math.log(2) / config.halfLifeMinutes;
+  const timeDecayed = params.potential * Math.exp(-lambda * elapsedMinutes);
+  const turnDecayed = params.potential * (1 - config.minTurnDecay);
+  return Math.max(0, Math.min(timeDecayed, turnDecayed));
+}
+
 /**
- * Detect which skills qualify for pre-warming based on recent activity.
- * Returns an array of skill names and their hints, sorted by hit count (most active first).
+ * Increase a skill's activation potential after explicit skill use.
  *
- * @param userId - The user to analyse
- * @param store - IMemoryStore instance
- * @param windowN - How many recent L1s to scan (default: BRAINROUTER_PREWARM_WINDOW or 10)
- * @param minHits - Min occurrences to qualify (default: BRAINROUTER_PREWARM_MIN_HITS or 3)
- * @param excludeSkill - Active skill to exclude (already injected via capture pipeline)
+ * The existing potential is decayed up to `now`, then the spike is applied and
+ * capped. The result is persisted so activation survives process restarts.
+ */
+export function spikeSkill(params: {
+  userId: string;
+  skillName: string;
+  store: IMemoryStore;
+  now?: Date;
+  config?: Partial<SkillActivationConfig>;
+}) {
+  const skillName = params.skillName.trim();
+  if (!skillName) return null;
+
+  const config = getActivationConfig(params.config);
+  const now = params.now ?? new Date();
+  const nowIso = now.toISOString();
+  const existing = params.store
+    .getSkillActivations(params.userId)
+    .find((record) => record.skillName === skillName);
+  const decayed = existing
+    ? decayPotential({
+      potential: existing.potential,
+      lastDecayTime: existing.lastDecayTime,
+      now,
+      halfLifeMinutes: config.halfLifeMinutes,
+      minTurnDecay: config.minTurnDecay,
+    })
+    : 0;
+  const potential = Math.min(config.maxPotential, decayed + config.spikeAmount);
+  const activation = { skillName, potential, lastDecayTime: nowIso };
+  params.store.upsertSkillActivations(params.userId, [activation]);
+  return activation;
+}
+
+/**
+ * Detect which skills qualify for pre-warming based on persistent activation potential.
+ * Returns an array of skill names and their hints, sorted by potential.
  */
 export function detectPrewarmSkills(params: {
   userId: string;
   store: IMemoryStore;
-  windowN?: number;
-  minHits?: number;
+  threshold?: number;
   excludeSkill?: string;
+  now?: Date;
+  config?: Partial<SkillActivationConfig>;
 }): PrewarmResult[] {
   const {
     userId,
     store,
-    windowN = parseInt(process.env.BRAINROUTER_PREWARM_WINDOW ?? "10", 10),
-    minHits = parseInt(process.env.BRAINROUTER_PREWARM_MIN_HITS ?? "3", 10),
     excludeSkill,
   } = params;
 
-  // Guard: invalid config values fall back to defaults
-  const safeWindow = isNaN(windowN) || windowN <= 0 ? 10 : windowN;
-  const safeMinHits = isNaN(minHits) || minHits <= 0 ? 3 : minHits;
+  const config = getActivationConfig({ ...params.config, threshold: params.threshold });
+  const now = params.now ?? new Date();
+  const activations = store.getSkillActivations(userId);
+  if (activations.length === 0) return [];
 
-  const recentL1s = store.getRecentSkillContextL1s(userId, safeWindow);
-  if (recentL1s.length === 0) return [];
+  const decayedActivations = activations.map((activation) => ({
+    skillName: activation.skillName,
+    potential: decayPotential({
+      potential: activation.potential,
+      lastDecayTime: activation.lastDecayTime,
+      now,
+      halfLifeMinutes: config.halfLifeMinutes,
+      minTurnDecay: config.minTurnDecay,
+    }),
+    lastDecayTime: activation.lastDecayTime,
+  }));
 
-  // Count occurrences per skill
-  const hitCounts = new Map<string, number>();
-  for (const { skillTag } of recentL1s) {
-    if (!skillTag || skillTag === excludeSkill) continue;
-    hitCounts.set(skillTag, (hitCounts.get(skillTag) ?? 0) + 1);
-  }
-
-  // Filter by minimum threshold and load hints
   const results: PrewarmResult[] = [];
-  for (const [skillName, hitCount] of hitCounts.entries()) {
-    if (hitCount < safeMinHits) continue;
+  for (const activation of decayedActivations) {
+    if (activation.skillName === excludeSkill) continue;
+    if (activation.potential < config.threshold) continue;
 
-    const hints = store.getSkillHints(skillName);
+    const hints = store.getSkillHints(activation.skillName);
     if (!hints) continue; // No hints registered — nothing useful to inject
 
-    results.push({ skillName, hitCount, hints });
+    results.push({ skillName: activation.skillName, potential: activation.potential, hints });
   }
 
-  // Sort by most active skill first
-  results.sort((a, b) => b.hitCount - a.hitCount);
+  results.sort((a, b) => b.potential - a.potential || a.skillName.localeCompare(b.skillName));
   return results;
 }
 
@@ -79,9 +169,9 @@ export function detectPrewarmSkills(params: {
 export function buildPrewarmBlock(prewarmResults: PrewarmResult[]): string {
   if (prewarmResults.length === 0) return "";
 
-  const sections = prewarmResults.map(({ skillName, hitCount, hints }) =>
-    `  [${skillName}] (active ${hitCount}x recently)\n  ${hints.split("\n").join("\n  ")}`
+  const sections = prewarmResults.map(({ skillName, potential, hints }) =>
+    `  [${skillName}] (activation ${potential.toFixed(2)})\n  ${hints.split("\n").join("\n  ")}`
   );
 
-  return `<skill-prewarm>\n  Skills detected as recently active — hints pre-loaded:\n\n${sections.join("\n\n---\n\n")}\n</skill-prewarm>`;
+  return `<skill-prewarm>\n  Skills detected as currently active — hints pre-loaded:\n\n${sections.join("\n\n---\n\n")}\n</skill-prewarm>`;
 }

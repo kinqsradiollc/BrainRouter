@@ -61,6 +61,10 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
+    if (params.activeSkill) {
+      memoryEngine.spikeSkill(effectiveUserId, params.activeSkill);
+    }
+
     const result = await memoryEngine.capture({
       userId: effectiveUserId,
       sessionKey: params.sessionKey,

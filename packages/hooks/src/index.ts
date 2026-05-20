@@ -11,3 +11,4 @@ export * from "./useEvidence.js";
 export * from "./useRecallInspector.js";
 export * from "./useWorkingMemory.js";
 export * from "./useHookStatus.js";
+export * from "./useSkillActivations.js";
