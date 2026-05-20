@@ -107,9 +107,9 @@ Memory Priority
 *   **Synaptic Pruning (Auto-Archive)**:
     If a memory is retrieved but ignored by the agent:
     
-    $$N_{\text{never\_cited}} \leftarrow N_{\text{never\_cited}} + 1$$
+    $$N_{\text{never-cited}} \leftarrow N_{\text{never-cited}} + 1$$
     
-    Once $N_{\text{never\_cited}} \geq 10$, the fact is pruned (archived) to prevent future prompt pollution.
+    Once $N_{\text{never-cited}} \geq 10$, the fact is pruned (archived) to prevent future prompt pollution.
 
 ---
 

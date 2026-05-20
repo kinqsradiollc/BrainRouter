@@ -111,7 +111,7 @@ Where $N_{\text{citations}}$ is the number of times the record has been cited. T
 #### Synaptic Pruning (Auto-Archiving)
 To prevent noise accumulation, if a cognitive record is surfaced in recall but the agent chooses *not* to cite it, its `neverCitedCount` increases. Once:
 
-$$N_{\text{never\_cited}} \geq 10$$
+$$N_{\text{never-cited}} \geq 10$$
 
 The record is **pruned** (moved to the archive tables), keeping the search index high-fidelity.
 

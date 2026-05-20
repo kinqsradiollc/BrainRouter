@@ -101,7 +101,7 @@ Both engines emulate biological cognitive phenomena, but they express these dyna
     *   *Synaptic Strengthening*: If the agent cites a recalled record, its priority gets boosted, offsetting time-decay:
         $$P_{\text{effective}} = P_{\text{decayed}} \times (1 + \min(N_{\text{citations}} \times 0.05, 0.30))$$
     *   *Synaptic Pruning*: If a record is surfaced in query results but the agent ignores/does not cite it, `neverCitedCount` increments. If:
-        $$N_{\text{never\_cited}} \geq 10$$
+        $$N_{\text{never-cited}} \geq 10$$
         the memory is pruned (moved to the archive tables) to maintain a high-signal index.
 *   **agentmemory**: Relies on a passive feedback mechanism. When memories are retrieved, their internal access count increases, delaying decay. Pruning occurs via conflict/contradiction resolution: if an incoming memory contradicts an existing one, the old record is automatically superseded and archived.
 
