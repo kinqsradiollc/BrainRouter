@@ -133,6 +133,7 @@ For every request:
 *Focus: Persistent awareness, cross-session recall, and user profiling.*
 - **`agent-memory`**: Mandatory skill for managing the memory engine lifecycle (Recall/Capture/Cite).
 - **`mcp_brainrouter_memory_search`**: (Tool) Use for deep retrieval when injected context is insufficient. Pass `asOf` (ISO 8601) to query what the memory engine knew at a specific point in time — useful for auditing past decisions.
+- **`mcp_brainrouter_memory_graph_query`**: (Tool) Use to query the GraphRAG knowledge graph. Retrieves entities and their relationships up to 2 hops away from a given entity. Excellent for discovering codebase architecture, implicit dependencies, or tracking how variables/concepts interconnect across the system.
 - **`mcp_brainrouter_memory_mark_cited`**: (Tool) **Required after every response.** Signal which recalled memories you used (`citedRecordIds`) vs. all that were surfaced (`allRecalledRecordIds`). Drives citation-boosted recall ranking and auto-archives noise memories that are never cited.
 - **`mcp_brainrouter_memory_contradictions`**: (Tool) Use to check for conflicting user instructions or past decisions.
 
@@ -182,6 +183,7 @@ Look up the required resource name for your scenario, then use the appropriate t
   - `mcp_brainrouter_memory_mark_cited` → signal citations after response (required — drives ACE loop)
   - `mcp_brainrouter_memory_capture_turn` → persist turn as final tool call (optional if passive hooks active)
   - `mcp_brainrouter_memory_search` → deep retrieval (supports `asOf` ISO param for point-in-time)
+  - `mcp_brainrouter_memory_graph_query` → query the GraphRAG knowledge graph to retrieve connected entities/relationships up to 2 hops away (useful for discovering architecture dependencies or related constraints)
   - `mcp_brainrouter_memory_contradictions` → surface + resolve conflicting instructions
 - **Memory Tools — Working Memory / Context Reduction**:
   - `mcp_brainrouter_memory_working_context` → fetch Mermaid task canvas & state block

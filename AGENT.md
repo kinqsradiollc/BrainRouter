@@ -140,6 +140,7 @@ Look up the required resource name for your scenario, then use the appropriate t
   - `mcp_brainrouter_memory_mark_cited` → signal citations after response (required — drives ACE loop)
   - `mcp_brainrouter_memory_capture_turn` → persist turn as final tool call (optional if passive hooks active)
   - `mcp_brainrouter_memory_search` → deep retrieval (supports `asOf` ISO param for point-in-time)
+  - `mcp_brainrouter_memory_graph_query` → query the GraphRAG knowledge graph to retrieve connected entities/relationships up to 2 hops away (useful for discovering architecture dependencies or related constraints)
   - `mcp_brainrouter_memory_contradictions` → surface + resolve conflicting instructions
 - **Memory Tools — Working Memory / Context Reduction**:
   - `mcp_brainrouter_memory_working_context` → fetch Mermaid task canvas & state block
