@@ -288,7 +288,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_working_context':
         case 'memory_working_offload':
         case 'memory_working_reset':
-          return await handleMemoryWorkingTool(request.params.name, request.params.arguments);
+          return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

@@ -1,6 +1,6 @@
 {
   "sessionKey": "default",
-  "workDir": "/Users/anhdang/Documents/Github/BrainRouter/mcp/global/.brainrouter/work/anhdang_contact/default",
+  "workDir": "/Users/anhdang/Documents/Github/BrainRouter/mcp/global/.brainrouter/work/admin/default",
   "pressureLevel": "none",
   "contextWindowTokens": 128000,
   "estimatedTokens": 0,
@@ -9,5 +9,5 @@
     "refs": [],
     "rawPayloadsIncluded": false
   },
-  "updatedAt": "2026-05-20T12:58:08.897Z"
+  "updatedAt": "2026-05-20T14:15:16.171Z"
 }

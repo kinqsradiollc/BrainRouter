@@ -80,7 +80,7 @@ export function detectTokenPressure(estimatedTokens: number, contextWindowTokens
 
 function getWorkspaceId(workspacePath: string | undefined): string {
   if (!workspacePath) return "global";
-  if (/^[a-f0-9]{12}$/i.test(workspacePath)) {
+  if (isWorkspaceId(workspacePath)) {
     return workspacePath;
   }
   if (isForeignAbsolutePath(workspacePath)) {
@@ -94,11 +94,15 @@ function getWorkspaceId(workspacePath: string | undefined): string {
   }
 }
 
+function isWorkspaceId(value: string): boolean {
+  return value === "global" || /^[a-f0-9]{12}$/i.test(value);
+}
+
 export function getWorkingMemoryDir(workspacePath: string | undefined, userId: string, sessionKey: string): string {
   let root = workspacePath ?? "";
   let isWritable = false;
 
-  if (root.trim()) {
+  if (root.trim() && !isWorkspaceId(root)) {
     if (!isForeignAbsolutePath(root)) {
       try {
         root = path.resolve(root);

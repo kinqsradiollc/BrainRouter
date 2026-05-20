@@ -94,9 +94,9 @@ export default function RecallInspectorPage() {
                   🧠 Neural Spark Spreading Activation Trace
                 </div>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  {explanation.sparkedNodes.map((node: any) => (
+                  {explanation.sparkedNodes.map((node: any, index: number) => (
                     <div
-                      key={node.id}
+                      key={node.id ? `${node.id}-${index}` : index}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -120,7 +120,7 @@ export default function RecallInspectorPage() {
                         {node.id}
                       </span>
                       <span style={{ fontSize: "10px", fontFamily: "monospace", color: "var(--color-ash-text)" }}>
-                        {node.potential.toFixed(2)}V
+                        {(node.potential ?? 0).toFixed(2)}V
                       </span>
                       {node.fired && (
                         <span style={{ fontSize: "8px", padding: "1px 4px", borderRadius: "3px", background: "rgba(217, 119, 6, 0.2)", color: "var(--color-golden-accent)", fontWeight: "bold" }}>

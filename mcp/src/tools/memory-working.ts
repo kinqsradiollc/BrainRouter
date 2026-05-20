@@ -68,7 +68,11 @@ export const memoryWorkingToolSchemas = [
   },
 ] as const;
 
-export async function handleMemoryWorkingTool(name: string, args: unknown) {
+export async function handleMemoryWorkingTool(
+  name: string,
+  args: unknown,
+  options?: { defaultUserId?: string }
+) {
   switch (name) {
     case "memory_working_context": {
       const params = z.object({
@@ -78,7 +82,7 @@ export async function handleMemoryWorkingTool(name: string, args: unknown) {
         contextWindowTokens: z.number().int().positive().optional(),
         estimatedTokens: z.number().int().nonnegative().optional(),
       }).parse(args);
-      const result = getWorkingContext(params.workspacePath, params.userId ?? "default", params.sessionKey, {
+      const result = getWorkingContext(params.workspacePath, params.userId ?? options?.defaultUserId ?? "default", params.sessionKey, {
         nodeId: params.nodeId,
         activeNodeId: params.activeNodeId,
         contextWindowTokens: params.contextWindowTokens,
@@ -97,11 +101,11 @@ export async function handleMemoryWorkingTool(name: string, args: unknown) {
         estimatedTokens: z.number().int().nonnegative().optional(),
         forceAggressive: z.boolean().optional(),
       }).parse(args);
-      return toolResult(offloadWorkingPayload({ ...params, userId: params.userId ?? "default" }));
+      return toolResult(offloadWorkingPayload({ ...params, userId: params.userId ?? options?.defaultUserId ?? "default" }));
     }
     case "memory_working_reset": {
       const params = z.object(baseWorkingInput).parse(args);
-      return toolResult(resetWorkingMemory(params.workspacePath, params.userId ?? "default", params.sessionKey));
+      return toolResult(resetWorkingMemory(params.workspacePath, params.userId ?? options?.defaultUserId ?? "default", params.sessionKey));
     }
     default:
       throw new Error(`Unknown working memory tool: ${name}`);

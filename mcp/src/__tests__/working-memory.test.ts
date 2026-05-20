@@ -151,6 +151,32 @@ describe("short-term working memory tools", () => {
     expect(userBContext.canvas).not.toContain("User A");
   });
 
+  it("uses the authenticated MCP user when a tool call omits userId", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "brainrouter-working-default-user-"));
+    const sessionKey = "authenticated-session";
+
+    await handleMemoryWorkingTool("memory_working_offload", {
+      workspacePath,
+      sessionKey,
+      payload: "payload for authenticated user",
+      title: "Authenticated user",
+    }, { defaultUserId: "admin" });
+
+    const adminContext = parseToolJson(await handleMemoryWorkingTool("memory_working_context", {
+      workspacePath,
+      sessionKey,
+    }, { defaultUserId: "admin" }));
+    const fallbackContext = parseToolJson(await handleMemoryWorkingTool("memory_working_context", {
+      workspacePath,
+      sessionKey,
+    }));
+
+    expect(adminContext.workDir).toContain(join(".brainrouter", "work", "admin", sessionKey));
+    expect(adminContext.canvas).toContain("Authenticated user");
+    expect(fallbackContext.workDir).toContain(join(".brainrouter", "work", "default", sessionKey));
+    expect(fallbackContext.canvas).not.toContain("Authenticated user");
+  });
+
   it("routes foreign absolute workspace paths to the user fallback instead of the process cwd", async () => {
     if (process.platform === "win32") return;
 
@@ -170,6 +196,21 @@ describe("short-term working memory tools", () => {
     expect(result.state.workDir).not.toContain(foreignWorkspacePath);
     expect(existsSync(join(result.state.workDir, "refs"))).toBe(true);
     expect(existsSync(pollutedPath)).toBe(false);
+    rmSync(result.state.workDir, { recursive: true, force: true });
+  });
+
+  it("treats listed workspace IDs as fallback-store IDs, not relative paths", async () => {
+    const sessionKey = "workspace-id-session";
+    const result = parseToolJson(await handleMemoryWorkingTool("memory_working_offload", {
+      workspacePath: "abc123abc123",
+      userId: "workspace-id-user",
+      sessionKey,
+      payload: "payload for listed workspace id",
+      title: "Listed workspace id",
+    }));
+
+    expect(result.state.workDir).toBe(join(homedir(), ".brainrouter", "work", "workspace-id-user", "abc123abc123", sessionKey));
+    expect(existsSync(join(resolve("abc123abc123"), ".brainrouter"))).toBe(false);
     rmSync(result.state.workDir, { recursive: true, force: true });
   });
 });
