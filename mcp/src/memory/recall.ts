@@ -1,10 +1,11 @@
 import type { IMemoryStore } from "@brainrouter/types";
-import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult, L1Record } from "@brainrouter/types";
+import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult, L1Record, RecallExplanation } from "@brainrouter/types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
+import { randomUUID } from "node:crypto";
 
 function effectivePriority(memory: L1FtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
@@ -35,7 +36,9 @@ export class MemoryRecallPipeline {
     sessionKey: string;
     query: string;
     activeSkill?: string;
+    explain?: boolean;
   }): Promise<RecallResult> {
+    const startTime = Date.now();
     const { userId, sessionKey, query, activeSkill } = params;
     const intent = detectTaskIntent(query);
 
@@ -55,7 +58,29 @@ export class MemoryRecallPipeline {
     }
 
     if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
-      return { recallStrategy: this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty" };
+      const emptyStrategy = this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty";
+      const durationMs = Date.now() - startTime;
+      const recallExplanation: RecallExplanation = {
+        ftsHits: 0,
+        vecHits: 0,
+        filePathHits: 0,
+        rrfTopScore: 0,
+        intentDetected: intent,
+        typeBoosts: {},
+        skillBoostApplied: false,
+        rerankerUsed: false,
+        graphExpansion: false,
+        citationBoosts: {},
+        durationMs,
+        rerankerCandidates: 0,
+        scoredRecords: [],
+      };
+
+      if (!params.explain) {
+        this.writeRecallOp(userId, sessionKey, query, emptyStrategy, 0, durationMs, recallExplanation);
+      }
+
+      return { recallStrategy: emptyStrategy, recallExplanation };
     }
 
     // 3. RRF Merge (Reciprocal Rank Fusion)
@@ -87,10 +112,17 @@ export class MemoryRecallPipeline {
       }
     });
 
+    // Compute top RRF score before blending
+    const rrfValues = Array.from(rrfMap.values()).map(v => v.rrfScore);
+    const rrfTopScore = rrfValues.length > 0 ? Math.max(...rrfValues) : 0;
+
     // 4. Combine RRF with Decay + Skill boost
+    const typeBoosts: Record<string, number> = {};
+    const citationBoosts: Record<string, number> = {};
+    let skillBoostApplied = false;
+
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // Scale RRF score (which is typically small, e.g. 1/60 + 1/60 ≈ 0.033) to 0-1ish range
-      // For top 1/1, max possible is 2/61 ≈ 0.0327. Let's multiply by 30 to get ~1.0
       const baseScore = rrfScore * 30;
 
       // Decay priority (0-100) contributes to the final blend
@@ -101,9 +133,21 @@ export class MemoryRecallPipeline {
 
       if (activeSkill && record.skill_tag === activeSkill) {
         finalScore *= 1.2;
+        skillBoostApplied = true;
       }
 
-      finalScore *= getMemoryTypeConfig(record.type).intentAffinity[intent] ?? 1;
+      const intentMultiplier = getMemoryTypeConfig(record.type).intentAffinity[intent] ?? 1;
+      if (intentMultiplier !== 1) {
+        typeBoosts[record.type] = intentMultiplier;
+      }
+      finalScore *= intentMultiplier;
+
+      // Track citation boost for explanation
+      const citationCount = (record as L1FtsResult).citation_count ?? 0;
+      const citBoost = Math.min(citationCount * 0.05, 0.30);
+      if (citBoost > 0) {
+        citationBoosts[record.record_id] = citBoost;
+      }
 
       return { record, score: finalScore };
     });
@@ -171,6 +215,7 @@ export class MemoryRecallPipeline {
       activeSkill,
       store: this.store
     });
+    const hasGraphExpansion = !!graphContext;
     if (graphContext) {
       appendSystemContext += `\n${graphContext}`;
     }
@@ -201,15 +246,94 @@ export class MemoryRecallPipeline {
       skillTag: r.record.skill_tag
     }));
 
+    const recallStrategy = vecResults.length > 0
+      ? (usedReranker ? "hybrid+rerank" : "hybrid")
+      : (usedReranker ? "keyword+rerank" : (filePathResults.length > 0 ? "keyword+file" : "keyword"));
+
+    const durationMs = Date.now() - startTime;
+
+    // Build recallExplanation — always populated so engine/timeline can log it
+    const recallExplanation: RecallExplanation = {
+      ftsHits: ftsResults.length,
+      vecHits: vecResults.length,
+      filePathHits: filePathResults.length,
+      rrfTopScore,
+      intentDetected: intent !== "build" ? intent : "build", // intent is always a valid value
+      typeBoosts,
+      skillBoostApplied,
+      rerankerUsed: usedReranker,
+      graphExpansion: hasGraphExpansion,
+      citationBoosts,
+      durationMs,
+      rerankerCandidates: rerankCandidates.length,
+      scoredRecords: topResults.map(r => ({
+        recordId: r.record.record_id,
+        finalScore: r.score,
+        type: r.record.type,
+      })),
+    };
+
+    // Write recall operation to audit log (for Timeline page)
+    if (!params.explain) {
+      this.writeRecallOp(userId, sessionKey, query, recallStrategy, topResults.length, durationMs, recallExplanation);
+    }
+
     return {
       prependContext,
       appendSystemContext,
       recalledL1Memories,
-      recallStrategy: vecResults.length > 0 
-        ? (usedReranker ? "hybrid+rerank" : "hybrid") 
-        : (usedReranker ? "keyword+rerank" : (filePathResults.length > 0 ? "keyword+file" : "keyword")),
+      recallStrategy,
       activeScene: topScenes[0]?.sceneName,
+      recallExplanation,
     };
+  }
+
+  /**
+   * Re-run a query in explain mode — returns full breakdown without side effects.
+   * Does NOT write a memory_operations row.
+   */
+  public async explainRecall(params: {
+    userId: string;
+    sessionKey: string;
+    query: string;
+    activeSkill?: string;
+  }): Promise<RecallResult> {
+    return this.recall({ ...params, explain: true });
+  }
+
+  private writeRecallOp(
+    userId: string,
+    sessionKey: string,
+    query: string,
+    strategy: string,
+    hitCount: number,
+    durationMs: number,
+    explanation?: RecallExplanation
+  ) {
+    try {
+      this.store.insertOperation({
+        id: randomUUID(),
+        userId,
+        recordId: null,
+        operation: "recall",
+        actor: "agent",
+        sessionKey,
+        reason: "",
+        createdAt: new Date().toISOString(),
+        metadata: {
+          query: query.slice(0, 500), // truncate long queries
+          strategy,
+          hitCount,
+          durationMs,
+          ftsHits: explanation?.ftsHits ?? 0,
+          vecHits: explanation?.vecHits ?? 0,
+          intentDetected: explanation?.intentDetected ?? "none",
+          rerankerUsed: explanation?.rerankerUsed ?? false,
+        },
+      });
+    } catch {
+      // Audit writes are best-effort — never let them block recall
+    }
   }
 
   private expandWithFilePathMatches(userId: string, query: string): L1FtsResult[] {

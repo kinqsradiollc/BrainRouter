@@ -2,6 +2,7 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getSafeWorkspacePath } from '../resolver.js';
 
 export const memoryResolveSessionToolSchema = {
   name: 'memory_resolve_session',
@@ -37,6 +38,7 @@ function isUniqueId(key: string): boolean {
 
 export async function handleMemoryResolveSession(args: unknown) {
   const { workspacePath, suggestedKey } = resolveSessionSchema.parse(args);
+  const safeWorkspacePath = getSafeWorkspacePath(workspacePath);
 
   // 1. If suggestedKey is a valid clean unique ID, use it directly
   if (suggestedKey && isUniqueId(suggestedKey)) {
@@ -51,7 +53,7 @@ export async function handleMemoryResolveSession(args: unknown) {
   }
 
   // 2. Ensure .brainrouter directory exists in the workspace
-  const brainrouterDir = path.join(workspacePath, '.brainrouter');
+  const brainrouterDir = path.join(safeWorkspacePath, '.brainrouter');
   const cacheFilePath = path.join(brainrouterDir, 'active_session.json');
 
   try {
@@ -95,7 +97,8 @@ export async function handleMemoryResolveSession(args: unknown) {
   const sessionData = {
     sessionKey: newSessionKey,
     createdAt: new Date().toISOString(),
-    workspace: workspacePath
+    workspace: workspacePath,
+    cacheWorkspace: safeWorkspacePath,
   };
 
   try {

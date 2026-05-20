@@ -3,8 +3,10 @@
 // Determines globalRoot and localRoot at startup.
 // ─────────────────────────────────────────────
 
+import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'fs';
-import { resolve, dirname, join, basename } from 'path';
+import { resolve, dirname, join, basename, isAbsolute, win32, posix } from 'path';
 import { fileURLToPath } from 'url';
 import type { RegistryConfig, BrainRouterConfig } from './types.js';
 
@@ -33,6 +35,27 @@ function findRepoRoot(start: string): string {
 }
 
 const GLOBAL_ROOT = findRepoRoot(__dirname);
+
+export function isForeignAbsolutePath(workspacePath: string | undefined): boolean {
+  const candidate = workspacePath?.trim();
+  if (!candidate) return false;
+
+  const absoluteOnSomePlatform = win32.isAbsolute(candidate) || posix.isAbsolute(candidate);
+  return absoluteOnSomePlatform && !isAbsolute(candidate);
+}
+
+function fallbackWorkspacePath(workspacePath: string): string {
+  const workspaceHash = createHash('sha256').update(workspacePath).digest('hex').slice(0, 16);
+  return join(homedir(), '.brainrouter', 'fallback-workspaces', workspaceHash);
+}
+
+export function getSafeWorkspacePath(workspacePath: string): string {
+  if (isForeignAbsolutePath(workspacePath)) {
+    return fallbackWorkspacePath(workspacePath);
+  }
+
+  return resolve(workspacePath);
+}
 
 /**
  * Parse --root <path> from process.argv.

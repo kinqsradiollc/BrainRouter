@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { CursorPaginationOptions, ExtractionStatus, ImportResult, L0Record, L1Record, L1FtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
+import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, L0Record, L1Record, L1FtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@brainrouter/types";
 
@@ -207,6 +207,44 @@ export class SqliteMemoryStore implements IMemoryStore {
 
   public isVecAvailable(): boolean {
     return this.vecLoaded && this.vecDimensions > 0;
+  }
+
+  public async reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number> {
+    if (!this.vecLoaded) return 0;
+
+    const rows = this.db.prepare(`
+      SELECT r.record_id, r.content
+      FROM l1_records r
+      LEFT JOIN l1_vec v ON r.record_id = v.record_id
+      WHERE r.invalid_at IS NULL
+        AND r.archived = 0
+        AND v.record_id IS NULL
+      ORDER BY r.created_time ASC, r.record_id ASC
+    `).all() as Array<{ record_id: string; content: string }>;
+
+    let successCount = 0;
+    for (const row of rows) {
+      try {
+        const embedding = await embedder(row.content);
+        this.upsertL1Vec(row.record_id, embedding);
+        successCount += 1;
+      } catch (error) {
+        console.error(
+          `[BrainRouter] Failed to re-embed record ${row.record_id}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+    return successCount;
+  }
+
+  public getSqliteVersion(): string {
+    try {
+      const row = this.db.prepare("SELECT sqlite_version() AS version").get() as { version?: string } | undefined;
+      return row?.version ?? "unknown";
+    } catch {
+      return "unknown";
+    }
   }
 
   private initSchema() {
@@ -614,7 +652,7 @@ export class SqliteMemoryStore implements IMemoryStore {
   // L1 Methods
   // ============================
 
-  public upsertL1Batch(entries: Array<{ record: L1Record; embedding?: Float32Array }>) {
+  public upsertL1Batch(entries: Array<{ record: L1Record; embedding?: Float32Array }>, options?: { skipAudit?: boolean }) {
     this.db.exec("BEGIN");
     try {
       const deleteFts = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ? AND user_id = ?");
@@ -645,17 +683,22 @@ export class SqliteMemoryStore implements IMemoryStore {
           this.stmtL1VecInsert.run(record.id, entry.embedding);
         }
         this.replaceFileIndex(record);
-        this.insertOperation({
-          id: randomUUID(),
-          userId: record.userId,
-          recordId: record.id,
-          operation: "l1_upsert",
-          actor: "system",
-          sessionKey: record.sessionKey,
-          reason: "",
-          createdAt: new Date().toISOString(),
-          metadata: { batch: true, type: record.type },
-        });
+
+        // skipAudit suppresses per-record l1_upsert noise; callers (e.g. extraction pipeline)
+        // should write one higher-level batch audit entry after the loop instead.
+        if (!options?.skipAudit) {
+          this.insertOperation({
+            id: randomUUID(),
+            userId: record.userId,
+            recordId: record.id,
+            operation: "l1_upsert",
+            actor: "system",
+            sessionKey: record.sessionKey,
+            reason: "",
+            createdAt: new Date().toISOString(),
+            metadata: { batch: true, type: record.type },
+          });
+        }
       }
       this.db.exec("COMMIT");
     } catch (e) {
@@ -664,7 +707,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
-  public upsertL1(record: L1Record) {
+  public upsertL1(record: L1Record, options?: { skipAudit?: boolean }) {
     this.db.exec("BEGIN");
     try {
       this.stmtL1UpsertMeta.run(
@@ -689,17 +732,22 @@ export class SqliteMemoryStore implements IMemoryStore {
       );
       this.replaceFileIndex(record);
 
-      this.insertOperation({
-        id: randomUUID(),
-        userId: record.userId,
-        recordId: record.id,
-        operation: "l1_upsert",
-        actor: "system",
-        sessionKey: record.sessionKey,
-        reason: "",
-        createdAt: new Date().toISOString(),
-        metadata: { type: record.type },
-      });
+      // skipAudit: true suppresses the automatic l1_upsert op so callers that
+      // write their own higher-level operation (e.g. memory_update) don't produce
+      // a redundant audit row for every upsert they perform.
+      if (!options?.skipAudit) {
+        this.insertOperation({
+          id: randomUUID(),
+          userId: record.userId,
+          recordId: record.id,
+          operation: "l1_upsert",
+          actor: "system",
+          sessionKey: record.sessionKey,
+          reason: "",
+          createdAt: new Date().toISOString(),
+          metadata: { type: record.type },
+        });
+      }
 
       this.db.exec("COMMIT");
     } catch (e) {
@@ -799,6 +847,36 @@ export class SqliteMemoryStore implements IMemoryStore {
     return rows.map(evidenceRowToRecord);
   }
 
+  public listEvidence(
+    userId: string,
+    filters?: EvidenceListFilters,
+    pagination?: CursorPaginationOptions<{ observedAt: string; id: string }>
+  ): MemoryEvidence[] {
+    const where = ["user_id = ?"];
+    const args: any[] = [userId];
+    if (filters?.recordId) {
+      where.push("record_id = ?");
+      args.push(filters.recordId);
+    }
+    if (filters?.kind) {
+      where.push("kind = ?");
+      args.push(filters.kind);
+    }
+    if (pagination?.cursor) {
+      where.push("(observed_at < ? OR (observed_at = ? AND id > ?))");
+      args.push(pagination.cursor.observedAt, pagination.cursor.observedAt, pagination.cursor.id);
+    }
+    args.push(pagination?.limit ?? 100);
+    const rows = this.db.prepare(`
+      SELECT id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json
+      FROM memory_evidence
+      WHERE ${where.join(" AND ")}
+      ORDER BY observed_at DESC, id ASC
+      LIMIT ?
+    `).all(...args) as any[];
+    return rows.map(evidenceRowToRecord);
+  }
+
   public insertOperation(op: MemoryOperation): void {
     this.db.prepare(`
       INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
@@ -822,10 +900,33 @@ export class SqliteMemoryStore implements IMemoryStore {
     );
   }
 
-  public getOperationLog(userId: string, options?: CursorPaginationOptions<{ createdAt: string; id: string }>): MemoryOperation[] {
+  public getOperationLog(
+    userId: string,
+    options?: CursorPaginationOptions<{ createdAt: string; id: string }>,
+    filters?: OperationLogFilters
+  ): MemoryOperation[] {
     const where = ["user_id = ?"];
     const args: any[] = [userId];
+    if (filters?.operation) {
+      where.push("operation = ?");
+      args.push(filters.operation);
+    }
+    if (filters?.sessionKey) {
+      where.push("session_key = ?");
+      args.push(filters.sessionKey);
+    }
+    if (filters?.createdAfter) {
+      where.push("created_at >= ?");
+      args.push(filters.createdAfter);
+    }
+    if (filters?.createdBefore) {
+      where.push("created_at <= ?");
+      args.push(filters.createdBefore);
+    }
     if (options?.cursor) {
+      // ORDER BY created_at DESC, id ASC:
+      // Next page = rows with an earlier timestamp, OR same timestamp with a higher id
+      // (id is sorted ASC within a timestamp, so the next rows in the same bucket have id > cursor.id).
       where.push("(created_at < ? OR (created_at = ? AND id > ?))");
       args.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
     }
@@ -1094,7 +1195,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     stmt.run(data.id, data.userId, data.recordIdA, data.recordIdB, data.reason, data.confidence, new Date().toISOString());
   }
 
-  public getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>) {
+  public getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>): ContradictionRecord[] {
     const where = ["c.user_id = ?", "c.status = 'pending'"];
     const args: any[] = [userId];
     if (pagination?.cursor) {
@@ -1111,7 +1212,7 @@ export class SqliteMemoryStore implements IMemoryStore {
       ORDER BY c.confidence DESC, c.id ASC
       LIMIT ?
     `);
-    return stmt.all(...args);
+    return stmt.all(...args) as unknown as ContradictionRecord[];
   }
 
   public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {

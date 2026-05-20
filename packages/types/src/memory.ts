@@ -166,6 +166,24 @@ export interface ImportResult {
   importedOperations: number;
 }
 
+export interface DiagnosticsBundle {
+  timestamp: string;
+  sqliteVersion: string;
+  nodeVersion: string;
+  databaseStats: {
+    userStats: {
+      total: number;
+      archived: number;
+      byType: Record<string, number>;
+      citationRate: number;
+      lastRecallAt: string | null;
+      extraction: ExtractionStatus;
+    };
+  };
+  envKeys: string[];
+  recentErrors: MemoryOperation[];
+}
+
 // ============================
 // Vector & FTS Search Results
 // ============================
@@ -232,6 +250,39 @@ export type MemoryTaskIntent =
 // Result Types
 // ============================
 
+// ============================
+// Recall Explainability (Phase 3)
+// ============================
+
+export interface RecallExplanation {
+  /** Number of FTS5 BM25 hits returned before RRF merge. */
+  ftsHits: number;
+  /** Number of vector search hits returned before RRF merge. */
+  vecHits: number;
+  /** Number of file-path expansion hits. */
+  filePathHits: number;
+  /** Top RRF fusion score (pre-decay). */
+  rrfTopScore: number;
+  /** Task intent detected from the query. */
+  intentDetected: MemoryTaskIntent | "none";
+  /** Memory types that received an intent boost (type → multiplier). */
+  typeBoosts: Record<string, number>;
+  /** Whether the active skill triggered a 1.2× skill boost. */
+  skillBoostApplied: boolean;
+  /** Whether the neural reranker was used in Stage 3. */
+  rerankerUsed: boolean;
+  /** Whether graph context expansion was appended. */
+  graphExpansion: boolean;
+  /** Per-record citation boost contribution (recordId → boost). */
+  citationBoosts: Record<string, number>;
+  /** Total recall pipeline duration in milliseconds. */
+  durationMs: number;
+  /** Number of candidates sent to reranker (pre-filter). */
+  rerankerCandidates: number;
+  /** Final ranked records (recordId → finalScore). */
+  scoredRecords: Array<{ recordId: string; finalScore: number; type: string }>;
+}
+
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
@@ -245,6 +296,8 @@ export interface RecallResult {
   personaSummary?: string;
   /** Current most active scene name (for metrics/debugging). */
   activeScene?: string;
+  /** Full recall pipeline explanation (populated in explain mode or always). */
+  recallExplanation?: RecallExplanation;
 }
 
 export interface CaptureResult {
@@ -337,6 +390,25 @@ export interface L3PersonaRecord {
   l1CountAtGeneration: number;
   createdTime: string;
   updatedTime: string;
+}
+
+export interface ContradictionRecord {
+  id: string;
+  user_id?: string;
+  userId?: string;
+  record_id_a?: string;
+  recordIdA?: string;
+  record_id_b?: string;
+  recordIdB?: string;
+  reason: string;
+  confidence: number;
+  status?: "pending" | "resolved" | "dismissed";
+  created_time?: string;
+  createdTime?: string;
+  content_a?: string;
+  contentA?: string;
+  content_b?: string;
+  contentB?: string;
 }
 
 export interface SchedulerState {

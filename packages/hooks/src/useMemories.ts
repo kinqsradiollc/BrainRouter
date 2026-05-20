@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { BrainRouterClient } from "@brainrouter/sdk";
+import type { MemoryListItem } from "@brainrouter/types";
 import { useCursorPagination } from "./useCursorPagination.js";
 
 export function useMemories(client: BrainRouterClient) {
@@ -7,7 +8,7 @@ export function useMemories(client: BrainRouterClient) {
     return client.getMemories(params);
   }, [client]);
 
-  const { items: memories, ...pagination } = useCursorPagination("memories", fetchMemories);
+  const { items: memories, ...pagination } = useCursorPagination<MemoryListItem, "memories">("memories", fetchMemories);
 
   return { memories, ...pagination };
 }

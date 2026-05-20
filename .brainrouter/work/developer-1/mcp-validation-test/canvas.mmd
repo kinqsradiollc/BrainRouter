@@ -1,0 +1,8 @@
+flowchart TD
+  w1779238824776-c0ceb0d9["Investigate Memory DB Timeouts\\nIdentified that the memory SQLite vector queries occasionally t"]
+  w1779238824778-114a3791["Implement DB write backoff\\n```typescript function executeWithBackoff<T>(fn: () => T, retries ="]
+  w1779238824779-493ccbda["Run concurrency load tests\\nExecuted the full load test suite `npm run bench:load`.  Results: -"]
+  w1779238824779-034ebc1c["Update architecture docs & PR\\nUpdated the architecture docs to mention that the SQLite store o"]
+  w1779238824776-c0ceb0d9 --> w1779238824778-114a3791
+  w1779238824778-114a3791 --> w1779238824779-493ccbda
+  w1779238824779-493ccbda --> w1779238824779-034ebc1c

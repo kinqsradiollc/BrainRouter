@@ -1,6 +1,7 @@
 import type {
   GraphEdge,
   GraphNode,
+  ContradictionRecord,
   ImportResult,
   L0Record,
   L1FtsResult,
@@ -51,22 +52,51 @@ export interface MemoryListItem {
   archived: boolean;
 }
 
+export interface EvidenceListFilters {
+  recordId?: string;
+  kind?: string;
+}
+
+export interface OperationLogFilters {
+  operation?: string;
+  sessionKey?: string;
+  createdAfter?: string;
+  createdBefore?: string;
+}
+
 export interface IMemoryStore {
   init(): void;
   initVec(dimensions: number): void;
+  reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number>;
+  getSqliteVersion(): string;
   upsertL0(record: L0Record): void;
   getRecentL0Messages(userId: string, sessionKey: string, limit: number, afterIsoTime?: string): L0Record[];
   getUnextractedL0Count(userId: string, sessionKey: string): number;
   markL0Extracted(userId: string, sessionKey: string, recordIds: string[], extractedAt?: string): void;
-  upsertL1(record: L1Record): void;
+  upsertL1(record: L1Record, options?: { skipAudit?: boolean }): void;
+  /** Batch upsert with optional embedding vectors. Pass skipAudit to suppress per-record
+   * l1_upsert noise when the caller will write a higher-level audit entry itself. */
+  upsertL1Batch(entries: Array<{ record: L1Record; embedding?: Float32Array }>, options?: { skipAudit?: boolean }): void;
   invalidateL1Record(userId: string, recordId: string, supersededById: string): void;
   getMemoryById(userId: string, recordId: string): L1Record | null;
   getMemoriesByFilePath(userId: string, filePath: string, limit: number): L1Record[];
   updateL1Confidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void;
   insertEvidence(ev: MemoryEvidence): void;
   getEvidenceByRecord(userId: string, recordId: string): MemoryEvidence[];
+  listEvidence(
+    userId: string,
+    filters?: EvidenceListFilters,
+    pagination?: CursorPaginationOptions<{ observedAt: string; id: string }>
+  ): MemoryEvidence[];
+  /** Write an audit operation. Kept on the interface because the engine layer needs to
+   * correlate external events (memory_update, import) with store writes atomically.
+   * It is NOT intended for use by any caller outside of SqliteMemoryStore or MemoryEngine. */
   insertOperation(op: MemoryOperation): void;
-  getOperationLog(userId: string, options?: CursorPaginationOptions<{ createdAt: string; id: string }>): MemoryOperation[];
+  getOperationLog(
+    userId: string,
+    options?: CursorPaginationOptions<{ createdAt: string; id: string }>,
+    filters?: OperationLogFilters
+  ): MemoryOperation[];
   exportMemories(userId: string): MemoryExport;
   importMemories(userId: string, data: MemoryImport): ImportResult;
   hardDeleteMemory(userId: string, recordId: string, reason: string): void;
@@ -83,7 +113,7 @@ export interface IMemoryStore {
     confidence: number;
     createdTime?: string;
   }): void;
-  getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>): any[];
+  getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>): ContradictionRecord[];
   resolveContradiction(id: string, userId: string, status: "resolved" | "dismissed"): void;
   upsertSkillHints(skillName: string, hints: string, sourceFile?: string): void;
   listSkillHints(): SkillHintsRecord[];

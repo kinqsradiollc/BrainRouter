@@ -8,4 +8,15 @@ describe("memory redaction", () => {
     expect(redacted).not.toContain("SECRET_TOKEN=abc123");
     expect(redacted).toContain("[REDACTED]");
   });
+
+  it("redacts database connection strings and IPv4 addresses", () => {
+    const redacted = redactSensitiveMemoryText(
+      "Connect to postgresql://admin:s3cret@10.0.0.5:5432/app from 192.168.1.10"
+    );
+
+    expect(redacted).not.toContain("s3cret");
+    expect(redacted).not.toContain("192.168.1.10");
+    expect(redacted).toContain("[REDACTED_CONN_STR]");
+    expect(redacted).toContain("[REDACTED_IP]");
+  });
 });

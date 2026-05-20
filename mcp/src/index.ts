@@ -52,6 +52,9 @@ import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from './tools/memo
 import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from './tools/memory_mark_cited.js';
 import { memoryGovernanceToolSchemas, handleMemoryGovernanceTool } from './tools/memory-governance.js';
 import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from './tools/memory-engineering.js';
+import { memoryExplainToolSchema, handleMemoryExplainRecall } from './tools/memory-explain.js';
+import { memoryHookToolSchemas, handleMemoryHookTool } from './tools/memory-hooks.js';
+import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memory-working.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { usersRouter } from './api/routes/users.js';
@@ -63,6 +66,9 @@ import { statsRouter } from './api/routes/stats.js';
 import { graphRouter } from './api/routes/graph.js';
 import { authRouter } from './api/routes/auth.js';
 import { governanceRouter } from './api/routes/governance.js';
+import { evidenceRouter } from './api/routes/evidence.js';
+import { hooksRouter } from './api/routes/hooks.js';
+import { workingRouter } from './api/routes/working.js';
 import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -220,6 +226,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryMarkCitedToolSchema,
       ...memoryGovernanceToolSchemas,
       ...memoryEngineeringToolSchemas,
+      memoryExplainToolSchema,
+      ...memoryHookToolSchemas,
+      ...memoryWorkingToolSchemas,
     ],
   }));
 
@@ -259,6 +268,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_import':
         case 'memory_governance_delete':
         case 'memory_audit':
+        case 'memory_diagnostics':
           return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId });
         case 'memory_debug_trace_save':
         case 'memory_debug_trace_search':
@@ -269,6 +279,15 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_handover':
         case 'memory_verify':
           return await handleMemoryEngineeringTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_explain_recall':
+          return await handleMemoryExplainRecall(request.params.arguments, { defaultUserId });
+        case 'memory_hook_register':
+        case 'memory_hook_status':
+          return await handleMemoryHookTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_working_context':
+        case 'memory_working_offload':
+        case 'memory_working_reset':
+          return await handleMemoryWorkingTool(request.params.name, request.params.arguments);
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
@@ -335,6 +354,9 @@ if (USE_HTTP) {
   app.use("/api/stats", statsRouter);
   app.use("/api/graph", graphRouter);
   app.use("/api", governanceRouter);
+  app.use("/api/evidence", evidenceRouter);
+  app.use("/api/hooks", hooksRouter);
+  app.use("/api/working", workingRouter);
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream)
   async function handleMcp(req: Request, res: Response) {

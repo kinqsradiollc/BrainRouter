@@ -1,5 +1,5 @@
 import { SqliteMemoryStore } from "./store/sqlite.js";
-import type { CursorPaginationOptions, IMemoryStore, MemoryListFilters } from "@brainrouter/types";
+import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@brainrouter/types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { EmbeddingService } from "./store/embedding.js";
@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type { L1Record, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, UserRecord } from "@brainrouter/types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
+import { redactSensitiveMemoryText } from "./redaction.js";
 
 // Configure default path
 const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");
@@ -100,7 +101,9 @@ export class MemoryEngine {
       this.store = storeOrDbPath;
     }
     this.store.init();
-    void this.ensureSeedAdminUser();
+    this.ensureSeedAdminUser().catch((err) => {
+      console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
+    });
 
     // Extraction runner: BRAINROUTER_EXTRACTION_MODEL → BRAINROUTER_LLM_MODEL → "gpt-4o-mini"
     this.extractionRunner = new ModelLLMRunner(
@@ -129,6 +132,15 @@ export class MemoryEngine {
     });
 
     this.store.initVec(embeddingService.getDimensions());
+    if (embeddingService.isReady()) {
+      void this.store.reembedStaleRecords((text) => embeddingService.embed(text)).then((count) => {
+        if (count > 0) {
+          console.error(`[BrainRouter] Re-embedded ${count} stale L1 vector records.`);
+        }
+      }).catch((err) => {
+        console.error("[BrainRouter] Failed to re-embed stale L1 vector records:", err instanceof Error ? err.message : err);
+      });
+    }
     
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService);
@@ -153,6 +165,36 @@ export class MemoryEngine {
 
   public get capture() {
     return this.capturePipeline.captureTurn.bind(this.capturePipeline);
+  }
+
+  public capturePassiveL0(params: {
+    userId: string;
+    sessionKey: string;
+    sessionId?: string;
+    role: string;
+    content: string;
+    timestamp?: number;
+    skillTag?: string;
+  }) {
+    const now = new Date().toISOString();
+    const timestamp = params.timestamp ?? Date.now();
+    const record = {
+      id: `l0_hook_${params.sessionKey}_${timestamp}_${randomUUID()}`,
+      userId: params.userId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId ?? "",
+      role: params.role,
+      messageText: redactSensitiveMemoryText(params.content),
+      recordedAt: now,
+      timestamp,
+      skillTag: params.skillTag ?? "",
+    };
+    this.store.upsertL0(record);
+    return record;
+  }
+
+  public async explainRecall(params: Parameters<MemoryRecallPipeline['recall']>[0]) {
+    return this.recallPipeline.recall({ ...params, explain: true });
   }
 
   public get recall() {
@@ -339,7 +381,7 @@ export class MemoryEngine {
       content: params.content,
       type: params.type,
       priority: params.priority ?? 75,
-      sceneName: "Software engineering memory",
+      sceneName: params.activeSkill ? `${params.activeSkill} engineering` : "Software engineering memory",
       skillTag: params.activeSkill ?? "",
       halfLifeDays: config.halfLifeDays,
       supersededBy: null,
@@ -396,7 +438,8 @@ export class MemoryEngine {
         ? { ...existing.metadata, governanceNote: updates.note, governanceNoteAt: now }
         : existing.metadata,
     };
-    this.store.upsertL1(updated);
+    // skipAudit: true because updateMemory writes its own memory_update op below.
+    this.store.upsertL1(updated, { skipAudit: true });
     this.store.insertOperation({
       id: randomUUID(),
       userId,
@@ -440,6 +483,14 @@ export class MemoryEngine {
     return this.store.getEvidenceByRecord(userId, recordId);
   }
 
+  public listEvidence(
+    userId: string,
+    filters?: EvidenceListFilters,
+    pagination?: CursorPaginationOptions<{ observedAt: string; id: string }>
+  ) {
+    return this.store.listEvidence(userId, filters, pagination);
+  }
+
   public exportMemories(userId: string) {
     return this.store.exportMemories(userId);
   }
@@ -452,12 +503,37 @@ export class MemoryEngine {
     this.store.hardDeleteMemory(userId, recordId, reason);
   }
 
-  public getOperationLog(userId: string, pagination?: CursorPaginationOptions<{ createdAt: string; id: string }>): MemoryOperation[] {
-    return this.store.getOperationLog(userId, pagination);
+  public getOperationLog(
+    userId: string,
+    pagination?: CursorPaginationOptions<{ createdAt: string; id: string }>,
+    filters?: OperationLogFilters
+  ): MemoryOperation[] {
+    return this.store.getOperationLog(userId, pagination, filters);
   }
 
   public getStats(userId: string) {
     return this.store.getMemoryStats(userId);
+  }
+
+  public getDiagnostics(userId: string): DiagnosticsBundle {
+    const envKeys = Object.keys(process.env)
+      .filter((key) => key.startsWith("BRAINROUTER_") || key.includes("API") || key.includes("SECRET"))
+      .sort();
+    const recentOperations = this.store.getOperationLog(userId, { limit: 50 });
+    const recentErrors = recentOperations
+      .filter((op) => /error|degrad|fail/i.test(`${op.operation} ${op.reason} ${JSON.stringify(op.metadata ?? {})}`))
+      .slice(0, 10);
+
+    return {
+      timestamp: new Date().toISOString(),
+      sqliteVersion: this.store.getSqliteVersion(),
+      nodeVersion: process.version,
+      databaseStats: {
+        userStats: this.store.getMemoryStats(userId),
+      },
+      envKeys,
+      recentErrors,
+    };
   }
 
   private startExtractionSweeper(): void {

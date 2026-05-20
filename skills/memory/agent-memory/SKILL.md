@@ -1,11 +1,12 @@
 ---
 name: agent-memory
-description: Teaches agents how and when to use BrainRouter's 5 memory tools. Apply this skill whenever memory tools are available in the environment. Ensures the agent captures context after every turn and injects relevant history before every response.
+description: Teaches agents how and when to use BrainRouter's memory engine (including Long-Term L1/L3, Short-Term Working Memory offloads, and Software Engineering-specific tools). Ensures the agent maintains context-awareness while proactively keeping context limits low.
 memory_hints: |
   - Extract if the user disables or opts out of memory capture (respect this as a hard rule).
   - Note if the user prefers a specific recall strategy (keyword vs. hybrid).
   - Capture if the user requests the agent to "forget" specific information.
   - Note any sessions where the user explicitly asked for memory context to be surfaced.
+  - Ensure working memory offload is triggered for payloads >1,000 tokens.
 ---
 
 # Agent Memory — Using BrainRouter Memory Tools
@@ -14,103 +15,96 @@ memory_hints: |
 
 BrainRouter's memory engine gives you persistent, cross-session awareness of the user. Use it consistently — an agent that doesn't recall context is worse than a stateless one because it appears to ignore the user.
 
+With the new Memory Systems, you have access to:
+1. **Long-Term Memory:** Retrieval-Augmented Generation (RAG) based on L1/L3 database entries.
+2. **Short-Term Working Memory:** Active task canvases and reference-offloading to keep your prompt context clean and small during long conversations.
+3. **Software Engineering Tools:** Structured memory types (e.g., failed attempts, debug traces, file histories, task handovers).
+
+---
 
 ## Workflow
 
-1. Identify release scope (version range, commit range, or date range).
-2. Gather relevant commits and exclude maintenance noise.
-3. Group changes into user-facing categories.
-4. Rewrite each item in plain customer language.
-5. Format output as publish-ready markdown and verify clarity.
+1. **Resolve and Start:** Call `mcp_brainrouter_resolve_session` at the beginning of a turn.
+2. **Context Setup:** Invoke `memory_recall` and `memory_working_context` to inject long-term and short-term working state.
+3. **Payload Inspection:** Look up any referenced `nodeId` from the Mermaid canvas.
+4. **Execution & Offloading:** If executing a tool with output >1,000 tokens, offload via `memory_working_offload`.
+5. **Citational Signals:** Record memory citation outcomes via `memory_mark_cited`.
+6. **Passive or Manual Logging:** Capture the final turn state via passive hooks or manual `memory_capture_turn`.
 
-## The Two Non-Negotiable Habits
+## The Non-Negotiable Habits
 
-### 1. Before every response — recall memory
-Call `memory_recall` before generating your response. This injects:
-- Relevant L1 memories (per-turn, dynamic)
-- The user's L3 Persona profile (stable, cacheable)
-- Recent scene navigation (what was worked on recently)
+### 1. Before every response — recall memory & check working context
+- Call `memory_recall` to get relevant L1 memories and the user L3 persona.
+- If in a long-running debugging or coding session, call `memory_working_context` to fetch the high-level Mermaid task canvas and status.
 
-```
+```typescript
 memory_recall({
-  userId: "<user-id>",
-  sessionKey: "<conversation-id>", // USE THE CONVERSATION ID AS SESSION KEY
+  sessionKey: "<conversation-id>", // ALWAYS USE THE CONVERSATION ID AS SESSION KEY
   query: "<summary of current user message>",
   activeSkill: "<current skill name, if any>"
 })
 ```
 
-### 2. After every response — capture the turn
-Call `memory_capture_turn` after generating your response. Pass both the user's message and your response.
+### 2. During execution — offload large payloads
+- Never paste large tool outputs, build logs, or code blocks (>1,000 tokens) back to the user or into your prompt. 
+- Proactively call `memory_working_offload` to save the payload to a reference file. The tool returns a short `nodeId` (e.g., `w1682390-a2ef`) to insert in your workspace context instead.
 
-```
-memory_capture_turn({
-  userId: "<user-id>",
-  sessionKey: "<conversation-id>", // USE THE CONVERSATION ID AS SESSION KEY
-  messages: [
-    { role: "user", content: "<user message>", timestamp: <unix ms> },
-    { role: "assistant", content: "<your response>", timestamp: <unix ms> }
-  ],
-  activeSkill: "<current skill name, if any>"
+```typescript
+memory_working_offload({
+  sessionKey: "<conversation-id>",
+  payload: "<large tool output stdout/stderr>",
+  title: "Build failure log",
+  kind: "tool_output"
 })
 ```
 
-## Scoping the `sessionKey`
+### 3. After every response — capture the turn (unless using passive hooks)
+- If passive lifecycle hooks are registered in the host environment, you do not need to call this.
+- If hooks are absent, call `memory_capture_turn` to store the conversation segment in L0.
 
-The `sessionKey` is the primary grouping mechanism for episodic memory. 
-- **Recommendation**: Always use the **Conversation ID** (e.g. `8af8ea2c-...`) as the `sessionKey` to ensure memories are pinned to the correct session.
-- **Project-Wide**: For project-wide continuity across sessions, use a stable project identifier (e.g. `project-kinqs-radio`).
+---
 
-## The 5 Memory Tools
+## Memory Tool Taxonomy
 
+### 1. Long-Term Memory (RAG)
 | Tool | When to Call |
-|------|-------------|
-| `memory_recall` | **Before every response** — gets relevant context |
-| `memory_capture_turn` | **After every response** — records the turn |
-| `memory_search` | When injected context is insufficient for the current query |
-| `memory_contradictions` | After a major decision; before enforcing a rule the user may have changed |
-| `memory_register_skill_hints` | When activating a skill for the first time in a new project |
+| :--- | :--- |
+| `memory_recall` | **Before every response** — retrieves relevant context & persona. |
+| `memory_search` | When the automatically recalled context is missing specific past details. Supports `asOf` for point-in-time audits. |
+| `memory_contradictions` | Before making major architectural decisions or enforcing tech preferences. |
+| `memory_register_skill_hints` | When activating a skill for the first time in a new project. |
 
-## When to Use `memory_search`
+### 2. Short-Term Working Memory (Context Reduction)
+| Tool | When to Call |
+| :--- | :--- |
+| `memory_working_context` | At the start of a turn to retrieve the active task state and Mermaid task canvas. |
+| `memory_working_offload` | To move a large payload out of the active prompt, returning a short `nodeId` placeholder. |
+| `memory_working_reset` | At the end of a session to completely flush working directories. |
 
-The injected `<relevant-memories>` block contains the top 5 results. If you need more specific history:
-- The user references something specific ("remember when we...") and it's not in the injected block
-- You need to verify a specific past decision before proceeding
-- Limit to **3 memory tool calls per turn** total
+### 3. Software Engineering Traces
+| Tool | When to Call |
+| :--- | :--- |
+| `memory_task_state` / `_update` | To read/write structured progress, blockers, and next actions. |
+| `memory_failed_attempts` | To check what solutions have already been tried for a bug or problem area, preventing redundant work. |
+| `memory_file_history` | To query all historical memories and evidence attached to a specific file or symbol. |
+| `memory_debug_trace_save` | To save bug reproduction steps, root cause analysis, and fix summaries. |
+| `memory_handover` | To generate a compact continuation note with evidence links. |
+| `memory_verify` | To check a memory and update its confidence or status (active, superseded, archived). |
 
-## When to Use `memory_contradictions`
-
-Call this before:
-- Enforcing a tech preference the user may have changed (e.g., checking if "always use pnpm" is still valid)
-- Making an architectural decision that might conflict with past choices
-- Presenting options the user may have already rejected
-
-## Registering Skill Hints
-
-When you activate a new skill on a new project, register its hints to improve future extractions:
-```
-memory_register_skill_hints({
-  skillPath: "/path/to/skills/lifecycle/incremental-skill/SKILL.md"
-})
-```
+---
 
 ## What NOT to Do
 
-- **Never skip `memory_recall`** before a response if memory tools are available
-- **Never skip `memory_capture_turn`** — even for short turns
-- **Never call more than 3 memory tools** in a single turn (latency budget)
-- **Do not fabricate memories** — only use what appears in the injected context
+- **Never paste outputs >1,000 tokens** directly into conversation. Always offload them.
+- **Never skip `memory_recall`** before a response.
+- **Never repeat failed approaches** — check `memory_failed_attempts` when debugging.
+- **Limit memory tool calls** to a maximum of **3 per turn** to respect the latency budget.
 
-## Red Flags
-
-- Giving advice that contradicts a known user instruction (check `memory_contradictions`)
-- Repeating the same question the user answered two sessions ago
-- Recommending a tool/framework the user has explicitly banned
-- Forgetting a decision the user made in a previous session about this project
+---
 
 ## Verification
 
 After applying this skill, confirm:
-- [ ] `memory_recall` was called before this response
-- [ ] `memory_capture_turn` will be called after this response
-- [ ] The injected context was referenced (not ignored)
+- [ ] `memory_recall` or `memory_working_context` was called.
+- [ ] Large payloads were offloaded via `memory_working_offload`.
+- [ ] The injected context was referenced (not ignored).

@@ -53,14 +53,14 @@ export function getMemoryTypeConfig(type: string): TypeConfig {
 
 export function detectTaskIntent(query: string): MemoryTaskIntent {
   const q = query.toLowerCase();
-  if (/\b(debug|bug|error|fail|failing|failure|repro|crash|stack)\b/.test(q)) return "debug";
-  if (/\b(review|audit|risk|regression|pr|pull request)\b/.test(q)) return "review";
-  if (/\b(test|spec|coverage|vitest|benchmark result)\b/.test(q)) return "test";
-  if (/\b(plan|task|roadmap|todo|handover|blocked|next)\b/.test(q)) return "plan";
-  if (/\b(refactor|cleanup|simplify|migration|deprecate)\b/.test(q)) return "refactor";
-  if (/\b(security|auth|permission|secret|token|vulnerability)\b/.test(q)) return "security";
-  if (/\b(performance|latency|throughput|slow|benchmark|r@5|token savings)\b/.test(q)) return "performance";
-  if (/\b(release|ship|launch|deploy|changelog)\b/.test(q)) return "release";
+  if (/\b(debug|bug|error|fail|failing|failure|repro|crash|stack|traceback|exception|panic|segfault|undefined|null)\b/.test(q)) return "debug";
+  if (/\b(review|audit|risk|regression|pr|pull request|code review|lgtm|approve)\b/.test(q)) return "review";
+  if (/\b(test|spec|coverage|vitest|jest|benchmark result|assertion|expect|describe|it\()\b/.test(q)) return "test";
+  if (/\b(plan|task|roadmap|todo|handover|blocked|next|sprint|milestone|backlog)\b/.test(q)) return "plan";
+  if (/\b(refactor|cleanup|simplify|migration|deprecate|rename|extract|move|reorganize|restructure)\b/.test(q)) return "refactor";
+  if (/\b(security|auth|permission|secret|token|vulnerability|xss|injection|csrf|rbac|oauth|jwt|sanitize|escape)\b/.test(q)) return "security";
+  if (/\b(performance|latency|throughput|slow|benchmark|r@5|token savings|optimize|cache|memory leak|profil|bottleneck)\b/.test(q)) return "performance";
+  if (/\b(release|ship|launch|deploy|changelog|version|tag|publish|hotfix)\b/.test(q)) return "release";
   return "build";
 }
 
