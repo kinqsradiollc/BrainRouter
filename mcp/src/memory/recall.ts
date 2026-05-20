@@ -6,6 +6,7 @@ import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
 import { randomUUID } from "node:crypto";
+import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
@@ -143,11 +144,74 @@ export class MemoryRecallPipeline {
       return { record, score: finalScore };
     });
 
-    scoredResults.sort((a, b) => b.score - a.score);
-    let topResults = scoredResults.slice(0, 5);
+    // --- Neural Sparks & Spreading Activation ---
+    const maxScore = scoredResults.length > 0 ? Math.max(...scoredResults.map(r => r.score)) : 1.0;
+    const initialNodes = scoredResults.map(r => ({
+      id: r.record.record_id,
+      potential: maxScore > 0 ? r.score / maxScore : 0.0,
+      fired: false
+    }));
+
+    const sparkEngine = new NeuralSparkEngine(this.store);
+    const propagatedNodes = sparkEngine.propagateSparks(userId, initialNodes);
+
+    const propagatedMap = new Map(propagatedNodes.map(n => [n.id, n]));
+    const existingIds = new Set(scoredResults.map(r => r.record.record_id));
+    const sparkedNodes: string[] = [];
+
+    const sparkScoredResults: Array<{ record: any; score: number; fired?: boolean }> = [];
+
+    for (const scored of scoredResults) {
+      const propNode = propagatedMap.get(scored.record.record_id);
+      if (propNode) {
+        const newScore = Math.max(scored.score, propNode.potential * maxScore);
+        if (propNode.fired) {
+          sparkedNodes.push(scored.record.record_id);
+        }
+        sparkScoredResults.push({
+          record: scored.record,
+          score: propNode.fired ? newScore * 1.5 : newScore,
+          fired: propNode.fired
+        });
+      } else {
+        sparkScoredResults.push(scored);
+      }
+    }
+
+    // Pull in connected memories that were excited above the firing threshold
+    for (const propNode of propagatedNodes) {
+      if (propNode.fired && !existingIds.has(propNode.id)) {
+        const record = this.store.getMemoryById(userId, propNode.id);
+        if (record) {
+          sparkedNodes.push(propNode.id);
+          const formattedRecord = {
+            record_id: record.id,
+            user_id: record.userId,
+            content: record.content,
+            type: record.type,
+            priority: record.priority,
+            scene_name: record.sceneName,
+            skill_tag: record.skillTag,
+            session_key: record.sessionKey,
+            timestamp_str: record.timestampStr,
+            created_time: record.createdTime,
+            citation_count: record.citationCount
+          };
+          const baseScore = propNode.potential * maxScore;
+          sparkScoredResults.push({
+            record: formattedRecord,
+            score: baseScore * 1.5,
+            fired: true
+          });
+        }
+      }
+    }
+
+    sparkScoredResults.sort((a, b) => b.score - a.score);
+    let topResults = sparkScoredResults.slice(0, 5);
     
-    // Stage 3 — Reranker (Top 20 from RRF)
-    const rerankCandidates = scoredResults.slice(0, 20);
+    // Stage 3 — Reranker (Top 20 from RRF + Sparks)
+    const rerankCandidates = sparkScoredResults.slice(0, 20);
     let usedReranker = false;
     
     if (this.rerankerService.isReady()) {
@@ -256,6 +320,7 @@ export class MemoryRecallPipeline {
         finalScore: r.score,
         type: r.record.type,
       })),
+      sparkedNodes,
     };
 
     if (!params.explain) {

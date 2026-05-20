@@ -9,6 +9,7 @@ import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { detectFocusShift } from "./pipeline/focus-direction-shift.js";
 import { shouldRunFocusDistill, shouldRunIdentityDistill } from "./scheduler.js";
 import type { EmbeddingService } from "./store/embedding.js";
+import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
 import crypto from "node:crypto";
 
@@ -162,6 +163,29 @@ export class MemoryCapturePipeline {
       });
     }
 
+    // --- Seeding Dendritic Spine Connections ---
+    for (let i = 0; i < uniqueRecords.length; i++) {
+      const recA = uniqueRecords[i];
+
+      // 1. Connect with other records extracted in this same batch/turn
+      for (let j = i + 1; j < uniqueRecords.length; j++) {
+        const recB = uniqueRecords[j];
+        this.store.upsertConnection(userId, recA.id, recB.id, 0.5);
+        this.store.upsertConnection(userId, recB.id, recA.id, 0.5);
+      }
+
+      // 2. Connect with existing active records sharing the same focus scene name
+      if (recA.sceneName) {
+        const matchingRecords = this.store.getCognitivesByFocus(userId, recA.sceneName, 10);
+        for (const match of matchingRecords) {
+          if (match.record_id !== recA.id) {
+            this.store.upsertConnection(userId, recA.id, match.record_id, 0.5);
+            this.store.upsertConnection(userId, match.record_id, recA.id, 0.5);
+          }
+        }
+      }
+    }
+
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {
       return { triggered: true, extractedCount: 0 };
@@ -181,12 +205,24 @@ export class MemoryCapturePipeline {
         if (shiftResult.shift && shiftResult.confidence >= 0.75) {
           console.error(`[BrainRouter] Focus shift detected (confidence=${shiftResult.confidence.toFixed(2)}): ${shiftResult.reason}. Triggering focus distillation.`);
           this.store.resetSchedulerFocusCount(userId);
+          try {
+            const sparkEngine = new NeuralSparkEngine(this.store);
+            sparkEngine.decayAndPrune(userId);
+          } catch (err: any) {
+            console.error("[BrainRouter] LTD decay and prune failed:", err.message);
+          }
           distillFocusScenes({ userId, store: this.store, llmRunner: this.llmRunner })
             .catch(err => console.error("[BrainRouter] Background focus distillation failed:", err.message));
         } else {
           const countState = this.store.getSchedulerState(userId);
           if (shouldRunFocusDistill(countState)) {
             this.store.resetSchedulerFocusCount(userId);
+            try {
+              const sparkEngine = new NeuralSparkEngine(this.store);
+              sparkEngine.decayAndPrune(userId);
+            } catch (err: any) {
+              console.error("[BrainRouter] LTD decay and prune failed:", err.message);
+            }
             distillFocusScenes({ userId, store: this.store, llmRunner: this.llmRunner })
               .catch(err => console.error("[BrainRouter] Background focus distillation failed:", err.message));
           }
@@ -196,6 +232,12 @@ export class MemoryCapturePipeline {
       const countState = this.store.getSchedulerState(userId);
       if (shouldRunFocusDistill(countState)) {
         this.store.resetSchedulerFocusCount(userId);
+        try {
+          const sparkEngine = new NeuralSparkEngine(this.store);
+          sparkEngine.decayAndPrune(userId);
+        } catch (err: any) {
+          console.error("[BrainRouter] LTD decay and prune failed:", err.message);
+        }
         distillFocusScenes({ userId, store: this.store, llmRunner: this.llmRunner })
           .catch(err => console.error("[BrainRouter] Background focus distillation failed:", err.message));
       }

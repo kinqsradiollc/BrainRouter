@@ -281,6 +281,8 @@ export interface RecallExplanation {
   rerankerCandidates: number;
   /** Final ranked records (recordId → finalScore). */
   scoredRecords: Array<{ recordId: string; finalScore: number; type: string }>;
+  /** IDs of memory nodes that triggered/sparked during spreading activation. */
+  sparkedNodes?: string[];
 }
 
 export interface RecallResult {

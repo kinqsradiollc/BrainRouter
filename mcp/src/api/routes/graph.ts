@@ -16,3 +16,12 @@ graphRouter.get("/", (req: AuthedRequest, res) => {
   const result = memoryEngine.queryGraph(req.userId!, entity, skillTag, Number.isFinite(hops) ? hops : 2);
   res.json(result);
 });
+
+graphRouter.get("/connections", (req: AuthedRequest, res) => {
+  try {
+    const result = memoryEngine.store.getAllConnections(req.userId!);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});

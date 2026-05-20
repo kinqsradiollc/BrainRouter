@@ -90,6 +90,7 @@ interface VisualLink {
   source: string;
   target: string;
   type: string;
+  weight?: number;
 }
 
 export default function HomePage() {
@@ -159,8 +160,8 @@ export default function HomePage() {
       { id: "cr-3", label: "Tailwind CSS", type: "cr", x: 550, y: 130, opacity: 1, size: 11 }
     ]);
     setVisLinks([
-      { source: "cr-1", target: "cr-2", type: "semantic" },
-      { source: "cr-2", target: "cr-3", type: "semantic" }
+      { source: "cr-1", target: "cr-2", type: "semantic", weight: 0.5 },
+      { source: "cr-2", target: "cr-3", type: "semantic", weight: 0.5 }
     ]);
     setConsolidationLogs(prev => [
       ...prev,
@@ -180,15 +181,16 @@ export default function HomePage() {
       { id: "cf-1", label: "Obsidian Dev Scene", type: "cf", x: 325, y: 195, opacity: 1, size: 18 }
     ]);
     setVisLinks([
-      { source: "cr-1", target: "cf-1", type: "scene-member" },
-      { source: "cr-2", target: "cf-1", type: "scene-member" },
-      { source: "cr-3", target: "cf-1", type: "scene-member" },
-      { source: "cf-1", target: "ci-1", type: "distillation" }
+      { source: "cr-1", target: "cf-1", type: "scene-member", weight: 0.8 },
+      { source: "cr-2", target: "cf-1", type: "scene-member", weight: 0.8 },
+      { source: "cr-3", target: "cf-1", type: "scene-member", weight: 0.8 },
+      { source: "cf-1", target: "ci-1", type: "distillation", weight: 0.94 }
     ]);
     setConsolidationLogs(prev => [
       ...prev,
       "[RELATIONSHIP ENGINE] Synaptic spreading activation triggered in memory graph.",
       "[GRAPH BUILDER] Clustered cognitive records into Focus Scene 'Obsidian Dev' (CF-1).",
+      "[SYNAPTIC PLASTICITY] Strengthened cognitive connections (Hebbian LTP) between co-cited memories to weight 0.80.",
       "[IDENTITY DISTILLER] Synthesized Core Identity. Distilled preference 'Obsidian theme' (weight 0.94) into persistent profile."
     ]);
   };
@@ -203,16 +205,16 @@ export default function HomePage() {
       { id: "cf-1", label: "Obsidian Dev Scene", type: "cf", x: 325, y: 195, opacity: 1, size: 18 }
     ]);
     setVisLinks([
-      { source: "cr-1", target: "cf-1", type: "scene-member" },
-      { source: "cr-2", target: "cf-1", type: "scene-member" },
-      { source: "cr-3", target: "cf-1", type: "scene-member" },
-      { source: "cf-1", target: "ci-1", type: "distillation" }
+      { source: "cr-1", target: "cf-1", type: "scene-member", weight: 0.32 },
+      { source: "cr-2", target: "cf-1", type: "scene-member", weight: 0.8 },
+      { source: "cr-3", target: "cf-1", type: "scene-member", weight: 0.32 },
+      { source: "cf-1", target: "ci-1", type: "distillation", weight: 0.94 }
     ]);
     setConsolidationLogs(prev => [
       ...prev,
-      "[DECAY ENGINE] Simulated 24-hour time step. Synaptic weights decayed.",
-      "[FORGETTING CURVE] CR-1 and CR-3 decayed by 60% due to lack of citation.",
-      "[STABILITY] CR-2 ('Obsidian Design') preserved due to high consolidation strength."
+      "[DECAY ENGINE] Synaptic connection weights decayed (LTD) by 0.9x factor.",
+      "[FORGETTING CURVE] Connections for Next.js Router (CR-1) and Tailwind CSS (CR-3) decayed to weight 0.32.",
+      "[STABILITY] Preserved connections with high consolidation strength; pruned weak weights < 0.10."
     ]);
   };
 
@@ -1199,8 +1201,8 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 }}
               >
                 <span style={{ fontSize: "16px" }}>🕸️</span>
-                <span style={{ fontWeight: 700 }}>3. Consolidate Graph</span>
-                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Cluster Scenes & Identity</span>
+                <span style={{ fontWeight: 700 }}>3. Spark Graph & LTP</span>
+                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Cluster Focus & Synaptic LTP</span>
               </button>
 
               <button
@@ -1224,8 +1226,8 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 }}
               >
                 <span style={{ fontSize: "16px" }}>⏳</span>
-                <span style={{ fontWeight: 700 }}>4. Decay Weights</span>
-                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Simulate Forgetting Curve</span>
+                <span style={{ fontWeight: 700 }}>4. Decay & LTD Pruning</span>
+                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Synaptic Decay & LTD Pruning</span>
               </button>
             </div>
 
@@ -1304,28 +1306,57 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 {visLinks.map((link, idx) => {
                   const start = getCoords(link.source);
                   const end = getCoords(link.target);
+                  const midX = (start.x + end.x) / 2;
+                  const midY = (start.y + end.y) / 2;
+                  const thickness = link.weight ? (link.weight * 3.5) : (link.type === "distillation" ? 2.5 : 1.5);
                   return (
-                    <motion.line
-                      key={idx}
-                      x1={start.x}
-                      y1={start.y}
-                      x2={end.x}
-                      y2={end.y}
-                      stroke={
-                        link.type === "distillation" 
-                          ? "var(--color-golden-accent)" 
-                          : link.type === "scene-member" 
-                            ? "#818cf8" 
-                            : link.type === "prewarm"
-                              ? "rgba(217, 119, 6, 0.6)"
-                              : "rgba(255, 255, 255, 0.15)"
-                      }
-                      strokeWidth={link.type === "distillation" ? 2.5 : link.type === "prewarm" ? 2 : 1.5}
-                      strokeDasharray={link.type === "distillation" ? "none" : "4 4"}
-                      initial={{ pathLength: 0 }}
-                      animate={{ pathLength: 1 }}
-                      transition={{ duration: 0.6 }}
-                    />
+                    <g key={idx}>
+                      <motion.line
+                        x1={start.x}
+                        y1={start.y}
+                        x2={end.x}
+                        y2={end.y}
+                        stroke={
+                          link.type === "distillation" 
+                            ? "var(--color-golden-accent)" 
+                            : link.type === "scene-member" 
+                              ? "#818cf8" 
+                              : link.type === "prewarm"
+                                ? "rgba(217, 119, 6, 0.6)"
+                                : "rgba(255, 255, 255, 0.15)"
+                        }
+                        strokeWidth={thickness}
+                        strokeDasharray={link.type === "distillation" ? "none" : "4 4"}
+                        initial={{ pathLength: 0 }}
+                        animate={{ pathLength: 1 }}
+                        transition={{ duration: 0.6 }}
+                      />
+                      {link.weight !== undefined && (
+                        <g>
+                          <rect
+                            x={midX - 14}
+                            y={midY - 7}
+                            width={28}
+                            height={14}
+                            rx={4}
+                            fill="#1e1e2e"
+                            stroke="rgba(255, 255, 255, 0.15)"
+                            strokeWidth={1}
+                          />
+                          <text
+                            x={midX}
+                            y={midY + 3.5}
+                            fill="var(--color-silver-text)"
+                            fontSize="8px"
+                            fontWeight="bold"
+                            fontFamily="monospace"
+                            textAnchor="middle"
+                          >
+                            {link.weight.toFixed(2)}
+                          </text>
+                        </g>
+                      )}
+                    </g>
                   );
                 })}
 

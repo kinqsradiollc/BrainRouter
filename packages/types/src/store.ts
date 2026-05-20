@@ -176,4 +176,10 @@ export interface IMemoryStore {
     lastRecallAt: string | null;
     extraction: ExtractionStatus;
   };
+  upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): void;
+  getConnectionsForSource(userId: string, sourceId: string): Array<{ targetId: string; weight: number }>;
+  strengthenConnectionsBatch(userId: string, pairs: Array<{ source: string; target: string }>, delta: number): void;
+  decayConnections(userId: string, decayFactor: number): void;
+  pruneConnections(userId: string, threshold: number): void;
+  getAllConnections(userId: string): Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }>;
 }

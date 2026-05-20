@@ -71,20 +71,67 @@ export default function RecallInspectorPage() {
         </div>
 
         {explanation && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}>
-            {[
-              ["FTS hits", explanation.ftsHits],
-              ["Vector hits", explanation.vecHits],
-              ["File hits", explanation.filePathHits],
-              ["Intent", explanation.intentDetected],
-              ["Reranker", explanation.rerankerUsed ? "on" : "off"],
-              ["Duration", `${explanation.durationMs}ms`],
-            ].map(([label, value]) => (
-              <div key={label} className="card" style={{ padding: "14px" }}>
-                <div style={{ color: "var(--color-ash-text)", fontSize: "11px", textTransform: "uppercase" }}>{label}</div>
-                <div style={{ color: "var(--color-pure-white)", fontSize: "18px", marginTop: "6px", fontWeight: 700 }}>{value}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}>
+              {[
+                ["FTS hits", explanation.ftsHits],
+                ["Vector hits", explanation.vecHits],
+                ["File hits", explanation.filePathHits],
+                ["Intent", explanation.intentDetected],
+                ["Reranker", explanation.rerankerUsed ? "on" : "off"],
+                ["Duration", `${explanation.durationMs}ms`],
+              ].map(([label, value]) => (
+                <div key={label} className="card" style={{ padding: "14px" }}>
+                  <div style={{ color: "var(--color-ash-text)", fontSize: "11px", textTransform: "uppercase" }}>{label}</div>
+                  <div style={{ color: "var(--color-pure-white)", fontSize: "18px", marginTop: "6px", fontWeight: 700 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {explanation.sparkedNodes && explanation.sparkedNodes.length > 0 && (
+              <div className="card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--color-ash-text)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  🧠 Neural Spark Spreading Activation Trace
+                </div>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  {explanation.sparkedNodes.map((node: any) => (
+                    <div
+                      key={node.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "6px 12px",
+                        borderRadius: "6px",
+                        background: node.fired ? "rgba(129, 140, 248, 0.12)" : "rgba(255, 255, 255, 0.03)",
+                        border: node.fired ? "1px solid rgba(129, 140, 248, 0.3)" : "1px solid rgba(255, 255, 255, 0.08)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: "6px",
+                          height: "6px",
+                          borderRadius: "50%",
+                          background: node.fired ? "var(--color-golden-accent)" : "var(--color-stone-text)",
+                          boxShadow: node.fired ? "0 0 8px var(--color-golden-accent)" : "none",
+                        }}
+                      />
+                      <span style={{ fontSize: "12px", fontWeight: 600, color: node.fired ? "var(--color-pure-white)" : "var(--color-silver-text)" }}>
+                        {node.id}
+                      </span>
+                      <span style={{ fontSize: "10px", fontFamily: "monospace", color: "var(--color-ash-text)" }}>
+                        {node.potential.toFixed(2)}V
+                      </span>
+                      {node.fired && (
+                        <span style={{ fontSize: "8px", padding: "1px 4px", borderRadius: "3px", background: "rgba(217, 119, 6, 0.2)", color: "var(--color-golden-accent)", fontWeight: "bold" }}>
+                          FIRED
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
+            )}
           </div>
         )}
 

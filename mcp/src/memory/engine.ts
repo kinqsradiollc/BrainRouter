@@ -9,6 +9,7 @@ import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@brainrouter/types";
+import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { fetchWithExternalRetry } from "./retry.js";
 import "dotenv/config";
 import path from "node:path";
@@ -73,7 +74,7 @@ class ModelLLMRunner implements LLMRunner {
 }
 
 export class MemoryEngine {
-  private store: IMemoryStore;
+  public readonly store: IMemoryStore;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
   private extractionRunner: LLMRunner;
@@ -596,6 +597,15 @@ export class MemoryEngine {
   public markCited(userId: string, citedRecordIds: string[], allRecalledRecordIds: string[]) {
     if (citedRecordIds.length > 0) {
       this.store.markCited(userId, citedRecordIds);
+    }
+
+    if (citedRecordIds.length >= 2) {
+      try {
+        const sparkEngine = new NeuralSparkEngine(this.store);
+        sparkEngine.strengthenSpines(userId, citedRecordIds);
+      } catch (err: any) {
+        console.error("[BrainRouter] Failed to strengthen spines on citation:", err.message);
+      }
     }
 
     const citedSet = new Set(citedRecordIds);
