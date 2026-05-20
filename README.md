@@ -18,7 +18,7 @@ Human memory doesn't dump everything into a single context window. It filters, c
 graph TD
     User([User Prompt]) --> Query[User Query]
     
-    subgraph Recall [Recall Pipeline (System 1 & System 2)]
+    subgraph Recall ["Recall Pipeline (System 1 & System 2)"]
         Query --> FTS[Keyword Search: FTS5 BM25]
         Query --> Vec[Vector Search: Cosine Similarity]
         Query --> Path[File-path Heuristic Matches]
@@ -37,7 +37,7 @@ graph TD
     Agent --> Response([Agent Response])
     Response --> ACE[ACE Citation Audit<br/>Boost Cited / Prune Unused]
     
-    subgraph Consolidation [Memory Consolidation]
+    subgraph Consolidation ["Memory Consolidation"]
         Dialogue[Interaction Dialogue] --> Sensory[SensoryStream Buffer]
         Sensory --> CogExtract[Cognitive Extractor Pipeline]
         CogExtract --> Cognitive[(CognitiveRecord DB)]
