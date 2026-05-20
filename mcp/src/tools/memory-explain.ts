@@ -101,9 +101,9 @@ export async function handleMemoryExplainRecall(
     lines.push("", "_(No memories matched this query)_");
   }
 
-  if (result.recalledL1Memories && result.recalledL1Memories.length > 0) {
+  if (result.recalledCognitiveMemories && result.recalledCognitiveMemories.length > 0) {
     lines.push("", "### Memory Content Preview");
-    result.recalledL1Memories.slice(0, 5).forEach((m, i) => {
+    result.recalledCognitiveMemories.slice(0, 5).forEach((m: any, i: number) => {
       lines.push(`${i + 1}. **[${m.type}]** ${m.content.slice(0, 120)}${m.content.length > 120 ? "…" : ""}`);
     });
   }

@@ -1,10 +1,10 @@
 // ============================
-// L3 Persona Synthesis Prompt
+// Core Identity Synthesis Prompt
 // ============================
 
-export const L3_PERSONA_SYSTEM_PROMPT = `You are a user profiling expert for a software engineering AI assistant.
+export const CORE_IDENTITY_SYSTEM_PROMPT = `You are a user profiling expert for a software engineering AI assistant.
 
-Your task is to synthesize a set of durable user memories (persona traits and instructions) into a concise, structured 4-layer Narrative Profile.
+Your task is to synthesize a set of durable user memories (persona traits and instructions) into a concise, structured 4-layer Core Identity narrative profile.
 
 Rules:
 - Be STRICTLY grounded in the provided memories. Do NOT infer or fabricate traits.
@@ -14,7 +14,7 @@ Rules:
 - DEDUPLICATE Hard Rules: if multiple instruction memories express the same constraint (even with different wording), merge them into one canonical rule. Prefer the most specific and complete version.
 - Output ONLY the Markdown profile. No preamble.`;
 
-export function formatL3PersonaPrompt(memories: Array<{ content: string; type: string; priority: number }>): string {
+export function formatCoreIdentityPrompt(memories: Array<{ content: string; type: string; priority: number }>): string {
   const personaLines = memories
     .filter(m => m.type === "persona")
     .sort((a, b) => b.priority - a.priority)
@@ -27,7 +27,7 @@ export function formatL3PersonaPrompt(memories: Array<{ content: string; type: s
     .map(m => `- ${m.content}`)
     .join("\n");
 
-  return `Synthesize a structured Narrative Profile from the following user memories.
+  return `Synthesize a structured Core Identity Narrative Profile from the following user memories.
 
 ### Persona Memories (stable traits, preferences):
 ${personaLines || "- (none)"}

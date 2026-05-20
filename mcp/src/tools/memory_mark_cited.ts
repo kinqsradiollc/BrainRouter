@@ -27,7 +27,7 @@ export const memoryMarkCitedToolSchema = {
         items: { type: "string" },
         description:
           "All record IDs that were returned in the previous memory_recall result " +
-          "(recalledL1Memories[].recordId). This is the full set that was surfaced to you.",
+          "(recalledCognitiveRecords[].recordId). This is the full set that was surfaced to you.",
       },
     },
     required: ["citedRecordIds", "allRecalledRecordIds"],

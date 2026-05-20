@@ -1,4 +1,4 @@
-import type { L0Record } from "@brainrouter/types";
+import type { SensoryRecord } from "@brainrouter/types";
 
 // ============================
 // System Prompt
@@ -8,9 +8,9 @@ export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `You are a Skill-Aware Memory Extr
 
 Your task is to analyze a conversation and extract durable, self-contained memories.
 
-### Scene Segmentation
-Determine if the topic has changed since the previous scene.
-If there are existing scenes, PREFER to reuse the most relevant existing scene name — only create a new name if the topic is genuinely different from ALL existing scenes.
+### Focus Scene Segmentation
+Determine if the topic has changed since the previous focus scene.
+If there are existing scenes, PREFER to reuse the most relevant existing focus scene name — only create a new name if the topic is genuinely different from ALL existing focus scenes.
 If reusing, use the EXACT existing name (no paraphrasing).
 If creating new, format: "AI helping [user role] with [goal activity]" (unique, max 50 chars).
 
@@ -65,7 +65,7 @@ artifact_reference, file_history, command_knowledge.
 Return ONLY a valid JSON array matching this format exactly:
 [
   {
-    "scene_name": "current or inherited scene name",
+    "scene_name": "current or inherited focus scene name",
     "message_ids": ["id1"],
     "memories": [
       {
@@ -92,8 +92,8 @@ Return ONLY a valid JSON array matching this format exactly:
 // ============================
 
 export function formatExtractionPrompt(params: {
-  newMessages: L0Record[];
-  backgroundMessages?: L0Record[];
+  newMessages: SensoryRecord[];
+  backgroundMessages?: SensoryRecord[];
   previousSceneName?: string;
   existingSceneNames?: string[];
   activeSkill?: string;
@@ -112,10 +112,10 @@ export function formatExtractionPrompt(params: {
     .join("\n\n");
 
   const existingScenesNote = existingSceneNames.length > 0
-    ? `[EXISTING SCENES] (reuse one of these if the topic matches):\n${existingSceneNames.map(n => `  - ${n}`).join("\n")}`
-    : "[EXISTING SCENES]: None yet";
+    ? `[EXISTING FOCUS SCENES] (reuse one of these if the topic matches):\n${existingSceneNames.map(n => `  - ${n}`).join("\n")}`
+    : "[EXISTING FOCUS SCENES]: None yet";
 
-  return `[PREVIOUS SCENE]: ${previousSceneName}
+  return `[PREVIOUS FOCUS SCENE]: ${previousSceneName}
 ${existingScenesNote}
 [ACTIVE SKILL]: ${activeSkill}
 [SKILL EXTRACTION HINTS]: ${skillHints}

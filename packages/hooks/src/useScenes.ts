@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { BrainRouterClient } from "@brainrouter/sdk";
-import type { L2SceneRecord } from "@brainrouter/types";
+import type { ContextualFocusRecord } from "@brainrouter/types";
 import { useCursorPagination } from "./useCursorPagination.js";
 
 export function useScenes(client: BrainRouterClient) {
@@ -8,7 +8,7 @@ export function useScenes(client: BrainRouterClient) {
     return client.getScenes(params);
   }, [client]);
 
-  const { items: scenes, ...pagination } = useCursorPagination<L2SceneRecord, "scenes">("scenes", fetchScenes);
+  const { items: scenes, ...pagination } = useCursorPagination<ContextualFocusRecord, "scenes">("scenes", fetchScenes);
 
   return { scenes, ...pagination };
 }

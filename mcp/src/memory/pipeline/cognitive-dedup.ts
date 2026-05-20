@@ -1,4 +1,4 @@
-import type { L1Record } from "@brainrouter/types";
+import type { CognitiveRecord } from "@brainrouter/types";
 import type { IMemoryStore } from "@brainrouter/types";
 
 /**
@@ -6,7 +6,7 @@ import type { IMemoryStore } from "@brainrouter/types";
  */
 export interface DedupResult {
   /** Memories that are unique and should be stored */
-  uniqueRecords: L1Record[];
+  uniqueRecords: CognitiveRecord[];
   /** Memories that were identified as exact duplicates and dropped */
   droppedCount: number;
 }
@@ -16,10 +16,10 @@ export interface DedupResult {
  * before they are stored.
  * 
  * Uses exact/near-exact string matching to prevent identical noisy facts 
- * from accumulating in the L1 store.
+ * from accumulating in the store.
  */
 export async function deduplicateMemories(params: {
-  records: L1Record[];
+  records: CognitiveRecord[];
   store: IMemoryStore;
   userId: string;
 }): Promise<DedupResult> {
@@ -29,18 +29,17 @@ export async function deduplicateMemories(params: {
     return { uniqueRecords: [], droppedCount: 0 };
   }
 
-  const uniqueRecords: L1Record[] = [];
+  const uniqueRecords: CognitiveRecord[] = [];
   let droppedCount = 0;
 
   for (const newRecord of records) {
     // 1. Keyword search to find potentially identical memories
     // We only need top 3 to see if there is an exact match
-    const candidates = store.searchL1Fts(userId, newRecord.content, 3);
+    const candidates = store.searchCognitiveFts(userId, newRecord.content, 3);
     
     let isDuplicate = false;
     
     for (const candidate of candidates) {
-      // Direct string comparison (case-insensitive, trimmed)
       if (candidate.content.trim().toLowerCase() === newRecord.content.trim().toLowerCase()) {
         isDuplicate = true;
         break;

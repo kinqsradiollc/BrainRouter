@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useEvidence } from "@brainrouter/hooks";
-import type { EvidenceKind, L1Record } from "@brainrouter/types";
+import type { EvidenceKind, CognitiveRecord } from "@brainrouter/types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
@@ -15,7 +15,7 @@ export default function EvidencePage() {
   const client = useMemo(() => getClient(), []);
   const [kind, setKind] = useState<EvidenceKind | "all">("all");
   const [recordId, setRecordId] = useState("");
-  const [selectedMemory, setSelectedMemory] = useState<L1Record | null>(null);
+  const [selectedMemory, setSelectedMemory] = useState<CognitiveRecord | null>(null);
   const [selectedError, setSelectedError] = useState<string | null>(null);
   const filters = useMemo(() => ({
     limit: 50,
@@ -38,7 +38,7 @@ export default function EvidencePage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Evidence" description="File, command, test, URL, benchmark, and memory references attached to L1 records." />
+        <PageHeader title="Evidence" description="File, command, test, URL, benchmark, and memory references attached to cognitive records." />
 
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-end" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "280px", flex: 1 }}>

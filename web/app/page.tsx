@@ -76,9 +76,145 @@ const workflowExamples = [
   }
 ];
 
+interface VisualNode {
+  id: string;
+  label: string;
+  type: "dialogue" | "cr" | "cf" | "ci" | "skill";
+  x: number;
+  y: number;
+  opacity: number;
+  size: number;
+}
+
+interface VisualLink {
+  source: string;
+  target: string;
+  type: string;
+}
+
 export default function HomePage() {
   const [activeExampleId, setActiveExampleId] = useState("frontend");
   const activeExample = workflowExamples.find(ex => ex.id === activeExampleId) || workflowExamples[0];
+
+  // Interactive Consolidation & Learning State
+  const [learningStep, setLearningStep] = useState<"idle" | "ingested" | "extracted" | "consolidated" | "decayed">("idle");
+  const [consolidationLogs, setConsolidationLogs] = useState<string[]>([
+    "Consolidation Engine standing by. Ingest a dialogue turn to begin."
+  ]);
+  const [visNodes, setVisNodes] = useState<VisualNode[]>([
+    { id: "ci-1", label: "Tailwind UI Developer Profile", type: "ci", x: 325, y: 275, opacity: 1, size: 22 }
+  ]);
+  const [visLinks, setVisLinks] = useState<VisualLink[]>([]);
+
+  const getCoords = (nodeId: string) => {
+    const node = visNodes.find(n => n.id === nodeId);
+    return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
+  };
+
+  const renderMultiLineText = (text: string, x: number, y: number, size: number, type: string) => {
+    const words = text.split(" ");
+    const lines: string[] = [];
+    let currentLine = "";
+    const maxChars = type === "ci" ? 18 : 12;
+    
+    words.forEach(word => {
+      if ((currentLine + " " + word).trim().length > maxChars) {
+        lines.push(currentLine.trim());
+        currentLine = word;
+      } else {
+        currentLine = (currentLine + " " + word).trim();
+      }
+    });
+    if (currentLine) {
+      lines.push(currentLine.trim());
+    }
+    
+    return lines.map((line, idx) => (
+      <tspan key={idx} x={x} dy={idx === 0 ? size + 12 : 10}>
+        {line}
+      </tspan>
+    ));
+  };
+
+  const handleIngest = () => {
+    setLearningStep("ingested");
+    setVisNodes([
+      { id: "ci-1", label: "Tailwind UI Developer Profile", type: "ci", x: 325, y: 275, opacity: 1, size: 22 },
+      { id: "d-1", label: "Dialogue: Obsidian Next.js", type: "dialogue", x: 325, y: 35, opacity: 1, size: 16 }
+    ]);
+    setVisLinks([]);
+    setConsolidationLogs(prev => [
+      ...prev,
+      "[SENSORY STREAM] Ingested dialogue turn #14 into Dialogue Buffer.",
+      "[BUFFER] Raw input: 'I want to deploy the Next.js dashboard with a dark obsidian scheme.' Awaiting LLM processing."
+    ]);
+  };
+
+  const handleExtract = () => {
+    setLearningStep("extracted");
+    setVisNodes([
+      { id: "ci-1", label: "Tailwind UI Developer Profile", type: "ci", x: 325, y: 275, opacity: 1, size: 22 },
+      { id: "cr-1", label: "Next.js Router", type: "cr", x: 100, y: 130, opacity: 1, size: 11 },
+      { id: "cr-2", label: "Obsidian Dark", type: "cr", x: 325, y: 75, opacity: 1, size: 11 },
+      { id: "cr-3", label: "Tailwind CSS", type: "cr", x: 550, y: 130, opacity: 1, size: 11 }
+    ]);
+    setVisLinks([
+      { source: "cr-1", target: "cr-2", type: "semantic" },
+      { source: "cr-2", target: "cr-3", type: "semantic" }
+    ]);
+    setConsolidationLogs(prev => [
+      ...prev,
+      "[COGNITIVE EXTRACTOR] Triggered background LLM extraction task.",
+      "[EXTRACTOR] Extracted 3 new cognitive records (CR) from dialogue turn.",
+      "[DEDUP] Audited conflicts. No active contradictions found."
+    ]);
+  };
+
+  const handleConsolidate = () => {
+    setLearningStep("consolidated");
+    setVisNodes([
+      { id: "ci-1", label: "Tailwind UI Developer Profile (Obsidian Added)", type: "ci", x: 325, y: 275, opacity: 1, size: 22 },
+      { id: "cr-1", label: "Next.js Router", type: "cr", x: 100, y: 130, opacity: 1, size: 11 },
+      { id: "cr-2", label: "Obsidian Dark", type: "cr", x: 325, y: 75, opacity: 1, size: 11 },
+      { id: "cr-3", label: "Tailwind CSS", type: "cr", x: 550, y: 130, opacity: 1, size: 11 },
+      { id: "cf-1", label: "Obsidian Dev Scene", type: "cf", x: 325, y: 195, opacity: 1, size: 18 }
+    ]);
+    setVisLinks([
+      { source: "cr-1", target: "cf-1", type: "scene-member" },
+      { source: "cr-2", target: "cf-1", type: "scene-member" },
+      { source: "cr-3", target: "cf-1", type: "scene-member" },
+      { source: "cf-1", target: "ci-1", type: "distillation" }
+    ]);
+    setConsolidationLogs(prev => [
+      ...prev,
+      "[RELATIONSHIP ENGINE] Synaptic spreading activation triggered in memory graph.",
+      "[GRAPH BUILDER] Clustered cognitive records into Focus Scene 'Obsidian Dev' (CF-1).",
+      "[IDENTITY DISTILLER] Synthesized Core Identity. Distilled preference 'Obsidian theme' (weight 0.94) into persistent profile."
+    ]);
+  };
+
+  const handleSimulateDecay = () => {
+    setLearningStep("decayed");
+    setVisNodes([
+      { id: "ci-1", label: "Tailwind UI Developer Profile (Obsidian Added)", type: "ci", x: 325, y: 275, opacity: 1, size: 22 },
+      { id: "cr-1", label: "Next.js Router", type: "cr", x: 100, y: 130, opacity: 0.4, size: 11 },
+      { id: "cr-2", label: "Obsidian Dark", type: "cr", x: 325, y: 75, opacity: 1.0, size: 11 },
+      { id: "cr-3", label: "Tailwind CSS", type: "cr", x: 550, y: 130, opacity: 0.4, size: 11 },
+      { id: "cf-1", label: "Obsidian Dev Scene", type: "cf", x: 325, y: 195, opacity: 1, size: 18 }
+    ]);
+    setVisLinks([
+      { source: "cr-1", target: "cf-1", type: "scene-member" },
+      { source: "cr-2", target: "cf-1", type: "scene-member" },
+      { source: "cr-3", target: "cf-1", type: "scene-member" },
+      { source: "cf-1", target: "ci-1", type: "distillation" }
+    ]);
+    setConsolidationLogs(prev => [
+      ...prev,
+      "[DECAY ENGINE] Simulated 24-hour time step. Synaptic weights decayed.",
+      "[FORGETTING CURVE] CR-1 and CR-3 decayed by 60% due to lack of citation.",
+      "[STABILITY] CR-2 ('Obsidian Design') preserved due to high consolidation strength."
+    ]);
+  };
 
   // Interactive Mock SNN Simulator State
   const [mockSkills, setMockSkills] = useState([
@@ -460,7 +596,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
         {/* Tier Layout Grid */}
         <div className="grid-symmetrical-4">
           
-          {/* L1 Card */}
+          {/* CR Card */}
           <motion.div 
             className="card-premium" 
             variants={hoverScaleVariants}
@@ -468,11 +604,11 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             style={{ display: "flex", flexDirection: "column", gap: "16px" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>LEVEL 01</span>
+              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>COGNITIVE LAYER</span>
               <span className="badge" style={{ color: "var(--color-golden-accent)", borderColor: "var(--border-hover-accent)", background: "var(--overlay-bg-hover)" }}>REAL-TIME</span>
             </div>
             <h3 className="serif-display" style={{ fontSize: "22px", margin: 0, color: "var(--color-pure-white)" }}>
-              Session Moments
+              Cognitive Records
             </h3>
             <p style={{ color: "var(--color-silver-text)", fontSize: "14px", lineHeight: 1.5, margin: 0 }}>
               Captures important user preferences, instructions, and factual background statements dynamically. It structures raw conversational elements into actionable memory blocks immediately.
@@ -482,7 +618,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             </div>
           </motion.div>
 
-          {/* L1.5 Contradiction Gateway */}
+          {/* Contradiction Gateway */}
           <motion.div 
             className="card-premium gradient-gold-border" 
             variants={hoverScaleVariants}
@@ -490,7 +626,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             style={{ display: "flex", flexDirection: "column", gap: "16px" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-golden-accent)", fontWeight: 700 }}>LEVEL 1.5</span>
+              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-golden-accent)", fontWeight: 700 }}>INTEGRITY CHECK</span>
               <span className="badge" style={{ color: "var(--color-golden-accent)", borderColor: "var(--border-hover-accent)", background: "var(--overlay-bg-hover)" }}>AUTOMATIC</span>
             </div>
             <h3 className="serif-display" style={{ fontSize: "22px", margin: 0, color: "var(--color-pure-white)" }}>
@@ -504,7 +640,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             </div>
           </motion.div>
 
-          {/* L2 Card */}
+          {/* CF Card */}
           <motion.div 
             className="card-premium" 
             variants={hoverScaleVariants}
@@ -512,11 +648,11 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             style={{ display: "flex", flexDirection: "column", gap: "16px" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>LEVEL 02</span>
+              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>FOCUS LAYER</span>
               <span className="badge" style={{ color: "var(--color-golden-accent)", borderColor: "var(--border-hover-accent)", background: "var(--overlay-bg-hover)" }}>THEMATIC</span>
             </div>
             <h3 className="serif-display" style={{ fontSize: "22px", margin: 0, color: "var(--color-pure-white)" }}>
-              Memory Themes
+              Contextual Focus
             </h3>
             <p style={{ color: "var(--color-silver-text)", fontSize: "14px", lineHeight: 1.5, margin: 0 }}>
               Bridges separate chat sessions by summarizing related memories into overarching project contexts. Keeps track of ongoing topics and interests to preserve structural context across weeks.
@@ -526,7 +662,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             </div>
           </motion.div>
 
-          {/* L3 Card */}
+          {/* CI Card */}
           <motion.div 
             className="card-premium" 
             variants={hoverScaleVariants}
@@ -534,11 +670,11 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
             style={{ display: "flex", flexDirection: "column", gap: "16px" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>LEVEL 03</span>
+              <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>IDENTITY LAYER</span>
               <span className="badge" style={{ color: "var(--color-golden-accent)", borderColor: "var(--border-hover-accent)", background: "var(--overlay-bg-hover)" }}>SYNTHESIS</span>
             </div>
             <h3 className="serif-display" style={{ fontSize: "22px", margin: 0, color: "var(--color-pure-white)" }}>
-              User Persona Profile
+              Core Identity
             </h3>
             <p style={{ color: "var(--color-silver-text)", fontSize: "14px", lineHeight: 1.5, margin: 0 }}>
               Distills your communication style, primary goals, habits, and decision frameworks into a central profile. This profile anchors your AI's behavior, allowing it to adapt to your personality.
@@ -796,18 +932,18 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 BRAINROUTER INSTANT RECALL
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {/* L3 Persona */}
+                {/* Core Identity */}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
-                  <span style={{ background: "var(--color-golden-accent)", color: "#000", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>L3</span>
+                  <span style={{ background: "var(--color-golden-accent)", color: "#000", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>CI</span>
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                     <span style={{ color: "var(--color-stone-text)", fontSize: "10px", fontWeight: 600 }}>{activeExample.l3.title}</span>
                     <span style={{ color: "var(--color-white-frost)", fontSize: "12px", fontFamily: "var(--font-inter)" }}>{activeExample.l3.detail}</span>
                   </div>
                 </div>
 
-                {/* L2 Pre-warm */}
+                {/* Contextual Focus */}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
-                  <span style={{ background: "#4f46e5", color: "#fff", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>L2</span>
+                  <span style={{ background: "#4f46e5", color: "#fff", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>CF</span>
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px", width: "100%" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span style={{ color: "var(--color-stone-text)", fontSize: "10px", fontWeight: 600 }}>{activeExample.l2.title}</span>
@@ -817,7 +953,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                       <span style={{ color: "var(--color-white-frost)", fontSize: "11px", fontStyle: "italic" }}>"{activeExample.l2.hints}"</span>
                       <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "2px" }}>
                         <div style={{ flex: 1, height: "3px", background: "rgba(255,255,255,0.08)", borderRadius: "2px", overflow: "hidden" }}>
-                          <div style={{ width: `${(activeExample.l2.potential / 4.0) * 100}%`, height: "100%", background: "var(--color-golden-accent)" }} />
+                           <div style={{ width: `${(activeExample.l2.potential / 4.0) * 100}%`, height: "100%", background: "var(--color-golden-accent)" }} />
                         </div>
                         <span style={{ color: "var(--color-ash-text)", fontSize: "9px" }}>{activeExample.l2.potential.toFixed(1)}/4.0</span>
                       </div>
@@ -825,9 +961,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                   </div>
                 </div>
 
-                {/* L1 Context */}
+                {/* Cognitive Record */}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
-                  <span style={{ background: "var(--color-silver-text)", color: "#000", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>L1</span>
+                  <span style={{ background: "var(--color-silver-text)", color: "#000", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>CR</span>
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                     <span style={{ color: "var(--color-stone-text)", fontSize: "10px", fontWeight: 600 }}>{activeExample.l1.title}</span>
                     <span style={{ color: "var(--color-white-frost)", fontSize: "12px", fontFamily: "var(--font-inter)" }}>{activeExample.l1.detail}</span>
@@ -962,6 +1098,339 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
         </motion.div>
       </motion.section>
 
+      {/* Interactive Consolidation & Learning Loop */}
+      <motion.section 
+        variants={itemVariants}
+        style={{
+          background: "rgba(255, 255, 255, 0.01)",
+          border: "1px solid var(--border-med)",
+          borderRadius: "16px",
+          padding: "28px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "24px",
+          boxShadow: "0 4px 30px rgba(0, 0, 0, 0.2)"
+        }}
+      >
+        <div style={{ borderBottom: "1px solid var(--border-dim)", paddingBottom: "16px" }}>
+          <h2 className="serif-display" style={{ fontSize: "24px", margin: 0, fontWeight: 500, color: "var(--color-pure-white)" }}>
+            Continuous Learning & Consolidation Engine
+          </h2>
+          <p style={{ color: "var(--color-stone-text)", fontSize: "13px", margin: "4px 0 0 0" }}>
+            See how BrainRouter processes raw user interactions through different levels, building connections, clustering active scenes, distilling persona guidelines, and applying forgetting curve decay in the background.
+          </p>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "32px" }}>
+          
+          {/* Left Panel: Control Center & Terminal Logs */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>
+              CONSOLIDATION PIPELINE CONTROL
+            </span>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <button
+                onClick={handleIngest}
+                style={{
+                  padding: "12px",
+                  borderRadius: "8px",
+                  background: learningStep === "ingested" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  border: `1px solid ${learningStep === "ingested" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
+                  color: learningStep === "ingested" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                  transition: "all 0.2s ease"
+                }}
+              >
+                <span style={{ fontSize: "16px" }}>📥</span>
+                <span style={{ fontWeight: 700 }}>1. Ingest Turn</span>
+                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Buffer sensory dialog stream</span>
+              </button>
+
+              <button
+                onClick={handleExtract}
+                disabled={learningStep === "idle"}
+                style={{
+                  padding: "12px",
+                  borderRadius: "8px",
+                  background: learningStep === "extracted" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  border: `1px solid ${learningStep === "extracted" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
+                  color: learningStep === "extracted" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: learningStep === "idle" ? "not-allowed" : "pointer",
+                  textAlign: "left",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                  opacity: learningStep === "idle" ? 0.5 : 1,
+                  transition: "all 0.2s ease"
+                }}
+              >
+                <span style={{ fontSize: "16px" }}>🧠</span>
+                <span style={{ fontWeight: 700 }}>2. Extract CRs</span>
+                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Form Cognitive Records</span>
+              </button>
+
+              <button
+                onClick={handleConsolidate}
+                disabled={learningStep !== "extracted" && learningStep !== "consolidated" && learningStep !== "decayed"}
+                style={{
+                  padding: "12px",
+                  borderRadius: "8px",
+                  background: learningStep === "consolidated" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  border: `1px solid ${learningStep === "consolidated" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
+                  color: learningStep === "consolidated" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: (learningStep !== "extracted" && learningStep !== "consolidated" && learningStep !== "decayed") ? "not-allowed" : "pointer",
+                  textAlign: "left",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                  opacity: (learningStep !== "extracted" && learningStep !== "consolidated" && learningStep !== "decayed") ? 0.5 : 1,
+                  transition: "all 0.2s ease"
+                }}
+              >
+                <span style={{ fontSize: "16px" }}>🕸️</span>
+                <span style={{ fontWeight: 700 }}>3. Consolidate Graph</span>
+                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Cluster Scenes & Identity</span>
+              </button>
+
+              <button
+                onClick={handleSimulateDecay}
+                disabled={learningStep !== "consolidated" && learningStep !== "decayed"}
+                style={{
+                  padding: "12px",
+                  borderRadius: "8px",
+                  background: learningStep === "decayed" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  border: `1px solid ${learningStep === "decayed" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
+                  color: learningStep === "decayed" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: (learningStep !== "consolidated" && learningStep !== "decayed") ? "not-allowed" : "pointer",
+                  textAlign: "left",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                  opacity: (learningStep !== "consolidated" && learningStep !== "decayed") ? 0.5 : 1,
+                  transition: "all 0.2s ease"
+                }}
+              >
+                <span style={{ fontSize: "16px" }}>⏳</span>
+                <span style={{ fontWeight: 700 }}>4. Decay Weights</span>
+                <span style={{ fontSize: "10px", opacity: 0.8, fontWeight: 400 }}>Simulate Forgetting Curve</span>
+              </button>
+            </div>
+
+            <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700, marginTop: "8px" }}>
+              CONSOLIDATION ENGINE LOGS
+            </span>
+            <div 
+              style={{ 
+                background: "#000", 
+                border: "1px solid var(--border-dim)", 
+                borderRadius: "10px", 
+                padding: "12px 16px",
+                fontFamily: "monospace",
+                fontSize: "11px",
+                color: "#10b981",
+                height: "140px",
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px"
+              }}
+            >
+              {consolidationLogs.slice(-8).map((log, i) => (
+                <div key={i} style={{ opacity: i === consolidationLogs.slice(-8).length - 1 ? 1 : 0.6 }}>
+                  {log}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Right Panel: SVG Visual Graph Canvas */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-ash-text)", fontWeight: 700 }}>
+              COGNITIVE GRAPH VISUALIZATION CANVAS
+            </span>
+            
+            <div 
+              style={{ 
+                background: "var(--surface-pewter-accent)", 
+                border: "1px solid var(--border-med)", 
+                borderRadius: "12px", 
+                padding: "12px",
+                position: "relative",
+                height: "320px",
+                overflow: "hidden"
+              }}
+            >
+              {/* Contextual Focus boundary representation (drawn only in consolidated or decayed state) */}
+              {(learningStep === "consolidated" || learningStep === "decayed") && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 0.08, scale: 1 }}
+                  style={{
+                    position: "absolute",
+                    top: "75px",
+                    left: "50px",
+                    right: "50px",
+                    bottom: "105px",
+                    borderRadius: "12px",
+                    border: "2px dashed #818cf8",
+                    background: "rgba(129, 140, 248, 0.1)",
+                    pointerEvents: "none",
+                    zIndex: 0
+                  }}
+                />
+              )}
+              
+              {(learningStep === "consolidated" || learningStep === "decayed") && (
+                <div style={{ position: "absolute", top: "82px", left: "62px", color: "rgba(129, 140, 248, 0.8)", fontSize: "9px", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", zIndex: 1 }}>
+                  CONTEXTUAL FOCUS SCENE LIMITS
+                </div>
+              )}
+
+              <svg width="100%" height="100%" viewBox="0 0 650 320" style={{ overflow: "visible" }}>
+                {/* 1. Draw Links */}
+                {visLinks.map((link, idx) => {
+                  const start = getCoords(link.source);
+                  const end = getCoords(link.target);
+                  return (
+                    <motion.line
+                      key={idx}
+                      x1={start.x}
+                      y1={start.y}
+                      x2={end.x}
+                      y2={end.y}
+                      stroke={
+                        link.type === "distillation" 
+                          ? "var(--color-golden-accent)" 
+                          : link.type === "scene-member" 
+                            ? "#818cf8" 
+                            : link.type === "prewarm"
+                              ? "rgba(217, 119, 6, 0.6)"
+                              : "rgba(255, 255, 255, 0.15)"
+                      }
+                      strokeWidth={link.type === "distillation" ? 2.5 : link.type === "prewarm" ? 2 : 1.5}
+                      strokeDasharray={link.type === "distillation" ? "none" : "4 4"}
+                      initial={{ pathLength: 0 }}
+                      animate={{ pathLength: 1 }}
+                      transition={{ duration: 0.6 }}
+                    />
+                  );
+                })}
+
+                {/* 2. Draw Nodes */}
+                {visNodes.map((node) => {
+                  let fillColor = "var(--color-stone-text)";
+                  let strokeColor = "var(--border-strong)";
+                  let shadowColor = "none";
+                  
+                  if (node.type === "dialogue") {
+                    fillColor = "#10b981";
+                    strokeColor = "#34d399";
+                    shadowColor = "rgba(16, 185, 129, 0.4)";
+                  } else if (node.type === "cr") {
+                    fillColor = "var(--color-porcelain-text)";
+                    strokeColor = "var(--color-silver-text)";
+                    shadowColor = "rgba(226, 227, 233, 0.2)";
+                  } else if (node.type === "cf") {
+                    fillColor = "#4f46e5";
+                    strokeColor = "#818cf8";
+                    shadowColor = "rgba(79, 70, 229, 0.4)";
+                  } else if (node.type === "ci") {
+                    fillColor = "var(--color-golden-accent)";
+                    strokeColor = "var(--color-white-frost)";
+                    shadowColor = "var(--color-golden-accent)";
+                  } else if (node.type === "skill") {
+                    fillColor = "#d97706";
+                    strokeColor = "#f59e0b";
+                    shadowColor = "rgba(217, 119, 6, 0.4)";
+                  }
+
+                  return (
+                    <motion.g
+                      key={node.id}
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      animate={{ opacity: node.opacity, scale: 1 }}
+                      transition={{ type: "spring", stiffness: 200, damping: 15 }}
+                    >
+                      {/* Glow Backing */}
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={node.size + 4}
+                        fill="none"
+                        stroke={strokeColor}
+                        strokeWidth="1"
+                        style={{ opacity: 0.2, filter: "blur(2px)" }}
+                      />
+                      
+                      {/* Main Node Circle */}
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={node.size}
+                        fill={fillColor}
+                        stroke={strokeColor}
+                        strokeWidth="2.5"
+                        style={{ filter: `drop-shadow(0 0 6px ${shadowColor})` }}
+                      />
+                      
+                      {/* Node Label Text */}
+                      <text
+                        x={node.x}
+                        y={node.y}
+                        textAnchor="middle"
+                        fill="var(--color-pure-white)"
+                        fontSize="9px"
+                        fontWeight={node.type === "ci" || node.type === "cf" ? 700 : 500}
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >
+                        {renderMultiLineText(node.label, node.x, node.y, node.size, node.type)}
+                      </text>
+
+                      {/* Small Type Icon */}
+                      <text
+                        x={node.x}
+                        y={node.y + 3}
+                        textAnchor="middle"
+                        fill={node.type === "dialogue" || node.type === "ci" || node.type === "skill" ? "#000" : "#fff"}
+                        fontSize="8px"
+                        fontWeight={900}
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >
+                        {node.type === "ci" ? "CI" : node.type === "cf" ? "CF" : node.type === "cr" ? "CR" : node.type === "skill" ? "SK" : "DS"}
+                      </text>
+                    </motion.g>
+                  );
+                })}
+              </svg>
+              
+              {/* Level Legend indicators */}
+              <div style={{ position: "absolute", bottom: "10px", right: "12px", display: "flex", gap: "8px", background: "rgba(0,0,0,0.3)", padding: "4px 8px", borderRadius: "6px", fontSize: "8px", zIndex: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981" }}/> Dialogue</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#fff" }}/> CR</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#4f46e5" }}/> CF (Scene)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#d97706" }}/> Skill (Pre-Warm)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "var(--color-golden-accent)" }}/> CI (Identity)</div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </motion.section>
+
       {/* Ecosystem Architecture */}
       <motion.section 
         variants={itemVariants}
@@ -1072,19 +1541,19 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "5px", fontSize: "11px" }}>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
-                      <span style={{ color: "var(--color-pure-white)" }}>L1 Extractor & Dedup</span>
+                      <span style={{ color: "var(--color-pure-white)" }}>Cognitive Extractor & Dedup</span>
                       <span style={{ color: "var(--color-golden-accent)", fontWeight: 500 }}>Memory Clean</span>
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
-                      <span style={{ color: "var(--color-pure-white)" }}>L1 Contradiction Auditor</span>
+                      <span style={{ color: "var(--color-pure-white)" }}>Contradiction Auditor</span>
                       <span style={{ color: "#ff6b6b", fontWeight: 500 }}>Conflict Check</span>
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
-                      <span style={{ color: "var(--color-pure-white)" }}>L2 Director & Skill Prewarm</span>
+                      <span style={{ color: "var(--color-pure-white)" }}>Focus Director & Skill Prewarm</span>
                       <span style={{ color: "var(--color-golden-accent)", fontWeight: 500 }}>Tool Routing</span>
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
-                      <span style={{ color: "var(--color-pure-white)" }}>L3 Cognitive Distiller</span>
+                      <span style={{ color: "var(--color-pure-white)" }}>Identity Distiller</span>
                       <span style={{ color: "var(--color-golden-accent)", fontWeight: 500 }}>Consolidator</span>
                     </div>
                   </div>
@@ -1101,7 +1570,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                       <span style={{ color: "var(--color-stone-text)" }}>Build Nodes</span>
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
-                      <span style={{ color: "var(--color-pure-white)" }}>Hybrid Reranker (BM25)</span>
+                      <span style={{ color: "var(--color-pure-white)" }}>Hybrid Reranker (Cross-Encoder)</span>
                       <span style={{ color: "var(--color-golden-accent)", fontWeight: 500 }}>Semantic</span>
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
@@ -1130,16 +1599,16 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px" }}>
                     <div style={{ display: "flex", gap: "6px" }}>
-                      <span style={{ background: "var(--border-med)", color: "var(--color-pure-white)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>L1</span>
-                      <span style={{ color: "var(--color-silver-text)" }}>Short-Term Context & Task State</span>
+                      <span style={{ background: "var(--border-med)", color: "var(--color-pure-white)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>CR</span>
+                      <span style={{ color: "var(--color-silver-text)" }}>Cognitive Records & Task State</span>
                     </div>
                     <div style={{ display: "flex", gap: "6px" }}>
-                      <span style={{ background: "var(--border-med)", color: "var(--color-pure-white)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>L2</span>
-                      <span style={{ color: "var(--color-silver-text)" }}>Procedural Skills & Tools Registry</span>
+                      <span style={{ background: "var(--border-med)", color: "var(--color-pure-white)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>CF</span>
+                      <span style={{ color: "var(--color-silver-text)" }}>Contextual Focus & Active Scenes</span>
                     </div>
                     <div style={{ display: "flex", gap: "6px" }}>
-                      <span style={{ background: "rgba(204, 145, 102, 0.15)", color: "var(--color-golden-accent)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>L3</span>
-                      <span style={{ color: "var(--color-silver-text)" }}>Core Persona & Custom Constraints</span>
+                      <span style={{ background: "rgba(204, 145, 102, 0.15)", color: "var(--color-golden-accent)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>CI</span>
+                      <span style={{ color: "var(--color-silver-text)" }}>Core Identity & Custom Constraints</span>
                     </div>
                   </div>
                 </div>

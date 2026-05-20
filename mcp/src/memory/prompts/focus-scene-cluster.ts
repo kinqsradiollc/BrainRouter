@@ -1,10 +1,10 @@
 // ============================
-// L2 Scene Clustering & Canonicalization Prompt
+// Focus Scene Clustering & Canonicalization Prompt
 // ============================
 
-export const L2_SCENE_CLUSTER_SYSTEM_PROMPT = `You are a semantic text clustering expert for an AI agent's memory database.
+export const FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT = `You are a semantic text clustering expert for an AI agent's memory database.
 
-Your task is to review a list of work scene/session names and identify near-duplicate or highly overlapping scenes that should be merged to prevent memory fragmentation.
+Your task is to review a list of focus scene/session names and identify near-duplicate or highly overlapping scenes that should be merged to prevent memory fragmentation.
 
 Rules:
 1. Group scenes that discuss the SAME overall goal, project, or task (e.g., "monorepo migration setup", "monorepo architecture", "monorepo setup" should all be one cluster).
@@ -25,10 +25,10 @@ Return ONLY a valid JSON array matching this format exactly:
 ]
 `;
 
-export function formatSceneClusterPrompt(sceneNames: string[]): string {
-  return `Please analyze the following list of scene names and group any near-duplicates or highly overlapping topics into clusters.
+export function formatFocusSceneClusterPrompt(sceneNames: string[]): string {
+  return `Please analyze the following list of focus scene names and group any near-duplicates or highly overlapping topics into clusters.
 
-### Input Scene Names:
+### Input Focus Scene Names:
 ${sceneNames.map(s => `- ${s}`).join("\n")}
 
 ### Output Format (strict JSON array of clusters):`;

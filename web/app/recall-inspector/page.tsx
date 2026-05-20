@@ -13,7 +13,7 @@ export default function RecallInspectorPage() {
   const [query, setQuery] = useState("");
   const [activeSkill, setActiveSkill] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const memories = result?.recalledL1Memories ?? [];
+  const memories = result?.recalledCognitiveMemories ?? [];
   const explanation = result?.recallExplanation;
 
   async function runExplain() {

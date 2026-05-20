@@ -68,7 +68,7 @@ export default function Page() {
 
         {/* Stats Cards Bento Row */}
         <motion.div className="grid" variants={containerVariants} style={{ display: "grid", gap: "20px" }}>
-          <StatCard title="Total Memories (L1)" value={data?.total ?? "0"} />
+          <StatCard title="Total Cognitive Records" value={data?.total ?? "0"} />
           <StatCard title="Archived Records" value={data?.archived ?? "0"} />
           <StatCard title="Citation Rate" value={data ? `${(data.citationRate * 100).toFixed(1)}%` : "0.0%"} />
           <StatCard title="Last Memory Recall" value={formattedDate} />
@@ -88,7 +88,7 @@ export default function Page() {
             </div>
 
             <p style={{ color: "var(--color-porcelain-text)", fontSize: "14px", margin: 0 }}>
-              BrainRouter integrates a multi-layered hierarchical memory subsystem. L1 memories represent semantic episodes extracted from turns. Over time, recurring L1 episodes are consolidated by the background worker into L2 Scenes and distilled into an L3 Persona profile.
+              BrainRouter integrates a multi-layered hierarchical memory subsystem. The SensoryStream buffer captures user turns, consolidating them into CognitiveRecord files. Over time, recurring cognitive records are clustered by the background worker into ContextualFocus scenes and distilled into a CoreIdentity profile.
             </p>
 
             {user?.isAdmin ? (

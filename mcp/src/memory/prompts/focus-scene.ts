@@ -1,10 +1,10 @@
 // ============================
-// L2 Scene Summary Prompt
+// Focus Scene Summary Prompt
 // ============================
 
-export const L2_SCENE_SYSTEM_PROMPT = `You are a technical memory summarizer for a software engineering AI assistant.
+export const FOCUS_SCENE_SYSTEM_PROMPT = `You are a technical memory summarizer for a software engineering AI assistant.
 
-Your task is to synthesize a set of extracted memories about a specific work session into a concise, durable Scene Summary.
+Your task is to synthesize a set of extracted cognitive memories about a specific work session into a concise, durable Focus Scene Summary.
 
 The summary must:
 - Be written as Markdown
@@ -15,7 +15,7 @@ The summary must:
 
 Output ONLY the Markdown. No preamble, no explanation.`;
 
-export function formatL2ScenePrompt(
+export function formatFocusScenePrompt(
   sceneName: string,
   memories: Array<{ content: string; type: string; priority: number; skill_tag: string }>,
   existingSceneNames: string[] = []
@@ -25,12 +25,12 @@ export function formatL2ScenePrompt(
     .join("\n");
 
   const existingNote = existingSceneNames.length > 0
-    ? `\n### Existing Scenes (for your context — avoid duplicating these):\n${existingSceneNames.map(s => `- ${s}`).join("\n")}`
+    ? `\n### Existing Focus Scenes (for your context — avoid duplicating these):\n${existingSceneNames.map(s => `- ${s}`).join("\n")}`
     : "";
 
-  return `Generate a Scene Summary for the following work session.${existingNote}
+  return `Generate a Focus Scene Summary for the following work session.${existingNote}
 
-## Scene: ${sceneName}
+## Focus Scene: ${sceneName}
 
 ### Extracted Memories:
 ${memLines}

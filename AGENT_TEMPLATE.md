@@ -31,11 +31,11 @@
 
 - **Skill-First Mindset**: If a task matches a skill, you MUST invoke it using the `mcp_brainrouter_get_skill` tool. Never implement directly if a skill applies.
 - **Memory-First Habit**: Before doing anything, you MUST call `mcp_brainrouter_memory_resolve_session` passing the current workspace path and the **Conversation ID** (as the `suggestedKey` if present). Use the returned `sessionKey` UUID for all subsequent `mcp_brainrouter_memory_recall`, `mcp_brainrouter_memory_capture_turn`, and `mcp_brainrouter_memory_search` operations.
-- **L2 Pre-Warming & System Hints**: Treat any instructions inside the `<skill-prewarm>` XML block in the system prompt with the same strict authority as the main skill documents. These are active guidelines injected dynamically because the corresponding skills crossed the `0.3` activation potential threshold.
+- **Focus Pre-Warming & System Hints**: Treat any instructions inside the `<skill-prewarm>` XML block in the system prompt with the same strict authority as the main skill documents. These are active guidelines injected dynamically because the corresponding skills crossed the `0.3` activation potential threshold.
 - **Short-Term Working Memory Offloads**: Proactively call `mcp_brainrouter_memory_working_offload` for any stdout, stderr, or files exceeding **1,000 tokens** to prevent context window bloat. Use `mcp_brainrouter_memory_working_context` to monitor the Mermaid task canvas.
 - **Proactive Memory Retrieval**: If `mcp_brainrouter_memory_recall` returns insufficient context, you MUST call `mcp_brainrouter_memory_search` with specific keywords. Use the optional `asOf` parameter (ISO 8601) to query what the memory engine knew at a specific point in time.
 - **Citation Habit**: After generating your response, call `mcp_brainrouter_memory_mark_cited` with the `recordIds` you actually referenced (`citedRecordIds`) and the full list returned by the previous recall (`allRecalledRecordIds`). This powers the ACE feedback loop. Pass an empty `citedRecordIds` array if no memories were used.
-- **Skill Context Registration**: When authoring, updating, or loading a new skill, register its metadata hints using `mcp_brainrouter_memory_register_skill_hints` (or specify them in the skill file's yaml frontmatter) so the L2 pre-warming engine can locate them.
+- **Skill Context Registration**: When authoring, updating, or loading a new skill, register its metadata hints using `mcp_brainrouter_memory_register_skill_hints` (or specify them in the skill file's yaml frontmatter) so the Focus pre-warming engine can locate them.
 - **Resolve Contradictions**: Periodically, especially when starting a new task, call `mcp_brainrouter_memory_contradictions` to check for and resolve any conflicting instructions or memories.
 - **Strict Adherence**: Follow skill instructions exactly. Do not partially apply them or "skip ahead" to code.
 - **No Shortcuts**: Avoid "this is too small for a skill" or "I'll just quickly fix it" rationalization.
@@ -45,13 +45,13 @@
 For every request:
 1. **Resolve Session**: Proactively call `mcp_brainrouter_memory_resolve_session` with your current workspace path and the **Conversation ID** (as `suggestedKey`) to get a standardized `sessionKey` UUID.
 2. **Scan Pre-Warmed Hints**: Check your system prompt for any `<skill-prewarm>` tags. If instructions are present, apply them immediately to the current workspace task.
-3. **Recall Context**: Call `mcp_brainrouter_memory_recall` using the resolved `sessionKey`. If in a long-running task, also fetch `mcp_brainrouter_memory_working_context` to view the task canvas. Capture the `recalledL1Memories[].recordId` list — you will need it in step 7.
+3. **Recall Context**: Call `mcp_brainrouter_memory_recall` using the resolved `sessionKey`. If in a long-running task, also fetch `mcp_brainrouter_memory_working_context` to view the task canvas. Capture the `recalledCognitiveRecords[].recordId` list — you will need it in step 7.
 4. **Detect Intent**: Map the user's request to a scenario below using the recalled context. Check `mcp_brainrouter_memory_contradictions` if there is ambiguity.
 5. **Select Skill**: Identify the most relevant skill name.
 6. **Execute & Offload**: Fetch the skill using `mcp_brainrouter_get_skill` (which spikes its potential by `+1.0` and delays its decay). If this is a newly invoked skill, ensure its hints are registered using `mcp_brainrouter_memory_register_skill_hints`. Follow the skill workflow strictly. Call `mcp_brainrouter_memory_working_offload` for any output exceeding 1,000 tokens.
 7. **Signal Citations**: After generating your response, call `mcp_brainrouter_memory_mark_cited` with:
    - `citedRecordIds`: IDs of memories you actually referenced in your response
-   - `allRecalledRecordIds`: the full `recalledL1Memories[].recordId` list from step 3
+   - `allRecalledRecordIds`: the full `recalledCognitiveRecords[].recordId` list from step 3
    - Pass an empty `citedRecordIds: []` if no specific memories were used
 8. **Record Outcome**: If passive capturing hooks (e.g. Claude Code/Codex) are not running, call `mcp_brainrouter_memory_capture_turn` using the resolved `sessionKey` as your *final tool call* to persist the turn (which also acts as a potential spike trigger for related skills).
 9. **Iterate**: Return to step 1 if the scenario changes or a new request arrives.
@@ -179,7 +179,7 @@ Look up the required resource name for your scenario, then use the appropriate t
 - **Personas**: `mcp_brainrouter_get_persona(name: "<persona-name>")`
 - **Docs (Templates)**: `mcp_brainrouter_list_template_docs()` or `mcp_brainrouter_get_template_doc(name: "<doc-name>")`
 - **Memory Tools — RAG / Long-Term**:
-  - `mcp_brainrouter_memory_recall` → inject context at turn start (returns `recalledL1Memories[].recordId`)
+  - `mcp_brainrouter_memory_recall` → inject context at turn start (returns `recalledCognitiveRecords[].recordId`)
   - `mcp_brainrouter_memory_mark_cited` → signal citations after response (required — drives ACE loop)
   - `mcp_brainrouter_memory_capture_turn` → persist turn as final tool call (optional if passive hooks active)
   - `mcp_brainrouter_memory_search` → deep retrieval (supports `asOf` ISO param for point-in-time)

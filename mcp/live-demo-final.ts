@@ -6,7 +6,7 @@ async function runDemo() {
 
   console.log("🚀 STARTING BRAINROUTER MEMORY SHOWCASE\n");
 
-  // --- STAGE 1: EPISODIC SEEDING ---
+  // --- STAGE 1: SENSORY RECORDING ---
   console.log("📦 Stage 1: Capturing User Context & Technical Mandates...");
   await memoryEngine.capture({
     userId,
@@ -29,7 +29,7 @@ async function runDemo() {
   });
 
   // --- STAGE 3: CONTRADICTION SEEDING ---
-  console.log("⚠️ Stage 3: Triggering Conflict Detection (L1.5)...");
+  console.log("⚠️ Stage 3: Triggering Conflict Detection (Cognitive contradiction check)...");
   await memoryEngine.capture({
     userId,
     sessionKey,
@@ -39,11 +39,11 @@ async function runDemo() {
     ]
   });
 
-  console.log("\n⏳ Waiting for Background Pipelines (L1 Extraction, L1.5 Contradiction, L2 Scenes)...");
+  console.log("\n⏳ Waiting for Background Pipelines (Cognitive Extraction, Contradiction, Focus Scenes)...");
   await new Promise(r => setTimeout(r, 15000));
 
-  // Trigger L2/L3 manually for the demo
-  console.log("\n⚡ Manually Distilling Narrative Layers (L2 & L3)...");
+  // Trigger manually for the demo
+  console.log("\n⚡ Manually Distilling Narrative Layers (Focus & Identity)...");
   await memoryEngine.distillScenes(userId);
   await memoryEngine.distillPersona(userId);
 
@@ -59,40 +59,39 @@ async function runDemo() {
   console.log("🧠 BRAINROUTER AGENT CONTEXT");
   console.log("==================================================");
 
-  console.log("\n👤 [L3 USER PERSONA]");
-  console.log(recall.personaSummary || "Persona distillation still in progress...");
+  console.log("\n👤 [CORE IDENTITY Narrative Profile]");
+  console.log(recall.coreIdentitySummary || "Core Identity distillation still in progress...");
 
-  console.log("\n🎬 [L2 ACTIVE SCENES & KNOWLEDGE GRAPH]");
+  console.log("\n🎬 [CONTEXTUAL FOCUS & KNOWLEDGE GRAPH]");
   console.log(recall.appendSystemContext || "No system context.");
 
   console.log("\n🕸️ [KNOWLEDGE GRAPH DIRECT QUERY - 'Lucide icons']");
   const graphResult = memoryEngine.queryGraph(userId, "Lucide icons");
   console.log(JSON.stringify(graphResult, null, 2));
 
-  console.log("\n💾 [L1 RELEVANT MEMORIES]");
+  console.log("\n💾 [RELEVANT COGNITIVE MEMORIES]");
   console.log(recall.prependContext);
 
-  console.log("\n🛑 [L1.5 CONFLICTS]");
+  console.log("\n🛑 [CONTRADICTIONS]");
   const contradictions = memoryEngine.getPendingContradictions(userId);
   if (contradictions.length > 0) {
     contradictions.forEach((c: any, i: number) => {
       console.log(`Conflict #${i + 1}:`);
       console.log(`  - Reason: ${c.reason}`);
-      console.log(`  - Record A: "${c.content_a.slice(0, 60)}..."`);
-      console.log(`  - Record B: "${c.content_b.slice(0, 60)}..."`);
+      console.log(`  - Record A: "${(c.contentA || c.content_a || "").slice(0, 60)}..."`);
+      console.log(`  - Record B: "${(c.contentB || c.content_b || "").slice(0, 60)}..."`);
       console.log(`  - Confidence: ${c.confidence.toFixed(2)}`);
     });
   } else {
     console.log("No pending conflicts detected.");
   }
 
-  // ── PHASE 3 FEATURE DEMOS ───────────────────────────────────────────────
-
+  // ACE Feedback Loop
   console.log("\n==================================================");
-  console.log("🆕 PHASE 3: ACE FEEDBACK LOOP DEMO");
+  console.log("🆕 ACE FEEDBACK LOOP DEMO");
   console.log("==================================================");
 
-  const recalledIds = (recall.recalledL1Memories ?? []).map((m: any) => m.recordId);
+  const recalledIds = (recall.recalledCognitiveMemories ?? []).map((m: any) => m.recordId);
   if (recalledIds.length > 0) {
     // Simulate: agent used the first memory, ignored the rest
     const cited = [recalledIds[0]];
@@ -104,7 +103,7 @@ async function runDemo() {
 
     // Second recall to prove citation boost is applied
     const recall2 = await memoryEngine.recall({ userId, sessionKey, query: "monorepo UI standards" });
-    const topMemory = recall2.recalledL1Memories?.[0];
+    const topMemory = recall2.recalledCognitiveMemories?.[0];
     console.log(`\n  ↑ Re-recalled top memory after citation boost:`);
     console.log(`    "${topMemory?.content?.slice(0, 80)}..."`);
     console.log(`    score: ${topMemory?.score?.toFixed(4)}`);
@@ -113,10 +112,9 @@ async function runDemo() {
   }
 
   console.log("\n==================================================");
-  console.log("⏱️  PHASE 3: POINT-IN-TIME RECALL (asOf) DEMO");
+  console.log("⏱️  POINT-IN-TIME RECALL (asOf) DEMO");
   console.log("==================================================");
 
-  // asOf set to 1 minute ago — should still catch memories captured in this demo
   const oneMinAgo = new Date(Date.now() - 60_000).toISOString();
   const asOfResult = memoryEngine.searchAsOf(userId, "monorepo pnpm turborepo", oneMinAgo, 5);
   console.log(`\n🔎 Memories valid at ${oneMinAgo}:`);
@@ -128,13 +126,12 @@ async function runDemo() {
     console.log("  No memories found at that timestamp.");
   }
 
-  // asOf set far in the past — should return nothing
   const wayBack = "2020-01-01T00:00:00.000Z";
   const asOfOld = memoryEngine.searchAsOf(userId, "monorepo", wayBack, 5);
   console.log(`\n🔎 Memories valid at ${wayBack} (expect 0): count=${asOfOld.count}`);
 
   console.log("\n==================================================");
-  console.log("⚙️  PHASE 3: MODEL ROUTING CONFIRMATION");
+  console.log("⚙️  MODEL ROUTING CONFIRMATION");
   console.log("==================================================");
   const extractionModel = process.env.BRAINROUTER_EXTRACTION_MODEL || process.env.BRAINROUTER_LLM_MODEL || "gpt-4o-mini (default)";
   const synthesisModel  = process.env.BRAINROUTER_SYNTHESIS_MODEL  || process.env.BRAINROUTER_LLM_MODEL || "gpt-4o-mini (default)";

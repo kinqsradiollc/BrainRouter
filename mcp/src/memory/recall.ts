@@ -1,5 +1,5 @@
 import type { IMemoryStore } from "@brainrouter/types";
-import type { RecallResult, L1FtsResult, RecalledMemory, VectorSearchResult, L1Record, RecallExplanation } from "@brainrouter/types";
+import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation } from "@brainrouter/types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
@@ -7,11 +7,11 @@ import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
 import { randomUUID } from "node:crypto";
 
-function effectivePriority(memory: L1FtsResult & { citation_count?: number }): number {
+function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
 
   if (!halfLife) {
-    return memory.priority; // e.g. instruction
+    return memory.priority;
   }
 
   const ageMs = Date.now() - new Date(memory.created_time).getTime();
@@ -19,7 +19,6 @@ function effectivePriority(memory: L1FtsResult & { citation_count?: number }): n
   const decayFactor = Math.pow(0.5, ageDays / halfLife);
   const decayedPriority = memory.priority * decayFactor;
 
-  // ACE citation boost: each citation adds +5% effective priority, capped at +30%
   const citationBoost = Math.min((memory.citation_count ?? 0) * 0.05, 0.30);
   return decayedPriority * (1 + citationBoost);
 }
@@ -43,7 +42,7 @@ export class MemoryRecallPipeline {
     const intent = detectTaskIntent(query);
 
     // 1. FTS5 BM25 search (Top 15)
-    const ftsResults = this.store.searchL1Fts(userId, query, 15);
+    const ftsResults = this.store.searchCognitiveFts(userId, query, 15);
     const filePathResults = this.expandWithFilePathMatches(userId, query);
 
     // 2. Vector search (Top 15, if enabled)
@@ -51,7 +50,7 @@ export class MemoryRecallPipeline {
     if (this.embeddingService.isReady()) {
       try {
         const queryVec = await this.embeddingService.embed(query);
-        vecResults = this.store.searchL1Vec(userId, queryVec, 15);
+        vecResults = this.store.searchCognitiveVec(userId, queryVec, 15);
       } catch (e) {
         console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
       }
@@ -84,8 +83,7 @@ export class MemoryRecallPipeline {
     }
 
     // 3. RRF Merge (Reciprocal Rank Fusion)
-    // Formula: score = Σ 1 / (60 + rank)
-    const rrfMap = new Map<string, { record: L1FtsResult | VectorSearchResult, rrfScore: number }>();
+    const rrfMap = new Map<string, { record: CognitiveFtsResult | VectorSearchResult, rrfScore: number }>();
 
     ftsResults.forEach((r, idx) => {
       const rank = idx + 1;
@@ -112,7 +110,6 @@ export class MemoryRecallPipeline {
       }
     });
 
-    // Compute top RRF score before blending
     const rrfValues = Array.from(rrfMap.values()).map(v => v.rrfScore);
     const rrfTopScore = rrfValues.length > 0 ? Math.max(...rrfValues) : 0;
 
@@ -122,13 +119,8 @@ export class MemoryRecallPipeline {
     let skillBoostApplied = false;
 
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
-      // Scale RRF score (which is typically small, e.g. 1/60 + 1/60 ≈ 0.033) to 0-1ish range
       const baseScore = rrfScore * 30;
-
-      // Decay priority (0-100) contributes to the final blend
-      const priorityScore = (effectivePriority(record as L1FtsResult) / 100);
-
-      // Blend: 70% relevance (RRF), 30% priority/freshness
+      const priorityScore = (effectivePriority(record as CognitiveFtsResult) / 100);
       let finalScore = (baseScore * 0.7) + (priorityScore * 0.3);
 
       if (activeSkill && record.skill_tag === activeSkill) {
@@ -142,8 +134,7 @@ export class MemoryRecallPipeline {
       }
       finalScore *= intentMultiplier;
 
-      // Track citation boost for explanation
-      const citationCount = (record as L1FtsResult).citation_count ?? 0;
+      const citationCount = (record as CognitiveFtsResult).citation_count ?? 0;
       const citBoost = Math.min(citationCount * 0.05, 0.30);
       if (citBoost > 0) {
         citationBoosts[record.record_id] = citBoost;
@@ -152,9 +143,7 @@ export class MemoryRecallPipeline {
       return { record, score: finalScore };
     });
 
-    // Sort by final score descending
     scoredResults.sort((a, b) => b.score - a.score);
-    
     let topResults = scoredResults.slice(0, 5);
     
     // Stage 3 — Reranker (Top 20 from RRF)
@@ -189,16 +178,15 @@ export class MemoryRecallPipeline {
 
     const prependContext = `<relevant-memories>\n  The following memories are relevant to this query. Reference only if helpful:\n\n  ${memoryLines.join("\n  ")}\n</relevant-memories>`;
 
-    // Build appendSystemContext with L2 Scene Navigation + tools guide
-    const topScenes = this.store.getTopL2Scenes(userId, 3);
-
+    // Build appendSystemContext with Contextual Focus Navigation + tools guide
+    const topScenes = this.store.getTopContextualFocus(userId, 3);
     let appendSystemContext = "";
 
     if (topScenes.length > 0) {
       const sceneNav = topScenes
         .map(s => `  - ${s.sceneName} (heat: ${s.heatScore.toFixed(0)})`)
         .join("\n");
-      appendSystemContext += `<scene-navigation>\n  Recent scenes:\n${sceneNav}\n</scene-navigation>\n\n`;
+      appendSystemContext += `<scene-navigation>\n  Recent focus scenes:\n${sceneNav}\n</scene-navigation>\n\n`;
     }
 
     appendSystemContext += `<memory-tools-guide>
@@ -209,7 +197,7 @@ export class MemoryRecallPipeline {
 
     // Graph context expansion (2-hop BFS from matched entities)
     const graphContext = expandRecallWithGraph({
-      topL1Results: topResults.map(r => r.record),
+      topCognitiveResults: topResults.map(r => r.record),
       query,
       userId,
       activeSkill,
@@ -220,25 +208,23 @@ export class MemoryRecallPipeline {
       appendSystemContext += `\n${graphContext}`;
     }
 
-    // Skill pre-warming injection (opt-in via BRAINROUTER_PREWARM_ENABLED)
     if (process.env.BRAINROUTER_PREWARM_ENABLED === "true") {
       try {
         const prewarmResults = detectPrewarmSkills({
           userId,
           store: this.store,
-          excludeSkill: activeSkill, // don't duplicate hints already provided by active skill
+          excludeSkill: activeSkill,
         });
         const prewarmBlock = buildPrewarmBlock(prewarmResults);
         if (prewarmBlock) {
           appendSystemContext += `\n${prewarmBlock}`;
         }
       } catch (e) {
-        // Pre-warming is best-effort — never block recall on failure
         console.error("[BrainRouter] Skill pre-warming skipped:", (e as Error).message);
       }
     }
 
-    const recalledL1Memories: RecalledMemory[] = topResults.map(r => ({
+    const recalledCognitiveMemories: RecalledMemory[] = topResults.map(r => ({
       content: r.record.content,
       score: r.score,
       type: r.record.type,
@@ -252,13 +238,12 @@ export class MemoryRecallPipeline {
 
     const durationMs = Date.now() - startTime;
 
-    // Build recallExplanation — always populated so engine/timeline can log it
     const recallExplanation: RecallExplanation = {
       ftsHits: ftsResults.length,
       vecHits: vecResults.length,
       filePathHits: filePathResults.length,
       rrfTopScore,
-      intentDetected: intent !== "build" ? intent : "build", // intent is always a valid value
+      intentDetected: intent,
       typeBoosts,
       skillBoostApplied,
       rerankerUsed: usedReranker,
@@ -273,7 +258,6 @@ export class MemoryRecallPipeline {
       })),
     };
 
-    // Write recall operation to audit log (for Timeline page)
     if (!params.explain) {
       this.writeRecallOp(userId, sessionKey, query, recallStrategy, topResults.length, durationMs, recallExplanation);
     }
@@ -281,17 +265,13 @@ export class MemoryRecallPipeline {
     return {
       prependContext,
       appendSystemContext,
-      recalledL1Memories,
+      recalledCognitiveMemories,
       recallStrategy,
-      activeScene: topScenes[0]?.sceneName,
+      activeFocusName: topScenes[0]?.sceneName,
       recallExplanation,
     };
   }
 
-  /**
-   * Re-run a query in explain mode — returns full breakdown without side effects.
-   * Does NOT write a memory_operations row.
-   */
   public async explainRecall(params: {
     userId: string;
     sessionKey: string;
@@ -321,7 +301,7 @@ export class MemoryRecallPipeline {
         reason: "",
         createdAt: new Date().toISOString(),
         metadata: {
-          query: query.slice(0, 500), // truncate long queries
+          query: query.slice(0, 500),
           strategy,
           hitCount,
           durationMs,
@@ -332,15 +312,15 @@ export class MemoryRecallPipeline {
         },
       });
     } catch {
-      // Audit writes are best-effort — never let them block recall
+      // Audit writes are best-effort
     }
   }
 
-  private expandWithFilePathMatches(userId: string, query: string): L1FtsResult[] {
+  private expandWithFilePathMatches(userId: string, query: string): CognitiveFtsResult[] {
     const filePaths = extractFilePathHints(query);
     if (filePaths.length === 0) return [];
 
-    const records = new Map<string, L1Record>();
+    const records = new Map<string, CognitiveRecord>();
     for (const filePath of filePaths) {
       for (const record of this.store.getMemoriesByFilePath(userId, filePath, 10)) {
         records.set(record.id, record);

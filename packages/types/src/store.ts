@@ -3,11 +3,11 @@ import type {
   GraphNode,
   ContradictionRecord,
   ImportResult,
-  L0Record,
-  L1FtsResult,
-  L1Record,
-  L2SceneRecord,
-  L3PersonaRecord,
+  SensoryRecord,
+  CognitiveFtsResult,
+  CognitiveRecord,
+  ContextualFocusRecord,
+  CoreIdentityRecord,
   MemoryEvidence,
   MemoryExport,
   MemoryImport,
@@ -70,18 +70,18 @@ export interface IMemoryStore {
   initVec(dimensions: number): void;
   reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number>;
   getSqliteVersion(): string;
-  upsertL0(record: L0Record): void;
-  getRecentL0Messages(userId: string, sessionKey: string, limit: number, afterIsoTime?: string): L0Record[];
-  getUnextractedL0Count(userId: string, sessionKey: string): number;
-  markL0Extracted(userId: string, sessionKey: string, recordIds: string[], extractedAt?: string): void;
-  upsertL1(record: L1Record, options?: { skipAudit?: boolean }): void;
+  upsertSensory(record: SensoryRecord): void;
+  getRecentSensoryMessages(userId: string, sessionKey: string, limit: number, afterIsoTime?: string): SensoryRecord[];
+  getUnextractedSensoryCount(userId: string, sessionKey: string): number;
+  markSensoryExtracted(userId: string, sessionKey: string, recordIds: string[], extractedAt?: string): void;
+  upsertCognitive(record: CognitiveRecord, options?: { skipAudit?: boolean }): void;
   /** Batch upsert with optional embedding vectors. Pass skipAudit to suppress per-record
-   * l1_upsert noise when the caller will write a higher-level audit entry itself. */
-  upsertL1Batch(entries: Array<{ record: L1Record; embedding?: Float32Array }>, options?: { skipAudit?: boolean }): void;
-  invalidateL1Record(userId: string, recordId: string, supersededById: string): void;
-  getMemoryById(userId: string, recordId: string): L1Record | null;
-  getMemoriesByFilePath(userId: string, filePath: string, limit: number): L1Record[];
-  updateL1Confidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void;
+   * cognitive_upsert noise when the caller will write a higher-level audit entry itself. */
+  upsertCognitiveBatch(entries: Array<{ record: CognitiveRecord; embedding?: Float32Array }>, options?: { skipAudit?: boolean }): void;
+  invalidateCognitiveRecord(userId: string, recordId: string, supersededById: string): void;
+  getMemoryById(userId: string, recordId: string): CognitiveRecord | null;
+  getMemoriesByFilePath(userId: string, filePath: string, limit: number): CognitiveRecord[];
+  updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void;
   insertEvidence(ev: MemoryEvidence): void;
   getEvidenceByRecord(userId: string, recordId: string): MemoryEvidence[];
   listEvidence(
@@ -101,10 +101,10 @@ export interface IMemoryStore {
   exportMemories(userId: string): MemoryExport;
   importMemories(userId: string, data: MemoryImport): ImportResult;
   hardDeleteMemory(userId: string, recordId: string, reason: string): void;
-  searchL1Fts(userId: string, query: string, limit: number): L1FtsResult[];
-  searchL1FtsAsOf(userId: string, query: string, limit: number, asOf: string): L1FtsResult[];
-  upsertL1Vec(recordId: string, embedding: Float32Array): void;
-  searchL1Vec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
+  searchCognitiveFts(userId: string, query: string, limit: number): CognitiveFtsResult[];
+  searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): CognitiveFtsResult[];
+  upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
+  searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
   upsertContradiction(data: {
     id: string;
     userId: string;
@@ -121,24 +121,24 @@ export interface IMemoryStore {
   getSkillHints(skillName: string): string | null;
   getSkillActivations(userId: string): SkillActivationRecord[];
   upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): void;
-  upsertL2Scene(record: L2SceneRecord): void;
-  getTopL2Scenes(userId: string, limit?: number, cursor?: { heatScore: number; id: string }): L2SceneRecord[];
-  decayL2HeatScores(userId: string, decayFactor?: number): void;
-  boostL2HeatScore(userId: string, sceneName: string, boost?: number): void;
-  getL1sByScene(userId: string, sceneName: string, limit?: number): any[];
-  getL2SceneCount(userId: string): number;
-  getColdL2Scenes(userId: string, limit: number): L2SceneRecord[];
-  deleteL2Scenes(userId: string, sceneIds: string[]): void;
-  getL2SceneByName(userId: string, sceneName: string): L2SceneRecord | null;
+  upsertContextualFocus(record: ContextualFocusRecord): void;
+  getTopContextualFocus(userId: string, limit?: number, cursor?: { heatScore: number; id: string }): ContextualFocusRecord[];
+  decayContextualFocusHeatScores(userId: string, decayFactor?: number): void;
+  boostContextualFocusHeatScore(userId: string, sceneName: string, boost?: number): void;
+  getCognitivesByFocus(userId: string, sceneName: string, limit?: number): any[];
+  getContextualFocusCount(userId: string): number;
+  getColdContextualFocus(userId: string, limit: number): ContextualFocusRecord[];
+  deleteContextualFocus(userId: string, sceneIds: string[]): void;
+  getContextualFocusByName(userId: string, sceneName: string): ContextualFocusRecord | null;
   getDistinctSceneNames(userId: string): string[];
-  renameSceneInL1Records(userId: string, oldName: string, canonicalName: string): void;
-  upsertL3Persona(record: L3PersonaRecord): void;
-  getL3Persona(userId: string): L3PersonaRecord | null;
-  getPersonaAndInstructionL1s(userId: string, limit?: number): any[];
+  renameFocusInCognitiveRecords(userId: string, oldName: string, canonicalName: string): void;
+  upsertCoreIdentity(record: CoreIdentityRecord): void;
+  getCoreIdentity(userId: string): CoreIdentityRecord | null;
+  getIdentityAndInstructionCognitives(userId: string, limit?: number): any[];
   getSchedulerState(userId: string): SchedulerState;
-  incrementSchedulerL1Count(userId: string, count: number): void;
-  resetSchedulerL2Count(userId: string): void;
-  resetSchedulerL3Count(userId: string): void;
+  incrementSchedulerCognitiveCount(userId: string, count: number): void;
+  resetSchedulerFocusCount(userId: string): void;
+  resetSchedulerIdentityCount(userId: string): void;
   recordExtractionFailure(userId: string, message: string): void;
   resetExtractionFailures(userId: string): void;
   getExtractionStatus(userId: string): ExtractionStatus;
@@ -150,8 +150,8 @@ export interface IMemoryStore {
   getGraphNeighbors(userId: string, entityId: string, skillTag?: string, maxHops?: number): { nodes: GraphNode[]; edges: GraphEdge[] };
   markCited(userId: string, recordIds: string[]): void;
   incrementNeverCited(userId: string, recordIds: string[]): { recordId: string; neverCitedCount: number }[];
-  archiveL1Record(userId: string, recordId: string): void;
-  getRecentSkillContextL1s(userId: string, limit: number): { skillTag: string; createdTime: string }[];
+  archiveCognitiveRecord(userId: string, recordId: string): void;
+  getRecentSkillContextCognitives(userId: string, limit: number): { skillTag: string; createdTime: string }[];
   createUser(userId: string, apiKey: string, displayName?: string, isAdmin?: boolean): UserRecord;
   getUserByApiKey(apiKey: string): UserRecord | null;
   getUserByEmail(email: string): UserRecord | null;

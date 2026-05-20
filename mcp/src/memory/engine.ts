@@ -5,8 +5,8 @@ import { MemoryRecallPipeline } from "./recall.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
-import { distillScenes } from "./pipeline/l2-scene.js";
-import { distillPersona } from "./pipeline/l3-distiller.js";
+import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
+import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@brainrouter/types";
 import { fetchWithExternalRetry } from "./retry.js";
@@ -16,7 +16,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { L1Record, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, UserRecord } from "@brainrouter/types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, UserRecord } from "@brainrouter/types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -25,12 +25,10 @@ import { redactSensitiveMemoryText } from "./redaction.js";
 const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");
 
 // Configurable LLM Runner — supports per-task model routing
-// Fallback chain: modelOverride → BRAINROUTER_LLM_MODEL → "gpt-4o-mini"
 class ModelLLMRunner implements LLMRunner {
   private readonly modelOverride?: string;
 
   constructor(modelOverride?: string) {
-    // Treat empty string as "not set" so env vars don't accidentally blank the model
     this.modelOverride = modelOverride?.trim() || undefined;
   }
 
@@ -42,7 +40,6 @@ class ModelLLMRunner implements LLMRunner {
       throw new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Memory extraction requires an LLM.`);
     }
 
-    // Fallback chain: constructor override → env BRAINROUTER_LLM_MODEL → hard default
     const model = this.modelOverride
       ?? (process.env.BRAINROUTER_LLM_MODEL?.trim() || undefined)
       ?? "gpt-4o-mini";
@@ -75,14 +72,11 @@ class ModelLLMRunner implements LLMRunner {
   }
 }
 
-
 export class MemoryEngine {
   private store: IMemoryStore;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
-  // Extraction runner: L1, L1.5, GraphRAG — should be fast/cheap
   private extractionRunner: LLMRunner;
-  // Synthesis runner: L2 scenes, L3 persona — can be smarter/larger
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
 
@@ -106,12 +100,9 @@ export class MemoryEngine {
       console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
     });
 
-    // Extraction runner: BRAINROUTER_EXTRACTION_MODEL → BRAINROUTER_LLM_MODEL → "gpt-4o-mini"
     this.extractionRunner = new ModelLLMRunner(
       process.env.BRAINROUTER_EXTRACTION_MODEL
     );
-    // Synthesis runner: BRAINROUTER_SYNTHESIS_MODEL → BRAINROUTER_LLM_MODEL → "gpt-4o-mini"
-    // When same model is desired (default), simply don't set BRAINROUTER_SYNTHESIS_MODEL
     this.synthesisRunner = new ModelLLMRunner(
       process.env.BRAINROUTER_SYNTHESIS_MODEL
     );
@@ -136,10 +127,10 @@ export class MemoryEngine {
     if (embeddingService.isReady()) {
       void this.store.reembedStaleRecords((text) => embeddingService.embed(text)).then((count) => {
         if (count > 0) {
-          console.error(`[BrainRouter] Re-embedded ${count} stale L1 vector records.`);
+          console.error(`[BrainRouter] Re-embedded ${count} stale cognitive vector records.`);
         }
       }).catch((err) => {
-        console.error("[BrainRouter] Failed to re-embed stale L1 vector records:", err instanceof Error ? err.message : err);
+        console.error("[BrainRouter] Failed to re-embed stale cognitive vector records:", err instanceof Error ? err.message : err);
       });
     }
     
@@ -180,7 +171,7 @@ export class MemoryEngine {
     const now = new Date().toISOString();
     const timestamp = params.timestamp ?? Date.now();
     const record = {
-      id: `l0_hook_${params.sessionKey}_${timestamp}_${randomUUID()}`,
+      id: `sensory_hook_${params.sessionKey}_${timestamp}_${randomUUID()}`,
       userId: params.userId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId ?? "",
@@ -190,7 +181,7 @@ export class MemoryEngine {
       timestamp,
       skillTag: params.skillTag ?? "",
     };
-    this.store.upsertL0(record);
+    this.store.upsertSensory(record);
     return record;
   }
 
@@ -202,13 +193,11 @@ export class MemoryEngine {
     return async (params: Parameters<MemoryRecallPipeline['recall']>[0]) => {
       const result = await this.recallPipeline.recall(params);
       
-      // Inject persona from cache — prepend so it's stable at the top of appendSystemContext
-      // Guard against undefined (returned on empty-recall fast-path)
       const persona = this.getPersona(params.userId);
       if (persona) {
         const existing = result.appendSystemContext ?? "";
         result.appendSystemContext = `<user-persona>\n${persona.personaMd}\n</user-persona>\n\n` + existing;
-        result.personaSummary = persona.personaMd;
+        result.coreIdentitySummary = persona.personaMd;
       }
       
       return result;
@@ -252,10 +241,6 @@ export class MemoryEngine {
     })).sort((a, b) => b.potential - a.potential);
   }
 
-  /**
-   * Scan global + local skills directories for SKILL.md files with memory_hints
-   * and auto-register them into the DB. Called once at startup.
-   */
   public autoScanSkillHints(skillsDirs: string[]) {
     let loaded = 0;
     for (const dir of skillsDirs) {
@@ -272,37 +257,37 @@ export class MemoryEngine {
     }
   }
 
-  /** On-demand L2 scene distillation — groups L1s by scene and summarizes via LLM. */
+  /** On-demand Focus Scene distillation — groups cognitives by scene and summarizes via LLM. */
   public async distillScenes(userId: string) {
-    return distillScenes({ userId, store: this.store, llmRunner: this.synthesisRunner });
+    return distillFocusScenes({ userId, store: this.store, llmRunner: this.synthesisRunner });
   }
 
-  /** On-demand L3 persona distillation — cross-session synthesis of persona+instruction L1s. */
+  /** On-demand Core Identity distillation — cross-session synthesis of persona+instruction cognitives. */
   public async distillPersona(userId: string) {
-    const result = await distillPersona({ userId, store: this.store, llmRunner: this.synthesisRunner });
+    const result = await distillCoreIdentity({ userId, store: this.store, llmRunner: this.synthesisRunner });
     if (result.success && result.personaMd) {
       this.personaCache.set(userId, { personaMd: result.personaMd, cachedAt: Date.now() });
     }
     return result;
   }
 
-  /** Get the current L3 persona for a user, using prompt-level in-memory cache. */
+  /** Get the current Core Identity for a user, using prompt-level in-memory cache. */
   public getPersona(userId: string) {
     const cached = this.personaCache.get(userId);
     if (cached && (Date.now() - cached.cachedAt) < this.PERSONA_CACHE_TTL_MS) {
       return { personaMd: cached.personaMd };
     }
     
-    const persona = this.store.getL3Persona(userId);
+    const persona = this.store.getCoreIdentity(userId);
     if (persona) {
       this.personaCache.set(userId, { personaMd: persona.personaMd, cachedAt: Date.now() });
     }
     return persona;
   }
 
-  /** Get the top N active scenes for a user (ordered by heat score). */
+  /** Get the top N active focus scenes for a user (ordered by heat score). */
   public getTopScenes(userId: string, limit = 3, cursor?: { heatScore: number; id: string }) {
-    return this.store.getTopL2Scenes(userId, limit, cursor);
+    return this.store.getTopContextualFocus(userId, limit, cursor);
   }
 
   /** Expose the ability to query the knowledge graph for a user/entity. */
@@ -365,7 +350,7 @@ export class MemoryEngine {
   }
 
   public deleteMemory(userId: string, recordId: string) {
-    this.store.archiveL1Record(userId, recordId);
+    this.store.archiveCognitiveRecord(userId, recordId);
   }
 
   public getMemoryById(userId: string, recordId: string) {
@@ -383,17 +368,17 @@ export class MemoryEngine {
     priority?: number;
     activeSkill?: string;
     confidence?: number;
-    sourceKind?: L1Record["sourceKind"];
-    verificationStatus?: L1Record["verificationStatus"];
+    sourceKind?: CognitiveRecord["sourceKind"];
+    verificationStatus?: CognitiveRecord["verificationStatus"];
     repoPaths?: string[];
     filePaths?: string[];
     commands?: string[];
     metadata?: Record<string, unknown>;
-  }): L1Record {
+  }): CognitiveRecord {
     const now = new Date().toISOString();
     const config = getMemoryTypeConfig(params.type);
-    const record: L1Record = {
-      id: `l1_manual_${randomUUID()}`,
+    const record: CognitiveRecord = {
+      id: `cognitive_manual_${randomUUID()}`,
       userId: params.userId,
       sessionKey: params.sessionKey ?? "",
       sessionId: params.sessionId ?? "",
@@ -423,29 +408,29 @@ export class MemoryEngine {
       neverCitedCount: 0,
       archived: false,
     };
-    this.store.upsertL1(record);
+    this.store.upsertCognitive(record);
     return record;
   }
 
-  public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): L1Record[] {
+  public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): CognitiveRecord[] {
     return this.store.getMemoriesByFilePath(userId, filePath, limit);
   }
 
   public searchMemoryRecords(userId: string, query: string, limit = 20) {
-    return this.store.searchL1Fts(userId, query, limit);
+    return this.store.searchCognitiveFts(userId, query, limit);
   }
 
   public updateMemory(userId: string, recordId: string, updates: {
     content?: string;
     status?: MemoryStatus;
     confidence?: number;
-    verificationStatus?: L1Record["verificationStatus"];
+    verificationStatus?: CognitiveRecord["verificationStatus"];
     note?: string;
   }) {
     const existing = this.store.getMemoryById(userId, recordId);
     if (!existing) return null;
     const now = new Date().toISOString();
-    const updated: L1Record = {
+    const updated: CognitiveRecord = {
       ...existing,
       content: updates.content ?? existing.content,
       status: updates.status ?? existing.status,
@@ -457,8 +442,7 @@ export class MemoryEngine {
         ? { ...existing.metadata, governanceNote: updates.note, governanceNoteAt: now }
         : existing.metadata,
     };
-    // skipAudit: true because updateMemory writes its own memory_update op below.
-    this.store.upsertL1(updated, { skipAudit: true });
+    this.store.upsertCognitive(updated, { skipAudit: true });
     this.store.insertOperation({
       id: randomUUID(),
       userId,
@@ -479,7 +463,7 @@ export class MemoryEngine {
   }
 
   public updateMemoryStatus(userId: string, recordId: string, confidence: number, status: MemoryStatus) {
-    this.store.updateL1Confidence(userId, recordId, confidence, status);
+    this.store.updateCognitiveConfidence(userId, recordId, confidence, status);
     return this.getMemoryById(userId, recordId);
   }
 
@@ -606,40 +590,24 @@ export class MemoryEngine {
 
   private readonly ACE_ARCHIVE_THRESHOLD = (() => {
     const v = parseInt(process.env.BRAINROUTER_ACE_ARCHIVE_THRESHOLD ?? "10", 10);
-    // 0 means disabled; NaN or negative also disables
     return isNaN(v) || v <= 0 ? 0 : v;
   })();
 
-  /**
-   * Mark specific recalled memories as cited, and track non-cited ones.
-   *
-   * @param userId - The user who owns the memories
-   * @param citedRecordIds - IDs of memories the agent actually used in its response
-   * @param allRecalledRecordIds - All IDs surfaced during the previous recall (superset)
-   *
-   * Edge cases:
-   * - citedRecordIds ⊄ allRecalledRecordIds: both sets processed independently (cited always wins)
-   * - stale IDs not in DB: SQL IN() skips them silently
-   * - ACE_ARCHIVE_THRESHOLD = 0: auto-archive is disabled
-   */
   public markCited(userId: string, citedRecordIds: string[], allRecalledRecordIds: string[]) {
-    // Cited memories: increment citation_count, reset never_cited_count
     if (citedRecordIds.length > 0) {
       this.store.markCited(userId, citedRecordIds);
     }
 
-    // Non-cited recalled memories: increment never_cited_count
     const citedSet = new Set(citedRecordIds);
     const nonCited = allRecalledRecordIds.filter(id => !citedSet.has(id));
 
     if (nonCited.length > 0) {
       const updated = this.store.incrementNeverCited(userId, nonCited);
 
-      // Auto-archive if threshold is enabled and exceeded
       if (this.ACE_ARCHIVE_THRESHOLD > 0) {
         for (const { recordId, neverCitedCount } of updated) {
           if (neverCitedCount >= this.ACE_ARCHIVE_THRESHOLD) {
-            this.store.archiveL1Record(userId, recordId);
+            this.store.archiveCognitiveRecord(userId, recordId);
             console.error(`[BrainRouter] ACE: Auto-archived memory ${recordId} (never_cited_count=${neverCitedCount})`);
           }
         }
@@ -657,24 +625,17 @@ export class MemoryEngine {
   // Point-in-Time Search (asOf)
   // ============================
 
-  /**
-   * Search memories that were valid at a specific ISO timestamp.
-   * Returns formatted context string (same shape as recall for easy comparison).
-   *
-   * @throws Error if asOf is not a parseable ISO date string
-   */
   public searchAsOf(userId: string, query: string, asOf: string, limit = 10): {
     memories: Array<{ recordId: string; content: string; type: string; score: number }>;
     asOf: string;
     count: number;
   } {
-    // Validate asOf is a parseable date
     const ts = Date.parse(asOf);
     if (isNaN(ts)) {
       throw new Error(`Invalid asOf timestamp: "${asOf}". Must be a valid ISO 8601 date string.`);
     }
 
-    const results = this.store.searchL1FtsAsOf(userId, query, limit, asOf);
+    const results = this.store.searchCognitiveFtsAsOf(userId, query, limit, asOf);
     return {
       memories: results.map(r => ({
         recordId: r.record_id,
@@ -687,7 +648,6 @@ export class MemoryEngine {
     };
   }
 }
-
 
 // Singleton export
 export const memoryEngine = new MemoryEngine();

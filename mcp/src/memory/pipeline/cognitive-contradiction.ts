@@ -1,21 +1,20 @@
 import type { IMemoryStore } from "@brainrouter/types";
-import type { LLMRunner, L1Record, L1FtsResult } from "@brainrouter/types";
-import { L1_CONTRADICTION_PROMPT } from "../prompts/l1-contradiction.js";
+import type { LLMRunner, CognitiveRecord, CognitiveFtsResult } from "@brainrouter/types";
+import { COGNITIVE_CONTRADICTION_PROMPT } from "../prompts/cognitive-contradiction.js";
 import crypto from "node:crypto";
 
 export async function detectContradictions(params: {
-  newRecord: L1Record;
+  newRecord: CognitiveRecord;
   store: IMemoryStore;
   llmRunner: LLMRunner;
 }) {
   const { newRecord, store, llmRunner } = params;
 
   // 1. Search for potentially related memories
-  // We use keyword search on the content of the new record to find similar existing ones
-  const candidates = store.searchL1Fts(newRecord.userId, newRecord.content, 5);
+  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, 5);
   
   const evaluations: Array<{
-    candidate: L1FtsResult;
+    candidate: CognitiveFtsResult;
     isContradiction: boolean;
     confidence: number;
     kind: "temporal_update" | "genuine_conflict";
@@ -29,10 +28,7 @@ export async function detectContradictions(params: {
     // Don't compare with self
     if (candidate.record_id === newRecord.id) continue;
 
-    // Only compare if they are of the same type or both are episodic/persona
-    // (instructions don't usually contradict episodic facts)
-    
-    const prompt = L1_CONTRADICTION_PROMPT
+    const prompt = COGNITIVE_CONTRADICTION_PROMPT
       .replace("{{newContent}}", newRecord.content)
       .replace("{{existingContent}}", candidate.content);
 
@@ -43,7 +39,6 @@ export async function detectContradictions(params: {
         timeoutMs: contradictionTimeoutMs
       });
 
-      // Simple JSON extraction (flexible for local models)
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (!jsonMatch) continue;
 
@@ -62,16 +57,13 @@ export async function detectContradictions(params: {
     }
   }
 
-  // If ANY evaluation is a temporal_update, then the entire batch of contradictions represents a temporal transition!
   const hasTemporalUpdate = evaluations.some(ev => ev.kind === "temporal_update");
 
   for (const ev of evaluations) {
     if (hasTemporalUpdate) {
-      // Treat all conflicting old records as superseded by the new record
       console.error(`[BrainRouter] TEMPORAL UPDATE DETECTED (transition): Superseding memory ${ev.candidate.record_id} with new memory ${newRecord.id}`);
-      store.invalidateL1Record(newRecord.userId, ev.candidate.record_id, newRecord.id);
+      store.invalidateCognitiveRecord(newRecord.userId, ev.candidate.record_id, newRecord.id);
     } else {
-      // Genuine conflict
       console.error(`[BrainRouter] CONTRADICTION DETECTED: ${newRecord.id} vs ${ev.candidate.record_id}`);
       
       store.upsertContradiction({

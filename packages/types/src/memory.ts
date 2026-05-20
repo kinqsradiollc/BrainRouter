@@ -24,7 +24,7 @@ export interface BrainRouterMemoryContext {
 // Record Types
 // ============================
 
-export interface L0Record {
+export interface SensoryRecord {
   id: string;
   userId: string;
   sessionKey: string;
@@ -88,7 +88,7 @@ export interface EvidenceRef {
   ref: string;
 }
 
-export interface L1Record {
+export interface CognitiveRecord {
   id: string;
   userId: string;
   sessionKey: string;
@@ -148,14 +148,14 @@ export interface MemoryExport {
   version: 1;
   exportedAt: string;
   userId: string;
-  memories: L1Record[];
+  memories: CognitiveRecord[];
   evidence: MemoryEvidence[];
   operations: MemoryOperation[];
 }
 
 export interface MemoryImport {
   version: 1;
-  memories: L1Record[];
+  memories: CognitiveRecord[];
   evidence?: MemoryEvidence[];
   operations?: MemoryOperation[];
 }
@@ -207,7 +207,7 @@ export interface VectorSearchResult {
 }
 
 
-export interface L1FtsResult {
+export interface CognitiveFtsResult {
   record_id: string;
   user_id: string;
   content: string;
@@ -284,29 +284,29 @@ export interface RecallExplanation {
 }
 
 export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
+  /** Cognitive relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
+  /** Stable recall context appended to system prompt (core identity, focus nav, tools guide). */
   appendSystemContext?: string;
-  /** Recalled L1 memories with scores (for metrics/debugging). */
-  recalledL1Memories?: RecalledMemory[];
+  /** Recalled Cognitive memories with scores (for metrics/debugging). */
+  recalledCognitiveMemories?: RecalledMemory[];
   /** Strategy used. Phase 1 = keyword. */
   recallStrategy: string;
-  /** L3 persona markdown (for metrics/debugging). */
-  personaSummary?: string;
-  /** Current most active scene name (for metrics/debugging). */
-  activeScene?: string;
+  /** Core identity markdown (for metrics/debugging). */
+  coreIdentitySummary?: string;
+  /** Current most active focus scene name (for metrics/debugging). */
+  activeFocusName?: string;
   /** Full recall pipeline explanation (populated in explain mode or always). */
   recallExplanation?: RecallExplanation;
 }
 
 export interface CaptureResult {
-  /** Number of L0 messages recorded. */
-  l0RecordedCount: number;
-  /** Whether L1 extraction was triggered this turn. */
-  l1ExtractionTriggered: boolean;
-  /** Number of L1 memories extracted (if triggered). */
-  l1ExtractedCount: number;
+  /** Number of Sensory messages recorded. */
+  sensoryRecordedCount: number;
+  /** Whether Cognitive extraction was triggered this turn. */
+  cognitiveExtractionTriggered: boolean;
+  /** Number of Cognitive memories extracted (if triggered). */
+  cognitiveExtractedCount: number;
 }
 
 // ============================
@@ -379,7 +379,7 @@ export interface LLMRunner {
 // L2 / L3 / Scheduler Types
 // ============================
 
-export interface L2SceneRecord {
+export interface ContextualFocusRecord {
   id: string;
   userId: string;
   sceneName: string;
@@ -390,10 +390,10 @@ export interface L2SceneRecord {
   updatedTime: string;
 }
 
-export interface L3PersonaRecord {
+export interface CoreIdentityRecord {
   userId: string;
   personaMd: string;
-  l1CountAtGeneration: number;
+  cognitiveCountAtGeneration: number;
   createdTime: string;
   updatedTime: string;
 }
@@ -418,9 +418,9 @@ export interface ContradictionRecord {
 }
 
 export interface SchedulerState {
-  l1CountSinceLastL2: number;
-  l1CountSinceLastL3: number;
-  totalL1Count: number;
+  cognitiveCountSinceLastFocus: number;
+  cognitiveCountSinceLastIdentity: number;
+  totalCognitiveCount: number;
   extractionErrors: number;
   lastErrorMessage: string | null;
   lastErrorAt: string | null;

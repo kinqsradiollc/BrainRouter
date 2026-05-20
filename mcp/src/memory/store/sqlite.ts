@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, L0Record, L1Record, L1FtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, L2SceneRecord, L3PersonaRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
+import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@brainrouter/types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@brainrouter/types";
 
@@ -49,7 +49,7 @@ function parseJsonArray(raw: string | null | undefined): string[] {
   }
 }
 
-function l1RowToRecord(row: any): L1Record {
+function cognitiveRowToRecord(row: any): CognitiveRecord {
   return {
     id: row.record_id,
     userId: row.user_id,
@@ -113,21 +113,21 @@ function operationRowToRecord(row: any): MemoryOperation {
 export class SqliteMemoryStore implements IMemoryStore {
   private db: DatabaseSync;
 
-  // L0 statements
-  private stmtL0UpsertMeta!: StatementSync;
-  private stmtL0QueryAfter!: StatementSync;
+  // Sensory statements
+  private stmtSensoryUpsertMeta!: StatementSync;
+  private stmtSensoryQueryAfter!: StatementSync;
 
-  // L1 statements
-  private stmtL1UpsertMeta!: StatementSync;
-  private stmtL1GetMeta!: StatementSync;
+  // Cognitive statements
+  private stmtCognitiveUpsertMeta!: StatementSync;
+  private stmtCognitiveGetMeta!: StatementSync;
   
-  // FTS5 statements
-  private stmtL1FtsInsert!: StatementSync;
-  private stmtL1FtsSearch!: StatementSync;
+  // FTS statements
+  private stmtCognitiveFtsInsert!: StatementSync;
+  private stmtCognitiveFtsSearch!: StatementSync;
 
   // Vector statements
-  private stmtL1VecInsert?: StatementSync;
-  private stmtL1VecDelete?: StatementSync;
+  private stmtCognitiveVecInsert?: StatementSync;
+  private stmtCognitiveVecDelete?: StatementSync;
 
   private vecLoaded = false;
   private vecDimensions = 0;
@@ -169,7 +169,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     `);
 
     // Robust dimension check: extract actual dimension from the virtual table schema
-    const tableInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'l1_vec'").get() as any;
+    const tableInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'cognitive_vec'").get() as any;
     let actualDimensions = -1;
     if (tableInfo && tableInfo.sql) {
       const match = tableInfo.sql.match(/float\[(\d+)\]/i);
@@ -178,11 +178,10 @@ export class SqliteMemoryStore implements IMemoryStore {
 
     if (actualDimensions !== -1 && actualDimensions !== dimensions) {
       console.error(`[BrainRouter] Embedding dimensions changed (${actualDimensions} -> ${dimensions}). Recreating vector tables.`);
-      // Drop all shadow tables explicitly to avoid sqlite-vec edge cases, then drop the virtual table
       try {
-        this.db.exec("DROP TABLE IF EXISTS l1_vec");
+        this.db.exec("DROP TABLE IF EXISTS cognitive_vec");
       } catch (e) {
-        console.warn("[BrainRouter] Error dropping l1_vec:", e);
+        console.warn("[BrainRouter] Error dropping cognitive_vec:", e);
       }
       this.db.prepare("UPDATE embedding_meta SET dimensions = ?, created_at = ? WHERE id = 1")
         .run(dimensions, new Date().toISOString());
@@ -195,14 +194,14 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
 
     this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS l1_vec USING vec0(
+      CREATE VIRTUAL TABLE IF NOT EXISTS cognitive_vec USING vec0(
         record_id TEXT PRIMARY KEY,
         embedding float[${dimensions}] distance_metric=cosine
       )
     `);
 
-    this.stmtL1VecInsert = this.db.prepare("INSERT INTO l1_vec (record_id, embedding) VALUES (?, ?)");
-    this.stmtL1VecDelete = this.db.prepare("DELETE FROM l1_vec WHERE record_id = ?");
+    this.stmtCognitiveVecInsert = this.db.prepare("INSERT INTO cognitive_vec (record_id, embedding) VALUES (?, ?)");
+    this.stmtCognitiveVecDelete = this.db.prepare("DELETE FROM cognitive_vec WHERE record_id = ?");
   }
 
   public isVecAvailable(): boolean {
@@ -214,8 +213,8 @@ export class SqliteMemoryStore implements IMemoryStore {
 
     const rows = this.db.prepare(`
       SELECT r.record_id, r.content
-      FROM l1_records r
-      LEFT JOIN l1_vec v ON r.record_id = v.record_id
+      FROM cognitive_records r
+      LEFT JOIN cognitive_vec v ON r.record_id = v.record_id
       WHERE r.invalid_at IS NULL
         AND r.archived = 0
         AND v.record_id IS NULL
@@ -226,7 +225,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     for (const row of rows) {
       try {
         const embedding = await embedder(row.content);
-        this.upsertL1Vec(row.record_id, embedding);
+        this.upsertCognitiveVec(row.record_id, embedding);
         successCount += 1;
       } catch (error) {
         console.error(
@@ -248,9 +247,9 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   private initSchema() {
-    // ── L0 Schema ──
+    // ── Sensory Schema ──
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS l0_conversations (
+      CREATE TABLE IF NOT EXISTS sensory_stream (
         record_id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         session_key TEXT NOT NULL,
@@ -263,15 +262,10 @@ export class SqliteMemoryStore implements IMemoryStore {
         extracted_at TEXT DEFAULT NULL
       )
     `);
-    try {
-      this.db.exec("ALTER TABLE l0_conversations ADD COLUMN extracted_at TEXT DEFAULT NULL");
-    } catch (_) {
-      // Column already exists, ignore
-    }
 
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_session ON l0_conversations(user_id, session_key)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_recorded ON l0_conversations(recorded_at)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_extracted ON l0_conversations(user_id, session_key, extracted_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_sensory_user_session ON sensory_stream(user_id, session_key)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_sensory_recorded ON sensory_stream(recorded_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_sensory_extracted ON sensory_stream(user_id, session_key, extracted_at)");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (
@@ -285,17 +279,9 @@ export class SqliteMemoryStore implements IMemoryStore {
         created_at TEXT NOT NULL
       )
     `);
-    const userColumns = [
-      "ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT NULL",
-      "ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''",
-      "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'",
-    ];
-    for (const sql of userColumns) {
-      try { this.db.exec(sql); } catch { /* column exists */ }
-    }
 
-    this.stmtL0UpsertMeta = this.db.prepare(`
-      INSERT INTO l0_conversations (
+    this.stmtSensoryUpsertMeta = this.db.prepare(`
+      INSERT INTO sensory_stream (
         record_id, user_id, session_key, session_id, role, message_text, recorded_at, timestamp, skill_tag
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
@@ -304,18 +290,18 @@ export class SqliteMemoryStore implements IMemoryStore {
         timestamp=excluded.timestamp
     `);
 
-    this.stmtL0QueryAfter = this.db.prepare(`
+    this.stmtSensoryQueryAfter = this.db.prepare(`
       SELECT record_id as id, user_id as userId, session_key as sessionKey, session_id as sessionId,
              role, message_text as messageText, recorded_at as recordedAt, timestamp, skill_tag as skillTag
-      FROM l0_conversations
+      FROM sensory_stream
       WHERE user_id = ? AND session_key = ? AND recorded_at > ? AND extracted_at IS NULL
       ORDER BY recorded_at DESC
       LIMIT ?
     `);
 
-    // ── L1 Schema ──
+    // ── Cognitive Schema ──
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS l1_records (
+      CREATE TABLE IF NOT EXISTS cognitive_records (
         record_id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         session_key TEXT DEFAULT '',
@@ -333,39 +319,20 @@ export class SqliteMemoryStore implements IMemoryStore {
         timestamp_end TEXT DEFAULT '',
         created_time TEXT DEFAULT '',
         updated_time TEXT DEFAULT '',
-        metadata_json TEXT DEFAULT '{}'
+        metadata_json TEXT DEFAULT '{}',
+        citation_count INTEGER DEFAULT 0,
+        last_cited_at TEXT,
+        never_cited_count INTEGER DEFAULT 0,
+        archived INTEGER DEFAULT 0,
+        confidence REAL DEFAULT 0.65,
+        status TEXT DEFAULT 'active',
+        source_kind TEXT DEFAULT '',
+        verification_status TEXT DEFAULT '',
+        repo_paths_json TEXT DEFAULT '[]',
+        file_paths_json TEXT DEFAULT '[]',
+        commands_json TEXT DEFAULT '[]'
       )
     `);
-
-    try {
-      this.db.exec("ALTER TABLE l1_records ADD COLUMN invalid_at TEXT DEFAULT NULL");
-    } catch (_) {
-      // Column already exists, ignore
-    }
-
-    // ── ACE Feedback Loop columns — added before prepared statements so queries can reference them ──
-    const aceColumns = [
-      "ALTER TABLE l1_records ADD COLUMN citation_count INTEGER DEFAULT 0",
-      "ALTER TABLE l1_records ADD COLUMN last_cited_at TEXT",
-      "ALTER TABLE l1_records ADD COLUMN never_cited_count INTEGER DEFAULT 0",
-      "ALTER TABLE l1_records ADD COLUMN archived INTEGER DEFAULT 0",
-    ];
-    for (const sql of aceColumns) {
-      try { this.db.exec(sql); } catch { /* column already exists — safe to ignore */ }
-    }
-
-    const trustColumns = [
-      "ALTER TABLE l1_records ADD COLUMN confidence REAL DEFAULT 0.65",
-      "ALTER TABLE l1_records ADD COLUMN status TEXT DEFAULT 'active'",
-      "ALTER TABLE l1_records ADD COLUMN source_kind TEXT DEFAULT ''",
-      "ALTER TABLE l1_records ADD COLUMN verification_status TEXT DEFAULT ''",
-      "ALTER TABLE l1_records ADD COLUMN repo_paths_json TEXT DEFAULT '[]'",
-      "ALTER TABLE l1_records ADD COLUMN file_paths_json TEXT DEFAULT '[]'",
-      "ALTER TABLE l1_records ADD COLUMN commands_json TEXT DEFAULT '[]'",
-    ];
-    for (const sql of trustColumns) {
-      try { this.db.exec(sql); } catch { /* column already exists */ }
-    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_evidence (
@@ -409,11 +376,11 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_file_index_path ON memory_file_index(user_id, file_path, created_time DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_file_index_record ON memory_file_index(user_id, record_id)");
 
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_user_type ON l1_records(user_id, type)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_user_session ON l1_records(user_id, session_key)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_user_type ON cognitive_records(user_id, type)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_user_session ON cognitive_records(user_id, session_key)");
 
-    this.stmtL1UpsertMeta = this.db.prepare(`
-      INSERT INTO l1_records (
+    this.stmtCognitiveUpsertMeta = this.db.prepare(`
+      INSERT INTO cognitive_records (
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
@@ -440,18 +407,15 @@ export class SqliteMemoryStore implements IMemoryStore {
         repo_paths_json=excluded.repo_paths_json,
         file_paths_json=excluded.file_paths_json,
         commands_json=excluded.commands_json
-        -- NOTE: citation_count, last_cited_at, never_cited_count, archived intentionally excluded
-        -- They are managed exclusively by ACE methods (markCited, incrementNeverCited, archiveL1Record)
-        -- to prevent re-upserts from resetting citation signals
     `);
 
-    this.stmtL1GetMeta = this.db.prepare(`
-      SELECT * FROM l1_records WHERE record_id = ? AND user_id = ?
+    this.stmtCognitiveGetMeta = this.db.prepare(`
+      SELECT * FROM cognitive_records WHERE record_id = ? AND user_id = ?
     `);
 
-    // ── L1 FTS5 Schema ──
+    // ── Cognitive FTS5 Schema ──
     this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS l1_fts USING fts5(
+      CREATE VIRTUAL TABLE IF NOT EXISTS cognitive_fts USING fts5(
         content,
         content_original UNINDEXED,
         record_id UNINDEXED,
@@ -466,24 +430,25 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
 
-    this.stmtL1FtsInsert = this.db.prepare(`
-      INSERT INTO l1_fts (
+    this.stmtCognitiveFtsInsert = this.db.prepare(`
+      INSERT INTO cognitive_fts (
         content, content_original, record_id, user_id, type, priority, scene_name,
         skill_tag, session_key, timestamp_str, created_time
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    this.stmtL1FtsSearch = this.db.prepare(`
+    this.stmtCognitiveFtsSearch = this.db.prepare(`
       SELECT 
         f.record_id, f.user_id, f.content_original as content, f.type, f.priority, f.scene_name,
         f.skill_tag, f.session_key, f.timestamp_str, f.created_time,
         f.rank, r.citation_count
-      FROM l1_fts f
-      JOIN l1_records r ON f.record_id = r.record_id
-      WHERE f.user_id = ? AND l1_fts MATCH ? AND r.invalid_at IS NULL AND r.archived = 0
+      FROM cognitive_fts f
+      JOIN cognitive_records r ON f.record_id = r.record_id
+      WHERE f.user_id = ? AND cognitive_fts MATCH ? AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY rank
       LIMIT ?
     `);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS contradictions (
         id TEXT PRIMARY KEY,
@@ -519,9 +484,9 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
 
-    // ── L2 Scene Narratives ──
+    // ── Contextual Focus Scenes ──
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS l2_scenes (
+      CREATE TABLE IF NOT EXISTS contextual_focus (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         scene_name TEXT NOT NULL,
@@ -533,14 +498,14 @@ export class SqliteMemoryStore implements IMemoryStore {
         UNIQUE(user_id, scene_name)
       )
     `);
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l2_user_heat ON l2_scenes(user_id, heat_score DESC)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_focus_user_heat ON contextual_focus(user_id, heat_score DESC)");
 
-    // ── L3 Persona ──
+    // ── Core Identity ──
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS l3_persona (
+      CREATE TABLE IF NOT EXISTS core_identity (
         user_id TEXT PRIMARY KEY,
         persona_md TEXT NOT NULL,
-        l1_count_at_generation INTEGER DEFAULT 0,
+        cognitive_count_at_generation INTEGER DEFAULT 0,
         created_time TEXT DEFAULT '',
         updated_time TEXT DEFAULT ''
       )
@@ -550,22 +515,14 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS scheduler_state (
         user_id TEXT PRIMARY KEY,
-        l1_count_since_last_l2 INTEGER DEFAULT 0,
-        l1_count_since_last_l3 INTEGER DEFAULT 0,
-        total_l1_count INTEGER DEFAULT 0,
+        cognitive_count_since_last_focus INTEGER DEFAULT 0,
+        cognitive_count_since_last_identity INTEGER DEFAULT 0,
+        total_cognitive_count INTEGER DEFAULT 0,
         extraction_errors INTEGER DEFAULT 0,
         last_error_message TEXT DEFAULT NULL,
         last_error_at TEXT DEFAULT NULL
       )
     `);
-    const schedulerColumns = [
-      "ALTER TABLE scheduler_state ADD COLUMN extraction_errors INTEGER DEFAULT 0",
-      "ALTER TABLE scheduler_state ADD COLUMN last_error_message TEXT DEFAULT NULL",
-      "ALTER TABLE scheduler_state ADD COLUMN last_error_at TEXT DEFAULT NULL",
-    ];
-    for (const sql of schedulerColumns) {
-      try { this.db.exec(sql); } catch { /* column exists */ }
-    }
 
     // ── GraphRAG Nodes ──
     this.db.exec(`
@@ -603,13 +560,13 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   // ============================
-  // L0 Methods
+  // Sensory Stream Methods
   // ============================
 
-  public upsertL0(record: L0Record) {
+  public upsertSensory(record: SensoryRecord) {
     this.db.exec("BEGIN");
     try {
-      this.stmtL0UpsertMeta.run(
+      this.stmtSensoryUpsertMeta.run(
         record.id, record.userId, record.sessionKey, record.sessionId, record.role,
         record.messageText, record.recordedAt, record.timestamp, record.skillTag
       );
@@ -620,8 +577,8 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
-  public getRecentL0Messages(userId: string, sessionKey: string, limit: number, afterIsoTime = ""): L0Record[] {
-    const rows = this.stmtL0QueryAfter.all(userId, sessionKey, afterIsoTime, limit) as any[];
+  public getRecentSensoryMessages(userId: string, sessionKey: string, limit: number, afterIsoTime = ""): SensoryRecord[] {
+    const rows = this.stmtSensoryQueryAfter.all(userId, sessionKey, afterIsoTime, limit) as any[];
     // Reverse so chronologically they are oldest first
     return rows.reverse().map(r => ({
       id: r.id,
@@ -636,18 +593,18 @@ export class SqliteMemoryStore implements IMemoryStore {
     }));
   }
 
-  public getUnextractedL0Count(userId: string, sessionKey: string): number {
-    const stmtCount = this.db.prepare("SELECT COUNT(*) as count FROM l0_conversations WHERE user_id = ? AND session_key = ? AND extracted_at IS NULL");
+  public getUnextractedSensoryCount(userId: string, sessionKey: string): number {
+    const stmtCount = this.db.prepare("SELECT COUNT(*) as count FROM sensory_stream WHERE user_id = ? AND session_key = ? AND extracted_at IS NULL");
     const row = stmtCount.get(userId, sessionKey) as any;
     return row?.count || 0;
   }
 
-  public markL0Extracted(userId: string, sessionKey: string, recordIds: string[], extractedAt = new Date().toISOString()): void {
+  public markSensoryExtracted(userId: string, sessionKey: string, recordIds: string[], extractedAt = new Date().toISOString()): void {
     if (recordIds.length === 0) return;
 
     this.db.exec("BEGIN");
     try {
-      const stmt = this.db.prepare("UPDATE l0_conversations SET extracted_at = ? WHERE user_id = ? AND session_key = ? AND record_id = ?");
+      const stmt = this.db.prepare("UPDATE sensory_stream SET extracted_at = ? WHERE user_id = ? AND session_key = ? AND record_id = ?");
       for (const recordId of recordIds) {
         stmt.run(extractedAt, userId, sessionKey, recordId);
       }
@@ -659,16 +616,16 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   // ============================
-  // L1 Methods
+  // Cognitive Methods
   // ============================
 
-  public upsertL1Batch(entries: Array<{ record: L1Record; embedding?: Float32Array }>, options?: { skipAudit?: boolean }) {
+  public upsertCognitiveBatch(entries: Array<{ record: CognitiveRecord; embedding?: Float32Array }>, options?: { skipAudit?: boolean }) {
     this.db.exec("BEGIN");
     try {
-      const deleteFts = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ? AND user_id = ?");
+      const deleteFts = this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?");
       for (const entry of entries) {
         const record = entry.record;
-        this.stmtL1UpsertMeta.run(
+        this.stmtCognitiveUpsertMeta.run(
           record.id, record.userId, record.sessionKey, record.sessionId, record.content,
           record.type, record.priority, record.sceneName, record.skillTag,
           record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
@@ -681,27 +638,25 @@ export class SqliteMemoryStore implements IMemoryStore {
 
         // FTS5 Insert
         deleteFts.run(record.id, record.userId);
-        this.stmtL1FtsInsert.run(
+        this.stmtCognitiveFtsInsert.run(
           record.content, record.content, record.id, record.userId, record.type,
           record.priority, record.sceneName, record.skillTag, record.sessionKey,
           record.timestampStr, record.createdTime
         );
 
         // Vector Insert
-        if (entry.embedding && this.vecLoaded && this.stmtL1VecInsert && this.stmtL1VecDelete) {
-          this.stmtL1VecDelete.run(record.id);
-          this.stmtL1VecInsert.run(record.id, entry.embedding);
+        if (entry.embedding && this.vecLoaded && this.stmtCognitiveVecInsert && this.stmtCognitiveVecDelete) {
+          this.stmtCognitiveVecDelete.run(record.id);
+          this.stmtCognitiveVecInsert.run(record.id, entry.embedding);
         }
         this.replaceFileIndex(record);
 
-        // skipAudit suppresses per-record l1_upsert noise; callers (e.g. extraction pipeline)
-        // should write one higher-level batch audit entry after the loop instead.
         if (!options?.skipAudit) {
           this.insertOperation({
             id: randomUUID(),
             userId: record.userId,
             recordId: record.id,
-            operation: "l1_upsert",
+            operation: "cognitive_upsert",
             actor: "system",
             sessionKey: record.sessionKey,
             reason: "",
@@ -717,10 +672,10 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
-  public upsertL1(record: L1Record, options?: { skipAudit?: boolean }) {
+  public upsertCognitive(record: CognitiveRecord, options?: { skipAudit?: boolean }) {
     this.db.exec("BEGIN");
     try {
-      this.stmtL1UpsertMeta.run(
+      this.stmtCognitiveUpsertMeta.run(
         record.id, record.userId, record.sessionKey, record.sessionId, record.content,
         record.type, record.priority, record.sceneName, record.skillTag,
         record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
@@ -732,25 +687,22 @@ export class SqliteMemoryStore implements IMemoryStore {
       );
 
       // FTS5 Insert (delete old first if it exists to emulate UPSERT)
-      const deleteFts = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ? AND user_id = ?");
+      const deleteFts = this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?");
       deleteFts.run(record.id, record.userId);
       
-      this.stmtL1FtsInsert.run(
+      this.stmtCognitiveFtsInsert.run(
         record.content, record.content, record.id, record.userId, record.type,
         record.priority, record.sceneName, record.skillTag, record.sessionKey,
         record.timestampStr, record.createdTime
       );
       this.replaceFileIndex(record);
 
-      // skipAudit: true suppresses the automatic l1_upsert op so callers that
-      // write their own higher-level operation (e.g. memory_update) don't produce
-      // a redundant audit row for every upsert they perform.
       if (!options?.skipAudit) {
         this.insertOperation({
           id: randomUUID(),
           userId: record.userId,
           recordId: record.id,
-          operation: "l1_upsert",
+          operation: "cognitive_upsert",
           actor: "system",
           sessionKey: record.sessionKey,
           reason: "",
@@ -766,9 +718,9 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
-  public invalidateL1Record(userId: string, recordId: string, supersededById: string) {
+  public invalidateCognitiveRecord(userId: string, recordId: string, supersededById: string) {
     const stmt = this.db.prepare(
-      "UPDATE l1_records SET invalid_at = ?, superseded_by = ?, status = 'superseded' WHERE user_id = ? AND record_id = ?"
+      "UPDATE cognitive_records SET invalid_at = ?, superseded_by = ?, status = 'superseded' WHERE user_id = ? AND record_id = ?"
     );
     const now = new Date().toISOString();
     stmt.run(now, supersededById, userId, recordId);
@@ -776,7 +728,7 @@ export class SqliteMemoryStore implements IMemoryStore {
       id: randomUUID(),
       userId,
       recordId,
-      operation: "l1_supersede",
+      operation: "cognitive_supersede",
       actor: "system",
       sessionKey: "",
       reason: `Superseded by ${supersededById}`,
@@ -785,16 +737,16 @@ export class SqliteMemoryStore implements IMemoryStore {
     });
   }
 
-  public getMemoryById(userId: string, recordId: string): L1Record | null {
-    const row = this.stmtL1GetMeta.get(recordId, userId) as any;
-    return row ? l1RowToRecord(row) : null;
+  public getMemoryById(userId: string, recordId: string): CognitiveRecord | null {
+    const row = this.stmtCognitiveGetMeta.get(recordId, userId) as any;
+    return row ? cognitiveRowToRecord(row) : null;
   }
 
-  public getMemoriesByFilePath(userId: string, filePath: string, limit: number): L1Record[] {
+  public getMemoriesByFilePath(userId: string, filePath: string, limit: number): CognitiveRecord[] {
     const rows = this.db.prepare(`
       SELECT r.*
       FROM memory_file_index i
-      JOIN l1_records r ON r.user_id = i.user_id AND r.record_id = i.record_id
+      JOIN cognitive_records r ON r.user_id = i.user_id AND r.record_id = i.record_id
       WHERE i.user_id = ?
         AND (i.file_path = ? OR i.file_path LIKE ?)
         AND r.invalid_at IS NULL
@@ -802,19 +754,19 @@ export class SqliteMemoryStore implements IMemoryStore {
       ORDER BY i.created_time DESC, r.priority DESC
       LIMIT ?
     `).all(userId, filePath, `%${filePath}%`, limit) as any[];
-    return rows.map(l1RowToRecord);
+    return rows.map(cognitiveRowToRecord);
   }
 
-  public updateL1Confidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void {
+  public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void {
     const now = new Date().toISOString();
     this.db.prepare(
-      "UPDATE l1_records SET confidence = ?, status = ?, archived = CASE WHEN ? = 'archived' THEN 1 ELSE archived END, updated_time = ? WHERE user_id = ? AND record_id = ?"
+      "UPDATE cognitive_records SET confidence = ?, status = ?, archived = CASE WHEN ? = 'archived' THEN 1 ELSE archived END, updated_time = ? WHERE user_id = ? AND record_id = ?"
     ).run(confidence, status, status, now, userId, recordId);
     this.insertOperation({
       id: randomUUID(),
       userId,
       recordId,
-      operation: "l1_status_update",
+      operation: "cognitive_status_update",
       actor: "system",
       sessionKey: "",
       reason: "",
@@ -934,9 +886,6 @@ export class SqliteMemoryStore implements IMemoryStore {
       args.push(filters.createdBefore);
     }
     if (options?.cursor) {
-      // ORDER BY created_at DESC, id ASC:
-      // Next page = rows with an earlier timestamp, OR same timestamp with a higher id
-      // (id is sorted ASC within a timestamp, so the next rows in the same bucket have id > cursor.id).
       where.push("(created_at < ? OR (created_at = ? AND id > ?))");
       args.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
     }
@@ -952,14 +901,14 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   public exportMemories(userId: string): MemoryExport {
-    const memoryRows = this.db.prepare("SELECT * FROM l1_records WHERE user_id = ? ORDER BY created_time ASC, record_id ASC").all(userId) as any[];
+    const memoryRows = this.db.prepare("SELECT * FROM cognitive_records WHERE user_id = ? ORDER BY created_time ASC, record_id ASC").all(userId) as any[];
     const evidenceRows = this.db.prepare("SELECT * FROM memory_evidence WHERE user_id = ? ORDER BY observed_at ASC, id ASC").all(userId) as any[];
     const operationRows = this.db.prepare("SELECT * FROM memory_operations WHERE user_id = ? ORDER BY created_at ASC, id ASC").all(userId) as any[];
     return {
       version: 1,
       exportedAt: new Date().toISOString(),
       userId,
-      memories: memoryRows.map(l1RowToRecord),
+      memories: memoryRows.map(cognitiveRowToRecord),
       evidence: evidenceRows.map(evidenceRowToRecord),
       operations: operationRows.map(operationRowToRecord),
     };
@@ -973,7 +922,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.exec("BEGIN");
     try {
       for (const record of data.memories ?? []) {
-        this.stmtL1UpsertMeta.run(
+        this.stmtCognitiveUpsertMeta.run(
           record.id, userId, record.sessionKey, record.sessionId, record.content,
           record.type, record.priority, record.sceneName, record.skillTag,
           record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
@@ -983,8 +932,8 @@ export class SqliteMemoryStore implements IMemoryStore {
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
           JSON.stringify(record.commands ?? [])
         );
-        this.db.prepare("DELETE FROM l1_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
-        this.stmtL1FtsInsert.run(
+        this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
+        this.stmtCognitiveFtsInsert.run(
           record.content, record.content, record.id, userId, record.type,
           record.priority, record.sceneName, record.skillTag, record.sessionKey,
           record.timestampStr, record.createdTime
@@ -1033,11 +982,11 @@ export class SqliteMemoryStore implements IMemoryStore {
     try {
       this.db.prepare("DELETE FROM memory_evidence WHERE user_id = ? AND record_id = ?").run(userId, recordId);
       this.db.prepare("DELETE FROM memory_file_index WHERE user_id = ? AND record_id = ?").run(userId, recordId);
-      this.db.prepare("DELETE FROM l1_fts WHERE user_id = ? AND record_id = ?").run(userId, recordId);
-      if (this.stmtL1VecDelete) {
-        this.stmtL1VecDelete.run(recordId);
+      this.db.prepare("DELETE FROM cognitive_fts WHERE user_id = ? AND record_id = ?").run(userId, recordId);
+      if (this.stmtCognitiveVecDelete) {
+        this.stmtCognitiveVecDelete.run(recordId);
       }
-      this.db.prepare("DELETE FROM l1_records WHERE user_id = ? AND record_id = ?").run(userId, recordId);
+      this.db.prepare("DELETE FROM cognitive_records WHERE user_id = ? AND record_id = ?").run(userId, recordId);
       this.db.prepare(`
         INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
         VALUES (?, ?, ?, 'governance_delete', 'system', '', ?, ?, '{}')
@@ -1049,11 +998,11 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
-  public searchL1Fts(userId: string, query: string, limit: number): L1FtsResult[] {
+  public searchCognitiveFts(userId: string, query: string, limit: number): CognitiveFtsResult[] {
     const ftsQuery = buildFtsQuery(query);
     if (!ftsQuery) return [];
 
-    const rows = this.stmtL1FtsSearch.all(userId, ftsQuery, limit) as any[];
+    const rows = this.stmtCognitiveFtsSearch.all(userId, ftsQuery, limit) as any[];
     return rows.map(r => ({
       record_id: r.record_id,
       user_id: r.user_id,
@@ -1074,11 +1023,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     }));
   }
 
-  /**
-   * Point-in-time FTS search: returns memories that existed AND were valid at `asOf` ISO timestamp.
-   * Surfaces what the engine "knew" at a specific moment in time.
-   */
-  public searchL1FtsAsOf(userId: string, query: string, limit: number, asOf: string): L1FtsResult[] {
+  public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): CognitiveFtsResult[] {
     const ftsQuery = buildFtsQuery(query);
     if (!ftsQuery) return [];
 
@@ -1087,10 +1032,10 @@ export class SqliteMemoryStore implements IMemoryStore {
         f.record_id, f.user_id, f.content_original as content, f.type, f.priority, f.scene_name,
         f.skill_tag, f.session_key, f.timestamp_str, f.created_time,
         f.rank
-      FROM l1_fts f
-      JOIN l1_records r ON f.record_id = r.record_id
+      FROM cognitive_fts f
+      JOIN cognitive_records r ON f.record_id = r.record_id
       WHERE f.user_id = ?
-        AND l1_fts MATCH ?
+        AND cognitive_fts MATCH ?
         AND r.created_time <= ?          -- memory must have existed at asOf
         AND (r.invalid_at IS NULL OR r.invalid_at > ?)  -- must have been valid at asOf
         AND r.archived = 0
@@ -1118,21 +1063,19 @@ export class SqliteMemoryStore implements IMemoryStore {
     }));
   }
 
-  public upsertL1Vec(recordId: string, embedding: Float32Array) {
+  public upsertCognitiveVec(recordId: string, embedding: Float32Array) {
     if (!this.vecLoaded) return;
     
-    // Lazy schema recreation if dimensions dynamically shift from API
     if (this.vecDimensions !== embedding.length) {
       this.initVec(embedding.length);
     }
 
-    if (!this.stmtL1VecInsert || !this.stmtL1VecDelete) return;
+    if (!this.stmtCognitiveVecInsert || !this.stmtCognitiveVecDelete) return;
     
     this.db.exec("BEGIN");
     try {
-      // vec0 doesn't support ON CONFLICT
-      this.stmtL1VecDelete.run(recordId);
-      this.stmtL1VecInsert.run(recordId, embedding);
+      this.stmtCognitiveVecDelete.run(recordId);
+      this.stmtCognitiveVecInsert.run(recordId, embedding);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -1140,24 +1083,22 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
-  public searchL1Vec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[] {
+  public searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[] {
     if (!this.vecLoaded) return [];
 
-    // Lazy schema recreation if dimensions dynamically shift from API
     if (this.vecDimensions !== queryEmbedding.length) {
       this.initVec(queryEmbedding.length);
     }
 
     if (!this.vecDimensions) return [];
 
-    // vec0 cosine search
     const stmt = this.db.prepare(`
       SELECT 
         v.record_id, v.distance,
         r.user_id, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
         r.session_key, r.timestamp_str, r.created_time
-      FROM l1_vec v
-      JOIN l1_records r ON v.record_id = r.record_id
+      FROM cognitive_vec v
+      JOIN cognitive_records r ON v.record_id = r.record_id
       WHERE v.embedding MATCH ? AND k = ? AND r.user_id = ? AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY distance
     `);
@@ -1172,7 +1113,7 @@ export class SqliteMemoryStore implements IMemoryStore {
         priority: r.priority,
         scene_name: r.scene_name,
         skill_tag: r.skill_tag,
-        score: 1 - r.distance, // Convert distance to similarity score
+        score: 1 - r.distance,
         timestamp_str: r.timestamp_str,
         timestamp_start: "",
         timestamp_end: "",
@@ -1216,8 +1157,8 @@ export class SqliteMemoryStore implements IMemoryStore {
     const stmt = this.db.prepare(`
       SELECT c.*, r1.content as content_a, r2.content as content_b
       FROM contradictions c
-      JOIN l1_records r1 ON c.record_id_a = r1.record_id
-      JOIN l1_records r2 ON c.record_id_b = r2.record_id
+      JOIN cognitive_records r1 ON c.record_id_a = r1.record_id
+      JOIN cognitive_records r2 ON c.record_id_b = r2.record_id
       WHERE ${where.join(" AND ")}
       ORDER BY c.confidence DESC, c.id ASC
       LIMIT ?
@@ -1257,7 +1198,6 @@ export class SqliteMemoryStore implements IMemoryStore {
     stmt.run(skillName, hints, sourceFile, new Date().toISOString());
   }
 
-
   public listSkillHints(): SkillHintsRecord[] {
     const stmt = this.db.prepare("SELECT skill_name, hints, source_file, registered_at FROM skill_extraction_hints ORDER BY registered_at DESC");
     const rows = stmt.all() as any[];
@@ -1270,12 +1210,12 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   // ============================
-  // L2 Scene Methods
+  // Contextual Focus Methods
   // ============================
 
-  public upsertL2Scene(record: L2SceneRecord) {
+  public upsertContextualFocus(record: ContextualFocusRecord) {
     const stmt = this.db.prepare(`
-      INSERT INTO l2_scenes (id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time)
+      INSERT INTO contextual_focus (id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, scene_name) DO UPDATE SET
         summary_md=excluded.summary_md,
@@ -1289,7 +1229,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     );
   }
 
-  public getTopL2Scenes(userId: string, limit = 3, cursor?: { heatScore: number; id: string }): L2SceneRecord[] {
+  public getTopContextualFocus(userId: string, limit = 3, cursor?: { heatScore: number; id: string }): ContextualFocusRecord[] {
     const where = ["user_id = ?"];
     const args: any[] = [userId];
     if (cursor) {
@@ -1299,7 +1239,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     args.push(limit);
     const stmt = this.db.prepare(
       `SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time
-       FROM l2_scenes
+       FROM contextual_focus
        WHERE ${where.join(" AND ")}
        ORDER BY heat_score DESC, id ASC
        LIMIT ?`
@@ -1312,32 +1252,32 @@ export class SqliteMemoryStore implements IMemoryStore {
     }));
   }
 
-  public decayL2HeatScores(userId: string, decayFactor = 0.95) {
-    const stmt = this.db.prepare("UPDATE l2_scenes SET heat_score = heat_score * ? WHERE user_id = ?");
+  public decayContextualFocusHeatScores(userId: string, decayFactor = 0.95) {
+    const stmt = this.db.prepare("UPDATE contextual_focus SET heat_score = heat_score * ? WHERE user_id = ?");
     stmt.run(decayFactor, userId);
   }
 
-  public boostL2HeatScore(userId: string, sceneName: string, boost = 20) {
-    const stmt = this.db.prepare("UPDATE l2_scenes SET heat_score = MIN(100.0, heat_score + ?), last_active_time = ? WHERE user_id = ? AND scene_name = ?");
+  public boostContextualFocusHeatScore(userId: string, sceneName: string, boost = 20) {
+    const stmt = this.db.prepare("UPDATE contextual_focus SET heat_score = MIN(100.0, heat_score + ?), last_active_time = ? WHERE user_id = ? AND scene_name = ?");
     stmt.run(boost, new Date().toISOString(), userId, sceneName);
   }
 
-  public getL1sByScene(userId: string, sceneName: string, limit = 30): any[] {
+  public getCognitivesByFocus(userId: string, sceneName: string, limit = 30): any[] {
     const stmt = this.db.prepare(
-      "SELECT record_id, content, type, priority, skill_tag, created_time FROM l1_records WHERE user_id = ? AND scene_name = ? AND invalid_at IS NULL ORDER BY priority DESC LIMIT ?"
+      "SELECT record_id, content, type, priority, skill_tag, created_time FROM cognitive_records WHERE user_id = ? AND scene_name = ? AND invalid_at IS NULL ORDER BY priority DESC LIMIT ?"
     );
     return stmt.all(userId, sceneName, limit) as any[];
   }
 
-  public getL2SceneCount(userId: string): number {
-    const stmt = this.db.prepare("SELECT COUNT(*) as count FROM l2_scenes WHERE user_id = ?");
+  public getContextualFocusCount(userId: string): number {
+    const stmt = this.db.prepare("SELECT COUNT(*) as count FROM contextual_focus WHERE user_id = ?");
     const row = stmt.get(userId) as any;
     return row?.count || 0;
   }
 
-  public getColdL2Scenes(userId: string, limit: number): L2SceneRecord[] {
+  public getColdContextualFocus(userId: string, limit: number): ContextualFocusRecord[] {
     const stmt = this.db.prepare(
-      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM l2_scenes WHERE user_id = ? ORDER BY heat_score ASC LIMIT ?"
+      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM contextual_focus WHERE user_id = ? ORDER BY heat_score ASC LIMIT ?"
     );
     const rows = stmt.all(userId, limit) as any[];
     return rows.map(r => ({
@@ -1347,16 +1287,16 @@ export class SqliteMemoryStore implements IMemoryStore {
     }));
   }
 
-  public deleteL2Scenes(userId: string, sceneIds: string[]) {
+  public deleteContextualFocus(userId: string, sceneIds: string[]) {
     if (sceneIds.length === 0) return;
     const placeholders = sceneIds.map(() => "?").join(",");
-    const stmt = this.db.prepare(`DELETE FROM l2_scenes WHERE user_id = ? AND id IN (${placeholders})`);
+    const stmt = this.db.prepare(`DELETE FROM contextual_focus WHERE user_id = ? AND id IN (${placeholders})`);
     stmt.run(userId, ...sceneIds);
   }
 
-  public getL2SceneByName(userId: string, sceneName: string): L2SceneRecord | null {
+  public getContextualFocusByName(userId: string, sceneName: string): ContextualFocusRecord | null {
     const stmt = this.db.prepare(
-      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM l2_scenes WHERE user_id = ? AND scene_name = ?"
+      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM contextual_focus WHERE user_id = ? AND scene_name = ?"
     );
     const row = stmt.get(userId, sceneName) as any;
     if (!row) return null;
@@ -1368,25 +1308,23 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   public getDistinctSceneNames(userId: string): string[] {
-    const stmt = this.db.prepare("SELECT DISTINCT scene_name FROM l1_records WHERE user_id = ? AND scene_name != ''");
+    const stmt = this.db.prepare("SELECT DISTINCT scene_name FROM cognitive_records WHERE user_id = ? AND scene_name != ''");
     const rows = stmt.all(userId) as any[];
     return rows.map(r => r.scene_name);
   }
 
-  public renameSceneInL1Records(userId: string, oldName: string, canonicalName: string) {
+  public renameFocusInCognitiveRecords(userId: string, oldName: string, canonicalName: string) {
     this.db.exec("BEGIN");
     try {
-      // 1. Update all L1 records using this scene name
-      const stmtUpdateL1 = this.db.prepare(
-        "UPDATE l1_records SET scene_name = ?, updated_time = ? WHERE user_id = ? AND scene_name = ?"
+      const stmtUpdate = this.db.prepare(
+        "UPDATE cognitive_records SET scene_name = ?, updated_time = ? WHERE user_id = ? AND scene_name = ?"
       );
-      stmtUpdateL1.run(canonicalName, new Date().toISOString(), userId, oldName);
+      stmtUpdate.run(canonicalName, new Date().toISOString(), userId, oldName);
 
-      // 2. Remove the old scene record from l2_scenes so it doesn't linger
-      const stmtDeleteL2 = this.db.prepare(
-        "DELETE FROM l2_scenes WHERE user_id = ? AND scene_name = ?"
+      const stmtDelete = this.db.prepare(
+        "DELETE FROM contextual_focus WHERE user_id = ? AND scene_name = ?"
       );
-      stmtDeleteL2.run(userId, oldName);
+      stmtDelete.run(userId, oldName);
 
       this.db.exec("COMMIT");
     } catch (e) {
@@ -1396,35 +1334,35 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   // ============================
-  // L3 Persona Methods
+  // Core Identity Methods
   // ============================
 
-  public upsertL3Persona(record: L3PersonaRecord) {
+  public upsertCoreIdentity(record: CoreIdentityRecord) {
     const stmt = this.db.prepare(`
-      INSERT INTO l3_persona (user_id, persona_md, l1_count_at_generation, created_time, updated_time)
+      INSERT INTO core_identity (user_id, persona_md, cognitive_count_at_generation, created_time, updated_time)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
         persona_md=excluded.persona_md,
-        l1_count_at_generation=excluded.l1_count_at_generation,
+        cognitive_count_at_generation=excluded.cognitive_count_at_generation,
         updated_time=excluded.updated_time
     `);
-    stmt.run(record.userId, record.personaMd, record.l1CountAtGeneration, record.createdTime, record.updatedTime);
+    stmt.run(record.userId, record.personaMd, record.cognitiveCountAtGeneration, record.createdTime, record.updatedTime);
   }
 
-  public getL3Persona(userId: string): L3PersonaRecord | null {
-    const stmt = this.db.prepare("SELECT user_id, persona_md, l1_count_at_generation, created_time, updated_time FROM l3_persona WHERE user_id = ?");
+  public getCoreIdentity(userId: string): CoreIdentityRecord | null {
+    const stmt = this.db.prepare("SELECT user_id, persona_md, cognitive_count_at_generation, created_time, updated_time FROM core_identity WHERE user_id = ?");
     const row = stmt.get(userId) as any;
     if (!row) return null;
     return {
       userId: row.user_id, personaMd: row.persona_md,
-      l1CountAtGeneration: row.l1_count_at_generation,
+      cognitiveCountAtGeneration: row.cognitive_count_at_generation,
       createdTime: row.created_time, updatedTime: row.updated_time
     };
   }
 
-  public getPersonaAndInstructionL1s(userId: string, limit = 100): any[] {
+  public getIdentityAndInstructionCognitives(userId: string, limit = 100): any[] {
     const stmt = this.db.prepare(
-      "SELECT record_id, content, type, priority, skill_tag, created_time FROM l1_records WHERE user_id = ? AND type IN ('persona','instruction') AND invalid_at IS NULL ORDER BY priority DESC, created_time DESC LIMIT ?"
+      "SELECT record_id, content, type, priority, skill_tag, created_time FROM cognitive_records WHERE user_id = ? AND type IN ('persona','instruction') AND invalid_at IS NULL ORDER BY priority DESC, created_time DESC LIMIT ?"
     );
     return stmt.all(userId, limit) as any[];
   }
@@ -1434,47 +1372,47 @@ export class SqliteMemoryStore implements IMemoryStore {
   // ============================
 
   public getSchedulerState(userId: string): SchedulerState {
-    const stmt = this.db.prepare("SELECT l1_count_since_last_l2, l1_count_since_last_l3, total_l1_count, extraction_errors, last_error_message, last_error_at FROM scheduler_state WHERE user_id = ?");
+    const stmt = this.db.prepare("SELECT cognitive_count_since_last_focus, cognitive_count_since_last_identity, total_cognitive_count, extraction_errors, last_error_message, last_error_at FROM scheduler_state WHERE user_id = ?");
     const row = stmt.get(userId) as any;
     if (!row) {
       return {
-        l1CountSinceLastL2: 0,
-        l1CountSinceLastL3: 0,
-        totalL1Count: 0,
+        cognitiveCountSinceLastFocus: 0,
+        cognitiveCountSinceLastIdentity: 0,
+        totalCognitiveCount: 0,
         extractionErrors: 0,
         lastErrorMessage: null,
         lastErrorAt: null,
       };
     }
     return {
-      l1CountSinceLastL2: row.l1_count_since_last_l2,
-      l1CountSinceLastL3: row.l1_count_since_last_l3,
-      totalL1Count: row.total_l1_count,
+      cognitiveCountSinceLastFocus: row.cognitive_count_since_last_focus,
+      cognitiveCountSinceLastIdentity: row.cognitive_count_since_last_identity,
+      totalCognitiveCount: row.total_cognitive_count,
       extractionErrors: row.extraction_errors ?? 0,
       lastErrorMessage: row.last_error_message ?? null,
       lastErrorAt: row.last_error_at ?? null,
     };
   }
 
-  public incrementSchedulerL1Count(userId: string, count: number) {
+  public incrementSchedulerCognitiveCount(userId: string, count: number) {
     const stmt = this.db.prepare(`
-      INSERT INTO scheduler_state (user_id, l1_count_since_last_l2, l1_count_since_last_l3, total_l1_count)
+      INSERT INTO scheduler_state (user_id, cognitive_count_since_last_focus, cognitive_count_since_last_identity, total_cognitive_count)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
-        l1_count_since_last_l2 = l1_count_since_last_l2 + excluded.l1_count_since_last_l2,
-        l1_count_since_last_l3 = l1_count_since_last_l3 + excluded.l1_count_since_last_l3,
-        total_l1_count = total_l1_count + excluded.total_l1_count
+        cognitive_count_since_last_focus = cognitive_count_since_last_focus + excluded.cognitive_count_since_last_focus,
+        cognitive_count_since_last_identity = cognitive_count_since_last_identity + excluded.cognitive_count_since_last_identity,
+        total_cognitive_count = total_cognitive_count + excluded.total_cognitive_count
     `);
     stmt.run(userId, count, count, count);
   }
 
-  public resetSchedulerL2Count(userId: string) {
-    const stmt = this.db.prepare("UPDATE scheduler_state SET l1_count_since_last_l2 = 0 WHERE user_id = ?");
+  public resetSchedulerFocusCount(userId: string) {
+    const stmt = this.db.prepare("UPDATE scheduler_state SET cognitive_count_since_last_focus = 0 WHERE user_id = ?");
     stmt.run(userId);
   }
 
-  public resetSchedulerL3Count(userId: string) {
-    const stmt = this.db.prepare("UPDATE scheduler_state SET l1_count_since_last_l3 = 0 WHERE user_id = ?");
+  public resetSchedulerIdentityCount(userId: string) {
+    const stmt = this.db.prepare("UPDATE scheduler_state SET cognitive_count_since_last_identity = 0 WHERE user_id = ?");
     stmt.run(userId);
   }
 
@@ -1533,7 +1471,7 @@ export class SqliteMemoryStore implements IMemoryStore {
         MAX(l0.recorded_at) AS latest_recorded_at,
         COALESCE(ss.extraction_errors, 0) AS extraction_errors,
         ss.last_error_message
-      FROM l0_conversations l0
+      FROM sensory_stream l0
       LEFT JOIN scheduler_state ss ON ss.user_id = l0.user_id
       WHERE l0.extracted_at IS NULL
       GROUP BY l0.user_id, l0.session_key
@@ -1625,7 +1563,6 @@ export class SqliteMemoryStore implements IMemoryStore {
     const visitedNodes = new Map<string, GraphNode>();
     const visitedEdges = new Map<string, GraphEdge>();
     
-    // Look up the starting node
     const stmtNodeById = this.db.prepare(
       "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ? AND id = ?"
     );
@@ -1651,7 +1588,6 @@ export class SqliteMemoryStore implements IMemoryStore {
       const nextQueue: string[] = [];
       
       for (const nodeId of queue) {
-        // Query edges from/to this node
         const queryParams: any[] = [userId, nodeId, nodeId];
         
         let edgeSql = `
@@ -1716,16 +1652,12 @@ export class SqliteMemoryStore implements IMemoryStore {
   // ACE Feedback Loop Methods
   // ============================
 
-  /**
-   * Mark a set of record IDs as cited — increments citation_count, sets last_cited_at,
-   * and resets never_cited_count to 0 (a citation cancels accumulated non-citation signal).
-   */
   public markCited(userId: string, recordIds: string[]): void {
     if (recordIds.length === 0) return;
     const now = new Date().toISOString();
     const placeholders = recordIds.map(() => "?").join(",");
     const stmt = this.db.prepare(`
-      UPDATE l1_records
+      UPDATE cognitive_records
       SET citation_count = citation_count + 1,
           last_cited_at = ?,
           never_cited_count = 0,
@@ -1735,37 +1667,29 @@ export class SqliteMemoryStore implements IMemoryStore {
     stmt.run(now, now, userId, ...recordIds);
   }
 
-  /**
-   * Increment never_cited_count for records that were recalled but NOT cited.
-   * Returns the updated never_cited_count for each affected record (used for auto-archive).
-   */
   public incrementNeverCited(userId: string, recordIds: string[]): { recordId: string; neverCitedCount: number }[] {
     if (recordIds.length === 0) return [];
     const now = new Date().toISOString();
     const placeholders = recordIds.map(() => "?").join(",");
 
     this.db.prepare(`
-      UPDATE l1_records
+      UPDATE cognitive_records
       SET never_cited_count = never_cited_count + 1, updated_time = ?
       WHERE user_id = ? AND record_id IN (${placeholders})
     `).run(now, userId, ...recordIds);
 
     const rows = this.db.prepare(`
-      SELECT record_id, never_cited_count FROM l1_records
+      SELECT record_id, never_cited_count FROM cognitive_records
       WHERE user_id = ? AND record_id IN (${placeholders})
     `).all(userId, ...recordIds) as any[];
 
     return rows.map(r => ({ recordId: r.record_id, neverCitedCount: r.never_cited_count }));
   }
 
-  /**
-   * Archive a single L1 record — excluded from future active recall queries.
-   * The record is preserved for explicit archive queries.
-   */
-  public archiveL1Record(userId: string, recordId: string): void {
+  public archiveCognitiveRecord(userId: string, recordId: string): void {
     const now = new Date().toISOString();
     this.db.prepare(
-      "UPDATE l1_records SET archived = 1, status = 'archived', updated_time = ? WHERE user_id = ? AND record_id = ?"
+      "UPDATE cognitive_records SET archived = 1, status = 'archived', updated_time = ? WHERE user_id = ? AND record_id = ?"
     ).run(now, userId, recordId);
     this.insertOperation({
       id: randomUUID(),
@@ -1784,13 +1708,9 @@ export class SqliteMemoryStore implements IMemoryStore {
   // Skill Pre-warming Helpers
   // ============================
 
-  /**
-   * Get the most recent N skill_context L1 records for a user.
-   * Used by the skill pre-warming pipeline to detect recent skill patterns.
-   */
-  public getRecentSkillContextL1s(userId: string, limit: number): { skillTag: string; createdTime: string }[] {
+  public getRecentSkillContextCognitives(userId: string, limit: number): { skillTag: string; createdTime: string }[] {
     const rows = this.db.prepare(`
-      SELECT skill_tag, created_time FROM l1_records
+      SELECT skill_tag, created_time FROM cognitive_records
       WHERE user_id = ? AND type = 'skill_context' AND skill_tag != '' AND invalid_at IS NULL AND archived = 0
       ORDER BY created_time DESC
       LIMIT ?
@@ -1798,10 +1718,6 @@ export class SqliteMemoryStore implements IMemoryStore {
     return rows.map(r => ({ skillTag: r.skill_tag, createdTime: r.created_time }));
   }
 
-  /**
-   * Get the registered extraction hints for a specific skill name.
-   * Returns null if no hints are registered.
-   */
   public getSkillHints(skillName: string): string | null {
     const row = this.db.prepare(
       "SELECT hints FROM skill_extraction_hints WHERE skill_name = ?"
@@ -1964,12 +1880,12 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.exec("BEGIN");
     try {
       this.db.prepare("DELETE FROM users WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM l0_conversations WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM l1_fts WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM l1_records WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM sensory_stream WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM cognitive_fts WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM cognitive_records WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM contradictions WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM l2_scenes WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM l3_persona WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM contextual_focus WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM core_identity WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM scheduler_state WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM graph_nodes WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM graph_edges WHERE user_id = ?").run(userId);
@@ -2002,7 +1918,7 @@ export class SqliteMemoryStore implements IMemoryStore {
 
     const rows = this.db.prepare(`
       SELECT record_id, content, type, priority, scene_name, skill_tag, created_time, citation_count, never_cited_count, archived
-      FROM l1_records
+      FROM cognitive_records
       WHERE ${where.join(" AND ")}
       ORDER BY created_time DESC, record_id ASC
       LIMIT ?
@@ -2030,12 +1946,12 @@ export class SqliteMemoryStore implements IMemoryStore {
     lastRecallAt: string | null;
     extraction: ExtractionStatus;
   } {
-    const totalRow = this.db.prepare("SELECT COUNT(*) as c FROM l1_records WHERE user_id = ?").get(userId) as any;
-    const archivedRow = this.db.prepare("SELECT COUNT(*) as c FROM l1_records WHERE user_id = ? AND archived = 1").get(userId) as any;
-    const typeRows = this.db.prepare("SELECT type, COUNT(*) as c FROM l1_records WHERE user_id = ? GROUP BY type").all(userId) as any[];
-    const citationRows = this.db.prepare("SELECT SUM(citation_count) as cited, COUNT(*) as total FROM l1_records WHERE user_id = ?").get(userId) as any;
+    const totalRow = this.db.prepare("SELECT COUNT(*) as c FROM cognitive_records WHERE user_id = ?").get(userId) as any;
+    const archivedRow = this.db.prepare("SELECT COUNT(*) as c FROM cognitive_records WHERE user_id = ? AND archived = 1").get(userId) as any;
+    const typeRows = this.db.prepare("SELECT type, COUNT(*) as c FROM cognitive_records WHERE user_id = ? GROUP BY type").all(userId) as any[];
+    const citationRows = this.db.prepare("SELECT SUM(citation_count) as cited, COUNT(*) as total FROM cognitive_records WHERE user_id = ?").get(userId) as any;
     const lastRecall = this.db.prepare(
-      "SELECT MAX(recorded_at) as last_at FROM l0_conversations WHERE user_id = ?"
+      "SELECT MAX(recorded_at) as last_at FROM sensory_stream WHERE user_id = ?"
     ).get(userId) as any;
 
     const byType: Record<string, number> = {};
@@ -2053,7 +1969,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     };
   }
 
-  private replaceFileIndex(record: L1Record): void {
+  private replaceFileIndex(record: CognitiveRecord): void {
     this.db.prepare("DELETE FROM memory_file_index WHERE user_id = ? AND record_id = ?").run(record.userId, record.id);
     const filePaths = [...new Set((record.filePaths ?? []).map((filePath) => filePath.trim()).filter(Boolean))];
     if (filePaths.length === 0) return;

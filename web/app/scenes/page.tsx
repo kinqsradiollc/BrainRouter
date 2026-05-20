@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useScenes } from "@brainrouter/hooks";
-import type { L2SceneRecord } from "@brainrouter/types";
+import type { ContextualFocusRecord } from "@brainrouter/types";
 import { getClient } from "../../lib/client";
 import { SceneCard } from "../../components/SceneCard";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -34,7 +34,7 @@ export default function ScenesPage() {
       >
         {/* Title block */}
         <PageHeader 
-          title="Scenes (L2)" 
+          title="Contextual Focus" 
           description="Consolidated narrative themes and high-level episodic contexts summarizing memory logs." 
         />
 
@@ -46,7 +46,7 @@ export default function ScenesPage() {
           animate="show"
         >
           <AnimatePresence mode="popLayout">
-            {scenes.map((scene: L2SceneRecord) => (
+            {scenes.map((scene: ContextualFocusRecord) => (
               <SceneCard key={scene.id} scene={scene} />
             ))}
           </AnimatePresence>
@@ -61,8 +61,8 @@ export default function ScenesPage() {
                 <path d="M8.25 21v-4.875c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125V21m0 0h4.5V3.545M12.75 21h7.5V10.75M2.25 21h1.5m18 0h-18M2.25 9l4.5-1.636M18.75 3l-1.5.545m0 6.205 3 1M2.25 9v12m0-12h3m0 0 3-1.091M6.75 7.364V21m-3-12v12m0-12v12" />
               </svg>
             }
-            title="No Consolidated Scenes"
-            description="The background worker automatically consolidates recurring L1 memories into L2 scenes periodically."
+            title="No Consolidated Focus Scenes"
+            description="The background worker automatically consolidates recurring cognitive memories into focus scenes periodically."
           />
         )}
       </motion.div>

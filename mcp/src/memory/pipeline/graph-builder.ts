@@ -1,14 +1,14 @@
 import type { IMemoryStore } from "@brainrouter/types";
-import type { LLMRunner, L1Record, GraphNode, GraphEdge } from "@brainrouter/types";
+import type { LLMRunner, CognitiveRecord, GraphNode, GraphEdge } from "@brainrouter/types";
 import { GRAPH_EXTRACTION_SYSTEM_PROMPT, formatGraphExtractionPrompt } from "../prompts/graph-extraction.js";
 import crypto from "node:crypto";
 
 /**
  * Graph Construction Pipeline
- * Extracts entities and relationships from L1 records to update the Knowledge Graph.
+ * Extracts entities and relationships from Cognitive records to update the Knowledge Graph.
  */
-export async function buildGraphFromL1(params: {
-  record: L1Record;
+export async function buildGraphFromCognitive(params: {
+  record: CognitiveRecord;
   store: IMemoryStore;
   llmRunner: LLMRunner;
 }) {

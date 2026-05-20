@@ -3,8 +3,8 @@ import type {
   ContradictionRecord,
   DiagnosticsBundle,
   ImportResult,
-  L1Record,
-  L2SceneRecord,
+  CognitiveRecord,
+  ContextualFocusRecord,
   MemoryEvidence,
   MemoryExport,
   MemoryImport,
@@ -105,7 +105,7 @@ export type EvidenceResponse = {
 };
 
 export type ScenesResponse = {
-  scenes: L2SceneRecord[];
+  scenes: ContextualFocusRecord[];
   nextCursor: string | null;
   limit: number;
   hasMore: boolean;
@@ -121,7 +121,7 @@ export type ContradictionsResponse = {
 export type DiagnosticsResponse = DiagnosticsBundle;
 
 export interface MemoryWithEvidenceResponse {
-  memory: L1Record;
+  memory: CognitiveRecord;
   evidence: MemoryEvidence[];
 }
 
@@ -134,7 +134,7 @@ export interface UpdateMemoryRequest {
   content?: string;
   status?: MemoryStatus;
   confidence?: number;
-  verificationStatus?: L1Record["verificationStatus"];
+  verificationStatus?: CognitiveRecord["verificationStatus"];
   note?: string;
 }
 

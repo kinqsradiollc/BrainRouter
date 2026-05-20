@@ -2,24 +2,24 @@ import type { IMemoryStore } from "@brainrouter/types";
 
 /**
  * Hybrid GraphRAG Recall Expansion
- * Finds matching entities in the query and top L1 results, performs a 2-hop
+ * Finds matching entities in the query and top Cognitive results, performs a 2-hop
  * BFS traversal, and returns a formatted markdown block of the context.
  */
 export function expandRecallWithGraph(params: {
-  topL1Results: any[];
+  topCognitiveResults: any[];
   query: string;
   userId: string;
   activeSkill?: string;
   store: IMemoryStore;
 }): string {
-  const { topL1Results, query, userId, activeSkill, store } = params;
+  const { topCognitiveResults, query, userId, activeSkill, store } = params;
 
   try {
     // 1. Fetch all graph nodes for this user to match entities
     const allNodes = store.getAllGraphNodes(userId);
     if (allNodes.length === 0) return "";
 
-    const combinedText = `${query} ${topL1Results.map(r => r.content || "").join(" ")}`.toLowerCase();
+    const combinedText = `${query} ${topCognitiveResults.map(r => r.content || "").join(" ")}`.toLowerCase();
 
     // 2. Find which nodes are mentioned in the query or top results
     const matchingNodeIds = new Set<string>();

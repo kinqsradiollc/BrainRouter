@@ -1,6 +1,6 @@
-import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/l1-extraction.js";
+import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/cognitive-extraction.js";
 import { getMemoryTypeConfig } from "../memory-type-config.js";
-import type { L0Record, L1Record, LLMRunner, MemorySourceKind, MemoryType, MemoryVerificationStatus } from "@brainrouter/types";
+import type { SensoryRecord, CognitiveRecord, LLMRunner, MemorySourceKind, MemoryType, MemoryVerificationStatus } from "@brainrouter/types";
 import crypto from "node:crypto";
 
 const ALLOWED_MEMORY_TYPES = new Set<MemoryType>([
@@ -23,26 +23,24 @@ const ALLOWED_VERIFICATION_STATUSES = new Set<MemoryVerificationStatus>([
   "", "verified", "unverified", "stale",
 ]);
 
-export interface L1ExtractionResult {
+export interface CognitiveExtractionResult {
   success: boolean;
   extractedCount: number;
-  records: L1Record[];
+  records: CognitiveRecord[];
   sceneNames: string[];
   errorMessage?: string;
 }
 
-// Ensure the message has actual words to extract from, not just symbols or single letters.
-function shouldExtractL1(text: string): boolean {
+function shouldExtractCognitive(text: string): boolean {
   if (!text) return false;
   const clean = text.trim();
   if (clean.length < 3) return false;
-  // If it's pure symbols/numbers, ignore
   if (/^[^a-zA-Z\u4e00-\u9fa5]+$/.test(clean)) return false;
   return true;
 }
 
-export async function extractL1Memories(params: {
-  messages: L0Record[];
+export async function extractCognitiveMemories(params: {
+  messages: SensoryRecord[];
   userId: string;
   sessionKey: string;
   sessionId: string;
@@ -53,7 +51,7 @@ export async function extractL1Memories(params: {
   existingSceneNames?: string[];
   activeSkill?: string;
   skillHints?: string;
-}): Promise<L1ExtractionResult> {
+}): Promise<CognitiveExtractionResult> {
   const { 
     messages, userId, sessionKey, sessionId, llmRunner, 
     maxMessagesPerExtraction = 10, maxBackgroundMessages = 5,
@@ -64,7 +62,7 @@ export async function extractL1Memories(params: {
     return { success: true, extractedCount: 0, records: [], sceneNames: [] };
   }
 
-  const qualifiedMessages = messages.filter((m) => shouldExtractL1(m.messageText));
+  const qualifiedMessages = messages.filter((m) => shouldExtractCognitive(m.messageText));
   if (qualifiedMessages.length === 0) {
     return { success: true, extractedCount: 0, records: [], sceneNames: [] };
   }
@@ -89,7 +87,7 @@ export async function extractL1Memories(params: {
     rawResult = await llmRunner.run({
       prompt: userPrompt,
       systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
-      taskId: "l1-extraction",
+      taskId: "cognitive-extraction",
       timeoutMs: 120_000
     });
   } catch (err) {
@@ -100,7 +98,7 @@ export async function extractL1Memories(params: {
 
   const parsedScenes = parseExtractionResult(rawResult);
   
-  const records: L1Record[] = [];
+  const records: CognitiveRecord[] = [];
   const sceneNames: string[] = [];
 
   const nowStr = new Date().toISOString();
@@ -110,7 +108,7 @@ export async function extractL1Memories(params: {
     for (const mem of scene.memories) {
       const config = getMemoryTypeConfig(mem.type);
       records.push({
-        id: `l1_${sessionKey}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+        id: `cognitive_${sessionKey}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
         userId,
         sessionKey,
         sessionId,
@@ -121,7 +119,7 @@ export async function extractL1Memories(params: {
         skillTag: mem.skill_tag || activeSkill || "",
         halfLifeDays: config.halfLifeDays,
         supersededBy: null,
-        timestampStr: "", // Phase 1: Not strictly tracking time from LLM, just raw extraction
+        timestampStr: "",
         timestampStart: "",
         timestampEnd: "",
         createdTime: nowStr,
@@ -134,7 +132,6 @@ export async function extractL1Memories(params: {
         repoPaths: mem.repoPaths,
         filePaths: mem.filePaths,
         commands: mem.commands,
-        // ACE fields — zero on creation, updated by citation tracking
         citationCount: 0,
         lastCitedAt: null,
         neverCitedCount: 0,
@@ -150,10 +147,6 @@ export async function extractL1Memories(params: {
     sceneNames
   };
 }
-
-// --------------------------------------------------------
-// Parsing
-// --------------------------------------------------------
 
 interface ParsedScene {
   scene_name: string;
@@ -205,7 +198,7 @@ function parseExtractionResult(raw: string): ParsedScene[] {
       })).filter((m: any) => m.content.length > 0) : [];
 
       scenes.push({
-        scene_name: String(s.scene_name || "Unknown Scene"),
+        scene_name: String(s.scene_name || "Unknown Focus Scene"),
         memories
       });
     }

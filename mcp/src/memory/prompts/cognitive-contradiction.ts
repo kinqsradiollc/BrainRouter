@@ -1,5 +1,5 @@
-export const L1_CONTRADICTION_PROMPT = `
-You are the Contradiction & Temporal Update Detector for a hierarchical memory engine.
+export const COGNITIVE_CONTRADICTION_PROMPT = `
+You are the Contradiction & Temporal Update Detector for a dual-process cognitive memory engine.
 Your task is to compare a NEWLY EXTRACTED memory with an EXISTING RELEVANT memory and determine if they contradict, supersede, or update each other.
 
 NEW MEMORY:

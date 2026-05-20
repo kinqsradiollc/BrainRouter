@@ -31,7 +31,7 @@ export default function PersonaPage() {
       >
         {/* Editorial Title Block */}
         <PageHeader 
-          title="Persona (L3)" 
+          title="Core Identity" 
           description="Distilled cognitive agent profile consolidating recurring scenes into a unified persistent identity." 
         />
 
@@ -77,7 +77,7 @@ export default function PersonaPage() {
                 </p>
               ) : (
                 <div style={{ color: "var(--color-stone-text)", fontStyle: "italic", padding: "40px 0", textAlign: "center" }}>
-                  No active persona profile consolidated yet. Perform more turns to trigger L3 consolidation.
+                  No active core identity profile consolidated yet. Perform more turns to trigger identity distillation.
                 </div>
               )}
             </div>
@@ -103,12 +103,12 @@ export default function PersonaPage() {
                 
                 {/* Funnel Stage 1 */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(226, 227, 233, 0.04)", border: "1px solid rgba(226, 227, 233, 0.1)", fontSize: "11px", color: "var(--color-stone-text)", fontWeight: 600, justifyContent: "center" }}>
-                    L1
+                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(226, 227, 233, 0.04)", border: "1px solid rgba(226, 227, 233, 0.1)", fontSize: "10px", color: "var(--color-stone-text)", fontWeight: 600, justifyContent: "center" }}>
+                    CR
                   </div>
                   <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-pure-white)" }}>Episodes</div>
-                    <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>Granular memory logs</div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-pure-white)" }}>Cognitive Records</div>
+                    <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>Structured episodic facts</div>
                   </div>
                 </div>
 
@@ -121,12 +121,12 @@ export default function PersonaPage() {
 
                 {/* Funnel Stage 2 */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(204, 145, 102, 0.08)", border: "1px solid rgba(204, 145, 102, 0.2)", fontSize: "11px", color: "var(--color-golden-accent)", fontWeight: 600, justifyContent: "center" }}>
-                    L2
+                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(204, 145, 102, 0.08)", border: "1px solid rgba(204, 145, 102, 0.2)", fontSize: "10px", color: "var(--color-golden-accent)", fontWeight: 600, justifyContent: "center" }}>
+                    CF
                   </div>
                   <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-pure-white)" }}>Themes (Scenes)</div>
-                    <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>Semantic consolidations</div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-pure-white)" }}>Focus Scenes</div>
+                    <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>Active contextual clusters</div>
                   </div>
                 </div>
 
@@ -139,12 +139,12 @@ export default function PersonaPage() {
 
                 {/* Funnel Stage 3 */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "var(--color-golden-accent)", fontSize: "11px", color: "var(--color-midnight-ink)", fontWeight: 700, boxShadow: "0 0 10px rgba(204, 145, 102, 0.4)", justifyContent: "center" }}>
-                    L3
+                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "var(--color-golden-accent)", fontSize: "10px", color: "var(--color-midnight-ink)", fontWeight: 700, boxShadow: "0 0 10px rgba(204, 145, 102, 0.4)", justifyContent: "center" }}>
+                    CI
                   </div>
                   <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-pure-white)" }}>Persistent Identity</div>
-                    <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>Distilled Persona profile</div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-pure-white)" }}>Core Identity</div>
+                    <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>Distilled persona profile</div>
                   </div>
                 </div>
 

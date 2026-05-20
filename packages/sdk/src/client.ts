@@ -34,7 +34,7 @@ import {
   WorkingResetRequest,
   WorkingResetResponse,
   ActiveSessionsResponse,
-  L3PersonaRecord,
+  CoreIdentityRecord,
   SkillActivationsResponse,
 } from "@brainrouter/types";
 
@@ -148,7 +148,7 @@ export class BrainRouterClient {
   exportMemories() { return this.get<ExportMemoriesResponse>("/api/export"); }
   importMemories(body: ImportMemoriesRequest) { return this.post<ImportMemoriesResponse>("/api/import", body); }
   getScenes(params?: CursorPaginationParams) { return this.get<ScenesResponse>("/api/scenes", params); }
-  getPersona() { return this.get<{ persona: L3PersonaRecord | null }>("/api/persona"); }
+  getPersona() { return this.get<{ persona: CoreIdentityRecord | null }>("/api/persona"); }
   getContradictions(params?: CursorPaginationParams) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
   resolveContradiction(id: string, status: "resolved" | "dismissed") { return this.post<{ success: boolean }>(`/api/contradictions/${id}/resolve`, { status }); }
 
