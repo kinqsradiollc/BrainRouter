@@ -1,126 +1,127 @@
-# 🧠 BrainRouter: Dynamic Context Gateway
+# BrainRouter Presentation
 
-### Orchestrating Multi-Agent Memory with Spiking Activation Routing
+## Slide 1: What BrainRouter Is
 
----
+BrainRouter is a local-first MCP memory server for AI coding agents.
 
-## 🛑 Slide 1: The Context Window Challenge
+It gives agents a shared memory layer across sessions and tools, backed by SQLite, exposed through MCP, REST APIs, an SDK, React hooks, and a dashboard.
 
-### Why Standard Prompts Struggle in Long-Running Development Cycles
-*   **Prompt Bloat:** Combining multiple coding guidelines, directories, and checklists (e.g. `CLAUDE.md`, `CONVENTIONS.md`) consumes thousands of tokens before an agent executes its first turn.
-*   **Attention Dilution:** Irrelevant prompt instructions pollute the context window, causing the LLM to ignore styling constraints or make syntax errors.
-*   **API Latency & Cost:** Sending large prompts back and forth over HTTP spikes token usage and increases request latencies.
-*   **Agent Silos:** CLI development environments (e.g. Claude Code) and editor instances (e.g. Cursor) lack a synchronized context cache.
+Current implementation:
 
----
+- MCP over stdio and Streamable HTTP.
+- API-key auth for agents.
+- JWT auth for the dashboard.
+- Multi-user memory isolation.
+- L0 capture, L1 extraction, contradiction detection, graph extraction, L2 scenes, and L3 persona synthesis.
 
-## 🔬 Slide 2: SNN-Inspired Pre-Warming
+## Slide 2: The Problem
 
-### Borrowing Mechanics from the `ei8/prototypes` Models
+Coding agents lose important context between sessions.
 
-```mermaid
-graph LR
-    sensory([Agent Action / Tool Call])
-    node((Skill Potential))
-    decay{{Exponential Leakage}}
-    trigger[/Threshold Pre-Warming/]
+Static instruction files help, but they do not solve:
 
-    sensory -->|Spikes +1.0| node
-    node -->|Time / Turns| decay
-    decay -->|Re-evaluates| node
-    node -->|> 1.5| trigger
-```
+- Past decisions being forgotten.
+- Repeated debugging mistakes.
+- Long command output flooding context.
+- Different agent hosts having separate memory.
+- No inspection surface for what the agent remembered and why.
 
-*   **Active State Accumulation (`HelloWorm` Concept):** Tool executions act as stimuli, spiking specific skill potentials. Unused potentials decay back to zero over time.
-*   **Sensor-Analyzer-Reactor Loop (`HeartRate` Concept):** Tracks developer actions (Sensor), computes decaying potentials (Analyzer), and pre-warms the prompt with relevant templates (Reactor).
+BrainRouter turns those events into queryable, governable memory.
 
----
-
-## 📐 Slide 3: Decaying Potential Mathematics
-
-### In-Memory Score Calculation on Read
-
-$$P_{decayed} = \max(0, \min(P_{time}, P_{turn}))$$
-
-*   **Temporal Clock Decay ($P_{time}$):** Decays potentials based on elapsed minutes ($\Delta t$) and a configured half-life:
-    $$P_{time} = P_{old} \times e^{-\frac{\ln(2)}{T_{1/2}} \Delta t}$$
-*   **Per-Turn Minimum Decay ($P_{turn}$):** Safeguards against zero-elapsed time during rapid turns:
-    $$P_{turn} = P_{old} \times (1 - D_{turn})$$
-*   **Pre-Warming Trigger:** Skills with potentials $\ge 1.5$ have their markdown files loaded and injected into the active prompt during `memory_recall`.
-
----
-
-## 📊 Slide 4: Landscape Positioning
-
-### Where BrainRouter Fits Among Alternative memory Implementations
+## Slide 3: Runtime Shape
 
 ```mermaid
 graph TD
-    AM{{agentmemory}}
-    TC{{TencentDB-Agent-Memory}}
-    BR{{BrainRouter}}
+    Agent[MCP Client]
+    Server[mcp server]
+    DB[(SQLite)]
+    API[REST API]
+    Web[Next.js dashboard]
+    SDK[SDK and hooks]
 
-    P2P[P2P Mesh Synchronization]
-    Cloud[Tencent Cloud VectorDB]
-    Local[Local SQLite + SNN Pre-Warming]
-
-    AM -->|Focus| P2P
-    TC -->|Focus| Cloud
-    BR -->|Focus| Local
+    Agent -->|stdio or /mcp| Server
+    Server --> DB
+    API --> Server
+    Web --> SDK
+    SDK --> API
 ```
 
-*   **agentmemory:** Best for multi-agent P2P mesh synchronization with transactional locks (leases).
-*   **TencentDB-Agent-Memory:** Best for enterprise cloud scaling using Tencent Cloud VectorDB.
-*   **BrainRouter:** Hybrid choice. Lightweight local SQLite WAL + `sqlite-vec` vector storage, integrated with active context pre-warming to keep prompt costs low.
+The MCP server is the core process. It owns the registry, memory engine, auth checks, REST routes, and transport sessions.
 
----
-
-## 📦 Slide 5: Hierarchical Memory Layers
-
-### Organizing Information to Prevent Attention Distraction
-
-```mermaid
-graph TD
-    L0[(L0: Raw Turn Logs)]
-    L1[(L1: Distilled Memories)]
-    L1_5{{L1.5: Contradictions}}
-    L2([L2: Scene Nodes])
-    L3([L3: User Personas])
-
-    L0 -->|Async Pipeline| L1
-    L1 -->|Pairwise Check| L1_5
-    L1 -->|Clustering| L2
-    L1 -->|Entity Distillation| L3
-```
-
-*   **L0:** Baseline raw logs, scrubbed of credentials before DB writes.
-*   **L1:** Extracted episodic facts, API contracts, and guidelines.
-*   **L1.5:** Active contradiction checks and pairwise logical evaluations.
-*   **L2 / L3:** Situational clusters and user preference profiles.
-
----
-
-## 🔌 Slide 6: Workspace Integration
-
-### How Client Tools and Servers Synchronize
+## Slide 4: Memory Pipeline
 
 ```mermaid
 sequenceDiagram
-    participant CLI as Agent CLI
-    participant Server as BrainRouter MCP
-    participant DB as SQLite Store
-    participant Dashboard as React UI
+    participant Agent
+    participant MCP
+    participant Store as SQLite Store
+    participant LLM as Chat Completion
 
-    CLI->>Server: POST /api/skills/spike
-    Server->>DB: Increment potential (+1.0)
-    Server-->>CLI: Acknowledge spike
-    
-    Dashboard->>Server: GET /api/skills/activations
-    Server->>DB: Apply in-memory decay
-    Server-->>Dashboard: Return potentials
-    Note over Dashboard: Render activation curves
+    Agent->>MCP: memory_capture_turn
+    MCP->>Store: write redacted L0 messages
+    MCP->>LLM: extract L1 memories
+    MCP->>Store: store L1 records
+    MCP-->>Agent: capture result
+    MCP-->>Store: background contradiction, graph, scene, persona work
 ```
 
-*   **`@brainrouter/sdk`:** Type-safe wrapper client matching the `/api` routes.
-*   **`@brainrouter/hooks`:** React Hooks (e.g. `useSkillActivations`) for synchronization.
-*   **Next.js Dashboard:** Obsidian Surfaces UI displaying potentials, contradictions, and memory tables.
+Recall combines keyword search, optional vector search, file-path matches, score fusion, priority decay, citation boosts, optional reranking, scene context, persona context, and graph expansion.
+
+## Slide 5: Tool Surface
+
+BrainRouter exposes tools in five groups:
+
+- Registry: `list_skills`, `get_skill`, `search_skills`, personas, references, template docs.
+- Recall/capture: `memory_resolve_session`, `memory_capture_turn`, `memory_recall`, `memory_search`, `memory_explain_recall`.
+- Governance: `memory_get`, `memory_update`, evidence, export/import, audit, diagnostics, delete.
+- Engineering workflow: debug traces, failed attempts, file history, task state, handover, verification.
+- Host and working memory: hooks plus `.brainrouter/work/...` payload offload.
+
+Skill writes are admin-only. Current code does not expose a `BRAINROUTER_LLM_MODE` agent/server switch.
+
+## Slide 6: Dashboard and API
+
+The dashboard is a Next.js app in `web/`.
+
+It uses:
+
+- `@brainrouter/sdk` for typed REST calls.
+- `@brainrouter/hooks` for React state.
+- JWT stored in session storage for dashboard auth.
+- API keys for MCP client setup and integrations.
+
+Dashboard surfaces include auth, profile/API key, users, memories, evidence, timeline, recall inspector, scenes, persona, contradictions, hooks, working memory, and diagnostics.
+
+## Slide 7: Why It Matters
+
+BrainRouter is not just long-term chat history.
+
+It gives engineering agents:
+
+- A durable memory store.
+- Evidence and governance.
+- Recall explanations.
+- Session-scoped large-output offload.
+- Cross-host ingestion hooks.
+- A dashboard for inspecting and correcting memory.
+
+The practical goal is simple: an agent should remember verified engineering context without putting every instruction, log, and historical decision into every prompt.
+
+## Slide 8: Running It
+
+```bash
+npm install
+npm run build
+cd mcp
+npm run setup:admin -- --reset --userId admin
+npm run dev:http
+```
+
+Then:
+
+```bash
+cd web
+npm run dev
+```
+
+Use the printed API key for MCP clients and the configured admin email/password for dashboard sign-in.
