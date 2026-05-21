@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useContradictions } from "@brainrouter/hooks";
 import type { ContradictionRecord } from "@brainrouter/types";
@@ -35,6 +35,8 @@ const cardVariants = {
 export default function ContradictionsPage() {
   const client = useMemo(() => getClient(), []);
   const { contradictions, refresh, loadMore, hasMore, isFetchingMore } = useContradictions(client);
+  const [filter, setFilter] = useState<"pending" | "resolved" | "all">("pending");
+  const filteredContradictions = contradictions.filter((item) => filter === "all" ? true : item.status === filter);
 
   return (
     <AuthGuard>
@@ -49,6 +51,14 @@ export default function ContradictionsPage() {
           description="Unresolved semantic conflicts detected in the L1/L2 memory layer." 
         />
 
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          {(["pending", "resolved", "all"] as const).map((item) => (
+            <PremiumButton key={item} size="small" variant={filter === item ? "primary" : "ghost"} onClick={() => setFilter(item)}>
+              {item === "pending" ? "Open" : item[0].toUpperCase() + item.slice(1)}
+            </PremiumButton>
+          ))}
+        </div>
+
         {/* Contradictions Queue */}
         <motion.div 
           variants={containerVariants}
@@ -57,7 +67,7 @@ export default function ContradictionsPage() {
           style={{ display: "flex", flexDirection: "column", gap: "16px" }}
         >
           <AnimatePresence mode="popLayout">
-            {contradictions.map((c: ContradictionRecord) => (
+            {filteredContradictions.map((c: ContradictionRecord) => (
               <motion.div 
                 key={c.id} 
                 className="card"
@@ -91,33 +101,36 @@ export default function ContradictionsPage() {
                       lineHeight: 1.5
                     }}
                   >
-                    {[c.content_a ?? c.contentA, c.content_b ?? c.contentB].filter(Boolean).join(" <-> ") || `Confidence ${c.confidence.toFixed(2)}`}
+                    {[c.content_a ?? c.contentA, c.content_b ?? c.contentB].filter(Boolean).join(" <-> ") || `Confidence ${(c.confidence ?? 0).toFixed(2)}`}
                   </p>
+                  <span className={c.status === "pending" ? "badge-gold" : "badge"}>{c.status === "pending" ? "open" : c.status}</span>
                 </div>
 
-                <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
-                  <PremiumButton 
-                    variant="ghost" 
-                    style={{ padding: "8px 18px", fontSize: "13px" }}
-                    onClick={() => client.resolveContradiction(c.id, "resolved").then(refresh)}
-                  >
-                    Resolve
-                  </PremiumButton>
-                  <PremiumButton 
-                    variant="text" 
-                    style={{ padding: "8px 18px", fontSize: "13px" }}
-                    onClick={() => client.resolveContradiction(c.id, "dismissed").then(refresh)}
-                  >
-                    Dismiss
-                  </PremiumButton>
-                </div>
+                {c.status === "pending" && (
+                  <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                    <PremiumButton 
+                      variant="ghost" 
+                      size="small"
+                      onClick={() => client.resolveContradiction(c.id, "resolved").then(refresh)}
+                    >
+                      Resolve
+                    </PremiumButton>
+                    <PremiumButton 
+                      variant="text" 
+                      size="small"
+                      onClick={() => client.resolveContradiction(c.id, "dismissed").then(refresh)}
+                    >
+                      Dismiss
+                    </PremiumButton>
+                  </div>
+                )}
               </motion.div>
             ))}
           </AnimatePresence>
         </motion.div>
 
         {/* Elegant Empty State */}
-        {contradictions.length === 0 && (
+        {filteredContradictions.length === 0 && (
           <EmptyState
             icon={
               <div 

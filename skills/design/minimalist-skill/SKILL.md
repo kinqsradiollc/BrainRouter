@@ -1,6 +1,12 @@
 ---
-name: minimalist-ui
+name: minimalist-skill
 description: Clean editorial-style interfaces. Warm monochrome palette, typographic contrast, flat bento grids, muted pastels. No gradients, no heavy shadows.
+hints:
+  - "Enforce absolute negative constraints: zero emojis, zero Lucide default stroke-widths, and zero Inter."
+  - "Leverage typographic contrast with custom sans-serif fonts for body and variable editorial serif for headlines."
+  - "Maintain a warm monochrome palette (e.g. White, Off-white, Charcoal) with extremely desaturated pastels."
+  - "Build card features with thin 1px EAEAEA borders, crisp 8px-12px rounded corners, and zero drop shadows."
+  - "Implement clean scroll-entry animations using IntersectionObserver or cubic-bezier curves."
 ---
 
 # Protocol: Premium Utilitarian Minimalism UI Architect
@@ -85,18 +91,26 @@ When tasked with writing frontend code (HTML, React, Tailwind, Vue) or designing
 7. Provide code that reflects this high-end, uncluttered, editorial aesthetic natively without requiring manual adjustments.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Designing minimal workspace pages, documentation sites, high-end agency portfolios, editorial layouts, or clean personal blogs.
+- **NOT for:** Action-oriented game interfaces, data-heavy high-density financial dashboards (where card boxes are banned), or vibrantly colorful landing pages.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| A basic drop-shadow makes the card stand out | Thick dropshadows break the flat paper-like aesthetic of premium utilitarian minimalism. Use thin borders or negative space instead. |
+| Using 'Inter' is safe for typography | Inter is extremely generic and immediately signals a basic, uncurated UI. Swapping it for Geist or Satoshi provides instant differentiation. |
+| Emojis make sections feel friendly | Emojis cheapen high-end designs. Use precise line-art icons or geometric SVG symbols. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Visible drop-shadows under main panels or layout cards.
+- Sudden use of bright primary colors or multi-color gradients.
+- Clashing grays (e.g. placing warm bone cards on a cold slate-gray background).
+- Headline containers stretching edge-to-edge without a reasonable max-width layout constraint.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] No emojis are present in any content block or code comment.
+- [ ] Borders are standardized to thin `1px solid` with light gray or subtle transparency.
+- [ ] The font stack uses SF Pro, Geist, or Satoshi instead of standard Inter.
+- [ ] Large sections are separated by significant, clean vertical padding.
+- [ ] The page looks like a highly refined, premium magazine layout rather than a generic SaaS template.

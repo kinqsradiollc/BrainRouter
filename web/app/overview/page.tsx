@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { MemoryListItem } from "@brainrouter/types";
 import { motion } from "framer-motion";
 import { useDiagnostics, useStats } from "@brainrouter/hooks";
 import { getClient } from "../../lib/client";
@@ -29,6 +30,7 @@ export default function Page() {
   const client = useMemo(() => getClient(), []);
   const { user } = useAuth();
   const { data } = useStats(client);
+  const [recentMemories, setRecentMemories] = useState<MemoryListItem[]>([]);
   const { data: diagnostics, error: diagnosticsError, isLoading: diagnosticsLoading } = useDiagnostics(
     client,
     undefined,
@@ -49,6 +51,15 @@ export default function Page() {
   const recentErrors = diagnostics?.recentErrors ?? [];
   const sqliteVersion = diagnostics?.sqliteVersion ?? (diagnosticsLoading ? "Loading" : "Unavailable");
   const nodeVersion = diagnostics?.nodeVersion ?? (diagnosticsLoading ? "Loading" : "Unavailable");
+  const activeCount = Math.max(0, (data?.total ?? 0) - (data?.archived ?? 0));
+  const activePct = data?.total ? Math.round((activeCount / data.total) * 100) : 0;
+  const archivedPct = data?.total ? 100 - activePct : 0;
+
+  useEffect(() => {
+    client.getMemories({ limit: 10 })
+      .then((page) => setRecentMemories(page.memories))
+      .catch(() => setRecentMemories([]));
+  }, [client]);
 
   return (
     <AuthGuard>
@@ -179,6 +190,31 @@ export default function Page() {
             <p style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5, margin: 0, marginTop: "8px" }}>
               All telemetry metrics are fetched securely from the active BrainRouter daemon running on port 3747.
             </p>
+          </PremiumCard>
+        </div>
+
+        <div className="grid-asymmetric">
+          <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>Recent Activity</h3>
+            {recentMemories.length > 0 ? recentMemories.map((memory) => (
+              <div key={memory.recordId} style={{ borderTop: "1px solid var(--border-dim)", paddingTop: "10px" }}>
+                <div style={{ color: "var(--color-golden-accent)", fontSize: "11px", textTransform: "uppercase", fontWeight: 700 }}>{memory.type}</div>
+                <p style={{ margin: "4px 0", color: "var(--color-white-frost)", fontSize: "13px", lineHeight: 1.45 }}>{memory.content.slice(0, 160)}</p>
+                <span style={{ color: "var(--color-stone-text)", fontSize: "11px" }}>{new Date(memory.createdTime).toLocaleString()}</span>
+              </div>
+            )) : (
+              <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "13px" }}>No recent memories recorded.</p>
+            )}
+          </PremiumCard>
+          <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>Memory Health</h3>
+            <div style={{ height: "8px", borderRadius: "9999px", background: "rgba(226,227,233,0.1)", overflow: "hidden" }}>
+              <div style={{ width: `${activePct}%`, height: "100%", background: "var(--color-golden-gradient)" }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", color: "var(--color-silver-text)", fontSize: "13px" }}>
+              <span>Active: {activePct}%</span>
+              <span>Archived: {archivedPct}%</span>
+            </div>
           </PremiumCard>
         </div>
       </motion.div>

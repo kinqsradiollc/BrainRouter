@@ -13,7 +13,7 @@ export default function RecallInspectorPage() {
   const [query, setQuery] = useState("");
   const [activeSkill, setActiveSkill] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const memories = result?.recalledCognitiveMemories ?? [];
+  const memories = Array.isArray(result?.recalledCognitiveMemories) ? result.recalledCognitiveMemories : [];
   const explanation = result?.recallExplanation;
 
   async function runExplain() {
@@ -88,7 +88,7 @@ export default function RecallInspectorPage() {
               ))}
             </div>
 
-            {explanation.sparkedNodes && explanation.sparkedNodes.length > 0 && (
+            {Array.isArray(explanation.sparkedNodes) && explanation.sparkedNodes.length > 0 && (
               <div className="card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "12px" }}>
                 <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--color-ash-text)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                   🧠 Neural Spark Spreading Activation Trace
@@ -152,7 +152,7 @@ export default function RecallInspectorPage() {
                 {memories.map((memory) => (
                   <tr key={memory.recordId}>
                     <td style={{ fontWeight: 700 }}>{memory.type}</td>
-                    <td>{memory.score.toFixed(3)}</td>
+                    <td>{(memory.score ?? 0).toFixed(3)}</td>
                     <td>{memory.content}</td>
                     <td style={{ fontFamily: "monospace", color: "var(--color-stone-text)" }}>{memory.recordId}</td>
                   </tr>

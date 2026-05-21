@@ -1,6 +1,12 @@
 ---
-name: documentation-and-adrs
+name: adr-skill
 description: Records decisions and documentation. Use when making architectural decisions, changing public APIs, shipping features, or when you need to record context that future engineers and agents will need to understand the codebase.
+hints:
+  - Document the 'why' (context, constraints, trade-offs) behind a change, not just the 'what'.
+  - Write an ADR (Architecture Decision Record) for any decision that would be expensive to reverse.
+  - Review openSrc/ directories or existing ADRs under docs/decisions/ for structure and style guidelines.
+  - Store ADRs in docs/decisions/ with sequential, three-digit numbering (e.g., ADR-001).
+  - Keep public API and inline documentation clean, type-annotated, and free of commented-out code.
 ---
 
 # Documentation and ADRs
@@ -278,10 +284,16 @@ After documenting:
 - [ ] Rules files (CLAUDE.md etc.) are current and accurate
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+
+1. **Identify Significant Decisions:** Recognize when a change impacts API structure, package dependencies, data model/schema, or deployment architecture.
+2. **Draft the Architecture Decision Record (ADR):** Create a new markdown file under `docs/decisions/` prefixed with a sequential index (e.g., `ADR-005-redis-caching.md`).
+3. **Analyze Alternatives:** Outline at least 2 distinct alternatives, detailing explicit pros/cons and clear reasons for rejection.
+4. **Define Consequences:** Explicitly capture downstream engineering impacts, risks, and onboarding implications.
+5. **Verify and Update:** Review against similar historical decisions (checking `openSrc/` patterns if an openSrc/ directory is present) before finalizing.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After executing this skill, confirm:
+- [ ] ADR file is correctly formatted and located in `docs/decisions/`.
+- [ ] No un-analyzed alternatives or vague rationalizations exist in the record.
+- [ ] Code references to the decision are updated to cross-reference the ADR.

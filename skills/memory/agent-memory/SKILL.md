@@ -92,7 +92,9 @@ memory_working_offload({
 | `memory_handover` | To generate a compact continuation note with evidence links. |
 | `memory_verify` | To check a memory and update its confidence or status (active, superseded, archived). |
 
----
+## When to Use
+- Use at the start of every session or complex debugging task to load persona preferences, past engineering failed attempts, and high-level task status.
+- NOT for stateless operations (e.g. running single lint tests or querying a git commit list once).
 
 ## What NOT to Do
 
@@ -101,11 +103,20 @@ memory_working_offload({
 - **Never repeat failed approaches** — check `memory_failed_attempts` when debugging.
 - **Limit memory tool calls** to a maximum of **3 per turn** to respect the latency budget.
 
----
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I don't need memory recall; I already know the context. | BrainRouter memory syncs user preferences and persona across multiple sessions. Skipping recall results in repetitive or off-track answers. |
+| The log is long, but I'll paste it anyway. | Large logs (exceeding 1000 tokens) blow up the prompt context window, wasting tokens and diluting relevant instructions. |
+
+## Red Flags
+- Committing giant files or pasting massive build outputs (>1,000 tokens) directly in the conversation.
+- Attempting a debug fix that has already been documented as a failure in `memory_failed_attempts`.
+- Disregarding user preferences retrieved from the L3 persona.
 
 ## Verification
 
 After applying this skill, confirm:
-- [ ] `memory_recall` or `memory_working_context` was called.
-- [ ] Large payloads were offloaded via `memory_working_offload`.
-- [ ] The injected context was referenced (not ignored).
+- [ ] `memory_recall` or `memory_working_context` was called to pull relevant developer configurations.
+- [ ] Large payloads or log blocks were offloaded via `memory_working_offload`.
+- [ ] Injected memory and Persona configurations were actively referenced in the output.

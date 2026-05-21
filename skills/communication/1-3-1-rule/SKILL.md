@@ -1,6 +1,12 @@
 ---
-name: high-agency-communication
+name: 1-3-1-rule
 description: Professional communication for high-agency engineers. Enforces the 1-3-1 rule to turn problems into decisions and minimizes synchronous friction.
+hints:
+  - Frame the core issue in exactly one concise sentence (the '1' in 1-3-1).
+  - Provide exactly three distinct, viable options with structured pros and cons (the '3' in 1-3-1).
+  - Explicitly recommend exactly one option with a clear professional rationale (the '1' in 1-3-1).
+  - Detail a concrete, testable Definition of Done and step-by-step implementation plan for the recommendation.
+  - Revise the recommendation, DoD, and implementation plan dynamically if the user chooses a different option.
 ---
 
 # 1-3-1 Communication Rule
@@ -91,14 +97,24 @@ Agent:
 5. Verify under load with a simple stress test against a flaky endpoint mock.
 
 ## Common Rationalizations
+
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| "The options are too similar to list three distinct paths." | There are always different dimensions: speed of implementation, operational complexity, security/reliability, or third-party dependencies. Find the genuine trade-offs. |
+| "I'll just ask the user what they want instead of giving a recommendation." | High-agency professionals do not offload decision-making. Presenting raw options without a recommendation wastes user time. |
+| "This decision is too simple to need a 1-3-1 response." | A simplified 1-3-1 can be extremely short (e.g. 1 sentence problem, 3 bullet options, 1 sentence recommendation). It forces clarity and consensus. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+
+- Listing more or fewer than three options.
+- The "Problem" statement is multiple sentences or describes implementation details instead of the core goal.
+- Giving a vague recommendation (e.g. "it depends on what you prefer" or "either option works").
+- Implementation plan and DoD do not align with the recommended option.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing this skill, confirm:
+- [ ] The response contains exactly one single-sentence problem framing.
+- [ ] Exactly three distinct options (A, B, C) are presented with explicit pros/cons.
+- [ ] A definitive, professional recommendation is stated.
+- [ ] The Definition of Done and Implementation Plan are fully tailored to the chosen option.

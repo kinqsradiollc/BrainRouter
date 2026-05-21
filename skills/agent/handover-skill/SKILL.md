@@ -1,6 +1,12 @@
 ---
-name: project-handover-and-walkthrough
+name: handover-skill
 description: Summarizes completed work and provides a walkthrough. Use when a project, feature, or task is finished and needs to be reviewed or handed over to a human or another agent.
+hints: |
+  - Always verify that all tests pass and lint checks are green before initiating a handover.
+  - Create or update the walkthrough.md artifact to detail structural changes and decisions.
+  - Ensure every key change is explained in terms of product behavior, not just raw file diffs.
+  - Document all verification results with exact commands run and observable outcomes.
+  - Clearly flag any remaining technical debt or future enhancement work.
 ---
 
 # Project Handover and Walkthrough
@@ -95,26 +101,12 @@ Provide proof that the work is correct.
 - Leaving `task.md` with uncompleted items.
 - Vague summaries like "Implemented the feature."
 
-## Required Checks
+## Verification
 
 Before finalizing the handover, confirm:
-
-- [ ] `walkthrough.md` is saved in the repository.
-- [ ] All verification steps have been run and documented.
-- [ ] Technical decisions are clearly explained.
-- [ ] `task.md` is updated to reflect the final state.
-- [ ] Any "Future Work" or "Known Issues" are noted.
-
-## Workflow
-1. **Verify:** Run all tests and manual checks one last time.
-2. **Review:** Compare the final state against the original `SPEC.md` and `IMPLEMENTATION_PLAN.md`.
-3. **Write:** Create the `walkthrough.md` using the template.
-4. **Clean up:** Delete any temporary scratch files or debug logs.
-5. **Update:** Mark the final task in `task.md` as done.
-6. **Submit:** Inform the human that the walkthrough is ready for review.
-
-## Verification
-After completing the skill, confirm:
-- [ ] The walkthrough accurately reflects the work done.
-- [ ] All verification data is accurate and current.
-- [ ] The human can follow the walkthrough to understand the changes.
+- [ ] `walkthrough.md` is saved in the repository artifacts directory or project root.
+- [ ] All verification steps have been run, tested, and documented.
+- [ ] Non-obvious technical decisions and architectural changes are clearly explained.
+- [ ] `task.md` has been updated to reflect the final state.
+- [ ] Any "Future Work," "Remaining Debt," or "Known Issues" are noted.
+- [ ] All temporary scratch files, debug logs, and unfinished code blocks have been cleaned up.

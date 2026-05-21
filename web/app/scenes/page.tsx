@@ -44,6 +44,7 @@ export default function ScenesPage() {
           variants={containerVariants}
           initial="hidden"
           animate="show"
+          style={{ alignItems: "start" }}
         >
           <AnimatePresence mode="popLayout">
             {scenes.map((scene: ContextualFocusRecord) => (

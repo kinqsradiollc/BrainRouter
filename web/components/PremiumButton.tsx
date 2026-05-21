@@ -3,8 +3,10 @@ import { motion } from "framer-motion";
 
 interface PremiumButtonProps {
   variant?: "primary" | "ghost" | "danger" | "success" | "text";
+  size?: "small" | "medium";
   onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
+  title?: string;
   type?: "button" | "submit" | "reset";
   style?: React.CSSProperties;
   children: React.ReactNode;
@@ -12,8 +14,10 @@ interface PremiumButtonProps {
 
 export function PremiumButton({ 
   variant = "ghost", 
+  size = "medium",
   onClick, 
   disabled = false, 
+  title,
   type = "button", 
   style, 
   children 
@@ -21,18 +25,19 @@ export function PremiumButton({
   // Shared base styles
   const baseStyle: React.CSSProperties = {
     fontFamily: "var(--font-inter), sans-serif",
-    fontWeight: 600,
-    fontSize: "14px",
+    fontWeight: size === "small" ? 500 : 600,
+    fontSize: size === "small" ? "12.5px" : "14px",
     borderRadius: "var(--radius-pill)",
-    padding: "10px 24px",
+    padding: size === "small" ? "6px 14px" : "10px 24px",
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: "8px",
+    gap: size === "small" ? "4px" : "8px",
     transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
     border: "1px solid transparent",
     outline: "none",
+    whiteSpace: "nowrap",
     ...style
   };
 
@@ -80,6 +85,7 @@ export function PremiumButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
+      title={title}
       style={{
         ...baseStyle,
         ...variantStyle,

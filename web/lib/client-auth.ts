@@ -16,17 +16,24 @@ function safeDecodeJwtPayload(token: string): Record<string, unknown> | null {
 
 export function getJwt(): string | null {
   if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(JWT_KEY);
+  return sessionStorage.getItem(JWT_KEY) ?? localStorage.getItem(JWT_KEY);
 }
 
-export function setJwt(token: string): void {
+export function setJwt(token: string, rememberMe = false): void {
   if (typeof window === "undefined") return;
-  sessionStorage.setItem(JWT_KEY, token);
+  if (rememberMe) {
+    sessionStorage.removeItem(JWT_KEY);
+    localStorage.setItem(JWT_KEY, token);
+  } else {
+    localStorage.removeItem(JWT_KEY);
+    sessionStorage.setItem(JWT_KEY, token);
+  }
 }
 
 export function clearJwt(): void {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(JWT_KEY);
+  localStorage.removeItem(JWT_KEY);
 }
 
 export function getApiKey(): string {
@@ -44,6 +51,11 @@ export function clearApiKey(): void {
   localStorage.removeItem(API_KEY);
 }
 
+export function clearAll(): void {
+  clearJwt();
+  clearApiKey();
+}
+
 export function isAuthenticated(): boolean {
   const jwt = getJwt();
   if (!jwt) return false;
@@ -54,8 +66,7 @@ export function isAuthenticated(): boolean {
 }
 
 export function signOut(): void {
-  clearJwt();
-  clearApiKey();
+  clearAll();
   if (typeof window !== "undefined") {
     window.location.replace("/auth");
   }

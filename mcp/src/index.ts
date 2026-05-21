@@ -73,6 +73,22 @@ import { skillsRouter } from './api/routes/skills.js';
 import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function authRateLimit(req: Request, res: Response, next: () => void) {
+  const now = Date.now();
+  const key = req.ip ?? "unknown";
+  const current = authAttempts.get(key);
+  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + 15 * 60 * 1000 };
+  bucket.count += 1;
+  authAttempts.set(key, bucket);
+  if (bucket.count > 20) {
+    res.status(429).json({ error: "Too many authentication attempts" });
+    return;
+  }
+  next();
+}
+
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 function parseFlag(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
@@ -326,7 +342,13 @@ if (USE_HTTP) {
   
   // Custom CORS middleware to support cross-origin requests from Dashboard
   app.use((req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const allowedOrigin = process.env.BRAINROUTER_CORS_ORIGIN || "http://localhost:3000";
+    const requestOrigin = req.headers.origin;
+    if (!requestOrigin || requestOrigin === allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", requestOrigin ?? allowedOrigin);
+    }
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
     if (req.method === "OPTIONS") {
@@ -346,6 +368,8 @@ if (USE_HTTP) {
     res.json({ status: 'ok', transport: 'http', root: config.localRoot });
   });
 
+  app.use("/api/auth/signin", authRateLimit);
+  app.use("/api/auth/signup", authRateLimit);
   app.use("/api/auth", authRouter);
   app.use("/api/users", usersRouter);
   app.use("/api/memories", memoriesRouter);

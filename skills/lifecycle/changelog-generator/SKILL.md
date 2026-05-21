@@ -1,6 +1,12 @@
 ---
 name: changelog-generator
 description: Automatically creates user-facing changelogs from git commits by analyzing commit history, categorizing changes, and transforming technical commits into clear, customer-friendly release notes. Turns hours of manual changelog writing into minutes of automated generation.
+hints:
+  - Check openSrc/ or existing project files for CHANGELOG.md patterns and formats if available.
+  - Exclude developer-only noise (e.g. chore, simple refactoring, config updates) from user-facing logs.
+  - Group additions into cohesive, standard categories: Features, Improvements, Bug Fixes, Breaking Changes, Security.
+  - Translate technical implementation terms (e.g., class names, SQL keys) into user-facing benefits and actions.
+  - Highlight breaking changes or required migration steps prominently at the top of the changelog notes.
 ---
 
 # Changelog Generator
@@ -110,3 +116,20 @@ guidelines from CHANGELOG_STYLE.md
 - Writing app store update descriptions
 - Generating email updates for users
 - Creating social media announcement posts
+
+## Common Rationalizations
+| Rationalization | Reality |
+|---|---|
+| I'll just dump raw commit logs directly. | Raw commits contain internal technical jargon (e.g. `refactor: fix database constraints`) that confuses users. |
+| No one reads changelogs, so formatting doesn't matter. | Well-structured changelogs demonstrate project health, building trust with users and stakeholders. |
+
+## Red Flags
+- Including chore commits (`chore: update eslint`) or test commits in user-facing release notes.
+- Highlighting internal module names or database parameters instead of functional product capabilities.
+- Obfuscating or hiding major breaking changes in fine print.
+
+## Verification
+After completing the skill, confirm:
+- [ ] Technical jargon is completely rewritten to represent user-facing value and utility.
+- [ ] Internal/engineering noise (tests, configs, refactors) is filtered out.
+- [ ] Markdown formatting is verified clean, readable, and properly categorized.

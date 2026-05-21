@@ -1,13 +1,19 @@
 ---
 name: conventions-skill
-description: Naming patterns, formatting rules, import order, and module design standards for.
+description: Naming patterns, formatting rules, import order, and module design standards for modern software codebases.
+hints:
+  - Inspect project root configuration files (e.g. .prettierrc, eslint.config.js) to align with existing styling tools.
+  - Check openSrc/ or existing project files for naming patterns and module architecture styles.
+  - Follow kebab-case for system files and PascalCase for UI components (e.g. React components).
+  - Keep functions focused and under 50 lines; extract complex logic into small, reusable helpers.
+  - Eliminate console.log statements before committing, substituting appropriate logging utilities.
 ---
 
 # Coding Conventions Skill
 
 ## Overview
 
-This skill ensures all new code written in matches existing style and patterns. Load this before writing new files, adding features, or conducting code reviews.
+This skill ensures all new code written in the codebase matches existing style and patterns. Load this before writing new files, adding features, or conducting code reviews.
 
 ## Workflow
 
@@ -68,18 +74,22 @@ This skill ensures all new code written in matches existing style and patterns. 
 - [ ] Functions stay under 50 lines.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- Use when creating new modules, adding endpoints, writing frontend components, or conducting local codebase cleanups and refactoring.
+- NOT for simple documentation-only changes or config modifications.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| I'll format the code manually later. | Automated formatting ensures clean git diffs and prevents formatting noise. |
+| It's just a single console.log for quick debugging. | Forgotten debug logs clutter runtime output in production and create noise. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Committing code with generic `console.log` statements instead of proper logging mechanisms.
+- Functions exceeding 50-60 lines without being split into cohesive helpers.
+- Inconsistent file naming conventions (e.g. mixing `camelCase` and `kebab-case` filenames in the same folder).
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Prettier/ESLint rules have been run and all styling warnings are cleared.
+- [ ] All imported modules are ordered according to standard grouping.
+- [ ] Functions are short, clean, well-scoped, and documented where necessary.

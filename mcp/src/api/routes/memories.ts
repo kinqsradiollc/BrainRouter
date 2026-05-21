@@ -12,6 +12,7 @@ memoriesRouter.get("/", (req: AuthedRequest, res) => {
     const pagination = PaginationQuerySchema.parse(req.query);
     const archived = req.query.archived;
     const filters = {
+      query: typeof req.query.query === "string" ? req.query.query : undefined,
       type: typeof req.query.type === "string" ? req.query.type : undefined,
       scene: typeof req.query.scene === "string" ? req.query.scene : undefined,
       skill: typeof req.query.skill === "string" ? req.query.skill : undefined,
@@ -49,6 +50,10 @@ memoriesRouter.patch("/:recordId", (req: AuthedRequest, res) => {
       verificationStatus: z.enum(["", "verified", "unverified", "stale"]).optional(),
       note: z.string().optional(),
     }).parse(req.body ?? {});
+    if (body.content && body.content.length > 10000) {
+      res.status(400).json({ error: "Content too long" });
+      return;
+    }
     const result = memoryEngine.updateMemory(req.userId!, String(req.params.recordId), body);
     if (!result) {
       res.status(404).json({ error: "Memory not found" });

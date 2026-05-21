@@ -1,6 +1,12 @@
 ---
-name: spec-driven-development
+name: spec-driven-skill
 description: Creates specs before coding. Use when starting a new project, feature, or significant change and no specification exists yet. Use when requirements are unclear, ambiguous, or only exist as a vague idea.
+hints:
+  - Never write code for a new feature or major refactoring without a written specification.
+  - Review openSrc/ templates or existing specs in docs/specs/ if they exist to reuse standard structures.
+  - Define explicit, testable Definition of Done (DoD) criteria in every specification.
+  - Establish boundary conditions (Always, Ask First, Never) to govern agent behaviors.
+  - Commit the spec as a living markdown file in the repository (e.g. docs/specs/) before implementing.
 ---
 
 # Spec-Driven Development
@@ -200,10 +206,16 @@ Before proceeding to implementation, confirm:
 - [ ] The spec is saved to a file in the repository
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+
+1. **Analyze Requirements:** Review user requests, existing code, and optional openSrc/ reference examples to identify ambiguities.
+2. **Draft the Specification:** Create a document (e.g., `docs/specs/feature-spec.md`) detailing the Goal, User Stories, Architecture changes, In-Scope vs Out-of-Scope, and Boundaries.
+3. **Formulate Definition of Done:** Establish concrete, testable criteria for success (e.g., unit tests, visual checks, command runs).
+4. **Obtain User Approval:** Share the spec with the user, collect feedback, and get explicit sign-off before coding.
+5. **Update Continuously:** If requirements evolve during implementation, update the specification first.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After executing this skill, confirm:
+- [ ] A written specification is committed to the repository.
+- [ ] Definition of Done and boundaries are fully defined and approved by the user.
+- [ ] The implementation plan maps directly to the spec sections.

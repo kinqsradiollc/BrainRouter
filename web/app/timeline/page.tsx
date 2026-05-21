@@ -7,6 +7,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { PageHeader } from "../../components/PageHeader";
+import { PremiumButton } from "../../components/PremiumButton";
 
 const OP_TYPES = ["all", "recall", "l1_upsert", "memory_update", "archive", "export", "import", "memory_governance_delete", "contradiction_resolve"];
 
@@ -31,7 +32,7 @@ export default function TimelinePage() {
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
         <PageHeader title="Timeline" description="Chronological memory operations across capture, recall, governance, and import/export activity." />
 
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center", width: "100%" }}>
           {showAdvanced && (
             <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "240px" }}>
               <span style={{ fontSize: "11px", color: "var(--color-ash-text)", textTransform: "uppercase" }}>Session Key</span>
@@ -43,44 +44,34 @@ export default function TimelinePage() {
               />
             </label>
           )}
-          <button
+          <PremiumButton
+            size="small"
+            variant="ghost"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--color-stone-text)",
-              fontSize: "12px",
-              cursor: "pointer",
-              padding: "4px 8px",
-            }}
           >
             {showAdvanced ? "Hide Filter" : "Session Filter..."}
-          </button>
-          <button
+          </PremiumButton>
+          <PremiumButton
+            size="small"
+            variant="ghost"
             onClick={() => void refresh()}
             disabled={isLoading}
-            style={{ marginLeft: "auto", padding: "9px 16px", borderRadius: "9999px", border: "1px solid rgba(226,227,233,0.12)", background: "transparent", color: "var(--color-silver-text)", cursor: isLoading ? "default" : "pointer" }}
+            style={{ marginLeft: "auto" }}
           >
             {isLoading ? "Loading" : "Refresh"}
-          </button>
+          </PremiumButton>
         </div>
 
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           {OP_TYPES.map((item) => (
-            <button
+            <PremiumButton
               key={item}
+              size="small"
+              variant={operation === item ? "primary" : "ghost"}
               onClick={() => setOperation(item)}
-              style={{
-                padding: "5px 12px",
-                borderRadius: "9999px",
-                border: "1px solid rgba(226,227,233,0.12)",
-                background: operation === item ? "rgba(174,147,87,0.18)" : "transparent",
-                color: operation === item ? "var(--color-pure-white)" : "var(--color-stone-text)",
-                cursor: "pointer",
-              }}
             >
               {item === "all" ? "All" : item.replace(/_/g, " ")}
-            </button>
+            </PremiumButton>
           ))}
         </div>
 

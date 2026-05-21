@@ -1,13 +1,18 @@
 ---
 name: doc-management-skill
-category: codebase
 description: Guidelines for reading living project documentation using MCP tools.
+hints:
+  - Query project-level documentation using list_template_docs and get_template_doc to discover existing specifications.
+  - Utilize specific section parameters in get_template_doc to read target content efficiently.
+  - Load reference guidelines (e.g. security-checklist, testing-patterns) using get_reference to respect engineering checklists.
+  - Restrict actions to read-only when interacting with documentation via MCP to avoid modifying architectural blueprints.
+  - Fall back to checking openSrc/ or standard project directories (e.g., docs/, doc/) if MCP tools are not available.
 ---
 
 # Doc Management Skill
 
 ## Overview
-This skill defines the workflow for interacting with project documentation. The Global BrainRouter `docs/` folder contains universal templates. However, the actual living documentation for a user's project resides strictly in their **local project's** `docs/` directory (e.g., `projects/<project_name>/docs/`). The MCP tools (`list_template_docs` and `get_template_doc`) only load the local project documents. Documentation via MCP is entirely read-only to prevent unexpected modifications to the user's local architectural blueprints or the server's templates.
+This skill defines the workflow for interacting with project documentation. The Global BrainRouter `docs/` folder contains universal templates. However, the actual living documentation for a user's project resides strictly in their **local project's** `docs/` directory. The MCP tools (`list_template_docs` and `get_template_doc`) only load the local project documents. Documentation via MCP is entirely read-only to prevent unexpected modifications to the user's local architectural blueprints or the server's templates.
 
 ## When to Use
 Use this skill whenever you need to understand existing architectural decisions, read API endpoint specifications, check database schemas, load persistent project context from the living documentation, or consult project reference checklists/patterns.

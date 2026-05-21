@@ -1,6 +1,12 @@
 ---
-name: ci-cd-and-automation
+name: ci-cd-skill
 description: Automates CI/CD pipeline setup. Use when setting up or modifying build and deployment pipelines. Use when you need to automate quality gates, configure test runners in CI, or establish deployment strategies.
+hints:
+  - Check openSrc/ or existing workflows (e.g., .github/workflows/, .gitlab-ci.yml) for pipeline patterns if available.
+  - Structure CI pipelines to run checks in parallel (lint, typecheck, test, build) to reduce feedback loop times.
+  - Implement package manager caching (e.g. actions/setup-node cache option) to optimize dependency installs.
+  - Avoid hardcoding credentials or configuration secrets; mandate repository/environment secret variables instead.
+  - Enforce branch protection rules that require green CI pipelines to pass before merging into the main branch.
 ---
 
 # CI/CD and Automation
@@ -391,5 +397,6 @@ After setting up or modifying CI:
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Newly configured/updated workflow syntax is linted and validates successfully.
+- [ ] Caching blocks are verified locally to confirm they cache package directories correctly.
+- [ ] Branch protection status checks are confirmed active and secrets are decoupled from codebase source files.

@@ -35,6 +35,15 @@ export function PublicHeader() {
           <Link href="/about" className={`public-nav-link ${pathname === "/about" ? "active" : ""}`}>
             About Us
           </Link>
+          <Link href="/#features" className="public-nav-link">
+            Features
+          </Link>
+          <Link href="/#how-it-works" className="public-nav-link">
+            How It Works
+          </Link>
+          <Link href="/#workflow" className="public-nav-link">
+            Workflow
+          </Link>
           <a 
             href="https://github.com/kinqsradiollc/BrainRouter" 
             target="_blank" 

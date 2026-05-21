@@ -7,6 +7,7 @@ import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
+import { PremiumButton } from "../../components/PremiumButton";
 
 const SOURCES: Array<HostHookSource | "all"> = ["all", "claude-code", "codex", "generic-mcp"];
 
@@ -36,41 +37,34 @@ export default function HooksPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
         <PageHeader title="Hooks" description="Registered passive host integrations and lifecycle event status." />
 
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", width: "100%" }}>
           {SOURCES.map((item) => (
-            <button
+            <PremiumButton
               key={item}
+              size="small"
+              variant={source === item ? "primary" : "ghost"}
               onClick={() => setSource(item)}
-              style={{
-                padding: "5px 12px",
-                borderRadius: "9999px",
-                border: "1px solid var(--border-med)",
-                background: source === item ? "var(--overlay-bg-hover)" : "transparent",
-                color: source === item ? "var(--color-pure-white)" : "var(--color-stone-text)",
-                cursor: "pointer",
-              }}
             >
               {item === "all" ? "All" : item}
-            </button>
+            </PremiumButton>
           ))}
-          <button
+          <PremiumButton
+            size="small"
+            variant="ghost"
             onClick={() => setShowRegisterForm(!showRegisterForm)}
-            style={{
-              marginLeft: "10px",
-              padding: "5px 12px",
-              borderRadius: "9999px",
-              border: "1px solid var(--border-med)",
-              background: showRegisterForm ? "var(--overlay-bg)" : "transparent",
-              color: "var(--color-silver-text)",
-              cursor: "pointer",
-              fontSize: "12px"
-            }}
+            style={{ marginLeft: "10px" }}
           >
             {showRegisterForm ? "Cancel Registration" : "Register Hook..."}
-          </button>
-          <button onClick={() => void refresh()} disabled={isLoading} style={{ marginLeft: "auto", padding: "5px 14px", borderRadius: "9999px", border: "1px solid var(--border-med)", background: "transparent", color: "var(--color-silver-text)" }}>
+          </PremiumButton>
+          <PremiumButton 
+            size="small"
+            variant="ghost"
+            onClick={() => void refresh()} 
+            disabled={isLoading} 
+            style={{ marginLeft: "auto" }}
+          >
             {isLoading ? "Loading" : "Refresh"}
-          </button>
+          </PremiumButton>
         </div>
 
         {showRegisterForm && (
@@ -80,7 +74,14 @@ export default function HooksPage() {
               <input value={event} onChange={(next) => setEvent(next.target.value)} placeholder="Lifecycle event" style={inputStyle} />
             </div>
             <textarea value={payload} onChange={(next) => setPayload(next.target.value)} rows={5} style={{ ...inputStyle, resize: "vertical" }} />
-            <button onClick={() => void handleRegister()} style={buttonStyle}>Register Hook</button>
+            <PremiumButton 
+              size="small" 
+              variant="primary" 
+              onClick={() => void handleRegister()}
+              style={{ width: "fit-content" }}
+            >
+              Register Hook
+            </PremiumButton>
             {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
           </div>
         )}
@@ -124,14 +125,4 @@ const inputStyle = {
   border: "1px solid var(--border-med)",
   background: "var(--overlay-bg)",
   color: "var(--color-silver-text)",
-};
-
-const buttonStyle = {
-  width: "fit-content",
-  padding: "9px 16px",
-  borderRadius: "9999px",
-  border: "1px solid var(--border-med)",
-  background: "transparent",
-  color: "var(--color-silver-text)",
-  cursor: "pointer",
 };

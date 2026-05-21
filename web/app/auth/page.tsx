@@ -16,6 +16,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [signin, setSignin] = useState({ email: "", password: "" });
+  const [rememberMe, setRememberMe] = useState(false);
   const [signup, setSignup] = useState({ email: "", displayName: "", password: "", confirmPassword: "" });
 
   // Light beam and 3D tilt interaction states
@@ -43,6 +44,23 @@ export default function AuthPage() {
     setTilt({ x: 0, y: 0 });
   }
 
+  function authErrorMessage(err: unknown) {
+    const status = typeof err === "object" && err !== null && "status" in err ? Number((err as { status?: number }).status) : 0;
+    if (status === 409) return "This email is already registered. Try signing in.";
+    if (status === 401) return "Incorrect email or password.";
+    if (status === 403) return "Your account has been disabled. Contact an administrator.";
+    if (err instanceof TypeError) return "Cannot reach the server. Is the MCP server running?";
+    return err instanceof Error ? err.message : "Something went wrong.";
+  }
+
+  function passwordStrength(password: string) {
+    const hasMixedCase = /[a-z]/.test(password) && /[A-Z]/.test(password);
+    const hasSpecial = /[^a-zA-Z0-9]/.test(password);
+    if (password.length > 12 && hasMixedCase && hasSpecial) return { label: "Strong", color: "#22c55e", width: "100%" };
+    if (password.length >= 8 && hasMixedCase) return { label: "OK", color: "#f59e0b", width: "66%" };
+    return { label: "Weak", color: "#ef4444", width: "33%" };
+  }
+
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -50,10 +68,10 @@ export default function AuthPage() {
     try {
       const client = getClient();
       const data = await client.signIn(signin);
-      await login(data.jwt, data.apiKey);
+      await login(data.jwt, data.apiKey, rememberMe);
       router.replace("/overview");
-    } catch (err: any) {
-      setError(err?.message || "Invalid email or password");
+    } catch (err) {
+      setError(authErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -72,9 +90,9 @@ export default function AuthPage() {
         displayName: signup.displayName || undefined,
       });
       await login(data.jwt);
-      router.replace("/profile");
-    } catch (err: any) {
-      setError(err?.message || "Sign up failed");
+      router.replace("/overview");
+    } catch (err) {
+      setError(authErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -405,6 +423,16 @@ export default function AuthPage() {
                   />
                 </div>
 
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--color-silver-text)", fontSize: "13px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    style={{ accentColor: "#cc9166" }}
+                  />
+                  Remember me
+                </label>
+
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                   <label style={{ fontSize: "11px", letterSpacing: "0.08em", color: "var(--color-stone-text)", fontWeight: 600 }}>PASSWORD</label>
                   <input 
@@ -416,6 +444,24 @@ export default function AuthPage() {
                     onChange={(e) => setSignin((s) => ({ ...s, password: e.target.value }))} 
                   />
                 </div>
+
+                {signup.password && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <div style={{ height: "4px", borderRadius: "9999px", background: "rgba(226,227,233,0.12)", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          width: passwordStrength(signup.password).width,
+                          height: "100%",
+                          background: passwordStrength(signup.password).color,
+                          transition: "width 160ms ease, background 160ms ease",
+                        }}
+                      />
+                    </div>
+                    <span style={{ color: passwordStrength(signup.password).color, fontSize: "11px", fontWeight: 600 }}>
+                      {passwordStrength(signup.password).label} password
+                    </span>
+                  </div>
+                )}
 
                 {error && (
                   <motion.div 

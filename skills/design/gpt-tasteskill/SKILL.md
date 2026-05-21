@@ -1,6 +1,12 @@
 ---
-name: gpt-taste
+name: gpt-tasteskill
 description: Elite UX/UI & Advanced GSAP Motion Engineer. Enforces Python-driven true randomization for layout variance, strict AIDA page structure, wide editorial typography (bans 6-line wraps), gapless bento grids, strict GSAP ScrollTriggers (pinning, stacking, scrubbing), inline micro-images, and massive section spacing.
+hints:
+  - "Run a simulated Python randomization check in a `<design_plan>` before writing any React/UI code."
+  - "Strictly enforce the 2-line maximum for display headlines by adjusting container widths and typography size."
+  - "Never allow empty voids or cells in Bento layouts; use `grid-flow-dense` and mathematically check grid coordinates."
+  - "Write actual, clean GSAP logic for scroll-triggered pinning, scrub reveals, and magnetic hover effects."
+  - "Cleanly avoid cheap meta-labels ('Section 01') and maintain high-contrast legibility for all button states."
 ---
 
 # CORE DIRECTIVE: AWWWARDS-LEVEL DESIGN ENGINEERING
@@ -74,25 +80,35 @@ Before writing ANY React/UI code, you MUST output a `<design_plan>` block contai
 Only output the UI code after this rigorous verification is complete.
 
 ## Overview
-Brief description of what this skill does and why it matters.
+This skill implements high-end Awwwards-tier frontend engineering rules. It overrides default statistical LLM behaviors (such as standard center-aligned templates, poor spacing, and boring typography) by introducing strict design plan checks, mathematical layout verifications, and advanced GSAP motion paradigms.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Building highly immersive, interactive marketing sites, cinematic landing pages, portfolio galleries, and award-winning corporate presentations.
+- **NOT for:** internal corporate admin tooling, data-heavy raw database views, or simple text-only documentation sites where heavy motion affects reader focus.
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+1. **Pre-flight Plan:** Draft a `<design_plan>` detailing the simulated seed, the AIDA flow, and the H1 width checks.
+2. **Setup Spacing & Containers:** Define extremely generous padding (`py-32` or `md:py-48`) and wide containers (`max-w-5xl` to `6xl`) to guarantee text flows as intended.
+3. **Draft Bento Coordinates:** Construct the bento grids ensuring no dead zones remain in the tracks.
+4. **Script GSAP ScrollTriggers:** Code high-performance scroll pinned columns, card stacking, and word opacity reveals.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| A standard linear scroll transition is fine | Standard linear transitions look cheap. Real-world physical momentum requires custom cubic-beziers or GSAP scroll scrubbing. |
+| Using 'SECTION 01' helps structure content | Cheap meta-labels look unprofessional and templated. Replace them with creative subtitles or omit them completely. |
+| The header looks okay wrapping to 5 lines | Multi-line headers look cluttered and hard to scan. Restrict display headings to 2-3 lines max. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Headlines wrapping to 4, 5, or 6 lines on desktop views.
+- Dead grid elements or uneven card spacing inside a Bento layout.
+- Low-contrast text on primary buttons rendering them unreadable.
+- Presence of generic AI placeholder badges ("ABOUT US", "SECTION 1").
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Pre-flight `<design_plan>` with Python seed simulation was generated.
+- [ ] High-contrast, clean typography pairing (Satoshi/Geist/etc.) is implemented.
+- [ ] No `Inter` or standard browser default font is in use.
+- [ ] Every major page section contains significant spatial rhythm.
+- [ ] Clicking and hover states feature premium transitions.

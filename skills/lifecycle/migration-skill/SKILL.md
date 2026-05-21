@@ -1,6 +1,12 @@
 ---
-name: deprecation-and-migration
+name: migration-skill
 description: Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when deciding whether to maintain or sunset existing code.
+hints:
+  - Check openSrc/ or existing project files for deprecated systems or migration patterns if available.
+  - Rely on backward-compatible adapter interfaces to let old consumers interact with new systems smoothly.
+  - Use the Strangler Pattern to route traffic incrementally from old code paths to new ones.
+  - Confirm active usage has dropped to absolute zero via logs/metrics before completely deleting code.
+  - Adhere to the Churn Rule: if you own the code being retired, provide easy-to-use migration tools or scripts.
 ---
 
 # Deprecation and Migration
@@ -198,18 +204,15 @@ Zombie code is code that nobody owns but everybody depends on. It's not actively
 
 After completing a deprecation:
 
-- [ ] Replacement is production-proven and covers all critical use cases
-- [ ] Migration guide exists with concrete steps and examples
-- [ ] All active consumers have been migrated (verified by metrics/logs)
-- [ ] Old code, tests, documentation, and configuration are fully removed
-- [ ] No references to the deprecated system remain in the codebase
-- [ ] Deprecation notices are removed (they served their purpose)
-
-## Workflow
-1. [Step one]
-2. [Step two]
+- [ ] Replacement is production-proven and covers all critical use cases.
+- [ ] Migration guide exists with concrete steps and examples.
+- [ ] All active consumers have been migrated (verified by metrics/logs).
+- [ ] Old code, tests, documentation, and configuration are fully removed.
+- [ ] No references to the deprecated system remain in the codebase.
+- [ ] Deprecation notices are removed (they served their purpose).
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Active traffic/call metrics are monitored to guarantee zero active dependency on the deprecated path.
+- [ ] Backward-compatible adapters or feature flag selectors are thoroughly unit tested before sunsetting old versions.
+- [ ] The deprecated code block, associated test suites, and dead documentation are fully purged from the codebase.

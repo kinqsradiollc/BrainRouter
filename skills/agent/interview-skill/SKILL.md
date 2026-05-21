@@ -1,6 +1,12 @@
 ---
-name: interview-me
+name: interview-skill
 description: Extracts what the user actually wants instead of what they think they should want. Achieves this through one-question-at-a-time interview until ~95% confidence about the underlying intent. Use when an ask is underspecified ("build me X" without "for whom" or "why now"), when the user explicitly invokes ("interview me", "grill me", "are we sure?", "stress-test my thinking"), or when you catch yourself silently filling in ambiguous requirements before any plan, spec, or code exists.
+hints: |
+  - State your initial hypothesis with an explicit confidence percentage in the first turn.
+  - Ask exactly one clarifying question at a time to prevent cognitive overload.
+  - Attach a concrete guess/hypothesis to every question to accelerate the user's feedback.
+  - Watch for sophistication-signaling buzzwords (e.g. "scalable", "clean") and probe for actual underlying needs.
+  - Restate the user's intent with a strict Out of Scope boundary and obtain an explicit confirmation.
 ---
 
 # Interview Me
@@ -208,23 +214,13 @@ Two questions in, the agent has discovered the actual ask isn't "a dashboard." I
 - Saving the intent doc before the user has confirmed (the doc itself implies a yes the user didn't give)
 - Skipping the "Out of scope" line in the restate (silent disagreement about non-goals is half of misalignment)
 
-## Required Checks
-
-After applying interview-me:
-
-- [ ] An explicit hypothesis with a confidence number was stated in the first turn
-- [ ] Questions were asked one at a time, each with the agent's guess attached
-- [ ] At least one "what would you actually want if you didn't have to justify it?" probe ran when the user gave a sophistication-signaling or convention-signaling answer
-- [ ] A concrete restate (Outcome / User / Why now / Success / Constraint / Out of scope) was written back to the user
-- [ ] The user confirmed the restate with an explicit yes (not "whatever you think," not "sounds good," not silence)
-- [ ] At the stop point, the agent could predict reactions to the next three questions it would ask
-- [ ] Any handoff to a downstream skill (`idea-refine`, `spec-driven-development`) was framed in terms of the confirmed intent, not the original underspecified ask
-
-## Workflow
-1. [Step one]
-2. [Step two]
-
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After applying interview-me, confirm:
+- [ ] An explicit hypothesis with a confidence number was stated in the first turn.
+- [ ] Questions were asked one at a time, each with the agent's guess attached.
+- [ ] At least one "what would you actually want if you didn't have to justify it?" probe ran when the user gave a sophistication-signaling or convention-signaling answer.
+- [ ] A concrete restate (Outcome / User / Why now / Success / Constraint / Out of scope) was written back to the user.
+- [ ] The user confirmed the restate with an explicit yes (not "whatever you think," not "sounds good," not silence).
+- [ ] At the stop point, the agent could predict reactions to the next three questions it would ask.
+- [ ] Any handoff to a downstream skill (`idea-refine`, `spec-driven-development`) was framed in terms of the confirmed intent, not the original underspecified ask.

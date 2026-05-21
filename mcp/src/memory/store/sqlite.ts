@@ -1923,6 +1923,10 @@ export class SqliteMemoryStore implements IMemoryStore {
   ): MemoryListItem[] {
     const where: string[] = ["user_id = ?"];
     const args: any[] = [userId];
+    if (filters?.query) {
+      where.push("content LIKE ?");
+      args.push(`%${filters.query}%`);
+    }
     if (filters?.type) { where.push("type = ?"); args.push(filters.type); }
     if (filters?.scene) { where.push("scene_name = ?"); args.push(filters.scene); }
     if (filters?.skill) { where.push("skill_tag = ?"); args.push(filters.skill); }

@@ -1,6 +1,12 @@
 ---
 name: using-agent-skills
 description: Discovers and invokes agent skills. Use when starting a session or when you need to discover which skill applies to the current task. This is the meta-skill that governs how all other skills are discovered and invoked.
+hints: |
+  - Always consult this skill map first when starting any new development phase.
+  - Make explicit assumptions using the "ASSUMPTIONS I'M MAKING" format before coding.
+  - Present trade-offs immediately when noticing conflicting requirements or specs.
+  - Prioritize code simplicity and write surgical diffs that only touch requested files.
+  - Ensure every step of the lifecycle sequence is verified with concrete runtime evidence.
 ---
 
 # Using Agent Skills
@@ -181,23 +187,3 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Ship | [handover-skill](../handover-skill/SKILL.md) | Final walkthrough and handover via walkthrough.md |
 | Ship | [shipping-skill](../../lifecycle/shipping-skill/SKILL.md) | Pre-launch checklist, monitoring, rollback plan |
 
-## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
-
-## Workflow
-1. [Step one]
-2. [Step two]
-
-## Common Rationalizations
-| Rationalization | Reality |
-|---|---|
-| I can skip this | Following the defined process prevents regressions |
-
-## Red Flags
-- Observable signs that this skill is being violated.
-
-## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.

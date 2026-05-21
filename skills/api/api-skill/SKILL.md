@@ -1,22 +1,27 @@
 ---
 name: api-skill
-description: Mandatory middleware and validation boilerplate for fast, consistent, and secure endpoints.
+description: Mandatory middleware, validation boilerplate, error safe-listing, and performance rules for fast, consistent, and secure endpoints.
+hints: |
+  - Verify existing API routes, schemas, and specs in the project before drafting new endpoints.
+  - Implement a strong validation layer (e.g. Zod, Joi) covering all incoming body, query, and path parameters.
+  - Apply security middleware, rate-limiting, and authentication gates to all non-public endpoints.
+  - Safe-list user-visible errors and never leak database stack traces or internal secrets to the client.
+  - Optimize query performance by selecting explicit columns and using cursor-based pagination for lists.
 ---
 
 # API Standards Skill
 
 ## Overview
 
-This skill ensures every endpoint is fast, consistent, and secure.
+This skill ensures every network endpoint is fast, consistent, secure, and well-designed. Standardizing input validation, error mapping, rate limiting, and database interactions prevents security vulnerabilities and performance bottlenecks at the entry point of the application.
 
 ## Workflow
 
-### 0️⃣ Mandatory Documentation Check
-Before crafting or modifying any endpoint, you **must** run `list_template_docs` and use `get_template_doc` to retrieve any project-specific API documentation (e.g., from `docs/api`). Your API design must adhere exactly to the defined schemas and conventions in the living documentation.
+### 1. Document & Align Check
+Before crafting or modifying any endpoint, review the project's active API specification files (e.g., `API.md`, `openapi.yaml`, or `docs/api/`). Ensure your endpoints adhere exactly to the defined naming schemes, payload structures, and architectural standards.
 
-### 🛡️ The "Security Shield" Boilerplate
-
-New developers **must** use this pattern for every new route. AI agents will reject any PR missing these components.
+### 2. Implement the "Security Shield" Ingress
+Use the following pattern for every new route to guarantee input hygiene, authentication, and rate limiting:
 
 ```typescript
 import { Request, Response } from 'express';
@@ -32,18 +37,18 @@ const InputSchema = z.object({
 });
 
 export const myNewEndpoint = [
-  // 2. Apply Rate Limit [SEC-303]
+  // 2. Apply Rate Limit
   redisRateLimit({ windowMs: 60000, max: 10 }), 
   
-  // 3. Authenticate [SEC-201]
+  // 3. Authenticate
   requireAuth, 
   
   async (req: Request, res: Response) => {
     try {
-      // 4. Validate Input [SEC-103]
+      // 4. Validate Input
       const data = InputSchema.parse(req.body);
       
-      // 5. Derive Identity [SEC-201]
+      // 5. Derive Identity
       const userId = req.user.id; 
 
       // ... Business Logic ...
@@ -60,42 +65,59 @@ export const myNewEndpoint = [
 ];
 ```
 
-## 📋 Error Safe-Listing
+## Error Safe-Listing
 
-| Code | Type | Visible to Client? |
-|------|------|--------------------|
-| `VALIDATION_ERROR` | Bad Request | Yes (Field details ok) |
-| `AUTH_REQUIRED` | Unauthorized | Yes |
-| `FORBIDDEN` | Permission | Yes |
-| `NOT_FOUND` | Missing | Yes |
-| `DB_ERROR` | Internal | **NO** (Map to INTERNAL_ERROR) |
-| `S3_CONNECTION_FAIL` | Internal | **NO** (Map to INTERNAL_ERROR) |
+Map all internal system errors to secure, generic client-facing errors. Never leak raw database queries, connection failures, or environment details.
 
-## 🚀 Performance Rules
-- **[PERF-001] No SELECT * **: Always list required columns.
-- **[PERF-002] Cursors Only**: Use `encodeCursor` for all lists. No `OFFSET`.
-- **[PERF-003] Cache-Aside**: Use Redis `cache.get/set` for heavy read operations (e.g., Vibe lists).
+| Internal Code / Error Type | HTTP Status | Visible to Client? | Exposed Client Code |
+|---|---|---|---|
+| `ZodError` / Input validation | 400 Bad Request | Yes (with field details) | `VALIDATION_ERROR` |
+| Missing Session Token / Expired | 401 Unauthorized | Yes | `AUTH_REQUIRED` |
+| Insufficient Permissions / Roles | 403 Forbidden | Yes | `FORBIDDEN` |
+| Database Entity Missing | 404 Not Found | Yes | `NOT_FOUND` |
+| Raw Database Exception (`DB_ERROR`) | 500 Internal Error | **NO** | `INTERNAL_ERROR` |
+| Third-Party API Failure | 500 Internal Error | **NO** | `INTERNAL_ERROR` |
 
-## Required Checks
+---
 
-- [ ] Route uses the "Security Shield" pattern.
-- [ ] Zod schema covers all inputs.
-- [ ] No internal system errors are leaked.
-- [ ] Cursor pagination is used for lists.
+## Performance Rules
+
+- **No `SELECT *`**: Always explicitly select the required columns. Scanning and returning unused database fields wastes database memory and network bandwidth.
+- **Cursors Only**: Use cursor-based keys (`before`/`after` or comparable token indices) for list pagination. Avoid `OFFSET` pagination, which degrades rapidly as tables grow.
+- **Cache-Aside Pattern**: Wrap resource-intensive, read-heavy query operations (like listings, configs, or stats) in cached gets/sets (e.g., Redis) with explicit TTLs.
+
+---
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+
+- Implementing new REST, GraphQL, or RPC endpoints in backend routers.
+- Modifying existing request/response structures or validation schemas.
+- Refactoring data fetch APIs, database pagination, caching logic, or error handling.
+
+**When NOT to use:**
+- Internal utility functions, helper libraries, or offline CLI commands that do not expose public network endpoints.
+- Developing pure client-side markup or styling layout elements.
 
 ## Common Rationalizations
+
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| "I'll add validation and security middlewares later." | Security and input validation are baseline requirements, not post-implementation decorations. Out-of-order security leads to leaked data. |
+| "Leaking internal stack traces helps me debug faster in staging." | Stack traces and DB messages leak structural details about database models, schemas, and packages, giving attackers vectors to exploit. |
+| "Offset pagination is easier to implement." | Offset pagination (`LIMIT/OFFSET`) scales poorly. As datasets grow, the database must scan millions of rows to discard them, causing severe latency degradation. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+
+- Request handler reading raw untrusted `req.body` variables without structural validation.
+- Database query executing `SELECT *` or lack of explicit select fields.
+- Returning raw server errors or database exceptions directly in JSON response blocks.
+- Pagination endpoints that do not accept cursor boundaries or rely solely on page offsets.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing the API endpoint, verify:
+- [ ] Route uses the "Security Shield" pattern (Rate limits, Authentication, Validation).
+- [ ] Zod or equivalent validation schemas strictly validate all parameters (body, query, params).
+- [ ] Malformed or invalid payloads return safe `VALIDATION_ERROR` responses with 400 statuses.
+- [ ] System logs stack traces on exceptions, but clients receive a generic `INTERNAL_ERROR` 500 status.
+- [ ] Large list responses enforce cursor-based pagination and select explicit database columns.

@@ -1,6 +1,12 @@
 ---
 name: code-review-and-quality
-description: Conducts multi-axis code review. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when you need to assess code quality across multiple dimensions before it enters the main branch.
+description: Conducts multi-axis code review across correctness, readability, architecture, security, and performance. Use before merging any change. Use when reviewing code written by yourself, another agent, or a human. Use when running an agentic review-fix loop until tests pass and the PR is clean.
+hints: |
+  - Review tests first — they reveal intent before you read the implementation.
+  - Evaluate across all five axes: correctness, readability, architecture, security, performance.
+  - PRs over ~300 lines should be split before review — accuracy degrades on large diffs.
+  - In the review-fix loop: fix only issues that are real and relevant — never over-fix.
+  - Approve when the change improves overall code health, even if it isn't perfect.
 memory_hints: |
   - Capture recurring review failures the user encounters (e.g. always missing error handling, recurring N+1 patterns).
   - Note if user consistently skips specific review axes (e.g. tends to skip security review).
@@ -23,6 +29,10 @@ Multi-dimensional code review with quality gates. Every change gets reviewed bef
 - When another agent or model produced code you need to evaluate
 - When refactoring existing code
 - After any bug fix (review both the fix and the regression test)
+
+## Workflow
+
+Read the diff and task context first, review tests before implementation details, evaluate the five quality axes, list concrete findings with severity and file references, then verify fixes with the relevant build and test commands.
 
 ## The Five-Axis Review
 
@@ -104,14 +114,48 @@ Every change needs a description that stands alone in version control history.
 **First line:** Short, imperative, standalone. "Delete the FizzBuzz RPC" not "Deleting the FizzBuzz RPC."
 **Body:** What is changing and why. Include context, decisions, and reasoning not visible in the code itself.
 
-## Workflow
+## Agentic Review-Fix Loop (Grep Loop)
 
-1.  **Context Loading**: Read the spec, implementation plan, and task description.
-2.  **Test Review**: Review the tests first. Do they reveal intent? Are they testing the right things?
-3.  **Implementation Walkthrough**: Review the implementation axis by axis (Correctness, Readability, Architecture, Security, Performance).
-4.  **Categorization**: Label findings as Critical, Important, or Suggestion.
-5.  **Verification**: Verify the verification story (tests run, build pass, manual checks).
-6.  **Report**: Deliver the review using the [Review Checklist](#the-review-checklist) template.
+This is an auto-research-style loop for code review, specifically useful when a PR is small and you want an agent to repeatedly fix review feedback until tests pass and the PR is merge-ready.
+
+1. Create a small PR.
+2. Let a review tool, AI reviewer, or human inspect it.
+3. Feed the review back to the coding agent.
+4. Agent fixes the feedback.
+5. Review again.
+6. Repeat until the PR is clean and tests pass.
+
+### Review-Fix Prompt
+
+```md
+Run a review-fix loop for this PR.
+
+Inputs:
+- Current branch: <branch-name>
+- Review feedback: <paste feedback or point to reviewer output>
+- Required end state: tests pass, reviewer issues resolved, no unrelated rewrites.
+
+Rules:
+1. Read the PR diff first.
+2. Read the review feedback.
+3. Fix only issues that are real and relevant to this PR.
+4. Add or update tests for each bug fix when possible.
+5. Run the relevant tests/typechecks.
+6. Commit/push the fix if this workflow is allowed to push.
+7. Stop only when the PR is clean or when blocked by a decision that needs a human.
+```
+
+### Pre-Flight Check
+
+Before starting the loop, ask: "Is this PR too large for a reliable review loop? If yes, suggest how to split it." If the answer is yes, split the PR first.
+
+### Human Guardrails & Pitfalls
+
+- **Thousands of lines in one PR:** The reviewer and coding agent both lose accuracy. Split it.
+- **No tests:** The loop needs objective checks, not just vibes.
+- **Blindly accepting every comment:** Some comments are wrong or irrelevant.
+- **Over-fixing:** Agents can rewrite unrelated code. Fix only what was reviewed.
+- **False security:** A clean review is not proof the product is valuable; it only means this diff looks clean.
 
 ## The Review Checklist
 

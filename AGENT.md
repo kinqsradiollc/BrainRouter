@@ -1,155 +1,75 @@
-# BrainRouter Agent Context Router
+# BrainRouter Development Manual
 
-**AGENT INSTRUCTION:** This is your primary navigation hub for working on the BrainRouter project itself. Do NOT scan the entire directory. Instead, identify the user's task below and load ONLY the specified Global Skill via `mcp_brainrouter_get_skill`, the reference via `mcp_brainrouter_get_reference`, or the listed local documentation file to minimize context noise.
+**AGENT INSTRUCTION:** This is your primary instruction hub for developing, maintaining, and building the **BrainRouter** repository. You are the AI engineer building BrainRouter, not a client using its MCP server. 
 
----
-
-## ⚖️ Core Rules
-
-- **Memory-First Habit**: Before doing anything, you MUST call `mcp_brainrouter_memory_resolve_session` passing the current workspace path and the **Conversation ID** (as the `suggestedKey` if present). Use the returned `sessionKey` UUID for all subsequent `mcp_brainrouter_memory_recall`, `mcp_brainrouter_memory_capture_turn`, and `mcp_brainrouter_memory_search` operations.
-- **Focus Pre-Warming & System Hints**: Treat any instructions inside the `<skill-prewarm>` XML block in the system prompt with the same strict authority as the main skill documents. These are active guidelines injected dynamically because the corresponding skills crossed the `0.3` activation potential threshold.
-- **Short-Term Working Memory Offloads**: Proactively call `mcp_brainrouter_memory_working_offload` for any stdout, stderr, or files exceeding **1,000 tokens** to prevent context window bloat. Use `mcp_brainrouter_memory_working_context` to monitor the Mermaid task canvas.
-- **Proactive Memory Retrieval**: If `mcp_brainrouter_memory_recall` returns insufficient context, you MUST call `mcp_brainrouter_memory_search` with specific keywords. Use the optional `asOf` parameter (ISO 8601) to query what the memory engine knew at a specific point in time.
-- **Citation Habit**: After generating your response, call `mcp_brainrouter_memory_mark_cited` with the `recordIds` you actually referenced (`citedRecordIds`) and the full list returned by the previous recall (`allRecalledRecordIds`). This powers the ACE feedback loop. Pass an empty `citedRecordIds` array if no memories were used.
-- **Skill Context Registration**: When authoring, updating, or loading a new skill, register its metadata hints using `mcp_brainrouter_memory_register_skill_hints` (or specify them in the skill file's yaml frontmatter) so the Focus pre-warming engine can locate them.
-- **Resolve Contradictions**: Periodically, especially when starting a new task, call `mcp_brainrouter_memory_contradictions` to check for and resolve any conflicting instructions or memories.
-- **No Shortcuts**: Avoid "this is too small for a skill" or "I'll just quickly fix it" rationalization.
-
-## 🔄 Execution Model
-
-For every request:
-1. **Resolve Session**: Proactively call `mcp_brainrouter_memory_resolve_session` with your current workspace path and the **Conversation ID** (as `suggestedKey`) to get a standardized `sessionKey` UUID.
-2. **Scan Pre-Warmed Hints**: Check your system prompt for any `<skill-prewarm>` tags. If instructions are present, apply them immediately to the current workspace task.
-3. **Recall Context**: Call `mcp_brainrouter_memory_recall` using the resolved `sessionKey`. If in a long-running task, also fetch `mcp_brainrouter_memory_working_context` to view the task canvas. Capture the `recalledCognitiveRecords[].recordId` list — you will need it in step 7.
-4. **Detect Intent**: Map the user's request to a scenario below using the recalled context. Check `mcp_brainrouter_memory_contradictions` if there is ambiguity.
-5. **Select Skill**: Identify the most relevant skill name.
-6. **Execute & Offload**: Fetch the skill using `mcp_brainrouter_get_skill` (which spikes its potential by `+1.0` and delays its decay). If this is a newly invoked skill, ensure its hints are registered using `mcp_brainrouter_memory_register_skill_hints`. Follow the skill workflow strictly. Call `mcp_brainrouter_memory_working_offload` for any output exceeding 1,000 tokens.
-7. **Signal Citations**: After generating your response, call `mcp_brainrouter_memory_mark_cited` with:
-   - `citedRecordIds`: IDs of memories you actually referenced in your response
-   - `allRecalledRecordIds`: the full `recalledCognitiveRecords[].recordId` list from step 3
-   - Pass an empty `citedRecordIds: []` if no specific memories were used
-8. **Record Outcome**: If passive capturing hooks (e.g. Claude Code/Codex) are not running, call `mcp_brainrouter_memory_capture_turn` using the resolved `sessionKey` as your *final tool call* to persist the turn (which also acts as a potential spike trigger for related skills).
-9. **Iterate**: Return to this router if the scenario changes (e.g., from Debugging to Shipping).
-
-## 🗺️ Lifecycle Mapping
-- **DEFINE** → `spec-driven-development` (Global Skill)
-- **PLAN** → `planning-and-task-breakdown` (Global Skill)
-- **BUILD** → `incremental-implementation` (Global Skill) + `testing-skill` (Global Skill)
-- **REVIEW** → `code-reviewer` (Global Persona) + `code-review-and-quality` (Global Skill)
-- **HANDOVER** → `project-handover-and-walkthrough` (Global Skill)
-- **SHIP** → `shipping-and-launch` (Global Skill)
+> **Audience**: AI Coding Agents and Developers building BrainRouter.
 
 ---
 
-## 🏗️ Scenario: MCP Server Development
-*Focus: Tools, registry, loaders, and stdio/HTTP transports.*
-- **Core Codebase**: Code lives in `mcp/src/` (not `src/`).
-- **`api-skill`**: For middleware and server logic, though adapted for MCP concepts.
-- **`conventions-skill`**: Standardized TypeScript and formatting rules for the codebase.
+## ⚖️ Core Development Rules
 
-## 🧠 Scenario: Memory Engine Development
-*Focus: Evolving BrainRouter with a hierarchical memory subsystem.*
-- **Core Requirement**: The engine must be **multi-tenant**, supporting many users on a single server. Memories must be isolated by `user_id` or equivalent, not just session keys.
-- **LLM Abstraction**: Extraction requires an LLM. Implement this as a configurable OpenAI-compatible endpoint rather than a hardcoded service.
-- **`spec-driven-development`**: Mandatory before adding new memory layers (SensoryStream, CognitiveRecord, Focus Scenes, Core Identity).
-- **Architecture Base**: Reference the original concepts in `CONCEPT.md` and the refined target state in `APPLIED_CONCEPT.md` (keeping in mind the 5 required adjustments for BrainRouter's reality).
-
-## 📚 Scenario: Skill & Content Authoring
-*Focus: Writing, updating, and scaffolding skills, personas, and references.*
-- **`skill-authoring`**: Canonical structure, format, and writing principles for BrainRouter SKILL.md files. Always use this when creating or modifying skills.
-- **`doc-management-skill`**: Reading and maintaining the global registry files.
-
-## 🧪 Scenario: QA, Testing & UX Friction
-*Focus: Verification and tool robustness.*
-- **`testing-skill`**: Unit and integration testing using Vitest (BrainRouter's test runner).
-- **`testing-patterns`**: (Reference) Arrange-Act-Assert, mocking, and pattern testing. Use `mcp_brainrouter_get_reference(name: "testing-patterns")`.
-
-## 🔍 Scenario: Debugging & Troubleshooting
-*Focus: Root-Cause Analysis.*
-- **`debugging-and-error-recovery`**: Systematic Reproduce → Localize → Fix → Guard process.
-- **`api-layered-debugging`**: Connectivity and protocol flow, particularly for Streamable HTTP or stdio pipe issues.
-
-## 🐳 Scenario: Infrastructure & DevOps
-*Focus: Deployment, CI/CD, and scaling.*
-- **`ci-cd-and-automation`**: Automated pipeline setup and quality gates.
-- **`docker-lifecycle-engineering`**: Containerizing the HTTP transport mode for remote MCP server hosting.
-- **`git-workflow-and-versioning`**: Branching strategy, commit standards, and version control hygiene.
-
-## 📝 Scenario: Proposals & Decision Making
-*Focus: Trade-off Analysis and Architectural Records.*
-- **`documentation-and-adrs`**: Recording architectural decisions (ADRs) particularly for the Memory Engine.
-- **`high-agency-communication`**: Standardized framework for technical proposals (1-3-1 Rule).
-
-## 🔬 Scenario: Codebase Analysis & Exploration
-*Focus: Understanding existing code, style, risks, and technical health.*
-- **`conventions-skill`**: Naming patterns, formatting rules, import order, and module design standards.
-- **`code-simplification`**: Reducing complexity while preserving behavior.
-- **`code-review-and-quality`**: Multi-axis evaluation and quality gates.
-- **`concerns-skill`**: Surfacing tech debt, known bugs, and security gaps.
-
-## 🧠 Scenario: Agent Methodology & Planning
-*Focus: Meta-cognition, requirement refining, and strict verification.*
-- **`using-agent-skills`**: Meta-skill for skill discovery and operating behaviors.
-- **`context-engineering`**: Systematic curation of agent context.
-- **`interview-me`**: Proactive requirement gathering for underspecified tasks.
-- **`doubt-driven-development`**: Adversarial self-review to disprove assumptions before implementation.
-- **`source-driven-development`**: Mandatory verification against official framework documentation.
-- **`idea-refine`**: Stress-testing raw concepts before committing to code.
-- **`planning-and-task-breakdown`**: Systematic decomposition of complex features into tasks with active tracking via `task.md`.
-- **`spec-driven-development`**: Creating technical specifications before writing a single line of logic.
-
-## 🤖 Scenario: Specialized Expert Personas
-*Focus: Adopting a specific role for deep analysis or fan-out orchestration.*
-- **`code-reviewer`**: Staff Engineer persona for PR reviews.
-- **`security-auditor`**: Security Engineer persona for vulnerability detection and threat modeling.
-- **`test-engineer`**: QA Engineer persona for coverage analysis and test strategy.
-
-## 🚀 Scenario: Lifecycle & Delivery
-*Focus: Preparation, Migration, and Incremental Shipping.*
-- **`shipping-and-launch`**: Pre-flight checklists and production rollout strategies.
-- **`project-handover-and-walkthrough`**: Summarizing accomplishments and providing a `walkthrough.md` for human review.
-- **`deprecation-and-migration`**: Safely sunsetting legacy code.
-- **`incremental-implementation`**: Breaking large changes into manageable, reviewable PRs.
+- **No MCP Tool Calling for Development**: Since we are the ones building BrainRouter, do NOT attempt to invoke `mcp_brainrouter_*` tools. Instead, perform all tasks locally using file system tools and local terminal commands.
+- **Reference the `skills/` Folder Directly**: To maintain premium engineering workflow discipline, check the `skills/` folder directly using filesystem tools (`view_file`, `grep_search`). If a task matches a skill (e.g., `planning-skill`, `spec-driven-skill`, `debugging-and-error-recovery`), read its `SKILL.md` directly and follow its steps.
+- **openSrc/ Reference Habit**: If the optional `openSrc/` folder is present, inspect it for mature patterns, open-source layouts, or CLI structures to draw ideas and code architecture designs from.
+- **Incremental & Test-Driven**: When working on BrainRouter packages, dashboard, CLI, or MCP servers, write/update tests first and run the local test suites to prevent regressions.
 
 ---
 
-## 🎭 Orchestration: Skills, Personas, and Commands
-BrainRouter uses three composable layers to manage complexity:
+## 📂 Codebase Directory Map
 
-- **Skills** (Global MCP): Workflows with steps and exit criteria. The **How**.
-- **Personas** (Global MCP): Roles with a specific perspective (e.g., Security Auditor). The **Who**.
-- **Commands**: User-facing entry points (e.g., `/review`). The **When**.
-
-**Composition Rule:** Personas do not invoke other personas. A persona may invoke global skills using `mcp_brainrouter_get_skill`.
-
-### 🔀 Persona Decision Matrix
-- **Invoke `code-reviewer`**: When conducting PR reviews (Correctness, Readability, Architecture, Security, Performance).
-- **Invoke `security-auditor`**: When auditing sensitive flows or threat modeling new features.
-- **Invoke `test-engineer`**: When defining test strategies or resolving QA gaps.
+- **`skills/`**: Universal skill workflows and markdown definitions (organized by category: `agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`).
+- **`brainrouter-cli/`**: Node.js/TypeScript CLI interface for working with local session memories and skills.
+- **`dashboard/`**: React/Vite/Next.js dashboard for visualizing cognitive graphs, recall histories, and memory states.
+- **`mcp/`**: Model Context Protocol (MCP) server implementations and tool definitions.
+- **`packages/`**: Shared core utility libraries and modules.
+- **`openSrc/`** *(Conditional)*: Optional repository of open-source projects. Check this directory for reference patterns when creating new modules or refactoring existing ones.
 
 ---
 
-**QUICK LOAD COMMAND:**
-Look up the required resource name for your scenario, then use the appropriate tool to load the instructions:
-- **Skills**: `mcp_brainrouter_get_skill(name: "<skill-name>")`
-- **References**: `mcp_brainrouter_get_reference(name: "<reference-name>")`
-- **Personas**: `mcp_brainrouter_get_persona(name: "<persona-name>")`
-- **Docs (Templates)**: `mcp_brainrouter_list_template_docs()` or `mcp_brainrouter_get_template_doc(name: "<doc-name>")`
-- **Memory Tools — RAG / Long-Term**:
-  - `mcp_brainrouter_memory_recall` → inject context at turn start (returns `recalledCognitiveRecords[].recordId`)
-  - `mcp_brainrouter_memory_mark_cited` → signal citations after response (required — drives ACE loop)
-  - `mcp_brainrouter_memory_capture_turn` → persist turn as final tool call (optional if passive hooks active)
-  - `mcp_brainrouter_memory_search` → deep retrieval (supports `asOf` ISO param for point-in-time)
-  - `mcp_brainrouter_memory_graph_query` → query the GraphRAG knowledge graph to retrieve connected entities/relationships up to 2 hops away (useful for discovering architecture dependencies or related constraints)
-  - `mcp_brainrouter_memory_contradictions` → surface + resolve conflicting instructions
-- **Memory Tools — Working Memory / Context Reduction**:
-  - `mcp_brainrouter_memory_working_context` → fetch Mermaid task canvas & state block
-  - `mcp_brainrouter_memory_working_offload` → offload large payloads (>1,000 tokens), return nodeId
-  - `mcp_brainrouter_memory_working_reset` → flush working memory for session
-- **Memory Tools — Software Engineering Workflow**:
-  - `mcp_brainrouter_memory_task_state` / `mcp_brainrouter_memory_task_update` → structured progress tracking
-  - `mcp_brainrouter_memory_failed_attempts` → query previously failed solutions
-  - `mcp_brainrouter_memory_file_history` → query memories tied to specific file paths
-  - `mcp_brainrouter_memory_debug_trace_save` / `mcp_brainrouter_memory_debug_trace_search` → record/query reproduction traces for bugs
-  - `mcp_brainrouter_memory_handover` → produce handover summary with evidence links
-  - `mcp_brainrouter_memory_verify` → verify memory and adjust confidence score
+## 🗺️ Scenario Mapping: Developing BrainRouter
+
+When you are assigned a development task in this codebase, look up the scenario below and read the corresponding skill file directly from the filesystem:
+
+### 🔍 Scenario: Planning & Architecture
+*Focus: Clarifying ambiguous requirements, creating specs, and defining tasks.*
+- **[planning-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/planning-skill/SKILL.md)**: Standard planning mode, tracking progress in `task.md`.
+- **[spec-driven-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `docs/specs/` before writing core code.
+- **[adr-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `docs/decisions/` for major database or routing decisions.
+
+### 💻 Scenario: Code Implementation & Cleanups
+*Focus: Writing robust code, refactoring layers, and codebase cleanup.*
+- **[incremental-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/lifecycle/incremental-skill/SKILL.md)**: Implementing features in small, vertical micro-slices.
+- **[code-structure-cleanup](file:///Users/anhdang/Documents/Github/BrainRouter/skills/codebase/code-structure-cleanup/SKILL.md)**: Cleaning structural entropy, removing dead code, and standardizing service layers.
+- **[code-simplification](file:///Users/anhdang/Documents/Github/BrainRouter/skills/codebase/code-simplification/SKILL.md)**: Refactoring complex routines for high comprehension speed.
+- **[conventions-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/codebase/conventions-skill/SKILL.md)**: Checking import order, type annotations, and naming style.
+
+### 🧪 Scenario: Testing, Debugging & QA
+*Focus: Running test runners, browser test cases, and error recovery.*
+- **[debugging-and-error-recovery](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/debugging-and-error-recovery/SKILL.md)**: Systematic Reproduce → Localize → Fix → Guard debugging.
+- **[testing-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/api/testing-skill/SKILL.md)**: Writing Vitest/Jest unit and integration tests.
+- **[browser-testing-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/qa/browser-testing-skill/SKILL.md)**: Inspecting and testing dashboard UI.
+
+### 🚀 Scenario: Shipping & Handovers
+*Focus: Creating changelogs, preparing rollouts, and documenting changes.*
+- **[shipping-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/lifecycle/shipping-skill/SKILL.md)**: Pre-flight checklist before finishing tasks.
+- **[changelog-generator](file:///Users/anhdang/Documents/Github/BrainRouter/skills/lifecycle/changelog-generator/SKILL.md)**: Compiling structured release changelogs.
+- **[handover-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/handover-skill/SKILL.md)**: Summarizing accomplishments in `walkthrough.md`.
+
+---
+
+## ⚡ Development Workflow Checklists
+
+### Phase 1: Planning
+1. Create a `task.md` checklist in the workspace to track progress.
+2. If the user request is ambiguous, draft a micro-specification file and get explicit user approval.
+3. Review `openSrc/` code patterns if available to inform technical design choices.
+
+### Phase 2: Execution
+1. Implement in small, verifiable steps.
+2. Run build scripts (`npm run build` or equivalent) and local tests after each significant change.
+3. Write test cases for any new functionality added to `brainrouter-cli` or core packages.
+
+### Phase 3: Handover & Walkthrough
+1. Run linting and formatting suites to keep codebase clean.
+2. Record all completed checklist items in `task.md`.
+3. Generate a structured summary of changes in `walkthrough.md` for human review.

@@ -1,6 +1,12 @@
 ---
-name: idea-refine
-description: Refines raw ideas into sharp, actionable concepts through structured divergent and convergent thinking. Use when an idea is still vague, when you need to stress-test assumptions before committing to a plan, or when you want to expand options before converging on one. Triggers on "ideate", "refine this idea", or "stress-test my plan".
+name: idea-refine-skill
+description: Refines raw ideas into sharp, actionable concepts through structured divergent and convergent thinking. Use when an idea is still vague, when you need to stress-test assumptions before committing to a plan, or when you want to expand options before converging on one.
+hints: |
+  - Anchor the ideation around a crisp "How Might We" problem statement.
+  - Ask 3-5 high-leverage sharpening questions to define the target user and success metrics.
+  - Generate 5-8 distinct idea variations using inversion, constraint removal, or 10x scale lenses.
+  - Explicitly stress-test directions against user value, feasibility, and differentiation.
+  - Produce a structured one-pager specifying MVP scope and a strict "Not Doing" list.
 ---
 
 # Idea Refine
@@ -167,28 +173,13 @@ Read `examples.md` in this skill directory for examples of what great ideation s
 - Ignoring existing codebase constraints when ideating inside a project
 - Jumping straight to Phase 3 output without running Phases 1 and 2
 
-## Required Checks
-
-After completing an ideation session:
-
-- [ ] A clear "How Might We" problem statement exists
-- [ ] The target user and success criteria are defined
-- [ ] Multiple directions were explored, not just the first idea
-- [ ] Hidden assumptions are explicitly listed with validation strategies
-- [ ] A "Not Doing" list makes trade-offs explicit
-- [ ] The output is a concrete artifact (markdown one-pager), not just conversation
-- [ ] The user confirmed the final direction before any implementation work
-
-## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
-
-## Common Rationalizations
-| Rationalization | Reality |
-|---|---|
-| I can skip this | Following the defined process prevents regressions |
-
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing an ideation session, confirm:
+- [ ] A clear "How Might We" problem statement exists.
+- [ ] The target user and success criteria are defined.
+- [ ] Multiple directions were explored, not just the first idea.
+- [ ] Hidden assumptions are explicitly listed with validation strategies.
+- [ ] A "Not Doing" list makes trade-offs explicit.
+- [ ] The output is a concrete artifact (markdown one-pager), not just conversation.
+- [ ] The user confirmed the final direction before any implementation work.

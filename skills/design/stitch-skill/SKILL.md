@@ -1,6 +1,12 @@
 ---
-name: stitch-design-taste
+name: stitch-skill
 description: Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that enforce premium, anti-generic UI standards — strict typography, calibrated color, asymmetric layouts, perpetual micro-motion, and hardware-accelerated performance.
+hints:
+  - "Produce highly detailed, descriptive DESIGN.md rules mapping tokens to concrete hex parameters."
+  - "Calibrate colors with a single accent under 80% saturation, strictly banning neon or purple glow elements."
+  - "Define custom display typography constraints, banning default Inter and generic serif configurations."
+  - "Implement signature layout structures like inline visual typography inside macro headlines."
+  - "Mandate weight-calibrated spring physics and staggered children mounting for lists."
 ---
 
 # Stitch Design Taste — Semantic Design System Skill
@@ -184,22 +190,33 @@ no generic placeholder names, no broken image links.)
 - Defaulting to generic "safe" designs instead of enforcing the curated aesthetic
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Working with Google Stitch, authoring premium design guidelines inside standard folders to guide AI generations, or standardizing UI directives for agent-driven frontends.
+- **NOT for:** Designing simple code snippets that do not require external guidelines, or when writing styling configurations in pure code without building a design documentation layout.
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+1. **Audit Mood & Density:** Select numerical values for density, variance, and motion.
+2. **Standardize Palette:** Write hex codes and roles for canvas, surface, ink, and a single accent.
+3. **Map Typography:** Select unique display and body fonts, explicitly banning Inter.
+4. **Draft Component States:** Document button translations, nested card rules, input offsets, and loading skeletons.
+5. **Output DESIGN.md:** Export the complete, structured design specification file to the project folder.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| A short list of colors is enough for the agent | The agent needs absolute constraints (like hex codes, roles, and explicit bans) to prevent returning standard AI blue/purple layouts. |
+| Writing standard Tailwind rules is fine | Stitch works best with natural-language architectural visual descriptions supported by precise tokens. |
+| I can skip listing the banned patterns | Listing the explicit bans prevents the agent from falling back on its statistical defaults during subsequent screen generation steps. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Presence of generic placeholders or empty lists in generated `DESIGN.md` assets.
+- Suggestions of Inter or Times New Roman in premium UI specifications.
+- Allowing multiple distinct accent colors or glowing shadows in the instructions.
+- Lack of mobile collapse strategies or single-column directives in the layout section.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] A complete `DESIGN.md` was generated with all required sections populated.
+- [ ] Only one accent color is defined with saturation explicitly limited.
+- [ ] An explicit section detailing anti-patterns and AI tells is included.
+- [ ] The generated system focuses on descriptive, high-agency typography and layout rules.
+- [ ] Automatic mobile-first collapse rules are documented.

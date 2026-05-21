@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useAuth } from "./AuthProvider";
 import { signOut } from "../lib/client-auth";
+import { getClient } from "../lib/client";
 
 const links = [
   {
@@ -157,6 +159,8 @@ interface SidebarProps {
 export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const client = useMemo(() => getClient(), []);
+  const [openContradictions, setOpenContradictions] = useState(0);
 
   const handleSignOut = () => {
     logout();
@@ -166,6 +170,15 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
     if (link.href === "/users" && !user?.isAdmin) return false;
     return true;
   });
+
+  useEffect(() => {
+    if (!user) return;
+    client.getContradictions({ limit: 20 })
+      .then((data) => {
+        setOpenContradictions(data.contradictions.filter((item) => item.status === "pending").length);
+      })
+      .catch(() => setOpenContradictions(0));
+  }, [client, user]);
 
   return (
     <motion.aside 
@@ -337,6 +350,27 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
                   >
                     {link.label}
                   </motion.span>
+                )}
+
+                {link.href === "/contradictions" && openContradictions > 0 && (
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      minWidth: "18px",
+                      height: "18px",
+                      borderRadius: "9999px",
+                      background: "#dc2626",
+                      color: "#fff",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      padding: "0 5px",
+                    }}
+                  >
+                    {openContradictions}
+                  </span>
                 )}
 
                 {/* Animated active background pills using layoutId */}

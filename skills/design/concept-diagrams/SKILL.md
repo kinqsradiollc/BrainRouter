@@ -1,6 +1,12 @@
 ---
 name: concept-diagrams
 description: Generate flat, minimal light/dark-aware SVG diagrams. Unified visual language with semantic colors and automatic dark mode.
+hints:
+  - "Always output semantic color classes (c-purple, c-teal, etc.) on <g> or shape elements, never on line connectors."
+  - "Ensure every <text> element carries a class (th, ts, or t) and uses sentence case."
+  - "Verify box widths mathematically: width >= (char_count * px_per_char) + 48."
+  - "Include the standard arrow marker <defs> block in every SVG."
+  - "Serve local diagrams on 127.0.0.1 for security; never expose on 0.0.0.0."
 ---
 
 # Concept Diagrams
@@ -353,21 +359,29 @@ skill_view(name="concept-diagrams", file_path="examples/<filename>")
 | "reaction mechanism" | Chemistry | atoms, bonds, curved arrows, transition state, energy profile |
 
 ## Overview
-Brief description of what this skill does and why it matters.
+This skill governs the generation of flat, minimal, light/dark-aware SVG diagrams. It provides a standardized visual design system that ensures diagrams render beautifully, scale fluidly, and adapt automatically to light and dark themes using semantic color categories.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Building technical documentation, explaining architectural setups, illustrating science/physics/chemistry mechanisms, flowcharts, API endpoints, or user journeys.
+- **NOT for:** Complex 3D modeling, hand-drawn wireframes, or high-fidelity UI mockup pages (use dedicated UI or mock design systems instead).
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| I can use CSS inline styles for custom colors | Using inline styles breaks automatic dark-mode adjustments. Only semantic classes (e.g., `c-purple`, `c-teal`) adapt. |
+| Eyeballing box width is fine | Eyeballing causes text overflow or ugly padding on different screens. Always calculate: width >= (chars * multiplier) + 48. |
+| It's easier to serve on 0.0.0.0 | Exposing local design work on 0.0.0.0 opens access to your local files on the local network. Always bind to 127.0.0.1. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Absence of class tags (`th`, `ts`, or `t`) on `<text>` elements.
+- Connector `<line>` or `<path>` elements missing `fill="none"`.
+- Use of drop-shadows, gradients, or heavy neon glow filters in elements.
+- Text strings using Title Case or all-caps instead of sentence case.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Every `<text>` has an assigned font class (`th`, `ts`, or `t`).
+- [ ] Every connector line has `fill="none"` and references the arrow marker.
+- [ ] The `marker` block is defined within `<defs>` inside the `<svg>` node.
+- [ ] Diagram viewBox has clean bounds containing all elements with 40px safe margins.
+- [ ] Automatic dark mode works properly when classes shift.

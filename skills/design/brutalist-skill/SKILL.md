@@ -1,6 +1,12 @@
 ---
-name: industrial-brutalist-ui
+name: brutalist-skill
 description: Raw mechanical interfaces fusing Swiss typographic print with military terminal aesthetics. Rigid grids, extreme type scale contrast, utilitarian color, analog degradation effects. For data-heavy dashboards, portfolios, or editorial sites that need to feel like declassified blueprints.
+hints:
+  - "Select exactly ONE substrate: Swiss Industrial Print (light) or CRT Terminal (dark); never mix them."
+  - "Enforce absolute 90-degree corners; border-radius is strictly prohibited."
+  - "Construct a strict CSS Grid where lines are generated using gaps rather than thick borders."
+  - "Utilize massive fluid typography for headers, and clean, tracked monospace for micro data."
+  - "Integrate ASCII indicators, crosshairs, and industrial symbols as pure structural geometry."
 ---
 
 # SKILL: Industrial Brutalism & Tactical Telemetry UI
@@ -92,25 +98,34 @@ To prevent the design from appearing purely digital, simulated analog degradatio
 3.  **Typography Clamping:** Implement CSS `clamp()` functions exclusively for macro-typography to ensure massive text scales aggressively while maintaining structural integrity across viewports.
 
 ## Overview
-Brief description of what this skill does and why it matters.
+This skill governs the execution of Industrial Brutalism and Tactical Telemetry UIs. It rejects modern consumer-centric visual cliches (rounded corners, soft dropshadows, complex gradients) in favor of high-contrast Swiss printing and terminal interface styles.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Building telemetry dashboards, software dev tools, visual portfolios, dense terminal views, or raw editorial layouts.
+- **NOT for:** standard consumer SaaS, friendly marketing pages, or e-commerce checkouts where high user conversion relies on soft, warm aesthetics.
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+1. **Establish Substrate:** Select either Swiss Industrial Print (light substrate, off-white/carbon ink) or CRT Terminal (dark substrate, deactivated CRT/white phosphor).
+2. **Setup Mathematical Grid:** Architect layouts with strict CSS Grid. Outline dividing lines cleanly.
+3. **Draft Typographic Scale:** Define massive macro-typography headers (`clamp()`) and highly legible, small monospace text for subheaders and telemetry details.
+4. **Decorate Structurally:** Add ASCII framing indicators, industrial symbols, crosshairs, or repeating barcodes to construct mechanical layouts.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| A tiny border-radius will soften it | Softening compromises the raw, mechanical integrity of industrial brutalism. All corners must be exactly 90 degrees. |
+| Gradients and blurs look more futuristic | Classic retro-futuristic telemetry relies on strict hardware limitations. Flat colors are mandatory. |
+| Mixed substrate modes look organic | Mixing light and dark themes on the same screen breaks visual cohesion and physical substrate logic. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Mixing warm paper tones with harsh pure dark mode colors on a single viewport.
+- Unintentional use of standard browser-default or consumer SaaS fonts (like Inter or Open Sans) for display.
+- Rounded corners (`border-radius`) sneaking into buttons or cards.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Only a single substrate mode (Swiss Print or CRT Terminal) is active on the page.
+- [ ] No `border-radius` exists on any elements.
+- [ ] All elements are aligned to a deterministic grid.
+- [ ] Text uses high type contrast (monolithic sans-serif vs small tracked monospace).
+- [ ] All icons and graphics align with the raw, structural telemetry aesthetic.

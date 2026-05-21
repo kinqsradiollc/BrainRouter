@@ -1,12 +1,12 @@
 ---
-name: incremental-implementation
+name: incremental-skill
 description: Delivers changes incrementally. Use when implementing any feature or change that touches more than one file. Use when you're about to write a large amount of code at once, or when a task feels too big to land in one step.
-memory_hints: |
-  - Extract when user skips testing between slices (resistance to the verify step).
-  - Capture scope creep incidents: user adds requirements mid-implementation.
-  - Remember which slicing strategy (vertical, contract-first, risk-first) the user prefers for this project.
-  - Note if user tends to mix refactoring with feature changes in the same increment.
-  - Capture any agreed-upon increment size limits the user has set for this project.
+hints:
+  - Check openSrc/ or existing project layouts for modular folder structures if available.
+  - Implement code in thin vertical slices (e.g. database schema first, then api route, then frontend UI components).
+  - Verify every single micro-slice immediately after implementation via test runner or build suites.
+  - Wrap incomplete code blocks behind feature flags before merging to the main branch.
+  - Adhere strictly to scope discipline: document out-of-scope issues rather than attempting to refactor them immediately.
 ---
 
 # Incremental Implementation
@@ -244,17 +244,14 @@ After each increment, verify:
 
 After completing all increments for a task:
 
-- [ ] Each increment was individually tested and committed
-- [ ] The full test suite passes
-- [ ] The build is clean
-- [ ] The feature works end-to-end as specified
-- [ ] No uncommitted changes remain
-
-## Workflow
-1. [Step one]
-2. [Step two]
+- [ ] Each increment was individually tested and committed.
+- [ ] The full test suite passes.
+- [ ] The build is clean and error-free.
+- [ ] The feature works end-to-end as specified.
+- [ ] No uncommitted files or styling junk are left behind.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Each micro-slice is verified functionally and committed with an atomic, conventional message.
+- [ ] Build processes and lint suites run successfully without errors or warnings.
+- [ ] Scope discipline has been strictly observed, and no out-of-scope code changes were introduced.

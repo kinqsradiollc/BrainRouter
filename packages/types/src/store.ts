@@ -34,6 +34,7 @@ export interface CursorPage<T> {
 }
 
 export interface MemoryListFilters {
+  query?: string;
   type?: string;
   scene?: string;
   skill?: string;

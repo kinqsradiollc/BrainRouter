@@ -38,6 +38,17 @@ import {
   SkillActivationsResponse,
 } from "@brainrouter/types";
 
+export class BrainRouterApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public body: string
+  ) {
+    super(message);
+    this.name = "BrainRouterApiError";
+  }
+}
+
 export class BrainRouterClient {
   constructor(
     private baseUrl = "",
@@ -71,7 +82,7 @@ export class BrainRouterClient {
         ).toString()
       : "";
     const res = await fetch(`${this.baseUrl}${path}${query ? `?${query}` : ""}`, { headers: this.headers() });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await this.toError(res);
     return res.json() as Promise<T>;
   }
 
@@ -81,7 +92,7 @@ export class BrainRouterClient {
       headers: { "Content-Type": "application/json", ...this.headers() },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await this.toError(res);
     return res.json() as Promise<T>;
   }
 
@@ -91,7 +102,7 @@ export class BrainRouterClient {
       headers: { "Content-Type": "application/json", ...this.headers() },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await this.toError(res);
     return res.json() as Promise<T>;
   }
 
@@ -101,13 +112,13 @@ export class BrainRouterClient {
       headers: { "Content-Type": "application/json", ...this.headers() },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await this.toError(res);
     return res.json() as Promise<T>;
   }
 
   private async deleteReq<T>(path: string): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, { method: "DELETE", headers: this.headers() });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await this.toError(res);
     return res.json() as Promise<T>;
   }
 
@@ -117,14 +128,27 @@ export class BrainRouterClient {
       headers: { "Content-Type": "application/json", ...this.headers() },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await this.toError(res);
     return res.json() as Promise<T>;
+  }
+
+  private async toError(res: Response) {
+    const body = await res.text();
+    let message = body || res.statusText;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === "string") message = parsed.error;
+    } catch {
+      // Keep raw text for non-JSON responses.
+    }
+    return new BrainRouterApiError(res.status, message, body);
   }
 
   // Auth Operations
   signIn(body: SigninRequest) { return this.post<SigninResponse>("/api/auth/signin", body); }
   signUp(body: SignupRequest) { return this.post<SignupResponse>("/api/auth/signup", body); }
   me() { return this.get<MeResponse>("/api/auth/me"); }
+  updateMe(body: { displayName: string }) { return this.put<{ success: boolean }>("/api/auth/me", body); }
   rotateApiKey() { return this.post<{ apiKey: string }>("/api/auth/rotate-key", {}); }
 
   // Admin User Operations
@@ -138,7 +162,7 @@ export class BrainRouterClient {
   getStats() { return this.get<MemoryStatsResponse>("/api/stats"); }
   getSkillActivations() { return this.get<SkillActivationsResponse>("/api/skills/activations"); }
   getDiagnostics(userId?: string) { return this.get<DiagnosticsBundle>("/api/governance/diagnostics", { userId }); }
-  getMemories(params?: CursorPaginationParams & { type?: string; scene?: string; skill?: string; archived?: boolean }) {
+  getMemories(params?: CursorPaginationParams & { query?: string; type?: string; scene?: string; skill?: string; archived?: boolean }) {
     return this.get<MemoriesResponse>("/api/memories", params);
   }
   archiveMemory(id: string) { return this.deleteReq<{ success: boolean }>(`/api/memories/${id}`); }

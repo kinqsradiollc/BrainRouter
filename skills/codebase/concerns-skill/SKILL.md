@@ -1,6 +1,12 @@
 ---
 name: concerns-skill
-description: Framework for surfacing and tracking tech debt, known bugs, and security gaps in.
+description: Framework for surfacing and tracking tech debt, known bugs, and security gaps in software codebases.
+hints:
+  - Check openSrc/ or docs for existing tech debt registers and known bugs if available.
+  - Formulate codebase concern reports with specific file paths, line numbers, and factual impact.
+  - Avoid emotional adjectives; use precise engineering terms (e.g. N+1 queries, race conditions).
+  - Provide a clear, actionable fix or mitigation approach for every logged concern.
+  - Update or remove concern entries immediately upon resolution.
 ---
 
 # Codebase Concerns Skill
@@ -62,18 +68,22 @@ This skill governs how known risks, tech debt, and codebase health issues are su
 - [ ] New concerns added after any audit or incident.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- Use when preparing to work on existing codebases, planning refactoring phases, or onboarding onto unfamiliar directories.
+- NOT for styling changes or single-file variable renames unless they are part of a larger architectural risk.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| I don't have time to catalog debt. | Logging debt takes 2 minutes and prevents the next developer from breaking the system. |
+| It's just a temporary hack, no need to log it. | Temporary hacks frequently become permanent; documenting them prevents future blindspots. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Technical debt or security gaps left unrecorded in codebase documentation.
+- Vague reports like "the DB is slow" without specific query profiles, execution times, or metric traces.
+- Modifying fragile codebase components without checking existing concern registers or tech debt lists first.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] All newly identified concerns are logged with precise file paths, triggers, and suggested fix paths.
+- [ ] Any resolved concerns are updated in the tracking documents.
+- [ ] Tone of logged issues is kept entirely factual, metric-driven, and constructive.

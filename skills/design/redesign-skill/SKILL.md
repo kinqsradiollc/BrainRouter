@@ -1,6 +1,12 @@
 ---
-name: redesign-existing-projects
+name: redesign-skill
 description: Upgrades existing websites and apps to premium quality. Audits current design, identifies generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framework or vanilla CSS.
+hints:
+  - "Scan the codebase first to identify the styling framework, configuration rules, and overall layout patterns."
+  - "Diagnose visual tells (like pure blacks, generic card wrappers, oversaturated highlights, or Inter-only pairings)."
+  - "Fix priority: swap fonts first, then clean up the palette, add interactive states, and expand spatial rhythm."
+  - "Maintain full layout stability: replace height: 100vh with min-height: 100dvh for viewports."
+  - "Inject visual depth using subtle meshes, low-opacity grainy radial gradients, and real Picsum seed parameters."
 ---
 
 # Redesign Skill
@@ -182,18 +188,26 @@ Apply changes in this order for maximum visual impact with minimum risk:
 - Keep changes reviewable and focused. Small, targeted improvements over big rewrites.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Upgrading an existing web project, refactoring legacy layouts, introducing premium design to standard bootstrap/Tailwind templates, or cleaning up generic AI-generated interfaces.
+- **NOT for:** Designing a fresh project from scratch (use a dedicated design starter or bootstrap skill instead), or doing simple styling changes without structural audits.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| Redesigning is just about changing font-family | Typography is a major pillar, but colors, spatial rhythm, interactive active states, and layout structural variety are equally critical to elite quality. |
+| It's easier to rewrite the code from scratch | Rewriting from scratch risks breaking working complex logic and backend integration. Always apply surgical styling updates first. |
+| The viewport height looks fine on desktop | Standard 100vh breaks catastrophically on mobile screens when system navbars push content down. Always use `min-h-[100dvh]`. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Mixing warm gray themes with cold blue-gray shadows or backgrounds on the same screen.
+- Layout sections transitioning instantly on hover/click with zero animation duration.
+- Missing keyboard focus rings on interactive elements.
+- Placeholder image links that return empty 404 boxes or generic placeholders.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Font swap is done, swapping Inter or browser defaults for curated fonts (Geist, Satoshi, etc.).
+- [ ] All buttons and links feature clean, tactile hover and active scale transitions.
+- [ ] Grid elements align to mathematical containers with sufficient padding constraints.
+- [ ] Grays and neutrals are standardized to a single temperature family.
+- [ ] All elements are tested for mobile single-column collapse and layout bounds.

@@ -1,6 +1,12 @@
 ---
-name: docker-lifecycle-engineering
-description: Senior DevOps Engineer. Containerize applications using Docker. Enforce production-grade security, multi-stage builds, and optimized resource allocation.
+name: docker-skill
+description: Containerize applications using Docker. Enforce production-grade security, multi-stage builds, and optimized resource allocation.
+hints:
+  - Check openSrc/ or existing project files for Dockerfiles or docker-compose.yml files if available.
+  - Employ multi-stage builds and slim/alpine base images to produce compact, secure final images.
+  - Order Dockerfile instructions strategically: install dependencies before copying source files to optimize cache hits.
+  - Implement security best practices by defining a non-root USER and mounting secrets securely rather than embedding them.
+  - Use docker system df to inspect disk space before running prunes; never delete volumes without human confirmation.
 ---
 
 # Docker Management
@@ -276,12 +282,16 @@ When reviewing or creating a Dockerfile, suggest these improvements:
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| I'll clean up the build cache later. | Docker build caches can quickly consume dozens of gigabytes of disk space, leading to system hangs. |
+| Pinned image tags aren't necessary. | Using `latest` tag breaks build predictability and can introduce silent upstream bugs. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Hardcoded database passwords or secrets in Dockerfiles or `docker-compose.yml` configs.
+- Giant image sizes (e.g. >1GB) due to lack of multi-stage builds or missing `.dockerignore`.
+- Running containers as the root user inside production environments.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Newly written Dockerfiles or compose setups are linted/validated via `docker compose config`.
+- [ ] Final built images have been inspected for size and layers.
+- [ ] No local configuration volumes are deleted without explicit backup or manual consent.

@@ -1,6 +1,12 @@
 ---
 name: soft-skill
 description: Teaches the AI to design like a high-end agency. Defines the exact fonts, spacing, shadows, card structures, and animations that make a website feel expensive. Blocks all the common defaults that make AI designs look cheap or generic.
+hints:
+  - "Reject default fonts, standard Lucide icon widths, and sticky edge-to-edge header frames."
+  - "Enforce structural variance by choosing a unique Vibe Archetype and Layout combination."
+  - "Implement the 'Double-Bezel' (Doppelrand) card and nested content container pattern."
+  - "Design CTA elements with fully rounded capsules and nested circular trailing action icons."
+  - "Choreograph organic spring-physics transitions and staggered cascade reveals for lists."
 ---
 
 # Agent Skill: Principal UI/UX Architect & Motion Choreographer (Awwwards-Tier)
@@ -98,25 +104,29 @@ Evaluate your code against this matrix before delivering. This is the last filte
 - [ ] The overall impression reads as "$150k agency build", not "template with nice fonts"
 
 ## Overview
-Brief description of what this skill does and why it matters.
+This skill acts as the primary visual architecture handbook for producing premium, agency-level digital experiences. It sets up strict aesthetic constraints, guides spatial rhythms, and mandates specific components and transitions that make custom web builds feel sophisticated, organic, and tactile.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
-
-## Workflow
-1. [Step one]
-2. [Step two]
+- **Use when:** Building highly custom brand sites, SaaS user onboarding, design-led engineer portfolios, or bespoke product pages where spatial presence and premium interactivity is valued.
+- **NOT for:** Flat terminal interfaces (use `brutalist-skill` instead), highly dense corporate matrices where screen real estate is limited, or generic layouts.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| A standard single 1px border looks clean enough | Simple single borders look thin and flat. Layering nested containers ('Double-Bezel') with offsets simulates the optical depth of machined premium hardware. |
+| Custom cubic-bezier is hard to coordinate | Framer motion spring parameters or customized cubic-beziers represent physical mass. Standard 'linear' and 'ease' transitions feel mechanical and digital. |
+| Center alignment is the standard fallback | Centering displays by default signals basic template building. Introducing off-center grids or asymmetrical negative space instantly elevates the visual tone. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Presence of generic Lucide icon packages with standard static configurations.
+- Spacing padding under section boundaries less than `py-24`.
+- Large elements or full viewports hardcoded to `h-screen`.
+- Direct layout reflow animations caused by animating properties like `top`, `left`, `width`, or `height`.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Visual checks verify that the chosen Vibe and Layout archetypes are cohesive.
+- [ ] Major cards and panels follow the concentric double-bezel nested rounding rule.
+- [ ] Custom cubic-bezier animations are implemented for interactive transitions.
+- [ ] Mobile collapse layouts cleanly drop all rotation offsets and negative margins.
+- [ ] No emojis or cheap AI tells are present in the code or presentation.

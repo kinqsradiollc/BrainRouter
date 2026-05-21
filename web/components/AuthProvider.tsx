@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { getClient } from "../lib/client";
-import { isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, signOut } from "../lib/client-auth";
+import { isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, signOut, clearAll } from "../lib/client-auth";
 
 interface AuthUser {
   userId: string;
@@ -15,8 +15,9 @@ interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  isAdmin: boolean;
   refreshUser: () => Promise<void>;
-  login: (jwt: string, apiKey?: string) => Promise<void>;
+  login: (jwt: string, apiKey?: string, rememberMe?: boolean) => Promise<void>;
   logout: () => void;
 }
 
@@ -24,6 +25,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   isLoading: true,
   isAuthenticated: false,
+  isAdmin: false,
   refreshUser: async () => {},
   login: async () => {},
   logout: () => {},
@@ -57,6 +59,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       setIsAuthenticated(true);
     } catch (err) {
+      const status = typeof err === "object" && err !== null && "status" in err ? Number((err as { status?: number }).status) : 0;
+      if (status === 401 || status === 403) {
+        clearAll();
+      }
       console.error("Failed to fetch user:", err);
       setIsAuthenticated(false);
       setUser(null);
@@ -65,9 +71,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const login = async (jwt: string, apiKey?: string) => {
+  const login = async (jwt: string, apiKey?: string, rememberMe = false) => {
     setIsLoading(true);
-    setJwt(jwt);
+    setJwt(jwt, rememberMe);
     if (apiKey) setApiKey(apiKey);
     await fetchUser();
   };
@@ -83,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, refreshUser: fetchUser, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin: user?.isAdmin ?? false, refreshUser: fetchUser, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

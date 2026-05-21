@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 import { usePersona } from "@brainrouter/hooks";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -62,19 +63,9 @@ export default function PersonaPage() {
 
             <div style={{ position: "relative" }}>
               {persona ? (
-                <p 
-                  style={{ 
-                    whiteSpace: "pre-wrap", 
-                    color: "var(--color-white-frost)", 
-                    fontSize: "15px", 
-                    lineHeight: 1.7,
-                    letterSpacing: "0.01em",
-                    margin: 0,
-                    fontFamily: "var(--font-inter)"
-                  }}
-                >
-                  {persona.personaMd}
-                </p>
+                <div className="markdown-content">
+                  <ReactMarkdown>{persona.personaMd}</ReactMarkdown>
+                </div>
               ) : (
                 <div style={{ color: "var(--color-stone-text)", fontStyle: "italic", padding: "40px 0", textAlign: "center" }}>
                   No active core identity profile consolidated yet. Perform more turns to trigger identity distillation.

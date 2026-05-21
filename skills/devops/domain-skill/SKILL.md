@@ -1,30 +1,36 @@
 ---
-name: domain-infrastructure-routing
-description: Architect production-ready domain routing. Configure Traefik ingress, SSL/TLS certificates, and Cloudflare tunnels for secure public access.
+name: domain-skill
+description: Architect production-ready domain routing. Configure reverse proxies (e.g., Traefik), SSL/TLS certificates, and Cloudflare tunnels for secure public access.
+hints: |
+  - Always identify the primary hostnames (e.g. app.domain.com, api.domain.com) before structuring routing.
+  - Review Traefik labels in docker-compose.yml to ensure correct entrypoint and rule mappings.
+  - Use Cloudflare Zero Trust tunnels to establish secure outbound-only ingress paths without exposing local ports.
+  - Set up environment variables (like DOMAIN, CORS_ORIGIN, and WebAuthn relying party IDs) dynamically.
+  - Test routing and certificate issuance sequentially, beginning with Flexible TLS before strict enforcement.
 ---
 
 # Custom Domain & Networking
 
 ## Overview
 
-Connect `api.the project domain` (Cloudflare-managed) to the Node.js backend running in Docker via Traefik.
+A robust routing architecture ensures secure, encrypted public access to backend and frontend services. This skill guides the setup of production-ready routing using reverse proxies (e.g., Traefik v3) coupled with secure edge ingress (e.g., Cloudflare Tunnels) to direct external traffic cleanly to containerized services without exposing local ports.
 
-## Architecture
+## Ingress Architecture
 
 ```
 Browser
   │  HTTPS (TLS terminated by Cloudflare)
   ▼
-Cloudflare Edge (api.the project domain)
+Cloudflare Edge (api.yourdomain.com)
   │  Outbound tunnel (no open ports needed)
   ▼
 cloudflared daemon  ← Docker container, profile: production
   │  HTTP  http://traefik:80
   ▼
-Traefik v3          ←-traefik container
+Traefik v3          ← traefik container
   │  HTTP  :3001
   ▼
-Node.js / Express   ←-backend container
+Node.js / Express   ← backend container
 ```
 
 > Local dev skips cloudflared entirely. Traefik routes `Host(\`localhost\`)` directly.
@@ -33,41 +39,43 @@ Node.js / Express   ←-backend container
 
 ## Environment Variables
 
+Ensure the following networking environment variables are configured in the `.env` or deployment settings:
+
 | Variable | Dev value | Prod value | Purpose |
 |---|---|---|---|
-| `DOMAIN` | `api.the project domain` | `api.the project domain` | Traefik HTTPS router host rule |
-| `ACME_EMAIL` | `admin@the project domain` | same | Let's Encrypt certificate contact |
+| `DOMAIN` | `api.yourdomain.com` | `api.yourdomain.com` | Traefik HTTPS router host rule |
+| `ACME_EMAIL` | `admin@yourdomain.com` | `admin@yourdomain.com` | Let's Encrypt certificate contact |
 | `CLOUDFLARE_TUNNEL_TOKEN` | *(blank)* | `<token from CF dashboard>` | Authenticates cloudflared to Cloudflare |
-| `FRONTEND_URL` | `http://localhost:3000` | `https://the project domain` | Email link base URL |
-| `CORS_ORIGIN` | `http://localhost:3000,https://the project domain` | `https://the project domain` | Allowed CORS origins |
-| `PASSKEY_RP_ID` | `localhost` | `the project domain` | WebAuthn Relying Party ID |
-| `PASSKEY_ORIGIN` | `http://localhost:3000` | `https://the project domain` | WebAuthn allowed origin |
+| `FRONTEND_URL` | `http://localhost:3000` | `https://yourdomain.com` | Email link base URL |
+| `CORS_ORIGIN` | `http://localhost:3000,https://yourdomain.com` | `https://yourdomain.com` | Allowed CORS origins |
+| `PASSKEY_RP_ID` | `localhost` | `yourdomain.com` | WebAuthn Relying Party ID |
+| `PASSKEY_ORIGIN` | `http://localhost:3000` | `https://yourdomain.com` | WebAuthn allowed origin |
 
 ---
 
 ## Traefik Router Setup
 
-Two routers exist in `docker-compose.yml` on the `backend` service:
+Two routers are typically configured in `docker-compose.yml` on the `backend` service:
 
 ### HTTP Router (always active)
 
 ```yaml
-- "traefik.http.routers.backend.rule=Host(`localhost`) || Host(`api.the project domain`)"
+- "traefik.http.routers.backend.rule=Host(`localhost`) || Host(`api.yourdomain.com`)"
 - "traefik.http.routers.backend.entrypoints=web"
 ```
 
-Accepts both `localhost` (dev) and `api.the project domain` (prod via cloudflared HTTP passthrough).
+Accepts both `localhost` (dev) and `api.yourdomain.com` (prod via cloudflared HTTP passthrough).
 
 ### HTTPS Router (activates with Cloudflare Full strict)
 
 ```yaml
-- "traefik.http.routers.backend-secure.rule=Host(`api.the project domain`)"
+- "traefik.http.routers.backend-secure.rule=Host(`api.yourdomain.com`)"
 - "traefik.http.routers.backend-secure.entrypoints=websecure"
 - "traefik.http.routers.backend-secure.tls=true"
 - "traefik.http.routers.backend-secure.tls.certresolver=letsencrypt"
 ```
 
-Traefik will auto-issue a Let's Encrypt cert once `api.the project domain` is publicly resolvable.
+Traefik will auto-issue a Let's Encrypt cert once `api.yourdomain.com` is publicly resolvable.
 
 ---
 
@@ -89,7 +97,7 @@ Traefik will auto-issue a Let's Encrypt cert once `api.the project domain` is pu
 
 1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com) → **Networks → Tunnels → Create a tunnel**
 2. Choose **Cloudflared** connector
-3. Name the tunnel `the project-tunnel`
+3. Name the tunnel `app-tunnel`
 4. Copy the **tunnel token** — this is your `CLOUDFLARE_TUNNEL_TOKEN`
 
 ### Step 2 — Configure Public Hostname
@@ -99,7 +107,7 @@ In the tunnel settings, add a Public Hostname:
 | Field | Value |
 |---|---|
 | Subdomain | `api` |
-| Domain | `the project domain` |
+| Domain | `yourdomain.com` |
 | Service Type | `HTTP` |
 | Service URL | `traefik:80` |
 
@@ -123,7 +131,7 @@ CLOUDFLARE_TUNNEL_TOKEN=<paste token here>
 docker compose --profile production up -d cloudflared
 
 # Verify connection
-docker logs-cloudflared --tail 20
+docker logs cloudflared --tail 20
 # Expected: "Connection established" / "Registered tunnel connection"
 ```
 
@@ -131,7 +139,7 @@ docker logs-cloudflared --tail 20
 
 ```bash
 # Health check through the full tunnel
-curl https://api.the project domain/health
+curl https://api.yourdomain.com/health
 # Expected: { "status": "ok", ... }
 
 # Check Traefik picked up the new router
@@ -186,25 +194,41 @@ The Traefik labels and ACME config in docker-compose remain identical — only t
 | Problem | Cause | Fix |
 |---|---|---|
 | `curl: (6) Could not resolve host` | DNS not propagated | Wait 1–5 min after Cloudflare saves the CNAME |
-| Tunnel connected but 502 | cloudflared can't reach `traefik:80` | Verify both are on `the project-network`; check `docker network inspect` |
+| Tunnel connected but 502 | cloudflared can't reach `traefik:80` | Verify both are on the same docker network; check `docker network inspect` |
 | Let's Encrypt cert not issued | Domain not publicly reachable on port 80 | Use Flexible SSL mode until tunnel is confirmed working |
-| CORS errors in browser | `CORS_ORIGIN` missing `https://the project domain` | Add to `.env` and restart backend |
-| WebAuthn fails on prod | `PASSKEY_RP_ID` still set to `localhost` | Update to `the project domain` and redeploy |
+| CORS errors in browser | `CORS_ORIGIN` missing origin domain | Add proper origin to `.env` and restart backend |
+| WebAuthn fails on prod | `PASSKEY_RP_ID` still set to `localhost` | Update to the production domain and redeploy |
 | `--profile production` not recognized | Old Docker Compose version | Upgrade to Docker Compose v2.x (`docker compose version`) |
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+
+- Mapping custom domains (e.g., `app.domain.com` or `api.domain.com`) to containerized services.
+- Designing secure ingress architectures via reverse proxies (e.g., Traefik, Nginx) and edge providers (e.g., Cloudflare).
+- Setting up SSL/TLS termination, automated certificate resolvers (Let's Encrypt), or Cloudflare Tunnels (`cloudflared`).
+
+**When NOT to use:**
+- Basic local-only dev environments that do not require DNS mapping or secure public access.
+- Deploying on serverless platforms (e.g., Vercel, Netlify) where domain routing is fully managed by the provider.
 
 ## Common Rationalizations
+
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| "I will expose the container port directly to the internet." | Exposing service ports directly bypasses reverse proxy benefits (load balancing, SSL termination, request filtering) and introduces massive security vulnerabilities. |
+| "I'll use HTTP in staging to save setup time." | Staging must mimic production. Omitting TLS in staging leads to hidden CORS, WebAuthn, cookie security, or certificate routing errors that only show up in production. |
+| "Setting up Cloudflare tunnels is too slow; I'll just open port 80/443." | Opening incoming ports makes the host machine an active target for automated port scanners. Outbound-only tunnels are vastly more secure. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+
+- Hardcoded domain names in docker-compose configurations instead of environment variables.
+- Using Flexible SSL/TLS modes in production indefinitely without terminating TLS at the reverse proxy (leaves edge-to-origin traffic unencrypted).
+- Mixing production tunnel credentials or domain records directly inside shared development files.
+- Exposing Traefik dashboards publicly without authentication or strong basic auth middlewares.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing the domain setup, verify:
+- [ ] Ingress paths are tested and return valid HTTP statuses (e.g., 200 OK, secure 301 redirects).
+- [ ] SSL/TLS certificate is verified as valid and issued by a recognized CA (e.g., Let's Encrypt, Cloudflare Edge).
+- [ ] CORS origins and authentication parameters (e.g., WebAuthn/Passkey RP IDs) match the active host exactly.
+- [ ] Cloudflared connections are confirmed in container logs with `Connection established` and no active errors.

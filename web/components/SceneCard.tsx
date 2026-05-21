@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
+import { PremiumCard } from "./PremiumCard";
 
 interface SceneCardProps {
   scene: {
@@ -18,8 +19,8 @@ export function SceneCard({ scene }: SceneCardProps) {
   const heat = Number(scene.heatScore ?? 0);
 
   return (
-    <motion.div
-      className="card"
+    <PremiumCard
+      level={1}
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ 
@@ -30,7 +31,6 @@ export function SceneCard({ scene }: SceneCardProps) {
       style={{
         display: "flex",
         flexDirection: "column",
-        background: "var(--color-charcoal-canvas)",
         cursor: "pointer"
       }}
       onClick={() => setExpanded(!expanded)}
@@ -127,29 +127,24 @@ export function SceneCard({ scene }: SceneCardProps) {
           >
             <div 
               style={{ 
-                color: "var(--color-porcelain-text)", 
-                fontSize: "14px", 
-                lineHeight: 1.6,
-                padding: "16px 18px",
-                backgroundColor: "var(--color-obsidian-surface)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid rgba(226, 227, 233, 0.04)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "8px"
+                paddingTop: "16px",
+                borderTop: "1px solid rgba(226, 227, 233, 0.06)"
               }}
               onClick={(e) => e.stopPropagation()} // stop parent toggle
-              className="markdown-content"
             >
               {scene.summaryMd ? (
-                <ReactMarkdown>{scene.summaryMd}</ReactMarkdown>
+                <div className="markdown-content">
+                  <ReactMarkdown>{scene.summaryMd}</ReactMarkdown>
+                </div>
               ) : (
-                "No summary recorded."
+                <div style={{ color: "var(--color-stone-text)" }}>
+                  No summary recorded.
+                </div>
               )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </PremiumCard>
   );
 }

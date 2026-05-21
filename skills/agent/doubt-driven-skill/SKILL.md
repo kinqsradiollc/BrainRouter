@@ -1,6 +1,12 @@
 ---
-name: doubt-driven-development
+name: doubt-driven-skill
 description: Subjects every non-trivial decision to a fresh-context adversarial review before it stands. Use when correctness matters more than speed, when working in unfamiliar code, when stakes are high (production, security-sensitive logic, irreversible operations), or any time a confident output would be cheaper to verify now than to debug later.
+hints: |
+  - Use this skill to challenge assumptions and logic boundaries in non-trivial changes.
+  - Separate the review unit into a distinct ARTIFACT and CONTRACT before testing.
+  - Formulate adversarial reviewer prompts focused on disproving correctness, not validating it.
+  - Limit the doubt review loop to a maximum of 3 cycles to avoid unproductive recursion.
+  - In interactive mode, explicitly offer a cross-model second opinion to the user.
 ---
 
 # Doubt-Driven Development
@@ -228,9 +234,9 @@ If 3 cycles is "obviously insufficient" because the artifact is large: the artif
 - **`debugging-and-error-recovery`**: when the reviewer surfaces a real failure mode, drop into the debugging skill to localize and fix.
 - **Repo orchestration rules** (`references/orchestration-patterns.md`): this skill orchestrates from the main session. A persona calling another persona is anti-pattern B — see Loading Constraints above.
 
-## Required Checks
+## Verification
 
-After applying doubt-driven development:
+After applying doubt-driven development, confirm:
 
 - [ ] Every non-trivial decision (per the definition above) was named explicitly as a CLAIM before standing
 - [ ] At least one fresh-context review per non-trivial artifact (a failing test produced by TDD's RED step satisfies this for behavioral claims, per Interaction with Other Skills)
@@ -241,12 +247,3 @@ After applying doubt-driven development:
 - [ ] In interactive mode, cross-model was **explicitly offered** to the user (regardless of artifact stakes) and the response was acknowledged in the output
 - [ ] In non-interactive mode, cross-model was skipped and the skip was announced
 - [ ] Any external CLI invocation was preceded by a PATH check, a working-binary test, syntax confirmation with the user, and explicit authorization to run
-
-## Workflow
-1. [Step one]
-2. [Step two]
-
-## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.

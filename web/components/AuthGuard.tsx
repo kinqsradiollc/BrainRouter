@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { isAuthenticated } from "../lib/client-auth";
+import { LoadingSpinner } from "./LoadingSpinner";
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -22,6 +23,6 @@ export function AuthGuard({ children }: AuthGuardProps) {
     setReady(true);
   }, [pathname, router]);
 
-  if (!ready) return null;
+  if (!ready) return <LoadingSpinner />;
   return <>{children}</>;
 }

@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { PageHeader } from "../../components/PageHeader";
+import { PremiumButton } from "../../components/PremiumButton";
 
 const EVIDENCE_KINDS: Array<EvidenceKind | "all"> = ["all", "file", "command", "url", "test", "benchmark", "memory", "other"];
 
@@ -50,31 +51,26 @@ export default function EvidencePage() {
               style={{ padding: "9px 10px", borderRadius: "6px", border: "1px solid var(--border-med)", background: "var(--overlay-bg)", color: "var(--color-silver-text)" }}
             />
           </label>
-          <button
+          <PremiumButton
+            size="small"
+            variant="ghost"
             onClick={() => void refresh()}
             disabled={isLoading}
-            style={{ padding: "9px 16px", borderRadius: "9999px", border: "1px solid var(--border-med)", background: "transparent", color: "var(--color-silver-text)", cursor: isLoading ? "default" : "pointer" }}
           >
             {isLoading ? "Loading" : "Refresh"}
-          </button>
+          </PremiumButton>
         </div>
 
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           {EVIDENCE_KINDS.map((item) => (
-            <button
+            <PremiumButton
               key={item}
+              size="small"
+              variant={kind === item ? "primary" : "ghost"}
               onClick={() => setKind(item)}
-              style={{
-                padding: "5px 12px",
-                borderRadius: "9999px",
-                border: "1px solid var(--border-med)",
-                background: kind === item ? "var(--overlay-bg-hover)" : "transparent",
-                color: kind === item ? "var(--color-pure-white)" : "var(--color-stone-text)",
-                cursor: "pointer",
-              }}
             >
               {item === "all" ? "All" : item}
-            </button>
+            </PremiumButton>
           ))}
         </div>
 

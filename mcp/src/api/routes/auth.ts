@@ -72,6 +72,18 @@ authRouter.post("/signup", async (req, res) => {
     res.status(400).json({ error: "email and password are required" });
     return;
   }
+  if (email.length > 254) {
+    res.status(400).json({ error: "Email too long" });
+    return;
+  }
+  if (password.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters" });
+    return;
+  }
+  if (displayName.length > 100) {
+    res.status(400).json({ error: "Display name too long" });
+    return;
+  }
   if (memoryEngine.getUserByEmail(email)) {
     res.status(409).json({ error: "Email already registered" });
     return;
@@ -114,6 +126,20 @@ authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
     status: user.status,
     mcpPath: path.resolve(process.cwd(), "dist/index.js")
   });
+});
+
+authRouter.put("/me", requireJwt, (req: AuthedRequest, res) => {
+  const displayName = String(req.body?.displayName ?? "").trim();
+  if (!displayName) {
+    res.status(400).json({ error: "displayName required" });
+    return;
+  }
+  if (displayName.length > 100) {
+    res.status(400).json({ error: "Display name too long" });
+    return;
+  }
+  memoryEngine.updateUserDisplayName(req.userId!, displayName);
+  res.json({ success: true });
 });
 
 authRouter.post("/rotate-key", requireJwt, (req: AuthedRequest, res) => {

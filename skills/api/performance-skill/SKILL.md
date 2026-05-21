@@ -1,36 +1,42 @@
 ---
 name: performance-skill
-description: Redis caching and Postgres replication rules for performance and scalability.
+description: Redis caching, Postgres replication, query indexing, and connection management rules for performance and scalability. Use when writing database queries, configuring caching layers, or auditing backend load speeds.
+hints: |
+  - Use Cache-Aside pattern for read-heavy, slowly changing data models.
+  - Actively invalidate cache keys upon data modifications (POST, PATCH, DELETE).
+  - Explicitly route read-only operations to database replicas and mutations to the primary host.
+  - Run EXPLAIN ANALYZE on complex database queries to ensure active index coverage.
+  - Avoid executing heavy calculations or string manipulations inside SQL queries.
 ---
 
 # Performance & Scalability Skill
 
 ## Overview
 
-This skill ensures remains fast and responsive as the user base and data volume grows.
+This skill ensures backend API structures remain fast, responsive, and resource-efficient as user traffic and data volume grow. Enforcing strict caching architectures, database replication rules, indexing profiles, and application-layer calculations prevents latency spikes and keeps resource usage optimized.
 
 ## Workflow
 
 - **[PERF-001] Cache-Aside Pattern**
-  - Use the "Cache-Aside" strategy for frequently read, slowly changing data (e.g., Vibe lists, Spot details).
-  - Workflow: Check Redis -> If miss, query DB -> Set Redis -> Return.
-  - Set reasonable TTLs (e.g., 5-10 minutes).
+  - Use the "Cache-Aside" strategy for frequently read, slowly changing data structures.
+  - Workflow: Check Cache (Redis) -> If hit, return -> If miss, query Database -> Set Cache (Redis) with TTL -> Return.
+  - Set reasonable TTLs (e.g., 5-10 minutes) based on data volatility.
 
 - **[PERF-002] Proactive Cache Invalidation**
-  - When data is updated (POST/PATCH/DELETE), proactively delete the associated cache keys using `cache.del(key)`.
-  - Use key patterns (e.g., `spots:detail:*`) to invalidate multiple related caches if necessary.
+  - When data is modified (POST, PATCH, DELETE), proactively invalidate the associated cache keys using `cache.del(key)`.
+  - Use namespace-based key patterns (e.g., `spots:detail:*`) to invalidate multiple related caches simultaneously.
 
 - **[PERF-003] Read/Write Replication**
-  - Use `readQuery` for all read operations to hit the read-replica database.
-  - Use `writeQuery` or `primaryQuery` for all mutations to hit the primary database.
-  - Exception: Use `primaryQuery` for "Read-after-Write" scenarios to avoid replication lag issues.
+  - Route all read operations (`SELECT`) to database replicas to distribute read load.
+  - Route all mutations (`INSERT`, `UPDATE`, `DELETE`) to the primary database.
+  - Exception: Use the primary database for "Read-after-Write" scenarios where replication lag would cause visual inconsistency for the active user.
 
 - **[PERF-004] Index-First Design**
-  - Every column used in a `WHERE`, `JOIN`, or `ORDER BY` clause must be indexed in Postgres.
-  - Use `EXPLAIN ANALYZE` to verify query performance before merging large data changes.
+  - Every column used in a `WHERE`, `JOIN`, or `ORDER BY` clause must have a corresponding database index.
+  - Use database performance profiling tools (e.g., `EXPLAIN ANALYZE`) to verify query plans before merging database alterations.
 
 - **[PERF-005] No Heavy Computations in SQL**
-  - Avoid complex calculations or string manipulations in Postgres. Perform data formatting and logic in the Node.js application layer.
+  - Avoid executing complex arithmetic, string formatters, or business logic inside SQL queries. Keep the database focused on fast indexing and retrieval; run formatting and calculations in the application layer.
 
 ## Implementation Pattern
 
@@ -56,27 +62,39 @@ export const getVibes = async (req: Request, res: Response) => {
 };
 ```
 
-## Required Checks
-
-- [ ] Redis is used for heavy read endpoints.
-- [ ] Cache is invalidated on data updates.
-- [ ] `readQuery` vs `writeQuery` is used correctly.
-- [ ] No `SELECT *` is used; only required columns are fetched.
-- [ ] Queries are optimized with proper indices.
+---
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+
+- Writing new database queries (SQL, Prisma models, ORMs) or API response endpoints.
+- Setting up or tuning Redis caching layers for frequently accessed data structures.
+- Auditing database query plans, slow query logs, or indexing schemas.
+- Configuring database replication routing (primary vs. read-replicas).
+
+**When NOT to use:**
+- Local static CLI tools or developer setups where data fits entirely in memory and has no persistent database.
+- Trivial, low-frequency administration actions that run off-peak and do not impact core application user latency.
 
 ## Common Rationalizations
+
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| "The database is fast enough; we don't need caching yet." | Caching reduces origin server load and eliminates roundtrips. Waiting for database saturation to implement caching causes high-severity production outages. |
+| "I'll let the cache expire on its own via TTL." | Relying solely on TTL means users will see stale data for long periods. Proactive invalidation on update guarantees visual consistency and real-time freshness. |
+| "Adding indexes on every column is always safe." | Too many indexes degrade write and update speeds because the database must update the indexes for every write. Focus indexing on columns actually used in filter/sort criteria. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+
+- Fetching full database rows (`SELECT *` or unrestricted ORM relations) when only a subset of fields is used.
+- Heavy reads targeting the primary database instance when read-replicas are available.
+- Heavy aggregate calculations, string operations, or custom formatting executed inside SQL database statements.
+- Implementing caching without a clear, proactive invalidation mechanism (`cache.del(key)` or pattern-based invalidations) on state changes.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing the performance implementation, verify:
+- [ ] Redis caching hit rate is confirmed (cached reads bypass database entirely).
+- [ ] Associated cache keys are successfully removed or updated upon resource mutations.
+- [ ] Database query profiles (`EXPLAIN ANALYZE` or ORM profiling) show active index scans rather than sequential table scans.
+- [ ] Core mutations write to the primary database, while read-only routes hit replica pools.
+- [ ] Clean performance data is gathered and validated against latency targets (e.g. sub-100ms API response).

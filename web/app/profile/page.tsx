@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
+import { PremiumModal } from "../../components/PremiumModal";
 import { motion } from "framer-motion";
 import { MeResponse } from "@brainrouter/types";
 
@@ -72,6 +73,8 @@ export default function ProfilePage() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"http" | "stdio">("http");
+  const [displayName, setDisplayName] = useState("");
+  const [confirmRotate, setConfirmRotate] = useState(false);
 
   async function load() {
     setCachedApiKey(getApiKey());
@@ -79,6 +82,7 @@ export default function ProfilePage() {
       const client = getClient();
       const data = await client.me();
       setMe(data);
+      setDisplayName(data.displayName || "");
     } catch (e) {
       console.error(e);
     } finally {
@@ -102,6 +106,14 @@ export default function ProfilePage() {
     } catch (e) {
       console.error(e);
     }
+  }
+
+  async function saveDisplayName() {
+    if (!displayName.trim()) return;
+    const client = getClient();
+    await client.updateMe({ displayName: displayName.trim() });
+    setMe((prev) => prev ? { ...prev, displayName: displayName.trim() } : prev);
+    setMsg("Display name updated.");
   }
 
   async function copyKey() {
@@ -156,6 +168,18 @@ export default function ProfilePage() {
                   <span style={{ color: "var(--color-white-frost)" }}>{new Date(me.createdAt).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" })}</span>
                 </div>
               </div>
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", borderTop: "1px solid rgba(226,227,233,0.04)", paddingTop: "14px" }}>
+                <input
+                  className="pill-input"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  placeholder="Display name"
+                  style={{ flex: "1 1 240px" }}
+                />
+                <PremiumButton variant="ghost" onClick={saveDisplayName}>
+                  Save Display Name
+                </PremiumButton>
+              </div>
             </PremiumCard>
 
             {/* API Key Panel */}
@@ -193,7 +217,7 @@ export default function ProfilePage() {
                       <PremiumButton 
                         variant="primary" 
                         style={{ padding: "8px 18px", fontSize: "13px" }}
-                        onClick={generateOrRotate}
+                        onClick={() => setConfirmRotate(true)}
                       >
                         Rotate API Key
                       </PremiumButton>
@@ -207,7 +231,7 @@ export default function ProfilePage() {
                     <PremiumButton 
                       variant="primary" 
                       style={{ padding: "10px 22px", fontSize: "13px", fontWeight: 600 }}
-                      onClick={generateOrRotate}
+                      onClick={() => setConfirmRotate(true)}
                     >
                       Generate API Key
                     </PremiumButton>
@@ -384,6 +408,26 @@ export default function ProfilePage() {
                 Sign Out from Console
               </PremiumButton>
             </div>
+
+            <PremiumModal isOpen={confirmRotate} onClose={() => setConfirmRotate(false)} title="Rotate API Key">
+              <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "14px", lineHeight: 1.5 }}>
+                  This will invalidate your current API key and replace it with a new key.
+                </p>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                  <PremiumButton variant="ghost" onClick={() => setConfirmRotate(false)}>Cancel</PremiumButton>
+                  <PremiumButton
+                    variant="primary"
+                    onClick={async () => {
+                      setConfirmRotate(false);
+                      await generateOrRotate();
+                    }}
+                  >
+                    Rotate Key
+                  </PremiumButton>
+                </div>
+              </div>
+            </PremiumModal>
 
           </div>
         )}

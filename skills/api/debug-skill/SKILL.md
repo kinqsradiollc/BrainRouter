@@ -1,6 +1,12 @@
 ---
-name: api-layered-debugging
+name: debug-skill
 description: Diagnoses and recovers from complex REST and GraphQL API failures. Enforces reproduction before fixing and verifies via runtime inspection.
+hints: |
+  - Systematically isolate the failing networking layer from DNS to application semantics before patching.
+  - Inspect GraphQL response payloads closely for inner "errors" arrays even when status is 200 OK.
+  - Differentiate between connection timeouts (firewalls/network) and read timeouts (slow server compute).
+  - Capture and log vendor-specific request tracking IDs (e.g. X-Request-Id) to streamline external support.
+  - Build reproducer curl commands or Vitest regression scripts to isolate and confirm fixed behaviors.
 ---
 
 # API Testing & Debugging
@@ -505,22 +511,25 @@ Missing required field `email`. Server validation rejects before processing.
 - `systematic-debugging` — once the failing API layer is isolated, root-cause your code
 - `test-driven-development` — write the regression test before shipping the fix
 
-## Overview
-Brief description of what this skill does and why it matters.
-
-## Workflow
-1. [Step one]
-2. [Step two]
-
 ## Common Rationalizations
+
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| "I'll guess the fix based on the exception text." | Guessing leads to trial-and-error changes that bloat the git history and introduce side effects. Always isolate the network layer first. |
+| "A 200 OK status means the API request succeeded." | Many APIs (especially GraphQL) return 200 OK but include structured exceptions or partial data. Always parse and validate payload bodies. |
+| "We don't need a formal reproducer for simple bugs." | If you can't reliably reproduce a failure, you can't verify that your change was the active fix rather than transient environmental behavior. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+
+- Guessing or modifying source code without replicating the bug locally or via curl first.
+- Blindly ignoring SSL certificate warnings (`-k` or `NODE_TLS_REJECT_UNAUTHORIZED=0`) in production code.
+- Swallowing internal exception messages inside catch blocks without mapping, logging, or reporting them.
+- Sharing full API auth headers, Bearer tokens, or passwords inside plain text logs or vendor bug reports.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing the debugging process, verify:
+- [ ] Network layer is successfully isolated and localized (Connectivity, TLS, Auth, Payload, or Application logic).
+- [ ] A reproducible test scenario (curl command, script, or test case) predictably fails.
+- [ ] The identified fix is applied and verified as passing using the same reproducer criteria.
+- [ ] All sensitive credentials, tokens, or PII are redacted from diagnostics, curl statements, and debug scripts.

@@ -1,6 +1,12 @@
 ---
 name: code-simplification
 description: Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity.
+hints:
+  - Separate refactoring/simplification from feature implementation; never mix the two in a single PR.
+  - Apply Chesterton's Fence: understand why the original code was written before simplifying it.
+  - Prioritize comprehension speed and readability over clever tricks or extreme line count reduction.
+  - Verify every simplification step immediately by running the unit test suite or the build system.
+  - Review openSrc/ or existing patterns for idiomatic simplification examples in the target language.
 ---
 
 # Code Simplification
@@ -331,10 +337,16 @@ After completing a simplification pass:
 - [ ] A teammate or review agent would approve the change as a net improvement
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+
+1. **Locate Complex Code:** Identify code with high cyclomatic complexity, deep nesting, vague naming, or redundant logic.
+2. **Apply Chesterton's Fence:** Read git history or docstrings to understand why the current complexity exists before modifying it.
+3. **Refactor Incrementally:** Break down refactoring into micro-steps (e.g. invert if-statements to return early, extract sub-functions, rename variables).
+4. **Compile and Test:** Run compile and test suites after each micro-step to ensure behavior is fully preserved.
+5. **Review and Polish:** Compare readability before/after; ensure naming and formatting align with project style.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After executing this skill, confirm:
+- [ ] All unit tests pass successfully without modifying test code.
+- [ ] Readability has measurably improved (verified by visual inspection).
+- [ ] No behavioral side-effects or functional regressions were introduced.

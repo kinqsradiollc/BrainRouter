@@ -1,6 +1,12 @@
 ---
 name: skill-authoring
 description: Defines the canonical structure, format, and writing principles for BrainRouter SKILL.md files. Use when creating a new skill, reviewing an existing skill for compliance, or understanding what sections a skill must contain.
+hints:
+  - Keep skills project-agnostic, professional, and targeted at engineers or VibeCoders.
+  - Standardize frontmatter name to match folder basename exactly.
+  - Exclude custom branding, metadata keys, or trailing placeholders (like [trigger condition]).
+  - Write high-rebuttal anti-rationalizations and actionable verification checklists.
+  - Structure all supporting reference or template files under subfolders (e.g. templates/, scripts/).
 ---
 
 # Skill Anatomy

@@ -1,6 +1,12 @@
 ---
-name: design-taste-frontend
+name: taste-skill
 description: Senior UI/UX Engineer. Architect digital interfaces overriding default LLM biases. Enforces metric-based rules, strict component architecture, CSS hardware acceleration, and balanced design engineering.
+hints:
+  - "Apply all directives based on configurable DESIGN_VARIANCE, MOTION_INTENSITY, and VISUAL_DENSITY knobs before writing code."
+  - "Verify dependencies in package.json before importing any 3rd party library."
+  - "Default to React Server Components with isolated 'use client' islands for interactivity and animations."
+  - "Use CSS Grid exclusively over flexbox percentage math for multi-column structures."
+  - "Animate only transform and opacity properties; never animate top, left, width, or height."
 ---
 
 # High-Agency Frontend Skill
@@ -227,25 +233,37 @@ Evaluate your code against this matrix before outputting. This is the **last** f
 - [ ] Did you strictly isolate CPU-heavy perpetual animations in their own Client Components?
 
 ## Overview
-Brief description of what this skill does and why it matters.
+This skill acts as the primary high-agency frontend design system for React/Next.js projects. It overrides statistical LLM bias patterns, enforces correct performance guardrails, and provides precise stylistic guidelines that produce premium, non-generic UI implementations.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** Creating new application interfaces, upgrading existing product page designs, building SaaS dashboards, developer tool UIs, or brand-forward product landing pages.
+- **NOT for:** Simple CLI tools or server-only scripts with no UI layer, basic markdown files or READMEs, or raw terminal emulators where design variance is prohibited.
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+1. **Read Design Docs:** Run `list_template_docs` and check `docs/design` or `docs/theme` for any existing design constraints.
+2. **Set the Dials:** Confirm or adapt the `DESIGN_VARIANCE`, `MOTION_INTENSITY`, and `VISUAL_DENSITY` values based on the project context.
+3. **Verify Dependencies:** Check `package.json` before importing any third-party package. Only import what is installed.
+4. **Architect Components:** Apply the defined rules to the design (color, typography, grid, interactive states) as code.
+5. **Performance Audit:** Scan animated elements for disallowed layout properties and isolate all heavy Client Components.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| Using Inter font keeps things clean | Inter signals generic AI-generated output. Geist, Outfit, or Satoshi add distinct character without sacrificing legibility. |
+| `h-screen` works fine for most cases | On iOS Safari, `h-screen` shifts when the browser chrome hides, causing layout jumps. `min-h-[100dvh]` is required. |
+| Framer Motion can be placed in a Server Component | Framer Motion requires DOM access. All interactive or animated components must be isolated in `'use client'` leaf components. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Multiple accent colors used across the same project page.
+- Purple or neon blue gradient glows applied as primary brand elements.
+- Animated motion using `top`, `left`, `width`, or `height` properties instead of `transform`.
+- Inline SVG icon eggs used as avatar placeholders without contextual personalization.
+- Global state providers placed inside Server Components.
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] All dependencies used in the output are confirmed to exist in `package.json`.
+- [ ] Interactivity and animations are isolated in Client Components.
+- [ ] No banned fonts (Inter), icons, or layout patterns from Section 7 are present.
+- [ ] Full mobile collapse behavior is verified (single-column, `w-full`, `px-4`, `min-h-[100dvh]`).
+- [ ] Loading, empty, and error states have been implemented for all data-dependent components.

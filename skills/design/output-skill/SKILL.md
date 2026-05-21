@@ -1,6 +1,12 @@
 ---
-name: full-output-enforcement
+name: output-skill
 description: Overrides default LLM truncation behavior. Enforces complete code generation, bans placeholder patterns, and handles token-limit splits cleanly. Apply to any task requiring exhaustive, unabridged output.
+hints:
+  - "Never write placeholders or truncation comments like `// ...` or `// implement here`."
+  - "Explicitly count all required deliverables and verify that each is fully rendered in the final output."
+  - "When outputting extremely long files, pause at a clean logical breakpoint and provide a structured resume instruction."
+  - "Deliver actual, copy-pasteable production code rather than structural summaries or code sketches."
+  - "Cross-check the output files against the target specification to ensure no methods or blocks were accidentally omitted."
 ---
 
 # Full-Output Enforcement
@@ -49,25 +55,33 @@ Before finalizing any response, verify:
 - Nothing was shortened to save space
 
 ## Overview
-Brief description of what this skill does and why it matters.
+This skill enforces absolute completeness in code generation and textual output. It serves as a guardrail against AI-native shortcuts, placeholders, and truncation behaviors, guaranteeing that the delivered assets are fully realized, production-ready, and directly runnable.
 
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+- **Use when:** The user requests full file creation or major system rewrites, when implementing complex multiple-file setups, or when writing comprehensive architectural designs.
+- **NOT for:** Quick one-off terminal command suggestions, brief yes/no answers, or when explaining a high-level concept where full code isn't required.
 
 ## Workflow
-1. [Step one]
-2. [Step two]
+1. **Identify Deliverables:** Audit the prompt and list exactly how many files, routines, or structural assets must be produced.
+2. **Implement Unabridged Code:** Write every single line of code without skipping boilerplate, repeated fields, or setup configurations.
+3. **Establish Token Checkpoints:** If output length nears limits, suspend generation at a clean boundary, and write the standard `[PAUSED — X of Y complete]` marker.
+4. **Final Content Sweep:** Scan the drafted response for any commented ellipsis (`// ...`) or filler text, replacing them with complete implementations before finalizing.
 
 ## Common Rationalizations
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| The user knows how to write the remaining handlers | The user expects complete, working code. Leaving stubs wastes their time and leads to integration bugs. |
+| It saves space to show only the changed block | Swapping parts of a file often leads to copy-paste alignment errors. If a full file rewrite is requested, output the entire file. |
+| I can write the imports and skip the details | Partial code blocks cannot be verified or compiled. Deliver full imports, variables, and logic. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+- Comments like `// rest of the code is unchanged` or `/* ... */` in any code segment.
+- Outlines or lists of steps instead of complete file contents.
+- Direct suggestions to "implement this function as an exercise."
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] No placeholder stubs or ellipses exist in any code snippet.
+- [ ] Every single file, component, and method listed in the scope has been fully output.
+- [ ] The generated output compiles or runs with zero omitted dependencies.
+- [ ] Large outputs have been correctly split and resumed with clear, clean instructions.

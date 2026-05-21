@@ -1,13 +1,19 @@
 ---
 name: a11y-skill
-description: WCAG 2.1 AA accessibility mandates for the frontend.
+description: WCAG 2.1 AA accessibility mandates for the frontend. Use when implementing or reviewing user interface components, form inputs, modals, or motion effects.
+hints: |
+  - Always use semantic HTML tags (like button, main, nav, section) instead of styled divs.
+  - Ensure every interactive element is keyboard-focusable with visible focus-visible indicators.
+  - Associate all input fields with clear label tags and connect error messages via aria-describedby.
+  - Implement focus-traps for modals and popovers, restoring focus on close.
+  - Audit color contrast ratios and respect prefers-reduced-motion media queries for transitions.
 ---
 
 # Accessibility (A11Y) Skill
 
 ## Overview
 
-must meet WCAG 2.1 Level AA standards. Accessibility is a first-class citizen in our design system.
+User interfaces must meet WCAG 2.1 Level AA standards. Accessibility is a first-class citizen in modern interface design, ensuring that apps are robust, accessible, and compliant for all users, including those using assistive technologies.
 
 ## Workflow
 
@@ -47,27 +53,36 @@ must meet WCAG 2.1 Level AA standards. Accessibility is a first-class citizen in
 </button>
 ```
 
-## Required Checks
-
-- [ ] Page is navigable via Tab key.
-- [ ] Form labels are present and correctly associated.
-- [ ] Alt text is provided for all informative images.
-- [ ] Modals correctly trap and restore focus.
-- [ ] Contrast ratios meet WCAG AA standards.
-
 ## When to Use
-- Use when: [trigger condition]
-- NOT for: [exclusion]
+
+- Designing, building, or refactoring user interfaces, navigation menus, and page structures.
+- Creating interactive components such as modals, dropdowns, popovers, or forms.
+- Adding custom styling focus effects, animations, or state indicators.
+
+**When NOT to use:**
+- Developing purely headless CLI tools, server backend APIs, or cron jobs that lack user interfaces.
+- Running internal unit tests that do not involve DOM rendering or browser-based UI.
 
 ## Common Rationalizations
+
 | Rationalization | Reality |
 |---|---|
-| I can skip this | Following the defined process prevents regressions |
+| "Accessibility is a nice-to-have we can add later." | Retrofitting accessibility is extremely expensive as it requires changing DOM structures and component behaviors. Day-one accessibility ensures robust interfaces. |
+| "A styled div with an onClick handler is good enough." | Styled divs lack default keyboard interactivity (Tab focus, Enter/Space activation) and screen reader support, completely blocking disabled users. |
+| "Default browser focus outlines look ugly, so I'll disable them." | Disabling focus outlines makes the app unusable for keyboard-only users. Always replace default outlines with premium custom `:focus-visible` styles. |
 
 ## Red Flags
-- Observable signs that this skill is being violated.
+
+- Interactive elements constructed from `<div>` or `<span>` without ARIA roles, `tabindex="0"`, or keyboard event listeners.
+- Using `outline: none` or `outline: 0` in CSS without providing a visible focus alternative.
+- Icon-only buttons lacking `aria-label` or descriptive visually-hidden text.
+- Form inputs without corresponding `<label>` tags or using placeholder attributes as the sole label.
 
 ## Verification
-After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+
+After completing the UI implementation, verify:
+- [ ] Tab key navigation succeeds through all interactive elements in logical order.
+- [ ] No keyboard focus traps exist (user can navigate into and out of all controls).
+- [ ] Screen reader roles and accessibility trees are checked (using Chrome DevTools or axe audits).
+- [ ] All inputs have associated labels and announce error states correctly using ARIA attributes.
+- [ ] Interactive modals restrict focus to their active contents and restore focus on exit.

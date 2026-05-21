@@ -1,6 +1,12 @@
 ---
 name: developer-growth-analysis
 description: Analyzes your recent chat history to identify coding patterns, development gaps, and areas for improvement, curates relevant learning resources from HackerNews, and automatically sends a personalized growth report to your Slack DMs.
+hints:
+  - Read recent chat history locally to identify active engineering patterns and technical challenges.
+  - Highlight recurring struggles (e.g. state management, API design, dependency errors) objectively.
+  - Curate highly-targeted, high-quality reference links (such as HackerNews threads) for development gaps.
+  - Keep the growth report concise, actionable, and formatted cleanly for quick scanning.
+  - Deliver recommendations securely to Slack DMs without exposing private codebase contents.
 ---
 
 # Developer Growth Analysis

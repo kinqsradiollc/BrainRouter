@@ -1,6 +1,12 @@
 ---
-name: shipping-and-launch
+name: shipping-skill
 description: Prepares production launches. Use when preparing to deploy to production. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy.
+hints:
+  - Check openSrc/ or existing project templates for launch/deployment procedures if available.
+  - Structure releases using feature flags to decouple code deployment from functional release.
+  - Implement a concrete, verified rollback script for codebase versions and database structures.
+  - Evaluate pre-launch checklists covering performance targets, accessibility, and security standards.
+  - Monitor application, client-side, and infrastructure logs closely for at least 15-30 minutes after deployment.
 ---
 
 # Shipping and Launch
@@ -308,11 +314,8 @@ After deploying:
 - [ ] Logs are flowing
 - [ ] Rollback tested or verified ready
 
-## Workflow
-1. [Step one]
-2. [Step two]
-
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] Staged environments are verified via automated or manual checks before triggering the production push.
+- [ ] Active monitoring dashboards and error logs are observed for at least 15-30 minutes after release.
+- [ ] Rollback pathways and database rollbacks are checked and ready to be executed if incident thresholds are hit.

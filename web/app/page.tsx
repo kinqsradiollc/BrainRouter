@@ -583,6 +583,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
 
       {/* Concept Architecture: Three-Tier Hierarchical Model */}
       <motion.section 
+        id="workflow"
         variants={itemVariants}
         style={{ display: "flex", flexDirection: "column", gap: "28px" }}
       >
@@ -1102,6 +1103,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
 
       {/* Interactive Consolidation & Learning Loop */}
       <motion.section 
+        id="how-it-works"
         variants={itemVariants}
         style={{
           background: "rgba(255, 255, 255, 0.01)",
@@ -1464,6 +1466,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
 
       {/* Ecosystem Architecture */}
       <motion.section 
+        id="features"
         variants={itemVariants}
         style={{ display: "flex", flexDirection: "column", gap: "28px", marginTop: "40px", marginBottom: "40px" }}
       >

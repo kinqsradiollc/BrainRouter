@@ -39,4 +39,16 @@ mcp/benchmark/data/longmemeval_s_cleaned.json
 
 mcp/memory.db
 mcp/mcp_server.log
-research/prototypes
+
+openSrc/agentmemory
+openSrc/claude-code
+openSrc/codex
+openSrc/hermes-agent
+openSrc/langchain
+openSrc/openai-node
+openSrc/prototypes
+openSrc/TencentDB-Agent-Memory
+CodexImplementationPlan.md
+CodexTasks.md
+BRAINROUTER_TASKS.md
+BRAINROUTER_IMPLEMENTATION_PLAN.md

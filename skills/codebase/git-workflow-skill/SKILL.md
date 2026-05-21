@@ -1,6 +1,12 @@
 ---
-name: git-workflow-and-versioning
+name: git-workflow-skill
 description: Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, or when you need to organize work across multiple parallel streams.
+hints:
+  - Formulate small, atomic commits addressing single logical changes (typically under 100 lines).
+  - Use conventional commit formats (feat:, fix:, refactor:, test:) explaining the "why" instead of the "what".
+  - Inspect stages using git diff --staged to review and purge accidentally staged secrets or temporary comments.
+  - Separate formatting or styling adjustments from behavioral logic updates in distinct commits.
+  - Utilize short-lived feature branches, avoiding long-lived branches that diverge from the main branch.
 ---
 
 # Git Workflow and Versioning
@@ -301,5 +307,6 @@ For every commit:
 
 ## Verification
 After completing the skill, confirm:
-- [ ] The process was followed correctly.
-- [ ] Required outcomes are met.
+- [ ] All staged files are reviewed with `git diff --staged` to confirm formatting is separated from behavior changes.
+- [ ] Commit message is conventional, descriptive, and accurately conveys the "why".
+- [ ] Clean working directory achieved and test passes before pushing.
