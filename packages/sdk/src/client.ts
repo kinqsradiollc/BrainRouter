@@ -172,6 +172,7 @@ export class BrainRouterClient {
   exportMemories() { return this.get<ExportMemoriesResponse>("/api/export"); }
   importMemories(body: ImportMemoriesRequest) { return this.post<ImportMemoriesResponse>("/api/import", body); }
   getScenes(params?: CursorPaginationParams) { return this.get<ScenesResponse>("/api/scenes", params); }
+  deleteScene(id: string) { return this.deleteReq<{ success: boolean }>(`/api/scenes/${id}`); }
   getPersona() { return this.get<{ persona: CoreIdentityRecord | null }>("/api/persona"); }
   getContradictions(params?: CursorPaginationParams) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
   resolveContradiction(id: string, status: "resolved" | "dismissed") { return this.post<{ success: boolean }>(`/api/contradictions/${id}/resolve`, { status }); }

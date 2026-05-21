@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useScenes } from "@brainrouter/hooks";
 import type { ContextualFocusRecord } from "@brainrouter/types";
 import { getClient } from "../../lib/client";
 import { SceneCard } from "../../components/SceneCard";
+import { PremiumModal } from "../../components/PremiumModal";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { EmptyState } from "../../components/EmptyState";
@@ -23,7 +24,8 @@ const containerVariants = {
 
 export default function ScenesPage() {
   const client = useMemo(() => getClient(), []);
-  const { scenes, loadMore, hasMore, isFetchingMore } = useScenes(client);
+  const { scenes, loadMore, hasMore, isFetchingMore, evictScene } = useScenes(client);
+  const [evictTargetId, setEvictTargetId] = useState<string | null>(null);
 
   return (
     <AuthGuard>
@@ -48,7 +50,7 @@ export default function ScenesPage() {
         >
           <AnimatePresence mode="popLayout">
             {scenes.map((scene: ContextualFocusRecord) => (
-              <SceneCard key={scene.id} scene={scene} />
+              <SceneCard key={scene.id} scene={scene} onEvict={(id) => setEvictTargetId(id)} />
             ))}
           </AnimatePresence>
         </motion.div>
@@ -63,9 +65,33 @@ export default function ScenesPage() {
               </svg>
             }
             title="No Consolidated Focus Scenes"
-            description="The background worker automatically consolidates recurring cognitive memories into focus scenes periodically."
+            description="The background worker automatically consolidates cognitive memories into focus scenes periodically."
           />
         )}
+
+        <PremiumModal isOpen={!!evictTargetId} onClose={() => setEvictTargetId(null)} title="Confirm Scene Eviction">
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <p style={{ margin: 0, color: "var(--color-silver-text)" }}>
+              Are you sure you want to evict this scene? This will remove its high-level consolidated context focus and history from memory.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+              <button onClick={() => setEvictTargetId(null)} className="pill-btn pill-btn-ghost">
+                Cancel
+              </button>
+              <button 
+                onClick={async () => {
+                  if (evictTargetId) {
+                    await evictScene(evictTargetId);
+                    setEvictTargetId(null);
+                  }
+                }} 
+                className="pill-btn pill-btn-danger"
+              >
+                Evict Scene
+              </button>
+            </div>
+          </div>
+        </PremiumModal>
       </motion.div>
     </AuthGuard>
   );

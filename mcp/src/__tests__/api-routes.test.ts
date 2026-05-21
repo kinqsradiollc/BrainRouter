@@ -42,18 +42,23 @@ vi.mock("../memory/engine.js", () => ({
       email: "user@example.test",
       status: "active",
     })),
+    store: {
+      deleteContextualFocus: vi.fn(),
+    },
   },
 }));
 
 async function createServer() {
-  const [{ workingRouter }, { hooksRouter }] = await Promise.all([
+  const [{ workingRouter }, { hooksRouter }, { scenesRouter }] = await Promise.all([
     import("../api/routes/working.js"),
     import("../api/routes/hooks.js"),
+    import("../api/routes/scenes.js"),
   ]);
   const app = express();
   app.use(express.json());
   app.use("/api/working", workingRouter);
   app.use("/api/hooks", hooksRouter);
+  app.use("/api/scenes", scenesRouter);
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address();
@@ -162,5 +167,19 @@ describe("Phase 4 and 5 API routes", () => {
       headers: { Authorization: "Bearer br_user" },
     });
     expect(response.status).toBe(403);
+  });
+
+  it("evicts scenes via delete endpoint", async () => {
+    const auth = { Authorization: "Bearer br_user" };
+    const response = await fetch(`${baseUrl}/api/scenes/scene-123`, {
+      method: "DELETE",
+      headers: auth,
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { success: boolean };
+    expect(json.success).toBe(true);
+
+    const { memoryEngine } = await import("../memory/engine.js");
+    expect(memoryEngine.store.deleteContextualFocus).toHaveBeenCalledWith("user-1", ["scene-123"]);
   });
 });

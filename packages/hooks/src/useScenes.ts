@@ -8,7 +8,12 @@ export function useScenes(client: BrainRouterClient) {
     return client.getScenes(params);
   }, [client]);
 
-  const { items: scenes, ...pagination } = useCursorPagination<ContextualFocusRecord, "scenes">("scenes", fetchScenes);
+  const { items: scenes, refresh, ...pagination } = useCursorPagination<ContextualFocusRecord, "scenes">("scenes", fetchScenes);
 
-  return { scenes, ...pagination };
+  const evictScene = useCallback(async (id: string) => {
+    await client.deleteScene(id);
+    await refresh();
+  }, [client, refresh]);
+
+  return { scenes, refresh, evictScene, ...pagination };
 }

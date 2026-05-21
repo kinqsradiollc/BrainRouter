@@ -12,9 +12,10 @@ interface SceneCardProps {
     heatScore?: number | string;
     summaryMd?: string;
   };
+  onEvict?: (id: string) => void;
 }
 
-export function SceneCard({ scene }: SceneCardProps) {
+export function SceneCard({ scene, onEvict }: SceneCardProps) {
   const [expanded, setExpanded] = useState(false);
   const heat = Number(scene.heatScore ?? 0);
 
@@ -80,31 +81,62 @@ export function SceneCard({ scene }: SceneCardProps) {
         />
       </div>
 
-      {/* Click to expand prompt */}
+      {/* Footer controls */}
       <div 
         style={{ 
           display: "flex", 
           alignItems: "center", 
-          gap: "4px", 
-          color: "var(--color-stone-text)", 
-          fontSize: "11px", 
-          textTransform: "uppercase", 
-          marginTop: "16px",
-          fontWeight: 600
+          justifyContent: "space-between",
+          marginTop: "16px"
         }}
       >
-        <span>{expanded ? "Collapse synopsis" : "Expand synopsis"}</span>
-        <motion.svg 
-          animate={{ rotate: expanded ? 180 : 0 }}
-          width="12" 
-          height="12" 
-          viewBox="0 0 24 24" 
-          fill="none" 
-          stroke="currentColor" 
-          strokeWidth="3"
+        <div 
+          style={{ 
+            display: "flex", 
+            alignItems: "center", 
+            gap: "4px", 
+            color: "var(--color-stone-text)", 
+            fontSize: "11px", 
+            textTransform: "uppercase", 
+            fontWeight: 600
+          }}
         >
-          <path d="m6 9 6 6 6-6" />
-        </motion.svg>
+          <span>{expanded ? "Collapse synopsis" : "Expand synopsis"}</span>
+          <motion.svg 
+            animate={{ rotate: expanded ? 180 : 0 }}
+            width="12" 
+            height="12" 
+            viewBox="0 0 24 24" 
+            fill="none" 
+            stroke="currentColor" 
+            strokeWidth="3"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </motion.svg>
+        </div>
+
+        {onEvict && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onEvict(String(scene.id));
+            }}
+            className="pill-btn-danger"
+            style={{
+              padding: "4px 10px",
+              fontSize: "11px",
+              borderRadius: "4px",
+              cursor: "pointer",
+              border: "1px solid rgba(239, 68, 68, 0.2)",
+              background: "rgba(239, 68, 68, 0.08)",
+              textTransform: "uppercase",
+              fontWeight: 600,
+              letterSpacing: "0.02em"
+            }}
+          >
+            Evict
+          </button>
+        )}
       </div>
 
       {/* Expandable synopsis drawer */}
