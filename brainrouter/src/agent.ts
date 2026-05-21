@@ -21,6 +21,8 @@ import {
 } from './orchestratorTools.js';
 import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from './memoryBriefing.js';
 import { callMcpTool, extractToolText } from './mcpUtils.js';
+import { formatGoalBlock, readGoal } from './goalStore.js';
+import { runHooks } from './hooksStore.js';
 
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
@@ -29,6 +31,12 @@ export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
   onToolStart: (name: string, args: Record<string, any>) => void;
   onToolEnd: (name: string, result: { success: boolean; summary: string }) => void;
+  /**
+   * Optional: invoked whenever the agent calls update_plan during a turn,
+   * so the REPL can render a live ✓ / ⏳ / ☐ checklist instead of leaving the
+   * plan invisible until the user runs `/plan`.
+   */
+  onPlanUpdate?: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed' }>, explanation?: string) => void;
 }
 
 export interface ChatCompletionPayload {
@@ -151,6 +159,29 @@ export const LOCAL_TOOLS = [
       required: ['url']
     }
   },
+  {
+    name: 'web_search',
+    description: 'Search the public web for a query and return top results (title, url, snippet). Useful when fetch_url needs a starting point.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query.' },
+        maxResults: { type: 'integer', description: 'Maximum results to return. Default 5, max 10.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'apply_patch',
+    description: 'Apply a multi-file patch in the codex-cli envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). Lets you make several coordinated edits across files in one tool call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        patch: { type: 'string', description: 'The full patch text including Begin Patch/End Patch envelope.' }
+      },
+      required: ['patch']
+    }
+  },
   createSpawnAgentTool(),
   createListAgentsTool(),
   createWaitAgentTool(),
@@ -240,9 +271,9 @@ export class Agent {
   }
 
   private allowedToolsForAccess(): Set<string> {
-    const readOnly = new Set(['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'update_plan',
+    const readOnly = new Set(['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
       'spawn_agent', 'list_agents', 'wait_agent', 'read_agent_transcript', 'close_agent']);
-    const writeAdds = new Set(['write_file', 'edit_file']);
+    const writeAdds = new Set(['write_file', 'edit_file', 'apply_patch']);
     const shellAdds = new Set(['run_command']);
     if (this.accessMode === 'read') return readOnly;
     if (this.accessMode === 'write') return new Set([...readOnly, ...writeAdds]);
@@ -253,6 +284,7 @@ export class Agent {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
+    this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0 };
 
     callbacks.onStatusUpdate('Loading available tools...');
     let mcpTools: any[] = [];
@@ -269,6 +301,9 @@ export class Agent {
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools and ${mcpTools.length} MCP tools.`);
     await this.injectRecallContext(prompt, mcpTools, callbacks);
 
+    // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
+    if (!this.silent) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+
     const userMsg = { role: 'user', content: prompt };
     this.chatHistory.push(userMsg);
     this.recordTranscript(userMsg);
@@ -281,11 +316,16 @@ export class Agent {
       loopCount++;
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
-      let response: { content: string; toolCalls?: any[] };
+      let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       try {
         response = await callOpenAI(this.llmConfig, this.chatHistory, allTools);
       } catch (err: any) {
         throw new Error(`LLM Execution failed: ${err.message}`);
+      }
+      if (response.usage) {
+        this.lastTurnUsage.promptTokens += response.usage.prompt_tokens ?? 0;
+        this.lastTurnUsage.completionTokens += response.usage.completion_tokens ?? 0;
+        this.lastTurnUsage.calls += 1;
       }
 
       // Record Assistant message
@@ -320,7 +360,20 @@ export class Agent {
         let isError = false;
         let summary = '';
 
+        // Lifecycle: pre-tool hook. Non-zero exit blocks the tool call.
+        let blockedByHook: string | undefined;
+        if (!this.silent) {
+          const preResults = runHooks(this.workspaceRoot, 'pre-tool', { tool: name, payload: args });
+          const denial = preResults.find((r) => r.exitCode !== 0);
+          if (denial) {
+            blockedByHook = (denial.stderr || denial.stdout || '').toString().trim() || `Hook ${denial.hook.id} denied tool call (exit ${denial.exitCode})`;
+          }
+        }
+
         try {
+          if (blockedByHook) {
+            throw new Error(`Blocked by pre-tool hook: ${blockedByHook}`);
+          }
           if (!allowed.has(name) && isLocal) {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
@@ -336,6 +389,11 @@ export class Agent {
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
+            // Plan-ticker: surface update_plan changes to the REPL so the user
+            // sees the live ✓/⏳/☐ checklist instead of having to run /plan.
+            if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
+              callbacks.onPlanUpdate(args.plan, args.explanation);
+            }
           } else {
             const mcpRes = await this.mcpClient.callTool(name, args);
             if (mcpRes.isError) {
@@ -351,6 +409,12 @@ export class Agent {
         }
 
         callbacks.onToolEnd(name, { success: !isError, summary });
+        if (!this.silent) {
+          runHooks(this.workspaceRoot, 'post-tool', {
+            tool: name,
+            payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
+          });
+        }
 
         const toolMsg = {
           role: 'tool',
@@ -364,7 +428,13 @@ export class Agent {
       }
     }
 
+    this.lastAnswer = finalAnswer;
     await this.captureTurn(prompt, finalAnswer);
+    if (!this.silent) {
+      runHooks(this.workspaceRoot, 'post-turn', {
+        payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
+      });
+    }
     return finalAnswer || 'I could not produce a final answer before the tool loop limit was reached.';
   }
 
@@ -539,6 +609,17 @@ export class Agent {
           return `Failed to fetch URL ${url}: ${err.message}`;
         }
       }
+      case 'web_search': {
+        const query = String(args.query ?? '').trim();
+        if (!query) throw new Error('web_search requires a non-empty query.');
+        const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
+        return await runWebSearch(query, maxResults);
+      }
+      case 'apply_patch': {
+        const patch = String(args.patch ?? '');
+        if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
+        return applyPatchEnvelope(patch);
+      }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
           explanation: args.explanation,
@@ -554,6 +635,69 @@ export class Agent {
   clearHistory() {
     this.chatHistory = [this.createSystemMessage()];
     this.initialized = true;
+  }
+
+  /** Runtime model switch. Used by `/model` slash command. */
+  public setModel(model: string): void {
+    this.llmConfig = { ...this.llmConfig, model };
+  }
+  public getModel(): string {
+    return this.llmConfig.model;
+  }
+
+  /** Runtime access-mode cycle for `/permissions` and Shift+Tab plan-mode toggle. */
+  public getAccessMode(): AccessMode {
+    return this.accessMode;
+  }
+  public setAccessMode(mode: AccessMode): void {
+    this.accessMode = mode;
+  }
+
+  /**
+   * Seed the chat history from a persisted transcript so the user can resume
+   * a previous session. The system message is regenerated for the current
+   * runtime so workspace/session context is fresh, but the user/assistant/tool
+   * messages are kept verbatim.
+   */
+  public loadHistory(entries: Array<{ role: string; content?: unknown; name?: string; tool_call_id?: string; tool_calls?: unknown }>): number {
+    const replay = entries
+      .filter((e) => e.role === 'user' || e.role === 'assistant' || e.role === 'tool')
+      .map((e) => {
+        const msg: any = { role: e.role, content: typeof e.content === 'string' ? e.content : JSON.stringify(e.content ?? '') };
+        if (e.name) msg.name = e.name;
+        if (e.tool_call_id) msg.tool_call_id = e.tool_call_id;
+        if (e.tool_calls) msg.tool_calls = e.tool_calls;
+        return msg;
+      });
+    this.chatHistory = [this.createSystemMessage(), ...replay];
+    this.initialized = true;
+    return replay.length;
+  }
+
+  /** Cumulative token usage across the last runTurn. Cleared at each new turn. */
+  public lastTurnUsage: { promptTokens: number; completionTokens: number; calls: number } = { promptTokens: 0, completionTokens: 0, calls: 0 };
+
+  /** Last assistant message of the most recent turn — used by `/copy`. */
+  public lastAnswer = '';
+
+  /** Allow REPL slash commands to refresh the system prompt without bumping a new turn. */
+  public refreshSystemPrompt(): void {
+    if (this.chatHistory.length > 0 && this.chatHistory[0].role === 'system') {
+      this.chatHistory[0] = this.createSystemMessage();
+    }
+  }
+
+  /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
+  public fork(newSessionKey: string): string {
+    this.sessionKey = newSessionKey;
+    // Replace the system message so workspace/session context is fresh,
+    // but keep the user/assistant/tool exchange.
+    if (this.chatHistory.length > 0 && this.chatHistory[0].role === 'system') {
+      this.chatHistory[0] = this.createSystemMessage();
+    } else {
+      this.chatHistory = [this.createSystemMessage(), ...this.chatHistory];
+    }
+    return this.sessionKey;
   }
 
   private async bootstrapSession(callbacks: RunTurnCallbacks): Promise<void> {
@@ -583,8 +727,13 @@ export class Agent {
       sessionKey: this.sessionKey,
       instructionSummary: loadWorkspaceInstructionSummary(this.workspaceRoot),
     });
-    const content = this.roleOverlay ? `${base}\n\n${this.roleOverlay}` : base;
-    return { role: 'system', content };
+    const parts = [base];
+    if (this.roleOverlay) parts.push(this.roleOverlay);
+    // Sticky goal lives on disk so it survives CLI restarts; injected here so
+    // every turn (including the first after `/resume`) sees it.
+    const goal = readGoal(this.workspaceRoot);
+    if (goal?.text) parts.push(formatGoalBlock(goal));
+    return { role: 'system', content: parts.join('\n\n') };
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {
@@ -679,6 +828,195 @@ export class Agent {
       // Transcript persistence should not break the interactive turn.
     }
   }
+}
+
+/**
+ * Run a web search via DuckDuckGo's Instant Answer API. No API key required.
+ *
+ * This is a thin, dependency-free fallback for codex/claude-code parity. For
+ * production-grade results, users can configure an upstream search provider
+ * (Brave / Tavily / SerpAPI) and point `BRAINROUTER_WEB_SEARCH_ENDPOINT` at it
+ * — when set, we POST the query and expect `{ results: [{title, url, snippet}] }`.
+ */
+async function runWebSearch(query: string, maxResults: number): Promise<string> {
+  const customEndpoint = process.env.BRAINROUTER_WEB_SEARCH_ENDPOINT?.trim();
+  if (customEndpoint) {
+    try {
+      const res = await fetch(customEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, maxResults }),
+      });
+      if (res.ok) {
+        const body = await res.json() as any;
+        if (Array.isArray(body?.results)) {
+          return JSON.stringify(body.results.slice(0, maxResults), null, 2);
+        }
+      }
+    } catch {
+      // fall through to DuckDuckGo fallback
+    }
+  }
+
+  try {
+    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.2' } });
+    if (!res.ok) {
+      return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
+    }
+    const data = await res.json() as any;
+    const results: Array<{ title: string; url: string; snippet: string }> = [];
+    if (data?.AbstractURL && data?.AbstractText) {
+      results.push({ title: data.Heading ?? query, url: data.AbstractURL, snippet: data.AbstractText });
+    }
+    const topics = Array.isArray(data?.RelatedTopics) ? data.RelatedTopics : [];
+    for (const t of topics) {
+      if (results.length >= maxResults) break;
+      if (t.FirstURL && t.Text) {
+        results.push({ title: t.Text.split(' - ')[0] ?? t.Text, url: t.FirstURL, snippet: t.Text });
+      } else if (Array.isArray(t?.Topics)) {
+        for (const inner of t.Topics) {
+          if (results.length >= maxResults) break;
+          if (inner.FirstURL && inner.Text) {
+            results.push({ title: inner.Text.split(' - ')[0] ?? inner.Text, url: inner.FirstURL, snippet: inner.Text });
+          }
+        }
+      }
+    }
+    if (results.length === 0) {
+      return `web_search returned no results for "${query}". DuckDuckGo Instant Answer is best for factual queries; configure BRAINROUTER_WEB_SEARCH_ENDPOINT for a full search backend.`;
+    }
+    return JSON.stringify(results.slice(0, maxResults), null, 2);
+  } catch (err: any) {
+    return `web_search failed: ${err?.message ?? err}`;
+  }
+}
+
+/**
+ * Apply a codex-cli-style patch envelope:
+ *
+ *   *** Begin Patch
+ *   *** Update File: path/relative/to/workspace
+ *   @@ optional context anchor
+ *   -old line
+ *   +new line
+ *    unchanged line
+ *   *** Add File: another/path
+ *   +line 1
+ *   +line 2
+ *   *** Delete File: third/path
+ *   *** End Patch
+ *
+ * Returns a JSON summary of operations performed; throws on a malformed envelope
+ * or when an Update fails to match its context block uniquely.
+ */
+export function applyPatchEnvelope(patch: string): string {
+  const text = patch.replace(/\r\n/g, '\n').trim();
+  if (!text.startsWith('*** Begin Patch')) {
+    throw new Error('apply_patch: missing "*** Begin Patch" header.');
+  }
+  if (!text.endsWith('*** End Patch')) {
+    throw new Error('apply_patch: missing "*** End Patch" footer.');
+  }
+  const inner = text.slice('*** Begin Patch'.length, text.length - '*** End Patch'.length);
+  const lines = inner.split('\n');
+
+  type Op =
+    | { kind: 'update'; file: string; oldBlock: string; newBlock: string }
+    | { kind: 'add'; file: string; body: string }
+    | { kind: 'delete'; file: string };
+
+  const ops: Op[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.startsWith('*** Update File: ')) {
+      const file = line.slice('*** Update File: '.length).trim();
+      i++;
+      // Optional @@ anchor (single line for now).
+      if (i < lines.length && lines[i].startsWith('@@')) {
+        i++;
+      }
+      const oldLines: string[] = [];
+      const newLines: string[] = [];
+      while (i < lines.length && !lines[i].startsWith('*** ')) {
+        const l = lines[i];
+        if (l.startsWith('-')) {
+          oldLines.push(l.slice(1));
+        } else if (l.startsWith('+')) {
+          newLines.push(l.slice(1));
+        } else if (l.startsWith(' ')) {
+          oldLines.push(l.slice(1));
+          newLines.push(l.slice(1));
+        } else if (l === '') {
+          // tolerate blank lines as untouched
+          oldLines.push('');
+          newLines.push('');
+        } else {
+          throw new Error(`apply_patch: unexpected line in Update File "${file}": ${JSON.stringify(l)}`);
+        }
+        i++;
+      }
+      ops.push({ kind: 'update', file, oldBlock: oldLines.join('\n'), newBlock: newLines.join('\n') });
+    } else if (line.startsWith('*** Add File: ')) {
+      const file = line.slice('*** Add File: '.length).trim();
+      i++;
+      const body: string[] = [];
+      while (i < lines.length && !lines[i].startsWith('*** ')) {
+        const l = lines[i];
+        if (l.startsWith('+')) body.push(l.slice(1));
+        else if (l === '') body.push('');
+        else throw new Error(`apply_patch: Add File "${file}" lines must start with '+': ${JSON.stringify(l)}`);
+        i++;
+      }
+      ops.push({ kind: 'add', file, body: body.join('\n') });
+    } else if (line.startsWith('*** Delete File: ')) {
+      const file = line.slice('*** Delete File: '.length).trim();
+      ops.push({ kind: 'delete', file });
+      i++;
+    } else if (line === '' || line.startsWith('***')) {
+      i++;
+    } else {
+      throw new Error(`apply_patch: expected an operation header, got ${JSON.stringify(line)}`);
+    }
+  }
+
+  const applied: Array<{ kind: string; file: string }> = [];
+  for (const op of ops) {
+    const resolved = resolveWorkspacePath(op.file, { forWrite: op.kind !== 'delete' });
+    if (op.kind === 'add') {
+      const dir = path.dirname(resolved);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (fs.existsSync(resolved)) {
+        throw new Error(`apply_patch: Add File "${op.file}" already exists. Use Update File instead.`);
+      }
+      fs.writeFileSync(resolved, op.body, 'utf8');
+      applied.push({ kind: 'add', file: op.file });
+    } else if (op.kind === 'delete') {
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`apply_patch: Delete File "${op.file}" does not exist.`);
+      }
+      fs.unlinkSync(resolved);
+      applied.push({ kind: 'delete', file: op.file });
+    } else {
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`apply_patch: Update File "${op.file}" does not exist.`);
+      }
+      const content = fs.readFileSync(resolved, 'utf8');
+      const count = op.oldBlock === '' ? 0 : content.split(op.oldBlock).length - 1;
+      if (count === 0) {
+        throw new Error(`apply_patch: context for Update File "${op.file}" did not match. Re-read the file and resubmit.`);
+      }
+      if (count > 1) {
+        throw new Error(`apply_patch: context for Update File "${op.file}" matched ${count} times. Add more surrounding lines for uniqueness.`);
+      }
+      const updated = content.replace(op.oldBlock, op.newBlock);
+      fs.writeFileSync(resolved, updated, 'utf8');
+      applied.push({ kind: 'update', file: op.file });
+    }
+  }
+
+  return JSON.stringify({ applied }, null, 2);
 }
 
 export function matchGlob(pattern: string, filePath: string): boolean {
@@ -799,6 +1137,10 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
         return 'failed web fetch';
       }
       return `fetched content from ${args.url}`;
+    case 'web_search':
+      try { return `${JSON.parse(result).length} web results for "${args.query}"`; } catch { return `searched web for "${args.query}"`; }
+    case 'apply_patch':
+      try { return `applied ${JSON.parse(result).applied.length} file ops`; } catch { return 'applied patch'; }
     case 'update_plan':
       return 'updated durable plan';
     case 'spawn_agent':
@@ -910,6 +1252,7 @@ async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
   }
   return {
     content: choice.message.content || '',
-    toolCalls: choice.message.tool_calls
+    toolCalls: choice.message.tool_calls,
+    usage: data.usage,
   };
 }

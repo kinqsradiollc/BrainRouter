@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  applyPatchEnvelope,
   buildChatCompletionPayload,
   globFiles,
   isPathInside,
@@ -22,6 +23,12 @@ import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from './skillRunner.js
 import { buildMemoryBriefing, selectCitedRecordIds } from './memoryBriefing.js';
 import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from './mcpUtils.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify, updateWorkflowStatus } from './workflowArtifacts.js';
+import { initAgentMd } from './initAgentMd.js';
+import { expandMentions } from './mentions.js';
+import { listTranscripts } from './sessionStore.js';
+import { clearGoal, formatGoalBlock, readGoal, setGoal } from './goalStore.js';
+import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from './hooksStore.js';
+import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from './loopRunner.js';
 
 function withTempWorkspace(fn: (workspace: string) => void) {
   const previousCwd = process.cwd();
@@ -401,6 +408,160 @@ test('workflowArtifacts: artifactRelativePath stays inside workspace and listWor
     assert.equal(rel.endsWith('spec.md'), true);
     assert.equal(rel.includes('..'), false);
   });
+});
+
+test('applyPatchEnvelope handles update, add, and delete operations in one envelope', () => {
+  withTempWorkspace(() => {
+    fs.writeFileSync('alpha.txt', 'hello world\n');
+    fs.writeFileSync('legacy.txt', 'remove me\n');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: alpha.txt',
+      '-hello world',
+      '+hello BrainRouter',
+      '*** Add File: notes/new.md',
+      '+# New file',
+      '+Created by apply_patch.',
+      '*** Delete File: legacy.txt',
+      '*** End Patch',
+    ].join('\n');
+    const result = applyPatchEnvelope(patch);
+    const parsed = JSON.parse(result);
+    assert.equal(parsed.applied.length, 3);
+    assert.equal(fs.readFileSync('alpha.txt', 'utf8'), 'hello BrainRouter\n');
+    assert.equal(fs.readFileSync('notes/new.md', 'utf8'), '# New file\nCreated by apply_patch.');
+    assert.equal(fs.existsSync('legacy.txt'), false);
+  });
+});
+
+test('applyPatchEnvelope rejects malformed envelopes and ambiguous context', () => {
+  withTempWorkspace(() => {
+    assert.throws(() => applyPatchEnvelope('not a patch'), /Begin Patch/);
+    fs.writeFileSync('dup.txt', 'same\nsame\n');
+    const ambiguous = [
+      '*** Begin Patch',
+      '*** Update File: dup.txt',
+      '-same',
+      '+changed',
+      '*** End Patch',
+    ].join('\n');
+    assert.throws(() => applyPatchEnvelope(ambiguous), /matched 2 times/);
+  });
+});
+
+test('initAgentMd creates AGENT.md when missing and is idempotent', () => {
+  withTempWorkspace((workspace) => {
+    const first = initAgentMd(workspace);
+    assert.equal(first.status, 'created');
+    assert.equal(fs.existsSync(path.join(workspace, 'AGENT.md')), true);
+    const second = initAgentMd(workspace);
+    assert.equal(second.status, 'exists');
+  });
+});
+
+test('initAgentMd respects pre-existing AGENTS.md', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync(path.join(workspace, 'AGENTS.md'), '# existing\n');
+    const result = initAgentMd(workspace);
+    assert.equal(result.status, 'exists');
+    assert.equal(fs.existsSync(path.join(workspace, 'AGENT.md')), false);
+  });
+});
+
+test('expandMentions inlines workspace files and skips outside-of-workspace paths', () => {
+  withTempWorkspace((workspace) => {
+    fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'src', 'index.ts'), 'export const x = 1;\n');
+    const { expanded, mentions } = expandMentions('Please review @src/index.ts plus @../../../etc/passwd', workspace);
+    // Only the safe in-workspace file got attached; the escape attempt was skipped.
+    assert.equal(mentions.length, 1);
+    assert.equal(mentions[0].token, 'src/index.ts');
+    assert.match(expanded, /Attached files/);
+    assert.match(expanded, /export const x = 1;/);
+    // No fenced reference header was created for the dangerous mention.
+    assert.doesNotMatch(expanded, /referenced via @\.\.\//);
+  });
+});
+
+test('expandMentions truncates oversize files and marks them', () => {
+  withTempWorkspace((workspace) => {
+    const big = 'x'.repeat(30_000);
+    fs.writeFileSync(path.join(workspace, 'big.txt'), big);
+    const { expanded, mentions } = expandMentions('see @big.txt', workspace, 1000);
+    assert.equal(mentions.length, 1);
+    assert.equal(mentions[0].truncated, true);
+    assert.match(expanded, /truncated at 1000 chars/);
+  });
+});
+
+test('listTranscripts surfaces persisted sessions newest first with previews', () => {
+  withTempWorkspace((workspace) => {
+    appendTranscriptEntry(workspace, 'session:one', { role: 'user', content: 'first thing about Zod' });
+    appendTranscriptEntry(workspace, 'session:one', { role: 'assistant', content: 'ok' });
+    appendTranscriptEntry(workspace, 'session:two', { role: 'user', content: 'second different session' });
+    const list = listTranscripts(workspace);
+    assert.equal(list.length, 2);
+    const one = list.find((t) => t.sessionKey === 'session:one')!;
+    assert.equal(one.turnCount, 2);
+    assert.match(one.firstUserMessage ?? '', /Zod/);
+  });
+});
+
+test('goalStore: set/read/clear round-trip and formatGoalBlock includes the text', () => {
+  withTempWorkspace((workspace) => {
+    assert.equal(readGoal(workspace), null);
+    const saved = setGoal(workspace, '   ship the auth refactor   ');
+    assert.equal(saved.text, 'ship the auth refactor');
+    const block = formatGoalBlock(saved);
+    assert.match(block, /Sticky Goal/);
+    assert.match(block, /ship the auth refactor/);
+    clearGoal(workspace);
+    assert.equal(readGoal(workspace), null);
+  });
+});
+
+test('hooksStore: add → enable/disable → run → remove', () => {
+  withTempWorkspace((workspace) => {
+    assert.deepEqual(readHooks(workspace), []);
+    const created = addHook(workspace, { event: 'post-tool', command: 'true' });
+    assert.equal(readHooks(workspace).length, 1);
+    const results = runHooks(workspace, 'post-tool', { tool: 'read_file' });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].exitCode, 0);
+    setHookEnabled(workspace, created.id, false);
+    assert.equal(runHooks(workspace, 'post-tool', { tool: 'read_file' }).length, 0);
+    assert.equal(removeHook(workspace, created.id), true);
+    assert.deepEqual(readHooks(workspace), []);
+  });
+});
+
+test('hooksStore: pre-tool hook with non-zero exit signals denial', () => {
+  withTempWorkspace((workspace) => {
+    addHook(workspace, { event: 'pre-tool', command: 'false' });
+    const results = runHooks(workspace, 'pre-tool', { tool: 'run_command' });
+    assert.equal(results.length, 1);
+    assert.notEqual(results[0].exitCode, 0);
+  });
+});
+
+test('loopRunner: parseInterval accepts s/m/h/ms', () => {
+  assert.equal(parseInterval('5s'), 5_000);
+  assert.equal(parseInterval('2m'), 120_000);
+  assert.equal(parseInterval('1h'), 3_600_000);
+  assert.equal(parseInterval('500ms'), 500);
+  assert.equal(parseInterval('notatime'), undefined);
+});
+
+test('loopRunner: only one loop runs at a time and stop releases the slot', async () => {
+  assert.equal(isLoopRunning(), false);
+  const first = startLoop('one', 60_000, async () => {});
+  assert.equal(first.started, true);
+  const second = startLoop('two', 60_000, async () => {});
+  assert.equal(second.started, false);
+  assert.match(second.reason ?? '', /already running/);
+  assert.equal(getLoopState()?.prompt, 'one');
+  assert.equal(stopLoop(), true);
+  assert.equal(isLoopRunning(), false);
 });
 
 test('findWorkspaceRoot promotes BrainRouter package cwd to parent monorepo', () => {

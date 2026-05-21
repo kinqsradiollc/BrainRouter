@@ -157,7 +157,35 @@ export class MemoryRecallPipeline {
 
     const propagatedMap = new Map(propagatedNodes.map(n => [n.id, n]));
     const existingIds = new Set(scoredResults.map(r => r.record.record_id));
-    const sparkedNodes: string[] = [];
+    // Carry the full {id, potential, fired, type, preview, sceneName} so the
+    // UI can render a human-friendly label instead of the opaque record id.
+    // Track seen ids so we don't double-list a node that appears as both a
+    // seed and a propagation target.
+    const sparkedNodes: Array<{ id: string; potential: number; fired: boolean; type?: string; preview?: string; sceneName?: string }> = [];
+    const sparkedSeen = new Set<string>();
+    const previewFromContent = (content: unknown): string | undefined => {
+      const text = (content ?? "").toString().trim();
+      if (!text) return undefined;
+      const oneLine = text.replace(/\s+/g, " ");
+      // Keep the preview short — the UI renders a compact pill, anything
+      // longer than ~70 chars wraps awkwardly even with ellipsis fallback.
+      return oneLine.length > 70 ? `${oneLine.slice(0, 67)}…` : oneLine;
+    };
+    const pushNode = (
+      node: { id: string; potential: number; fired: boolean },
+      meta?: { type?: string; preview?: string; sceneName?: string },
+    ) => {
+      if (!node.id || sparkedSeen.has(node.id)) return;
+      sparkedSeen.add(node.id);
+      sparkedNodes.push({
+        id: node.id,
+        potential: Math.max(0, Math.min(1, Number(node.potential) || 0)),
+        fired: Boolean(node.fired),
+        type: meta?.type,
+        preview: meta?.preview,
+        sceneName: meta?.sceneName,
+      });
+    };
 
     const sparkScoredResults: Array<{ record: any; score: number; fired?: boolean }> = [];
 
@@ -165,9 +193,14 @@ export class MemoryRecallPipeline {
       const propNode = propagatedMap.get(scored.record.record_id);
       if (propNode) {
         const newScore = Math.max(scored.score, propNode.potential * maxScore);
-        if (propNode.fired) {
-          sparkedNodes.push(scored.record.record_id);
-        }
+        // Every initial-seed node belongs in the trace, fired or not — the
+        // sub-threshold pills carry useful "we considered this but it didn't
+        // spread" signal.
+        pushNode(propNode, {
+          type: scored.record.type,
+          preview: previewFromContent(scored.record.content),
+          sceneName: scored.record.scene_name,
+        });
         sparkScoredResults.push({
           record: scored.record,
           score: propNode.fired ? newScore * 1.5 : newScore,
@@ -183,7 +216,11 @@ export class MemoryRecallPipeline {
       if (propNode.fired && !existingIds.has(propNode.id)) {
         const record = this.store.getMemoryById(userId, propNode.id);
         if (record) {
-          sparkedNodes.push(propNode.id);
+          pushNode(propNode, {
+            type: record.type,
+            preview: previewFromContent(record.content),
+            sceneName: record.sceneName,
+          });
           const formattedRecord = {
             record_id: record.id,
             user_id: record.userId,

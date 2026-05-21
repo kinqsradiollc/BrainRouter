@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { PageHeader } from "../../components/PageHeader";
+import { FilterBar } from "../../components/FilterBar";
 import { PremiumButton } from "../../components/PremiumButton";
 
 const EVIDENCE_KINDS: Array<EvidenceKind | "all"> = ["all", "file", "command", "url", "test", "benchmark", "memory", "other"];
@@ -39,40 +40,34 @@ export default function EvidencePage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Evidence" description="File, command, test, URL, benchmark, and memory references attached to cognitive records." />
+        <PageHeader title="Evidence" description="File, command, test, URL, benchmark, and memory references attached to cognitive records.">
+          <PremiumButton size="small" variant="ghost" onClick={() => void refresh()} disabled={isLoading}>
+            {isLoading ? "Loading…" : "Refresh"}
+          </PremiumButton>
+        </PageHeader>
 
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-end" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "280px", flex: 1 }}>
-            <span style={{ fontSize: "11px", color: "var(--color-ash-text)", textTransform: "uppercase" }}>Record ID</span>
+        <FilterBar>
+          <FilterBar.Label text="Record id">
             <input
               value={recordId}
               onChange={(event) => setRecordId(event.target.value)}
               placeholder="Filter by parent memory record"
-              style={{ padding: "9px 10px", borderRadius: "6px", border: "1px solid var(--border-med)", background: "var(--overlay-bg)", color: "var(--color-silver-text)" }}
+              className="pill-input"
             />
-          </label>
-          <PremiumButton
-            size="small"
-            variant="ghost"
-            onClick={() => void refresh()}
-            disabled={isLoading}
-          >
-            {isLoading ? "Loading" : "Refresh"}
-          </PremiumButton>
-        </div>
-
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {EVIDENCE_KINDS.map((item) => (
-            <PremiumButton
-              key={item}
-              size="small"
-              variant={kind === item ? "primary" : "ghost"}
-              onClick={() => setKind(item)}
-            >
-              {item === "all" ? "All" : item}
-            </PremiumButton>
-          ))}
-        </div>
+          </FilterBar.Label>
+          <FilterBar.Row>
+            {EVIDENCE_KINDS.map((item) => (
+              <PremiumButton
+                key={item}
+                size="small"
+                variant={kind === item ? "primary" : "ghost"}
+                onClick={() => setKind(item)}
+              >
+                {item === "all" ? "All" : item}
+              </PremiumButton>
+            ))}
+          </FilterBar.Row>
+        </FilterBar>
 
         {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
 

@@ -87,6 +87,7 @@ Within the chat session, type `/` to access commands:
 - `/spawn <role> <prompt>` — Spawn a child agent (parent narrates via the LLM tool call).
 - `/wait <id> [timeoutMs]` — Wait for a child agent to finish.
 - `/spec <title>` — Runs the **spec-driven-skill** and writes a full `spec.md` to `<workspace>/.brainrouter/cli/workflows/<slug>/spec.md`. Stops for approval before generating tasks.
+- `/approve [slug]` — Approves the current (or named) workflow and kicks off the worker + verifier implementation phase, one task at a time, appending to `walkthrough.md`.
 - `/workflows` — List durable workflow folders with per-artifact status (`spec.md`, `tasks.md`, `walkthrough.md`).
 - `/feature-dev <feature>` — Runs the catalogued **agentic-engineering-workflow** skill with explorer + architect orchestration. Writes `spec.md` and `tasks.md` to the workflow folder, then stops for user approval before worker implementation.
 - `/review [scope]` — Runs the catalogued **code-review-and-quality** skill with 3 parallel reviewer agents (correctness, maintainability, conventions).

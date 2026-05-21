@@ -10,6 +10,7 @@ import { PremiumButton } from "../../components/PremiumButton";
 import { PremiumModal } from "../../components/PremiumModal";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { MemoryCard } from "../../components/MemoryCard";
+import { FilterBar } from "../../components/FilterBar";
 import { useAuth } from "../../components/AuthProvider";
 
 const TYPES = ["instruction", "codebase_fact", "architecture_decision", "tool_preference", "task_state", "security_policy"];
@@ -101,36 +102,39 @@ export default function MemoriesPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Memories" description="Search, filter, edit, and archive semantic memories extracted from agent sessions." />
-
-        <div className="table-container" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+        <PageHeader title="Memories" description="Search, filter, edit, and archive semantic memories extracted from agent sessions.">
           <input
             className="pill-input"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search memories"
+            style={{ width: "320px" }}
           />
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <PremiumButton size="small" variant={!typeFilter ? "primary" : "ghost"} onClick={() => setTypeFilter("")}>All</PremiumButton>
-            {TYPES.map((type) => (
-              <PremiumButton key={type} size="small" variant={typeFilter === type ? "primary" : "ghost"} onClick={() => setTypeFilter(type)}>
-                {type}
-              </PremiumButton>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: "8px" }}>
+        </PageHeader>
+
+        <FilterBar>
+          <FilterBar.Row align="between">
+            <FilterBar.Row>
+              <PremiumButton size="small" variant={!typeFilter ? "primary" : "ghost"} onClick={() => setTypeFilter("")}>All types</PremiumButton>
+              {TYPES.map((type) => (
+                <PremiumButton key={type} size="small" variant={typeFilter === type ? "primary" : "ghost"} onClick={() => setTypeFilter(type)}>
+                  {type}
+                </PremiumButton>
+              ))}
+            </FilterBar.Row>
+            <FilterBar.Row>
               <PremiumButton size="small" variant={statusFilter === "active" ? "primary" : "ghost"} onClick={() => setStatusFilter("active")}>Active</PremiumButton>
               <PremiumButton size="small" variant={statusFilter === "archived" ? "primary" : "ghost"} onClick={() => setStatusFilter("archived")}>Archived</PremiumButton>
-            </div>
-            {user?.isAdmin && selected.size > 0 && (
-              <div style={{ display: "flex", gap: "8px" }}>
-                <PremiumButton variant="ghost" onClick={bulkArchive}>Archive selected</PremiumButton>
-                <PremiumButton variant="danger" onClick={bulkDelete}>Delete selected</PremiumButton>
-              </div>
-            )}
-          </div>
-        </div>
+            </FilterBar.Row>
+          </FilterBar.Row>
+          {user?.isAdmin && selected.size > 0 && (
+            <FilterBar.Row align="end">
+              <span style={{ color: "var(--color-stone-text)", fontSize: "12px", marginRight: "8px" }}>{selected.size} selected</span>
+              <PremiumButton variant="ghost" onClick={bulkArchive}>Archive selected</PremiumButton>
+              <PremiumButton variant="danger" onClick={bulkDelete}>Delete selected</PremiumButton>
+            </FilterBar.Row>
+          )}
+        </FilterBar>
 
         {error && <div style={{ color: "#f87171", fontSize: "13px" }}>{error}</div>}
 

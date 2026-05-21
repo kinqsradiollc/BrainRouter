@@ -281,8 +281,28 @@ export interface RecallExplanation {
   rerankerCandidates: number;
   /** Final ranked records (recordId → finalScore). */
   scoredRecords: Array<{ recordId: string; finalScore: number; type: string }>;
-  /** IDs of memory nodes that triggered/sparked during spreading activation. */
-  sparkedNodes?: string[];
+  /**
+   * Per-node trace of the neural-spark spreading activation pass.
+   *
+   * Each entry carries the node id, its final potential (clamped to [0, 1]),
+   * whether it crossed the firing threshold, and human-readable label fields
+   * so the UI can show "codebase_fact · the cli uses sqlite for…" instead of
+   * an opaque record id. The full id stays on the entry for click-through.
+   *
+   * Order is: initial seeds first (whether or not they fired), then propagated
+   * nodes that fired via 2-hop excitation.
+   */
+  sparkedNodes?: Array<{
+    id: string;
+    potential: number;
+    fired: boolean;
+    /** Memory type, e.g. "codebase_fact", "instruction". */
+    type?: string;
+    /** Optional short content preview (≤ 100 chars, single-line). */
+    preview?: string;
+    /** Optional focus-scene name the memory belongs to. */
+    sceneName?: string;
+  }>;
 }
 
 export interface RecallResult {

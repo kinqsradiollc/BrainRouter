@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -11,14 +12,21 @@ import type { McpClientWrapper } from './mcpClient.js';
 import type { Config } from './config.js';
 import { getConfigPath } from './config.js';
 import { LOCAL_TOOLS } from './agent.js';
-import { readTranscriptEntries } from './sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptEntries } from './sessionStore.js';
+import { initAgentMd } from './initAgentMd.js';
+import { expandMentions } from './mentions.js';
+import { clearGoal, readGoal, setGoal } from './goalStore.js';
+import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from './hooksStore.js';
+import { copyToClipboard } from './clipboard.js';
+import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from './loopRunner.js';
+import { randomUUID } from 'node:crypto';
 import { formatPlan, readPlan, updatePlan } from './taskStore.js';
 import type { WorkspaceInfo } from './workspace.js';
 import { listRoles } from './agentRoles.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from './orchestrator.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from './skillRunner.js';
 import { callMcpTool, childSessionKey } from './mcpUtils.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, slugify } from './workflowArtifacts.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from './workflowArtifacts.js';
 
 const execPromise = promisify(exec);
 
@@ -26,6 +34,20 @@ const execPromise = promisify(exec);
 marked.use(markedTerminal({
   showSectionPrefix: false,
 }));
+
+/**
+ * All slash commands the REPL recognizes. Used for tab autocomplete and for
+ * the readline completer. Keep alphabetically grouped roughly by surface area.
+ */
+const SLASH_COMMANDS = [
+  '/help', '/status', '/workspace', '/tools', '/skills', '/plan', '/transcript',
+  '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit',
+  '/roles', '/agents', '/agent', '/spawn', '/wait',
+  '/spec', '/feature-dev', '/review', '/implement-plan', '/skill', '/workflows', '/approve',
+  '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
+  '/init', '/sessions', '/resume', '/model', '/mcp',
+  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/loop',
+] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
   console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.2.0'));
@@ -36,7 +58,48 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.hex('#CC9166')('brainrouter> ')
+    prompt: chalk.hex('#CC9166')('brainrouter> '),
+    // Tab-completion: complete slash commands when the line begins with "/"
+    // and complete workspace file paths when the user is mid-`@mention`.
+    completer: (line: string): [string[], string] => {
+      const atMatch = line.match(/@([^\s]*)$/);
+      if (atMatch) {
+        const partial = atMatch[1];
+        const candidates = completeWorkspacePath(agent.workspaceRoot, partial);
+        return [candidates.map((c) => `@${c}`), `@${partial}`];
+      }
+      if (line.startsWith('/')) {
+        const hits = SLASH_COMMANDS.filter((cmd) => cmd.startsWith(line));
+        return [hits.length ? hits : SLASH_COMMANDS.slice(), line];
+      }
+      return [[], line];
+    },
+  });
+
+  // Reflect the current access mode in the prompt so the user always knows
+  // which "plan mode" they're in. Cycled via Shift+Tab below.
+  const refreshPromptForMode = () => {
+    const mode = agent.getAccessMode();
+    const accent = mode === 'shell' ? chalk.red : mode === 'write' ? chalk.hex('#CC9166') : chalk.green;
+    rl.setPrompt(accent(`brainrouter[${mode}]> `));
+  };
+  refreshPromptForMode();
+
+  // Shift+Tab cycles the access mode (codex calls this "Plan mode").
+  // Order: read → write → shell → read …
+  if (process.stdin.isTTY) {
+    try { (process.stdin as any).setRawMode?.(false); } catch { /* noop */ }
+  }
+  process.stdin.on('keypress', (_str, key) => {
+    if (key && key.name === 'tab' && key.shift) {
+      const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
+      const current = agent.getAccessMode() as 'read' | 'write' | 'shell';
+      const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+      agent.setAccessMode(next);
+      refreshPromptForMode();
+      process.stdout.write(`\n${chalk.gray(`Access mode → ${next}`)}\n`);
+      rl.prompt();
+    }
   });
 
   rl.prompt();
@@ -56,7 +119,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       const command = parts[0].toLowerCase();
       const args = parts.slice(1);
 
-      await handleSlashCommand(command, args, agent, mcpClient, config, rl);
+      await handleSlashCommand(command, args, agent, mcpClient, config, rl, {
+        refreshPromptForMode,
+        isProcessing: () => isProcessing,
+      });
       rl.prompt();
       return;
     }
@@ -70,13 +136,24 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     isProcessing = true;
     rl.pause();
 
+    // Expand @path/to/file mentions into a fenced context block.
+    const { expanded, mentions } = expandMentions(input, agent.workspaceRoot);
+    if (mentions.length > 0) {
+      console.log(chalk.gray(`📎  Attached ${mentions.length} file${mentions.length === 1 ? '' : 's'}: ${mentions.map((m) => m.token).join(', ')}`));
+    }
+
     // Run agent turn
+    const startedAt = Date.now();
     const spinner = ora(chalk.gray('Agent starting...')).start();
+    const tickStatus = (status: string) => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      const u = agent.lastTurnUsage;
+      const tokens = u.calls > 0 ? `  ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓` : '';
+      spinner.text = chalk.gray(`${status}  ${elapsed}s${tokens}`);
+    };
     try {
-      const answer = await agent.runTurn(input, {
-        onStatusUpdate: (status) => {
-          spinner.text = chalk.gray(status);
-        },
+      const answer = await agent.runTurn(expanded, {
+        onStatusUpdate: (status) => tickStatus(status),
         onToolStart: (name, args) => {
           spinner.stop();
           console.log(chalk.gray('🛞  Calling tool: ') + chalk.cyan(name) + chalk.gray(`(${JSON.stringify(args)})`));
@@ -87,10 +164,31 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           } else {
             console.log(chalk.red('❌  Tool ') + chalk.cyan(name) + chalk.red(' failed: ') + chalk.yellow(result.summary));
           }
-          spinner.start(chalk.gray('Thinking...'));
+          tickStatus('Thinking');
+          spinner.start();
+        },
+        // Plan ticker: render a compact ✓/⏳/☐ block when update_plan fires.
+        onPlanUpdate: (items, explanation) => {
+          spinner.stop();
+          console.log(chalk.gray('📋  Plan updated:'));
+          if (explanation) console.log(chalk.gray(`    ${explanation}`));
+          for (const item of items) {
+            const mark = item.status === 'completed' ? chalk.green('✓')
+              : item.status === 'in_progress' ? chalk.yellow('⏳')
+              : chalk.gray('☐');
+            const text = item.status === 'completed' ? chalk.gray(item.step) : item.step;
+            console.log(`    ${mark} ${text}`);
+          }
+          tickStatus('Thinking');
+          spinner.start();
         },
       });
-      spinner.succeed(chalk.green('Done!'));
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      const u = agent.lastTurnUsage;
+      const tokenSummary = u.calls > 0
+        ? chalk.gray(` · ${u.promptTokens.toLocaleString()} in / ${u.completionTokens.toLocaleString()} out across ${u.calls} call${u.calls === 1 ? '' : 's'}`)
+        : '';
+      spinner.succeed(chalk.green(`Done!${chalk.gray(` ${elapsed}s`)}${tokenSummary}`));
 
       console.log('\n' + marked.parse(answer) + '\n');
       const warning = agent.takeContradictionWarning();
@@ -121,13 +219,21 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   });
 }
 
+interface ReplContext {
+  /** Refresh the readline prompt (color reflects access mode). */
+  refreshPromptForMode: () => void;
+  /** True while the REPL is mid-turn; loop ticks should defer when set. */
+  isProcessing: () => boolean;
+}
+
 async function handleSlashCommand(
   command: string,
   args: string[],
   agent: Agent,
   mcpClient: McpClientWrapper,
   config: Config,
-  rl: readline.Interface
+  rl: readline.Interface,
+  ctx: ReplContext,
 ) {
   switch (command) {
     case '/help':
@@ -148,6 +254,7 @@ async function handleSlashCommand(
       console.log(`  ${chalk.cyan('/review [scope]')}    - Multi-agent code review; writes review.md to a workflow folder`);
       console.log(`  ${chalk.cyan('/implement-plan')}    - Execute next plan item; appends to walkthrough.md`);
       console.log(`  ${chalk.cyan('/workflows')}         - List durable workflow folders with artifact status`);
+      console.log(`  ${chalk.cyan('/approve [slug]')}    - Approve a workflow (default: current) and kick off implementation`);
       console.log(`  ${chalk.cyan('/skill <name> [input]')} - Run any catalogued skill from the skills/ folder via the agent`);
       console.log(`  ${chalk.cyan('/memory <query>')}   - Search BrainRouter long-term memory (memory_search)`);
       console.log(`  ${chalk.cyan('/recall <query>')}   - Explicit cognitive recall (memory_recall) — does not start an LLM turn`);
@@ -162,6 +269,20 @@ async function handleSlashCommand(
       console.log(`  ${chalk.cyan('/commit')}   - Generate message, stage files, and make git commit using agent`);
       console.log(`  ${chalk.cyan('/clear')}    - Clear chat history for the active session`);
       console.log(`  ${chalk.cyan('/compact')}  - Compact the active session by clearing chat history`);
+      console.log(`  ${chalk.cyan('/init')}       - Create AGENT.md in the workspace if not present`);
+      console.log(`  ${chalk.cyan('/sessions')}   - List persisted sessions (transcripts) for this workspace`);
+      console.log(`  ${chalk.cyan('/resume <id>')} - Resume a previous session by sessionKey`);
+      console.log(`  ${chalk.cyan('/model <name>')} - Switch the LLM model in-session`);
+      console.log(`  ${chalk.cyan('/mcp')}        - Show the active MCP server and its tool namespaces`);
+      console.log(`  ${chalk.cyan('/goal [text|clear]')}  - Set/clear a sticky goal injected into every turn`);
+      console.log(`  ${chalk.cyan('/copy')}              - Copy last assistant response to clipboard`);
+      console.log(`  ${chalk.cyan('/fork [label]')}      - Fork the current chat into a new session, keep prior context`);
+      console.log(`  ${chalk.cyan('/rename <label>')}    - Rename the current session id`);
+      console.log(`  ${chalk.cyan('/permissions [read|write|shell]')} - View or set the agent's access mode`);
+      console.log(`  ${chalk.cyan('/hooks [list|add|remove|enable|disable]')} - Lifecycle shell hooks`);
+      console.log(`  ${chalk.cyan('/loop <interval> <prompt> | /loop stop')} - Repeat a prompt on a cadence`);
+      console.log(chalk.gray('\nTips: type @ then a path for file mentions; Tab autocompletes commands and @paths.'));
+      console.log(chalk.gray('      Shift+Tab cycles access mode (read → write → shell).'));
       console.log(`  ${chalk.cyan('/exit')}     - Close the MCP connection and exit the CLI\n`);
       break;
 
@@ -639,6 +760,38 @@ async function handleSlashCommand(
       break;
     }
 
+    case '/approve': {
+      const slug = args[0] || getCurrentWorkflow(agent.workspaceRoot);
+      if (!slug) {
+        console.log(chalk.red('\nNo current workflow. Use /spec or /feature-dev first, or /approve <slug>.\n'));
+        break;
+      }
+      const spec = readArtifact(agent.workspaceRoot, slug, ARTIFACT.spec);
+      if (!spec) {
+        console.log(chalk.red(`\nWorkflow "${slug}" has no spec.md yet. Run /spec or /feature-dev first.\n`));
+        break;
+      }
+      const next = updateWorkflowStatus(agent.workspaceRoot, slug, 'in-progress');
+      if (!next) {
+        console.log(chalk.red(`\nWorkflow "${slug}" not found.\n`));
+        break;
+      }
+      console.log(chalk.green(`\n✓ Approved workflow "${slug}". Status: in-progress.`));
+      console.log(chalk.gray('Kicking off implementation phase…\n'));
+      const tasksPath = artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.tasks);
+      const walkPath = artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.walkthrough);
+      await runOrchestrationPrompt(agent,
+        `The user just approved workflow \`${slug}\`. Begin implementation now.\n\n` +
+        `1. If \`${tasksPath}\` does not exist yet, read \`${artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.spec)}\` and \`write_file\` a complete tasks.md (vertical slices, S/M-sized, with acceptance criteria) before doing anything else.\n` +
+        `2. Pick the first pending task from tasks.md and call \`update_plan\` to mark it in_progress.\n` +
+        `3. \`spawn_agent\` role=worker access=write to implement it. Pass any relevant recalled record IDs via seedRecordIds.\n` +
+        `4. After the worker completes, \`spawn_agent\` role=verifier access=shell to run tests/typechecks.\n` +
+        `5. Append a section to \`${walkPath}\` (read+write) recording the outcome.\n` +
+        `6. STOP after the first task and ask whether to continue. Do not silently work through every task — the user approves slices, not the whole batch.`,
+      );
+      break;
+    }
+
     case '/workflows': {
       const workflows = listWorkflows(agent.workspaceRoot);
       console.log(chalk.bold('\nDurable Workflows'));
@@ -720,6 +873,280 @@ async function handleSlashCommand(
       break;
     }
 
+    case '/init': {
+      const result = initAgentMd(agent.workspaceRoot);
+      if (result.status === 'created') {
+        console.log(chalk.green(`\n✓ Created ${result.path}`));
+        console.log(chalk.gray('Edit it to describe your project, conventions, and boundaries — every coding agent (BrainRouter, Claude Code, Codex) will read it.\n'));
+      } else {
+        console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
+        console.log(chalk.gray('Open it and edit by hand if you want to refresh it.\n'));
+      }
+      break;
+    }
+
+    case '/sessions': {
+      const transcripts = listTranscripts(agent.workspaceRoot);
+      console.log(chalk.bold('\nPersisted sessions:'));
+      if (transcripts.length === 0) {
+        console.log(chalk.yellow('  (none — start chatting and your transcript will appear here)'));
+      } else {
+        for (const t of transcripts.slice(0, 30)) {
+          const when = t.modifiedAt.replace('T', ' ').slice(0, 19);
+          const isCurrent = t.sessionKey === agent.sessionKey;
+          const tag = isCurrent ? chalk.green(' (current)') : '';
+          console.log(`  ${chalk.cyan(t.sessionKey)}${tag}`);
+          console.log(`    ${chalk.gray(`${t.turnCount} entries · ${when}`)}`);
+          if (t.firstUserMessage) console.log(`    ${chalk.gray(`"${t.firstUserMessage}"`)}`);
+        }
+        console.log(chalk.gray('\nResume one with: /resume <sessionKey>'));
+      }
+      console.log();
+      break;
+    }
+
+    case '/resume': {
+      const sessionKey = args.join(' ').trim();
+      if (!sessionKey) {
+        console.log(chalk.red('\nUsage: /resume <sessionKey>\n'));
+        console.log(chalk.gray('Tip: copy a sessionKey from /sessions.\n'));
+        break;
+      }
+      const entries = loadTranscript(agent.workspaceRoot, sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.red(`\nNo transcript found for "${sessionKey}".\n`));
+        break;
+      }
+      agent.sessionKey = sessionKey;
+      const loaded = agent.loadHistory(entries);
+      console.log(chalk.green(`\n✓ Resumed session ${chalk.cyan(sessionKey)} with ${loaded} prior messages.`));
+      console.log(chalk.gray('Your next message will continue the conversation.\n'));
+      break;
+    }
+
+    case '/model': {
+      const newModel = args[0];
+      if (!newModel) {
+        console.log(chalk.bold(`\nCurrent model: ${chalk.cyan(agent.getModel())}`));
+        console.log(chalk.gray('Switch with: /model <model-name> (e.g. /model gpt-4o-mini, /model claude-sonnet-4-5)\n'));
+        break;
+      }
+      const previous = agent.getModel();
+      agent.setModel(newModel);
+      console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
+      break;
+    }
+
+    case '/mcp': {
+      const profileName = config.activeServer;
+      const server = config.servers[profileName];
+      console.log(chalk.bold('\nMCP server'));
+      console.log(`  Profile: ${chalk.green(profileName)} (${chalk.cyan(server?.type ?? 'unknown')})`);
+      if (server?.type === 'http') {
+        console.log(`  URL:     ${chalk.blue(server.url)}`);
+      } else if (server?.type === 'stdio') {
+        console.log(`  Cmd:     ${chalk.blue(server.command)} ${server.args?.join(' ') || ''}`);
+      }
+      const spinner = ora(chalk.gray('Fetching MCP tool surface...')).start();
+      try {
+        const res = await mcpClient.listTools();
+        const tools = res.tools || [];
+        spinner.succeed(chalk.green(`${tools.length} MCP tools available`));
+        const namespaces: Record<string, string[]> = {};
+        for (const t of tools) {
+          const parts = (t.name || '').split('_');
+          const ns = parts.length > 1 ? parts[0] : 'misc';
+          (namespaces[ns] ||= []).push(t.name);
+        }
+        for (const ns of Object.keys(namespaces).sort()) {
+          console.log(`\n  ${chalk.bold.cyan(ns)} (${namespaces[ns].length})`);
+          for (const name of namespaces[ns].sort()) {
+            console.log(`    ${chalk.gray('•')} ${name}`);
+          }
+        }
+      } catch (err: any) {
+        spinner.fail(chalk.red(`Failed: ${err.message}`));
+      }
+      console.log();
+      break;
+    }
+
+    case '/goal': {
+      const arg = args.join(' ').trim();
+      if (!arg || arg === 'show') {
+        const goal = readGoal(agent.workspaceRoot);
+        if (!goal) console.log(chalk.yellow('\nNo sticky goal set. Set one with: /goal <text>\n'));
+        else console.log(chalk.bold('\nCurrent goal:') + ` ${chalk.cyan(goal.text)}\n` + chalk.gray(`Set ${goal.setAt}\n`));
+        break;
+      }
+      if (arg === 'clear') {
+        clearGoal(agent.workspaceRoot);
+        agent.refreshSystemPrompt();
+        console.log(chalk.green('\n✓ Goal cleared.\n'));
+        break;
+      }
+      const goal = setGoal(agent.workspaceRoot, arg);
+      agent.refreshSystemPrompt();
+      console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}\n`));
+      console.log(chalk.gray('It will be injected into every turn until /goal clear.\n'));
+      break;
+    }
+
+    case '/copy': {
+      if (!agent.lastAnswer) {
+        console.log(chalk.yellow('\nNo response yet to copy.\n'));
+        break;
+      }
+      const result = await copyToClipboard(agent.lastAnswer);
+      if (result.ok) {
+        console.log(chalk.green(`\n✓ Copied last response to clipboard via ${result.tool} (${agent.lastAnswer.length} chars).\n`));
+      } else {
+        console.log(chalk.yellow(`\nClipboard tool unavailable (${result.error}). Selecting the text above with your terminal still works.\n`));
+      }
+      break;
+    }
+
+    case '/fork': {
+      const label = args.join(' ').trim() || `fork-${new Date().toISOString().slice(11, 19)}`;
+      const newKey = `${agent.sessionKey}:fork:${randomUUID().slice(0, 8)}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+      const previous = agent.sessionKey;
+      agent.fork(newKey);
+      console.log(chalk.green(`\n✓ Forked session.`));
+      console.log(chalk.gray(`  Parent : ${previous}`));
+      console.log(chalk.gray(`  New    : ${newKey}`));
+      console.log(chalk.gray('  Your next message starts a new transcript while keeping prior context.\n'));
+      break;
+    }
+
+    case '/rename': {
+      const newName = args.join(' ').trim();
+      if (!newName) {
+        console.log(chalk.red('\nUsage: /rename <new session label>\n'));
+        break;
+      }
+      const safe = newName.replace(/[^A-Za-z0-9._-]+/g, '-');
+      const previous = agent.sessionKey;
+      const newKey = `${previous.split(':')[0]}:${safe}`;
+      agent.sessionKey = newKey;
+      agent.refreshSystemPrompt();
+      console.log(chalk.green(`\n✓ Session renamed`));
+      console.log(chalk.gray(`  Old: ${previous}`));
+      console.log(chalk.gray(`  New: ${newKey}`));
+      console.log(chalk.gray('  (Future transcript entries land under the new key; existing entries stay under the old.)\n'));
+      break;
+    }
+
+    case '/permissions': {
+      const sub = args[0];
+      if (!sub) {
+        const mode = agent.getAccessMode();
+        console.log(chalk.bold(`\nCurrent access mode: ${chalk.cyan(mode)}`));
+        console.log(chalk.gray('  read   — list/grep/read/web only. No file writes, no shell.'));
+        console.log(chalk.gray('  write  — read + write_file / edit_file / apply_patch. No shell.'));
+        console.log(chalk.gray('  shell  — write + run_command (still confirmed in the REPL).'));
+        console.log(chalk.gray('\nSwitch with: /permissions read | write | shell  (or use Shift+Tab to cycle)\n'));
+        break;
+      }
+      if (!['read', 'write', 'shell'].includes(sub)) {
+        console.log(chalk.red(`\nUnknown mode "${sub}". Choose: read, write, shell.\n`));
+        break;
+      }
+      agent.setAccessMode(sub as 'read' | 'write' | 'shell');
+      ctx.refreshPromptForMode();
+      console.log(chalk.green(`\n✓ Access mode → ${chalk.cyan(sub)}\n`));
+      break;
+    }
+
+    case '/hooks': {
+      const sub = args[0];
+      if (!sub || sub === 'list') {
+        const hooks = readHooks(agent.workspaceRoot);
+        console.log(chalk.bold('\nLifecycle hooks'));
+        if (hooks.length === 0) {
+          console.log(chalk.yellow('  (none)'));
+          console.log(chalk.gray('  Add one with: /hooks add <event> <shell-command>  (events: pre-turn, post-turn, pre-tool, post-tool, session-start, session-end)\n'));
+        } else {
+          for (const h of hooks) {
+            const tag = h.enabled ? chalk.green('●') : chalk.gray('○');
+            console.log(`  ${tag} ${chalk.cyan(h.id)} ${chalk.gray(h.event)}${h.match ? chalk.gray(` (match: ${h.match})`) : ''}`);
+            console.log(`    ${chalk.gray(h.command)}`);
+          }
+          console.log();
+        }
+        break;
+      }
+      if (sub === 'add') {
+        const event = args[1] as HookEvent | undefined;
+        const command = args.slice(2).join(' ').trim();
+        const validEvents: HookEvent[] = ['pre-turn', 'post-turn', 'pre-tool', 'post-tool', 'session-start', 'session-end'];
+        if (!event || !validEvents.includes(event) || !command) {
+          console.log(chalk.red(`\nUsage: /hooks add <${validEvents.join('|')}> <shell-command>\n`));
+          break;
+        }
+        const created = addHook(agent.workspaceRoot, { event, command });
+        console.log(chalk.green(`\n✓ Hook added: ${created.id}\n`));
+        break;
+      }
+      if (sub === 'remove' && args[1]) {
+        const ok = removeHook(agent.workspaceRoot, args[1]);
+        console.log(ok ? chalk.green(`\n✓ Removed ${args[1]}\n`) : chalk.red(`\nNo hook with id ${args[1]}\n`));
+        break;
+      }
+      if ((sub === 'enable' || sub === 'disable') && args[1]) {
+        const ok = setHookEnabled(agent.workspaceRoot, args[1], sub === 'enable');
+        console.log(ok ? chalk.green(`\n✓ ${sub === 'enable' ? 'Enabled' : 'Disabled'} ${args[1]}\n`) : chalk.red(`\nNo hook with id ${args[1]}\n`));
+        break;
+      }
+      console.log(chalk.red('\nUsage: /hooks [list | add <event> <cmd> | remove <id> | enable <id> | disable <id>]\n'));
+      break;
+    }
+
+    case '/loop': {
+      const arg0 = args[0];
+      if (!arg0 || arg0 === 'status') {
+        const state = getLoopState();
+        if (!state) console.log(chalk.yellow('\nNo loop running.\n'));
+        else {
+          console.log(chalk.bold('\nLoop state'));
+          console.log(`  Prompt:      ${chalk.cyan(state.prompt)}`);
+          console.log(`  Interval:    ${chalk.gray(`${state.intervalMs}ms`)}`);
+          console.log(`  Iterations:  ${chalk.gray(state.iterations.toString())}`);
+          if (state.lastFiredAt) console.log(`  Last fired:  ${chalk.gray(state.lastFiredAt)}`);
+          if (state.lastError) console.log(`  Last error:  ${chalk.red(state.lastError)}`);
+          console.log(chalk.gray('\n  Stop with /loop stop\n'));
+        }
+        break;
+      }
+      if (arg0 === 'stop') {
+        const ok = stopLoop();
+        console.log(ok ? chalk.green('\n✓ Loop stopped.\n') : chalk.yellow('\nNo loop was running.\n'));
+        break;
+      }
+      const intervalMs = parseInterval(arg0);
+      const loopPrompt = args.slice(intervalMs ? 1 : 0).join(' ').trim();
+      if (!intervalMs || !loopPrompt) {
+        console.log(chalk.red('\nUsage: /loop <interval> <prompt>'));
+        console.log(chalk.gray('  e.g. /loop 30s /review'));
+        console.log(chalk.gray('       /loop 5m check the deploy status\n'));
+        break;
+      }
+      const result = startLoop(loopPrompt, intervalMs, async () => {
+        // Each tick queues the loop's prompt as if the user typed it. We use
+        // the REPL's processing flag to avoid stomping on a turn the user
+        // started manually.
+        if (ctx.isProcessing()) return;
+        console.log(chalk.gray(`\n⟲ Loop tick (iteration ${(getLoopState()?.iterations ?? 0)})`));
+        rl.write(`${loopPrompt}\n`);
+      });
+      if (result.started) {
+        console.log(chalk.green(`\n✓ Loop started — "${loopPrompt}" every ${intervalMs}ms.`));
+        console.log(chalk.gray('  Stop with /loop stop.\n'));
+      } else {
+        console.log(chalk.red(`\nLoop not started: ${result.reason}\n`));
+      }
+      break;
+    }
+
     case '/clear':
     case '/compact':
       agent.clearHistory();
@@ -793,6 +1220,37 @@ async function runOrchestrationPrompt(agent: Agent, prompt: string): Promise<voi
   } catch (err: any) {
     spinner.fail(chalk.red(`Failed: ${err.message}`));
   }
+}
+
+/**
+ * Tab-completion source for `@path/to/file` mentions. Given a partial workspace
+ * path, return the matching files and directories one level deep. Stays inside
+ * the workspace and ignores noise dirs to keep the completion list useful.
+ */
+function completeWorkspacePath(workspaceRoot: string, partial: string): string[] {
+  const ignore = new Set(['node_modules', '.git', 'dist', '.next', '.turbo', 'coverage', '.brainrouter']);
+  // Split partial into "dir/" + "prefix" so we only enumerate one directory at a time.
+  const lastSlash = partial.lastIndexOf('/');
+  const subdir = lastSlash >= 0 ? partial.slice(0, lastSlash + 1) : '';
+  const prefix = lastSlash >= 0 ? partial.slice(lastSlash + 1) : partial;
+  let absDir: string;
+  try {
+    absDir = path.resolve(workspaceRoot, subdir || '.');
+  } catch {
+    return [];
+  }
+  // Don't escape the workspace.
+  if (path.relative(workspaceRoot, absDir).startsWith('..')) return [];
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = fs.readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => !ignore.has(e.name) && e.name.startsWith(prefix))
+    .map((e) => `${subdir}${e.name}${e.isDirectory() ? '/' : ''}`)
+    .sort();
 }
 
 async function printMcpCall(
