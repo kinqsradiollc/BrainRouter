@@ -92,6 +92,12 @@ export async function extractCognitiveMemories(params: {
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    const code = (err as any)?.code;
+    if (code === "LLM_NOT_CONFIGURED") {
+      // Expected, non-fatal: no LLM is configured server-side. Skip cognitive
+      // extraction silently; sensory records are still persisted by the caller.
+      return { success: false, extractedCount: 0, records: [], sceneNames: [], errorMessage: "LLM not configured; cognitive extraction skipped." };
+    }
     console.error("[BrainRouter] LLM extraction failed:", err);
     return { success: false, extractedCount: 0, records: [], sceneNames: [], errorMessage };
   }

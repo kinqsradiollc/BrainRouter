@@ -17,12 +17,20 @@ const __dirname = dirname(__filename);
 function findRepoRoot(start: string): string {
   let current = start;
   while (current !== resolve('/')) {
+    // 1. Installed-package mode: when this MCP package was published with bundled
+    //    skills/ (via scripts/prepack.mjs), the package directory itself is the
+    //    global root. Detect that by the presence of both package.json AND skills/.
+    if (existsSync(join(current, 'package.json')) && existsSync(join(current, 'skills'))) {
+      return current;
+    }
+
+    // 2. Monorepo mode: a parent directory that contains skills/ or docs/ but
+    //    where the current "mcp" subfolder is the package install.
     if (
       existsSync(join(current, 'skills')) ||
       existsSync(join(current, 'docs')) ||
       existsSync(join(current, 'package.json'))
     ) {
-      // If we found it, but we are inside the mcp folder, go one up to reach the BrainRouter root
       if (basename(current) === 'mcp') {
         return dirname(current);
       }
