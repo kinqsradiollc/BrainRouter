@@ -38,7 +38,11 @@ class ModelLLMRunner implements LLMRunner {
     const apiKey = process.env.BRAINROUTER_LLM_API_KEY;
 
     if (!apiKey) {
-      throw new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Memory extraction requires an LLM.`);
+      // Typed sentinel so upstream pipelines can short-circuit cleanly without dumping a stack trace.
+      // Callers should check `error.code === "LLM_NOT_CONFIGURED"` and skip extraction silently.
+      const err: any = new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Skipping LLM step.`);
+      err.code = "LLM_NOT_CONFIGURED";
+      throw err;
     }
 
     const model = this.modelOverride
