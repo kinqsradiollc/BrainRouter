@@ -7,6 +7,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { PageHeader } from "../../components/PageHeader";
+import { FilterBar } from "../../components/FilterBar";
 import { PremiumButton } from "../../components/PremiumButton";
 
 const OP_TYPES = ["all", "recall", "l1_upsert", "memory_update", "archive", "export", "import", "memory_governance_delete", "contradiction_resolve"];
@@ -30,50 +31,42 @@ export default function TimelinePage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Timeline" description="Chronological memory operations across capture, recall, governance, and import/export activity." />
+        <PageHeader title="Timeline" description="Chronological memory operations across capture, recall, governance, and import/export activity.">
+          <PremiumButton size="small" variant="ghost" onClick={() => setShowAdvanced(!showAdvanced)}>
+            {showAdvanced ? "Hide filter" : "Session filter"}
+          </PremiumButton>
+          <PremiumButton size="small" variant="ghost" onClick={() => void refresh()} disabled={isLoading}>
+            {isLoading ? "Loading…" : "Refresh"}
+          </PremiumButton>
+        </PageHeader>
 
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center", width: "100%" }}>
+        <FilterBar>
           {showAdvanced && (
-            <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "240px" }}>
-              <span style={{ fontSize: "11px", color: "var(--color-ash-text)", textTransform: "uppercase" }}>Session Key</span>
-              <input
-                value={sessionKey}
-                onChange={(event) => setSessionKey(event.target.value)}
-                placeholder="Filter by session"
-                style={{ padding: "9px 10px", borderRadius: "6px", border: "1px solid rgba(226,227,233,0.1)", background: "rgba(0,0,0,0.25)", color: "var(--color-silver-text)" }}
-              />
-            </label>
+            <FilterBar.Row>
+              <FilterBar.Label text="Session key">
+                <input
+                  value={sessionKey}
+                  onChange={(event) => setSessionKey(event.target.value)}
+                  placeholder="Filter by session"
+                  className="pill-input"
+                  style={{ minWidth: "280px" }}
+                />
+              </FilterBar.Label>
+            </FilterBar.Row>
           )}
-          <PremiumButton
-            size="small"
-            variant="ghost"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-          >
-            {showAdvanced ? "Hide Filter" : "Session Filter..."}
-          </PremiumButton>
-          <PremiumButton
-            size="small"
-            variant="ghost"
-            onClick={() => void refresh()}
-            disabled={isLoading}
-            style={{ marginLeft: "auto" }}
-          >
-            {isLoading ? "Loading" : "Refresh"}
-          </PremiumButton>
-        </div>
-
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {OP_TYPES.map((item) => (
-            <PremiumButton
-              key={item}
-              size="small"
-              variant={operation === item ? "primary" : "ghost"}
-              onClick={() => setOperation(item)}
-            >
-              {item === "all" ? "All" : item.replace(/_/g, " ")}
-            </PremiumButton>
-          ))}
-        </div>
+          <FilterBar.Row>
+            {OP_TYPES.map((item) => (
+              <PremiumButton
+                key={item}
+                size="small"
+                variant={operation === item ? "primary" : "ghost"}
+                onClick={() => setOperation(item)}
+              >
+                {item === "all" ? "All" : item.replace(/_/g, " ")}
+              </PremiumButton>
+            ))}
+          </FilterBar.Row>
+        </FilterBar>
 
         {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
 

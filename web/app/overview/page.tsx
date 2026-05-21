@@ -56,8 +56,11 @@ export default function Page() {
   const archivedPct = data?.total ? 100 - activePct : 0;
 
   useEffect(() => {
-    client.getMemories({ limit: 10 })
-      .then((page) => setRecentMemories(page.memories))
+    // Fetch more than needed to ensure we have enough after filtering internal system ops
+    client.getMemories({ limit: 25 })
+      .then((page) => setRecentMemories(
+        page.memories.filter((m) => m.type !== "cognitive_upsert" && m.type !== "system")
+      ))
       .catch(() => setRecentMemories([]));
   }, [client]);
 
@@ -71,10 +74,30 @@ export default function Page() {
       >
         {/* Editorial Welcome Header */}
         <motion.div variants={itemVariants}>
-          <PageHeader 
-            title="Overview" 
-            description="LTM (Long Term Memory) observability telemetry and citation graph analysis." 
-          />
+          <PageHeader
+            title="Overview"
+            description="LTM (Long Term Memory) observability telemetry and citation graph analysis."
+          >
+            <a
+              href="/chat"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "10px 18px",
+                borderRadius: "10px",
+                background: "linear-gradient(135deg, #d97847 0%, #b8623a 100%)",
+                color: "#fff",
+                fontSize: "13px",
+                fontWeight: 500,
+                letterSpacing: "0.01em",
+                textDecoration: "none",
+                boxShadow: "0 4px 12px rgba(217, 120, 71, 0.25)",
+              }}
+            >
+              Open memory-augmented chat →
+            </a>
+          </PageHeader>
         </motion.div>
 
         {/* Stats Cards Bento Row */}
@@ -86,7 +109,7 @@ export default function Page() {
         </motion.div>
 
         {/* Asymmetric Bento Grid Details */}
-        <div className="grid-asymmetric">
+        <div className="grid-asymmetric" style={{ alignItems: "start" }}>
           {/* Left Column: Operational Telemetry */}
           <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -179,44 +202,51 @@ export default function Page() {
           </PremiumCard>
 
           {/* Right Column: Mini Guidelines */}
-          <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>
-              API Status
-            </h3>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}>
-              <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px #10b981" }} />
-              <span style={{ fontSize: "14px", fontWeight: 500, color: "var(--color-pure-white)" }}>Server Connected</span>
-            </div>
-            <p style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5, margin: 0, marginTop: "8px" }}>
-              All telemetry metrics are fetched securely from the active BrainRouter daemon running on port 3747.
-            </p>
-          </PremiumCard>
+          {/* Right Column: API Status + Memory Health stacked */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>
+                API Status
+              </h3>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}>
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px #10b981" }} />
+                <span style={{ fontSize: "14px", fontWeight: 500, color: "var(--color-pure-white)" }}>Server Connected</span>
+              </div>
+              <p style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5, margin: 0, marginTop: "8px" }}>
+                All telemetry metrics are fetched securely from the active BrainRouter daemon running on port 3747.
+              </p>
+            </PremiumCard>
+
+            <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>Memory Health</h3>
+              <div style={{ height: "8px", borderRadius: "9999px", background: "rgba(226,227,233,0.1)", overflow: "hidden" }}>
+                <div style={{ width: `${activePct}%`, height: "100%", background: "var(--color-golden-gradient)" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--color-silver-text)", fontSize: "13px" }}>
+                <span>Active: {activePct}%</span>
+                <span>Archived: {archivedPct}%</span>
+              </div>
+            </PremiumCard>
+          </div>
         </div>
 
-        <div className="grid-asymmetric">
-          <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>Recent Activity</h3>
-            {recentMemories.length > 0 ? recentMemories.map((memory) => (
-              <div key={memory.recordId} style={{ borderTop: "1px solid var(--border-dim)", paddingTop: "10px" }}>
-                <div style={{ color: "var(--color-golden-accent)", fontSize: "11px", textTransform: "uppercase", fontWeight: 700 }}>{memory.type}</div>
-                <p style={{ margin: "4px 0", color: "var(--color-white-frost)", fontSize: "13px", lineHeight: 1.45 }}>{memory.content.slice(0, 160)}</p>
+        {/* Recent Activity — full width */}
+        <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+          <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0, marginBottom: "12px" }}>Recent Activity</h3>
+          <div style={{ overflowY: "auto", maxHeight: "320px", display: "flex", flexDirection: "column", gap: "0", paddingRight: "2px" }}>
+            {recentMemories.length > 0 ? recentMemories.slice(0, 10).map((memory) => (
+              <div key={memory.recordId} style={{ borderTop: "1px solid var(--border-dim)", paddingTop: "10px", paddingBottom: "10px" }}>
+                <div style={{ color: "var(--color-golden-accent)", fontSize: "11px", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em" }}>
+                  {memory.type.replace(/_/g, " ")}
+                </div>
+                <p style={{ margin: "4px 0", color: "var(--color-white-frost)", fontSize: "13px", lineHeight: 1.45 }}>{memory.content.slice(0, 200)}</p>
                 <span style={{ color: "var(--color-stone-text)", fontSize: "11px" }}>{new Date(memory.createdTime).toLocaleString()}</span>
               </div>
             )) : (
-              <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "13px" }}>No recent memories recorded.</p>
+              <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "13px", paddingTop: "10px", borderTop: "1px solid var(--border-dim)" }}>No recent memories recorded.</p>
             )}
-          </PremiumCard>
-          <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>Memory Health</h3>
-            <div style={{ height: "8px", borderRadius: "9999px", background: "rgba(226,227,233,0.1)", overflow: "hidden" }}>
-              <div style={{ width: `${activePct}%`, height: "100%", background: "var(--color-golden-gradient)" }} />
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", color: "var(--color-silver-text)", fontSize: "13px" }}>
-              <span>Active: {activePct}%</span>
-              <span>Archived: {archivedPct}%</span>
-            </div>
-          </PremiumCard>
-        </div>
+          </div>
+        </PremiumCard>
       </motion.div>
     </AuthGuard>
   );

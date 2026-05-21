@@ -7,6 +7,7 @@ import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
+import { FilterBar } from "../../components/FilterBar";
 import { PremiumButton } from "../../components/PremiumButton";
 
 const SOURCES: Array<HostHookSource | "all"> = ["all", "claude-code", "codex", "generic-mcp"];
@@ -35,55 +36,50 @@ export default function HooksPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Hooks" description="Registered passive host integrations and lifecycle event status." />
+        <PageHeader title="Hooks" description="Registered passive host integrations and lifecycle event status.">
+          <PremiumButton size="small" variant="ghost" onClick={() => setShowRegisterForm(!showRegisterForm)}>
+            {showRegisterForm ? "Cancel" : "Register hook"}
+          </PremiumButton>
+          <PremiumButton size="small" variant="ghost" onClick={() => void refresh()} disabled={isLoading}>
+            {isLoading ? "Loading…" : "Refresh"}
+          </PremiumButton>
+        </PageHeader>
 
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", width: "100%" }}>
-          {SOURCES.map((item) => (
-            <PremiumButton
-              key={item}
-              size="small"
-              variant={source === item ? "primary" : "ghost"}
-              onClick={() => setSource(item)}
-            >
-              {item === "all" ? "All" : item}
-            </PremiumButton>
-          ))}
-          <PremiumButton
-            size="small"
-            variant="ghost"
-            onClick={() => setShowRegisterForm(!showRegisterForm)}
-            style={{ marginLeft: "10px" }}
-          >
-            {showRegisterForm ? "Cancel Registration" : "Register Hook..."}
-          </PremiumButton>
-          <PremiumButton 
-            size="small"
-            variant="ghost"
-            onClick={() => void refresh()} 
-            disabled={isLoading} 
-            style={{ marginLeft: "auto" }}
-          >
-            {isLoading ? "Loading" : "Refresh"}
-          </PremiumButton>
-        </div>
+        <FilterBar card={false}>
+          <FilterBar.Row>
+            {SOURCES.map((item) => (
+              <PremiumButton
+                key={item}
+                size="small"
+                variant={source === item ? "primary" : "ghost"}
+                onClick={() => setSource(item)}
+              >
+                {item === "all" ? "All" : item}
+              </PremiumButton>
+            ))}
+          </FilterBar.Row>
+        </FilterBar>
 
         {showRegisterForm && (
-          <div className="table-container" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
-              <input value={sessionKey} onChange={(next) => setSessionKey(next.target.value)} placeholder="Session key" style={inputStyle} />
-              <input value={event} onChange={(next) => setEvent(next.target.value)} placeholder="Lifecycle event" style={inputStyle} />
-            </div>
-            <textarea value={payload} onChange={(next) => setPayload(next.target.value)} rows={5} style={{ ...inputStyle, resize: "vertical" }} />
-            <PremiumButton 
-              size="small" 
-              variant="primary" 
-              onClick={() => void handleRegister()}
-              style={{ width: "fit-content" }}
-            >
-              Register Hook
-            </PremiumButton>
+          <FilterBar>
+            <FilterBar.Row gap={12}>
+              <FilterBar.Label text="Session key">
+                <input value={sessionKey} onChange={(next) => setSessionKey(next.target.value)} placeholder="brainrouter-cli:/path" className="pill-input" style={{ minWidth: "240px" }} />
+              </FilterBar.Label>
+              <FilterBar.Label text="Lifecycle event">
+                <input value={event} onChange={(next) => setEvent(next.target.value)} placeholder="e.g. session.start" className="pill-input" style={{ minWidth: "240px" }} />
+              </FilterBar.Label>
+            </FilterBar.Row>
+            <FilterBar.Label text="Payload (JSON or text)">
+              <textarea value={payload} onChange={(next) => setPayload(next.target.value)} rows={5} className="pill-input" style={{ resize: "vertical", borderRadius: "10px", padding: "12px 16px" }} />
+            </FilterBar.Label>
+            <FilterBar.Row align="end">
+              <PremiumButton size="small" variant="primary" onClick={() => void handleRegister()}>
+                Register hook
+              </PremiumButton>
+            </FilterBar.Row>
             {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
-          </div>
+          </FilterBar>
         )}
 
         <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>

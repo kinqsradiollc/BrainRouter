@@ -65,6 +65,7 @@ import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
 import { graphRouter } from './api/routes/graph.js';
 import { authRouter } from './api/routes/auth.js';
+import { chatCompletionsRouter } from './api/routes/chat-completions.js';
 import { governanceRouter } from './api/routes/governance.js';
 import { evidenceRouter } from './api/routes/evidence.js';
 import { hooksRouter } from './api/routes/hooks.js';
@@ -383,6 +384,10 @@ if (USE_HTTP) {
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
   app.use("/api/skills", skillsRouter);
+  // OpenAI-compatible chat endpoint (memory-augmented):
+  //   POST /v1/chat/completions  — standard OpenAI body, sessionKey via body.brainrouter.sessionKey or X-BrainRouter-Session header
+  //   GET  /v1/models            — returns the configured upstream model
+  app.use("/v1", chatCompletionsRouter);
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream)
   async function handleMcp(req: Request, res: Response) {

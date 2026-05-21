@@ -67,3 +67,67 @@ function encodeSessionKey(sessionKey: string): string {
     .toString('base64url')
     .slice(0, 180);
 }
+
+function decodeSessionKey(encoded: string): string {
+  try {
+    return Buffer.from(encoded, 'base64url').toString('utf8');
+  } catch {
+    return encoded;
+  }
+}
+
+export interface TranscriptSummary {
+  sessionKey: string;
+  fileName: string;
+  modifiedAt: string;
+  turnCount: number;
+  firstUserMessage?: string;
+}
+
+/**
+ * List all persisted transcripts under the workspace, newest first.
+ * Used by `/sessions` to render a picker for `/resume`.
+ */
+export function listTranscripts(workspaceRoot: string): TranscriptSummary[] {
+  const stateDir = getCliStateDir(workspaceRoot);
+  const transcriptsDir = path.join(stateDir, 'transcripts');
+  if (!fs.existsSync(transcriptsDir)) return [];
+  const files = fs.readdirSync(transcriptsDir).filter((f) => f.endsWith('.jsonl'));
+  const summaries: TranscriptSummary[] = files.map((fileName) => {
+    const filePath = path.join(transcriptsDir, fileName);
+    const stat = fs.statSync(filePath);
+    const encoded = fileName.slice(0, -'.jsonl'.length);
+    const sessionKey = decodeSessionKey(encoded);
+    let turnCount = 0;
+    let firstUserMessage: string | undefined;
+    try {
+      const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
+      turnCount = lines.length;
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as TranscriptEntry;
+          if (entry.role === 'user' && typeof entry.content === 'string' && entry.content.trim()) {
+            firstUserMessage = entry.content.toString().replace(/\s+/g, ' ').slice(0, 120);
+            break;
+          }
+        } catch { /* skip malformed */ }
+      }
+    } catch { /* unreadable file */ }
+    return {
+      sessionKey,
+      fileName,
+      modifiedAt: stat.mtime.toISOString(),
+      turnCount,
+      firstUserMessage,
+    };
+  });
+  return summaries.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+}
+
+/**
+ * Read all transcript entries for a session, in order. Used by `/resume`
+ * to seed the Agent's chatHistory.
+ */
+export function loadTranscript(workspaceRoot: string, sessionKey: string): TranscriptEntry[] {
+  return readTranscriptEntries(workspaceRoot, sessionKey, Number.MAX_SAFE_INTEGER);
+}

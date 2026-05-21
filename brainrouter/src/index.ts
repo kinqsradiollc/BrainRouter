@@ -79,6 +79,108 @@ program
     startREPL(agent, mcpClient, config, workspace);
   });
 
+// One-shot non-interactive run — pipe-friendly for scripting/CI.
+//   brainrouter run "summarize the changes in src/"
+//   echo "what is this repo?" | brainrouter run -
+//   brainrouter run --print "..."        → print answer only
+//   brainrouter run --json "..."         → JSON-line with answer + usage
+program
+  .command('run [prompt...]')
+  .description('Run a single agent turn non-interactively and print the answer (use "-" to read prompt from stdin)')
+  .option('-p, --profile <name>', 'Connection profile name')
+  .option('-m, --model <name>', 'LLM model override')
+  .option('-w, --workspace <path>', 'Workspace root')
+  .option('--print', 'Print the answer text only, no chrome')
+  .option('--json', 'Emit one JSON line { answer, usage, durationMs, sessionKey }')
+  .option('--session <key>', 'Resume a specific sessionKey')
+  .option('--timeout <ms>', 'LLM request timeout in ms')
+  .action(async (promptParts: string[], options) => {
+    if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
+    if (options.timeout) process.env.BRAINROUTER_LLM_TIMEOUT_MS = String(options.timeout);
+
+    let prompt = (promptParts ?? []).join(' ').trim();
+    if (prompt === '-' || !prompt) {
+      // Read from stdin
+      prompt = await new Promise<string>((resolve) => {
+        let buf = '';
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('data', (chunk) => { buf += chunk; });
+        process.stdin.on('end', () => resolve(buf.trim()));
+      });
+    }
+    if (!prompt) {
+      console.error('Error: no prompt provided (pass as args or via stdin).');
+      process.exit(2);
+    }
+
+    const workspace = findWorkspaceRoot();
+    applyWorkspaceRoot(workspace.workspaceRoot);
+
+    const config = loadConfig();
+    const profileName = options.profile || config.activeServer;
+    const serverConfig = { ...config.servers[profileName] };
+    if (!serverConfig) {
+      console.error(`Error: Profile "${profileName}" not found.`);
+      process.exit(1);
+    }
+    if (serverConfig.type === 'stdio') {
+      const args = serverConfig.args ?? [];
+      const rootIndex = args.indexOf('--root');
+      serverConfig.args = rootIndex >= 0
+        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
+        : [...args, '--root', workspace.workspaceRoot];
+    }
+
+    const llm = config.llm ?? { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
+    if (options.model) llm.model = options.model;
+
+    const mcpClient = new McpClientWrapper();
+    try {
+      await mcpClient.connect(serverConfig, llm);
+    } catch (err: any) {
+      console.error(`MCP connect failed: ${err.message}`);
+      process.exit(1);
+    }
+
+    const agent = new Agent(mcpClient, llm, {
+      workspaceRoot: workspace.workspaceRoot,
+      launchCwd: workspace.launchCwd,
+      sessionKey: options.session,
+    });
+
+    const startedAt = Date.now();
+    let answer = '';
+    try {
+      answer = await agent.runTurn(prompt, {
+        onStatusUpdate: () => {},
+        onToolStart: (name) => { if (!options.print && !options.json) process.stderr.write(`  · ${name}\n`); },
+        onToolEnd: () => {},
+      });
+    } catch (err: any) {
+      console.error(`run failed: ${err.message}`);
+      await mcpClient.close();
+      process.exit(1);
+    }
+    const durationMs = Date.now() - startedAt;
+    await mcpClient.close();
+
+    if (options.json) {
+      process.stdout.write(JSON.stringify({
+        answer,
+        sessionKey: agent.sessionKey,
+        usage: agent.lastTurnUsage,
+        durationMs,
+      }) + '\n');
+    } else {
+      process.stdout.write(answer + (answer.endsWith('\n') ? '' : '\n'));
+      if (!options.print) {
+        const u = agent.lastTurnUsage;
+        process.stderr.write(`\n[done · ${Math.round(durationMs / 1000)}s · ${u.promptTokens} in / ${u.completionTokens} out across ${u.calls} call${u.calls === 1 ? '' : 's'}]\n`);
+      }
+    }
+    process.exit(0);
+  });
+
 // Login Command
 program
   .command('login')
