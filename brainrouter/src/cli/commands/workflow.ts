@@ -15,7 +15,8 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, updateWorkflowStatus } from '../../state/workflowArtifacts.js';
-import { clearGoal, completeGoal, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget } from '../../state/goalStore.js';
+import { clearGoal, completeGoal, editGoal, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget } from '../../state/goalStore.js';
+import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
@@ -358,23 +359,28 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           console.log(chalk.yellow('\nNo active goal. Set one with: /goal <outcome statement>\n'));
           console.log(chalk.gray('Outcome-first format works best:'));
           console.log(chalk.gray('  /goal <desired end state> verified by <evidence> while preserving <constraints>.\n'));
-          return true;
+          return;
         }
-        const status = g.status === 'active' ? chalk.green(g.status)
-          : g.status === 'paused' ? chalk.yellow(g.status)
-          : g.status === 'complete' ? chalk.cyan(g.status)
-          : chalk.red(g.status);
+        const statusLabel = g.status.replace('_', ' ');
+        const status = g.status === 'active' ? chalk.green(statusLabel)
+          : g.status === 'paused' ? chalk.yellow(statusLabel)
+          : g.status === 'complete' ? chalk.cyan(statusLabel)
+          : g.status === 'usage_limited' ? chalk.yellow(statusLabel)
+          : chalk.red(statusLabel);
         console.log(chalk.bold('\nGoal'));
         console.log(`  Status:     ${status}`);
         console.log(`  Outcome:    ${chalk.cyan(g.text)}`);
-        console.log(`  Budget:     ${g.budget.iterationsUsed}/${g.budget.maxIterations} iterations used`);
+        console.log(`  Iterations: ${g.budget.iterationsUsed}/${g.budget.maxIterations} used`);
+        if (g.budget.maxTokens) {
+          console.log(`  Tokens:     ${(g.budget.tokensUsed ?? 0).toLocaleString()}/${g.budget.maxTokens.toLocaleString()} used`);
+        }
         console.log(`  Started:    ${chalk.gray(g.startedAt)}`);
         if (g.completedAt) console.log(`  Completed:  ${chalk.gray(g.completedAt)}`);
-        if (g.blockedReason) console.log(`  Note:       ${chalk.gray(g.blockedReason)}`);
-        console.log(chalk.gray('\nSubcommands: /goal <text> | pause | resume | complete | clear | budget <n>\n'));
+        if (g.blockedReason) console.log(`  Reason:     ${chalk.gray(g.blockedReason)}`);
+        console.log(chalk.gray('\nSubcommands: /goal <text> | pause | resume | complete | clear | budget <n> | tokens <n> | edit <field> <value>\n'));
       };
 
-      if (!arg || arg === 'show') { showStatus(readGoal(ws, sk)); break; }
+      if (!arg || arg === 'show') { showStatus(readGoal(ws, sk)); return true; }
       if (arg === 'clear') {
         clearGoal(ws, sk);
         agent.refreshSystemPrompt();
@@ -389,7 +395,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       }
       if (arg === 'resume') {
         const g = resumeGoal(ws, sk);
-        if (!g) { console.log(chalk.yellow('\nNo goal to resume.\n')); break; }
+        if (!g) { console.log(chalk.yellow('\nNo goal to resume.\n')); return true; }
+        // Resume from paused/blocked/usage_limited — any stale "wrap up"
+        // steering from the previous final-budget tick must be dropped so
+        // the resumed turn doesn't see contradictory directives.
+        agent.removeTaggedSystemMessage('goal-budget-steering');
         agent.refreshSystemPrompt();
         console.log(chalk.green(`\n▶  Goal resumed (${g.budget.iterationsUsed}/${g.budget.maxIterations} used). Starting next iteration…\n`));
         // Fire the next iteration immediately so the user doesn't have to type
@@ -411,10 +421,108 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         }
         const g = setGoalBudget(ws, sk, Math.floor(n));
         if (!g) console.log(chalk.yellow('\nNo goal to update.\n'));
-        else { agent.refreshSystemPrompt(); console.log(chalk.green(`\n✓ Budget set to ${g.budget.maxIterations} iterations (${g.budget.iterationsUsed} already used).\n`)); }
+        else {
+          // The user just raised (or rarely lowered) the cap — any stale
+          // wrap-up steering message from the prior tight-budget state is
+          // now misleading. Drop it; the post-turn loop will re-inject if
+          // the new state still puts us on a final-budget turn.
+          agent.removeTaggedSystemMessage('goal-budget-steering');
+          agent.refreshSystemPrompt();
+          console.log(chalk.green(`\n✓ Iteration budget set to ${g.budget.maxIterations} (${g.budget.iterationsUsed} already used).\n`));
+        }
         return true;
       }
-      // Anything else is a new goal text.
+      if (arg.startsWith('tokens')) {
+        // /goal tokens <N>     — set the token cap (0 to clear)
+        const n = Number(arg.replace(/^tokens\s*/, '').trim());
+        if (!Number.isFinite(n) || n < 0) {
+          console.log(chalk.red('\nUsage: /goal tokens <non-negative integer> (0 to clear the token cap)\n'));
+          return true;
+        }
+        const g = setGoalTokenBudget(ws, sk, Math.floor(n));
+        if (!g) {
+          console.log(chalk.yellow('\nNo goal to update.\n'));
+          return true;
+        }
+        // Clear stale wrap-up steering — the budget state just changed
+        // and any previously-injected "this is your last turn" directive
+        // would now be misleading.
+        agent.removeTaggedSystemMessage('goal-budget-steering');
+        agent.refreshSystemPrompt();
+        if (n === 0) {
+          console.log(chalk.green('\n✓ Token budget cleared (iteration cap still applies).\n'));
+        } else {
+          console.log(chalk.green(`\n✓ Token budget set to ${g.budget.maxTokens?.toLocaleString()} (${(g.budget.tokensUsed ?? 0).toLocaleString()} already used).\n`));
+        }
+        return true;
+      }
+      if (arg.startsWith('edit')) {
+        // /goal edit text <new text>
+        // /goal edit status <active|paused|complete|blocked|usage_limited>
+        // /goal edit budget <N>
+        // /goal edit tokens <N>
+        const rest = arg.replace(/^edit\s*/, '').trim();
+        const [field, ...valueParts] = rest.split(/\s+/);
+        const value = valueParts.join(' ').trim();
+        if (!field || !value) {
+          console.log(chalk.red('\nUsage: /goal edit <field> <value>'));
+          console.log(chalk.gray('  fields: text | status | budget | tokens\n'));
+          return true;
+        }
+        try {
+          let g: import('../../state/goalStore.js').Goal | null;
+          if (field === 'text') {
+            g = editGoal(ws, sk, { text: value });
+          } else if (field === 'status') {
+            const allowed: GoalStatus[] = ['active', 'paused', 'complete', 'blocked', 'usage_limited'];
+            if (!(allowed as string[]).includes(value)) {
+              console.log(chalk.red(`\nUnknown status "${value}". Allowed: ${allowed.join(', ')}\n`));
+              return true;
+            }
+            g = editGoal(ws, sk, { status: value as GoalStatus });
+          } else if (field === 'budget') {
+            const n = Number(value);
+            if (!Number.isFinite(n) || n < 1) {
+              console.log(chalk.red('\n/goal edit budget <positive integer>\n'));
+              return true;
+            }
+            g = editGoal(ws, sk, { maxIterations: Math.floor(n) });
+          } else if (field === 'tokens') {
+            const n = Number(value);
+            if (!Number.isFinite(n) || n < 0) {
+              console.log(chalk.red('\n/goal edit tokens <non-negative integer>\n'));
+              return true;
+            }
+            g = editGoal(ws, sk, { maxTokens: Math.floor(n) });
+          } else {
+            console.log(chalk.red(`\nUnknown edit field "${field}". Allowed: text | status | budget | tokens\n`));
+            return true;
+          }
+          if (!g) {
+            console.log(chalk.yellow('\nNo goal to edit. Set one first with /goal <text>.\n'));
+          } else {
+            // Any edit may have changed the budget headroom; clear stale
+            // wrap-up steering so subsequent turns aren't told "this is
+            // your last turn" with stale data.
+            agent.removeTaggedSystemMessage('goal-budget-steering');
+            agent.refreshSystemPrompt();
+            console.log(chalk.green(`\n✓ Updated.\n`));
+            showStatus(g);
+          }
+        } catch (err: any) {
+          if (err instanceof GoalTooLongError) {
+            console.log(chalk.red(`\n✗ ${err.message}\n`));
+          } else {
+            console.log(chalk.red(`\n✗ ${err?.message ?? err}\n`));
+          }
+        }
+        return true;
+      }
+      // Anything else is a new goal text — attempt set with conflict
+      // detection. If a non-complete goal is already active we throw
+      // GoalConflictError and prompt the user before overwriting; a
+      // complete goal is replaced silently (the prior work is done, this
+      // is just starting fresh and the prompt would be noise).
       let goal: import('../../state/goalStore.js').Goal;
       try {
         goal = setGoal(ws, arg, sk);
@@ -424,7 +532,26 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           console.log(chalk.gray(`  Tip: a goal is a 1–3 sentence outcome statement, not a chat log. Max ${GOAL_TEXT_MAX_CHARS} chars.\n`));
           return true;
         }
-        throw err;
+        if (err instanceof GoalConflictError) {
+          const existing = err.existing;
+          console.log(chalk.yellow(`\n⚠️  A goal is already ${existing.status.replace('_', ' ')}:`));
+          console.log(`     ${chalk.cyan(existing.text)}`);
+          console.log(`     ${chalk.gray(`${existing.budget.iterationsUsed}/${existing.budget.maxIterations} iterations used`)}`);
+          const confirmed = await askYesNo('Replace it with the new objective? (y/N) ', false);
+          if (!confirmed) {
+            console.log(chalk.gray('\nKeeping the current goal. Use `/goal edit text <new>` to change just the wording.\n'));
+            return true;
+          }
+          // Force-replace.
+          try {
+            goal = setGoal(ws, arg, sk, { force: true });
+          } catch (err2: any) {
+            console.log(chalk.red(`\n✗ ${err2?.message ?? err2}\n`));
+            return true;
+          }
+        } else {
+          throw err;
+        }
       }
       agent.refreshSystemPrompt();
       console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}`));

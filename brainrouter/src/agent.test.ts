@@ -1256,6 +1256,181 @@ test('goalStore: per-session goals are isolated from each other', () => {
   });
 });
 
+test('goalStore: setGoal throws GoalConflictError when overwriting an active goal without force', async () => {
+  const { GoalConflictError, completeGoal } = await import('./state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:conflict';
+    setGoal(workspace, 'first goal', sk);
+    // Same key, new text — must conflict.
+    assert.throws(
+      () => setGoal(workspace, 'second goal', sk),
+      (err: unknown) => err instanceof GoalConflictError && (err as any).existing.text === 'first goal',
+    );
+    // Existing goal preserved.
+    assert.equal(readGoal(workspace, sk)?.text, 'first goal');
+    // force=true overrides.
+    const replaced = setGoal(workspace, 'second goal', sk, { force: true });
+    assert.equal(replaced.text, 'second goal');
+    assert.equal(readGoal(workspace, sk)?.text, 'second goal');
+    // Completing the goal lifts the conflict shield — fresh setGoal without
+    // force should now succeed because the old work is done.
+    completeGoal(workspace, sk, 'manually closed');
+    const next = setGoal(workspace, 'third goal', sk);
+    assert.equal(next.text, 'third goal');
+    assert.equal(next.status, 'active');
+  });
+});
+
+test('goalStore: GoalConflictError message reflects the actual existing status', async () => {
+  // Copilot review noted that the prior message hardcoded "already active"
+  // even when the existing goal was paused / blocked / usage_limited,
+  // misleading users via the REPL's catch path. Verify status-aware wording.
+  const { GoalConflictError, pauseGoal, blockGoal, usageLimitGoal } = await import('./state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:conflict-msg';
+    setGoal(workspace, 'first', sk);
+    // Active → "is in progress"
+    const active = (() => { try { setGoal(workspace, 'second', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    assert.ok(active instanceof GoalConflictError);
+    assert.match(active.message, /already is in progress/);
+
+    pauseGoal(workspace, sk);
+    const paused = (() => { try { setGoal(workspace, 'third', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    assert.ok(paused instanceof GoalConflictError);
+    assert.match(paused.message, /already exists with status: paused/);
+
+    blockGoal(workspace, sk, 'stuck');
+    const blocked = (() => { try { setGoal(workspace, 'fourth', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    assert.match(blocked!.message, /already exists with status: blocked/);
+
+    usageLimitGoal(workspace, sk, 'cap reached');
+    const limited = (() => { try { setGoal(workspace, 'fifth', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    // The status label spells out 'usage limited' (underscore-stripped).
+    assert.match(limited!.message, /already exists with status: usage limited/);
+  });
+});
+
+test('goalStore: buildBudgetSteeringMessage differentiates iteration vs token tightness', async () => {
+  // Copilot review: the message used to always say "one turn left within
+  // the iteration budget" even when only the token heuristic tripped.
+  // Verify each trigger gets the right wording.
+  const { buildBudgetSteeringMessage } = await import('./state/goalStore.js');
+  const baseGoal = {
+    text: 't', setAt: '', status: 'active' as const, startedAt: '', updatedAt: '',
+  };
+
+  // Iteration-tight only.
+  const iterationCase = buildBudgetSteeringMessage({
+    ...baseGoal,
+    budget: { maxIterations: 10, iterationsUsed: 9 },
+  });
+  assert.match(iterationCase, /iteration budget/);
+  assert.doesNotMatch(iterationCase, /token cap/);
+
+  // Token-tight only (iterations have headroom: 4/20 used).
+  const tokenCase = buildBudgetSteeringMessage({
+    ...baseGoal,
+    budget: { maxIterations: 20, iterationsUsed: 4, maxTokens: 10_000, tokensUsed: 8_500 },
+  });
+  assert.match(tokenCase, /token cap will trip/);
+  assert.match(tokenCase, /8,500\/10,000/);
+
+  // Both tight.
+  const bothCase = buildBudgetSteeringMessage({
+    ...baseGoal,
+    budget: { maxIterations: 10, iterationsUsed: 9, maxTokens: 5_000, tokensUsed: 4_500 },
+  });
+  assert.match(bothCase, /Both budgets are nearly exhausted/);
+});
+
+test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', async () => {
+  const { Agent } = await import('./agent/agent.js');
+  // Construct an Agent without touching MCP/LLM; we just exercise the
+  // chatHistory mutation methods that are pure CPU.
+  const stubMcp: any = { callTool: async () => ({ content: [] }) };
+  const agent: any = new Agent(stubMcp, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' }, {
+    workspaceRoot: '/tmp', launchCwd: '/tmp', sessionKey: 's:test',
+  });
+  // Seed with a system message (the constructor pushes one).
+  agent.replaceTaggedSystemMessage('demo', 'first version');
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('first version')).length, 1);
+  agent.replaceTaggedSystemMessage('demo', 'second version');
+  // Replace removes the first version and adds the second.
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('first version')).length, 0);
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 1);
+  // Remove drops the second.
+  agent.removeTaggedSystemMessage('demo');
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 0);
+  // Idempotent: removing again is a no-op (doesn't throw).
+  agent.removeTaggedSystemMessage('demo');
+  // Other tags are untouched by tag-specific removal.
+  agent.replaceTaggedSystemMessage('other', 'keep me');
+  agent.removeTaggedSystemMessage('demo');
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('keep me')).length, 1);
+});
+
+test('goalStore: token budget tracking + usage_limited transition', async () => {
+  const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('./state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:tokens';
+    const g0 = setGoal(workspace, 'finish auth refactor', sk);
+    assert.equal(g0.budget.maxTokens, undefined);
+
+    // Set a token cap of 1000.
+    const g1 = setGoalTokenBudget(workspace, sk, 1000)!;
+    assert.equal(g1.budget.maxTokens, 1000);
+    assert.equal(g1.budget.tokensUsed, 0);
+    assert.equal(goalHasBudgetLeft(g1), true);
+
+    // Tally usage in chunks.
+    const g2 = addGoalTokens(workspace, sk, 400)!;
+    assert.equal(g2.budget.tokensUsed, 400);
+    assert.equal(goalIsOnFinalBudgetTurn(g2), false);
+
+    // 850/1000 — > 80%, considered the "final turn" for steering.
+    const g3 = addGoalTokens(workspace, sk, 450)!;
+    assert.equal(g3.budget.tokensUsed, 850);
+    assert.equal(goalIsOnFinalBudgetTurn(g3), true);
+
+    // Cross the cap.
+    const g4 = addGoalTokens(workspace, sk, 200)!;
+    assert.equal(g4.budget.tokensUsed, 1050);
+    assert.equal(goalHasBudgetLeft(g4), false);
+
+    // Transition to usage_limited.
+    const limited = usageLimitGoal(workspace, sk, 'token budget reached')!;
+    assert.equal(limited.status, 'usage_limited');
+    assert.equal(limited.blockedReason, 'token budget reached');
+
+    // Clearing the token cap with 0.
+    const cleared = setGoalTokenBudget(workspace, sk, 0)!;
+    assert.equal(cleared.budget.maxTokens, undefined);
+    assert.equal(cleared.budget.tokensUsed, undefined);
+  });
+});
+
+test('goalStore: editGoal unified update changes text/status/budget/tokens in one call', async () => {
+  const { editGoal } = await import('./state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:edit';
+    setGoal(workspace, 'initial outcome', sk);
+    const edited = editGoal(workspace, sk, {
+      text: 'refined outcome with sharper boundary',
+      maxIterations: 25,
+      maxTokens: 50_000,
+    })!;
+    assert.equal(edited.text, 'refined outcome with sharper boundary');
+    assert.equal(edited.budget.maxIterations, 25);
+    assert.equal(edited.budget.maxTokens, 50_000);
+    assert.equal(edited.status, 'active');
+    // Status-only edit.
+    const paused = editGoal(workspace, sk, { status: 'paused' })!;
+    assert.equal(paused.status, 'paused');
+    // Empty text refused.
+    assert.throws(() => editGoal(workspace, sk, { text: '   ' }), /empty/);
+  });
+});
+
 test('goalStore: legacy workspace-level goal is read as a fallback', async () => {
   const { getCliStateFile, getSessionStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
@@ -1265,7 +1440,10 @@ test('goalStore: legacy workspace-level goal is read as a fallback', async () =>
     assert.equal(readGoal(workspace, sessionKey)?.text, 'legacy goal');
 
     // Setting a per-session goal shadows the legacy one without removing it.
-    setGoal(workspace, 'session-scoped', sessionKey);
+    // The legacy fallback DOES count as an existing goal under the new
+    // conflict-detection rule, so pass force=true to bypass the prompt
+    // path (REPL will do this after confirming with the user).
+    setGoal(workspace, 'session-scoped', sessionKey, { force: true });
     assert.equal(readGoal(workspace, sessionKey)?.text, 'session-scoped');
     // Bucket exists at the expected path.
     assert.equal(fs.existsSync(path.join(getSessionStateDir(workspace, sessionKey), 'goal.json')), true);

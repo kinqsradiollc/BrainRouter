@@ -10,6 +10,9 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
+import { readGoal, resumeGoal } from '../../state/goalStore.js';
+import { askYesNo } from '../cliPrompt.js';
+import { buildGoalKickoffPrompt } from './_helpers.js';
 import type { CommandContext } from './_context.js';
 
 
@@ -54,7 +57,43 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       agent.sessionKey = sessionKey;
       const loaded = agent.loadHistory(entries);
       console.log(chalk.green(`\n✓ Resumed session ${chalk.cyan(sessionKey)} with ${loaded} prior messages.`));
-      console.log(chalk.gray('Your next message will continue the conversation.\n'));
+
+      // If the resumed session has a goal that was suspended (paused,
+      // blocked, or hit usage limit), prompt the user whether to resume it
+      // now. Without this prompt the loop silently stays paused and the
+      // user has to remember to `/goal resume` — easy to miss.
+      const resumedGoal = readGoal(agent.workspaceRoot, sessionKey);
+      if (
+        resumedGoal &&
+        (resumedGoal.status === 'paused' ||
+          resumedGoal.status === 'blocked' ||
+          resumedGoal.status === 'usage_limited')
+      ) {
+        const label = resumedGoal.status.replace('_', ' ');
+        console.log(chalk.yellow(`\n⏸  This session has a ${label} goal:`));
+        console.log(`     ${chalk.cyan(resumedGoal.text)}`);
+        console.log(`     ${chalk.gray(`${resumedGoal.budget.iterationsUsed}/${resumedGoal.budget.maxIterations} iterations used`)}${resumedGoal.blockedReason ? chalk.gray(` · ${resumedGoal.blockedReason}`) : ''}`);
+        const resume = await askYesNo('Resume the goal and continue auto-iteration? (y/N) ', false);
+        if (resume) {
+          // If the goal hit a budget cap, the user probably also wants to
+          // raise it — but don't force the question; they can /goal budget
+          // before/after. Just unpause and kick off the next iteration.
+          const reactivated = resumeGoal(agent.workspaceRoot, sessionKey);
+          if (reactivated) {
+            // Same rationale as /goal resume — drop any stale wrap-up
+            // steering left over from the budget-trigger that paused us.
+            agent.removeTaggedSystemMessage('goal-budget-steering');
+            agent.refreshSystemPrompt();
+            console.log(chalk.green(`\n▶  Goal resumed (${reactivated.budget.iterationsUsed}/${reactivated.budget.maxIterations} used). Starting next iteration…\n`));
+            ctx.repl.runAgentTurn(buildGoalKickoffPrompt(reactivated, 'resume'));
+            return true; // runAgentTurn owns its prompt cycle
+          }
+        } else {
+          console.log(chalk.gray(`\nGoal stays ${label}. Run /goal resume later to continue.\n`));
+        }
+      } else {
+        console.log(chalk.gray('Your next message will continue the conversation.\n'));
+      }
       return true;
     }
     case '/fork':

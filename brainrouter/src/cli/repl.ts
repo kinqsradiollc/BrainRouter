@@ -11,7 +11,7 @@ import type { Agent } from '../agent/agent.js';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
 import type { Config } from '../config/config.js';
 import { expandMentions } from '../memory/mentions.js';
-import { goalHasBudgetLeft, readGoal, tickGoalIteration } from '../state/goalStore.js';
+import { addGoalTokens, buildBudgetSteeringMessage, goalHasBudgetLeft, goalIsOnFinalBudgetTurn, readGoal, tickGoalIteration, usageLimitGoal } from '../state/goalStore.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
 import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
@@ -471,12 +471,39 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       // spiking the same skill. The skill memetic potential still decays
       // server-side on its own half-life; this just stops attribution.
       agent.activeSkill = undefined;
-      // Auto-continuation: if a /goal is active, the turn made tool calls,
-      // and we still have budget, schedule another turn. Codex parity rules:
-      //   - prose-only turn (zero tool calls) suppresses next continuation
-      //   - user typing anything cancels pendingContinuation
-      //   - goal_complete / goal_blocked tools called during the turn stop the loop
-      const goalAfter = readGoal(agent.workspaceRoot, agent.sessionKey);
+
+      // Auto-continuation logic. Rules:
+      //   - the goal must be active (not paused / complete / blocked / usage_limited)
+      //   - the turn made at least one tool call (prose-only turns are anti-spin)
+      //   - we still have iteration AND token budget left
+      //   - the agent didn't call goal_complete / goal_blocked this turn
+      //
+      // BEFORE checking, accumulate this turn's tokens into the goal's
+      // running tally. If that tips us over a token cap, transition to
+      // `usage_limited` instead of continuing — same effect as exhausting
+      // the iteration cap, but distinguishable in status.
+      let goalAfter = readGoal(agent.workspaceRoot, agent.sessionKey);
+      if (goalAfter && goalAfter.budget.maxTokens) {
+        const delta = (agent.lastTurnUsage?.promptTokens ?? 0) + (agent.lastTurnUsage?.completionTokens ?? 0);
+        if (delta > 0) {
+          const updated = addGoalTokens(agent.workspaceRoot, agent.sessionKey, delta);
+          if (updated) goalAfter = updated;
+        }
+        if (
+          goalAfter &&
+          goalAfter.status === 'active' &&
+          typeof goalAfter.budget.maxTokens === 'number' &&
+          (goalAfter.budget.tokensUsed ?? 0) >= goalAfter.budget.maxTokens
+        ) {
+          const limited = usageLimitGoal(
+            agent.workspaceRoot,
+            agent.sessionKey,
+            `Token budget reached: ${(goalAfter.budget.tokensUsed ?? 0).toLocaleString()} of ${goalAfter.budget.maxTokens.toLocaleString()} used.`,
+          );
+          if (limited) goalAfter = limited;
+        }
+      }
+
       const shouldContinue =
         !!goalAfter &&
         goalAfter.status === 'active' &&
@@ -487,8 +514,17 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         console.log(chalk.green(`\n🎯  Goal achieved — ${goalAfter.blockedReason ?? 'evidence on record.'}\n`));
       } else if (goalAfter && goalAfter.status === 'blocked') {
         console.log(chalk.yellow(`\n🚧  Goal blocked: ${goalAfter.blockedReason ?? '(no reason)'}\n`));
+        console.log(chalk.gray(`    Resolve the blocker, then /goal resume to continue.\n`));
+      } else if (goalAfter && goalAfter.status === 'usage_limited') {
+        console.log(chalk.yellow(`\n⏸  Goal hit usage limit: ${goalAfter.blockedReason ?? 'budget exhausted'}.`));
+        console.log(chalk.gray(`    Raise the cap with /goal budget <n> or /goal tokens <n>, then /goal resume.\n`));
       } else if (goalAfter && goalAfter.status === 'active' && !goalHasBudgetLeft(goalAfter)) {
-        console.log(chalk.yellow(`\n⏸  Goal iteration budget exhausted (${goalAfter.budget.iterationsUsed}/${goalAfter.budget.maxIterations}). Extend with /goal budget <n>, mark /goal complete, or /goal clear.\n`));
+        // Iteration cap reached — transition to usage_limited so the user
+        // gets a consistent resumable state regardless of which cap tripped.
+        const reason = `Iteration budget exhausted (${goalAfter.budget.iterationsUsed}/${goalAfter.budget.maxIterations}).`;
+        const limited = usageLimitGoal(agent.workspaceRoot, agent.sessionKey, reason);
+        console.log(chalk.yellow(`\n⏸  ${reason} Extend with /goal budget <n> and /goal resume, mark /goal complete, or /goal clear.\n`));
+        if (limited) goalAfter = limited;
       } else if (goalAfter && goalAfter.status === 'active' && agent.lastTurnToolCalls === 0) {
         console.log(chalk.gray(`(goal continuation suppressed: last turn made no tool calls — anti-spin)\n`));
       }
@@ -498,6 +534,23 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       if (shouldContinue && goalAfter) {
         pendingContinuation = true;
         const next = goalAfter.budget.iterationsUsed + 1;
+        // Pre-tick steering: if the NEXT turn would be the final one inside
+        // the budget, inject a wrap-up directive so the model lands soft
+        // instead of being cut off mid-thought.
+        //
+        // CRITICAL: also drop any stale steering when the next turn is NOT
+        // final. Without this, a previously-injected "wrap up gracefully"
+        // message would persist after the user extended the budget via
+        // /goal budget or /goal tokens, telling the model "this is your
+        // last turn" for every subsequent turn. The removal is idempotent
+        // — if no steering was set, this is a no-op.
+        const finalBudgetTurn = goalIsOnFinalBudgetTurn(goalAfter);
+        if (finalBudgetTurn) {
+          agent.replaceTaggedSystemMessage('goal-budget-steering', buildBudgetSteeringMessage(goalAfter));
+          console.log(chalk.gray(`(final budget turn — wrap-up steering injected)`));
+        } else {
+          agent.removeTaggedSystemMessage('goal-budget-steering');
+        }
         console.log(chalk.gray(`(goal continuation queued — iteration ${next}/${goalAfter.budget.maxIterations}; type anything to cancel)`));
         const followUp = buildGoalContinuationPrompt(goalAfter, agent.lastUserPrompt, agent.lastAnswer);
         setImmediate(() => {

@@ -38,7 +38,7 @@ out/
 .brainrouter.migrated/
 
 # Top-level test/ scratchpad for LLM-scaffolded throwaway demos
-# (not the package-local test folders, which sit under brainrouter/, mcp/, etc.)
+# (not the package-local test folders under brainrouter/, mcp/, etc.)
 /test/
 
 # Local Projects
