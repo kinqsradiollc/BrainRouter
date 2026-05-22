@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-05-22
+
+### Added (Claude Code 2.1.147 parity)
+- **OTEL trace parent-child nesting for spawned agents.** Child agents now inherit `parentTraceId` + `parentSpanId` from the dispatching `spawn_agent` tool span so observability viewers can reconstruct fan-out trees. Each Agent instance gets a stable `agent.agentId` and tool events are tagged with `parent_agent_id`. Matches Claude Code 2.1.147's `agent_id` / `parent_agent_id` OTEL attributes. ([agent.ts](brainrouter/src/agent.ts), [orchestratorTools.ts](brainrouter/src/orchestratorTools.ts))
+- **Headless mode rejects slash commands with a clear error.** `brainrouter run "/help"` no longer silently routes the slash command to the LLM — now exits with code 2 and tells you to use the interactive REPL. ([index.ts](brainrouter/src/index.ts))
+- **GitHub PR info in statusline.** New `pr` segment (`/statusline mode,branch,pr`) detects the current PR via `gh pr view` with a 30s cache. ([repl.ts](brainrouter/src/repl.ts))
+- **Dynamic terminal tab title with awaiting-input count.** When a goal continuation is pending OR any child agent is in `running`/`pending` state, the tab title gets prefixed with `(N) ` so background tabs surface attention without focus. ([repl.ts](brainrouter/src/repl.ts))
+- **`brainrouter agents [--json]`** — list child sessions from the command line without entering the REPL. Mirrors `claude agents --json` for tmux-resurrect, status bars, and agent pickers. ([index.ts](brainrouter/src/index.ts))
+- **In-REPL `/agents --json`** — same payload as the CLI command for shell-pipe scripting from inside the REPL.
+- **Paginated `/help`** with category groups (`session`, `memory`, `workflow`, `orchestration`, `guard`, `obs`, `ui`). On small terminals shows an index; on tall ones shows everything. `/help <category>` drills in. Replaces the 95-line `console.log` block. ([repl.ts](brainrouter/src/repl.ts))
+- **Streaming diff for large edits.** `/diff` now spawns `git diff --color=always` with `stdio: inherit` so output appears immediately. Adds `--staged` and `--all` flags. ([repl.ts](brainrouter/src/repl.ts))
+
+### Fixed
+- **Slash commands followed by tab/newline now match correctly.** `input.split(' ')` → `input.trim().split(/\s+/)` so `/help\t` and `/help\n` no longer fall through to "Unknown slash command". ([repl.ts](brainrouter/src/repl.ts))
+- **Prompt history no longer records consecutive duplicate user prompts.** Arrow-up + Enter to replay the same prompt no longer adds another copy to the transcript. ([sessionStore.ts](brainrouter/src/sessionStore.ts))
+
+### Tests
+- 89 passing (up from 87). Added: prompt-dedup regression, OTEL span shape via existing trace tests.
+
 ## [0.3.1] - 2026-05-22
 
 ### Fixed

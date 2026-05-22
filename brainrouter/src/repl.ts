@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import ora from 'ora';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
@@ -90,6 +90,32 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     },
   });
 
+  // GitHub PR detection cache. `gh pr view` takes ~300ms and prompts often
+  // refresh many times per turn; cache the result for 30s. Returns either
+  // a string like "#42" or null when there's no PR / gh not installed.
+  let prCache: { value: string | null; cachedAt: number } | null = null;
+  const PR_CACHE_TTL_MS = 30_000;
+  const detectGitHubPR = (cwd: string): string | null => {
+    const now = Date.now();
+    if (prCache && now - prCache.cachedAt < PR_CACHE_TTL_MS) return prCache.value;
+    let value: string | null = null;
+    try {
+      const out = execSync('gh pr view --json number,title 2>/dev/null', {
+        cwd,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1500,
+      }).toString().trim();
+      if (out) {
+        const parsed = JSON.parse(out) as { number?: number };
+        if (typeof parsed.number === 'number') value = `#${parsed.number}`;
+      }
+    } catch {
+      // gh missing, not a PR branch, or not a github repo — fine.
+    }
+    prCache = { value, cachedAt: now };
+    return value;
+  };
+
   // Reflect the current access mode and any configured statusline segments
   // in the prompt. Configurable via /statusline; default just shows the mode.
   const renderStatusline = (): string => {
@@ -112,6 +138,11 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           if (seg === 'branch') out.push(branch);
           else if (seg === 'dirty' && dirty) out.push('*');
         } catch { /* not a git repo */ }
+      } else if (seg === 'pr') {
+        // Detect open GitHub PR for the current branch (Claude Code 2.1.147
+        // parity). 30s cache so the prompt refresh is cheap.
+        const pr = detectGitHubPR(agent.workspaceRoot);
+        if (pr) out.push(pr);
       }
     }
     return out.filter(Boolean).join(' · ');
@@ -121,8 +152,64 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     const accent = mode === 'shell' ? chalk.red : mode === 'write' ? chalk.hex('#CC9166') : chalk.green;
     const line = renderStatusline();
     rl.setPrompt(accent(`brainrouter[${line}]> `));
+    // The terminal title shares the same trigger conditions as the prompt:
+    // any time the prompt redraws (mode change, post-turn, post-spawn), the
+    // awaiting-input count or active model may have shifted. Cheap call.
+    refreshTerminalTitle();
   };
+
+  // When a /goal is active, after each turn we schedule the NEXT turn
+  // automatically. The flag tracks whether such a continuation is pending so
+  // user input (next line typed) cancels it before it fires. Declared early
+  // so refreshTerminalTitle() (below) can read it for the awaiting-count.
+  let pendingContinuation = false;
+
+  // Returns the number of child agents currently in `pending` or `running`
+  // status — used by the tab title to surface "needs attention" counts.
+  const getRunningChildCount = (): number => {
+    try {
+      const sessions = listSessions(agent.workspaceRoot);
+      return sessions.filter((s) => s.status === 'pending' || s.status === 'running').length;
+    } catch {
+      return 0;
+    }
+  };
+
+  // Dynamic terminal tab title. Refreshed at startup AND whenever the agent
+  // count / awaiting state changes (after each turn, post-spawn). Prefixes
+  // a "(N) " count when there's work requiring attention — pending
+  // continuation OR a running child. Matches Claude Code 2.1.147's tab
+  // title hint for `claude agents`.
+  const refreshTerminalTitle = () => {
+    try {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const cfg = prefs.terminalTitle ?? 'model,session';
+      if (cfg.toLowerCase() === 'off') return;
+      const segs = cfg.split(',').map((s) => s.trim()).filter(Boolean);
+      const parts: string[] = [];
+      for (const seg of segs) {
+        if (seg === 'model') parts.push(agent.getModel());
+        else if (seg === 'session') parts.push(agent.sessionKey.slice(0, 24));
+        else if (seg === 'mode') parts.push(agent.getAccessMode());
+        else if (seg === 'branch') {
+          try {
+            parts.push(execSync('git rev-parse --abbrev-ref HEAD', {
+              cwd: agent.workspaceRoot,
+              stdio: ['ignore', 'pipe', 'ignore'],
+            }).toString().trim());
+          } catch { /* not a git repo */ }
+        }
+      }
+      if (parts.length === 0) return;
+      // Awaiting-input prefix: pendingContinuation OR any running children.
+      const awaitingCount = (pendingContinuation ? 1 : 0) + getRunningChildCount();
+      const prefix = awaitingCount > 0 ? `(${awaitingCount}) ` : '';
+      process.stdout.write(`\x1b]0;${prefix}brainrouter · ${parts.join(' · ')}\x07`);
+    } catch { /* terminal doesn't support OSC titles */ }
+  };
+
   refreshPromptForMode();
+  refreshTerminalTitle();
 
   // Vim mode: readline supports editorMode 'vi' via setRawMode + tty.
   // We honor the persisted preference at startup so users don't have to
@@ -162,10 +249,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   rl.prompt();
 
   let isProcessing = false;
-  // When a /goal is active, after each turn we schedule the NEXT turn
-  // automatically. The flag tracks whether such a continuation is pending so
-  // user input (next line typed) cancels it before it fires.
-  let pendingContinuation = false;
+  // (pendingContinuation declared earlier alongside the title refresh helpers.)
 
   /**
    * Build the prompt that fires automatically between goal-driven turns. Codex
@@ -443,7 +527,11 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     }
 
     if (input.startsWith('/')) {
-      const parts = input.split(' ');
+      // Split on any whitespace, not a literal space. Without this, a slash
+      // command followed by a tab (autocomplete completion that wasn't
+      // consumed) or a trailing newline ends up as command="/help\t" which
+      // fell through to "Unknown slash command". Matches Claude Code 2.1.147.
+      const parts = input.trim().split(/\s+/);
       const command = parts[0].toLowerCase();
       const args = parts.slice(1);
 
@@ -506,6 +594,190 @@ interface ReplContext {
   runAgentTurnAsync: (prompt: string) => Promise<void>;
 }
 
+/**
+ * Help categories. Data-driven so /help can render the index on small
+ * terminals and a focused page on `/help <category>`. Matches Claude Code
+ * 2.1.147's paginated help — the prior implementation was 95 lines of
+ * console.log calls that blew past the scrollback on anything under ~50 rows.
+ */
+interface HelpEntry { cmd: string; desc: string; }
+interface HelpCategory { key: string; title: string; entries: HelpEntry[]; }
+
+const HELP_CATEGORIES: HelpCategory[] = [
+  {
+    key: 'session',
+    title: 'Session & State',
+    entries: [
+      { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
+      { cmd: '/workspace', desc: 'Active workspace and session identity' },
+      { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
+      { cmd: '/config', desc: 'View active configuration profile' },
+      { cmd: '/clear', desc: 'Clear chat history for the active session' },
+      { cmd: '/compact', desc: 'LLM-driven compaction of the active session' },
+      { cmd: '/new [label]', desc: 'Start a new chat with a fresh session key' },
+      { cmd: '/fork [label]', desc: 'Fork this chat into a new session, keep prior context' },
+      { cmd: '/rename <label>', desc: 'Rename the current session' },
+      { cmd: '/resume <id>', desc: 'Resume a previous session by sessionKey' },
+      { cmd: '/sessions', desc: 'List persisted sessions for this workspace' },
+      { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
+      { cmd: '/init', desc: 'Create AGENT.md in the workspace' },
+      { cmd: '/exit  /quit', desc: 'Close MCP connection and exit' },
+    ],
+  },
+  {
+    key: 'memory',
+    title: 'Memory & Recall',
+    entries: [
+      { cmd: '/memory <query>', desc: 'Search long-term memory (memory_search)' },
+      { cmd: '/recall <query>', desc: 'Explicit cognitive recall (no LLM turn)' },
+      { cmd: '/briefing', desc: 'Show what was recalled before the most recent turn' },
+      { cmd: '/scenes', desc: 'List active focus scenes' },
+      { cmd: '/working', desc: 'Show the working-memory canvas' },
+      { cmd: '/working reset confirm', desc: 'Clear the canvas' },
+      { cmd: '/forget <recordId>', desc: 'Archive a memory record by ID' },
+      { cmd: '/memories', desc: 'Manage memory pipeline + consolidate to filesystem' },
+      { cmd: '/handover', desc: 'Generate continuation note for next session' },
+      { cmd: '/explain <query>', desc: 'Why recall returned what it did' },
+      { cmd: '/failed [area]', desc: 'Past failed attempts for a problem area' },
+      { cmd: '/verify <id> [status]', desc: 'Re-verify a memory record' },
+      { cmd: '/audit', desc: 'Recent memory audit log' },
+      { cmd: '/export [path]', desc: 'Dump memory + evidence + ops to JSON' },
+      { cmd: '/import <path>', desc: 'Import a BrainRouter memory envelope' },
+      { cmd: '/persona <name>', desc: 'Fetch a persona definition' },
+      { cmd: '/skill-hints <skill> <hints>', desc: 'Register extraction hints' },
+      { cmd: '/diagnostics', desc: 'Scrubbed runtime + DB stats bundle' },
+    ],
+  },
+  {
+    key: 'workflow',
+    title: 'Workflows & Skills',
+    entries: [
+      { cmd: '/spec <title>', desc: 'Produce spec.md (spec-driven-skill)' },
+      { cmd: '/feature-dev <feat>', desc: 'Multi-agent feature dev with spec + tasks' },
+      { cmd: '/review [scope]', desc: 'Multi-agent code review → review.md' },
+      { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
+      { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
+      { cmd: '/workflows', desc: 'List durable workflow folders' },
+      { cmd: '/skill <name> [input]', desc: 'Run any catalogued skill' },
+      { cmd: '/skills', desc: 'List installed BrainRouter skills' },
+      { cmd: '/plan', desc: 'Show the durable CLI task plan' },
+      { cmd: '/tools', desc: 'List local + MCP tools available to the agent' },
+      { cmd: '/goal [text|clear|complete|pause|resume|budget <n>]', desc: 'Sticky goal' },
+      { cmd: '/continue', desc: 'Resume after a loop-limit abort' },
+      { cmd: '/loop <interval> <prompt>  /loop stop', desc: 'Repeat a prompt on cadence' },
+      { cmd: '/commit', desc: 'Generate message, stage, and git commit' },
+      { cmd: '/diff', desc: 'Show git changes (stream-paginated)' },
+    ],
+  },
+  {
+    key: 'orchestration',
+    title: 'Multi-Agent Orchestration',
+    entries: [
+      { cmd: '/roles', desc: 'List available agent roles' },
+      { cmd: '/agents [--json]', desc: 'List child agent sessions' },
+      { cmd: '/agent <id> [--full]', desc: 'Detail + recent transcript of a child' },
+      { cmd: '/spawn <role> <prompt>', desc: 'Spawn a child agent' },
+      { cmd: '/wait <id> [ms]', desc: 'Wait for a child to finish' },
+      { cmd: '/kill <agent-id>', desc: 'Stop a running child' },
+      { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker' },
+      { cmd: '/ps', desc: 'List background tasks (loop + running children)' },
+      { cmd: '/stop', desc: 'Stop the running loop, mark stale children' },
+    ],
+  },
+  {
+    key: 'guard',
+    title: 'Guardrails & Permissions',
+    entries: [
+      { cmd: '/permissions [read|write|shell]', desc: 'View or set agent access mode' },
+      { cmd: '/yolo [on|off]', desc: 'Auto-approve run_command' },
+      { cmd: '/sandbox [status|add-read|add-write|remove|clear]', desc: 'Sandbox grants' },
+      { cmd: '/hooks [list|add|remove|enable|disable]', desc: 'Lifecycle shell hooks' },
+      { cmd: '/hookify [list|create|enable|disable|remove]', desc: 'Markdown rule guards' },
+      { cmd: '/logout', desc: 'Clear API keys from the active profile' },
+    ],
+  },
+  {
+    key: 'obs',
+    title: 'Observability',
+    entries: [
+      { cmd: '/tokens', desc: 'Session token usage + memory-savings estimate' },
+      { cmd: '/watch', desc: 'Tail trace log (BRAINROUTER_TRACE_LOG required)' },
+      { cmd: '/trace save <desc>  /trace search <q>', desc: 'Debug-trace store' },
+      { cmd: '/transcript [main|sessionKey]', desc: 'Recent persisted transcript' },
+      { cmd: '/rollout', desc: 'Print the transcript file path' },
+      { cmd: '/debug-config', desc: 'Show config layers, env, preferences' },
+    ],
+  },
+  {
+    key: 'ui',
+    title: 'UI & Ergonomics',
+    entries: [
+      { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
+      { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
+      { cmd: '/statusline <segments>', desc: 'Prompt (mode,branch,dirty,model,tokens,session,pr)' },
+      { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
+      { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
+      { cmd: '/vim', desc: 'Toggle vi-mode for the composer' },
+      { cmd: '/keymap [json]', desc: 'Show built-in bindings and set overrides' },
+      { cmd: '/copy', desc: 'Copy last assistant response to clipboard' },
+      { cmd: '/mention [partial]', desc: 'Suggest files for @ mentions' },
+      { cmd: '/model <name>', desc: 'Switch the LLM model in-session' },
+      { cmd: '/mcp', desc: 'Show the active MCP server and tool namespaces' },
+      { cmd: '/ide', desc: 'Show detected IDE host' },
+      { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
+      { cmd: '/feedback [message]', desc: 'Append feedback entry' },
+      { cmd: '/experimental [on|off]', desc: 'Toggle experimental features' },
+    ],
+  },
+];
+
+function renderHelp(category?: string): void {
+  // Match by key OR by leading char of title (allowing /help m → memory).
+  const wantedCategory = category
+    ? HELP_CATEGORIES.find((c) => c.key === category || c.title.toLowerCase().startsWith(category))
+    : undefined;
+
+  // Special case: show a single category if the user asked for one explicitly.
+  if (category && wantedCategory) {
+    printHelpCategory(wantedCategory);
+    console.log(chalk.gray('\nTry /help to see all categories. Tab autocompletes commands; @ mentions files.\n'));
+    return;
+  }
+  if (category && !wantedCategory) {
+    console.log(chalk.red(`\nUnknown help category "${category}". Available:`));
+    for (const c of HELP_CATEGORIES) {
+      console.log(`  ${chalk.cyan('/help ' + c.key)}  ${chalk.gray(c.title)}`);
+    }
+    console.log();
+    return;
+  }
+
+  // No category → decide between full dump and index based on terminal height.
+  const totalLines = HELP_CATEGORIES.reduce((n, c) => n + c.entries.length + 2, 0);
+  const rows = process.stdout.rows ?? 9999;
+  if (rows >= totalLines + 6) {
+    // Tall enough — show everything.
+    for (const c of HELP_CATEGORIES) printHelpCategory(c);
+    console.log(chalk.gray('\nTips: @ mentions files · Tab autocompletes · Shift+Tab cycles access mode (read → write → shell).\n'));
+    return;
+  }
+  // Small terminal — show index + per-category command count.
+  console.log(chalk.bold('\nAvailable command categories:'));
+  for (const c of HELP_CATEGORIES) {
+    console.log(`  ${chalk.cyan('/help ' + c.key.padEnd(14))} ${chalk.gray(`${c.title}  (${c.entries.length} commands)`)}`);
+  }
+  console.log(chalk.gray('\nYour terminal is short — run /help <category> to drill in. Resize and re-run /help to see all at once.\n'));
+}
+
+function printHelpCategory(c: HelpCategory): void {
+  console.log(chalk.bold(`\n${c.title}:`));
+  // Find max command-column width for alignment.
+  const colWidth = Math.min(40, c.entries.reduce((w, e) => Math.max(w, e.cmd.length), 0));
+  for (const e of c.entries) {
+    console.log(`  ${chalk.cyan(e.cmd.padEnd(colWidth))}  ${chalk.gray(e.desc)}`);
+  }
+}
+
 async function handleSlashCommand(
   command: string,
   args: string[],
@@ -517,100 +789,7 @@ async function handleSlashCommand(
 ) {
   switch (command) {
     case '/help':
-      console.log(chalk.bold('\nAvailable Slash Commands:'));
-      console.log(`  ${chalk.cyan('/help')}     - Show this help menu`);
-      console.log(`  ${chalk.cyan('/status')}   - Show connection status, LLM configuration, and database stats`);
-      console.log(`  ${chalk.cyan('/workspace')} - Show active workspace and session identity`);
-      console.log(`  ${chalk.cyan('/skills')}   - List loaded BrainRouter skills`);
-      console.log(`  ${chalk.cyan('/tools')}    - List local workspace tools and MCP tools exposed to the agent`);
-      console.log(`  ${chalk.cyan('/plan')}     - Show the durable CLI task plan`);
-      console.log(`  ${chalk.cyan('/roles')}    - List available agent roles for orchestration`);
-      console.log(`  ${chalk.cyan('/agents')}   - List child agent sessions`);
-      console.log(`  ${chalk.cyan('/agent <id>')} - Show detail and recent transcript of a child agent`);
-      console.log(`  ${chalk.cyan('/spawn <role> <prompt>')} - Spawn a child agent`);
-      console.log(`  ${chalk.cyan('/wait <id> [ms]')} - Wait for a child agent to finish`);
-      console.log(`  ${chalk.cyan('/spec <title>')}      - Produce a spec.md under .brainrouter/cli/workflows/<slug>/ (skill: spec-driven-skill)`);
-      console.log(`  ${chalk.cyan('/feature-dev <feat>')} - Multi-agent feature dev: writes spec.md + tasks.md, stops for approval`);
-      console.log(`  ${chalk.cyan('/review [scope]')}    - Multi-agent code review; writes review.md to a workflow folder`);
-      console.log(`  ${chalk.cyan('/implement-plan')}    - Execute next plan item; appends to walkthrough.md`);
-      console.log(`  ${chalk.cyan('/workflows')}         - List durable workflow folders with artifact status`);
-      console.log(`  ${chalk.cyan('/approve [slug]')}    - Approve a workflow (default: current) and kick off implementation`);
-      console.log(`  ${chalk.cyan('/skill <name> [input]')} - Run any catalogued skill from the skills/ folder via the agent`);
-      console.log(`  ${chalk.cyan('/memory <query>')}   - Search BrainRouter long-term memory (memory_search)`);
-      console.log(`  ${chalk.cyan('/recall <query>')}   - Explicit cognitive recall (memory_recall) — does not start an LLM turn`);
-      console.log(`  ${chalk.cyan('/briefing')}         - Show what was recalled before the most recent turn`);
-      console.log(`  ${chalk.cyan('/scenes')}           - List active focus scenes (via memory_recall summary)`);
-      console.log(`  ${chalk.cyan('/working')}          - Show the current working-memory canvas`);
-      console.log(`  ${chalk.cyan('/forget <recordId>')} - Archive a memory record by ID (memory_update status=archived)`);
-      console.log(`  ${chalk.cyan('/transcript [main|sessionKey]')} - Show recent persisted transcript entries`);
-      console.log(`  ${chalk.cyan('/doctor')}   - Run config, connection, and tool-surface checks`);
-      console.log(`  ${chalk.cyan('/config')}   - View active configuration profile and settings`);
-      console.log(`  ${chalk.cyan('/diff')}     - Show unstaged git changes beautifully in the terminal`);
-      console.log(`  ${chalk.cyan('/commit')}   - Generate message, stage files, and make git commit using agent`);
-      console.log(`  ${chalk.cyan('/clear')}    - Clear chat history for the active session`);
-      console.log(`  ${chalk.cyan('/compact')}  - Compact the active session by clearing chat history`);
-      console.log(`  ${chalk.cyan('/init')}       - Create AGENT.md in the workspace if not present`);
-      console.log(`  ${chalk.cyan('/sessions')}   - List persisted sessions (transcripts) for this workspace`);
-      console.log(`  ${chalk.cyan('/resume <id>')} - Resume a previous session by sessionKey`);
-      console.log(`  ${chalk.cyan('/model <name>')} - Switch the LLM model in-session`);
-      console.log(`  ${chalk.cyan('/mcp')}        - Show the active MCP server and its tool namespaces`);
-      console.log(`  ${chalk.cyan('/goal [text|clear]')}  - Set/clear a sticky goal injected into every turn`);
-      console.log(`  ${chalk.cyan('/copy')}              - Copy last assistant response to clipboard`);
-      console.log(`  ${chalk.cyan('/fork [label]')}      - Fork the current chat into a new session, keep prior context`);
-      console.log(`  ${chalk.cyan('/rename <label>')}    - Rename the current session id`);
-      console.log(`  ${chalk.cyan('/permissions [read|write|shell]')} - View or set the agent's access mode`);
-      console.log(`  ${chalk.cyan('/hooks [list|add|remove|enable|disable]')} - Lifecycle shell hooks`);
-      console.log(`  ${chalk.cyan('/loop <interval> <prompt> | /loop stop')} - Repeat a prompt on a cadence`);
-      console.log(`  ${chalk.cyan('/continue')}         - Resume after a loop-limit abort (drain children, finish artifacts)`);
-      console.log(`  ${chalk.cyan('/auto-review [on|off]')} - Auto-run a reviewer agent after every worker completion`);
-      console.log(`  ${chalk.cyan('/vim')}              - Toggle vi-mode for the composer (persisted)`);
-      console.log(`  ${chalk.cyan('/statusline <segments>')} - Configure prompt: mode,branch,dirty,model,tokens,session`);
-      console.log(chalk.bold('\nFull memory surface (MCP):'));
-      console.log(`  ${chalk.cyan('/handover')}                - Generate continuation note for next session`);
-      console.log(`  ${chalk.cyan('/explain <query>')}         - Why did recall return what it did? (FTS/vec/RRF/boosts)`);
-      console.log(`  ${chalk.cyan('/trace save <desc> | /trace search <q>')} - Engineering debug-trace store`);
-      console.log(`  ${chalk.cyan('/failed [area]')}           - Past failed attempts for a problem area`);
-      console.log(`  ${chalk.cyan('/verify <recordId> [status] [confidence]')} - Re-verify a memory record`);
-      console.log(`  ${chalk.cyan('/audit')}                   - Recent memory audit log`);
-      console.log(`  ${chalk.cyan('/export [path]')}           - Dump memory + evidence + ops to JSON`);
-      console.log(`  ${chalk.cyan('/import <path>')}           - Import a BrainRouter memory envelope`);
-      console.log(`  ${chalk.cyan('/persona <name>')}          - Fetch a persona definition`);
-      console.log(`  ${chalk.cyan('/skill-hints <skill> <hints>')} - Register extraction hints for a skill`);
-      console.log(`  ${chalk.cyan('/diagnostics')}             - Scrubbed runtime + DB stats bundle`);
-      console.log(`  ${chalk.cyan('/working reset confirm')}   - Clear working-memory canvas (after session)`);
-      console.log(chalk.bold('\nObservability:'));
-      console.log(`  ${chalk.cyan('/tokens')}                  - Session token usage + memory-savings estimate`);
-      console.log(`  ${chalk.cyan('/agents')}                  - Child agents with per-agent tokens`);
-      console.log(`  ${chalk.cyan('/agent <id> [--full]')}     - Detail + (optionally) full transcript`);
-      console.log(`  ${chalk.cyan('/watch')}                   - Tail trace log (needs BRAINROUTER_TRACE_LOG)`);
-      console.log(`  ${chalk.cyan('/yolo [on|off]')}           - Auto-approve run_command (skip confirm prompt)`);
-      console.log(`  ${chalk.cyan('/sandbox [status|add-read|add-write|remove|clear] <path>')} - Persistent sandbox grants`);
-      console.log(`  ${chalk.cyan('/kill <agent-id>')}         - Stop a single running child agent`);
-      console.log(chalk.gray('  Sandbox: set BRAINROUTER_SANDBOX=on for sandboxed run_command (sandbox-exec / bwrap / firejail).'));
-      console.log(chalk.gray('  Tracing: set BRAINROUTER_TRACE_LOG=<path> to emit OTEL-style JSONL spans.'));
-      console.log(chalk.bold('\nWorkflow & Ergonomics:'));
-      console.log(`  ${chalk.cyan('/theme [auto|light|dark|mono]')} - Set markdown output theme`);
-      console.log(`  ${chalk.cyan('/title <segments>')}          - Configure terminal title (model,session,branch,mode)`);
-      console.log(`  ${chalk.cyan('/personality <style>')}       - concise|standard|detailed|pair-programmer`);
-      console.log(`  ${chalk.cyan('/new [label]')}               - Start a new chat with a fresh session key`);
-      console.log(`  ${chalk.cyan('/side <q>')} / ${chalk.cyan('/btw <q>')}       - Ephemeral side conversation in a forked session`);
-      console.log(`  ${chalk.cyan('/raw [on|off]')}              - Toggle raw scrollback (no markdown render) for copy-friendly output`);
-      console.log(`  ${chalk.cyan('/feedback [message]')}        - Append a feedback entry to .brainrouter/cli/feedback.jsonl`);
-      console.log(`  ${chalk.cyan('/rollout')}                   - Print the transcript file path for this session`);
-      console.log(`  ${chalk.cyan('/ps')}                        - List background tasks: loop + running children`);
-      console.log(`  ${chalk.cyan('/stop')}                      - Stop the running loop and mark stale children`);
-      console.log(`  ${chalk.cyan('/logout')}                    - Clear API keys from the active profile`);
-      console.log(`  ${chalk.cyan('/apps')} / ${chalk.cyan('/plugins')}           - List workspace skills and plugin folders`);
-      console.log(`  ${chalk.cyan('/experimental [on|off]')}     - Toggle experimental features`);
-      console.log(`  ${chalk.cyan('/memories [status|on|off|consolidate]')} - Manage memory pipeline + write user/feedback/project files`);
-      console.log(`  ${chalk.cyan('/debug-config')}              - Show config layers, env flags, preferences`);
-      console.log(`  ${chalk.cyan('/mention [partial]')}         - Suggest workspace files for @ mentions`);
-      console.log(`  ${chalk.cyan('/keymap [json]')}             - Show built-in bindings and set overrides`);
-      console.log(`  ${chalk.cyan('/ide')}                       - Show detected IDE host`);
-      console.log(`  ${chalk.cyan('/hookify [list|create|enable|disable|remove]')} - Markdown-based behavior guards (.brainrouter/hooks/*.md)`);
-      console.log(chalk.gray('\nTips: type @ then a path for file mentions; Tab autocompletes commands and @paths.'));
-      console.log(chalk.gray('      Shift+Tab cycles access mode (read → write → shell).'));
-      console.log(`  ${chalk.cyan('/exit')} / ${chalk.cyan('/quit')}     - Close the MCP connection and exit the CLI\n`);
+      renderHelp(args[0]?.toLowerCase());
       break;
 
     case '/status': {
@@ -857,31 +1036,41 @@ async function handleSlashCommand(
     }
 
     case '/diff': {
-      const spinner = ora(chalk.gray('Generating diff...')).start();
-      try {
-        const { stdout: diffOut } = await execPromise('git diff');
-        spinner.stop();
-        if (!diffOut.trim()) {
-          console.log(chalk.green('\nNo unstaged changes.\n'));
-        } else {
-          console.log(chalk.bold('\n--- Git Diff (Unstaged) ---'));
-          const lines = diffOut.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('+') && !line.startsWith('+++')) {
-              console.log(chalk.green(line));
-            } else if (line.startsWith('-') && !line.startsWith('---')) {
-              console.log(chalk.red(line));
-            } else if (line.startsWith('@@')) {
-              console.log(chalk.cyan(line));
-            } else {
-              console.log(line);
-            }
+      // Stream the diff instead of buffering. The old execPromise approach
+      // read the whole diff into memory, then colored every line in a JS
+      // loop before any output appeared — for a 5k-line diff that took
+      // seconds and you saw nothing until completion. Now: spawn `git diff
+      // --color=always` and pipe stdout directly. Claude Code 2.1.147
+      // improved diff rendering performance the same way.
+      const stagedFlag = args.includes('--staged') || args.includes('--cached');
+      const allFlag = args.includes('--all') || args.includes('HEAD');
+      const gitArgs = ['diff', '--color=always'];
+      if (allFlag) gitArgs.push('HEAD');
+      else if (stagedFlag) gitArgs.push('--cached');
+      console.log(chalk.bold(
+        `\n--- Git Diff (${allFlag ? 'staged + unstaged' : stagedFlag ? 'staged' : 'unstaged'}) ---`,
+      ));
+      await new Promise<void>((resolve) => {
+        const child = spawn('git', gitArgs, {
+          cwd: agent.workspaceRoot,
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+        child.on('exit', (code) => {
+          if (code !== 0 && code !== null && code !== 1) {
+            // git diff returns 1 when there are differences with --exit-code;
+            // without that flag it's just success. Anything else is an error.
+            console.log(chalk.yellow(`(git diff exited ${code})`));
           }
-          console.log();
-        }
-      } catch (err: any) {
-        spinner.fail(chalk.red(`Failed to run git diff: ${err.message}`));
-      }
+          resolve();
+        });
+        child.on('error', (err) => {
+          console.log(chalk.red(`Failed to spawn git: ${err.message}`));
+          resolve();
+        });
+      });
+      // If the diff was empty, git printed nothing — give the user a hint.
+      // (We can't detect empty without buffering; just always print the tip.)
+      console.log(chalk.gray('  Tip: /diff --staged for staged changes only, /diff --all (or HEAD) for both.\n'));
       break;
     }
 
@@ -928,6 +1117,27 @@ async function handleSlashCommand(
     case '/agents': {
       reconcileStale(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
+      // `--json` for scripting (Claude Code 2.1.147 parity). Emits a single
+      // JSON line on stdout so tmux-resurrect, status bars, agent pickers,
+      // and pipelines can parse the live session list reliably.
+      if (args.includes('--json')) {
+        const payload = sessions.map((s) => ({
+          id: s.id,
+          role: s.role,
+          status: s.status,
+          label: s.label,
+          startedAt: s.startedAt,
+          updatedAt: s.updatedAt,
+          completedAt: s.completedAt,
+          prompt: s.prompt,
+          usage: s.usage,
+          parentSessionKey: s.parentSessionKey,
+          finalOutputPreview: s.finalOutput ? String(s.finalOutput).slice(0, 280) : undefined,
+        }));
+        // process.stdout.write with no chalk so jq / scripts get clean JSON.
+        process.stdout.write(JSON.stringify({ sessions: payload }) + '\n');
+        break;
+      }
       console.log(chalk.bold('\nChild Agent Sessions:'));
       if (sessions.length === 0) {
         console.log(chalk.yellow('  No child agents yet. Use /spawn <role> <prompt> to start one.'));
@@ -946,6 +1156,7 @@ async function handleSlashCommand(
             console.log(chalk.gray(`      prompt: ${s.prompt.replace(/\s+/g, ' ').slice(0, 100)}${s.prompt.length > 100 ? '…' : ''}`));
           }
         }
+        console.log(chalk.gray('\n  (pipe-friendly output: /agents --json)'));
       }
       console.log();
       break;

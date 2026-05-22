@@ -31,7 +31,47 @@ export function appendTranscriptEntry(workspaceRoot: string, sessionKey: string,
     ...entry,
     timestamp: entry.timestamp ?? new Date().toISOString(),
   });
+
+  // Dedup consecutive identical user prompts (e.g. arrow-up + Enter to repeat
+  // the same prompt). Matches Claude Code 2.1.147 behavior so transcripts /
+  // /transcript / /resume don't accumulate identical replay-spam entries.
+  // Only applied to role='user' entries — assistant + tool replies legitimately
+  // differ between turns even when the prompt is the same.
+  if (payload.role === 'user' && isConsecutiveDuplicate(filePath, payload)) {
+    return;
+  }
+
   fs.appendFileSync(filePath, `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+/**
+ * Check if the last line of the transcript file matches the new entry on
+ * role + content. Bounded read (last ~32KB) so the dedup check stays cheap
+ * even for huge transcripts; consecutive duplicates that span beyond that
+ * window weren't going to be visually adjacent anyway.
+ */
+function isConsecutiveDuplicate(filePath: string, candidate: TranscriptEntry): boolean {
+  try {
+    if (!fs.existsSync(filePath)) return false;
+    const stat = fs.statSync(filePath);
+    if (stat.size === 0) return false;
+    const start = Math.max(0, stat.size - 32 * 1024);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(stat.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      const tail = buf.toString('utf8').trimEnd();
+      if (!tail) return false;
+      const lastLine = tail.slice(tail.lastIndexOf('\n') + 1);
+      const last = JSON.parse(lastLine) as TranscriptEntry;
+      return last.role === candidate.role && last.content === candidate.content;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Any read/parse failure: don't dedup — write the entry normally.
+    return false;
+  }
 }
 
 export function readTranscriptEntries(workspaceRoot: string, sessionKey: string, limit = 40): TranscriptEntry[] {

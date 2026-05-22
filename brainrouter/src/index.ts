@@ -176,6 +176,22 @@ program
       process.exit(2);
     }
 
+    // Reject slash commands in headless mode. The REPL handles them via
+    // handleSlashCommand, but `run` skips straight to agent.runTurn — so a
+    // user piping `/help` or `/sessions` was silently routed to the LLM and
+    // got back a confused chat response instead of a real CLI error.
+    // Matches Claude Code 2.1.147 "Fixed unknown slash commands silently
+    // doing nothing in headless/SDK mode — they now show an error message."
+    if (prompt.startsWith('/')) {
+      const cmdName = prompt.split(/\s+/)[0];
+      console.error(
+        `Error: slash commands are not supported in 'run' (headless) mode. ` +
+        `"${cmdName}" must be invoked from the interactive REPL (run \`brainrouter\` with no args).`,
+      );
+      console.error(`Hint: if you meant to send "${cmdName}" as a literal prompt, escape it with a leading space.`);
+      process.exit(2);
+    }
+
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
 
@@ -454,6 +470,57 @@ program
       console.log(chalk.gray(JSON.stringify(scrubbed, null, 2)));
       console.log();
     }
+  });
+
+// `brainrouter agents` — list live + recent child sessions without entering the REPL.
+// Mirrors `claude agents --json` (Claude Code 2.1.147) so scripting integrations
+// (tmux-resurrect, status bars, agent pickers) can pull the list without an
+// interactive session. `--json` for machine-readable; default is human-readable.
+program
+  .command('agents')
+  .description('List child agent sessions (workspace-scoped)')
+  .option('--json', 'Emit a single JSON line on stdout for scripting')
+  .option('-w, --workspace <path>', 'Workspace root override')
+  .action(async (options) => {
+    if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
+    const workspace = findWorkspaceRoot();
+    applyWorkspaceRoot(workspace.workspaceRoot);
+    // Reconcile + list happens locally — no MCP needed.
+    const { reconcileStale, listSessions } = await import('./orchestrator.js');
+    reconcileStale(workspace.workspaceRoot);
+    const sessions = listSessions(workspace.workspaceRoot);
+    if (options.json) {
+      const payload = sessions.map((s) => ({
+        id: s.id,
+        role: s.role,
+        status: s.status,
+        label: s.label,
+        startedAt: s.startedAt,
+        updatedAt: s.updatedAt,
+        completedAt: s.completedAt,
+        prompt: s.prompt,
+        usage: s.usage,
+        parentSessionKey: s.parentSessionKey,
+        finalOutputPreview: s.finalOutput ? String(s.finalOutput).slice(0, 280) : undefined,
+      }));
+      process.stdout.write(JSON.stringify({ sessions: payload }) + '\n');
+      return;
+    }
+    if (sessions.length === 0) {
+      console.log(chalk.yellow('No child agents yet.'));
+      console.log(chalk.gray('Start one from the REPL with: /spawn <role> <prompt>'));
+      return;
+    }
+    console.log(chalk.bold(`\nChild Agent Sessions (${sessions.length}):`));
+    for (const s of sessions) {
+      const status = s.status === 'completed' ? chalk.green(s.status)
+        : s.status === 'failed' ? chalk.red(s.status)
+        : s.status === 'stale' ? chalk.yellow(s.status)
+        : s.status === 'closed' ? chalk.gray(s.status) : chalk.cyan(s.status);
+      console.log(`  ${status}  ${chalk.cyan(s.id)}  ${chalk.magenta(s.role)}  ${chalk.gray(s.startedAt)}`);
+      if (s.prompt) console.log(chalk.gray(`    ${s.prompt.replace(/\s+/g, ' ').slice(0, 100)}`));
+    }
+    console.log();
   });
 
 program.parse(process.argv);

@@ -26,6 +26,15 @@ export interface OrchestrationContext {
    * child would silently run with elevated permissions.
    */
   parentAccessMode?: AccessMode;
+  /**
+   * Parent OTEL trace context. When set, child agents nest their per-turn
+   * spans under the dispatching `spawn_agent` tool span instead of starting
+   * a fresh trace. Lets observability viewers reconstruct fan-out trees.
+   */
+  parentTraceId?: string;
+  parentSpanId?: string;
+  /** Parent agent_id so children can be grouped via attribute even without trace links. */
+  parentAgentId?: string;
   mcpClient: McpClientWrapper;
   llmConfig: LLMConfig;
   launchCwd: string;
@@ -403,7 +412,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     // enabled, children join the same cognitive context as the parent.
     enableRecall: true,
     systemPromptOverride,
+    // Inherit the parent's OTEL trace context so spans nest under the
+    // dispatching spawn_agent tool span instead of starting a fresh tree.
+    parentTraceId: ctx.parentTraceId,
+    parentSpanId: ctx.parentSpanId,
   });
+  if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
   updateSession(ctx.workspaceRoot, record.id, { status: 'running' });
 

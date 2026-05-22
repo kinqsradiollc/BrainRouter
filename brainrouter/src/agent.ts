@@ -106,6 +106,15 @@ export interface AgentOptions {
   systemPromptOverride?: string;
   /** When true (default for silent children: false), pre-turn memory recall runs even in silent mode. */
   enableRecall?: boolean;
+  /**
+   * Parent OTEL trace context. Set by `spawn_agent` so the child's per-turn
+   * spans nest under the parent's `brainrouter.turn` span. Without this each
+   * child started a fresh trace tree and fan-out runs flattened in trace
+   * viewers — you couldn't see "this child belongs to that parent turn".
+   * Matches Claude Code 2.1.147's agent_id / parent_agent_id attributes.
+   */
+  parentTraceId?: string;
+  parentSpanId?: string;
 }
 
 export const LOCAL_TOOLS = [
@@ -420,6 +429,22 @@ export class Agent {
    * Null/undefined when no skill is active.
    */
   public activeSkill?: string;
+  /**
+   * Parent trace context (set by spawn_agent for child agents). When present,
+   * the per-turn span uses these as its trace/parent so OTEL viewers can
+   * stitch the fan-out tree together. Top-level (REPL) agents leave these
+   * undefined and get a fresh trace per turn.
+   */
+  private parentTraceId?: string;
+  private parentSpanId?: string;
+  /**
+   * Synthetic agent id used in OTEL attributes so child spans can be grouped
+   * even without trace links. Equals `agent-<6 random hex>` per Agent
+   * instance. Matches Claude Code's `agent_id` / `parent_agent_id` attrs.
+   */
+  public readonly agentId: string = `agent-${Math.random().toString(36).slice(2, 8)}`;
+  /** agent_id of the parent (set by spawn_agent for children). */
+  private parentAgentId?: string;
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -434,6 +459,17 @@ export class Agent {
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
     this.systemPromptOverride = options.systemPromptOverride;
+    this.parentTraceId = options.parentTraceId;
+    this.parentSpanId = options.parentSpanId;
+  }
+
+  /** Expose for orchestration so spawn_agent can record the parent linkage. */
+  public getAgentId(): string {
+    return this.agentId;
+  }
+  /** Internal — used by spawn_agent to record which parent dispatched us. */
+  public setParentAgentId(id: string | undefined): void {
+    this.parentAgentId = id;
   }
 
   private allowedToolsForAccess(): Set<string> {
@@ -461,11 +497,19 @@ export class Agent {
     this.lastTurnToolCalls = 0;
     this.lastGoalTransition = undefined;
     // OTEL-style span: one trace per turn, tool calls become child spans.
+    // When this Agent was spawned as a child, inherit the parent's traceId
+    // + spanId so fan-out runs stitch into one tree across processes (or
+    // promises). Top-level REPL agents get a fresh trace per turn.
     const turnSpan = startSpan('brainrouter.turn', {
       session_key: this.sessionKey,
       access_mode: this.accessMode,
       model: this.llmConfig.model,
       role_overlay: this.roleOverlay ? 'set' : 'none',
+      agent_id: this.agentId,
+      parent_agent_id: this.parentAgentId,
+    }, {
+      traceId: this.parentTraceId,
+      parentSpanId: this.parentSpanId,
     });
 
     callbacks.onStatusUpdate('Loading available tools...');
@@ -699,6 +743,12 @@ export class Agent {
               workspaceRoot: this.workspaceRoot,
               parentSessionKey: this.sessionKey,
               parentAccessMode: this.accessMode,
+              // Thread the parent's trace context so child agents nest their
+              // per-turn spans under THIS turn instead of starting a fresh
+              // trace tree. Lets observability backends reconstruct fan-out.
+              parentTraceId: turnSpan.traceId,
+              parentSpanId: turnSpan.spanId,
+              parentAgentId: this.agentId,
               mcpClient: this.mcpClient,
               llmConfig: this.llmConfig,
               launchCwd: this.launchCwd,
@@ -1782,7 +1832,7 @@ export function buildChatCompletionPayload(config: LLMConfig, messages: any[], t
   return body;
 }
 
-async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
+export async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
   const endpoint = config.endpoint || 'https://api.openai.com/v1';
   let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
   const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
@@ -1841,12 +1891,50 @@ async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
   }
 
   const data = await res.json() as any;
+
+  // Defensive response-shape parsing. Some endpoints (LM Studio with certain
+  // models, OpenRouter on specific upstream errors, local vLLM under load,
+  // gpt-oss reasoning models with a non-standard envelope) return a 200 OK
+  // with NO `choices` array — they smuggle the failure into the body as
+  // `{error: ...}` or change the schema entirely. Unguarded `data.choices[0]`
+  // then crashes with "Cannot read properties of undefined" and the user
+  // has no idea what the upstream actually sent. Surface the body in the
+  // error so they can spot the actual problem (wrong model name, OOM,
+  // content-filter refusal, etc.).
+  if (data && typeof data === 'object' && data.error) {
+    const errMsg = typeof data.error === 'string'
+      ? data.error
+      : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
+    throw new Error(`LLM endpoint returned an error envelope (HTTP 200): ${errMsg}`);
+  }
+  if (!Array.isArray(data?.choices) || data.choices.length === 0) {
+    throw new Error(
+      `LLM endpoint returned no choices. ` +
+      `Model "${config.model}" at ${endpoint} may not support chat/completions, ` +
+      `may need a different request shape (reasoning/harmony format?), or be misconfigured. ` +
+      `Response body: ${JSON.stringify(data).slice(0, 600)}`,
+    );
+  }
   const choice = data.choices[0];
   if (!choice?.message) {
+    // Streaming-style frames have `delta` instead of `message` — accept both
+    // so a partially-misconfigured endpoint at least surfaces what it sent.
+    const delta = choice?.delta;
+    if (delta && typeof delta === 'object') {
+      return {
+        content: delta.content || '',
+        toolCalls: delta.tool_calls,
+        usage: data.usage,
+      };
+    }
     throw new Error(`OpenAI-compatible endpoint returned an invalid chat completion response: ${JSON.stringify(data).slice(0, 1000)}`);
   }
   return {
-    content: choice.message.content || '',
+    // Some reasoning models put the visible answer in `message.content` and
+    // chain-of-thought in `message.reasoning_content` / `reasoning`. We use
+    // content (the canonical user-visible field) but tolerate it being null
+    // when there are tool_calls but no prose.
+    content: choice.message.content ?? '',
     toolCalls: choice.message.tool_calls,
     usage: data.usage,
   };

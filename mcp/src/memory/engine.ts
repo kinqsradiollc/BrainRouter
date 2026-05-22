@@ -107,7 +107,32 @@ class ModelLLMRunner implements LLMRunner {
       }
 
       const data = await res.json() as any;
-      return data.choices[0].message.content;
+      // Defensive parsing — see brainrouter/src/agent.ts callOpenAI for the
+      // full rationale. The short version: some endpoints return HTTP 200
+      // with an `error` envelope or a non-standard schema. Surface the
+      // actual response body in the error so a misconfigured model name
+      // doesn't crash with "Cannot read properties of undefined".
+      if (data && typeof data === "object" && data.error) {
+        const errMsg = typeof data.error === "string"
+          ? data.error
+          : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
+        throw new Error(`[BrainRouter:${taskId}] LLM endpoint returned an error envelope: ${errMsg}`);
+      }
+      if (!Array.isArray(data?.choices) || data.choices.length === 0) {
+        throw new Error(
+          `[BrainRouter:${taskId}] LLM endpoint returned no choices for model "${model}". ` +
+          `Response body: ${JSON.stringify(data).slice(0, 600)}`,
+        );
+      }
+      const choice = data.choices[0];
+      // Tolerate both message (standard) and delta (streaming-style) shapes.
+      const content = choice?.message?.content ?? choice?.delta?.content;
+      if (typeof content !== "string") {
+        throw new Error(
+          `[BrainRouter:${taskId}] LLM choice had no usable content. Choice: ${JSON.stringify(choice).slice(0, 600)}`,
+        );
+      }
+      return content;
     } finally {
       // Always release, success or failure, so the queue keeps moving even
       // if an upstream throw bubbles. The semaphore's release is idempotent.
