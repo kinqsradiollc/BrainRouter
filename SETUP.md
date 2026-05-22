@@ -362,16 +362,25 @@ npm whoami             # confirm you're authenticated as the right user
    omit the flag and npm will prompt interactively.
 
 ```bash
-# From the monorepo root. Run one at a time, fresh OTP per command.
-cd packages/types && npm publish --otp=PASTE_CODE
-cd ../sdk && npm publish --otp=PASTE_CODE
-cd ../../brainrouter && npm publish --otp=PASTE_CODE
-cd ../brainrouter-cli && npm publish --otp=PASTE_CODE
+# Use ABSOLUTE paths — they're immune to whatever cwd you're starting
+# from. Relative `cd` chains break when cwd isn't where you assumed,
+# and on macOS the case-insensitive filesystem makes `cd ../brainrouter`
+# silently land on the monorepo root `BrainRouter/` (which is private)
+# when you actually wanted the sibling `brainrouter/` package. That
+# triggers EPRIVATE on the wrong package.json.
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish --otp=PASTE_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish --otp=PASTE_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish --otp=PASTE_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish --otp=PASTE_CODE
 ```
 
 The order matters because each package's `dependencies` reference real
 semver of the prior ones; publishing in dependency order guarantees the
 registry resolves cleanly.
+
+If you see `EPRIVATE`, check `pwd` — you're probably in the monorepo
+root, which has `"private": true` (that's correct — only the four
+workspace packages above are publishable).
 
 Each `package.json` has `publishConfig.access: public` (required because
 `@brainrouter/*` is a scoped namespace — npm defaults scoped packages to
