@@ -5,35 +5,18 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
-import { exec } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import ora from 'ora';
-import { marked } from 'marked';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
-import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
-import { listRoles } from '../../orchestration/roles.js';
-import { createSession, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from '../../state/workflowArtifacts.js';
+import { callMcpTool } from '../../runtime/mcpUtils.js';
+import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
-import { addHook, readHooks, removeHook, runHooks, setHookEnabled, type HookEvent } from '../../state/hooksStore.js';
-import { buildHookifyContext, createHookifyRule, deleteHookifyRule, evaluateHookify, listHookifyRules, toggleHookifyRule } from '../../state/hookifyStore.js';
-import { clearGoal, completeGoal, goalHasBudgetLeft, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, tickGoalIteration } from '../../state/goalStore.js';
-import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
-import { appendTranscriptEntry, listTranscripts, loadTranscript, readTranscriptEntries } from '../../state/sessionStore.js';
-import { getCliStateDir, getCliStateFile } from '../../state/cliState.js';
-import { findWorkspaceRoot } from '../../config/workspace.js';
-import { getConfigPath, saveConfig } from '../../config/config.js';
+import { readPlan } from '../../state/taskStore.js';
+import { getConfigPath } from '../../config/config.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
-import { expandMentions } from '../../memory/mentions.js';
-import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
-import { resolveSandboxConfig } from '../../runtime/sandbox.js';
-import { askYesNo } from '../cliPrompt.js';
 import type { CommandContext } from './_context.js';
-import { buildGoalKickoffPrompt, formatTranscriptContent, printMcpCall, printMemoryCards, runSkillByName, runSkillCommand } from './_helpers.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
 
 

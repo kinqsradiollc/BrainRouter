@@ -10,29 +10,16 @@ import { markedTerminal } from 'marked-terminal';
 import type { Agent } from '../agent/agent.js';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
 import type { Config } from '../config/config.js';
-import { getConfigPath } from '../config/config.js';
-import { LOCAL_TOOLS } from '../agent/agent.js';
-import { listTranscripts, loadTranscript, readTranscriptEntries } from '../state/sessionStore.js';
-import { initAgentMd } from '../prompt/initAgentMd.js';
 import { expandMentions } from '../memory/mentions.js';
-import { clearGoal, completeGoal, goalHasBudgetLeft, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, tickGoalIteration } from '../state/goalStore.js';
-import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '../state/hooksStore.js';
-import { copyToClipboard } from '../runtime/clipboard.js';
-import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from '../runtime/loopRunner.js';
-import { randomUUID } from 'node:crypto';
-import { readPreferences, writePreferences } from '../state/preferencesStore.js';
+import { goalHasBudgetLeft, readGoal, tickGoalIteration } from '../state/goalStore.js';
+import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
 import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
-import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { WorkspaceInfo } from '../config/workspace.js';
-import { listRoles } from '../orchestration/roles.js';
-import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../orchestration/orchestrator.js';
+import { listSessions } from '../orchestration/orchestrator.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
-import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from '../state/workflowArtifacts.js';
-import { consolidateMemories } from '../memory/consolidation.js';
-import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '../state/hookifyStore.js';
-import { safePrintAbovePrompt as safePrintAbovePromptGlobalShared, setActiveReadline } from './cliPrompt.js';
+import { callMcpTool } from '../runtime/mcpUtils.js';
+import { setActiveReadline } from './cliPrompt.js';
 // Category dispatch — extracted slash-command handlers. Each module exports
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
 // in order; first match wins, no match falls through to the legacy switch.
