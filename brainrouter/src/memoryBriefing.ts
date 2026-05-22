@@ -62,8 +62,35 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   for (const r of results) {
     if (!r.text) continue;
     sourcesQueried.push(r.source);
-    sections.push(`### ${prettyLabel(r.source)}\n${redactText(r.text)}`);
-    if (r.records) recalledRecords.push(...r.records);
+    if (r.records && r.records.length > 0) {
+      // Render structured cards instead of dumping the raw JSON. The previous
+      // form emitted ~2-4KB of `recallExplanation`/`sparkedNodes`/etc. per
+      // turn — high signal-to-noise loss AND a 4000-char hard slice that
+      // routinely chopped the payload mid-string. Cards are ~120 chars each.
+      const cards = r.records.slice(0, 8).map((rec) => {
+        const idTag = `[${rec.recordId}]`;
+        const typeTag = rec.type ? ` (${rec.type})` : '';
+        const content = (rec.content ?? '').replace(/\s+/g, ' ').trim();
+        const preview = content.length > 240 ? content.slice(0, 239) + '…' : content;
+        return `- ${idTag}${typeTag} ${preview}`;
+      });
+      sections.push(`### ${prettyLabel(r.source)}\n${cards.join('\n')}`);
+      recalledRecords.push(...r.records);
+    } else {
+      // No structured records to render. Treat the JSON dump as opaque and
+      // only include it when it carries actual signal (skip the
+      // `keyword-empty` / zero-hits responses that the MCP returns when
+      // recall genuinely had nothing to surface).
+      const trimmed = r.text.trim();
+      if (
+        !trimmed ||
+        /"recallStrategy"\s*:\s*"(keyword|hybrid)-empty"/.test(trimmed) ||
+        /^[\s\S]{0,40}"ftsHits"\s*:\s*0\s*,\s*"vecHits"\s*:\s*0/.test(trimmed)
+      ) {
+        continue;
+      }
+      sections.push(`### ${prettyLabel(r.source)}\n${redactText(trimmed.slice(0, 1500))}`);
+    }
   }
 
   if (sections.length === 0) {
@@ -139,12 +166,16 @@ async function callSafe(
 
 function extractRecords(parsed: any): RecalledRecord[] {
   if (!parsed) return [];
-  const records = parsed.recalledCognitiveRecords ?? parsed.records ?? [];
+  const records =
+    parsed.recalledCognitiveMemories ??
+    parsed.recalledCognitiveRecords ??
+    parsed.records ??
+    [];
   if (!Array.isArray(records)) return [];
   return records
-    .filter((r: any) => r && typeof r.recordId === 'string')
+    .filter((r: any) => r && (typeof r.recordId === 'string' || typeof r.recordId === 'number'))
     .map((r: any) => ({
-      recordId: r.recordId,
+      recordId: String(r.recordId),
       content: typeof r.content === 'string' ? r.content : undefined,
       type: typeof r.type === 'string' ? r.type : undefined,
       priority: typeof r.priority === 'number' ? r.priority : undefined,

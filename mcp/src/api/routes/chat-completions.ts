@@ -144,7 +144,10 @@ async function fetchBriefing(
   const recalledIds = new Set<string>();
   try {
     const recall = await memoryEngine.recall({ userId, sessionKey, query, activeSkill });
-    const records = (recall as any)?.recalledCognitiveRecords ?? [];
+    const records =
+      (recall as any)?.recalledCognitiveMemories ??
+      (recall as any)?.recalledCognitiveRecords ?? // legacy alias for old callers
+      [];
     if (Array.isArray(records) && records.length > 0) {
       const lines: string[] = ["### Recalled cognitive memories for this question"];
       for (const r of records.slice(0, 10)) {

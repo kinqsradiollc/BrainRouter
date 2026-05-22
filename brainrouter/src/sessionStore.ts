@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCliStateDir, isPathInside } from './cliState.js';
+import {
+  decodeSessionKey,
+  encodeSessionKey,
+  getCliStateDir,
+  getSessionStateDir,
+  isPathInside,
+} from './cliState.js';
 
 export interface TranscriptEntry {
   role: string;
@@ -17,6 +23,8 @@ const SECRET_TOKEN_PATTERNS: RegExp[] = [
   /\bsk-[A-Za-z0-9._-]{8,}\b/g,
 ];
 
+const TRANSCRIPT_FILE = 'transcript.jsonl';
+
 export function appendTranscriptEntry(workspaceRoot: string, sessionKey: string, entry: Omit<TranscriptEntry, 'timestamp'> & { timestamp?: string }): void {
   const filePath = getTranscriptPath(workspaceRoot, sessionKey);
   const payload: TranscriptEntry = redactTranscriptEntry({
@@ -27,24 +35,56 @@ export function appendTranscriptEntry(workspaceRoot: string, sessionKey: string,
 }
 
 export function readTranscriptEntries(workspaceRoot: string, sessionKey: string, limit = 40): TranscriptEntry[] {
-  const filePath = getTranscriptPath(workspaceRoot, sessionKey);
-  if (!fs.existsSync(filePath)) {
+  const filePath = resolveExistingTranscriptPath(workspaceRoot, sessionKey);
+  if (!filePath) {
     return [];
   }
 
   const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean);
-  return lines.slice(Math.max(0, lines.length - limit)).map((line) => JSON.parse(line) as TranscriptEntry);
+  // A single corrupted line — most often the tail line from a Ctrl-C mid-write
+  // because appendFileSync is not atomic for large payloads — must not crash
+  // /resume or anything else that scans the transcript. Tolerate bad lines
+  // and warn once; the visible-entry slice handles the rest.
+  const entries: TranscriptEntry[] = [];
+  let dropped = 0;
+  for (const line of lines.slice(Math.max(0, lines.length - limit))) {
+    try {
+      entries.push(JSON.parse(line) as TranscriptEntry);
+    } catch {
+      dropped++;
+    }
+  }
+  if (dropped > 0) {
+    console.warn(`[brainrouter] dropped ${dropped} unparseable transcript line(s) in ${filePath}`);
+  }
+  return entries;
 }
 
+/**
+ * Resolve the transcript path for writes. Always uses the per-session bucket
+ * at `<state>/sessions/<encodedKey>/transcript.jsonl` so each chat session
+ * keeps its history co-located with its goal/plan/etc.
+ */
 export function getTranscriptPath(workspaceRoot: string, sessionKey: string): string {
-  const stateDir = getCliStateDir(workspaceRoot);
-  const transcriptsDir = path.join(stateDir, 'transcripts');
-  fs.mkdirSync(transcriptsDir, { recursive: true });
-  const filePath = path.join(transcriptsDir, `${encodeSessionKey(sessionKey)}.jsonl`);
-  if (!isPathInside(transcriptsDir, filePath)) {
-    throw new Error('Transcript path escapes transcript directory.');
+  const sessionDir = getSessionStateDir(workspaceRoot, sessionKey);
+  const filePath = path.join(sessionDir, TRANSCRIPT_FILE);
+  if (!isPathInside(sessionDir, filePath)) {
+    throw new Error('Transcript path escapes session directory.');
   }
   return filePath;
+}
+
+/**
+ * Read-side resolver: prefer the per-session bucket, fall back to the legacy
+ * `transcripts/<encodedKey>.jsonl` location so `/resume` still works for
+ * sessions captured by older builds.
+ */
+function resolveExistingTranscriptPath(workspaceRoot: string, sessionKey: string): string | undefined {
+  const sessionPath = getTranscriptPath(workspaceRoot, sessionKey);
+  if (fs.existsSync(sessionPath)) return sessionPath;
+  const legacy = path.join(getCliStateDir(workspaceRoot), 'transcripts', `${encodeSessionKey(sessionKey)}.jsonl`);
+  if (fs.existsSync(legacy)) return legacy;
+  return undefined;
 }
 
 export function redactText(value: string): string {
@@ -62,66 +102,82 @@ export function redactTranscriptEntry(entry: TranscriptEntry): TranscriptEntry {
   return JSON.parse(redactText(JSON.stringify(entry))) as TranscriptEntry;
 }
 
-function encodeSessionKey(sessionKey: string): string {
-  return Buffer.from(sessionKey, 'utf8')
-    .toString('base64url')
-    .slice(0, 180);
-}
-
-function decodeSessionKey(encoded: string): string {
-  try {
-    return Buffer.from(encoded, 'base64url').toString('utf8');
-  } catch {
-    return encoded;
-  }
-}
-
 export interface TranscriptSummary {
   sessionKey: string;
   fileName: string;
   modifiedAt: string;
   turnCount: number;
   firstUserMessage?: string;
+  /** Absolute path to the session bucket (new layout) or undefined for legacy. */
+  sessionDir?: string;
 }
 
 /**
- * List all persisted transcripts under the workspace, newest first.
- * Used by `/sessions` to render a picker for `/resume`.
+ * List all persisted transcripts under the workspace, newest first. Scans the
+ * new `sessions/<encodedKey>/transcript.jsonl` layout AND the legacy
+ * `transcripts/<encodedKey>.jsonl` files so the picker shows every session
+ * even after the upgrade. Per-session files always win on dedupe.
  */
 export function listTranscripts(workspaceRoot: string): TranscriptSummary[] {
   const stateDir = getCliStateDir(workspaceRoot);
-  const transcriptsDir = path.join(stateDir, 'transcripts');
-  if (!fs.existsSync(transcriptsDir)) return [];
-  const files = fs.readdirSync(transcriptsDir).filter((f) => f.endsWith('.jsonl'));
-  const summaries: TranscriptSummary[] = files.map((fileName) => {
-    const filePath = path.join(transcriptsDir, fileName);
-    const stat = fs.statSync(filePath);
-    const encoded = fileName.slice(0, -'.jsonl'.length);
-    const sessionKey = decodeSessionKey(encoded);
-    let turnCount = 0;
-    let firstUserMessage: string | undefined;
-    try {
-      const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
-      turnCount = lines.length;
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line) as TranscriptEntry;
-          if (entry.role === 'user' && typeof entry.content === 'string' && entry.content.trim()) {
-            firstUserMessage = entry.content.toString().replace(/\s+/g, ' ').slice(0, 120);
-            break;
-          }
-        } catch { /* skip malformed */ }
-      }
-    } catch { /* unreadable file */ }
-    return {
-      sessionKey,
-      fileName,
-      modifiedAt: stat.mtime.toISOString(),
-      turnCount,
-      firstUserMessage,
-    };
-  });
-  return summaries.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+  const seen = new Map<string, TranscriptSummary>();
+
+  // New layout: sessions/<encodedKey>/transcript.jsonl
+  const sessionsDir = path.join(stateDir, 'sessions');
+  if (fs.existsSync(sessionsDir)) {
+    for (const entry of fs.readdirSync(sessionsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const sessionDir = path.join(sessionsDir, entry.name);
+      const transcriptPath = path.join(sessionDir, TRANSCRIPT_FILE);
+      if (!fs.existsSync(transcriptPath)) continue;
+      const sessionKey = decodeSessionKey(entry.name);
+      const summary = summarizeTranscript(transcriptPath, sessionKey, sessionDir);
+      seen.set(sessionKey, summary);
+    }
+  }
+
+  // Legacy layout: transcripts/<encodedKey>.jsonl
+  const legacyDir = path.join(stateDir, 'transcripts');
+  if (fs.existsSync(legacyDir)) {
+    for (const fileName of fs.readdirSync(legacyDir)) {
+      if (!fileName.endsWith('.jsonl')) continue;
+      const encoded = fileName.slice(0, -'.jsonl'.length);
+      const sessionKey = decodeSessionKey(encoded);
+      if (seen.has(sessionKey)) continue;
+      const filePath = path.join(legacyDir, fileName);
+      seen.set(sessionKey, summarizeTranscript(filePath, sessionKey));
+    }
+  }
+
+  return Array.from(seen.values()).sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+}
+
+function summarizeTranscript(filePath: string, sessionKey: string, sessionDir?: string): TranscriptSummary {
+  let modifiedAt = new Date(0).toISOString();
+  let turnCount = 0;
+  let firstUserMessage: string | undefined;
+  try {
+    modifiedAt = fs.statSync(filePath).mtime.toISOString();
+    const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
+    turnCount = lines.length;
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as TranscriptEntry;
+        if (entry.role === 'user' && typeof entry.content === 'string' && entry.content.trim()) {
+          firstUserMessage = entry.content.toString().replace(/\s+/g, ' ').slice(0, 120);
+          break;
+        }
+      } catch { /* skip malformed */ }
+    }
+  } catch { /* unreadable file */ }
+  return {
+    sessionKey,
+    fileName: path.basename(filePath),
+    modifiedAt,
+    turnCount,
+    firstUserMessage,
+    sessionDir,
+  };
 }
 
 /**

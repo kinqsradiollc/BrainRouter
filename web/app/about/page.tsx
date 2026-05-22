@@ -136,6 +136,63 @@ export default function AboutPage() {
         </motion.div>
       </motion.section>
 
+      {/* What Ships Today */}
+      <motion.section
+        initial="hidden"
+        animate="visible"
+        variants={containerVariants}
+        style={{ display: "flex", flexDirection: "column", gap: "20px" }}
+      >
+        <motion.div variants={fadeInVariants} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <span style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--color-golden-accent)", fontWeight: 700 }}>
+            WHAT SHIPS TODAY
+          </span>
+          <h2 className="serif-display" style={{ fontSize: "28px", margin: 0, fontWeight: 500 }}>
+            One Memory Engine. Three Surfaces.
+          </h2>
+          <p style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: 1.6, margin: 0 }}>
+            BrainRouter is not a single product — it is a cognitive substrate that you can drive from a terminal, a browser, or any MCP-compatible agent. Every surface shares the same memory store, recall pipeline, and contradiction loop.
+          </p>
+        </motion.div>
+
+        <motion.div
+          variants={fadeInVariants}
+          style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}
+        >
+          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>TERMINAL</span>
+            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>brainrouter CLI</h3>
+            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
+              Memory-native coding agent with ~70 slash commands, an LLM-driven compactor, hookify guardrails, and durable per-session transcripts.
+            </p>
+          </div>
+
+          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>MULTI-AGENT</span>
+            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>Five Bounded Roles</h3>
+            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
+              explorer · architect · reviewer · worker · verifier. Each opens memory-first; large child outputs offload to a working canvas instead of polluting context.
+            </p>
+          </div>
+
+          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>BROWSER</span>
+            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>Web Chat & Dashboard</h3>
+            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
+              Talk to the agent at <Link href="/chat" style={{ color: "var(--color-golden-accent)" }}>/chat</Link>, inspect recall, scenes, contradictions, evidence, and the knowledge graph — all over the same store.
+            </p>
+          </div>
+
+          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>PROTOCOL</span>
+            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>MCP + HTTP API</h3>
+            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
+              Plug into any MCP host, or call the HTTP chat-completions route directly — every client inherits the same memory stack.
+            </p>
+          </div>
+        </motion.div>
+      </motion.section>
+
       {/* The Self-Hosting Paradigm */}
       <motion.section 
         initial="hidden"

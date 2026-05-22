@@ -1,4 +1,5 @@
-import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
+import fs from 'node:fs';
+import { getCliStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from './cliState.js';
 
 export type PlanItemStatus = 'pending' | 'in_progress' | 'completed';
 
@@ -18,13 +19,27 @@ const EMPTY_PLAN: PlanState = {
   items: [],
 };
 
-export function readPlan(workspaceRoot: string): PlanState {
+/**
+ * Durable per-session plan. Lives at
+ *   <workspace>/.brainrouter/cli/sessions/<encodedKey>/tasks.json
+ *
+ * Legacy callers that don't pass a sessionKey read/write the older workspace-
+ * level `tasks.json` so existing workspaces keep their plan after the upgrade.
+ */
+export function readPlan(workspaceRoot: string, sessionKey?: string): PlanState {
+  if (sessionKey) {
+    const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'tasks.json');
+    if (fs.existsSync(sessionPath)) {
+      return readJsonFile<PlanState>(sessionPath, EMPTY_PLAN);
+    }
+  }
   return readJsonFile<PlanState>(getCliStateFile(workspaceRoot, 'tasks.json'), EMPTY_PLAN);
 }
 
 export function updatePlan(
   workspaceRoot: string,
   input: { explanation?: string; plan: PlanItem[] },
+  sessionKey?: string,
 ): PlanState {
   if (!Array.isArray(input.plan)) {
     throw new Error('plan must be an array.');
@@ -43,7 +58,10 @@ export function updatePlan(
     items,
   };
 
-  writeJsonFile(getCliStateFile(workspaceRoot, 'tasks.json'), state);
+  const filePath = sessionKey
+    ? getSessionStateFile(workspaceRoot, sessionKey, 'tasks.json')
+    : getCliStateFile(workspaceRoot, 'tasks.json');
+  writeJsonFile(filePath, state);
   return state;
 }
 

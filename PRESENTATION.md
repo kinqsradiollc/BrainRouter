@@ -163,6 +163,60 @@ graph TD
 
 ---
 
+## 🖥️ The BrainRouter Terminal CLI
+
+### Memory-Native Coding Agent at Parity with Codex CLI & Claude Code
+
+```mermaid
+graph LR
+    subgraph CLI [brainrouter REPL]
+        Prompt[User Prompt + @mentions]
+        Slash[60+ Slash Commands]
+        Hookify[Hookify Rules<br/>.brainrouter/hooks/*.md]
+    end
+
+    subgraph Loop [Agent Tool-Calling Loop]
+        Brief[Pre-turn Memory Briefing]
+        ToolPolicy[Access Mode<br/>read / write / shell]
+        Tools[Local + MCP Tools]
+        Compact[/compact<br/>LLM Summarizer/]
+    end
+
+    subgraph Persistence [Filesystem Artifacts]
+        Memories[.brainrouter/memories/<br/>user / feedback / project / reference / raw / MEMORY]
+        Workflows[.brainrouter/cli/workflows/<br/>spec.md / tasks.md / walkthrough.md]
+        Transcripts[.brainrouter/cli/transcripts/]
+    end
+
+    Prompt --> Loop
+    Slash --> Loop
+    Hookify -->|warn / block| Loop
+    Loop --> Persistence
+    Loop -->|memory_*| MCP[(BrainRouter MCP)]
+    MCP --> Memories
+
+    style CLI fill:#1f1e33,stroke:#8b5cf6,color:#fff
+    style Loop fill:#121620,stroke:#10b981,color:#fff
+    style Persistence fill:#1e1e24,stroke:#3b82f6,color:#fff
+```
+
+*   **60+ slash commands** spanning session, memory, workflow, orchestration, and ops surfaces.
+*   **`/compact`** asks the LLM for a structured summary (Goals / Decisions / Files touched / Open work / Last user request) instead of nuking history.
+*   **Hookify rules** load from markdown files — install warn/block guards without code:
+
+    ```yaml
+    ---
+    name: block-rm-rf
+    event: bash
+    pattern: rm\s+-rf
+    action: block
+    ---
+    ```
+*   **Memory consolidation** runs Phase 2 over the MCP recall surface, writing per-type markdown so the cognitive store has a human-readable view at `.brainrouter/memories/`.
+*   **Multi-agent orchestration** via `spawn_agent` / `wait_agent` with explorer, architect, reviewer, worker, and verifier roles — each one a forked session with its own transcript and token budget.
+
+---
+
 ## 🛣️ Development Roadmap
 
 ### Phase 1: Local SQLite Storage & FTS5 (Completed)
@@ -176,3 +230,11 @@ graph TD
 ### Phase 3: Metacognitive Refactoring (Completed)
 *   System renaming to biological terms (`SensoryStream`, `CognitiveRecord`, `ContextualFocus`, `CoreIdentity`).
 *   Next.js dashboard web application integration.
+
+### Phase 4: Terminal CLI & Codex/Claude Code Parity (Completed)
+*   `brainrouter` REPL with 60+ slash commands (`/theme`, `/personality`, `/new`, `/side`, `/raw`, `/feedback`, `/rollout`, `/ps`, `/stop`, `/logout`, `/apps`, `/plugins`, `/experimental`, `/memories`, `/debug-config`, `/mention`, `/keymap`, `/ide`, `/hookify`, …).
+*   LLM-driven `/compact` summarization with structured headings.
+*   Hookify markdown rules under `.brainrouter/hooks/` (regex + multi-condition matchers, warn/block actions).
+*   Phase-2 filesystem consolidation: `MEMORY.md` + per-type files written by both the CLI and the new `memory_consolidate` MCP tool.
+*   Multi-agent orchestration (`spawn_agent`, `wait_agent`) with role-based access modes and durable workflow folders (`spec.md` / `tasks.md` / `walkthrough.md`).
+*   Personality overlays (`concise`, `standard`, `detailed`, `pair-programmer`) injected into the system prompt.

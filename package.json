@@ -2,10 +2,22 @@
   "name": "brainrouter-monorepo",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["packages/*", "mcp", "web", "brainrouter"],
+  "workspaces": [
+    "packages/*",
+    "mcp",
+    "web",
+    "brainrouter"
+  ],
   "scripts": {
     "build": "npm run build -ws --if-present",
     "test": "npm run test -ws --if-present",
     "cli": "node brainrouter/dist/index.js"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.15",
+    "jest": "^30.4.2",
+    "react-router-dom": "^7.15.1",
+    "ts-jest": "^29.4.10",
+    "typescript": "^6.0.3"
   }
 }

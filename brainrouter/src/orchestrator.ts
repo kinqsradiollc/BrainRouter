@@ -18,6 +18,8 @@ export interface ChildSessionRecord {
   pid: number;
   finalOutput?: string;
   error?: string;
+  /** LLM usage attributable to this child (filled when the child completes). */
+  usage?: { promptTokens: number; completionTokens: number; calls: number; turns: number };
 }
 
 interface SessionsFile {
