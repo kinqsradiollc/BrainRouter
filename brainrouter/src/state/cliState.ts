@@ -9,10 +9,9 @@ export function isPathInside(parent: string, candidate: string): boolean {
 }
 
 /**
- * User-global brainrouter home. Defaults to `~/.brainrouter` (matching how
- * codex uses `~/.codex` and claude-code uses `~/.claude`). Override with the
- * `BRAINROUTER_HOME` env var — tests set this to keep their state out of the
- * real user home.
+ * User-global brainrouter home. Defaults to `~/.brainrouter`. Override with
+ * the `BRAINROUTER_HOME` env var — tests set this to keep their state out of
+ * the real user home.
  */
 export function getBrainrouterHome(): string {
   const override = process.env.BRAINROUTER_HOME?.trim();

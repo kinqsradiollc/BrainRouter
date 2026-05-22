@@ -4,7 +4,7 @@ import { isPathInside } from '../state/cliState.js';
 
 /**
  * Expand `@path/to/file` mentions in a user prompt by appending the referenced
- * file contents as a fenced block, the way Claude Code and Codex do it.
+ * file contents as a fenced block.
  *
  * Rules:
  *   - Token shape: `@` followed by a workspace-relative path. The path can

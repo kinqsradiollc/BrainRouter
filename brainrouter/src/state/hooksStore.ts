@@ -2,10 +2,10 @@ import { execSync } from 'node:child_process';
 import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
 
 /**
- * Lifecycle shell hooks, modeled after Claude Code's PreToolUse / PostToolUse /
- * Stop hook surface. A hook is a shell command string that runs at a specific
- * agent-loop point. Non-zero exit codes from `pre-tool` hooks can block the
- * tool call ("approval gate"); other events are informational.
+ * Lifecycle shell hooks. A hook is a shell command string that runs at a
+ * specific agent-loop point (pre-tool, post-tool, stop). Non-zero exit codes
+ * from `pre-tool` hooks can block the tool call ("approval gate"); other
+ * events are informational.
  *
  * Persisted at <workspace>/.brainrouter/cli/hooks.json so they survive CLI
  * restarts and travel with the project.

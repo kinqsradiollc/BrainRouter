@@ -114,9 +114,8 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
 
 /**
  * Heuristic auto-router. Maps a free-text task to the best role based on
- * leading verbs and intent keywords. Mirrors codex's role inference but keeps
- * it pure-text so callers can opt in via `route_agent` without first spending
- * an LLM turn.
+ * leading verbs and intent keywords. Pure text-classification — callers can
+ * opt in via `route_agent` without first spending an LLM turn.
  */
 export function inferRoleFromTask(task: string): 'explorer' | 'architect' | 'reviewer' | 'worker' | 'verifier' {
   const t = task.trim().toLowerCase();

@@ -5,11 +5,12 @@ import { callMcpTool } from '../runtime/mcpUtils.js';
 import { getWorkspaceStateRoot } from '../state/cliState.js';
 
 /**
- * Filesystem memory consolidation, modeled after codex-rs/memories Phase 2.
+ * Filesystem memory consolidation — the human-readable companion to the
+ * cognitive memory database.
  *
  * Brainrouter's MCP already stores recall records in the cognitive memory DB.
- * This module mirrors codex's filesystem artifacts so users get a human-
- * readable view of what was learned across sessions:
+ * This module writes filesystem artifacts so users get a human-readable view
+ * of what was learned across sessions:
  *
  *   ~/.brainrouter/workspaces/<encoded>/memories/
  *     MEMORY.md              - one-line index of all consolidated entries
