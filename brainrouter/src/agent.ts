@@ -1249,7 +1249,7 @@ export class Agent {
    * removes any older entry with the same tag before appending the new one,
    * keeping the model's view of "current memory state" current.
    */
-  private replaceTaggedSystemMessage(tag: string, content: string): void {
+  public replaceTaggedSystemMessage(tag: string, content: string): void {
     const marker = `<!--brainrouter:${tag}-->\n`;
     this.chatHistory = this.chatHistory.filter(
       (msg) => !(msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(marker)),

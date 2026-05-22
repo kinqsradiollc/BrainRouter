@@ -1256,6 +1256,93 @@ test('goalStore: per-session goals are isolated from each other', () => {
   });
 });
 
+test('goalStore: setGoal throws GoalConflictError when overwriting an active goal without force', async () => {
+  const { GoalConflictError, completeGoal } = await import('./goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:conflict';
+    setGoal(workspace, 'first goal', sk);
+    // Same key, new text — must conflict.
+    assert.throws(
+      () => setGoal(workspace, 'second goal', sk),
+      (err: unknown) => err instanceof GoalConflictError && (err as any).existing.text === 'first goal',
+    );
+    // Existing goal preserved.
+    assert.equal(readGoal(workspace, sk)?.text, 'first goal');
+    // force=true overrides.
+    const replaced = setGoal(workspace, 'second goal', sk, { force: true });
+    assert.equal(replaced.text, 'second goal');
+    assert.equal(readGoal(workspace, sk)?.text, 'second goal');
+    // Completing the goal lifts the conflict shield — fresh setGoal without
+    // force should now succeed because the old work is done.
+    completeGoal(workspace, sk, 'manually closed');
+    const next = setGoal(workspace, 'third goal', sk);
+    assert.equal(next.text, 'third goal');
+    assert.equal(next.status, 'active');
+  });
+});
+
+test('goalStore: token budget tracking + usage_limited transition', async () => {
+  const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('./goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:tokens';
+    const g0 = setGoal(workspace, 'finish auth refactor', sk);
+    assert.equal(g0.budget.maxTokens, undefined);
+
+    // Set a token cap of 1000.
+    const g1 = setGoalTokenBudget(workspace, sk, 1000)!;
+    assert.equal(g1.budget.maxTokens, 1000);
+    assert.equal(g1.budget.tokensUsed, 0);
+    assert.equal(goalHasBudgetLeft(g1), true);
+
+    // Tally usage in chunks.
+    const g2 = addGoalTokens(workspace, sk, 400)!;
+    assert.equal(g2.budget.tokensUsed, 400);
+    assert.equal(goalIsOnFinalBudgetTurn(g2), false);
+
+    // 850/1000 — > 80%, considered the "final turn" for steering.
+    const g3 = addGoalTokens(workspace, sk, 450)!;
+    assert.equal(g3.budget.tokensUsed, 850);
+    assert.equal(goalIsOnFinalBudgetTurn(g3), true);
+
+    // Cross the cap.
+    const g4 = addGoalTokens(workspace, sk, 200)!;
+    assert.equal(g4.budget.tokensUsed, 1050);
+    assert.equal(goalHasBudgetLeft(g4), false);
+
+    // Transition to usage_limited.
+    const limited = usageLimitGoal(workspace, sk, 'token budget reached')!;
+    assert.equal(limited.status, 'usage_limited');
+    assert.equal(limited.blockedReason, 'token budget reached');
+
+    // Clearing the token cap with 0.
+    const cleared = setGoalTokenBudget(workspace, sk, 0)!;
+    assert.equal(cleared.budget.maxTokens, undefined);
+    assert.equal(cleared.budget.tokensUsed, undefined);
+  });
+});
+
+test('goalStore: editGoal unified update changes text/status/budget/tokens in one call', async () => {
+  const { editGoal } = await import('./goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:edit';
+    setGoal(workspace, 'initial outcome', sk);
+    const edited = editGoal(workspace, sk, {
+      text: 'refined outcome with sharper boundary',
+      maxIterations: 25,
+      maxTokens: 50_000,
+    })!;
+    assert.equal(edited.text, 'refined outcome with sharper boundary');
+    assert.equal(edited.budget.maxIterations, 25);
+    assert.equal(edited.budget.maxTokens, 50_000);
+    assert.equal(edited.status, 'active');
+    // Status-only edit.
+    const paused = editGoal(workspace, sk, { status: 'paused' })!;
+    assert.equal(paused.status, 'paused');
+    // Empty text refused.
+    assert.throws(() => editGoal(workspace, sk, { text: '   ' }), /empty/);
+  });
+});
+
 test('goalStore: legacy workspace-level goal is read as a fallback', async () => {
   const { getCliStateFile, getSessionStateDir } = await import('./cliState.js');
   withTempWorkspace((workspace) => {
@@ -1265,7 +1352,10 @@ test('goalStore: legacy workspace-level goal is read as a fallback', async () =>
     assert.equal(readGoal(workspace, sessionKey)?.text, 'legacy goal');
 
     // Setting a per-session goal shadows the legacy one without removing it.
-    setGoal(workspace, 'session-scoped', sessionKey);
+    // The legacy fallback DOES count as an existing goal under the new
+    // conflict-detection rule, so pass force=true to bypass the prompt
+    // path (REPL will do this after confirming with the user).
+    setGoal(workspace, 'session-scoped', sessionKey, { force: true });
     assert.equal(readGoal(workspace, sessionKey)?.text, 'session-scoped');
     // Bucket exists at the expected path.
     assert.equal(fs.existsSync(path.join(getSessionStateDir(workspace, sessionKey), 'goal.json')), true);
