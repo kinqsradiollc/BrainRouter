@@ -350,16 +350,24 @@ npm login              # one-time per session
 npm whoami             # confirm you're authenticated as the right user
 ```
 
-**Two zsh gotchas — read before you paste the publish commands:**
+**Three gotchas — read before you paste the publish commands:**
 
-1. **Inline `#` comments don't work in zsh interactive mode.** zsh treats
-   `# anything` as positional args, not a comment, unless you've enabled
-   `setopt interactive_comments` (not the default). The commands below
-   deliberately have NO inline comments — paste them as-is.
-2. **2FA is required.** The `@brainrouter` scope expects a TOTP code per
-   publish (mode `auth-and-publish`). Either pass `--otp=XXXXXX` on each
-   command (paste a fresh code from your authenticator each time), or
-   omit the flag and npm will prompt interactively.
+1. **The `@brainrouter` scope must exist as an npm org.** A scoped
+   package can only be published if the scope (a) matches your npm
+   username OR (b) is a registered npm organization you belong to. The
+   first time you publish, create the org at
+   <https://www.npmjs.com/org/create> — name `brainrouter`, **Free**
+   plan (unlimited public packages). Without this, `npm publish`
+   returns a misleading `404 Not Found - PUT .../@brainrouter%2ftypes`.
+2. **Inline `#` comments don't work in zsh interactive mode.** zsh
+   treats `# anything` as positional args, not a comment, unless
+   you've enabled `setopt interactive_comments` (not the default).
+   The commands below deliberately have NO inline comments — paste
+   them as-is.
+3. **2FA is required.** The `@brainrouter` scope expects a TOTP code
+   per publish (mode `auth-and-publish`). Either pass `--otp=XXXXXX`
+   on each command (paste a fresh code from your authenticator each
+   time), or omit the flag and npm will prompt interactively.
 
 ```bash
 # Use ABSOLUTE paths — they're immune to whatever cwd you're starting
