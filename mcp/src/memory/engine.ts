@@ -107,7 +107,7 @@ class ModelLLMRunner implements LLMRunner {
       }
 
       const data = await res.json() as any;
-      // Defensive parsing — see brainrouter/src/agent.ts callOpenAI for the
+      // Defensive parsing — see brainrouter/src/agent/agent.ts callOpenAI for the
       // full rationale. The short version: some endpoints return HTTP 200
       // with an `error` envelope or a non-standard schema. Surface the
       // actual response body in the error so a misconfigured model name

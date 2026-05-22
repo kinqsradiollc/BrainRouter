@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isPathInside } from './cliState.js';
+import { isPathInside } from '../state/cliState.js';
 
 /**
  * Expand `@path/to/file` mentions in a user prompt by appending the referenced

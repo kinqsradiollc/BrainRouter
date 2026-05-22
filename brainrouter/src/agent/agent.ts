@@ -3,13 +3,13 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import chalk from 'chalk';
-import type { McpClientWrapper } from './mcpClient.js';
-import { askYesNo } from './cliPrompt.js';
-import type { LLMConfig } from './config.js';
-import { appendTranscriptEntry } from './sessionStore.js';
-import { buildSystemPrompt, loadWorkspaceInstructionSummary } from './systemPrompt.js';
-import { formatPlan, updatePlan } from './taskStore.js';
-import type { AccessMode } from './agentRoles.js';
+import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import { askYesNo } from '../cli/cliPrompt.js';
+import type { LLMConfig } from '../config/config.js';
+import { appendTranscriptEntry } from '../state/sessionStore.js';
+import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
+import { formatPlan, updatePlan } from '../state/taskStore.js';
+import type { AccessMode } from '../orchestration/roles.js';
 import {
   createSpawnAgentTool,
   createSpawnAgentsTool,
@@ -21,18 +21,18 @@ import {
   createRouteAgentTool,
   executeOrchestrationTool,
   isOrchestrationToolName,
-} from './orchestratorTools.js';
-import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from './memoryBriefing.js';
-import { callMcpTool, extractToolText } from './mcpUtils.js';
-import { acquireLLMSlot } from './llmSemaphore.js';
-import { blockGoal, completeGoal, formatGoalBlock, readGoal } from './goalStore.js';
-import { runHooks } from './hooksStore.js';
-import { resolveSandboxConfig, runShell } from './sandbox.js';
-import { readPreferences } from './preferencesStore.js';
-import { startSpan, traceEvent } from './tracing.js';
-import { buildHookifyContext, evaluateHookify, listHookifyRules } from './hookifyStore.js';
-import { renderCompactSystemMessage, runCompaction } from './compactor.js';
-import { buildFanOutHint, shouldSuggestFanOut } from './breadthHint.js';
+} from '../orchestration/tools.js';
+import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
+import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
+import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
+import { runHooks } from '../state/hooksStore.js';
+import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
+import { readPreferences } from '../state/preferencesStore.js';
+import { startSpan, traceEvent } from '../runtime/tracing.js';
+import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
+import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
+import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
 
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
@@ -1063,7 +1063,7 @@ export class Agent {
         try {
           const res = await fetch(url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.2.0)'
+              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.3)'
             }
           });
           if (!res.ok) {
@@ -1497,7 +1497,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
 
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.2' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.3' } });
     if (!res.ok) {
       return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
     }

@@ -1,6 +1,6 @@
-import type { McpClientWrapper } from './mcpClient.js';
-import { redactText } from './sessionStore.js';
-import { callMcpTool } from './mcpUtils.js';
+import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import { redactText } from '../state/sessionStore.js';
+import { callMcpTool } from '../runtime/mcpUtils.js';
 
 export interface BriefingInputs {
   mcpClient: McpClientWrapper;

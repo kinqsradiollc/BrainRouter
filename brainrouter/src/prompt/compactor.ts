@@ -1,4 +1,4 @@
-import type { LLMConfig } from './config.js';
+import type { LLMConfig } from '../config/config.js';
 
 /**
  * Conversation compaction, modeled after codex-rs/core/src/compact.rs.

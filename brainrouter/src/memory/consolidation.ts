@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { McpClientWrapper } from './mcpClient.js';
-import { callMcpTool } from './mcpUtils.js';
-import { getWorkspaceStateRoot } from './cliState.js';
+import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import { callMcpTool } from '../runtime/mcpUtils.js';
+import { getWorkspaceStateRoot } from '../state/cliState.js';
 
 /**
  * Filesystem memory consolidation, modeled after codex-rs/memories Phase 2.

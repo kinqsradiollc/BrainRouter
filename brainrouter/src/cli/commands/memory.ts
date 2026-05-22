@@ -1,0 +1,235 @@
+/**
+ * Memory-related slash commands. All cases here are leaf operations against
+ * the MCP memory tools (search, recall, briefing inspection, scenes,
+ * forget, handover, explain, trace, failed, verify, audit, export, import,
+ * persona, skill-hints, diagnostics, working canvas) plus the pipeline
+ * toggle / consolidation operation.
+ *
+ * They mostly delegate to printMcpCall / printMemoryCards and write nothing
+ * back to the workspace except /export (which writes the JSON envelope).
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import chalk from 'chalk';
+import ora from 'ora';
+import { callMcpTool } from '../../runtime/mcpUtils.js';
+import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
+import { consolidateMemories } from '../../memory/consolidation.js';
+import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
+import type { CommandContext } from './_context.js';
+import { printMcpCall, printMemoryCards } from './_helpers.js';
+
+export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boolean> {
+  const { command, args, agent, mcpClient } = ctx;
+  switch (command) {
+    case '/memory': {
+      const query = args.join(' ').trim();
+      if (!query) { console.log(chalk.red('\nUsage: /memory <query>\n')); return true; }
+      await printMemoryCards(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey }, `Memory search · "${query}"`);
+      return true;
+    }
+    case '/recall': {
+      const query = args.join(' ').trim();
+      if (!query) { console.log(chalk.red('\nUsage: /recall <query>\n')); return true; }
+      await printMemoryCards(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query }, `Cognitive recall · "${query}"`);
+      return true;
+    }
+    case '/briefing': {
+      const b = agent.getLastBriefing();
+      console.log(chalk.bold('\nLast Memory Briefing'));
+      if (b.sources.length === 0) {
+        console.log(chalk.yellow('  No briefing has been built yet. Start a turn or use /recall.'));
+      } else {
+        console.log(`  Sources queried: ${chalk.cyan(b.sources.join(', '))}`);
+        console.log(`  Recalled record IDs (${b.recordIds.length}): ${chalk.gray(b.recordIds.slice(0, 10).join(', '))}${b.recordIds.length > 10 ? '…' : ''}`);
+      }
+      console.log();
+      return true;
+    }
+    case '/scenes': {
+      const res = await callMcpTool<any>(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query: 'list focus scenes' });
+      if (res.isError) {
+        console.log(chalk.red(`\nmemory_recall failed: ${res.text || '(no message)'}\n`));
+      } else {
+        const persona = res.parsed?.appendSystemContext ?? '';
+        const sceneRe = /Recent focus scenes:\s*\n([\s\S]*?)(\n\n|<\/scene-navigation>)/;
+        const m = sceneRe.exec(persona);
+        console.log(chalk.bold('\nActive focus scenes'));
+        if (m) {
+          for (const line of m[1].split('\n')) {
+            const trimmed = line.replace(/^\s+/, '').replace(/^-\s*/, '').trim();
+            if (trimmed) console.log(`  • ${chalk.cyan(trimmed)}`);
+          }
+        } else {
+          console.log(chalk.yellow('  (no scenes returned — recall may be empty)'));
+        }
+        const cards = extractMemories(res.parsed);
+        if (cards.length > 0) {
+          console.log();
+          console.log(renderMemoryCards(cards, 'Related memories', 5));
+        }
+      }
+      return true;
+    }
+    case '/forget': {
+      const id = args[0];
+      if (!id) { console.log(chalk.red('\nUsage: /forget <recordId>\n')); return true; }
+      await printMcpCall(mcpClient, 'memory_update', { recordId: id, status: 'archived' }, `Archive memory ${id}`);
+      return true;
+    }
+    case '/handover': {
+      // Generate a compact continuation note from current task memories so
+      // the next session can pick up. Uses memory_handover.
+      await printMcpCall(mcpClient, 'memory_handover', { sessionKey: agent.sessionKey }, 'Session handover note');
+      return true;
+    }
+    case '/explain': {
+      const query = args.join(' ').trim();
+      if (!query) {
+        console.log(chalk.red('\nUsage: /explain <query>\n'));
+        console.log(chalk.gray('  Re-runs recall in explain mode: shows FTS hits, vector hits, RRF scores, type/skill boosts, reranker, graph expansion.\n'));
+        return true;
+      }
+      await printMcpCall(mcpClient, 'memory_explain_recall', { sessionKey: agent.sessionKey, query }, `Recall explanation · "${query}"`);
+      return true;
+    }
+    case '/trace': {
+      const sub = args[0];
+      if (sub === 'save') {
+        const rest = args.slice(1).join(' ').trim();
+        if (!rest) { console.log(chalk.red('\nUsage: /trace save <description>\n')); return true; }
+        await printMcpCall(mcpClient, 'memory_debug_trace_save', { content: rest }, 'Saved debug trace');
+        return true;
+      }
+      if (sub === 'search' || !sub) {
+        const query = args.slice(1).join(' ').trim();
+        if (sub !== 'search' && !query) {
+          console.log(chalk.red('\nUsage: /trace save <description> | /trace search <query>\n'));
+          return true;
+        }
+        await printMcpCall(mcpClient, 'memory_debug_trace_search', { query: query || '*' }, 'Prior debug traces');
+        return true;
+      }
+      console.log(chalk.red('\nUsage: /trace save <description> | /trace search <query>\n'));
+      return true;
+    }
+    case '/failed': {
+      const area = args.join(' ').trim();
+      await printMcpCall(mcpClient, 'memory_failed_attempts', area ? { area } : {}, `Past failed attempts${area ? ` · "${area}"` : ''}`);
+      return true;
+    }
+    case '/verify': {
+      const id = args[0];
+      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]\n')); return true; }
+      const status = args[1] || 'verified';
+      const confidence = args[2] ? Number(args[2]) : 0.9;
+      await printMcpCall(mcpClient, 'memory_verify', { recordId: id, verificationStatus: status, confidence }, `Verify ${id}`);
+      return true;
+    }
+    case '/audit': {
+      await printMcpCall(mcpClient, 'memory_audit', { limit: 30 }, 'Recent memory audit log');
+      return true;
+    }
+    case '/export': {
+      const out = args[0] || `.brainrouter/cli/memory-export-${Date.now()}.json`;
+      const res = await callMcpTool<any>(mcpClient, 'memory_export', {});
+      if (res.isError) {
+        console.log(chalk.red(`\nmemory_export failed: ${res.text}\n`));
+      } else {
+        try {
+          fs.writeFileSync(path.resolve(agent.workspaceRoot, out), res.text, 'utf8');
+          console.log(chalk.green(`\n✓ Exported memory to ${out} (${res.text.length} chars)\n`));
+        } catch (err: any) {
+          console.log(chalk.red(`\nWrite failed: ${err.message}\n`));
+        }
+      }
+      return true;
+    }
+    case '/import': {
+      const src = args[0];
+      if (!src) { console.log(chalk.red('\nUsage: /import <path-to-export.json>\n')); return true; }
+      let envelope: string;
+      try { envelope = fs.readFileSync(path.resolve(agent.workspaceRoot, src), 'utf8'); }
+      catch (err: any) { console.log(chalk.red(`\nRead failed: ${err.message}\n`)); return true; }
+      await printMcpCall(mcpClient, 'memory_import', { envelope }, `Import from ${src}`);
+      return true;
+    }
+    case '/persona': {
+      const name = args.join(' ').trim();
+      if (!name) {
+        console.log(chalk.red('\nUsage: /persona <persona-name>\n'));
+        console.log(chalk.gray('  Example: /persona code-reviewer (see /skills for available personas)\n'));
+        return true;
+      }
+      await printMcpCall(mcpClient, 'get_persona', { name }, `Persona · ${name}`);
+      return true;
+    }
+    case '/skill-hints': {
+      const skill = args[0];
+      const hints = args.slice(1).join(' ').trim();
+      if (!skill || !hints) {
+        console.log(chalk.red('\nUsage: /skill-hints <skill-name> <hints>\n'));
+        return true;
+      }
+      await printMcpCall(mcpClient, 'memory_register_skill_hints', { skill, hints }, `Registered hints for ${skill}`);
+      return true;
+    }
+    case '/diagnostics': {
+      await printMcpCall(mcpClient, 'memory_diagnostics', {}, 'Memory diagnostics');
+      return true;
+    }
+    case '/working': {
+      const sub = args[0];
+      if (sub === 'reset') {
+        const confirm = args[1];
+        if (confirm !== 'confirm') {
+          console.log(chalk.yellow('\n⚠ /working reset clears the working-memory canvas. Confirm with: /working reset confirm\n'));
+          return true;
+        }
+        await printMcpCall(mcpClient, 'memory_working_reset', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot }, 'Working memory reset');
+        return true;
+      }
+      await printMcpCall(mcpClient, 'memory_working_context', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot }, 'Working memory canvas');
+      return true;
+    }
+    case '/memories': {
+      const sub = args[0];
+      if (!sub || sub === 'status') {
+        const prefs = readPreferences(agent.workspaceRoot);
+        console.log(chalk.bold('\nMemories pipeline'));
+        console.log(`  Enabled: ${prefs.memoriesEnabled ? chalk.green('on') : chalk.gray('off')}`);
+        console.log(chalk.gray('  Subcommands:'));
+        console.log(chalk.gray('    /memories on | off          — toggle the pipeline'));
+        console.log(chalk.gray('    /memories consolidate       — write user/feedback/project/reference files'));
+        console.log(chalk.gray('    /memories status            — show this view\n'));
+        return true;
+      }
+      if (sub === 'on' || sub === 'off') {
+        writePreferences(agent.workspaceRoot, { memoriesEnabled: sub === 'on' });
+        console.log(chalk.green(`\n✓ Memories pipeline ${sub === 'on' ? 'enabled' : 'disabled'}.\n`));
+        return true;
+      }
+      if (sub === 'consolidate') {
+        const spinner = ora(chalk.gray('Consolidating memories from MCP into filesystem artifacts...')).start();
+        try {
+          const result = await consolidateMemories(mcpClient, agent.workspaceRoot, { sessionKey: agent.sessionKey });
+          spinner.succeed(chalk.green(`Consolidated ${result.totalRecords} records.`));
+          console.log(chalk.bold('\nPer-type counts:'));
+          for (const [t, n] of Object.entries(result.perType)) {
+            console.log(`  ${chalk.cyan(t.padEnd(10))} ${n}`);
+          }
+          console.log(chalk.bold('\nFiles written:'));
+          for (const f of result.files) console.log(`  ${chalk.gray(f)}`);
+          console.log();
+        } catch (err: any) {
+          spinner.fail(chalk.red(`Consolidation failed: ${err.message}\n`));
+        }
+        return true;
+      }
+      console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, consolidate.\n`));
+      return true;
+    }
+  }
+  return false;
+}
