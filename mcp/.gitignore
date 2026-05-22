@@ -1,0 +1,7 @@
+# Bundled content (copied by scripts/prepack.mjs at publish time; cleaned by postpack).
+# Never commit these — the canonical sources live at the monorepo root.
+/skills/
+/agents/
+/references/
+/docs/
+/.bundled-content.json

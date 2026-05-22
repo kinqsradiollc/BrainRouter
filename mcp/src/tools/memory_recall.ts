@@ -3,7 +3,7 @@ import { memoryEngine } from "../memory/engine.js";
 
 export const memoryRecallToolSchema = {
   name: "memory_recall",
-  description: "Retrieve relevant memories, persona, and scene context before generating a response. Best used proactively when context is missing.",
+  description: "Retrieve relevant memories, persona, and scene context before generating a response. Best used proactively when context is missing. Supports `filters` to scope results by type / scene / time range / minPriority / skillTag — apply them when the query is mid-conversation pivot or only one memory category is wanted.",
   inputSchema: {
     type: "object",
     properties: {
@@ -22,6 +22,18 @@ export const memoryRecallToolSchema = {
       activeSkill: {
         type: "string",
         description: "The name of the BrainRouter skill currently being executed (if any)."
+      },
+      filters: {
+        type: "object",
+        description: "Optional filters narrowing the candidate pool before ranking.",
+        properties: {
+          types: { type: "array", items: { type: "string" }, description: "Whitelist of memory types (e.g. ['instruction', 'feedback'])." },
+          scenes: { type: "array", items: { type: "string" }, description: "Whitelist of contextual focus scene names." },
+          capturedAfter: { type: "string", description: "ISO 8601 lower bound on created_time." },
+          capturedBefore: { type: "string", description: "ISO 8601 upper bound on created_time." },
+          minPriority: { type: "number", description: "Drop records whose stored priority is below this threshold (0-100)." },
+          skillTag: { type: "string", description: "Restrict to records produced under this skill tag." }
+        }
       }
     },
     required: ["sessionKey", "query"]
@@ -33,7 +45,15 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
     userId: z.string().optional(),
     sessionKey: z.string(),
     query: z.string(),
-    activeSkill: z.string().optional()
+    activeSkill: z.string().optional(),
+    filters: z.object({
+      types: z.array(z.string()).optional(),
+      scenes: z.array(z.string()).optional(),
+      capturedAfter: z.string().optional(),
+      capturedBefore: z.string().optional(),
+      minPriority: z.number().optional(),
+      skillTag: z.string().optional(),
+    }).optional()
   }).parse(args);
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
@@ -46,7 +66,8 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
       userId: effectiveUserId,
       sessionKey: params.sessionKey,
       query: params.query,
-      activeSkill: params.activeSkill
+      activeSkill: params.activeSkill,
+      filters: params.filters,
     });
 
     return {

@@ -10,18 +10,67 @@ import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
-
-  if (!halfLife) {
-    return memory.priority;
-  }
-
   const ageMs = Date.now() - new Date(memory.created_time).getTime();
   const ageDays = ageMs / 86_400_000;
-  const decayFactor = Math.pow(0.5, ageDays / halfLife);
-  const decayedPriority = memory.priority * decayFactor;
+
+  let base = memory.priority;
+  if (halfLife) {
+    const decayFactor = Math.pow(0.5, ageDays / halfLife);
+    base = memory.priority * decayFactor;
+  }
 
   const citationBoost = Math.min((memory.citation_count ?? 0) * 0.05, 0.30);
-  return decayedPriority * (1 + citationBoost);
+  // Freshness boost: anything captured in the last 24h gets a small lift so
+  // brand-new facts surface even before they've been cited. Linear ramp from
+  // 1.15× at age 0 to 1.0× at age 1d.
+  const freshness = ageDays <= 1 ? 1 + 0.15 * (1 - ageDays) : 1;
+  return base * (1 + citationBoost) * freshness;
+}
+
+/**
+ * Optional filters applied to the candidate pool after RRF but before
+ * neural-spark propagation and reranking. Filters never *add* records — they
+ * narrow what the ranking stage considers, so callers can scope a recall to
+ * "feedback memories captured in the last week" without re-implementing the
+ * pipeline.
+ */
+export interface RecallFilters {
+  /** Restrict to these memory types (e.g. ["instruction", "feedback"]). */
+  types?: string[];
+  /** Restrict to records tagged with any of these scene names. */
+  scenes?: string[];
+  /** ISO timestamp lower bound on created_time. */
+  capturedAfter?: string;
+  /** ISO timestamp upper bound on created_time. */
+  capturedBefore?: string;
+  /** Drop records whose stored priority is below this threshold. */
+  minPriority?: number;
+  /** Restrict to records produced under this skill_tag. */
+  skillTag?: string;
+}
+
+function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
+  records: T[],
+  filters?: RecallFilters,
+): T[] {
+  if (!filters) return records;
+  const afterMs = filters.capturedAfter ? new Date(filters.capturedAfter).getTime() : undefined;
+  const beforeMs = filters.capturedBefore ? new Date(filters.capturedBefore).getTime() : undefined;
+  const types = filters.types && filters.types.length > 0 ? new Set(filters.types) : undefined;
+  const scenes = filters.scenes && filters.scenes.length > 0 ? new Set(filters.scenes) : undefined;
+  return records.filter((r) => {
+    if (types && !types.has(r.type)) return false;
+    if (scenes && (!r.scene_name || !scenes.has(r.scene_name))) return false;
+    if (filters.skillTag && r.skill_tag !== filters.skillTag) return false;
+    if (filters.minPriority !== undefined && r.priority < filters.minPriority) return false;
+    if (afterMs !== undefined || beforeMs !== undefined) {
+      const created = r.created_time ? new Date(r.created_time).getTime() : NaN;
+      if (Number.isNaN(created)) return false;
+      if (afterMs !== undefined && created < afterMs) return false;
+      if (beforeMs !== undefined && created > beforeMs) return false;
+    }
+    return true;
+  });
 }
 
 export class MemoryRecallPipeline {
@@ -37,25 +86,34 @@ export class MemoryRecallPipeline {
     query: string;
     activeSkill?: string;
     explain?: boolean;
+    filters?: RecallFilters;
   }): Promise<RecallResult> {
     const startTime = Date.now();
-    const { userId, sessionKey, query, activeSkill } = params;
+    const { userId, sessionKey, query, activeSkill, filters } = params;
     const intent = detectTaskIntent(query);
 
     // 1. FTS5 BM25 search (Top 15)
-    const ftsResults = this.store.searchCognitiveFts(userId, query, 15);
-    const filePathResults = this.expandWithFilePathMatches(userId, query);
+    const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, 15);
+    const filePathResultsRaw = this.expandWithFilePathMatches(userId, query);
 
     // 2. Vector search (Top 15, if enabled)
-    let vecResults: VectorSearchResult[] = [];
+    let vecResultsRaw: VectorSearchResult[] = [];
     if (this.embeddingService.isReady()) {
       try {
         const queryVec = await this.embeddingService.embed(query);
-        vecResults = this.store.searchCognitiveVec(userId, queryVec, 15);
+        vecResultsRaw = this.store.searchCognitiveVec(userId, queryVec, 15);
       } catch (e) {
         console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
       }
     }
+
+    // Filter the three candidate streams BEFORE RRF so the rank is computed
+    // on the actually-relevant pool, not a filtered subset of an unfiltered
+    // rank (which would bias scores toward records that happen to be in the
+    // top-15 globally even if irrelevant to the filter).
+    const ftsResults = applyFilters(ftsResultsRaw, filters);
+    const vecResults = applyFilters(vecResultsRaw, filters);
+    const filePathResults = applyFilters(filePathResultsRaw, filters);
 
     if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
       const emptyStrategy = this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty";
@@ -157,7 +215,35 @@ export class MemoryRecallPipeline {
 
     const propagatedMap = new Map(propagatedNodes.map(n => [n.id, n]));
     const existingIds = new Set(scoredResults.map(r => r.record.record_id));
-    const sparkedNodes: string[] = [];
+    // Carry the full {id, potential, fired, type, preview, sceneName} so the
+    // UI can render a human-friendly label instead of the opaque record id.
+    // Track seen ids so we don't double-list a node that appears as both a
+    // seed and a propagation target.
+    const sparkedNodes: Array<{ id: string; potential: number; fired: boolean; type?: string; preview?: string; sceneName?: string }> = [];
+    const sparkedSeen = new Set<string>();
+    const previewFromContent = (content: unknown): string | undefined => {
+      const text = (content ?? "").toString().trim();
+      if (!text) return undefined;
+      const oneLine = text.replace(/\s+/g, " ");
+      // Keep the preview short — the UI renders a compact pill, anything
+      // longer than ~70 chars wraps awkwardly even with ellipsis fallback.
+      return oneLine.length > 70 ? `${oneLine.slice(0, 67)}…` : oneLine;
+    };
+    const pushNode = (
+      node: { id: string; potential: number; fired: boolean },
+      meta?: { type?: string; preview?: string; sceneName?: string },
+    ) => {
+      if (!node.id || sparkedSeen.has(node.id)) return;
+      sparkedSeen.add(node.id);
+      sparkedNodes.push({
+        id: node.id,
+        potential: Math.max(0, Math.min(1, Number(node.potential) || 0)),
+        fired: Boolean(node.fired),
+        type: meta?.type,
+        preview: meta?.preview,
+        sceneName: meta?.sceneName,
+      });
+    };
 
     const sparkScoredResults: Array<{ record: any; score: number; fired?: boolean }> = [];
 
@@ -165,9 +251,14 @@ export class MemoryRecallPipeline {
       const propNode = propagatedMap.get(scored.record.record_id);
       if (propNode) {
         const newScore = Math.max(scored.score, propNode.potential * maxScore);
-        if (propNode.fired) {
-          sparkedNodes.push(scored.record.record_id);
-        }
+        // Every initial-seed node belongs in the trace, fired or not — the
+        // sub-threshold pills carry useful "we considered this but it didn't
+        // spread" signal.
+        pushNode(propNode, {
+          type: scored.record.type,
+          preview: previewFromContent(scored.record.content),
+          sceneName: scored.record.scene_name,
+        });
         sparkScoredResults.push({
           record: scored.record,
           score: propNode.fired ? newScore * 1.5 : newScore,
@@ -183,7 +274,11 @@ export class MemoryRecallPipeline {
       if (propNode.fired && !existingIds.has(propNode.id)) {
         const record = this.store.getMemoryById(userId, propNode.id);
         if (record) {
-          sparkedNodes.push(propNode.id);
+          pushNode(propNode, {
+            type: record.type,
+            preview: previewFromContent(record.content),
+            sceneName: record.sceneName,
+          });
           const formattedRecord = {
             record_id: record.id,
             user_id: record.userId,

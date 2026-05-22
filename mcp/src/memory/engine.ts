@@ -11,6 +11,7 @@ import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/s
 import type { LLMRunner, LLMRunParams } from "@brainrouter/types";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { fetchWithExternalRetry } from "./retry.js";
+import { acquireLLMSlot } from "./llm-semaphore.js";
 import "dotenv/config";
 import path from "node:path";
 import os from "node:os";
@@ -38,7 +39,11 @@ class ModelLLMRunner implements LLMRunner {
     const apiKey = process.env.BRAINROUTER_LLM_API_KEY;
 
     if (!apiKey) {
-      throw new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Memory extraction requires an LLM.`);
+      // Typed sentinel so upstream pipelines can short-circuit cleanly without dumping a stack trace.
+      // Callers should check `error.code === "LLM_NOT_CONFIGURED"` and skip extraction silently.
+      const err: any = new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Skipping LLM step.`);
+      err.code = "LLM_NOT_CONFIGURED";
+      throw err;
     }
 
     const model = this.modelOverride
@@ -51,7 +56,7 @@ class ModelLLMRunner implements LLMRunner {
     }
     messages.push({ role: "user", content: prompt });
 
-    const res = await fetchWithExternalRetry(endpoint, {
+    const doFetch = () => fetchWithExternalRetry(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -63,13 +68,51 @@ class ModelLLMRunner implements LLMRunner {
       label: `[BrainRouter:${taskId}] LLM API`,
     });
 
-    if (!res.ok) {
-      const errorBody = await res.text();
-      throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}): ${res.status} ${res.statusText} - ${errorBody}`);
-    }
+    // Acquire a slot from the global LLM semaphore BEFORE issuing the
+    // request. On consumer hardware (LM Studio with a single GPU) firing
+    // more than ~2 concurrent generations against the same backend causes
+    // the model to thrash or auto-unload — see llm-semaphore.ts for the
+    // full rationale. Cloud backends (OpenAI / OpenRouter) can lift the cap
+    // with BRAINROUTER_LLM_MAX_CONCURRENT=10 (or higher).
+    const release = await acquireLLMSlot();
+    try {
+      let res = await doFetch();
 
-    const data = await res.json() as any;
-    return data.choices[0].message.content;
+      // LM Studio quirk: if the model has been idle long enough to auto-unload,
+      // it returns 400 with `{"error":"Model is unloaded."}` on the first call
+      // and then loads the model in the background. The next call usually
+      // succeeds. Detect that exact error and retry ONCE after a brief pause
+      // so background workers (contradiction check, graph extraction, focus
+      // shift detection) don't all fail when the user has been quiet for a bit.
+      if (res.status === 400) {
+        const errorBody = await res.text();
+        if (/model\s+(is\s+)?unloaded|model\s+not\s+loaded|no\s+models?\s+loaded/i.test(errorBody)) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          res = await doFetch();
+          if (!res.ok) {
+            const retryBody = await res.text();
+            throw new Error(
+              `[BrainRouter:${taskId}] LLM model "${model}" was unloaded by the server; ` +
+              `retry also failed (${res.status} ${res.statusText}). ` +
+              `If you're using LM Studio, enable JIT model loading or pin the model as always-loaded. ` +
+              `Original error: ${errorBody}. Retry error: ${retryBody}`,
+            );
+          }
+        } else {
+          throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}): ${res.status} ${res.statusText} - ${errorBody}`);
+        }
+      } else if (!res.ok) {
+        const errorBody = await res.text();
+        throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}): ${res.status} ${res.statusText} - ${errorBody}`);
+      }
+
+      const data = await res.json() as any;
+      return data.choices[0].message.content;
+    } finally {
+      // Always release, success or failure, so the queue keeps moving even
+      // if an upstream throw bubbles. The semaphore's release is idempotent.
+      release();
+    }
   }
 }
 
@@ -80,6 +123,15 @@ export class MemoryEngine {
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
+  /**
+   * Reentrancy guard: setInterval doesn't wait for the previous callback to
+   * finish before firing the next tick. If a sweep takes longer than the
+   * configured interval (very common when LLM calls queue behind the
+   * concurrency semaphore), ticks pile up and each one tries to extract
+   * the SAME backlog rows. The guard ensures at most one sweep is in flight
+   * at any time; later ticks become no-ops while a previous one runs.
+   */
+  private sweepInProgress = false;
 
   private personaCache: Map<string, { personaMd: string; cachedAt: number }> = new Map();
   private readonly PERSONA_CACHE_TTL_MS = parseInt(
@@ -545,15 +597,46 @@ export class MemoryEngine {
       return;
     }
 
-    const intervalMs = parseInt(process.env.BRAINROUTER_EXTRACTION_SWEEP_INTERVAL_MS ?? String(5 * 60 * 1000), 10);
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;   // 5 minutes
+    // Floor at 30s — a user typo of `100` (intended seconds, actually ms)
+    // would otherwise fire the sweeper 10x/second, each tick hammering the
+    // LLM backend with extraction calls for the entire backlog. With a
+    // local LM Studio that's an instant model-unload + flood of 400s.
+    // 30s is a conservative floor that still feels responsive while keeping
+    // backend load sane on consumer hardware.
+    const MIN_INTERVAL_MS = 30 * 1000;
+
+    const raw = parseInt(process.env.BRAINROUTER_EXTRACTION_SWEEP_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS), 10);
+    if (!Number.isFinite(raw) || raw <= 0) {
       return;
+    }
+    let intervalMs = raw;
+    if (intervalMs < MIN_INTERVAL_MS) {
+      console.error(
+        `[BrainRouter] BRAINROUTER_EXTRACTION_SWEEP_INTERVAL_MS=${raw} is below the ${MIN_INTERVAL_MS}ms floor ` +
+        `(value is in MILLISECONDS, not seconds). Clamping to ${MIN_INTERVAL_MS}ms. ` +
+        `Use a value like 60000 (1 min) or 300000 (5 min) for local backends.`,
+      );
+      intervalMs = MIN_INTERVAL_MS;
     }
 
     this.sweeperTimer = setInterval(() => {
-      void this.sweepUnextractedBacklog().catch((err) => {
-        console.error("[BrainRouter] Extraction backlog sweeper failed:", err instanceof Error ? err.message : err);
-      });
+      if (this.sweepInProgress) {
+        // Previous tick still running (likely waiting on the LLM semaphore).
+        // Skip this tick instead of stacking a second invocation.
+        return;
+      }
+      this.sweepInProgress = true;
+      this.sweepUnextractedBacklog()
+        .catch((err) => {
+          console.error(
+            "[BrainRouter] Extraction backlog sweeper failed:",
+            err instanceof Error ? err.message : err,
+          );
+        })
+        .finally(() => {
+          this.sweepInProgress = false;
+        });
     }, intervalMs);
     this.sweeperTimer.unref?.();
   }
