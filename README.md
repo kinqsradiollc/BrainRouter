@@ -87,228 +87,78 @@ Outputs over ~6k chars are written to a **working-memory canvas** (`memory_worki
 
 ## 🖥️ Brainrouter CLI
 
-The repo ships a terminal agent at [`brainrouter/`](brainrouter/) — a memory-native coding agent built around the BrainRouter cognitive stack as a first-class tool.
-
-```bash
-cd brainrouter
-npm install && npm run build
-node dist/index.js                          # interactive REPL
-node dist/index.js run "summarize src/"     # one-shot non-interactive
-```
-
-**Slash commands (highlights):**
-
-| Category | Commands |
-| :--- | :--- |
-| Session | `/new`, `/fork`, `/rename`, `/resume`, `/sessions`, `/side`, `/btw`, `/clear`, `/compact`, `/quit` |
-| Style & UI | `/theme`, `/title`, `/personality`, `/raw`, `/statusline`, `/vim`, `/keymap` |
-| Memory | `/memory`, `/recall`, `/briefing`, `/scenes`, `/forget`, `/handover`, `/explain`, `/memories` |
-| Workflow | `/spec`, `/feature-dev`, `/review`, `/implement-plan`, `/workflows`, `/approve` |
-| Orchestration | `/spawn`, `/wait`, `/agents`, `/agent`, `/route_agent`, `/roles` |
-| Guardrails | `/permissions`, `/hooks`, `/hookify`, `/yolo`, `/ps`, `/stop` |
-| Ops | `/status`, `/doctor`, `/diagnostics`, `/debug-config`, `/tokens`, `/watch`, `/rollout`, `/feedback` |
-
-**Compaction (`/compact`)** asks the LLM for a structured summary (Goals / Decisions / Files touched / Open work / Last user request) and replaces the verbose chat history with a single tagged system block so long conversations don't blow the context window.
-
-**Hookify (`/hookify`)** loads markdown rules from `.brainrouter/hooks/*.md`. Example:
-
-```markdown
----
-name: block-rm-rf
-enabled: true
-event: bash
-pattern: rm\s+-rf
-action: block
----
-
-⚠️ Dangerous rm command blocked. Verify the path is correct.
-```
-
-**Memory consolidation (`/memories consolidate`)** runs Phase 2 over the MCP recall surface and writes per-type markdown files under `.brainrouter/memories/`. The same operation is exposed as the MCP tool `memory_consolidate` so any MCP-compatible client can produce the artifacts.
-
-See [`walkthrough.md`](walkthrough.md) for the latest implementation pass and [`task.md`](task.md) for the scope.
-
----
-
-## 🧰 MCP Tools (Inventory)
-
-The MCP server exposes the following tool families. All are usable from any MCP host (the BrainRouter CLI, Claude Desktop, Cursor, or any other MCP client) and from the HTTP `/api/chat-completions` endpoint.
-
-| Family | Tools |
-| :--- | :--- |
-| **Recall** | `memory_search`, `memory_recall`, `memory_graph_query`, `memory_resolve_session`, `memory_explain_recall` |
-| **Capture & Curate** | `memory_capture_turn`, `memory_consolidate`, `memory_mark_cited`, `memory_register_skill_hints` |
-| **Conflict** | `memory_contradictions` (detect / list / resolve) |
-| **Working Canvas** | `memory_working_*` (offload, fetch, clear) |
-| **Governance** | `memory_governance_*` (audit, import/export, prune) |
-| **Engineering** | `memory_engineering_*` (manual edits) |
-| **Hooks** | `memory_hooks_*` (automation rules) |
-| **Orchestration** | `spawn_agent`, `list_agents`, `wait_agent`, `read_agent_transcript`, `route_agent` |
-| **Skills & Personas** | `list_skills`, `get_skill`, `search_skills`, `create_skill`, `update_skill`, `get_persona`, `get_reference`, `list_template_docs`, `get_template_doc` |
-
----
-
-## 📁 Repository Structure
-
-```filepath
-BrainRouter/
-├── mcp/                      # Model Context Protocol Server
-│   ├── src/
-│   │   ├── memory/           # Core Memory Engine
-│   │   │   ├── store/        # SQLite database & vector/rerank adapters
-│   │   │   ├── pipeline/     # Extraction, scene, and graph pipelines
-│   │   │   ├── working/      # Session-level context stores
-│   │   │   ├── capture.ts    # Ingestion SensoryStream -> CognitiveRecord
-│   │   │   └── recall.ts     # Multi-stage hybrid search & blending
-│   │   ├── tools/
-│   │   │   ├── memory_*.ts         # search / recall / capture / mark_cited
-│   │   │   ├── memory_consolidate.ts # NEW — Phase 2 filesystem artifacts
-│   │   │   └── memory-*.ts          # engineering / governance / hooks / working
-│   │   └── index.ts          # MCP Server definition and registration
-│   ├── package.json
-│   └── tsconfig.json
-├── brainrouter/              # Terminal Agent CLI (memory-native coding agent)
-│   └── src/
-│       ├── index.ts               # CLI entry — argv parsing, env loading, top-level commands
-│       ├── agent.test.ts          # Test suite (89+ cases)
-│       │
-│       ├── agent/                 # Tool-calling loop + LLM client
-│       │   └── agent.ts           # Agent class, callOpenAI, captureTurn, retry
-│       │
-│       ├── cli/                   # Interactive surface
-│       │   ├── repl.ts            # 60+ slash commands, statusline, /help paginator
-│       │   └── cliPrompt.ts       # askYesNo, safePrintAbovePrompt
-│       │
-│       ├── config/                # Configuration + workspace detection
-│       │   ├── config.ts          # LLMConfig, ServerConfig, ~/.config/brainrouter
-│       │   └── workspace.ts       # findWorkspaceRoot (walks for AGENT.md or .git)
-│       │
-│       ├── memory/                # Memory layer (CLI side)
-│       │   ├── briefing.ts        # Per-turn buildMemoryBriefing
-│       │   ├── formatters.ts      # Render recalled records as cards
-│       │   ├── consolidation.ts   # Phase 2 filesystem snapshots
-│       │   └── mentions.ts        # @-mention expansion
-│       │
-│       ├── orchestration/         # Multi-agent
-│       │   ├── orchestrator.ts    # ChildSessionRecord CRUD
-│       │   ├── tools.ts           # spawn_agent / wait_agent / route_agent dispatch
-│       │   └── roles.ts           # explorer / architect / reviewer / worker / verifier
-│       │
-│       ├── prompt/                # Prompt construction + skill resolution
-│       │   ├── systemPrompt.ts    # Base system prompt builder
-│       │   ├── skillRunner.ts     # Skill name → prompt resolver
-│       │   ├── compactor.ts       # LLM-driven /compact summarizer
-│       │   ├── breadthHint.ts     # Fan-out signal detection
-│       │   └── initAgentMd.ts     # AGENT.md scaffolder
-│       │
-│       ├── runtime/               # Host-touching infrastructure
-│       │   ├── mcpClient.ts       # MCP wrapper (stdio + HTTP transports)
-│       │   ├── mcpUtils.ts        # callMcpTool, extractToolText, …
-│       │   ├── sandbox.ts         # sandbox-exec / bwrap / firejail wrapper
-│       │   ├── tracing.ts         # OTEL-style spans (BRAINROUTER_TRACE_LOG)
-│       │   ├── loopRunner.ts      # /loop background scheduler
-│       │   ├── llmSemaphore.ts    # Concurrent-LLM-call cap (CLI side)
-│       │   └── clipboard.ts       # Copy helper for /copy
-│       │
-│       └── state/                 # Per-session persistence
-│           ├── cliState.ts        # Workspace state dir layout, atomic JSON I/O
-│           ├── goalStore.ts       # Goal lifecycle (status + budget)
-│           ├── taskStore.ts       # Durable plan
-│           ├── sessionStore.ts    # transcript.jsonl + redaction
-│           ├── preferencesStore.ts# theme, statusline, etc.
-│           ├── hooksStore.ts      # Lifecycle hook config
-│           ├── hookifyStore.ts    # Markdown rule guards
-│           └── workflowArtifacts.ts # spec.md / tasks.md / walkthrough.md scaffolding
-│
-│   Personal CLI state lives in the user-global home (NOT inside the project):
-│   ~/.brainrouter/
-│   ├── memory.db                   # MCP cognitive store (long-term)
-│   └── workspaces/<name>-<hash8>/  # One bucket per workspace
-│       ├── cli/
-│       │   ├── preferences.json    # theme, statusline, vim mode, personality
-│       │   ├── hooks.json          # shell lifecycle hooks
-│       │   ├── sessions.json       # child-agent orchestration index
-│       │   ├── feedback.jsonl      # /feedback entries
-│       │   ├── current-workflow.json
-│       │   └── sessions/           # ─── ONE FOLDER PER CHAT SESSION ───
-│       │       └── <encodedKey>/
-│       │           ├── transcript.jsonl
-│       │           ├── goal.json
-│       │           └── tasks.json
-│       ├── hooks/                  # Hookify markdown rules (*.md)
-│       └── memories/               # Phase 2 filesystem consolidation
-│
-│   Override the home location with BRAINROUTER_HOME=/custom/path.
-│
-│   The ONLY files brainrouter writes inside the workspace are workflow
-│   artifacts — committable per-project documentation:
-│   <workspace>/.brainrouter/workflows/<slug>/
-│       ├── spec.md         # what + why + boundaries
-│       ├── tasks.md        # ordered breakdown
-│       ├── walkthrough.md  # post-implementation summary
-│       └── meta.json
-├── packages/                 # Monorepo Packages
-│   ├── types/                # Core Shared Types
-│   ├── sdk/                  # BrainRouter Client SDK
-│   └── hooks/                # React Hooks for Web Dashboard
-├── dashboard/                # Web UI dashboard
-├── skills/                   # Universal skill library (agent, codebase, lifecycle, …)
-├── openSrc/                  # Vendored reference material for research
-├── AGENT.md                  # Dev manual for AI coding agents working in this repo
-├── BRAINROUTER.md            # Deep Concepts & Math specifications
-├── PRESENTATION.md           # Slide Deck Overview
-├── task.md / walkthrough.md  # Latest implementation pass scope + handover notes
-└── README.md                 # Project Landing Page
-```
+The repo ships a terminal agent at [`brainrouter/`](brainrouter/) — a memory-native coding agent that uses the BrainRouter cognitive stack as a first-class tool. Type `/help` in the REPL for the full slash-command reference. See [BRAINROUTER.md](BRAINROUTER.md) for compaction, hookify rules, and memory consolidation details.
 
 ---
 
 ## 🛠️ Getting Started
 
-### 1. Installation
-Clone the repository and install dependencies in the root:
+### 1. Install
 
 ```bash
-# Clone & install root
 git clone https://github.com/kinqsradiollc/BrainRouter.git
-# Or navigate to local workspace
 cd BrainRouter
 npm install
 npm run build
 ```
 
-### 2. Configuration
-Create a `.env` file in the `mcp/` directory (see [`.env.example`](file:///Users/anhdang/Documents/Github/BrainRouter/mcp/.env.example) for reference):
+### 2. Configure
+
+Create `mcp/.env` (template lives at [`mcp/.env.example`](mcp/.env.example)):
 
 ```env
-# LLM Endpoint & Models
 BRAINROUTER_LLM_ENDPOINT="https://api.openai.com/v1/chat/completions"
 BRAINROUTER_LLM_API_KEY="your-api-key"
 BRAINROUTER_LLM_MODEL="gpt-4o-mini"
 
-# Embedding & Reranking (Optional but recommended)
+# Optional: embedding + reranker
 BRAINROUTER_EMBEDDING_MODEL="text-embedding-3-small"
 BRAINROUTER_RERANKER_ENDPOINT="https://api.cohere.com/v1/rerank"
 BRAINROUTER_RERANKER_API_KEY="your-cohere-key"
 
-# Database Configuration
+# Memory store path (relative is fine; defaults inside mcp/)
 BRAINROUTER_MEMORY_DB="./memory.db"
 ```
 
-### 3. Registering the MCP Server
-Add the server configuration to your MCP host clients (e.g. Cursor, Claude Desktop):
+### 3. Run the CLI
+
+The CLI auto-spawns the MCP server in stdio mode — no separate process needed.
+
+```bash
+npm run cli                          # interactive REPL (from repo root)
+# or
+node brainrouter/dist/index.js run "summarize src/"   # one-shot non-interactive
+```
+
+### 4. Run the Web Chat
+
+```bash
+# Terminal A — start the MCP HTTP server
+cd mcp
+npm run start:http                   # listens on http://localhost:3747
+
+# Terminal B — start the Next.js dashboard
+cd web
+npm run dev                          # http://localhost:3000
+```
+
+Open `http://localhost:3000/chat` in a browser to talk to the agent through the same memory stack the CLI uses.
+
+### 5. (Optional) Register the MCP with another host
+
+To connect the MCP to an external MCP host (e.g. Cursor), add it to the host's config:
 
 ```json
 {
   "mcpServers": {
     "brainrouter": {
       "command": "node",
-      "args": ["/Users/anhdang/Documents/Github/BrainRouter/mcp/dist/index.js"],
+      "args": ["/absolute/path/to/BrainRouter/mcp/dist/index.js"],
       "env": {
         "BRAINROUTER_LLM_ENDPOINT": "https://api.openai.com/v1/chat/completions",
         "BRAINROUTER_LLM_API_KEY": "your-openai-key",
         "BRAINROUTER_LLM_MODEL": "gpt-4o-mini",
-        "BRAINROUTER_MEMORY_DB": "/Users/anhdang/Documents/Github/BrainRouter/mcp/memory.db"
+        "BRAINROUTER_MEMORY_DB": "./memory.db"
       }
     }
   }
@@ -317,17 +167,15 @@ Add the server configuration to your MCP host clients (e.g. Cursor, Claude Deskt
 
 ---
 
-## 🧪 Documentation Suite
+## 📚 Documentation
 
-To dive deeper into the technical mechanics, mathematical routing functions, and visual presentations of BrainRouter:
-
-1.  **[BRAINROUTER.md (Concept Specs)](BRAINROUTER.md)**: Mathematical decay formulas, cognitive memory layer explanations, graph expansion mechanics, conflict resolution loops, and the CLI architecture (agent loop, compaction, hookify).
-2.  **[PRESENTATION.md (Slide Deck)](PRESENTATION.md)**: An executive slide-deck overview explaining the business problem, biological inspiration, architecture, the terminal CLI, and the developer roadmap.
-3.  **[AGENT.md (Agent System Guidelines)](AGENT.md)**: Guidelines for AI coding agents *building* this repo — skills mapping, workflow phases, openSrc reference habit.
-4.  **[ROADMAP.md (Future Milestones)](ROADMAP.md)**: Development phases, vector database expansions, and visual dashboard milestones.
-5.  **[walkthrough.md (Latest implementation pass)](walkthrough.md)**: Files touched, tests added, and follow-ups for the most recent implementation pass.
+- [BRAINROUTER.md](BRAINROUTER.md) — concept specs, decay formulas, recall pipeline, CLI architecture
+- [PRESENTATION.md](PRESENTATION.md) — slide-deck overview
+- [AGENT.md](AGENT.md) — guidelines for AI coding agents working in this repo
+- [ROADMAP.md](ROADMAP.md) — milestones and future direction
 
 ---
 
 ## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](file:///Users/anhdang/Documents/Github/BrainRouter/LICENSE) file for details.
+
+MIT — see [LICENSE](LICENSE).

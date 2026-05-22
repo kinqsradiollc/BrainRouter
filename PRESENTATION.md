@@ -165,7 +165,7 @@ graph TD
 
 ## 🖥️ The BrainRouter Terminal CLI
 
-### Memory-Native Coding Agent at Parity with Codex CLI & Claude Code
+### Memory-Native Coding Agent
 
 ```mermaid
 graph LR
@@ -231,7 +231,7 @@ graph LR
 *   System renaming to biological terms (`SensoryStream`, `CognitiveRecord`, `ContextualFocus`, `CoreIdentity`).
 *   Next.js dashboard web application integration.
 
-### Phase 4: Terminal CLI & Codex/Claude Code Parity (Completed)
+### Phase 4: Terminal CLI (Completed)
 *   `brainrouter` REPL with 60+ slash commands (`/theme`, `/personality`, `/new`, `/side`, `/raw`, `/feedback`, `/rollout`, `/ps`, `/stop`, `/logout`, `/apps`, `/plugins`, `/experimental`, `/memories`, `/debug-config`, `/mention`, `/keymap`, `/ide`, `/hookify`, …).
 *   LLM-driven `/compact` summarization with structured headings.
 *   Hookify markdown rules under `.brainrouter/hooks/` (regex + multi-condition matchers, warn/block actions).

@@ -1,8 +1,28 @@
 import { z } from 'zod';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getSafeWorkspacePath } from '../resolver.js';
+
+/**
+ * Per-workspace MCP cache directory under the user home, NOT inside the
+ * project tree. Mirrors the brainrouter CLI's convention so the workspace
+ * tree stays clean of MCP-side state.
+ *
+ *   ~/.brainrouter/mcp-cache/<workspace-hash>/
+ *
+ * The hash is sha256(absoluteWorkspacePath).slice(0, 12) so two different
+ * workspaces never collide. We don't reuse the CLI's `<basename>-<hash8>`
+ * encoding because the MCP and CLI are separate processes — keeping them
+ * encoded independently avoids cross-package coupling.
+ */
+function getMcpCacheDir(workspacePath: string): string {
+  const hash = createHash('sha256').update(workspacePath).digest('hex').slice(0, 12);
+  const dir = path.join(os.homedir(), '.brainrouter', 'mcp-cache', hash);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 export const memoryResolveSessionToolSchema = {
   name: 'memory_resolve_session',
@@ -52,16 +72,18 @@ export async function handleMemoryResolveSession(args: unknown) {
     };
   }
 
-  // 2. Ensure .brainrouter directory exists in the workspace
-  const brainrouterDir = path.join(safeWorkspacePath, '.brainrouter');
-  const cacheFilePath = path.join(brainrouterDir, 'active_session.json');
-
+  // 2. Cache lives in the user-global MCP cache dir, NOT inside the
+  // workspace. Writing `<workspace>/.brainrouter/` polluted every project
+  // tree, then bounced back through the CLI's legacy-state migration on
+  // each restart — a loop the user could see as recurring
+  // `.brainrouter/` + `.brainrouter.migrated/` folders.
+  let cacheFilePath: string;
   try {
-    if (!fs.existsSync(brainrouterDir)) {
-      fs.mkdirSync(brainrouterDir, { recursive: true });
-    }
+    const cacheDir = getMcpCacheDir(safeWorkspacePath);
+    cacheFilePath = path.join(cacheDir, 'active_session.json');
   } catch (err: any) {
-    // If workspace is read-only, fallback to temp directory or generate a transient UUID
+    // If the user home itself is unwritable (rare), fall back to a transient
+    // UUID rather than touching the workspace tree.
     const fallbackUuid = randomUUID();
     return {
       content: [
