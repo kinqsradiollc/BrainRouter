@@ -9,10 +9,9 @@ export function isPathInside(parent: string, candidate: string): boolean {
 }
 
 /**
- * User-global brainrouter home. Defaults to `~/.brainrouter` (matching how
- * codex uses `~/.codex` and claude-code uses `~/.claude`). Override with the
- * `BRAINROUTER_HOME` env var — tests set this to keep their state out of the
- * real user home.
+ * User-global brainrouter home. Defaults to `~/.brainrouter`. Override with
+ * the `BRAINROUTER_HOME` env var — tests set this to keep their state out of
+ * the real user home.
  */
 export function getBrainrouterHome(): string {
   const override = process.env.BRAINROUTER_HOME?.trim();
@@ -122,6 +121,19 @@ function migrateLegacyWorkspaceState(workspaceRoot: string, newRoot: string): vo
     }
     if (archivedAny) {
       process.stderr.write(`brainrouter: archived legacy in-workspace state to ${archiveRoot} (safe to delete after verifying)\n`);
+    }
+    // If the workspace-local `.brainrouter/` is now completely empty (no
+    // `workflows/` to preserve), remove the empty shell so the user
+    // doesn't see a stray folder reappear every session. We only delete
+    // it when empty — never when it still has committable workflow
+    // artifacts inside.
+    try {
+      const remaining = fs.readdirSync(legacyRoot);
+      if (remaining.length === 0) {
+        fs.rmdirSync(legacyRoot);
+      }
+    } catch {
+      // best-effort cleanup
     }
   } catch (err: any) {
     // Migration is best-effort. If it fails (permissions etc.), the CLI still

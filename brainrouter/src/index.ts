@@ -180,8 +180,7 @@ program
     // handleSlashCommand, but `run` skips straight to agent.runTurn — so a
     // user piping `/help` or `/sessions` was silently routed to the LLM and
     // got back a confused chat response instead of a real CLI error.
-    // Matches Claude Code 2.1.147 "Fixed unknown slash commands silently
-    // doing nothing in headless/SDK mode — they now show an error message."
+    // Headless mode now exits with a real error instead of consuming a turn.
     if (prompt.startsWith('/')) {
       const cmdName = prompt.split(/\s+/)[0];
       console.error(
@@ -473,9 +472,9 @@ program
   });
 
 // `brainrouter agents` — list live + recent child sessions without entering the REPL.
-// Mirrors `claude agents --json` (Claude Code 2.1.147) so scripting integrations
-// (tmux-resurrect, status bars, agent pickers) can pull the list without an
-// interactive session. `--json` for machine-readable; default is human-readable.
+// Lets scripting integrations (tmux-resurrect, status bars, agent pickers) pull
+// the list without an interactive session. `--json` for machine-readable;
+// default is human-readable.
 program
   .command('agents')
   .description('List child agent sessions (workspace-scoped)')

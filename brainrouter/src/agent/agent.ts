@@ -111,7 +111,6 @@ export interface AgentOptions {
    * spans nest under the parent's `brainrouter.turn` span. Without this each
    * child started a fresh trace tree and fan-out runs flattened in trace
    * viewers — you couldn't see "this child belongs to that parent turn".
-   * Matches Claude Code 2.1.147's agent_id / parent_agent_id attributes.
    */
   parentTraceId?: string;
   parentSpanId?: string;
@@ -225,7 +224,7 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'apply_patch',
-    description: 'Apply a multi-file patch in the codex-cli envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). Lets you make several coordinated edits across files in one tool call.',
+    description: 'Apply a multi-file patch using the Begin/End envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). Lets you make several coordinated edits across files in one tool call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -440,7 +439,7 @@ export class Agent {
   /**
    * Synthetic agent id used in OTEL attributes so child spans can be grouped
    * even without trace links. Equals `agent-<6 random hex>` per Agent
-   * instance. Matches Claude Code's `agent_id` / `parent_agent_id` attrs.
+   * instance. Surfaced as the `agent_id` / `parent_agent_id` span attrs.
    */
   public readonly agentId: string = `agent-${Math.random().toString(36).slice(2, 8)}`;
   /** agent_id of the parent (set by spawn_agent for children). */
@@ -1131,8 +1130,8 @@ export class Agent {
   }
 
   /**
-   * Compaction (codex parity for /compact): summarize current chat history via
-   * the LLM, then replace the verbose log with [system, compactedSummary,
+   * Compaction for /compact: summarize current chat history via the LLM,
+   * then replace the verbose log with [system, compactedSummary,
    * lastUserMessage]. Returns the summary so the REPL can display it.
    */
   public async compactHistory(): Promise<{ summary: string; estimatedTokens: number; durationMs: number; replacedMessages: number } | null> {
@@ -1470,10 +1469,10 @@ export class Agent {
 /**
  * Run a web search via DuckDuckGo's Instant Answer API. No API key required.
  *
- * This is a thin, dependency-free fallback for codex/claude-code parity. For
- * production-grade results, users can configure an upstream search provider
- * (Brave / Tavily / SerpAPI) and point `BRAINROUTER_WEB_SEARCH_ENDPOINT` at it
- * — when set, we POST the query and expect `{ results: [{title, url, snippet}] }`.
+ * This is a thin, dependency-free default. For production-grade results, users
+ * can configure an upstream search provider (Brave / Tavily / SerpAPI) and
+ * point `BRAINROUTER_WEB_SEARCH_ENDPOINT` at it — when set, we POST the query
+ * and expect `{ results: [{title, url, snippet}] }`.
  */
 async function runWebSearch(query: string, maxResults: number): Promise<string> {
   const customEndpoint = process.env.BRAINROUTER_WEB_SEARCH_ENDPOINT?.trim();
@@ -1530,7 +1529,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
 }
 
 /**
- * Apply a codex-cli-style patch envelope:
+ * Apply a Begin/End-envelope patch:
  *
  *   *** Begin Patch
  *   *** Update File: path/relative/to/workspace

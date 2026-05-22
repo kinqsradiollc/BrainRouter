@@ -3,7 +3,8 @@ import path from 'node:path';
 import { getWorkspaceStateRoot } from './cliState.js';
 
 /**
- * Hookify-style markdown hooks, inspired by claude-code's hookify plugin.
+ * Hookify-style markdown hooks — no-code behavior guards expressed as YAML
+ * frontmatter on a `.md` file.
  *
  * Hooks live as `.md` files under
  *   ~/.brainrouter/workspaces/<encoded>/hooks/

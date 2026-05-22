@@ -36,9 +36,9 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     {
       reconcileStale(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
-      // `--json` for scripting (Claude Code 2.1.147 parity). Emits a single
-      // JSON line on stdout so tmux-resurrect, status bars, agent pickers,
-      // and pipelines can parse the live session list reliably.
+      // `--json` for scripting. Emits a single JSON line on stdout so
+      // tmux-resurrect, status bars, agent pickers, and pipelines can
+      // parse the live session list reliably.
       if (args.includes('--json')) {
         const payload = sessions.map((s) => ({
           id: s.id,

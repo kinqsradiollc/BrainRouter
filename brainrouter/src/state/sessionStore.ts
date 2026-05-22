@@ -33,10 +33,10 @@ export function appendTranscriptEntry(workspaceRoot: string, sessionKey: string,
   });
 
   // Dedup consecutive identical user prompts (e.g. arrow-up + Enter to repeat
-  // the same prompt). Matches Claude Code 2.1.147 behavior so transcripts /
-  // /transcript / /resume don't accumulate identical replay-spam entries.
-  // Only applied to role='user' entries — assistant + tool replies legitimately
-  // differ between turns even when the prompt is the same.
+  // the same prompt) so /transcript and /resume don't accumulate identical
+  // replay-spam entries. Only applied to role='user' entries — assistant +
+  // tool replies legitimately differ between turns even when the prompt is
+  // the same.
   if (payload.role === 'user' && isConsecutiveDuplicate(filePath, payload)) {
     return;
   }

@@ -14,11 +14,8 @@ import { expandMentions } from '../memory/mentions.js';
 import { addGoalTokens, buildBudgetSteeringMessage, goalHasBudgetLeft, goalIsOnFinalBudgetTurn, readGoal, tickGoalIteration, usageLimitGoal } from '../state/goalStore.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
-import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
 import type { WorkspaceInfo } from '../config/workspace.js';
 import { listSessions } from '../orchestration/orchestrator.js';
-import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
-import { callMcpTool } from '../runtime/mcpUtils.js';
 import { setActiveReadline } from './cliPrompt.js';
 // Category dispatch — extracted slash-command handlers. Each module exports
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
@@ -136,8 +133,8 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           else if (seg === 'dirty' && dirty) out.push('*');
         } catch { /* not a git repo */ }
       } else if (seg === 'pr') {
-        // Detect open GitHub PR for the current branch (Claude Code 2.1.147
-        // parity). 30s cache so the prompt refresh is cheap.
+        // Detect open GitHub PR for the current branch — 30s cache so the
+        // prompt refresh is cheap (re-shells out only on a stale window).
         const pr = detectGitHubPR(agent.workspaceRoot);
         if (pr) out.push(pr);
       }
@@ -175,8 +172,8 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   // Dynamic terminal tab title. Refreshed at startup AND whenever the agent
   // count / awaiting state changes (after each turn, post-spawn). Prefixes
   // a "(N) " count when there's work requiring attention — pending
-  // continuation OR a running child. Matches Claude Code 2.1.147's tab
-  // title hint for `claude agents`.
+  // continuation OR a running child — so background tabs surface attention
+  // without focus.
   const refreshTerminalTitle = () => {
     try {
       const prefs = readPreferences(agent.workspaceRoot);
@@ -219,7 +216,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     // pass can swap in a custom keypress handler for full Vim semantics.
   }
 
-  // Shift+Tab cycles the access mode (codex calls this "Plan mode").
+  // Shift+Tab cycles the access mode.
   // Order: read → write → shell → read …
   if (process.stdin.isTTY) {
     try { (process.stdin as any).setRawMode?.(false); } catch { /* noop */ }
@@ -236,12 +233,11 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     }
   });
 
-  // Publish the rl interface globally so out-of-scope helpers
-  // (runOrchestrationPrompt, askYesNo in agent.ts) can talk to the same
-  // stdin/stdout pair the REPL owns. Cleared on close.
-  activeReadline = rl;
+  // Publish the rl interface to cliPrompt.ts so out-of-scope helpers
+  // (askYesNo, safePrintAbovePrompt) can talk to the same stdin/stdout
+  // pair the REPL owns. Cleared on close.
   setActiveReadline(rl);
-  rl.on('close', () => { activeReadline = undefined; setActiveReadline(undefined); });
+  rl.on('close', () => { setActiveReadline(undefined); });
 
   rl.prompt();
 
@@ -249,9 +245,13 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   // (pendingContinuation declared earlier alongside the title refresh helpers.)
 
   /**
-   * Build the prompt that fires automatically between goal-driven turns. Codex
-   * pattern: orient the model around the active objective, force an evidence
-   * audit, refuse prose-only "I will continue" answers.
+   * Prompt the agent receives for iterations 2..N of an active goal —
+   * fired automatically by the post-turn loop after each completed turn.
+   * Orients the model around the active objective, forces an evidence
+   * audit, and refuses prose-only "I will continue" answers.
+   *
+   * Distinct from `buildGoalKickoffPrompt` (in `commands/_helpers.ts`),
+   * which is the FIRST-turn prompt fired by `/goal <text>` and `/goal resume`.
    */
   const buildGoalContinuationPrompt = (
     goal: import('../state/goalStore.js').Goal,
@@ -329,9 +329,9 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
         onToolStart: (name, args) => {
-          // Render spawn_agent / spawn_agents specially — Claude-Code style
-          // one-liner ("Ran agent <role> — <one-line task>") so a fan-out of
-          // 5 children produces 5 clean lines instead of 5 JSON dumps. The
+          // Render spawn_agent / spawn_agents specially — a one-liner
+          // ("Ran agent <role> — <one-line task>") so a fan-out of 5
+          // children produces 5 clean lines instead of 5 JSON dumps. The
           // raw JSON is still in the transcript for debugging.
           let line: string;
           if (name === 'spawn_agent') {
@@ -580,7 +580,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       // Split on any whitespace, not a literal space. Without this, a slash
       // command followed by a tab (autocomplete completion that wasn't
       // consumed) or a trailing newline ends up as command="/help\t" which
-      // fell through to "Unknown slash command". Matches Claude Code 2.1.147.
+      // would fall through to "Unknown slash command".
       const parts = input.trim().split(/\s+/);
       const command = parts[0].toLowerCase();
       const args = parts.slice(1);
@@ -645,10 +645,10 @@ interface ReplContext {
 }
 
 /**
- * Help categories. Data-driven so /help can render the index on small
- * terminals and a focused page on `/help <category>`. Matches Claude Code
- * 2.1.147's paginated help — the prior implementation was 95 lines of
- * console.log calls that blew past the scrollback on anything under ~50 rows.
+ * Help categories. Data-driven so /help can render an index on small
+ * terminals and a focused page on `/help <category>`. The prior
+ * implementation was 95 lines of console.log calls that blew past the
+ * scrollback on anything under ~50 rows.
  */
 interface HelpEntry { cmd: string; desc: string; }
 interface HelpCategory { key: string; title: string; entries: HelpEntry[]; }
@@ -855,99 +855,6 @@ async function handleSlashCommand(
   console.log(chalk.red(`\nUnknown slash command: ${command}. Type /help for assistance.\n`));
 }
 
-async function runSkillCommand(
-  agent: Agent,
-  mcpClient: McpClientWrapper,
-  slashCommand: string,
-  userInput: string,
-  orchestration: string | undefined,
-  runTurn: (prompt: string) => void,
-): Promise<void> {
-  const skillName = SLASH_TO_SKILL[slashCommand];
-  if (!skillName) {
-    console.log(chalk.red(`\nNo skill mapped to ${slashCommand}.\n`));
-    return;
-  }
-  await runSkillByName(agent, mcpClient, skillName, userInput, orchestration, runTurn);
-}
-
-async function runSkillByName(
-  agent: Agent,
-  mcpClient: McpClientWrapper,
-  skillName: string,
-  userInput: string,
-  orchestration: string | undefined,
-  runTurn: (prompt: string) => void,
-): Promise<void> {
-  const loader = ora(chalk.gray(`Loading skill: ${skillName}...`)).start();
-  let prompt: string;
-  try {
-    const skill = await resolveSkill(mcpClient, skillName, agent.workspaceRoot, 'full');
-    if (skill.source === 'fallback') {
-      // resolveSkill returns a placeholder body for unknown names; running it
-      // burns an LLM call on nothing. Refuse early and tell the user what's
-      // actually installed.
-      loader.fail(chalk.red(`Unknown skill "${skillName}".`));
-      console.log(chalk.gray('  Run `/skills` to list installed skills, or call `search_skills` for fuzzy matches.\n'));
-      return;
-    }
-    loader.succeed(chalk.green(`Skill loaded: ${skillName} (${skill.source})`));
-    prompt = buildSkillPrompt(skill, { input: userInput, orchestration });
-  } catch (err: any) {
-    loader.fail(chalk.red(`Failed to resolve skill "${skillName}": ${err.message}`));
-    return;
-  }
-  // Mark the skill active so memory_recall / memory_capture_turn see it.
-  // The activeSkill stays latched while the turn runs; runAgentTurn's
-  // continuation loop will clear it via the post-turn hook below.
-  agent.activeSkill = skillName;
-  runTurn(prompt);
-}
-
-/**
- * Module-level "active readline" pointer so functions that don't carry an rl
- * argument (runOrchestrationPrompt, runSkillByName, …) can still redraw the
- * prompt cleanly after the parent's runTurn finishes and stray child events
- * arrive. Set by startREPL — there's only ever one REPL per process.
- */
-let activeReadline: readline.Interface | undefined;
-
-/**
- * Prompt the agent receives for the FIRST turn after /goal <text> or
- * /goal resume. Once this turn finishes, runAgentTurn's continuation loop
- * keeps firing iterations 2..N until the agent calls goal_complete or
- * goal_blocked, the budget runs out, or the user interrupts.
- */
-function buildGoalKickoffPrompt(goal: import('../state/goalStore.js').Goal, mode: 'start' | 'resume'): string {
-  const header = mode === 'start' ? '[GOAL KICKOFF — iteration 1]' : '[GOAL RESUME]';
-  return [
-    header,
-    '',
-    `Your active goal is: ${goal.text}`,
-    `Iteration budget: ${goal.budget.iterationsUsed}/${goal.budget.maxIterations} used.`,
-    '',
-    '## What to do right now',
-    mode === 'start'
-      ? '1. **Open with memory.** Run `memory_search` / `memory_recall` for prior work in this workspace. Cite the recordIds you find.'
-      : '1. **Reload context.** Check what was already done by reading the last few transcript entries, the current plan, and any open child agents (`list_agents`).',
-    '2. **Plan briefly.** If the work has 3+ vertical slices, call `update_plan` with statuses (pending / in_progress / completed; ≤ 1 in_progress).',
-    '3. **Take the first concrete tool action** toward the outcome. Read a file, write code, spawn an explorer child, run a verifier — whatever produces evidence the goal is satisfied.',
-    '4. The CLI will auto-continue you with another turn after this one finishes. Iterate until you can call `goal_complete(proof)` with concrete evidence (test pass / file written / benchmark hit) or `goal_blocked(reason)` if no path remains.',
-    '',
-    'Do NOT respond with prose-only "I will get started" — the CLI suppresses the next auto-continuation after a turn with zero tool calls. Begin executing tools now.',
-  ].join('\n');
-}
-
-function safePrintAbovePromptGlobal(msg: string): void {
-  if (!process.stdout.isTTY || !activeReadline) {
-    console.log(msg);
-    return;
-  }
-  process.stdout.write('\r\x1b[2K');
-  console.log(msg);
-  try { (activeReadline as any)._refreshLine?.(); } catch { activeReadline.prompt(true); }
-}
-
 // runOrchestrationPrompt was the second-class turn pipeline used by /spawn,
 // /wait, /kill, /commit, /approve, /spec, /feature-dev, /review,
 // /implement-plan, /skill. It lacked goal continuation, the isProcessing
@@ -985,67 +892,4 @@ export function completeWorkspacePath(workspaceRoot: string, partial: string): s
     .filter((e) => !ignore.has(e.name) && e.name.startsWith(prefix))
     .map((e) => `${subdir}${e.name}${e.isDirectory() ? '/' : ''}`)
     .sort();
-}
-
-/**
- * Memory-aware variant of printMcpCall. Calls the tool, extracts the flat
- * record list from whatever shape it returns, and renders compact cards
- * (recordId, type, scene, content preview). Falls back to printMcpCall's
- * raw output only when no records can be parsed.
- */
-async function printMemoryCards(
-  mcpClient: McpClientWrapper,
-  toolName: string,
-  args: Record<string, unknown>,
-  heading: string,
-): Promise<void> {
-  const spinner = ora(chalk.gray(`${toolName}…`)).start();
-  const res = await callMcpTool<any>(mcpClient, toolName, args);
-  spinner.stop();
-  console.log();
-  if (res.isError) {
-    console.log(chalk.red(`${heading}: tool error — ${res.text || '(no message)'}`));
-    return;
-  }
-  const cards = extractMemories(res.parsed);
-  if (cards.length > 0) {
-    console.log(renderMemoryCards(cards, heading));
-  } else {
-    console.log(chalk.bold(heading));
-    const preview = clampPayload(res.text, 2000).trim();
-    console.log(preview ? chalk.gray(preview) : chalk.yellow('  (empty result)'));
-    console.log();
-  }
-}
-
-async function printMcpCall(
-  mcpClient: McpClientWrapper,
-  toolName: string,
-  args: Record<string, unknown>,
-  heading: string,
-): Promise<void> {
-  const spinner = ora(chalk.gray(`${toolName}…`)).start();
-  const res = await callMcpTool(mcpClient, toolName, args);
-  spinner.stop();
-  console.log(chalk.bold(`\n${heading}`));
-  if (res.isError) {
-    console.log(chalk.red(`  Tool error: ${res.text || '(no message)'}`));
-    console.log();
-    return;
-  }
-  if (!res.text.trim()) {
-    console.log(chalk.yellow('  (empty result)'));
-    console.log();
-    return;
-  }
-  const preview = res.text.length > 4000
-    ? res.text.slice(0, 4000) + chalk.gray(`\n…(${res.text.length - 4000} chars truncated)`)
-    : res.text;
-  console.log(chalk.gray(preview));
-  console.log();
-}
-
-function formatTranscriptContent(value: unknown): string {
-  const raw = typeof value === 'string' ? value : JSON.stringify(value);
-  return raw.replace(/\s+/g, ' ').trim().slice(0, 240);
 }

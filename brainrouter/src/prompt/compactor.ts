@@ -1,12 +1,12 @@
 import type { LLMConfig } from '../config/config.js';
 
 /**
- * Conversation compaction, modeled after codex-rs/core/src/compact.rs.
+ * Conversation compaction for long sessions.
  *
  * The REPL's old `/compact` just nuked chat history. That works in a pinch but
- * loses every decision the agent made. This module does what codex does: ask
- * the model to write a structured summary of the conversation so far, then
- * replace the verbose history with a single condensed system message.
+ * loses every decision the agent made. This module asks the model to write a
+ * structured summary of the conversation so far, then replaces the verbose
+ * history with a single condensed system message.
  *
  * The summary lives in a stable shape so the post-compact turn can reason
  * about it without missing critical state:

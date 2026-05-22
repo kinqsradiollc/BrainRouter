@@ -102,8 +102,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       // read the whole diff into memory, then colored every line in a JS
       // loop before any output appeared — for a 5k-line diff that took
       // seconds and you saw nothing until completion. Now: spawn `git diff
-      // --color=always` and pipe stdout directly. Claude Code 2.1.147
-      // improved diff rendering performance the same way.
+      // --color=always` and pipe stdout directly so output appears as it
+      // streams.
       const stagedFlag = args.includes('--staged') || args.includes('--cached');
       const allFlag = args.includes('--all') || args.includes('HEAD');
       const gitArgs = ['diff', '--color=always'];

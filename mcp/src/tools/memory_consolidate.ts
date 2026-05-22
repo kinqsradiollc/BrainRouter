@@ -4,15 +4,14 @@ import path from 'node:path';
 import { memoryEngine } from '../memory/engine.js';
 
 /**
- * MCP-side memory consolidation. Mirrors codex Phase 2 — collapses recall
- * records into per-type markdown files under `<workspace>/.brainrouter/memories/`
- * so the user has a human-readable view of what the cognitive memory engine
- * has learned across sessions.
+ * MCP-side memory consolidation. Collapses recall records into per-type
+ * markdown files under `<workspace>/.brainrouter/memories/` so the user
+ * has a human-readable view of what the cognitive memory engine has
+ * learned across sessions.
  *
  * The MCP server already exposes recall + capture. This tool exposes the
- * filesystem consolidation step so any client (brainrouter CLI, codex CLI,
- * claude-code CLI) can write the same artifacts without re-implementing the
- * bucketing logic.
+ * filesystem consolidation step so any MCP-speaking client can write the
+ * same artifacts without re-implementing the bucketing logic.
  */
 
 export const memoryConsolidateToolSchema = {

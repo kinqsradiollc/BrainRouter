@@ -15,8 +15,9 @@ describe("short-term working memory tools", () => {
     const userId = "user-1";
     const sessionKey = "session-100";
 
+    let workDir = "";
     for (let index = 0; index < 100; index += 1) {
-      await handleMemoryWorkingTool("memory_working_offload", {
+      const offload = parseToolJson(await handleMemoryWorkingTool("memory_working_offload", {
         workspacePath,
         userId,
         sessionKey,
@@ -24,10 +25,15 @@ describe("short-term working memory tools", () => {
         title: `Tool call ${index}`,
         summary: `Summary ${index}`,
         kind: "tool_output",
-      });
+      }));
+      workDir = offload.state.workDir;
     }
 
-    const workDir = join(workspacePath, ".brainrouter", "work", userId, sessionKey);
+    // Working memory now lives under the user home — never inside the
+    // workspace tree. The workDir is partitioned by user + workspace-hash
+    // + sessionKey.
+    expect(workDir.startsWith(join(homedir(), ".brainrouter", "work", userId))).toBe(true);
+    expect(workDir.endsWith(sessionKey)).toBe(true);
     expect(existsSync(join(workDir, "steps.jsonl"))).toBe(true);
     expect(existsSync(join(workDir, "canvas.mmd"))).toBe(true);
     expect(existsSync(join(workDir, "refs"))).toBe(true);
@@ -143,8 +149,13 @@ describe("short-term working memory tools", () => {
       sessionKey,
     }));
 
-    expect(userAContext.workDir).toContain(join(".brainrouter", "work", "user-a", sessionKey));
-    expect(userBContext.workDir).toContain(join(".brainrouter", "work", "user-b", sessionKey));
+    // workDir layout is `~/.brainrouter/work/<userId>/<workspaceHash>/<sessionKey>`.
+    // We anchor on the user partition + session terminator; the workspace
+    // hash slot in between is a sha256 of the resolved workspace path.
+    expect(userAContext.workDir.startsWith(join(homedir(), ".brainrouter", "work", "user-a"))).toBe(true);
+    expect(userAContext.workDir.endsWith(sessionKey)).toBe(true);
+    expect(userBContext.workDir.startsWith(join(homedir(), ".brainrouter", "work", "user-b"))).toBe(true);
+    expect(userBContext.workDir.endsWith(sessionKey)).toBe(true);
     expect(userAContext.canvas).toContain("User A");
     expect(userAContext.canvas).not.toContain("User B");
     expect(userBContext.canvas).toContain("User B");
@@ -171,9 +182,11 @@ describe("short-term working memory tools", () => {
       sessionKey,
     }));
 
-    expect(adminContext.workDir).toContain(join(".brainrouter", "work", "admin", sessionKey));
+    expect(adminContext.workDir.startsWith(join(homedir(), ".brainrouter", "work", "admin"))).toBe(true);
+    expect(adminContext.workDir.endsWith(sessionKey)).toBe(true);
     expect(adminContext.canvas).toContain("Authenticated user");
-    expect(fallbackContext.workDir).toContain(join(".brainrouter", "work", "default", sessionKey));
+    expect(fallbackContext.workDir.startsWith(join(homedir(), ".brainrouter", "work", "default"))).toBe(true);
+    expect(fallbackContext.workDir.endsWith(sessionKey)).toBe(true);
     expect(fallbackContext.canvas).not.toContain("Authenticated user");
   });
 

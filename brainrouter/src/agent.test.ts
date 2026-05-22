@@ -1113,7 +1113,7 @@ test('findWorkspaceRoot promotes BrainRouter package cwd to parent monorepo', ()
   });
 });
 
-test('preferencesStore: defaults include codex-parity fields', () => {
+test('preferencesStore: defaults include theme + personality + statusline fields', () => {
   withTempWorkspace((workspace) => {
     const prefs = readPreferences(workspace);
     assert.equal(prefs.theme, 'auto');

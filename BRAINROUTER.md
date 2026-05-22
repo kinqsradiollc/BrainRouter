@@ -196,7 +196,7 @@ System 2 analyzes and filters the System 1 candidates:
 
 ## 🖥️ The Brainrouter Terminal CLI
 
-While BrainRouter began as a pure MCP server, the repo now ships a first-party terminal agent at [`brainrouter/`](brainrouter/) that competes feature-for-feature with Codex CLI and Claude Code. The CLI treats the BrainRouter MCP as a **primary tool**, not an afterthought, so cognitive memory shapes every turn instead of being a sidecar.
+While BrainRouter began as a pure MCP server, the repo now ships a first-party terminal agent at [`brainrouter/`](brainrouter/). The CLI treats the BrainRouter MCP as a **primary tool**, not an afterthought, so cognitive memory shapes every turn instead of being a sidecar.
 
 ### 1. Agent Loop & Access Modes
 
@@ -242,13 +242,13 @@ When a session's chat history grows past the model's effective context window, n
 - (verbatim)
 ```
 
-The verbose history is then replaced with `[system, compactedSummary, lastUserMessage]`, tagged so the next turn knows to treat the summary as authoritative state. This mirrors the strategy in `codex-rs/core/src/compact.rs`, but the implementation in [`brainrouter/src/compactor.ts`](brainrouter/src/compactor.ts) is provider-agnostic and works against any OpenAI-compatible endpoint.
+The verbose history is then replaced with `[system, compactedSummary, lastUserMessage]`, tagged so the next turn knows to treat the summary as authoritative state. The implementation in [`brainrouter/src/prompt/compactor.ts`](brainrouter/src/prompt/compactor.ts) is provider-agnostic and works against any OpenAI-compatible endpoint.
 
 ---
 
 ### 3. Hookify — Markdown-Rule Behavior Guards
 
-Inspired by claude-code's `hookify` plugin, BrainRouter CLI ships a markdown-rule system at [`brainrouter/src/hookifyStore.ts`](brainrouter/src/hookifyStore.ts). Users drop a file into `.brainrouter/hooks/` with YAML frontmatter and a markdown body:
+BrainRouter CLI ships a markdown-rule guardrail system at [`brainrouter/src/state/hookifyStore.ts`](brainrouter/src/state/hookifyStore.ts). Users drop a file into `~/.brainrouter/workspaces/<encoded>/hooks/` with YAML frontmatter and a markdown body:
 
 ```markdown
 ---
@@ -279,7 +279,7 @@ Each rule can use a single `pattern:` regex shortcut or a list of `conditions:` 
 
 ### 4. Phase-2 Filesystem Memory Consolidation
 
-The MCP cognitive store is the source of truth, but users want a **human-readable** view of what the agent has learned across sessions. The CLI ports codex's Phase-2 design from `codex-rs/memories` directly into [`brainrouter/src/memoryConsolidation.ts`](brainrouter/src/memoryConsolidation.ts) and the new MCP tool [`mcp/src/tools/memory_consolidate.ts`](mcp/src/tools/memory_consolidate.ts):
+The MCP cognitive store is the source of truth, but users want a **human-readable** view of what the agent has learned across sessions. The CLI writes per-type markdown artifacts via [`brainrouter/src/memory/consolidation.ts`](brainrouter/src/memory/consolidation.ts) and the MCP tool [`mcp/src/tools/memory_consolidate.ts`](mcp/src/tools/memory_consolidate.ts):
 
 ```
 <workspace>/.brainrouter/memories/
@@ -292,7 +292,7 @@ The MCP cognitive store is the source of truth, but users want a **human-readabl
 └── rollout_summaries/     # one .md per session summary
 ```
 
-The classification taxonomy mirrors the auto-memory schema (user / feedback / project / reference). Records that don't classify land in `raw_memories.md` so nothing is lost. Trigger consolidation manually with `/memories consolidate`, or via the MCP tool from any client (Codex, Claude Code, etc.).
+The classification taxonomy follows the auto-memory schema (user / feedback / project / reference). Records that don't classify land in `raw_memories.md` so nothing is lost. Trigger consolidation manually with `/memories consolidate`, or via the MCP tool from any MCP-speaking client.
 
 ---
 
@@ -311,7 +311,7 @@ The classification taxonomy mirrors the auto-memory schema (user / feedback / pr
 
 ### 6. Storage Layout — User-Global Home + Workspace Workflows
 
-Personal CLI state lives in the user-global home (matching codex's `~/.codex/` and claude-code's `~/.claude/`), not inside the project tree. Only workflow artifacts that are *meant* to be committed live in the workspace.
+Personal CLI state lives in the user-global home (`~/.brainrouter/`), not inside the project tree. Only workflow artifacts that are *meant* to be committed live in the workspace.
 
 ```
 ~/.brainrouter/                            ← user-global (override with BRAINROUTER_HOME)
@@ -354,7 +354,7 @@ Personal CLI state lives in the user-global home (matching codex's `~/.codex/` a
 
 ### 7. Multi-Agent Orchestration
 
-Beyond the single-agent loop, the CLI exposes a multi-agent surface modeled after codex's subagents:
+Beyond the single-agent loop, the CLI exposes a first-class multi-agent surface:
 
 * **Roles**: `explorer` (read-only investigation), `architect` (design alternatives), `reviewer` (code review), `worker` (write access for implementation), `verifier` (shell access for tests/typechecks).
 * **Tools**: `spawn_agent`, `wait_agent`, `list_agents`, `read_agent_transcript`, `close_agent`.
@@ -433,39 +433,6 @@ When `role` is omitted from a `spawn_agents` entry, `inferRoleFromTask` picks a 
 | (default — implementation) | `worker` |
 
 `route_agent({ task: '...' })` returns the inferred role + rationale without spawning, useful for sanity-checking before a costly fan-out.
-
----
-
-## 🆚 Comparison with TencentDB-Agent-Memory
-
-To understand BrainRouter's positioning, it is useful to contrast it with TencentDB-Agent-Memory and other traditional agent storage systems:
-
-| Architectural Feature | TencentDB-Agent-Memory | BrainRouter (Metacognitive Network) |
-| :--- | :--- | :--- |
-| **Retrieval Strategy** | Basic Vector / Semantic Search. | **Dual-Process (System 1 + System 2)**: FTS5 + Vector + Filepath RRF, reranked and boosted by query intent. |
-| **Forgetting & Decay** | Typically static storage or simple LRU/time-based eviction. | **Exponential Decay**: Modeled on the Ebbinghaus forgetting curve with decay rates tailored to memory type. |
-| **Synaptic Plasticity** | None. Facts remain in the database regardless of utility. | **ACE Loop**: Reinforces cited memories (LTP) and prunes neglected records (Synaptic Pruning) automatically. |
-| **Associative Recall** | Restricted to vector distance. | **Spreading Activation**: 2-Hop BFS Knowledge Graph expansion and keyword-based Skill pre-warming. |
-| **Self-Healing** | Overwrites or creates duplicate entries. | **Contradiction Resolution**: Evaluates updates to either supersede outdated facts or log conflicts for manual review. |
-| **Layered Structure** | Flat key-value or document collections. | **Multi-tier Stack**: Hierarchical flow from `SensoryStream` → `CognitiveRecord` → `ContextualFocus` → `CoreIdentity`. |
-| **Client Surface** | Plain API; no first-party agent loop. | **Brainrouter CLI**: terminal agent at Codex/Claude Code parity with 60+ slash commands, hookify markdown guardrails, LLM-driven compaction, and multi-agent orchestration. |
-
----
-
-## 🆚 Comparison with Codex CLI & Claude Code
-
-BrainRouter's terminal CLI sits in the same product space as Codex CLI and Claude Code. The differentiator is the memory engine sitting under every turn — memory isn't a side feature, it's the routing substrate.
-
-| Capability | Codex CLI | Claude Code | Brainrouter CLI |
-| :--- | :--- | :--- | :--- |
-| **Memory pipeline** | Phase 1 + Phase 2 filesystem artifacts (`~/.codex/memories/`). | None first-party; relies on `memory/` subagent or external. | **Cognitive memory engine** with FTS5/vector/graph recall, ACE citation loop, contradiction reconciliation, *plus* Phase 2 filesystem artifacts under `.brainrouter/memories/`. |
-| **Compaction** | `/compact` LLM summarizer. | Built into the harness. | **`/compact`** structured summarizer (Goals / Decisions / Files touched / Open work / Last user request). |
-| **Slash commands** | ~30 commands. | Plugin-driven extensions. | **60+** commands across session, memory, workflow, orchestration, ops surfaces. |
-| **Behavior guards** | Hooks (shell hooks, schema-validated). | Plugins (hookify markdown rules). | **Both** — shell-based lifecycle hooks (`pre-tool` / `post-tool` / `pre-turn` / …) *and* markdown hookify rules. |
-| **Multi-agent** | Subagents with codex roles. | Plugin-defined subagents. | First-class `spawn_agent` with explorer / architect / reviewer / worker / verifier roles, durable workflow folders, auto-review pass. |
-| **Sandboxing** | macOS sandbox-exec, Linux bwrap/firejail, Windows AppContainer. | Permission prompts. | **`BRAINROUTER_SANDBOX=on`** wraps `run_command` in sandbox-exec / bwrap / firejail; combined with `/permissions` access modes and hookify block rules. |
-| **Sessions & rollouts** | `/resume` from rollout files. | Session resumption built in. | **`/resume`** from `.brainrouter/cli/transcripts/<key>.jsonl`, `/fork` to branch, `/new` for fresh chat, `/side` / `/btw` for ephemeral forks. |
-| **MCP integration** | First-party MCP support. | First-party MCP support. | **Self-hosts the MCP** — every memory tool the agent uses ships in this repo. The new `memory_consolidate` tool means any MCP client gets the Phase-2 artifact writer for free. |
 
 ---
 
