@@ -1249,12 +1249,28 @@ export class Agent {
    * removes any older entry with the same tag before appending the new one,
    * keeping the model's view of "current memory state" current.
    */
-  private replaceTaggedSystemMessage(tag: string, content: string): void {
+  public replaceTaggedSystemMessage(tag: string, content: string): void {
     const marker = `<!--brainrouter:${tag}-->\n`;
     this.chatHistory = this.chatHistory.filter(
       (msg) => !(msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(marker)),
     );
     this.chatHistory.push({ role: 'system', content: `${marker}${content}` });
+  }
+
+  /**
+   * Drop any system message previously installed under `tag`. Used to retract
+   * one-off directives once the condition that motivated them no longer
+   * holds — e.g. the budget-steering "wrap up gracefully" message must
+   * disappear after the user extends the goal's budget, otherwise it keeps
+   * telling the model "this is your last turn" for every subsequent turn.
+   *
+   * Idempotent: calling this with a tag that isn't present is a no-op.
+   */
+  public removeTaggedSystemMessage(tag: string): void {
+    const marker = `<!--brainrouter:${tag}-->\n`;
+    this.chatHistory = this.chatHistory.filter(
+      (msg) => !(msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(marker)),
+    );
   }
 
   /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
