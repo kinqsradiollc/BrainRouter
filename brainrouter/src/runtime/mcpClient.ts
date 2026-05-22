@@ -11,7 +11,7 @@ export class McpClientWrapper {
 
   constructor() {
     this.client = new Client(
-      { name: 'brainrouter-cli', version: '0.2.0' },
+      { name: 'brainrouter-cli', version: '0.3.3' },
       { capabilities: {} }
     );
   }

@@ -64,7 +64,7 @@ const SLASH_COMMANDS = [
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
-  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.2.0'));
+  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.3'));
   console.log(chalk.gray('Midnight Ledger / Obsidian Surface theme active.'));
   console.log(chalk.gray(`Workspace root: ${workspace?.workspaceRoot || process.cwd()}`));
   console.log(chalk.gray('Type ') + chalk.cyan('/help') + chalk.gray(' for commands, or start typing your prompt.\n'));

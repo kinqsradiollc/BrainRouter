@@ -1063,7 +1063,7 @@ export class Agent {
         try {
           const res = await fetch(url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.2.0)'
+              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.3)'
             }
           });
           if (!res.ok) {
@@ -1481,7 +1481,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
 
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.2' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.3' } });
     if (!res.ok) {
       return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
     }
