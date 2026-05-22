@@ -346,12 +346,27 @@ Look for:
 ### 5.5 Publish in dependency order
 
 ```bash
-npm login   # one-time per session
+npm login              # one-time per session
+npm whoami             # confirm you're authenticated as the right user
+```
 
-cd packages/types     && npm publish
-cd ../sdk             && npm publish
-cd ../../brainrouter  && npm publish    # MCP server
-cd ../brainrouter-cli && npm publish    # CLI
+**Two zsh gotchas — read before you paste the publish commands:**
+
+1. **Inline `#` comments don't work in zsh interactive mode.** zsh treats
+   `# anything` as positional args, not a comment, unless you've enabled
+   `setopt interactive_comments` (not the default). The commands below
+   deliberately have NO inline comments — paste them as-is.
+2. **2FA is required.** The `@brainrouter` scope expects a TOTP code per
+   publish (mode `auth-and-publish`). Either pass `--otp=XXXXXX` on each
+   command (paste a fresh code from your authenticator each time), or
+   omit the flag and npm will prompt interactively.
+
+```bash
+# From the monorepo root. Run one at a time, fresh OTP per command.
+cd packages/types && npm publish --otp=PASTE_CODE
+cd ../sdk && npm publish --otp=PASTE_CODE
+cd ../../brainrouter && npm publish --otp=PASTE_CODE
+cd ../brainrouter-cli && npm publish --otp=PASTE_CODE
 ```
 
 The order matters because each package's `dependencies` reference real
@@ -361,6 +376,32 @@ registry resolves cleanly.
 Each `package.json` has `publishConfig.access: public` (required because
 `@brainrouter/*` is a scoped namespace — npm defaults scoped packages to
 restricted). You don't need `--access public` on the command line.
+
+#### 5.5.1 Avoiding the per-publish OTP friction
+
+Two options to skip the OTP prompts:
+
+**Option A — switch 2FA to `auth-only` mode** (one OTP per login, then
+publishes use the cached session):
+
+```bash
+npm profile set otp-mode auth-only --otp=PASTE_CODE
+```
+
+**Option B — granular access token with 2FA bypass** (best for
+CI/automation). At <https://www.npmjs.com/settings/YOUR_USERNAME/tokens>
+create a token with:
+
+- Permissions: **Read and write**
+- Packages scope: **`@brainrouter/*`**
+- "Bypass 2FA for this token": **✓**
+
+Then:
+
+```bash
+export NPM_TOKEN=npm_...        # or store in ~/.npmrc with //registry.npmjs.org/:_authToken=...
+# Now `npm publish` works with no OTP prompt
+```
 
 ### 5.6 Tag and push
 
