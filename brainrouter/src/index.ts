@@ -14,6 +14,18 @@
 //     Runs an Express HTTP server. Connect via serverUrl in tool config.
 //     Usage: node dist/index.js --root /path/to/project --http --port 3747
 //
+//   init subcommand
+//     Scaffold ~/.config/brainrouter/server.env from the bundled
+//     .env.example and exit. Run this once after a global install.
+//     Usage: brainrouter-mcp init
+//
+
+// CRITICAL: import order matters. `init` may exit the process before
+// anything else loads (for `brainrouter-mcp init`). `env-loader` runs next
+// and sets process.env from the right .env file before any module body
+// reads env vars (sqlite/embedding/extractor all do at load time).
+import './init.js';
+import './env-loader.js';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -105,7 +117,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
   const server = new Server(
-    { name: 'brainrouter-mcp-server', version: '0.3.4' },
+    { name: 'brainrouter-mcp-server', version: '0.3.5' },
     { capabilities: { tools: {} } }
   );
 

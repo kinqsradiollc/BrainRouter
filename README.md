@@ -28,12 +28,30 @@ run your own MCP server, hack on the engine, or use the dashboard.
 ### From npm (CLI + MCP server)
 
 ```bash
-# Terminal agent
-npm install -g @kinqs/brainrouter-cli          # exposes `brainrouter` on $PATH
-
-# MCP server (only if you want to run your own — the CLI also works against a hosted one)
+# 1. Install both globally — the -g flag is critical (without it, the
+#    binaries land in ./node_modules/.bin and aren't on $PATH).
+npm install -g @kinqs/brainrouter-cli          # exposes `brainrouter`
 npm install -g @kinqs/brainrouter-mcp-server   # exposes `brainrouter-mcp`
+
+# 2. Scaffold the MCP server's config file (one-time).
+brainrouter-mcp init                            # creates ~/.config/brainrouter/server.env
+$EDITOR ~/.config/brainrouter/server.env        # fill in LLM key + embeddings
+
+# 3. Start the MCP server in one terminal:
+brainrouter-mcp --http --port 3747
+
+# 4. Configure the CLI's chat LLM + point at the server (one-time):
+brainrouter config                              # interactive: LLM provider/model/key
+brainrouter login                               # interactive: MCP URL + API key
+
+# 5. Run the CLI in another terminal:
+brainrouter
 ```
+
+**Sudo caveat for step 1.** Whether you need `sudo` depends on how Node
+is installed: Homebrew / nvm / asdf → no sudo (user-writable prefix);
+system Node on macOS/Linux → yes sudo. Check with `npm config get prefix`
+— if the path is under your home dir or `/opt/homebrew`, skip sudo.
 
 Published packages: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli)
 (CLI — installs the `brainrouter` binary),

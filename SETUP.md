@@ -14,7 +14,9 @@ For end-user install (`npm install -g @kinqs/brainrouter-cli`), see
 ## Table of contents
 
 1. [Prerequisites](#1-prerequisites)
-2. [First-time setup](#2-first-time-setup)
+2. First-time setup
+   - [§2A — Install from npm (end users)](#2a-end-user-install-from-npm)
+   - [§2B — Clone and build (development)](#2b-clone-and-build-for-development)
 3. [Daily run](#3-daily-run)
 4. [Upgrading (pull new code)](#4-upgrading-pull-new-code)
 5. [Publishing a new release to npm](#5-publishing-a-new-release-to-npm)
@@ -41,10 +43,44 @@ Optional but recommended:
 
 ## 2. First-time setup
 
-You'll do this once per machine. It produces a working CLI that can talk
-to a local MCP server you also just started.
+Two paths:
 
-### 2.1 Clone and build
+- **§2A — Install from npm** (recommended for end users). Use this if
+  you just want to run the agent against a local MCP server, not hack
+  on the codebase.
+- **§2B — Clone the monorepo** (for development). Use this if you're
+  going to edit BrainRouter itself, run the dashboard, or work on
+  multiple packages together.
+
+Pick one and skip the other.
+
+### 2A. End-user install (from npm)
+
+```bash
+# 1. Install both packages globally. The -g is critical — without it
+#    npm installs into ./node_modules and the binaries never reach
+#    your $PATH. Symptom: "brainrouter: command not found" after install.
+npm install -g @kinqs/brainrouter-cli @kinqs/brainrouter-mcp-server
+
+# 2. Scaffold the MCP server's config (one-time, creates a user-editable file).
+brainrouter-mcp init
+$EDITOR ~/.config/brainrouter/server.env
+# At minimum set BRAINROUTER_LLM_API_KEY, BRAINROUTER_ADMIN_PASSWORD,
+# BRAINROUTER_JWT_SECRET. See the file for full inline docs.
+
+# 3. Configure the CLI's chat LLM and MCP connection (one-time, interactive).
+brainrouter config       # provider, model, endpoint, API key
+brainrouter login        # MCP URL (http://localhost:3747/mcp), API key
+```
+
+**Sudo for step 1?** Run `npm config get prefix`. If the path is under
+your home dir or `/opt/homebrew` → no sudo. If it's `/usr/local/...` →
+yes sudo. nvm and Homebrew Node users should never sudo (it breaks the
+npm cache later).
+
+Skip to [§3 Daily run](#3-daily-run).
+
+### 2B. Clone and build (for development)
 
 ```bash
 git clone https://github.com/kinqsradiollc/BrainRouter.git
@@ -58,7 +94,12 @@ npm run build
 time. If the dashboard build complains about a missing port, ignore it —
 it only matters at runtime.
 
-### 2.2 Configure the MCP server — `brainrouter/.env`
+### 2B.1 Configure the MCP server — `brainrouter/.env`
+
+In the monorepo, the MCP server still loads its `.env` from
+`brainrouter/.env` (cwd-relative dotenv default). This is the third
+priority slot — the env-loader also looks at `$BRAINROUTER_ENV_FILE`
+and `~/.config/brainrouter/server.env` first, in that order.
 
 ```bash
 cp brainrouter/.env.example brainrouter/.env
@@ -94,7 +135,7 @@ BRAINROUTER_LLM_API_KEY=sk-local            # LM Studio ignores the value but ne
 Everything else (reranker, prewarming, sweep intervals, JWT lifetime) is
 commented inline in `.env.example` and safe to leave at defaults.
 
-### 2.3 Configure the CLI — `~/.config/brainrouter/config.json`
+### 2B.2 Configure the CLI — `~/.config/brainrouter/config.json`
 
 The CLI's chat LLM and MCP connection live in `config.json`, **not in
 `.env`**. Use the interactive setup:
@@ -121,7 +162,7 @@ cat ~/.config/brainrouter/config.json
 You should see an `llm` block (provider, apiKey, model, endpoint) plus
 at least one server profile under `servers` and an `activeServer` field.
 
-### 2.4 Verify
+### 2B.3 Verify
 
 ```bash
 # Terminal A — start the MCP server (cognitive memory engine)
@@ -135,7 +176,7 @@ npm run cli
 Expected CLI banner:
 
 ```
-🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.4
+🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.5
 Midnight Ledger / Obsidian Surface theme active.
 Workspace root: /path/to/your/project
 brainrouter[shell]>
