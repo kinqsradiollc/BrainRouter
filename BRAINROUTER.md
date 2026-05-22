@@ -196,7 +196,7 @@ System 2 analyzes and filters the System 1 candidates:
 
 ## 🖥️ The Brainrouter Terminal CLI
 
-While BrainRouter began as a pure MCP server, the repo now ships a first-party terminal agent at [`brainrouter/`](brainrouter/). The CLI treats the BrainRouter MCP as a **primary tool**, not an afterthought, so cognitive memory shapes every turn instead of being a sidecar.
+While BrainRouter began as a pure MCP server, the repo now ships a first-party terminal agent at [`brainrouter-cli/`](brainrouter-cli/). The CLI treats the BrainRouter MCP as a **primary tool**, not an afterthought, so cognitive memory shapes every turn instead of being a sidecar.
 
 ### 1. Agent Loop & Access Modes
 
@@ -242,13 +242,13 @@ When a session's chat history grows past the model's effective context window, n
 - (verbatim)
 ```
 
-The verbose history is then replaced with `[system, compactedSummary, lastUserMessage]`, tagged so the next turn knows to treat the summary as authoritative state. The implementation in [`brainrouter/src/prompt/compactor.ts`](brainrouter/src/prompt/compactor.ts) is provider-agnostic and works against any OpenAI-compatible endpoint.
+The verbose history is then replaced with `[system, compactedSummary, lastUserMessage]`, tagged so the next turn knows to treat the summary as authoritative state. The implementation in [`brainrouter-cli/src/prompt/compactor.ts`](brainrouter-cli/src/prompt/compactor.ts) is provider-agnostic and works against any OpenAI-compatible endpoint.
 
 ---
 
 ### 3. Hookify — Markdown-Rule Behavior Guards
 
-BrainRouter CLI ships a markdown-rule guardrail system at [`brainrouter/src/state/hookifyStore.ts`](brainrouter/src/state/hookifyStore.ts). Users drop a file into `~/.brainrouter/workspaces/<encoded>/hooks/` with YAML frontmatter and a markdown body:
+BrainRouter CLI ships a markdown-rule guardrail system at [`brainrouter-cli/src/state/hookifyStore.ts`](brainrouter-cli/src/state/hookifyStore.ts). Users drop a file into `~/.brainrouter/workspaces/<encoded>/hooks/` with YAML frontmatter and a markdown body:
 
 ```markdown
 ---
@@ -279,7 +279,7 @@ Each rule can use a single `pattern:` regex shortcut or a list of `conditions:` 
 
 ### 4. Phase-2 Filesystem Memory Consolidation
 
-The MCP cognitive store is the source of truth, but users want a **human-readable** view of what the agent has learned across sessions. The CLI writes per-type markdown artifacts via [`brainrouter/src/memory/consolidation.ts`](brainrouter/src/memory/consolidation.ts) and the MCP tool [`mcp/src/tools/memory_consolidate.ts`](mcp/src/tools/memory_consolidate.ts):
+The MCP cognitive store is the source of truth, but users want a **human-readable** view of what the agent has learned across sessions. The CLI writes per-type markdown artifacts via [`brainrouter-cli/src/memory/consolidation.ts`](brainrouter-cli/src/memory/consolidation.ts) and the MCP tool [`brainrouter/src/tools/memory_consolidate.ts`](brainrouter/src/tools/memory_consolidate.ts):
 
 ```
 <workspace>/.brainrouter/memories/
@@ -298,7 +298,7 @@ The classification taxonomy follows the auto-memory schema (user / feedback / pr
 
 ### 5. Personality Overlay
 
-`/personality <style>` injects a communication-style block into the system prompt. Implemented in [`brainrouter/src/systemPrompt.ts`](brainrouter/src/systemPrompt.ts), the overlay is preference-driven (persists across restarts) and picked up by `refreshSystemPrompt()` on the next turn without re-bootstrapping the session.
+`/personality <style>` injects a communication-style block into the system prompt. Implemented in [`brainrouter-cli/src/systemPrompt.ts`](brainrouter-cli/src/systemPrompt.ts), the overlay is preference-driven (persists across restarts) and picked up by `refreshSystemPrompt()` on the next turn without re-bootstrapping the session.
 
 | Style | Behavior |
 | :--- | :--- |
@@ -444,14 +444,14 @@ The CLI can talk to the MCP server two ways. Same protocol, same tools, same mem
 
 | Transport | When to use | Where MCP logs go | Setup |
 | :--- | :--- | :--- | :--- |
-| **stdio** (default) | Single-machine dev. CLI spawns MCP as a subprocess. | Forwarded to the CLI's terminal (stderr passthrough). | `~/.config/brainrouter/config.json` → `"activeServer": "default"`. The CLI auto-spawns `node mcp/dist/index.js`. |
-| **HTTP (Streamable)** | Multi-process / cloud / clean CLI window. MCP is its own long-lived process. | Wherever you launched the server. | Start: `cd mcp && npm run start:http` (port 3747). Then in `~/.config/brainrouter/config.json` add a profile `{ "type": "http", "url": "http://localhost:3747/mcp", "apiKey": "br_..." }` and set it active. |
+| **stdio** (default) | Single-machine dev. CLI spawns MCP as a subprocess. | Forwarded to the CLI's terminal (stderr passthrough). | `~/.config/brainrouter/config.json` → `"activeServer": "default"`. The CLI auto-spawns `node brainrouter/dist/index.js`. |
+| **HTTP (Streamable)** | Multi-process / cloud / clean CLI window. MCP is its own long-lived process. | Wherever you launched the server. | Start: `cd brainrouter && npm run start:http` (port 3747). Then in `~/.config/brainrouter/config.json` add a profile `{ "type": "http", "url": "http://localhost:3747/mcp", "apiKey": "br_..." }` and set it active. |
 
 The same `BRAINROUTER_API_KEY` (from `users.api_key` in `memory.db`) authenticates both — for HTTP, send it as `Authorization: Bearer <key>`.
 
 ### Configuration env vars (full reference)
 
-The MCP server loads `mcp/.env` via `dotenv/config` at startup. The CLI also auto-loads `mcp/.env` at boot so the env reaches both processes consistently. Anything in your shell's exported env beats the `.env` file.
+The MCP server loads `brainrouter/.env` via `dotenv/config` at startup. The CLI also auto-loads `brainrouter/.env` at boot so the env reaches both processes consistently. Anything in your shell's exported env beats the `.env` file.
 
 | Var | Default | Purpose |
 | :--- | :--- | :--- |

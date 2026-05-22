@@ -341,7 +341,7 @@ export default function ProfilePage() {
                             mcpServers: {
                               brainrouter: {
                                 command: "node",
-                                args: [me.mcpPath || "/path/to/BrainRouter/mcp/dist/index.js"],
+                                args: [me.mcpPath || "/path/to/BrainRouter/brainrouter/dist/index.js"],
                                 env: {
                                   BRAINROUTER_API_KEY: reveal ? cachedApiKey : maskKey(cachedApiKey)
                                 }
@@ -374,7 +374,7 @@ export default function ProfilePage() {
                               mcpServers: {
                                 brainrouter: {
                                   command: "node",
-                                  args: [me.mcpPath || "/path/to/BrainRouter/mcp/dist/index.js"],
+                                  args: [me.mcpPath || "/path/to/BrainRouter/brainrouter/dist/index.js"],
                                   env: {
                                     BRAINROUTER_API_KEY: cachedApiKey
                                   }

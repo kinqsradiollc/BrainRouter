@@ -4,14 +4,14 @@
   "version": "0.3.3",
   "workspaces": [
     "packages/*",
-    "mcp",
+    "brainrouter",
     "web",
-    "brainrouter"
+    "brainrouter-cli"
   ],
   "scripts": {
     "build": "npm run build -ws --if-present",
     "test": "npm run test -ws --if-present",
-    "cli": "node brainrouter/dist/index.js"
+    "cli": "node brainrouter-cli/dist/index.js"
   },
   "devDependencies": {
     "@types/react": "^19.2.15",
