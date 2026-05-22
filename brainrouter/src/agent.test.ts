@@ -1281,6 +1281,94 @@ test('goalStore: setGoal throws GoalConflictError when overwriting an active goa
   });
 });
 
+test('goalStore: GoalConflictError message reflects the actual existing status', async () => {
+  // Copilot review noted that the prior message hardcoded "already active"
+  // even when the existing goal was paused / blocked / usage_limited,
+  // misleading users via the REPL's catch path. Verify status-aware wording.
+  const { GoalConflictError, pauseGoal, blockGoal, usageLimitGoal } = await import('./goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:conflict-msg';
+    setGoal(workspace, 'first', sk);
+    // Active → "is in progress"
+    const active = (() => { try { setGoal(workspace, 'second', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    assert.ok(active instanceof GoalConflictError);
+    assert.match(active.message, /already is in progress/);
+
+    pauseGoal(workspace, sk);
+    const paused = (() => { try { setGoal(workspace, 'third', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    assert.ok(paused instanceof GoalConflictError);
+    assert.match(paused.message, /already exists with status: paused/);
+
+    blockGoal(workspace, sk, 'stuck');
+    const blocked = (() => { try { setGoal(workspace, 'fourth', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    assert.match(blocked!.message, /already exists with status: blocked/);
+
+    usageLimitGoal(workspace, sk, 'cap reached');
+    const limited = (() => { try { setGoal(workspace, 'fifth', sk); return null; } catch (e) { return e as InstanceType<typeof GoalConflictError>; } })();
+    // The status label spells out 'usage limited' (underscore-stripped).
+    assert.match(limited!.message, /already exists with status: usage limited/);
+  });
+});
+
+test('goalStore: buildBudgetSteeringMessage differentiates iteration vs token tightness', async () => {
+  // Copilot review: the message used to always say "one turn left within
+  // the iteration budget" even when only the token heuristic tripped.
+  // Verify each trigger gets the right wording.
+  const { buildBudgetSteeringMessage } = await import('./goalStore.js');
+  const baseGoal = {
+    text: 't', setAt: '', status: 'active' as const, startedAt: '', updatedAt: '',
+  };
+
+  // Iteration-tight only.
+  const iterationCase = buildBudgetSteeringMessage({
+    ...baseGoal,
+    budget: { maxIterations: 10, iterationsUsed: 9 },
+  });
+  assert.match(iterationCase, /iteration budget/);
+  assert.doesNotMatch(iterationCase, /token cap/);
+
+  // Token-tight only (iterations have headroom: 4/20 used).
+  const tokenCase = buildBudgetSteeringMessage({
+    ...baseGoal,
+    budget: { maxIterations: 20, iterationsUsed: 4, maxTokens: 10_000, tokensUsed: 8_500 },
+  });
+  assert.match(tokenCase, /token cap will trip/);
+  assert.match(tokenCase, /8,500\/10,000/);
+
+  // Both tight.
+  const bothCase = buildBudgetSteeringMessage({
+    ...baseGoal,
+    budget: { maxIterations: 10, iterationsUsed: 9, maxTokens: 5_000, tokensUsed: 4_500 },
+  });
+  assert.match(bothCase, /Both budgets are nearly exhausted/);
+});
+
+test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', async () => {
+  const { Agent } = await import('./agent.js');
+  // Construct an Agent without touching MCP/LLM; we just exercise the
+  // chatHistory mutation methods that are pure CPU.
+  const stubMcp: any = { callTool: async () => ({ content: [] }) };
+  const agent: any = new Agent(stubMcp, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' }, {
+    workspaceRoot: '/tmp', launchCwd: '/tmp', sessionKey: 's:test',
+  });
+  // Seed with a system message (the constructor pushes one).
+  agent.replaceTaggedSystemMessage('demo', 'first version');
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('first version')).length, 1);
+  agent.replaceTaggedSystemMessage('demo', 'second version');
+  // Replace removes the first version and adds the second.
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('first version')).length, 0);
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 1);
+  // Remove drops the second.
+  agent.removeTaggedSystemMessage('demo');
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 0);
+  // Idempotent: removing again is a no-op (doesn't throw).
+  agent.removeTaggedSystemMessage('demo');
+  // Other tags are untouched by tag-specific removal.
+  agent.replaceTaggedSystemMessage('other', 'keep me');
+  agent.removeTaggedSystemMessage('demo');
+  assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('keep me')).length, 1);
+});
+
 test('goalStore: token budget tracking + usage_limited transition', async () => {
   const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('./goalStore.js');
   withTempWorkspace((workspace) => {

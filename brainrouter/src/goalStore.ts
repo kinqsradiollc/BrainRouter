@@ -96,9 +96,18 @@ export class GoalTooLongError extends Error {
  */
 export class GoalConflictError extends Error {
   constructor(public readonly existing: Goal) {
+    // Use status-aware wording. The previous "already active" phrasing was
+    // misleading when the existing goal was paused, blocked, or
+    // usage_limited — the REPL surfaces this message verbatim and users
+    // would see "already active" for a goal they explicitly paused. Now
+    // the message reflects the actual current state.
+    const statusLabel = existing.status.replace('_', ' ');
+    const inProgressClause = existing.status === 'active'
+      ? 'is in progress'
+      : `exists with status: ${statusLabel}`;
     super(
-      `A goal is already active (status: ${existing.status}). ` +
-      `Pass force=true to replace it.`,
+      `A goal already ${inProgressClause}. ` +
+      `Pass force=true to replace it (REPL will prompt for confirmation first).`,
     );
     this.name = 'GoalConflictError';
   }
@@ -403,14 +412,49 @@ export function goalIsOnFinalBudgetTurn(goal: Goal): boolean {
  * loop pushes this into the chat history as a system message so the model
  * pivots from "continue investigating" to "consolidate and report." Plain
  * directive, no role-play.
+ *
+ * The message specifically reports WHICH cap is tight (iterations, tokens,
+ * or both) so the model doesn't get told "one turn left" when it actually
+ * has many iterations remaining but is near the token cap, or vice versa.
+ * Earlier versions hardcoded the iteration framing even when only the
+ * token heuristic tripped, which misled the model on token-budgeted runs.
  */
 export function buildBudgetSteeringMessage(goal: Goal): string {
-  const tokensClause = goal.budget.maxTokens
-    ? ` and ~${Math.max(0, goal.budget.maxTokens - (goal.budget.tokensUsed ?? 0)).toLocaleString()} tokens remaining`
-    : '';
+  const iterationsRemaining = Math.max(0, goal.budget.maxIterations - goal.budget.iterationsUsed - 1);
+  const iterationTight = goal.budget.iterationsUsed + 2 >= goal.budget.maxIterations;
+  const tokensTight =
+    typeof goal.budget.maxTokens === 'number' &&
+    goal.budget.maxTokens > 0 &&
+    (goal.budget.maxTokens - (goal.budget.tokensUsed ?? 0)) <= goal.budget.maxTokens * 0.2;
+
+  let headline: string;
+  if (iterationTight && tokensTight) {
+    const tokensRemaining = (goal.budget.maxTokens ?? 0) - (goal.budget.tokensUsed ?? 0);
+    headline =
+      `Both budgets are nearly exhausted: ${iterationsRemaining} iteration(s) remaining ` +
+      `(cap ${goal.budget.maxIterations}) and ~${tokensRemaining.toLocaleString()} tokens remaining ` +
+      `(cap ${(goal.budget.maxTokens ?? 0).toLocaleString()}). This is your last turn.`;
+  } else if (iterationTight) {
+    const tokensClause = goal.budget.maxTokens
+      ? ` (tokens still have headroom: ${((goal.budget.maxTokens ?? 0) - (goal.budget.tokensUsed ?? 0)).toLocaleString()} of ${(goal.budget.maxTokens ?? 0).toLocaleString()} remaining)`
+      : '';
+    headline =
+      `You have ${iterationsRemaining || 1} iteration(s) left within the goal's iteration budget ` +
+      `(cap ${goal.budget.maxIterations})${tokensClause}. This is your last turn.`;
+  } else {
+    // Token cap is the trigger; iterations may still have plenty of headroom.
+    const tokensUsed = goal.budget.tokensUsed ?? 0;
+    const tokensCap = goal.budget.maxTokens ?? 0;
+    const tokensRemaining = Math.max(0, tokensCap - tokensUsed);
+    headline =
+      `You're at ${tokensUsed.toLocaleString()}/${tokensCap.toLocaleString()} tokens of the goal's budget ` +
+      `(${Math.round((tokensUsed / Math.max(1, tokensCap)) * 100)}% used) with only ~${tokensRemaining.toLocaleString()} tokens remaining. ` +
+      `Iteration count still has headroom but the token cap will trip before another full turn fits.`;
+  }
+
   return [
     '## Budget about to run out',
-    `You have one turn left within the goal's iteration budget (${goal.budget.maxIterations})${tokensClause}.`,
+    headline,
     'Do not start any new long-running investigation, spawn new children, or read more files.',
     'Instead:',
     '1. Synthesize what you already know into a concise wrap-up.',

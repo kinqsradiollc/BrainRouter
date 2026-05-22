@@ -540,10 +540,19 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         // Pre-tick steering: if the NEXT turn would be the final one inside
         // the budget, inject a wrap-up directive so the model lands soft
         // instead of being cut off mid-thought.
+        //
+        // CRITICAL: also drop any stale steering when the next turn is NOT
+        // final. Without this, a previously-injected "wrap up gracefully"
+        // message would persist after the user extended the budget via
+        // /goal budget or /goal tokens, telling the model "this is your
+        // last turn" for every subsequent turn. The removal is idempotent
+        // — if no steering was set, this is a no-op.
         const finalBudgetTurn = goalIsOnFinalBudgetTurn(goalAfter);
         if (finalBudgetTurn) {
           agent.replaceTaggedSystemMessage('goal-budget-steering', buildBudgetSteeringMessage(goalAfter));
           console.log(chalk.gray(`(final budget turn — wrap-up steering injected)`));
+        } else {
+          agent.removeTaggedSystemMessage('goal-budget-steering');
         }
         console.log(chalk.gray(`(goal continuation queued — iteration ${next}/${goalAfter.budget.maxIterations}; type anything to cancel)`));
         const followUp = buildGoalContinuationPrompt(goalAfter, agent.lastUserPrompt, agent.lastAnswer);
@@ -1583,6 +1592,9 @@ async function handleSlashCommand(
           // before/after. Just unpause and kick off the next iteration.
           const reactivated = resumeGoal(agent.workspaceRoot, sessionKey);
           if (reactivated) {
+            // Same rationale as /goal resume — drop any stale wrap-up
+            // steering left over from the budget-trigger that paused us.
+            agent.removeTaggedSystemMessage('goal-budget-steering');
             agent.refreshSystemPrompt();
             console.log(chalk.green(`\n▶  Goal resumed (${reactivated.budget.iterationsUsed}/${reactivated.budget.maxIterations} used). Starting next iteration…\n`));
             ctx.runAgentTurn(buildGoalKickoffPrompt(reactivated, 'resume'));
@@ -1690,6 +1702,10 @@ async function handleSlashCommand(
       if (arg === 'resume') {
         const g = resumeGoal(ws, sk);
         if (!g) { console.log(chalk.yellow('\nNo goal to resume.\n')); break; }
+        // Resume from paused/blocked/usage_limited — any stale "wrap up"
+        // steering from the previous final-budget tick must be dropped so
+        // the resumed turn doesn't see contradictory directives.
+        agent.removeTaggedSystemMessage('goal-budget-steering');
         agent.refreshSystemPrompt();
         console.log(chalk.green(`\n▶  Goal resumed (${g.budget.iterationsUsed}/${g.budget.maxIterations} used). Starting next iteration…\n`));
         // Fire the next iteration immediately so the user doesn't have to type
@@ -1711,7 +1727,15 @@ async function handleSlashCommand(
         }
         const g = setGoalBudget(ws, sk, Math.floor(n));
         if (!g) console.log(chalk.yellow('\nNo goal to update.\n'));
-        else { agent.refreshSystemPrompt(); console.log(chalk.green(`\n✓ Iteration budget set to ${g.budget.maxIterations} (${g.budget.iterationsUsed} already used).\n`)); }
+        else {
+          // The user just raised (or rarely lowered) the cap — any stale
+          // wrap-up steering message from the prior tight-budget state is
+          // now misleading. Drop it; the post-turn loop will re-inject if
+          // the new state still puts us on a final-budget turn.
+          agent.removeTaggedSystemMessage('goal-budget-steering');
+          agent.refreshSystemPrompt();
+          console.log(chalk.green(`\n✓ Iteration budget set to ${g.budget.maxIterations} (${g.budget.iterationsUsed} already used).\n`));
+        }
         break;
       }
       if (arg.startsWith('tokens')) {
@@ -1726,6 +1750,10 @@ async function handleSlashCommand(
           console.log(chalk.yellow('\nNo goal to update.\n'));
           break;
         }
+        // Clear stale wrap-up steering — the budget state just changed
+        // and any previously-injected "this is your last turn" directive
+        // would now be misleading.
+        agent.removeTaggedSystemMessage('goal-budget-steering');
         agent.refreshSystemPrompt();
         if (n === 0) {
           console.log(chalk.green('\n✓ Token budget cleared (iteration cap still applies).\n'));
@@ -1779,6 +1807,10 @@ async function handleSlashCommand(
           if (!g) {
             console.log(chalk.yellow('\nNo goal to edit. Set one first with /goal <text>.\n'));
           } else {
+            // Any edit may have changed the budget headroom; clear stale
+            // wrap-up steering so subsequent turns aren't told "this is
+            // your last turn" with stale data.
+            agent.removeTaggedSystemMessage('goal-budget-steering');
             agent.refreshSystemPrompt();
             console.log(chalk.green(`\n✓ Updated.\n`));
             showStatus(g);

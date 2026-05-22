@@ -21,7 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `formatGoalBlock` shows token usage alongside iteration usage when a token cap is set.
 
 ### Tests
-- 92 passing (up from 89). New coverage: `GoalConflictError` shield + bypass with `force`, token budget tally + `goalIsOnFinalBudgetTurn` heuristic, `editGoal` unified mutation, empty-text edit refusal.
+- 95 passing (up from 89). New coverage: `GoalConflictError` shield + bypass with `force`, status-aware error message, token budget tally + `goalIsOnFinalBudgetTurn` heuristic, `editGoal` unified mutation, empty-text edit refusal, `buildBudgetSteeringMessage` per-trigger wording, `removeTaggedSystemMessage` idempotency.
+
+### Review-driven follow-ups (applied this commit)
+- **Stale budget-steering messages cleared on budget extension.** When the user raises the iteration or token cap (via `/goal budget`, `/goal tokens`, `/goal edit`, `/goal resume`, or the resume prompt after `/resume`), any prior "this is your last turn" steering message is dropped from chat history. Without this, the directive would persist and tell the model to wrap up even after it gained more headroom. The post-turn continuation also now removes the steering when the next turn would NOT be on a final budget.
+- **`removeTaggedSystemMessage(tag)`** added to the Agent — companion to `replaceTaggedSystemMessage`. Lets the REPL retract one-off directives once their motivating condition no longer holds. Idempotent.
+- **`GoalConflictError` message reports the actual existing status.** Previously hardcoded "already active" even when the existing goal was `paused`, `blocked`, or `usage_limited`, which surfaced verbatim to users via the REPL catch path. Now reads "A goal already is in progress" for active goals and "A goal already exists with status: paused/blocked/usage limited" otherwise.
+- **`buildBudgetSteeringMessage` differentiates iteration-tight vs token-tight triggers.** Previously always claimed "one turn left within the iteration budget" even when only the token-cap heuristic (80% used) tripped — misleading on token-budgeted runs with plenty of iterations remaining. The message now describes whichever cap is actually tight (iteration, token, or both) with the real remaining counts.
 
 ## [0.3.2] - 2026-05-22
 
