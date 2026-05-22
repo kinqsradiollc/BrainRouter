@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
+import path from 'node:path';
+import url from 'node:url';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
@@ -8,6 +11,66 @@ import { McpClientWrapper } from './mcpClient.js';
 import { Agent } from './agent.js';
 import { startREPL } from './repl.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './workspace.js';
+
+/**
+ * Load `mcp/.env` (the canonical config home for BRAINROUTER_LLM_*, embedding,
+ * reranker, etc.) into the CLI's own `process.env` if not already set.
+ *
+ * Why this exists: the MCP child uses `import "dotenv/config"`, which resolves
+ * relative to whatever `process.cwd()` the child was spawned with — that's
+ * the user's launch directory, NOT `mcp/`. So `mcp/.env` was never read by
+ * the CLI-spawned MCP child, and the cognitive extractor silently disabled
+ * itself because `BRAINROUTER_LLM_API_KEY` was empty.
+ *
+ * Loading here is the belt: once these vars are in `process.env`, the
+ * propagation step in mcpClient.ts (the suspenders) forwards them to the
+ * spawned child verbatim. We do not overwrite values already set in the
+ * shell — explicit env > .env file, as is conventional.
+ */
+function loadBrainrouterEnv(): { loaded: string; count: number } | null {
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  // dist/index.js → ../.. → repo root. Try common locations.
+  const candidates = [
+    path.resolve(here, '..', '..', 'mcp', '.env'),       // monorepo layout
+    path.resolve(here, '..', '..', '..', 'mcp', '.env'), // installed/nested
+    path.resolve(process.cwd(), 'mcp', '.env'),          // running from repo root
+    path.resolve(process.cwd(), '.env'),                 // local override
+  ];
+  for (const file of candidates) {
+    if (!fs.existsSync(file)) continue;
+    try {
+      const raw = fs.readFileSync(file, 'utf8');
+      let count = 0;
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eq = trimmed.indexOf('=');
+        if (eq <= 0) continue;
+        const key = trimmed.slice(0, eq).trim();
+        let value = trimmed.slice(eq + 1).trim();
+        // Strip surrounding quotes if present.
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        if (key && !(key in process.env)) {
+          process.env[key] = value;
+          count++;
+        }
+      }
+      return { loaded: file, count };
+    } catch {
+      // Skip silently; the loud diagnostic in mcpClient will warn if nothing reached the child.
+    }
+  }
+  return null;
+}
+
+const envLoadResult = loadBrainrouterEnv();
+if (envLoadResult) {
+  // Visible-but-quiet startup line so users know which .env was picked up.
+  const tag = envLoadResult.count > 0 ? chalk.gray(` (${envLoadResult.count} new var${envLoadResult.count === 1 ? '' : 's'})`) : chalk.gray(' (all keys already set in shell)');
+  console.error(chalk.gray(`env: loaded ${envLoadResult.loaded}`) + tag);
+}
 
 const program = new Command();
 

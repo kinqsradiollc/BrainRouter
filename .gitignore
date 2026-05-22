@@ -30,6 +30,13 @@ out/
 .env.test.local
 .env.production.local
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Per-user tooling state (Claude Code, brainrouter migration leftovers)
+.claude/
+.brainrouter.migrated/
+
 # Local Projects
 .brainrouter/
 projects

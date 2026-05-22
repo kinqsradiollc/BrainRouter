@@ -1,21 +1,27 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCliStateDir, getCliStateFile, isPathInside, readJsonFile, writeJsonFile } from './cliState.js';
+import { getCliStateFile, getWorkspaceLocalDir, isPathInside, readJsonFile, writeJsonFile } from './cliState.js';
 
 /**
  * Canonical home for durable workflow artifacts produced by the multi-agent
  * commands (/feature-dev, /spec, /review, /implement-plan).
  *
  * One workflow == one slug == one directory:
- *   <workspace>/.brainrouter/cli/workflows/<slug>/
+ *   <workspace>/.brainrouter/workflows/<slug>/
  *     spec.md         — the agreed specification (what + why + boundaries)
  *     tasks.md        — human-readable task breakdown for execution
  *     walkthrough.md  — post-implementation summary (what was built, where)
  *     meta.json       — { slug, title, kind, createdAt, updatedAt, status }
  *     notes/          — optional supplementary artifacts (explorer reports etc.)
  *
- * Keeping every artifact for a workflow in one folder is the rule the user
- * asked for: "Everything should be 1 place right?" — yes.
+ * Workflows are the ONLY thing brainrouter writes inside the workspace. They
+ * stay here because (a) they're meant to be committed alongside code so the
+ * team shares them, and (b) the agent's `write_file` tool only accepts paths
+ * relative to the workspace root. Personal CLI state (sessions, hooks,
+ * memories, preferences) lives in `~/.brainrouter/workspaces/<encoded>/` and
+ * never touches the project tree. The current-workflow pointer is still per-
+ * user (it tracks which workflow YOU are focused on right now) so it lives
+ * with the CLI state, not the workspace.
  */
 
 const WORKFLOWS_SUBDIR = 'workflows';
@@ -48,10 +54,10 @@ export function slugify(input: string, fallback = 'workflow'): string {
 }
 
 export function getWorkflowsRoot(workspaceRoot: string): string {
-  const stateDir = getCliStateDir(workspaceRoot);
-  const root = path.join(stateDir, WORKFLOWS_SUBDIR);
-  if (!isPathInside(stateDir, root)) {
-    throw new Error('Workflows root escapes CLI state directory.');
+  const wsLocal = getWorkspaceLocalDir(workspaceRoot);
+  const root = path.join(wsLocal, WORKFLOWS_SUBDIR);
+  if (!isPathInside(wsLocal, root)) {
+    throw new Error('Workflows root escapes workspace-local directory.');
   }
   fs.mkdirSync(root, { recursive: true });
   return root;

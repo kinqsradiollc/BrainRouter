@@ -55,6 +55,7 @@ import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from './too
 import { memoryExplainToolSchema, handleMemoryExplainRecall } from './tools/memory-explain.js';
 import { memoryHookToolSchemas, handleMemoryHookTool } from './tools/memory-hooks.js';
 import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memory-working.js';
+import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { usersRouter } from './api/routes/users.js';
@@ -247,6 +248,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryExplainToolSchema,
       ...memoryHookToolSchemas,
       ...memoryWorkingToolSchemas,
+      memoryConsolidateToolSchema,
     ],
   }));
 
@@ -306,6 +308,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_working_offload':
         case 'memory_working_reset':
           return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_consolidate':
+          return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

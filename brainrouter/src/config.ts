@@ -52,6 +52,15 @@ export function loadConfig(): Config {
 
   // Auto-resolve placeholder API keys if possible
   resolveDefaultApiKey(config);
+  // The default config writes `llm.apiKey: ''` so it never appears as a
+  // secret in the committed file. Backfill from the standard env vars at
+  // load time so every downstream consumer (callOpenAI, mcpClient env
+  // propagation, the cognitive extractor LLM runner) sees a real value
+  // instead of the empty string.
+  if (config.llm && !config.llm.apiKey.trim()) {
+    const envKey = process.env.OPENAI_API_KEY || process.env.BRAINROUTER_LLM_API_KEY;
+    if (envKey) config.llm.apiKey = envKey;
+  }
 
   return config;
 }

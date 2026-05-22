@@ -322,6 +322,14 @@ export interface RecallResult {
   recallExplanation?: RecallExplanation;
 }
 
+/**
+ * Outcome of the cognitive extraction step for a single capture call. Lets
+ * the CLI distinguish "the LLM said nothing notable here" (ok, zero records)
+ * from "the LLM call itself failed" (failed) from "extraction wasn't tried
+ * this turn" (skipped — below the every-N-turns threshold).
+ */
+export type CognitiveExtractionStatus = "ok" | "failed" | "skipped";
+
 export interface CaptureResult {
   /** Number of Sensory messages recorded. */
   sensoryRecordedCount: number;
@@ -329,6 +337,15 @@ export interface CaptureResult {
   cognitiveExtractionTriggered: boolean;
   /** Number of Cognitive memories extracted (if triggered). */
   cognitiveExtractedCount: number;
+  /**
+   * Status of the extraction LLM call. `ok` means it ran and returned a
+   * (possibly empty) list of records. `failed` means the LLM call itself
+   * errored. `skipped` means we didn't try this turn. Callers should only
+   * surface a warning to the user on `failed`.
+   */
+  cognitiveExtractionStatus?: CognitiveExtractionStatus;
+  /** Error string when status === "failed", for diagnostic display. */
+  cognitiveExtractionError?: string;
 }
 
 // ============================

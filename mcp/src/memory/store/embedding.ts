@@ -1,5 +1,6 @@
 import type { EmbeddingServiceConfig } from "@brainrouter/types";
 import { fetchWithExternalRetry } from "../retry.js";
+import { acquireLLMSlot } from "../llm-semaphore.js";
 
 export class EmbeddingService {
   private readonly endpoint: string;
@@ -38,31 +39,40 @@ export class EmbeddingService {
       throw new Error("EmbeddingService is not ready (missing API key)");
     }
 
-    const res = await fetchWithExternalRetry(this.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        input: text,
-        model: this.model,
-      }),
-    }, {
-      label: "Embedding API",
-    });
+    // Same backend as ModelLLMRunner — go through the shared semaphore so
+    // embedding requests count against the concurrency cap. Otherwise a burst
+    // of new cognitive records can fire N embeddings + N LLM calls in
+    // parallel and overwhelm LM Studio just like before.
+    const release = await acquireLLMSlot();
+    try {
+      const res = await fetchWithExternalRetry(this.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          input: text,
+          model: this.model,
+        }),
+      }, {
+        label: "Embedding API",
+      });
 
-    if (!res.ok) {
-      const err = await res.text().catch(() => "(no body)");
-      throw new Error(`Embedding API failed: HTTP ${res.status} ${res.statusText} - ${err}`);
+      if (!res.ok) {
+        const err = await res.text().catch(() => "(no body)");
+        throw new Error(`Embedding API failed: HTTP ${res.status} ${res.statusText} - ${err}`);
+      }
+
+      const data = await res.json() as any;
+      if (!data.data || !data.data[0] || !Array.isArray(data.data[0].embedding)) {
+        throw new Error("Invalid embedding response format");
+      }
+
+      const vec = data.data[0].embedding as number[];
+      return new Float32Array(vec);
+    } finally {
+      release();
     }
-
-    const data = await res.json() as any;
-    if (!data.data || !data.data[0] || !Array.isArray(data.data[0].embedding)) {
-      throw new Error("Invalid embedding response format");
-    }
-
-    const vec = data.data[0].embedding as number[];
-    return new Float32Array(vec);
   }
 }

@@ -15,11 +15,14 @@ import { LOCAL_TOOLS } from './agent.js';
 import { listTranscripts, loadTranscript, readTranscriptEntries } from './sessionStore.js';
 import { initAgentMd } from './initAgentMd.js';
 import { expandMentions } from './mentions.js';
-import { clearGoal, readGoal, setGoal } from './goalStore.js';
+import { clearGoal, completeGoal, goalHasBudgetLeft, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, tickGoalIteration } from './goalStore.js';
 import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from './hooksStore.js';
 import { copyToClipboard } from './clipboard.js';
 import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from './loopRunner.js';
 import { randomUUID } from 'node:crypto';
+import { readPreferences, writePreferences } from './preferencesStore.js';
+import { execSync } from 'node:child_process';
+import { clampPayload, extractMemories, renderMemoryCards } from './memoryFormatters.js';
 import { formatPlan, readPlan, updatePlan } from './taskStore.js';
 import type { WorkspaceInfo } from './workspace.js';
 import { listRoles } from './agentRoles.js';
@@ -27,6 +30,9 @@ import { formatSessionSummary, getSession, listSessions, reconcileStale } from '
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from './skillRunner.js';
 import { callMcpTool, childSessionKey } from './mcpUtils.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from './workflowArtifacts.js';
+import { consolidateMemories } from './memoryConsolidation.js';
+import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from './hookifyStore.js';
+import { safePrintAbovePrompt as safePrintAbovePromptGlobalShared, setActiveReadline } from './cliPrompt.js';
 
 const execPromise = promisify(exec);
 
@@ -41,12 +47,20 @@ marked.use(markedTerminal({
  */
 const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/tools', '/skills', '/plan', '/transcript',
-  '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit',
+  '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait',
   '/spec', '/feature-dev', '/review', '/implement-plan', '/skill', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
   '/init', '/sessions', '/resume', '/model', '/mcp',
-  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/loop',
+  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop',
+  '/continue', '/auto-review', '/vim', '/statusline',
+  '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
+  '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
+  '/tokens', '/watch', '/yolo', '/sandbox', '/kill',
+  // workflow & ergonomics commands
+  '/theme', '/title', '/personality', '/new', '/side', '/btw', '/raw',
+  '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
+  '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
@@ -76,14 +90,50 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     },
   });
 
-  // Reflect the current access mode in the prompt so the user always knows
-  // which "plan mode" they're in. Cycled via Shift+Tab below.
+  // Reflect the current access mode and any configured statusline segments
+  // in the prompt. Configurable via /statusline; default just shows the mode.
+  const renderStatusline = (): string => {
+    const prefs = readPreferences(agent.workspaceRoot);
+    const segments = prefs.statusline.split(',').map((s) => s.trim()).filter(Boolean);
+    const out: string[] = [];
+    for (const seg of segments) {
+      if (seg === 'mode') out.push(agent.getAccessMode());
+      else if (seg === 'model') out.push(agent.getModel());
+      else if (seg === 'tokens') {
+        const u = agent.lastTurnUsage;
+        if (u.calls > 0) out.push(`${u.promptTokens}↑${u.completionTokens}↓`);
+      } else if (seg === 'session') {
+        const k = agent.sessionKey;
+        out.push(k.length > 22 ? `${k.slice(0, 22)}…` : k);
+      } else if (seg === 'branch' || seg === 'dirty') {
+        try {
+          const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: agent.workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+          const dirty = execSync('git status --porcelain', { cwd: agent.workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() !== '';
+          if (seg === 'branch') out.push(branch);
+          else if (seg === 'dirty' && dirty) out.push('*');
+        } catch { /* not a git repo */ }
+      }
+    }
+    return out.filter(Boolean).join(' · ');
+  };
   const refreshPromptForMode = () => {
     const mode = agent.getAccessMode();
     const accent = mode === 'shell' ? chalk.red : mode === 'write' ? chalk.hex('#CC9166') : chalk.green;
-    rl.setPrompt(accent(`brainrouter[${mode}]> `));
+    const line = renderStatusline();
+    rl.setPrompt(accent(`brainrouter[${line}]> `));
   };
   refreshPromptForMode();
+
+  // Vim mode: readline supports editorMode 'vi' via setRawMode + tty.
+  // We honor the persisted preference at startup so users don't have to
+  // re-toggle it each session.
+  const initialPrefs = readPreferences(agent.workspaceRoot);
+  if (initialPrefs.editorMode === 'vi') {
+    process.stdout.write(chalk.gray('Vim mode enabled (composer uses vi keybindings). Toggle with /vim.\n'));
+    // Node's readline doesn't natively expose vi mode; we approximate by
+    // emitting a hint and trusting the user's terminal/inputrc. A future
+    // pass can swap in a custom keypress handler for full Vim semantics.
+  }
 
   // Shift+Tab cycles the access mode (codex calls this "Plan mode").
   // Order: read → write → shell → read …
@@ -102,50 +152,93 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     }
   });
 
+  // Publish the rl interface globally so out-of-scope helpers
+  // (runOrchestrationPrompt, askYesNo in agent.ts) can talk to the same
+  // stdin/stdout pair the REPL owns. Cleared on close.
+  activeReadline = rl;
+  setActiveReadline(rl);
+  rl.on('close', () => { activeReadline = undefined; setActiveReadline(undefined); });
+
   rl.prompt();
 
   let isProcessing = false;
+  // When a /goal is active, after each turn we schedule the NEXT turn
+  // automatically. The flag tracks whether such a continuation is pending so
+  // user input (next line typed) cancels it before it fires.
+  let pendingContinuation = false;
 
-  rl.on('line', async (line) => {
-    const input = line.trim();
+  /**
+   * Build the prompt that fires automatically between goal-driven turns. Codex
+   * pattern: orient the model around the active objective, force an evidence
+   * audit, refuse prose-only "I will continue" answers.
+   */
+  const buildGoalContinuationPrompt = (
+    goal: import('./goalStore.js').Goal,
+    lastPrompt: string,
+    lastAnswer: string,
+  ): string => {
+    const iter = goal.budget.iterationsUsed + 1;
+    const remaining = Math.max(0, goal.budget.maxIterations - iter);
+    return [
+      `[GOAL CONTINUATION — iteration ${iter}/${goal.budget.maxIterations}, ${remaining} remaining]`,
+      '',
+      `Your active goal is: ${goal.text}`,
+      '',
+      `Last user message: ${lastPrompt || '(none)'}`,
+      `Your previous response (truncated): ${lastAnswer.slice(0, 600)}${lastAnswer.length > 600 ? '…' : ''}`,
+      '',
+      '## What to do this turn',
+      '1. **Audit the evidence in this thread** against the goal\'s outcome. Look at files you wrote, tests you ran, tools that returned ok=true.',
+      '2. **Decide one of three:**',
+      '   - If the outcome is met with concrete evidence (file paths, test names, command outputs), call `goal_complete` with a 1–2 sentence proof.',
+      '   - If no defensible path forward remains without user input or missing materials, call `goal_blocked` with a reason + needed input.',
+      '   - Otherwise, take the **next concrete tool action** (read a file, write code, spawn a worker child, run a verifier). Do NOT respond with prose like "I will now do X" — that\'s a no-op and the CLI will stop the continuation.',
+      '3. Use update_plan to track progress if you haven\'t already.',
+      '',
+      'Reminder: budget is finite. Pick the highest-leverage action that moves the goal forward.',
+    ].join('\n');
+  };
 
-    if (!input) {
-      rl.prompt();
+  /**
+   * Print a line of output while the readline prompt is showing without
+   * clobbering whatever the user is mid-typing. Used by child-agent callbacks
+   * that fire AFTER the parent's runTurn returned — the agent's tool events
+   * keep streaming for a while because children run detached, and naive
+   * console.log + spinner.start() would steal the input row.
+   */
+  const safePrintAbovePrompt = (msg: string): void => {
+    if (!process.stdout.isTTY) {
+      console.log(msg);
       return;
     }
+    // \r → column 0, \x1b[2K → clear the whole line, including any prompt + typed text.
+    process.stdout.write('\r\x1b[2K');
+    console.log(msg);
+    // Redraw the prompt and re-render the in-progress input buffer.
+    try { (rl as any)._refreshLine?.(); } catch { rl.prompt(true); }
+  };
 
-    if (input.startsWith('/')) {
-      const parts = input.split(' ');
-      const command = parts[0].toLowerCase();
-      const args = parts.slice(1);
-
-      await handleSlashCommand(command, args, agent, mcpClient, config, rl, {
-        refreshPromptForMode,
-        isProcessing: () => isProcessing,
-      });
-      rl.prompt();
-      return;
-    }
-
+  /** Run a turn programmatically (used by `/continue` and the line handler). */
+  const runAgentTurn = async (rawInput: string): Promise<void> => {
     if (isProcessing) {
-      console.log(chalk.yellow('\nA previous turn is still running. Wait for the prompt before sending another message.\n'));
-      rl.prompt();
+      console.log(chalk.yellow('\nA previous turn is still running.\n'));
       return;
     }
-
     isProcessing = true;
     rl.pause();
-
-    // Expand @path/to/file mentions into a fenced context block.
-    const { expanded, mentions } = expandMentions(input, agent.workspaceRoot);
+    const { expanded, mentions } = expandMentions(rawInput, agent.workspaceRoot);
     if (mentions.length > 0) {
       console.log(chalk.gray(`📎  Attached ${mentions.length} file${mentions.length === 1 ? '' : 's'}: ${mentions.map((m) => m.token).join(', ')}`));
     }
-
-    // Run agent turn
     const startedAt = Date.now();
     const spinner = ora(chalk.gray('Agent starting...')).start();
+    // Once the parent's runTurn returns, child agents may still emit tool
+    // events asynchronously. After this flag flips, we MUST NOT touch the
+    // spinner (which is already .succeeded) — restarting it would steal the
+    // readline row and the user would feel like they can't type.
+    let parentDone = false;
     const tickStatus = (status: string) => {
+      if (parentDone) return;
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
       const u = agent.lastTurnUsage;
       const tokens = u.calls > 0 ? `  ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓` : '';
@@ -153,22 +246,46 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     };
     try {
       const answer = await agent.runTurn(expanded, {
-        onStatusUpdate: (status) => tickStatus(status),
+        onStatusUpdate: tickStatus,
         onToolStart: (name, args) => {
+          // Render spawn_agent / spawn_agents specially — Claude-Code style
+          // one-liner ("Ran agent <role> — <one-line task>") so a fan-out of
+          // 5 children produces 5 clean lines instead of 5 JSON dumps. The
+          // raw JSON is still in the transcript for debugging.
+          let line: string;
+          if (name === 'spawn_agent') {
+            const role = chalk.magenta(String((args as any)?.role ?? 'agent'));
+            const label = (args as any)?.label ? chalk.gray(` [${(args as any).label}]`) : '';
+            const task = String((args as any)?.prompt ?? '').replace(/\s+/g, ' ').trim();
+            const preview = chalk.gray(task.length > 100 ? task.slice(0, 99) + '…' : task);
+            line = chalk.gray('🤖  Spawning agent: ') + role + label + chalk.gray(' — ') + preview;
+          } else if (name === 'spawn_agents') {
+            const agents = Array.isArray((args as any)?.agents) ? (args as any).agents : [];
+            const summary = agents
+              .map((a: any) => chalk.magenta(String(a?.role ?? 'agent')))
+              .join(chalk.gray(', '));
+            line = chalk.gray(`🤖  Spawning ${agents.length} agent${agents.length === 1 ? '' : 's'} in parallel: `) + summary;
+          } else {
+            line = chalk.gray('🛞  Calling tool: ') + chalk.cyan(name) + chalk.gray(`(${JSON.stringify(args).slice(0, 240)})`);
+          }
+          if (parentDone) { safePrintAbovePrompt(line); return; }
           spinner.stop();
-          console.log(chalk.gray('🛞  Calling tool: ') + chalk.cyan(name) + chalk.gray(`(${JSON.stringify(args)})`));
+          console.log(line);
         },
         onToolEnd: (name, result) => {
-          if (result.success) {
-            console.log(chalk.green('✓  Tool ') + chalk.cyan(name) + chalk.green(' completed: ') + chalk.gray(result.summary));
-          } else {
-            console.log(chalk.red('❌  Tool ') + chalk.cyan(name) + chalk.red(' failed: ') + chalk.yellow(result.summary));
-          }
+          const line = result.success
+            ? chalk.green('✓  Tool ') + chalk.cyan(name) + chalk.green(' completed: ') + chalk.gray(result.summary)
+            : chalk.red('❌  Tool ') + chalk.cyan(name) + chalk.red(' failed: ') + chalk.yellow(result.summary);
+          if (parentDone) { safePrintAbovePrompt(line); return; }
+          console.log(line);
           tickStatus('Thinking');
           spinner.start();
         },
-        // Plan ticker: render a compact ✓/⏳/☐ block when update_plan fires.
         onPlanUpdate: (items, explanation) => {
+          if (parentDone) {
+            safePrintAbovePrompt(chalk.gray(`📋  Plan updated (${items.length} item${items.length === 1 ? '' : 's'})`));
+            return;
+          }
           spinner.stop();
           console.log(chalk.gray('📋  Plan updated:'));
           if (explanation) console.log(chalk.gray(`    ${explanation}`));
@@ -182,29 +299,182 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           tickStatus('Thinking');
           spinner.start();
         },
+        onChildComplete: (event) => {
+          const head = event.status === 'completed'
+            ? chalk.green(`🏁  Agent ${event.childId} (${event.role}) completed`)
+            : chalk.red(`💥  Agent ${event.childId} (${event.role}) failed`);
+          const tail = event.status === 'completed' && event.preview
+            ? chalk.gray(` — ${event.preview}`)
+            : event.error ? chalk.yellow(` — ${event.error}`) : '';
+          const line = head + tail;
+          if (parentDone) { safePrintAbovePrompt(line); return; }
+          spinner.stop();
+          console.log(line);
+          tickStatus('Thinking');
+          spinner.start();
+        },
+        onMemoryEvent: (event) => {
+          let line: string | undefined;
+          if (event.kind === 'briefing') {
+            const src = event.sources.length > 0 ? event.sources.join(', ') : '(none)';
+            line = chalk.gray(`🧠  Briefing: ${event.recordCount} record${event.recordCount === 1 ? '' : 's'} from ${src}`);
+          } else if (event.kind === 'capture') {
+            // Truthful capture line: show sensory rows actually written, and
+            // — critically — flag when extraction silently failed. The old
+            // line said "Captured turn → memory" even when 0 cognitive
+            // records came out the other end, which made the user think
+            // their conversation was searchable when nothing of the sort
+            // was happening.
+            const sensory = event.sensoryRecorded ?? event.messageCount;
+            const extracted = event.extractedCount;
+            const triggered = event.extractionTriggered;
+            const sk = event.sessionKey.slice(0, 12);
+            if (event.extractionWarning) {
+              line = chalk.yellow(
+                `💾  Captured ${sensory} sensory msg(s) in ${sk}… — ⚠️ ${event.extractionWarning}`,
+              );
+            } else if (triggered && typeof extracted === 'number') {
+              if (extracted > 0) {
+                line = chalk.gray(
+                  `💾  Captured ${sensory} msg(s) → ${extracted} cognitive record(s) extracted (${sk}…)`,
+                );
+              } else {
+                // LLM ran successfully but found nothing notable to promote
+                // (greeting, trivial exchange, all-duplicates). NOT an error.
+                line = chalk.gray(
+                  `💾  Captured ${sensory} msg(s) → no new memories worth promoting (${sk}…)`,
+                );
+              }
+            } else if (triggered === false) {
+              // Sensory landed; extractor below the every-N-turn threshold.
+              line = chalk.gray(`💾  Captured ${sensory} msg(s) → sensory buffer (${sk}…)`);
+            } else {
+              line = chalk.gray(`💾  Captured ${sensory} msg(s) → memory (${sk}…)`);
+            }
+          } else if (event.kind === 'citation' && event.recordIds.length > 0) {
+            line = chalk.gray(`📌  Reinforced ${event.recordIds.length} record${event.recordIds.length === 1 ? '' : 's'}: ${event.recordIds.slice(0, 3).join(', ')}${event.recordIds.length > 3 ? '…' : ''}`);
+          } else if (event.kind === 'contradiction') {
+            line = chalk.yellow(`⚠️  Memory contradiction: ${event.warning.slice(0, 140)}`);
+          }
+          if (!line) return;
+          if (parentDone) { safePrintAbovePrompt(line); return; }
+          spinner.stop();
+          console.log(line);
+          tickStatus('Thinking');
+          spinner.start();
+        },
       });
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
       const u = agent.lastTurnUsage;
       const tokenSummary = u.calls > 0
         ? chalk.gray(` · ${u.promptTokens.toLocaleString()} in / ${u.completionTokens.toLocaleString()} out across ${u.calls} call${u.calls === 1 ? '' : 's'}`)
         : '';
+      parentDone = true;
       spinner.succeed(chalk.green(`Done!${chalk.gray(` ${elapsed}s`)}${tokenSummary}`));
-
-      console.log('\n' + marked.parse(answer) + '\n');
+      const prefsForRender = readPreferences(agent.workspaceRoot);
+      const rendered = prefsForRender.rawScrollback ? answer : marked.parse(answer);
+      console.log('\n' + rendered + '\n');
       const warning = agent.takeContradictionWarning();
       if (warning) {
         console.log(chalk.yellow(`⚠️  Memory: ${warning}`));
         console.log(chalk.gray(`    Use /memory or /briefing to investigate, /forget <id> to archive obsolete records.\n`));
       }
     } catch (err: any) {
+      parentDone = true;
       spinner.fail(chalk.red('Execution failed'));
       console.error(chalk.red(`\nError: ${err.message}\n`));
     } finally {
       isProcessing = false;
+      // Clear any active skill latched by /skill / /feature-dev / /spec /
+      // /review / /implement-plan so subsequent plain prompts don't keep
+      // spiking the same skill. The skill memetic potential still decays
+      // server-side on its own half-life; this just stops attribution.
+      agent.activeSkill = undefined;
+      // Auto-continuation: if a /goal is active, the turn made tool calls,
+      // and we still have budget, schedule another turn. Codex parity rules:
+      //   - prose-only turn (zero tool calls) suppresses next continuation
+      //   - user typing anything cancels pendingContinuation
+      //   - goal_complete / goal_blocked tools called during the turn stop the loop
+      const goalAfter = readGoal(agent.workspaceRoot, agent.sessionKey);
+      const shouldContinue =
+        !!goalAfter &&
+        goalAfter.status === 'active' &&
+        goalHasBudgetLeft(goalAfter) &&
+        agent.lastTurnToolCalls > 0 &&
+        agent.lastGoalTransition === undefined;
+      if (goalAfter && goalAfter.status === 'complete') {
+        console.log(chalk.green(`\n🎯  Goal achieved — ${goalAfter.blockedReason ?? 'evidence on record.'}\n`));
+      } else if (goalAfter && goalAfter.status === 'blocked') {
+        console.log(chalk.yellow(`\n🚧  Goal blocked: ${goalAfter.blockedReason ?? '(no reason)'}\n`));
+      } else if (goalAfter && goalAfter.status === 'active' && !goalHasBudgetLeft(goalAfter)) {
+        console.log(chalk.yellow(`\n⏸  Goal iteration budget exhausted (${goalAfter.budget.iterationsUsed}/${goalAfter.budget.maxIterations}). Extend with /goal budget <n>, mark /goal complete, or /goal clear.\n`));
+      } else if (goalAfter && goalAfter.status === 'active' && agent.lastTurnToolCalls === 0) {
+        console.log(chalk.gray(`(goal continuation suppressed: last turn made no tool calls — anti-spin)\n`));
+      }
       rl.resume();
+      refreshPromptForMode(); // pick up token-meter / branch updates
+      rl.prompt();
+      if (shouldContinue && goalAfter) {
+        pendingContinuation = true;
+        const next = goalAfter.budget.iterationsUsed + 1;
+        console.log(chalk.gray(`(goal continuation queued — iteration ${next}/${goalAfter.budget.maxIterations}; type anything to cancel)`));
+        const followUp = buildGoalContinuationPrompt(goalAfter, agent.lastUserPrompt, agent.lastAnswer);
+        setImmediate(() => {
+          if (!pendingContinuation || isProcessing) return; // user cancelled or busy
+          pendingContinuation = false;
+          tickGoalIteration(agent.workspaceRoot, agent.sessionKey);
+          void runAgentTurn(followUp);
+        });
+      }
+    }
+  };
+
+  rl.on('line', async (line) => {
+    // User typed: any pending goal continuation is cancelled.
+    if (pendingContinuation) {
+      pendingContinuation = false;
+      console.log(chalk.gray('(goal continuation cancelled by user input)'));
+    }
+    const input = line.trim();
+
+    if (!input) {
+      rl.prompt();
+      return;
     }
 
-    rl.prompt();
+    if (input.startsWith('/')) {
+      const parts = input.split(' ');
+      const command = parts[0].toLowerCase();
+      const args = parts.slice(1);
+
+      // Wrap the slash-command dispatcher so a thrown error or rejected
+      // promise can never leave the REPL without a prompt. Without this, a
+      // bug inside any /command (file write, MCP call, etc.) bricks the
+      // session because the user never sees the prompt come back.
+      try {
+        await handleSlashCommand(command, args, agent, mcpClient, config, rl, {
+          refreshPromptForMode,
+          isProcessing: () => isProcessing,
+          runAgentTurn: (prompt: string) => { void runAgentTurn(prompt); },
+          runAgentTurnAsync: (prompt: string) => runAgentTurn(prompt),
+        });
+      } catch (err: any) {
+        console.error(chalk.red(`\nSlash command "${command}" failed: ${err?.message ?? err}\n`));
+      } finally {
+        // The /continue and /side/btw cases own their own prompt cycle via
+        // runAgentTurn — only re-prompt if no turn is in flight.
+        if (!isProcessing) rl.prompt();
+      }
+      return;
+    }
+
+    if (isProcessing) {
+      console.log(chalk.yellow('\nA previous turn is still running. Wait for the prompt before sending another message.\n'));
+      rl.prompt();
+      return;
+    }
+
+    await runAgentTurn(input);
   });
 
   rl.on('SIGINT', async () => {
@@ -220,10 +490,20 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
 }
 
 interface ReplContext {
-  /** Refresh the readline prompt (color reflects access mode). */
+  /** Refresh the readline prompt (color reflects access mode + status segments). */
   refreshPromptForMode: () => void;
   /** True while the REPL is mid-turn; loop ticks should defer when set. */
   isProcessing: () => boolean;
+  /** Programmatically run an agent turn (used by `/continue` and friends). */
+  runAgentTurn: (prompt: string) => void;
+  /**
+   * Awaitable variant — same semantics but the caller can attach a `.finally`
+   * to do post-turn cleanup. Used by `/side` and `/btw` to restore the parent
+   * sessionKey after the side conversation finishes (the old setTimeout(100)
+   * race restored the key before the turn ever finished, polluting the main
+   * transcript).
+   */
+  runAgentTurnAsync: (prompt: string) => Promise<void>;
 }
 
 async function handleSlashCommand(
@@ -281,9 +561,56 @@ async function handleSlashCommand(
       console.log(`  ${chalk.cyan('/permissions [read|write|shell]')} - View or set the agent's access mode`);
       console.log(`  ${chalk.cyan('/hooks [list|add|remove|enable|disable]')} - Lifecycle shell hooks`);
       console.log(`  ${chalk.cyan('/loop <interval> <prompt> | /loop stop')} - Repeat a prompt on a cadence`);
+      console.log(`  ${chalk.cyan('/continue')}         - Resume after a loop-limit abort (drain children, finish artifacts)`);
+      console.log(`  ${chalk.cyan('/auto-review [on|off]')} - Auto-run a reviewer agent after every worker completion`);
+      console.log(`  ${chalk.cyan('/vim')}              - Toggle vi-mode for the composer (persisted)`);
+      console.log(`  ${chalk.cyan('/statusline <segments>')} - Configure prompt: mode,branch,dirty,model,tokens,session`);
+      console.log(chalk.bold('\nFull memory surface (MCP):'));
+      console.log(`  ${chalk.cyan('/handover')}                - Generate continuation note for next session`);
+      console.log(`  ${chalk.cyan('/explain <query>')}         - Why did recall return what it did? (FTS/vec/RRF/boosts)`);
+      console.log(`  ${chalk.cyan('/trace save <desc> | /trace search <q>')} - Engineering debug-trace store`);
+      console.log(`  ${chalk.cyan('/failed [area]')}           - Past failed attempts for a problem area`);
+      console.log(`  ${chalk.cyan('/verify <recordId> [status] [confidence]')} - Re-verify a memory record`);
+      console.log(`  ${chalk.cyan('/audit')}                   - Recent memory audit log`);
+      console.log(`  ${chalk.cyan('/export [path]')}           - Dump memory + evidence + ops to JSON`);
+      console.log(`  ${chalk.cyan('/import <path>')}           - Import a BrainRouter memory envelope`);
+      console.log(`  ${chalk.cyan('/persona <name>')}          - Fetch a persona definition`);
+      console.log(`  ${chalk.cyan('/skill-hints <skill> <hints>')} - Register extraction hints for a skill`);
+      console.log(`  ${chalk.cyan('/diagnostics')}             - Scrubbed runtime + DB stats bundle`);
+      console.log(`  ${chalk.cyan('/working reset confirm')}   - Clear working-memory canvas (after session)`);
+      console.log(chalk.bold('\nObservability:'));
+      console.log(`  ${chalk.cyan('/tokens')}                  - Session token usage + memory-savings estimate`);
+      console.log(`  ${chalk.cyan('/agents')}                  - Child agents with per-agent tokens`);
+      console.log(`  ${chalk.cyan('/agent <id> [--full]')}     - Detail + (optionally) full transcript`);
+      console.log(`  ${chalk.cyan('/watch')}                   - Tail trace log (needs BRAINROUTER_TRACE_LOG)`);
+      console.log(`  ${chalk.cyan('/yolo [on|off]')}           - Auto-approve run_command (skip confirm prompt)`);
+      console.log(`  ${chalk.cyan('/sandbox [status|add-read|add-write|remove|clear] <path>')} - Persistent sandbox grants`);
+      console.log(`  ${chalk.cyan('/kill <agent-id>')}         - Stop a single running child agent`);
+      console.log(chalk.gray('  Sandbox: set BRAINROUTER_SANDBOX=on for sandboxed run_command (sandbox-exec / bwrap / firejail).'));
+      console.log(chalk.gray('  Tracing: set BRAINROUTER_TRACE_LOG=<path> to emit OTEL-style JSONL spans.'));
+      console.log(chalk.bold('\nWorkflow & Ergonomics:'));
+      console.log(`  ${chalk.cyan('/theme [auto|light|dark|mono]')} - Set markdown output theme`);
+      console.log(`  ${chalk.cyan('/title <segments>')}          - Configure terminal title (model,session,branch,mode)`);
+      console.log(`  ${chalk.cyan('/personality <style>')}       - concise|standard|detailed|pair-programmer`);
+      console.log(`  ${chalk.cyan('/new [label]')}               - Start a new chat with a fresh session key`);
+      console.log(`  ${chalk.cyan('/side <q>')} / ${chalk.cyan('/btw <q>')}       - Ephemeral side conversation in a forked session`);
+      console.log(`  ${chalk.cyan('/raw [on|off]')}              - Toggle raw scrollback (no markdown render) for copy-friendly output`);
+      console.log(`  ${chalk.cyan('/feedback [message]')}        - Append a feedback entry to .brainrouter/cli/feedback.jsonl`);
+      console.log(`  ${chalk.cyan('/rollout')}                   - Print the transcript file path for this session`);
+      console.log(`  ${chalk.cyan('/ps')}                        - List background tasks: loop + running children`);
+      console.log(`  ${chalk.cyan('/stop')}                      - Stop the running loop and mark stale children`);
+      console.log(`  ${chalk.cyan('/logout')}                    - Clear API keys from the active profile`);
+      console.log(`  ${chalk.cyan('/apps')} / ${chalk.cyan('/plugins')}           - List workspace skills and plugin folders`);
+      console.log(`  ${chalk.cyan('/experimental [on|off]')}     - Toggle experimental features`);
+      console.log(`  ${chalk.cyan('/memories [status|on|off|consolidate]')} - Manage memory pipeline + write user/feedback/project files`);
+      console.log(`  ${chalk.cyan('/debug-config')}              - Show config layers, env flags, preferences`);
+      console.log(`  ${chalk.cyan('/mention [partial]')}         - Suggest workspace files for @ mentions`);
+      console.log(`  ${chalk.cyan('/keymap [json]')}             - Show built-in bindings and set overrides`);
+      console.log(`  ${chalk.cyan('/ide')}                       - Show detected IDE host`);
+      console.log(`  ${chalk.cyan('/hookify [list|create|enable|disable|remove]')} - Markdown-based behavior guards (.brainrouter/hooks/*.md)`);
       console.log(chalk.gray('\nTips: type @ then a path for file mentions; Tab autocompletes commands and @paths.'));
       console.log(chalk.gray('      Shift+Tab cycles access mode (read → write → shell).'));
-      console.log(`  ${chalk.cyan('/exit')}     - Close the MCP connection and exit the CLI\n`);
+      console.log(`  ${chalk.cyan('/exit')} / ${chalk.cyan('/quit')}     - Close the MCP connection and exit the CLI\n`);
       break;
 
     case '/status': {
@@ -419,7 +746,7 @@ async function handleSlashCommand(
     }
 
     case '/plan': {
-      const state = readPlan(agent.workspaceRoot);
+      const state = readPlan(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nPlan:'));
       console.log(chalk.gray(formatPlan(state)));
       if (state.updatedAt) {
@@ -485,7 +812,36 @@ async function handleSlashCommand(
         console.warn(chalk.yellow(`  Warning: ${err.message}`));
       }
 
-      const plan = readPlan(agent.workspaceRoot);
+      // Memory health: are captures actually being extracted into searchable
+      // cognitive records, or are they piling up in sensory_stream? This is
+      // the silent failure mode that makes briefings return "0 records" — the
+      // CLI shows 💾 Captured after every turn but the LLM the extractor
+      // needs may not be configured in the MCP child env.
+      try {
+        const diagRes = await callMcpTool<any>(mcpClient, 'memory_diagnostics', {});
+        const ext = diagRes.parsed?.databaseStats?.userStats?.extraction;
+        if (ext) {
+          const errs = ext.extractionErrors ?? 0;
+          const pending = ext.unextractedCount ?? 0;
+          const total = diagRes.parsed?.databaseStats?.userStats?.total ?? 0;
+          const headline = errs > 0
+            ? chalk.red(`  Memory extraction: DEGRADED — ${errs} consecutive failures`)
+            : pending > 5
+              ? chalk.yellow(`  Memory extraction: backlog of ${pending} sensory rows pending`)
+              : chalk.green(`  Memory extraction: healthy (${total} cognitive records, ${pending} pending)`);
+          console.log(headline);
+          if (ext.lastErrorMessage) {
+            console.log(chalk.gray(`    Last error: ${String(ext.lastErrorMessage).slice(0, 160)}`));
+          }
+          if (errs > 0 || !diagRes.parsed?.envKeys?.some?.((k: string) => /BRAINROUTER_LLM_API_KEY|OPENAI_API_KEY/.test(k))) {
+            console.log(chalk.gray('    Hint: set OPENAI_API_KEY (or BRAINROUTER_LLM_API_KEY) before launching brainrouter so the MCP child can run extraction.'));
+          }
+        }
+      } catch (err: any) {
+        console.log(chalk.yellow(`  Memory extraction: unable to query (${err?.message ?? err})`));
+      }
+
+      const plan = readPlan(agent.workspaceRoot, agent.sessionKey);
       console.log(`  Plan items: ${chalk.yellow(plan.items.length)} (updated: ${chalk.gray(plan.updatedAt || 'never')})`);
       const reconciled = reconcileStale(agent.workspaceRoot);
       if (reconciled > 0) console.log(`  Reconciled ${chalk.yellow(reconciled)} stale child session(s).`);
@@ -530,46 +886,34 @@ async function handleSlashCommand(
     }
 
     case '/commit': {
+      // Pre-check git status so we can skip an LLM round-trip when there's
+      // nothing to commit. The actual commit work goes through ctx.runAgentTurn
+      // so it inherits the normal pipeline: isProcessing locking, goal
+      // continuation, /raw honoring, contradiction surfacing, token summary.
       const spinner = ora(chalk.gray('Checking git status...')).start();
+      let statusOut = '';
+      let diffOut = '';
       try {
-        const { stdout: statusOut } = await execPromise('git status --short');
+        ({ stdout: statusOut } = await execPromise('git status --short'));
         if (!statusOut.trim()) {
           spinner.succeed(chalk.green('Working directory clean. Nothing to commit.'));
           break;
         }
-        spinner.text = chalk.gray('Generating commit message and staging changes...');
-        const { stdout: diffOut } = await execPromise('git diff HEAD');
-        
+        spinner.text = chalk.gray('Reading diff...');
+        ({ stdout: diffOut } = await execPromise('git diff HEAD'));
         spinner.stop();
-        console.log(chalk.bold('\nGit changes detected:'));
-        console.log(chalk.gray(statusOut));
-
-        const prompt = `Based on the following git status and git diff, please create a commit. You should stage the modified/untracked files (using git add) and run git commit with an appropriate conventional commit message. Here is the git status:\n${statusOut}\nHere is the diff:\n${diffOut}`;
-        
-        const agentSpinner = ora(chalk.gray('Executing agent commit workflow...')).start();
-        const answer = await agent.runTurn(prompt, {
-          onStatusUpdate: (status) => {
-            agentSpinner.text = chalk.gray(status);
-          },
-          onToolStart: (name, args) => {
-            agentSpinner.stop();
-            console.log(chalk.gray('🛞  Calling tool: ') + chalk.cyan(name) + chalk.gray(`(${JSON.stringify(args)})`));
-          },
-          onToolEnd: (name, result) => {
-            if (result.success) {
-              console.log(chalk.green('✓  Tool ') + chalk.cyan(name) + chalk.green(' completed: ') + chalk.gray(result.summary));
-            } else {
-              console.log(chalk.red('❌  Tool ') + chalk.cyan(name) + chalk.red(' failed: ') + chalk.yellow(result.summary));
-            }
-            agentSpinner.start(chalk.gray('Thinking...'));
-          }
-        });
-        agentSpinner.succeed(chalk.green('Commit workflow finished!'));
-        console.log('\n' + marked.parse(answer) + '\n');
       } catch (err: any) {
-        spinner.fail(chalk.red(`Failed to complete commit command: ${err.message}`));
+        spinner.fail(chalk.red(`Failed to read git status: ${err.message}`));
+        break;
       }
-      break;
+      console.log(chalk.bold('\nGit changes detected:'));
+      console.log(chalk.gray(statusOut));
+      const prompt =
+        `Based on the following git status and git diff, please create a commit. ` +
+        `Stage the modified/untracked files (using git add) and run git commit with an appropriate conventional commit message.\n\n` +
+        `Git status:\n${statusOut}\n\nDiff:\n${diffOut}`;
+      ctx.runAgentTurn(prompt);
+      return;
     }
 
     case '/roles': {
@@ -595,6 +939,12 @@ async function handleSlashCommand(
             s.status === 'stale' ? chalk.yellow :
             s.status === 'closed' ? chalk.gray : chalk.cyan;
           console.log(`  ${colorFn(formatSessionSummary(s))}`);
+          if (s.usage) {
+            console.log(chalk.gray(`      tokens: ${s.usage.promptTokens.toLocaleString()}↑ ${s.usage.completionTokens.toLocaleString()}↓ across ${s.usage.calls} call${s.usage.calls === 1 ? '' : 's'} (${s.usage.turns} turn${s.usage.turns === 1 ? '' : 's'})`));
+          }
+          if (s.prompt) {
+            console.log(chalk.gray(`      prompt: ${s.prompt.replace(/\s+/g, ' ').slice(0, 100)}${s.prompt.length > 100 ? '…' : ''}`));
+          }
         }
       }
       console.log();
@@ -603,7 +953,8 @@ async function handleSlashCommand(
 
     case '/agent': {
       const id = args[0];
-      if (!id) { console.log(chalk.red('\nUsage: /agent <id>\n')); break; }
+      if (!id) { console.log(chalk.red('\nUsage: /agent <id> [--full]\n')); break; }
+      const full = args.includes('--full');
       const s = getSession(agent.workspaceRoot, id);
       if (!s) { console.log(chalk.red(`\nNo session ${id}\n`)); break; }
       console.log(chalk.bold(`\nAgent ${s.id}`));
@@ -613,14 +964,21 @@ async function handleSlashCommand(
       if (s.completedAt) console.log(`  Ended:   ${chalk.gray(s.completedAt)}`);
       if (s.label) console.log(`  Label:   ${s.label}`);
       console.log(`  Prompt:  ${chalk.gray(s.prompt.slice(0, 240))}`);
+      if (s.usage) {
+        console.log(`  Tokens:  ${chalk.cyan(s.usage.promptTokens.toLocaleString())}↑  ${chalk.cyan(s.usage.completionTokens.toLocaleString())}↓  ${chalk.gray(`(${s.usage.calls} LLM call${s.usage.calls === 1 ? '' : 's'}, ${s.usage.turns} turn${s.usage.turns === 1 ? '' : 's'})`)}`);
+      }
       if (s.finalOutput) console.log(`\n${chalk.bold('Final output:')}\n${s.finalOutput}`);
       if (s.error) console.log(`\n${chalk.red('Error:')} ${s.error}`);
-      const recent = readTranscriptEntries(agent.workspaceRoot, childSessionKey(s.parentSessionKey, s.id), 10);
-      if (recent.length > 0) {
-        console.log(chalk.bold('\nRecent transcript:'));
-        for (const e of recent) {
+      const entries = readTranscriptEntries(agent.workspaceRoot, childSessionKey(s.parentSessionKey, s.id), full ? 1000 : 10);
+      if (entries.length > 0) {
+        console.log(chalk.bold(`\n${full ? 'Full' : 'Recent'} transcript (${entries.length} entries):`));
+        for (const e of entries) {
           const text = formatTranscriptContent(e.content ?? e.tool_calls ?? '');
-          console.log(`  ${chalk.gray(e.timestamp)} ${chalk.cyan(e.role)} ${chalk.gray(text)}`);
+          const roleColor = e.role === 'user' ? chalk.yellow : e.role === 'assistant' ? chalk.green : e.role === 'tool' ? chalk.magenta : chalk.cyan;
+          console.log(`  ${chalk.gray(e.timestamp)} ${roleColor(e.role)} ${chalk.gray(text)}`);
+        }
+        if (!full && entries.length === 10) {
+          console.log(chalk.gray(`\n  (use /agent ${id} --full to see all entries)`));
         }
       }
       console.log();
@@ -634,16 +992,27 @@ async function handleSlashCommand(
         console.log(chalk.red('\nUsage: /spawn <role> <prompt>\n'));
         break;
       }
-      await runOrchestrationPrompt(agent, `Use the spawn_agent tool to start a ${role} child agent with this prompt:\n\n${prompt}\n\nReturn the child agent id when done.`);
-      break;
+      // Validate the role upfront — saves an LLM round-trip that would just
+      // error out server-side anyway.
+      const validRoles = listRoles().map((r) => r.name);
+      if (!validRoles.includes(role)) {
+        console.log(chalk.red(`\nUnknown role "${role}". Available: ${validRoles.join(', ')}.\n`));
+        break;
+      }
+      ctx.runAgentTurn(
+        `Use the spawn_agent tool to start a ${role} child agent with this prompt:\n\n${prompt}\n\nReturn the child agent id when done.`,
+      );
+      return;
     }
 
     case '/wait': {
       const id = args[0];
       const ms = args[1] ? Number(args[1]) : 120000;
       if (!id) { console.log(chalk.red('\nUsage: /wait <id> [timeoutMs]\n')); break; }
-      await runOrchestrationPrompt(agent, `Use the wait_agent tool with id="${id}" and timeoutMs=${ms}. Then summarize the child output for me.`);
-      break;
+      ctx.runAgentTurn(
+        `Use the wait_agent tool with id="${id}" and timeoutMs=${ms}. Then summarize the child output for me.`,
+      );
+      return;
     }
 
     case '/feature-dev': {
@@ -666,7 +1035,7 @@ async function handleSlashCommand(
             { step: 'Review: reviewer agent inspects diff', status: 'pending' },
             { step: 'Verify: verifier agent runs tests', status: 'pending' },
           ],
-        });
+        }, agent.sessionKey);
       } catch (err: any) {
         console.log(chalk.yellow(`Plan setup warning: ${err.message}`));
       }
@@ -684,8 +1053,8 @@ async function handleSlashCommand(
         `Phase 3 — Persist artifacts: call \`write_file\` to create \`${specPath}\` (the spec) AND \`${tasksPath}\` (the task breakdown). Use the spec-driven-skill structure for \`spec.md\` and the planning-skill structure for \`tasks.md\`. These files are the canonical record — do NOT produce a chat-only plan.`,
         '',
         'Phase 4 — STOP: present a short summary in chat referencing the file paths, then explicitly ask the user to confirm before any `worker` implementation begins.',
-      ].join('\n'));
-      break;
+      ].join('\n'), ctx.runAgentTurn);
+      return;
     }
 
     case '/spec': {
@@ -707,8 +1076,8 @@ async function handleSlashCommand(
         '## Anti-patterns',
         '- Do NOT produce a multi-section spec inline in chat without writing the file.',
         '- Do NOT proceed to task breakdown or implementation until the user explicitly approves.',
-      ].join('\n'));
-      break;
+      ].join('\n'), ctx.runAgentTurn);
+      return;
     }
 
     case '/review': {
@@ -730,12 +1099,12 @@ async function handleSlashCommand(
         'Step 2: `wait_agent` on all three.',
         `Step 3: \`write_file\` to \`${reportPath}\` containing a severity-ordered synthesis (blocker / major / minor / nit) with file:line citations.`,
         'Step 4: summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.',
-      ].join('\n'));
-      break;
+      ].join('\n'), ctx.runAgentTurn);
+      return;
     }
 
     case '/implement-plan': {
-      const plan = readPlan(agent.workspaceRoot);
+      const plan = readPlan(agent.workspaceRoot, agent.sessionKey);
       const next = plan.items.find(i => i.status === 'pending' || i.status === 'in_progress');
       if (!next) { console.log(chalk.yellow('\nNo pending plan items.\n')); break; }
       // Attach this execution turn to the current workflow if there is one, so
@@ -756,8 +1125,8 @@ async function handleSlashCommand(
         'Step 3: after the worker completes, `spawn_agent` role=verifier access=shell to run tests/typechecks.',
         `Step 4: append a section to \`${walkPath}\` (use \`read_file\` then \`write_file\`) recording: item name, files changed, verification commands run, PASS/FAIL, follow-ups.`,
         'Step 5: only on PASS, `update_plan` to `completed` AND `memory_task_update` with outcome. On FAIL, keep `in_progress`, surface failing output, `memory_task_update` with blocker.',
-      ].join('\n'));
-      break;
+      ].join('\n'), ctx.runAgentTurn);
+      return;
     }
 
     case '/approve': {
@@ -780,7 +1149,7 @@ async function handleSlashCommand(
       console.log(chalk.gray('Kicking off implementation phase…\n'));
       const tasksPath = artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.tasks);
       const walkPath = artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.walkthrough);
-      await runOrchestrationPrompt(agent,
+      ctx.runAgentTurn(
         `The user just approved workflow \`${slug}\`. Begin implementation now.\n\n` +
         `1. If \`${tasksPath}\` does not exist yet, read \`${artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.spec)}\` and \`write_file\` a complete tasks.md (vertical slices, S/M-sized, with acceptance criteria) before doing anything else.\n` +
         `2. Pick the first pending task from tasks.md and call \`update_plan\` to mark it in_progress.\n` +
@@ -789,7 +1158,7 @@ async function handleSlashCommand(
         `5. Append a section to \`${walkPath}\` (read+write) recording the outcome.\n` +
         `6. STOP after the first task and ask whether to continue. Do not silently work through every task — the user approves slices, not the whole batch.`,
       );
-      break;
+      return;
     }
 
     case '/workflows': {
@@ -825,21 +1194,21 @@ async function handleSlashCommand(
         console.log();
         break;
       }
-      await runSkillByName(agent, mcpClient, skillName, userInput);
-      break;
+      await runSkillByName(agent, mcpClient, skillName, userInput, undefined, ctx.runAgentTurn);
+      return;
     }
 
     case '/memory': {
       const query = args.join(' ').trim();
       if (!query) { console.log(chalk.red('\nUsage: /memory <query>\n')); break; }
-      await printMcpCall(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey }, 'BrainRouter Memory Search');
+      await printMemoryCards(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey }, `Memory search · "${query}"`);
       break;
     }
 
     case '/recall': {
       const query = args.join(' ').trim();
       if (!query) { console.log(chalk.red('\nUsage: /recall <query>\n')); break; }
-      await printMcpCall(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query }, 'Cognitive Recall');
+      await printMemoryCards(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query }, `Cognitive recall · "${query}"`);
       break;
     }
 
@@ -857,12 +1226,28 @@ async function handleSlashCommand(
     }
 
     case '/scenes': {
-      await printMcpCall(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query: 'list focus scenes' }, 'Active Focus Scenes (via memory_recall)');
-      break;
-    }
-
-    case '/working': {
-      await printMcpCall(mcpClient, 'memory_working_context', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot }, 'Working Memory Canvas');
+      const res = await callMcpTool<any>(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query: 'list focus scenes' });
+      if (res.isError) {
+        console.log(chalk.red(`\nmemory_recall failed: ${res.text || '(no message)'}\n`));
+      } else {
+        const persona = res.parsed?.appendSystemContext ?? '';
+        const sceneRe = /Recent focus scenes:\s*\n([\s\S]*?)(\n\n|<\/scene-navigation>)/;
+        const m = sceneRe.exec(persona);
+        console.log(chalk.bold('\nActive focus scenes'));
+        if (m) {
+          for (const line of m[1].split('\n')) {
+            const trimmed = line.replace(/^\s+/, '').replace(/^-\s*/, '').trim();
+            if (trimmed) console.log(`  • ${chalk.cyan(trimmed)}`);
+          }
+        } else {
+          console.log(chalk.yellow('  (no scenes returned — recall may be empty)'));
+        }
+        const cards = extractMemories(res.parsed);
+        if (cards.length > 0) {
+          console.log();
+          console.log(renderMemoryCards(cards, 'Related memories', 5));
+        }
+      }
       break;
     }
 
@@ -877,7 +1262,7 @@ async function handleSlashCommand(
       const result = initAgentMd(agent.workspaceRoot);
       if (result.status === 'created') {
         console.log(chalk.green(`\n✓ Created ${result.path}`));
-        console.log(chalk.gray('Edit it to describe your project, conventions, and boundaries — every coding agent (BrainRouter, Claude Code, Codex) will read it.\n'));
+        console.log(chalk.gray('Edit it to describe your project, conventions, and boundaries — any AGENT.md-aware coding agent will read it.\n'));
       } else {
         console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
         console.log(chalk.gray('Open it and edit by hand if you want to refresh it.\n'));
@@ -928,7 +1313,7 @@ async function handleSlashCommand(
       const newModel = args[0];
       if (!newModel) {
         console.log(chalk.bold(`\nCurrent model: ${chalk.cyan(agent.getModel())}`));
-        console.log(chalk.gray('Switch with: /model <model-name> (e.g. /model gpt-4o-mini, /model claude-sonnet-4-5)\n'));
+        console.log(chalk.gray('Switch with: /model <model-name> (e.g. /model gpt-4o-mini, /model gpt-5, /model qwen2.5-coder)\n'));
         break;
       }
       const previous = agent.getModel();
@@ -973,23 +1358,90 @@ async function handleSlashCommand(
 
     case '/goal': {
       const arg = args.join(' ').trim();
-      if (!arg || arg === 'show') {
-        const goal = readGoal(agent.workspaceRoot);
-        if (!goal) console.log(chalk.yellow('\nNo sticky goal set. Set one with: /goal <text>\n'));
-        else console.log(chalk.bold('\nCurrent goal:') + ` ${chalk.cyan(goal.text)}\n` + chalk.gray(`Set ${goal.setAt}\n`));
-        break;
-      }
+      const ws = agent.workspaceRoot;
+      const sk = agent.sessionKey;
+      const showStatus = (g: import('./goalStore.js').Goal | null) => {
+        if (!g) {
+          console.log(chalk.yellow('\nNo active goal. Set one with: /goal <outcome statement>\n'));
+          console.log(chalk.gray('Outcome-first format works best:'));
+          console.log(chalk.gray('  /goal <desired end state> verified by <evidence> while preserving <constraints>.\n'));
+          return;
+        }
+        const status = g.status === 'active' ? chalk.green(g.status)
+          : g.status === 'paused' ? chalk.yellow(g.status)
+          : g.status === 'complete' ? chalk.cyan(g.status)
+          : chalk.red(g.status);
+        console.log(chalk.bold('\nGoal'));
+        console.log(`  Status:     ${status}`);
+        console.log(`  Outcome:    ${chalk.cyan(g.text)}`);
+        console.log(`  Budget:     ${g.budget.iterationsUsed}/${g.budget.maxIterations} iterations used`);
+        console.log(`  Started:    ${chalk.gray(g.startedAt)}`);
+        if (g.completedAt) console.log(`  Completed:  ${chalk.gray(g.completedAt)}`);
+        if (g.blockedReason) console.log(`  Note:       ${chalk.gray(g.blockedReason)}`);
+        console.log(chalk.gray('\nSubcommands: /goal <text> | pause | resume | complete | clear | budget <n>\n'));
+      };
+
+      if (!arg || arg === 'show') { showStatus(readGoal(ws, sk)); break; }
       if (arg === 'clear') {
-        clearGoal(agent.workspaceRoot);
+        clearGoal(ws, sk);
         agent.refreshSystemPrompt();
         console.log(chalk.green('\n✓ Goal cleared.\n'));
         break;
       }
-      const goal = setGoal(agent.workspaceRoot, arg);
+      if (arg === 'pause') {
+        const g = pauseGoal(ws, sk);
+        if (!g) console.log(chalk.yellow('\nNo active goal to pause.\n'));
+        else { agent.refreshSystemPrompt(); console.log(chalk.yellow(`\n⏸  Goal paused. No auto-continuation until /goal resume.\n`)); }
+        break;
+      }
+      if (arg === 'resume') {
+        const g = resumeGoal(ws, sk);
+        if (!g) { console.log(chalk.yellow('\nNo goal to resume.\n')); break; }
+        agent.refreshSystemPrompt();
+        console.log(chalk.green(`\n▶  Goal resumed (${g.budget.iterationsUsed}/${g.budget.maxIterations} used). Starting next iteration…\n`));
+        // Fire the next iteration immediately so the user doesn't have to type
+        // a "proceed" message — the whole point of /goal is autonomy.
+        ctx.runAgentTurn(buildGoalKickoffPrompt(g, 'resume'));
+        return; // runAgentTurn owns its prompt cycle
+      }
+      if (arg === 'complete') {
+        const g = completeGoal(ws, sk, 'Marked complete manually by user.');
+        if (!g) console.log(chalk.yellow('\nNo goal to mark complete.\n'));
+        else { agent.refreshSystemPrompt(); console.log(chalk.green(`\n🎯  Goal marked complete.\n`)); }
+        break;
+      }
+      if (arg.startsWith('budget')) {
+        const n = Number(arg.replace(/^budget\s*/, '').trim());
+        if (!Number.isFinite(n) || n < 1) {
+          console.log(chalk.red('\nUsage: /goal budget <positive integer>\n'));
+          break;
+        }
+        const g = setGoalBudget(ws, sk, Math.floor(n));
+        if (!g) console.log(chalk.yellow('\nNo goal to update.\n'));
+        else { agent.refreshSystemPrompt(); console.log(chalk.green(`\n✓ Budget set to ${g.budget.maxIterations} iterations (${g.budget.iterationsUsed} already used).\n`)); }
+        break;
+      }
+      // Anything else is a new goal text.
+      let goal: import('./goalStore.js').Goal;
+      try {
+        goal = setGoal(ws, arg, sk);
+      } catch (err: any) {
+        if (err instanceof GoalTooLongError) {
+          console.log(chalk.red(`\n✗ ${err.message}`));
+          console.log(chalk.gray(`  Tip: a goal is a 1–3 sentence outcome statement, not a chat log. Max ${GOAL_TEXT_MAX_CHARS} chars.\n`));
+          break;
+        }
+        throw err;
+      }
       agent.refreshSystemPrompt();
-      console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}\n`));
-      console.log(chalk.gray('It will be injected into every turn until /goal clear.\n'));
-      break;
+      console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}`));
+      console.log(chalk.gray(`Budget: ${goal.budget.maxIterations} iterations. The CLI will auto-continue after each turn until the agent calls goal_complete / goal_blocked or you /goal pause | clear.`));
+      console.log(chalk.gray('Kicking off iteration 1 now — type anything to cancel.\n'));
+      // Fire the first turn immediately so /goal doesn't require a "proceed"
+      // follow-up. The post-turn continuation loop in runAgentTurn handles
+      // iterations 2..N.
+      ctx.runAgentTurn(buildGoalKickoffPrompt(goal, 'start'));
+      return; // runAgentTurn owns its prompt cycle
     }
 
     case '/copy': {
@@ -1147,12 +1599,870 @@ async function handleSlashCommand(
       break;
     }
 
+    case '/continue': {
+      const last = agent.lastUserPrompt;
+      if (!last) {
+        console.log(chalk.yellow('\nNothing to continue — no prior prompt this session. Just type your next message.\n'));
+        break;
+      }
+      // Inspect child-agent state up front so /continue gives the LLM
+      // concrete instructions instead of a vague "wait for children". Without
+      // this, the model frequently text-replies "I am waiting…" without ever
+      // calling wait_agent and the turn just hangs the user.
+      reconcileStale(agent.workspaceRoot);
+      const allChildren = listSessions(agent.workspaceRoot);
+      const running = allChildren.filter((s) => s.status === 'pending' || s.status === 'running');
+      const recentlyDone = allChildren
+        .filter((s) => s.status === 'completed' || s.status === 'failed')
+        .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
+        .slice(0, 5);
+
+      const sections: string[] = [
+        `You were in the middle of working on: "${last}"`,
+        '',
+      ];
+      if (running.length > 0) {
+        const ids = running.map((s) => `${s.id} (${s.role}, ${s.status})`).join(', ');
+        sections.push(
+          `## Children still running`,
+          `${running.length} child agent${running.length === 1 ? '' : 's'} have NOT finished yet: ${ids}.`,
+          `**You MUST call \`wait_agent\` on each one** before producing a final answer. Do not respond with prose like "I am waiting" — that is a no-op. Issue the tool calls now in this turn.`,
+          '',
+        );
+      }
+      if (recentlyDone.length > 0) {
+        const lines = recentlyDone.map((s) => `- ${s.id} (${s.role}): ${s.status}${s.error ? ` — ${s.error}` : ''}`);
+        sections.push(
+          `## Children that already finished`,
+          `Use \`read_agent_transcript\` (or the cached finalOutput in \`list_agents\`) to incorporate their work:`,
+          ...lines,
+          '',
+        );
+      }
+      if (running.length === 0 && recentlyDone.length === 0) {
+        sections.push('No child agents are tracked. Pick up where you left off.', '');
+      }
+      sections.push(
+        agent.lastTurnHitLoopLimit
+          ? 'You ran out of tool-loop iterations before producing a final answer. Resume now: drain any pending children, then finish writing the workflow artifacts (`spec.md` / `tasks.md` / `walkthrough.md`) before giving a summary.'
+          : 'Resume the workflow. Synthesize whatever children produced, then finish writing the artifacts the workflow expects (`spec.md` / `tasks.md` / `walkthrough.md`).',
+      );
+
+      ctx.runAgentTurn(sections.join('\n'));
+      return; // runAgentTurn handles its own prompt cycle
+    }
+
+    case '/auto-review': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = args[0];
+      if (!arg) {
+        console.log(chalk.bold(`\nAuto-review: ${prefs.autoReview ? chalk.green('on') : chalk.gray('off')}`));
+        console.log(chalk.gray('  When on, every worker child agent is auto-followed by a reviewer agent on its diff.'));
+        console.log(chalk.gray('  Toggle with: /auto-review on | off\n'));
+        break;
+      }
+      const next = arg === 'on' || arg === 'true';
+      writePreferences(agent.workspaceRoot, { autoReview: next });
+      console.log(chalk.green(`\n✓ Auto-review ${next ? 'enabled' : 'disabled'}.\n`));
+      break;
+    }
+
+    case '/vim': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const next = prefs.editorMode === 'vi' ? 'emacs' : 'vi';
+      writePreferences(agent.workspaceRoot, { editorMode: next });
+      console.log(chalk.green(`\n✓ Editor mode → ${next}. Restart the CLI to apply.\n`));
+      break;
+    }
+
+    case '/statusline': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = args.join(' ').trim();
+      if (!arg) {
+        console.log(chalk.bold('\nStatusline'));
+        console.log(`  Current: ${chalk.cyan(prefs.statusline)}`);
+        console.log(chalk.gray('  Available segments: mode, branch, dirty, model, tokens, session'));
+        console.log(chalk.gray('  Example: /statusline mode,branch,dirty,tokens\n'));
+        break;
+      }
+      const valid = new Set(['mode', 'branch', 'dirty', 'model', 'tokens', 'session']);
+      const requested = arg.split(',').map((s) => s.trim()).filter(Boolean);
+      const unknown = requested.filter((s) => !valid.has(s));
+      if (unknown.length > 0) {
+        console.log(chalk.red(`\nUnknown segment(s): ${unknown.join(', ')}. Valid: ${Array.from(valid).join(', ')}\n`));
+        break;
+      }
+      writePreferences(agent.workspaceRoot, { statusline: requested.join(',') });
+      ctx.refreshPromptForMode();
+      console.log(chalk.green(`\n✓ Statusline set to: ${requested.join(',')}\n`));
+      break;
+    }
+
+    case '/handover': {
+      // Generate a compact continuation note from current task memories so
+      // the next session can pick up. Uses memory_handover.
+      await printMcpCall(mcpClient, 'memory_handover', { sessionKey: agent.sessionKey }, 'Session handover note');
+      break;
+    }
+
+    case '/explain': {
+      const query = args.join(' ').trim();
+      if (!query) {
+        console.log(chalk.red('\nUsage: /explain <query>\n'));
+        console.log(chalk.gray('  Re-runs recall in explain mode: shows FTS hits, vector hits, RRF scores, type/skill boosts, reranker, graph expansion.\n'));
+        break;
+      }
+      await printMcpCall(mcpClient, 'memory_explain_recall', { sessionKey: agent.sessionKey, query }, `Recall explanation · "${query}"`);
+      break;
+    }
+
+    case '/trace': {
+      const sub = args[0];
+      if (sub === 'save') {
+        const rest = args.slice(1).join(' ').trim();
+        if (!rest) { console.log(chalk.red('\nUsage: /trace save <description>\n')); break; }
+        await printMcpCall(mcpClient, 'memory_debug_trace_save', { content: rest }, 'Saved debug trace');
+        break;
+      }
+      if (sub === 'search' || !sub) {
+        const query = args.slice(1).join(' ').trim();
+        if (sub !== 'search' && !query) {
+          console.log(chalk.red('\nUsage: /trace save <description> | /trace search <query>\n'));
+          break;
+        }
+        await printMcpCall(mcpClient, 'memory_debug_trace_search', { query: query || '*' }, 'Prior debug traces');
+        break;
+      }
+      console.log(chalk.red('\nUsage: /trace save <description> | /trace search <query>\n'));
+      break;
+    }
+
+    case '/failed': {
+      const area = args.join(' ').trim();
+      await printMcpCall(mcpClient, 'memory_failed_attempts', area ? { area } : {}, `Past failed attempts${area ? ` · "${area}"` : ''}`);
+      break;
+    }
+
+    case '/verify': {
+      const id = args[0];
+      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]\n')); break; }
+      const status = args[1] || 'verified';
+      const confidence = args[2] ? Number(args[2]) : 0.9;
+      await printMcpCall(mcpClient, 'memory_verify', { recordId: id, verificationStatus: status, confidence }, `Verify ${id}`);
+      break;
+    }
+
+    case '/audit': {
+      await printMcpCall(mcpClient, 'memory_audit', { limit: 30 }, 'Recent memory audit log');
+      break;
+    }
+
+    case '/export': {
+      const out = args[0] || `.brainrouter/cli/memory-export-${Date.now()}.json`;
+      const res = await callMcpTool<any>(mcpClient, 'memory_export', {});
+      if (res.isError) {
+        console.log(chalk.red(`\nmemory_export failed: ${res.text}\n`));
+      } else {
+        try {
+          fs.writeFileSync(path.resolve(agent.workspaceRoot, out), res.text, 'utf8');
+          console.log(chalk.green(`\n✓ Exported memory to ${out} (${res.text.length} chars)\n`));
+        } catch (err: any) {
+          console.log(chalk.red(`\nWrite failed: ${err.message}\n`));
+        }
+      }
+      break;
+    }
+
+    case '/import': {
+      const src = args[0];
+      if (!src) { console.log(chalk.red('\nUsage: /import <path-to-export.json>\n')); break; }
+      let envelope: string;
+      try { envelope = fs.readFileSync(path.resolve(agent.workspaceRoot, src), 'utf8'); }
+      catch (err: any) { console.log(chalk.red(`\nRead failed: ${err.message}\n`)); break; }
+      await printMcpCall(mcpClient, 'memory_import', { envelope }, `Import from ${src}`);
+      break;
+    }
+
+    case '/persona': {
+      const name = args.join(' ').trim();
+      if (!name) {
+        console.log(chalk.red('\nUsage: /persona <persona-name>\n'));
+        console.log(chalk.gray('  Example: /persona code-reviewer (see /skills for available personas)\n'));
+        break;
+      }
+      await printMcpCall(mcpClient, 'get_persona', { name }, `Persona · ${name}`);
+      break;
+    }
+
+    case '/skill-hints': {
+      const skill = args[0];
+      const hints = args.slice(1).join(' ').trim();
+      if (!skill || !hints) {
+        console.log(chalk.red('\nUsage: /skill-hints <skill-name> <hints>\n'));
+        break;
+      }
+      await printMcpCall(mcpClient, 'memory_register_skill_hints', { skill, hints }, `Registered hints for ${skill}`);
+      break;
+    }
+
+    case '/diagnostics': {
+      await printMcpCall(mcpClient, 'memory_diagnostics', {}, 'Memory diagnostics');
+      break;
+    }
+
+    case '/working': {
+      const sub = args[0];
+      if (sub === 'reset') {
+        const confirm = args[1];
+        if (confirm !== 'confirm') {
+          console.log(chalk.yellow('\n⚠ /working reset clears the working-memory canvas. Confirm with: /working reset confirm\n'));
+          break;
+        }
+        await printMcpCall(mcpClient, 'memory_working_reset', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot }, 'Working memory reset');
+        break;
+      }
+      await printMcpCall(mcpClient, 'memory_working_context', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot }, 'Working memory canvas');
+      break;
+    }
+
+    case '/yolo': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      if (!arg) {
+        console.log(chalk.bold(`\nAuto-approve shell: ${prefs.autoApproveShell ? chalk.red('ON') : chalk.green('off')}`));
+        console.log(chalk.gray('  When ON, run_command skips the per-call confirmation prompt and executes immediately.'));
+        console.log(chalk.gray('  Pair with BRAINROUTER_SANDBOX=on if you still want a safety net.'));
+        console.log(chalk.gray('  Toggle with: /yolo on  |  /yolo off\n'));
+        break;
+      }
+      const next = arg === 'on' || arg === 'true' || arg === '1';
+      writePreferences(agent.workspaceRoot, { autoApproveShell: next });
+      if (next) {
+        console.log(chalk.red('\n⚠  /yolo ON — run_command will now execute without asking.'));
+        console.log(chalk.gray('   You are in access mode "shell" so the agent CAN call shell commands.'));
+        console.log(chalk.gray('   Lower the risk with /permissions write (no shell), or set BRAINROUTER_SANDBOX=on.\n'));
+      } else {
+        console.log(chalk.green('\n✓ /yolo off — run_command will prompt for confirmation again.\n'));
+      }
+      break;
+    }
+
+    case '/sandbox': {
+      const sub = (args[0] ?? '').toLowerCase();
+      const rest = args.slice(1).join(' ').trim();
+      const prefs = readPreferences(agent.workspaceRoot);
+      const showState = () => {
+        const enabled = (process.env.BRAINROUTER_SANDBOX ?? '').toLowerCase() === 'on';
+        console.log(chalk.bold('\nSandbox'));
+        console.log(`  Engine:  ${enabled ? chalk.green('on') : chalk.gray('off')} ${chalk.gray('(BRAINROUTER_SANDBOX env)')}`);
+        console.log(`  Platform: ${chalk.cyan(process.platform)} ${chalk.gray(process.platform === 'darwin' ? '(sandbox-exec)' : process.platform === 'linux' ? '(bwrap/firejail)' : '(unsupported — run_command runs unsandboxed)')}`);
+        console.log(`  Workspace (always rw): ${chalk.blue(agent.workspaceRoot)}`);
+        console.log(chalk.bold('  Read-only grants:'));
+        if (prefs.sandboxReadPaths.length === 0) console.log(chalk.gray('    (none)'));
+        else for (const p of prefs.sandboxReadPaths) console.log(`    ${chalk.cyan(p)}`);
+        console.log(chalk.bold('  Write grants (beyond workspace):'));
+        if (prefs.sandboxWritePaths.length === 0) console.log(chalk.gray('    (none)'));
+        else for (const p of prefs.sandboxWritePaths) console.log(`    ${chalk.cyan(p)}`);
+        console.log(chalk.gray('\n  Subcommands:'));
+        console.log(chalk.gray('    /sandbox add-read <path>     grant read-only access'));
+        console.log(chalk.gray('    /sandbox add-write <path>    grant read+write access'));
+        console.log(chalk.gray('    /sandbox remove <path>       drop a grant (matches either list)'));
+        console.log(chalk.gray('    /sandbox clear               drop all persisted grants'));
+        console.log(chalk.gray('    /sandbox status              show this view\n'));
+      };
+      if (!sub || sub === 'status') { showState(); break; }
+      const resolveGrant = (p: string): string | null => {
+        if (!p) return null;
+        const abs = path.resolve(agent.workspaceRoot, p);
+        if (!fs.existsSync(abs)) {
+          console.log(chalk.yellow(`\n⚠  Path does not exist: ${abs}`));
+          console.log(chalk.gray('   Granting anyway — create it later or the sandbox will skip the bind.\n'));
+        }
+        return abs;
+      };
+      if (sub === 'add-read') {
+        const abs = resolveGrant(rest); if (!abs) { console.log(chalk.red('\nUsage: /sandbox add-read <path>\n')); break; }
+        const next = Array.from(new Set([...prefs.sandboxReadPaths, abs]));
+        writePreferences(agent.workspaceRoot, { sandboxReadPaths: next });
+        console.log(chalk.green(`\n✓ Added read grant: ${abs}\n`));
+        break;
+      }
+      if (sub === 'add-write') {
+        const abs = resolveGrant(rest); if (!abs) { console.log(chalk.red('\nUsage: /sandbox add-write <path>\n')); break; }
+        const next = Array.from(new Set([...prefs.sandboxWritePaths, abs]));
+        writePreferences(agent.workspaceRoot, { sandboxWritePaths: next });
+        console.log(chalk.green(`\n✓ Added write grant: ${abs}\n`));
+        break;
+      }
+      if (sub === 'remove') {
+        const abs = resolveGrant(rest); if (!abs) { console.log(chalk.red('\nUsage: /sandbox remove <path>\n')); break; }
+        writePreferences(agent.workspaceRoot, {
+          sandboxReadPaths: prefs.sandboxReadPaths.filter((p) => p !== abs),
+          sandboxWritePaths: prefs.sandboxWritePaths.filter((p) => p !== abs),
+        });
+        console.log(chalk.green(`\n✓ Removed grant: ${abs}\n`));
+        break;
+      }
+      if (sub === 'clear') {
+        writePreferences(agent.workspaceRoot, { sandboxReadPaths: [], sandboxWritePaths: [] });
+        console.log(chalk.green('\n✓ Cleared all persisted sandbox grants.\n'));
+        break;
+      }
+      console.log(chalk.red(`\nUnknown /sandbox subcommand "${sub}". Run /sandbox for help.\n`));
+      break;
+    }
+
+    case '/kill': {
+      const id = args[0];
+      if (!id) { console.log(chalk.red('\nUsage: /kill <agent-id>\n')); break; }
+      const session = getSession(agent.workspaceRoot, id);
+      if (!session) { console.log(chalk.red(`\nNo agent session with id "${id}".\n`)); break; }
+      if (session.status !== 'pending' && session.status !== 'running') {
+        console.log(chalk.gray(`\nAgent ${id} is already ${session.status}.\n`));
+        break;
+      }
+      ctx.runAgentTurn(
+        `Use the close_agent tool with id="${id}" and reason="user-requested kill". Then confirm the close result.`,
+      );
+      return;
+    }
+
+    case '/watch': {
+      const tracePath = process.env.BRAINROUTER_TRACE_LOG?.trim();
+      if (!tracePath) {
+        console.log(chalk.yellow('\nLive tracing is off. Enable with:'));
+        console.log(chalk.gray('  export BRAINROUTER_TRACE_LOG=' + path.join(agent.workspaceRoot, '.brainrouter/cli/trace.jsonl')));
+        console.log(chalk.gray('  (restart the CLI so the change takes effect)\n'));
+        console.log(chalk.gray('Without it, you can still see per-tool activity inline in this REPL,'));
+        console.log(chalk.gray('and child-agent tool calls now surface as "role:id → tool" lines.'));
+        console.log(chalk.gray('Use /agents and /agent <id> --full for the persisted child transcripts.\n'));
+        break;
+      }
+      if (!fs.existsSync(tracePath)) {
+        console.log(chalk.yellow(`\nTrace file does not exist yet: ${tracePath}\nIt will appear after the first turn.\n`));
+        break;
+      }
+      console.log(chalk.bold(`\n📡 Tailing ${tracePath} — Ctrl+C to stop.\n`));
+      // Stream the last 30 lines + new appends as JSONL until the user
+      // interrupts with Ctrl+C. We use child_process tail because that's
+      // dramatically simpler than re-implementing inotify in Node.
+      const tail = exec(`tail -n 30 -f "${tracePath}"`);
+      const lineHandler = (chunk: Buffer | string) => {
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        for (const raw of text.split('\n')) {
+          if (!raw.trim()) continue;
+          try {
+            const e = JSON.parse(raw);
+            const attrs = e.attributes ?? {};
+            const dur = typeof e.duration_ms === 'number' ? chalk.gray(` ${e.duration_ms}ms`) : '';
+            const detail = Object.entries(attrs)
+              .slice(0, 4)
+              .map(([k, v]) => `${k}=${String(v).slice(0, 40)}`)
+              .join(' ');
+            console.log(`${chalk.gray(e.ts?.slice(11, 19) ?? '')} ${chalk.cyan(e.name)}${dur} ${chalk.gray(detail)}`);
+          } catch { /* not JSON — print raw */ console.log(chalk.gray(raw)); }
+        }
+      };
+      tail.stdout?.on('data', lineHandler);
+      tail.stderr?.on('data', (c) => process.stderr.write(c));
+      const onInterrupt = () => {
+        try { tail.kill('SIGTERM'); } catch { /* noop */ }
+        console.log(chalk.gray('\nwatch ended.\n'));
+        rl.off('SIGINT', onInterrupt);
+        rl.prompt();
+      };
+      rl.once('SIGINT', onInterrupt);
+      // Resume the prompt only after the user interrupts; otherwise the
+      // tail stays attached.
+      break;
+    }
+
+    case '/tokens': {
+      const session = agent.sessionUsage;
+      const metrics = agent.memoryMetrics;
+      const children = listSessions(agent.workspaceRoot).filter((s) => s.usage);
+      const childPrompt = children.reduce((acc, c) => acc + (c.usage?.promptTokens ?? 0), 0);
+      const childCompletion = children.reduce((acc, c) => acc + (c.usage?.completionTokens ?? 0), 0);
+      const childCalls = children.reduce((acc, c) => acc + (c.usage?.calls ?? 0), 0);
+
+      // Memory savings estimate:
+      // - Each recalled record (avg ~200 chars ≈ 50 tokens) supplies cross-
+      //   session context that would otherwise require either a manual
+      //   user explanation, a re-read of files, or skill re-discovery.
+      //   Conservative multiplier of 5× to account for the "without memory
+      //   you would have read 3-5 files" replacement cost.
+      // - Offloaded child output bytes are subtracted from what the parent
+      //   would otherwise have had to carry in context.
+      const recallSavings = metrics.briefingTokensInjected * 5;
+      const offloadSavings = Math.round(metrics.offloadCharsAvoided / 4);
+      const totalSaved = recallSavings + offloadSavings;
+      const totalSpent = session.promptTokens + session.completionTokens + childPrompt + childCompletion;
+
+      console.log(chalk.bold('\nToken usage — this session'));
+      console.log(`  Parent: ${chalk.cyan(session.promptTokens.toLocaleString())}↑  ${chalk.cyan(session.completionTokens.toLocaleString())}↓  ${chalk.gray(`(${session.turns} turn${session.turns === 1 ? '' : 's'}, ${session.calls} LLM call${session.calls === 1 ? '' : 's'})`)}`);
+      if (children.length > 0) {
+        console.log(`  Children (${children.length}): ${chalk.cyan(childPrompt.toLocaleString())}↑  ${chalk.cyan(childCompletion.toLocaleString())}↓  ${chalk.gray(`(${childCalls} LLM call${childCalls === 1 ? '' : 's'})`)}`);
+        for (const c of children.slice(0, 5)) {
+          const u = c.usage!;
+          console.log(chalk.gray(`    · ${c.id} (${c.role}): ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓`));
+        }
+        if (children.length > 5) console.log(chalk.gray(`    …and ${children.length - 5} more (see /agents)`));
+      }
+      console.log(`  Total this session: ${chalk.bold.cyan(totalSpent.toLocaleString())} tokens`);
+
+      console.log(chalk.bold('\nMemory savings (estimated)'));
+      console.log(`  Briefing tokens injected:  ${chalk.gray(metrics.briefingTokensInjected.toLocaleString())}  (${metrics.recallRecordsConsulted} records consulted)`);
+      console.log(`  Cross-session recall value: ~${chalk.green(recallSavings.toLocaleString())} tokens you'd otherwise spend re-reading files / re-explaining context`);
+      console.log(`  Offload bytes avoided:     ${chalk.gray(metrics.offloadCharsAvoided.toLocaleString())} chars (large child outputs that stayed out of parent context)`);
+      console.log(`  → Offload value:           ~${chalk.green(offloadSavings.toLocaleString())} tokens`);
+      console.log(`  ${chalk.bold('Total estimated savings:')}  ${chalk.bold.green('~' + totalSaved.toLocaleString())} tokens`);
+
+      if (totalSpent > 0) {
+        const ratio = totalSaved / totalSpent;
+        console.log(chalk.gray(`  Ratio: for every 1 token spent, memory saved ~${ratio.toFixed(2)} tokens of context.`));
+      }
+      console.log(chalk.gray('\n  (Estimates use a 5× multiplier on briefing tokens — a heuristic for "you would have needed to re-derive this from files/prompts otherwise". Treat as directional, not exact.)\n'));
+      break;
+    }
+
     case '/clear':
-    case '/compact':
       agent.clearHistory();
       console.log(chalk.yellow('\nConversation history cleared.\n'));
       break;
 
+    case '/compact': {
+      const spinner = ora(chalk.gray('Summarizing conversation for compaction...')).start();
+      try {
+        const result = await agent.compactHistory();
+        if (!result) {
+          spinner.warn(chalk.yellow('Nothing to compact — chat history is already short.'));
+          break;
+        }
+        spinner.succeed(chalk.green(`Compacted ${result.replacedMessages} messages → ~${result.estimatedTokens} tokens (${result.durationMs}ms).`));
+        console.log(chalk.bold('\nCompaction summary:'));
+        console.log(marked.parse(result.summary));
+        console.log(chalk.gray('The summary is now part of system context. Continue normally.\n'));
+      } catch (err: any) {
+        spinner.fail(chalk.red(`Compaction failed: ${err.message}`));
+        console.log(chalk.gray('Fallback: nothing was changed. Use /clear if you want to drop history without summarizing.\n'));
+      }
+      break;
+    }
+
+    case '/theme': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      const valid = new Set(['auto', 'light', 'dark', 'mono']);
+      if (!arg) {
+        console.log(chalk.bold('\nTheme'));
+        console.log(`  Current: ${chalk.cyan(prefs.theme)}`);
+        console.log(chalk.gray(`  Available: ${Array.from(valid).join(', ')}`));
+        console.log(chalk.gray('  Set with: /theme <name>\n'));
+        break;
+      }
+      if (!valid.has(arg)) {
+        console.log(chalk.red(`\nUnknown theme "${arg}". Choose: ${Array.from(valid).join(', ')}\n`));
+        break;
+      }
+      writePreferences(agent.workspaceRoot, { theme: arg as any });
+      console.log(chalk.green(`\n✓ Theme → ${arg}\n`));
+      break;
+    }
+
+    case '/title': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = args.join(' ').trim();
+      if (!arg) {
+        console.log(chalk.bold('\nTerminal title'));
+        console.log(`  Current: ${chalk.cyan(prefs.terminalTitle)}`);
+        console.log(chalk.gray('  Segments: model, branch, session, mode  (use "off" to disable)'));
+        console.log(chalk.gray('  Example: /title model,session\n'));
+        break;
+      }
+      writePreferences(agent.workspaceRoot, { terminalTitle: arg });
+      try {
+        if (arg.toLowerCase() !== 'off') {
+          const segs = arg.split(',').map((s) => s.trim()).filter(Boolean);
+          const parts: string[] = [];
+          for (const seg of segs) {
+            if (seg === 'model') parts.push(agent.getModel());
+            else if (seg === 'session') parts.push(agent.sessionKey.slice(0, 24));
+            else if (seg === 'mode') parts.push(agent.getAccessMode());
+            else if (seg === 'branch') {
+              try { parts.push(execSync('git rev-parse --abbrev-ref HEAD', { cwd: agent.workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()); } catch { /* not a git repo */ }
+            }
+          }
+          if (parts.length > 0) process.stdout.write(`\x1b]0;brainrouter · ${parts.join(' · ')}\x07`);
+        }
+      } catch { /* terminal does not support OSC titles */ }
+      console.log(chalk.green(`\n✓ Terminal title → ${arg}\n`));
+      break;
+    }
+
+    case '/personality': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      const valid = new Set(['concise', 'standard', 'detailed', 'pair-programmer']);
+      if (!arg) {
+        console.log(chalk.bold('\nPersonality (communication style)'));
+        console.log(`  Current: ${chalk.cyan(prefs.personality)}`);
+        console.log(chalk.gray(`  Available: ${Array.from(valid).join(', ')}\n`));
+        break;
+      }
+      if (!valid.has(arg)) {
+        console.log(chalk.red(`\nUnknown personality "${arg}". Choose: ${Array.from(valid).join(', ')}\n`));
+        break;
+      }
+      writePreferences(agent.workspaceRoot, { personality: arg as any });
+      agent.refreshSystemPrompt();
+      console.log(chalk.green(`\n✓ Personality → ${arg}. New behavior applies on the next turn.\n`));
+      break;
+    }
+
+    case '/new': {
+      const label = args.join(' ').trim() || `new-${new Date().toISOString().slice(11, 19)}`;
+      const newKey = `${agent.sessionKey.split(':')[0]}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+      const previous = agent.sessionKey;
+      agent.sessionKey = newKey;
+      agent.clearHistory();
+      console.log(chalk.green(`\n✓ Started a new chat.`));
+      console.log(chalk.gray(`  Old: ${previous}`));
+      console.log(chalk.gray(`  New: ${newKey}\n`));
+      break;
+    }
+
+    case '/side':
+    case '/btw': {
+      const prompt = args.join(' ').trim();
+      if (!prompt) {
+        console.log(chalk.red(`\nUsage: ${command} <ephemeral side question>\n`));
+        console.log(chalk.gray('  Side conversations run in a forked chat history and discard the result on exit.\n'));
+        break;
+      }
+      const original = agent.sessionKey;
+      const sideKey = `${original}:side:${randomUUID().slice(0, 6)}`;
+      agent.sessionKey = sideKey;
+      console.log(chalk.gray(`(side conversation in ${sideKey} — answer is ephemeral)\n`));
+      // Fire-and-forget BUT restore the sessionKey when the turn finishes,
+      // not after a fixed 100ms. The old setTimeout race restored the key
+      // long before the turn finished its async work — capture, transcript
+      // writes, contradiction checks — so side-conversation tool messages
+      // and the assistant reply ended up appended to the MAIN session.
+      void ctx.runAgentTurnAsync(prompt).finally(() => {
+        agent.sessionKey = original;
+      });
+      return;
+    }
+
+    case '/raw': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      const next = arg ? (arg === 'on' || arg === 'true' || arg === '1') : !prefs.rawScrollback;
+      writePreferences(agent.workspaceRoot, { rawScrollback: next });
+      console.log(chalk.green(`\n✓ Raw scrollback ${next ? 'enabled' : 'disabled'}. Markdown rendering ${next ? 'OFF' : 'ON'} for next turn.\n`));
+      break;
+    }
+
+    case '/feedback': {
+      const msg = args.join(' ').trim();
+      const dir = path.join(agent.workspaceRoot, '.brainrouter/cli');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'feedback.jsonl');
+      const entry = {
+        ts: new Date().toISOString(),
+        sessionKey: agent.sessionKey,
+        model: agent.getModel(),
+        accessMode: agent.getAccessMode(),
+        message: msg || '(no message provided)',
+      };
+      fs.appendFileSync(file, JSON.stringify(entry) + '\n', 'utf8');
+      console.log(chalk.green(`\n✓ Feedback recorded at ${path.relative(agent.workspaceRoot, file)}`));
+      console.log(chalk.gray('  This stays local — share by attaching the file to a GitHub issue.\n'));
+      break;
+    }
+
+    case '/rollout': {
+      const { getSessionStateDir } = await import('./cliState.js');
+      const sessionDir = getSessionStateDir(agent.workspaceRoot, agent.sessionKey);
+      console.log(chalk.bold('\nSession bucket'));
+      console.log(`  Session:   ${chalk.cyan(agent.sessionKey)}`);
+      console.log(`  Directory: ${chalk.blue(sessionDir)}`);
+      const interestingFiles = ['transcript.jsonl', 'goal.json', 'tasks.json'];
+      console.log(chalk.bold('\nFiles in bucket:'));
+      let printedAny = false;
+      for (const name of interestingFiles) {
+        const full = path.join(sessionDir, name);
+        if (fs.existsSync(full)) {
+          const stat = fs.statSync(full);
+          console.log(`  ${chalk.cyan(name.padEnd(18))} ${chalk.gray(`${stat.size} bytes · modified ${stat.mtime.toISOString()}`)}`);
+          printedAny = true;
+        }
+      }
+      if (!printedAny) console.log(chalk.gray('  (empty — files appear after you set a goal, update a plan, or run a turn)'));
+      console.log();
+      break;
+    }
+
+    case '/ps': {
+      const loopState = getLoopState();
+      console.log(chalk.bold('\nBackground tasks'));
+      if (!loopState) {
+        console.log(chalk.gray('  No /loop running.'));
+      } else {
+        console.log(`  Loop: ${chalk.cyan(loopState.prompt)} (${loopState.iterations} ticks, every ${loopState.intervalMs}ms)`);
+      }
+      reconcileStale(agent.workspaceRoot);
+      const sessions = listSessions(agent.workspaceRoot).filter((s) => s.status === 'pending' || s.status === 'running');
+      if (sessions.length === 0) {
+        console.log(chalk.gray('  No running child agents.'));
+      } else {
+        for (const s of sessions) {
+          console.log(`  Agent: ${chalk.cyan(s.id)} ${chalk.gray(s.role)} (${s.status})`);
+        }
+      }
+      console.log();
+      break;
+    }
+
+    case '/stop': {
+      // Stop the loop AND mark any running children stale.
+      const stopped = stopLoop();
+      console.log(stopped ? chalk.green('\n✓ Stopped /loop.') : chalk.gray('\nNo loop was running.'));
+      const reconciled = reconcileStale(agent.workspaceRoot);
+      if (reconciled > 0) console.log(chalk.yellow(`Marked ${reconciled} child session(s) stale.`));
+      console.log();
+      break;
+    }
+
+    case '/logout': {
+      // Remove the API key from the active server profile. The CLI keeps the
+      // profile so a future /login can re-attach credentials.
+      const profile = config.activeServer;
+      const server = config.servers[profile];
+      if (!server) {
+        console.log(chalk.red(`\nNo active profile to log out of.\n`));
+        break;
+      }
+      const removed: string[] = [];
+      if ((server as any).apiKey) { delete (server as any).apiKey; removed.push('server.apiKey'); }
+      if (config.llm?.apiKey) { (config.llm as any).apiKey = ''; removed.push('llm.apiKey'); }
+      if (removed.length === 0) {
+        console.log(chalk.gray(`\nNo credentials were set on profile "${profile}".\n`));
+        break;
+      }
+      const { saveConfig } = await import('./config.js');
+      saveConfig(config);
+      console.log(chalk.green(`\n✓ Cleared ${removed.join(', ')} from profile "${profile}".`));
+      console.log(chalk.gray('  Re-attach with /login.\n'));
+      break;
+    }
+
+    case '/apps':
+    case '/plugins': {
+      const skillsRoot = path.join(agent.workspaceRoot, 'skills');
+      const pluginsRoot = path.join(agent.workspaceRoot, 'plugins');
+      console.log(chalk.bold(`\n${command === '/apps' ? 'Apps' : 'Plugins'}`));
+      const roots = [skillsRoot, pluginsRoot].filter((p) => fs.existsSync(p));
+      if (roots.length === 0) {
+        console.log(chalk.yellow('  No skills/ or plugins/ directory in this workspace.'));
+        console.log(chalk.gray('  Drop a folder under skills/<category>/<name>/SKILL.md to register one.\n'));
+        break;
+      }
+      for (const root of roots) {
+        const entries = fs.readdirSync(root, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          console.log(chalk.cyan(`  ${path.relative(agent.workspaceRoot, path.join(root, entry.name))}`));
+        }
+      }
+      console.log();
+      break;
+    }
+
+    case '/experimental': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      const next = arg ? (arg === 'on' || arg === 'true' || arg === '1') : !prefs.experimental;
+      writePreferences(agent.workspaceRoot, { experimental: next });
+      console.log(chalk.green(`\n✓ Experimental features ${next ? 'enabled' : 'disabled'}.`));
+      if (next) console.log(chalk.gray('  Streaming output, theme rendering, and other gated features are now active.\n'));
+      else console.log();
+      break;
+    }
+
+    case '/memories': {
+      const sub = args[0];
+      if (!sub || sub === 'status') {
+        const prefs = readPreferences(agent.workspaceRoot);
+        console.log(chalk.bold('\nMemories pipeline'));
+        console.log(`  Enabled: ${prefs.memoriesEnabled ? chalk.green('on') : chalk.gray('off')}`);
+        console.log(chalk.gray('  Subcommands:'));
+        console.log(chalk.gray('    /memories on | off          — toggle the pipeline'));
+        console.log(chalk.gray('    /memories consolidate       — write user/feedback/project/reference files'));
+        console.log(chalk.gray('    /memories status            — show this view\n'));
+        break;
+      }
+      if (sub === 'on' || sub === 'off') {
+        writePreferences(agent.workspaceRoot, { memoriesEnabled: sub === 'on' });
+        console.log(chalk.green(`\n✓ Memories pipeline ${sub === 'on' ? 'enabled' : 'disabled'}.\n`));
+        break;
+      }
+      if (sub === 'consolidate') {
+        const spinner = ora(chalk.gray('Consolidating memories from MCP into filesystem artifacts...')).start();
+        try {
+          const result = await consolidateMemories(mcpClient, agent.workspaceRoot, { sessionKey: agent.sessionKey });
+          spinner.succeed(chalk.green(`Consolidated ${result.totalRecords} records.`));
+          console.log(chalk.bold('\nPer-type counts:'));
+          for (const [t, n] of Object.entries(result.perType)) {
+            console.log(`  ${chalk.cyan(t.padEnd(10))} ${n}`);
+          }
+          console.log(chalk.bold('\nFiles written:'));
+          for (const f of result.files) console.log(`  ${chalk.gray(f)}`);
+          console.log();
+        } catch (err: any) {
+          spinner.fail(chalk.red(`Consolidation failed: ${err.message}\n`));
+        }
+        break;
+      }
+      console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, consolidate.\n`));
+      break;
+    }
+
+    case '/debug-config': {
+      console.log(chalk.bold('\nConfig layers (in order of precedence)'));
+      console.log(`  Workspace: ${chalk.cyan(agent.workspaceRoot)}`);
+      console.log(`  CLI state: ${chalk.cyan(path.join(agent.workspaceRoot, '.brainrouter/cli'))}`);
+      console.log(`  Profile:   ${chalk.cyan(config.activeServer)}`);
+      console.log(`  Server:    ${chalk.cyan(JSON.stringify(config.servers[config.activeServer], null, 2).split('\n').map((l) => '             ' + l).join('\n').trim())}`);
+      console.log(chalk.bold('\nEnvironment'));
+      const flags = ['BRAINROUTER_SANDBOX', 'BRAINROUTER_SANDBOX_READ_PATHS', 'BRAINROUTER_SANDBOX_WRITE_PATHS', 'BRAINROUTER_SANDBOX_NETWORK', 'BRAINROUTER_TRACE_LOG', 'BRAINROUTER_MAX_TOOL_LOOPS', 'BRAINROUTER_LLM_TIMEOUT_MS', 'BRAINROUTER_WORKSPACE'];
+      for (const f of flags) {
+        const v = process.env[f];
+        if (v) console.log(`  ${chalk.cyan(f)} = ${v}`);
+      }
+      console.log(chalk.bold('\nPreferences'));
+      console.log(chalk.gray(JSON.stringify(readPreferences(agent.workspaceRoot), null, 2)));
+      console.log();
+      break;
+    }
+
+    case '/mention': {
+      const partial = args.join(' ').trim();
+      console.log(chalk.bold('\nFile mention helper'));
+      console.log(chalk.gray('  Inline syntax: write `@path/to/file` in a prompt — the CLI expands it before sending.'));
+      const ws = agent.workspaceRoot;
+      const suggestions = completeWorkspacePath(ws, partial || '');
+      if (suggestions.length === 0) {
+        console.log(chalk.yellow('  No files matched.\n'));
+        break;
+      }
+      console.log(chalk.gray(`  Workspace matches${partial ? ` for "${partial}"` : ''}:`));
+      for (const s of suggestions.slice(0, 20)) console.log(`    ${chalk.cyan('@' + s)}`);
+      if (suggestions.length > 20) console.log(chalk.gray(`    …and ${suggestions.length - 20} more`));
+      console.log();
+      break;
+    }
+
+    case '/keymap': {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = args.join(' ').trim();
+      if (!arg) {
+        console.log(chalk.bold('\nKeymap'));
+        console.log(chalk.gray('  Current overrides:'));
+        console.log(chalk.gray(`    ${prefs.keymap || '(none — defaults)'}`));
+        console.log(chalk.bold('\n  Built-in bindings'));
+        console.log(chalk.gray('    Shift+Tab       cycle access mode (read → write → shell)'));
+        console.log(chalk.gray('    Tab             autocomplete slash commands and @mentions'));
+        console.log(chalk.gray('    Ctrl+C          interrupt current turn / exit'));
+        console.log(chalk.gray('    /vim            toggle vi-mode for the composer'));
+        console.log(chalk.gray('\n  Set custom overrides (JSON map): /keymap {"submit":"ctrl+s"}\n'));
+        break;
+      }
+      try {
+        JSON.parse(arg); // validate
+      } catch (err: any) {
+        console.log(chalk.red(`\nInvalid JSON: ${err.message}\n`));
+        break;
+      }
+      writePreferences(agent.workspaceRoot, { keymap: arg });
+      console.log(chalk.green(`\n✓ Keymap overrides saved. Restart the CLI to apply.\n`));
+      break;
+    }
+
+    case '/ide': {
+      const env = process.env;
+      console.log(chalk.bold('\nIDE context'));
+      const cursor = env.CURSOR_TRACE_ID ? 'Cursor' : null;
+      const code = env.VSCODE_INJECTION || env.VSCODE_PID ? 'VS Code' : null;
+      const jet = env.JETBRAINS_IDE || env.IDEA_INITIAL_DIRECTORY ? 'JetBrains' : null;
+      const detected = [cursor, code, jet].filter(Boolean);
+      console.log(`  Detected: ${detected.length > 0 ? chalk.cyan(detected.join(', ')) : chalk.gray('(none — running standalone)')}`);
+      console.log(chalk.gray('  Brainrouter reads files via the workspace root; if your IDE has an open selection, paste it with @ mentions or copy/paste.'));
+      console.log(chalk.gray('  Tip: configure IDE to launch brainrouter with -w <workspace> so paths match.\n'));
+      break;
+    }
+
+    case '/hookify': {
+      const sub = args[0];
+      if (!sub || sub === 'list') {
+        const rules = listHookifyRules(agent.workspaceRoot);
+        console.log(chalk.bold('\nHookify rules'));
+        if (rules.length === 0) {
+          console.log(chalk.yellow('  (none)'));
+          console.log(chalk.gray('  Add with: /hookify create <name>|<event>|<pattern>|<action>|<message>'));
+          console.log(chalk.gray('    event   = bash | file | prompt | stop | all'));
+          console.log(chalk.gray('    action  = warn | block'));
+          console.log(chalk.gray('  Rules live as markdown files in .brainrouter/hooks/.\n'));
+        } else {
+          for (const r of rules) {
+            const tag = r.enabled ? chalk.green('●') : chalk.gray('○');
+            console.log(`  ${tag} ${chalk.cyan(r.id)} ${chalk.gray(r.event)} → ${chalk.yellow(r.action)}${r.pattern ? chalk.gray(` (pattern: ${r.pattern})`) : ''}`);
+            console.log(chalk.gray(`    ${r.message.split('\n')[0].slice(0, 120)}`));
+          }
+          console.log();
+        }
+        break;
+      }
+      if (sub === 'create') {
+        const raw = args.slice(1).join(' ').trim();
+        const parts = raw.split('|').map((p) => p.trim());
+        if (parts.length < 5) {
+          console.log(chalk.red('\nUsage: /hookify create <name>|<event>|<pattern>|<action>|<message>\n'));
+          break;
+        }
+        try {
+          const created = createHookifyRule(agent.workspaceRoot, {
+            name: parts[0],
+            event: parts[1] as any,
+            pattern: parts[2],
+            action: (parts[3] as 'warn' | 'block'),
+            message: parts.slice(4).join('|'),
+          });
+          console.log(chalk.green(`\n✓ Created hookify rule ${created.id} at ${path.relative(agent.workspaceRoot, created.sourcePath)}\n`));
+        } catch (err: any) {
+          console.log(chalk.red(`\nFailed: ${err.message}\n`));
+        }
+        break;
+      }
+      if (sub === 'enable' || sub === 'disable') {
+        const id = args[1];
+        if (!id) { console.log(chalk.red(`\nUsage: /hookify ${sub} <id>\n`)); break; }
+        const ok = toggleHookifyRule(agent.workspaceRoot, id, sub === 'enable');
+        console.log(ok ? chalk.green(`\n✓ ${sub === 'enable' ? 'Enabled' : 'Disabled'} ${id}\n`) : chalk.red(`\nNo rule ${id}\n`));
+        break;
+      }
+      if (sub === 'remove') {
+        const id = args[1];
+        if (!id) { console.log(chalk.red(`\nUsage: /hookify remove <id>\n`)); break; }
+        const ok = deleteHookifyRule(agent.workspaceRoot, id);
+        console.log(ok ? chalk.green(`\n✓ Removed ${id}\n`) : chalk.red(`\nNo rule ${id}\n`));
+        break;
+      }
+      console.log(chalk.red('\nUsage: /hookify [list | create <spec> | enable <id> | disable <id> | remove <id>]\n'));
+      break;
+    }
+
+    case '/quit':
     case '/exit':
       rl.close();
       break;
@@ -1167,14 +2477,15 @@ async function runSkillCommand(
   mcpClient: McpClientWrapper,
   slashCommand: string,
   userInput: string,
-  orchestration?: string,
+  orchestration: string | undefined,
+  runTurn: (prompt: string) => void,
 ): Promise<void> {
   const skillName = SLASH_TO_SKILL[slashCommand];
   if (!skillName) {
     console.log(chalk.red(`\nNo skill mapped to ${slashCommand}.\n`));
     return;
   }
-  await runSkillByName(agent, mcpClient, skillName, userInput, orchestration);
+  await runSkillByName(agent, mcpClient, skillName, userInput, orchestration, runTurn);
 }
 
 async function runSkillByName(
@@ -1182,45 +2493,85 @@ async function runSkillByName(
   mcpClient: McpClientWrapper,
   skillName: string,
   userInput: string,
-  orchestration?: string,
+  orchestration: string | undefined,
+  runTurn: (prompt: string) => void,
 ): Promise<void> {
   const loader = ora(chalk.gray(`Loading skill: ${skillName}...`)).start();
   let prompt: string;
   try {
     const skill = await resolveSkill(mcpClient, skillName, agent.workspaceRoot, 'full');
+    if (skill.source === 'fallback') {
+      // resolveSkill returns a placeholder body for unknown names; running it
+      // burns an LLM call on nothing. Refuse early and tell the user what's
+      // actually installed.
+      loader.fail(chalk.red(`Unknown skill "${skillName}".`));
+      console.log(chalk.gray('  Run `/skills` to list installed skills, or call `search_skills` for fuzzy matches.\n'));
+      return;
+    }
     loader.succeed(chalk.green(`Skill loaded: ${skillName} (${skill.source})`));
     prompt = buildSkillPrompt(skill, { input: userInput, orchestration });
   } catch (err: any) {
     loader.fail(chalk.red(`Failed to resolve skill "${skillName}": ${err.message}`));
     return;
   }
-  await runOrchestrationPrompt(agent, prompt);
+  // Mark the skill active so memory_recall / memory_capture_turn see it.
+  // The activeSkill stays latched while the turn runs; runAgentTurn's
+  // continuation loop will clear it via the post-turn hook below.
+  agent.activeSkill = skillName;
+  runTurn(prompt);
 }
 
-async function runOrchestrationPrompt(agent: Agent, prompt: string): Promise<void> {
-  const spinner = ora(chalk.gray('Orchestrating...')).start();
-  try {
-    const answer = await agent.runTurn(prompt, {
-      onStatusUpdate: (status) => { spinner.text = chalk.gray(status); },
-      onToolStart: (name, args) => {
-        spinner.stop();
-        console.log(chalk.gray('🛞  ') + chalk.cyan(name) + chalk.gray(` ${JSON.stringify(args).slice(0, 200)}`));
-      },
-      onToolEnd: (name, result) => {
-        if (result.success) {
-          console.log(chalk.green('✓  ') + chalk.cyan(name) + chalk.gray(` ${result.summary}`));
-        } else {
-          console.log(chalk.red('❌  ') + chalk.cyan(name) + chalk.yellow(` ${result.summary}`));
-        }
-        spinner.start(chalk.gray('Thinking...'));
-      },
-    });
-    spinner.succeed(chalk.green('Done!'));
-    console.log('\n' + marked.parse(answer) + '\n');
-  } catch (err: any) {
-    spinner.fail(chalk.red(`Failed: ${err.message}`));
-  }
+/**
+ * Module-level "active readline" pointer so functions that don't carry an rl
+ * argument (runOrchestrationPrompt, runSkillByName, …) can still redraw the
+ * prompt cleanly after the parent's runTurn finishes and stray child events
+ * arrive. Set by startREPL — there's only ever one REPL per process.
+ */
+let activeReadline: readline.Interface | undefined;
+
+/**
+ * Prompt the agent receives for the FIRST turn after /goal <text> or
+ * /goal resume. Once this turn finishes, runAgentTurn's continuation loop
+ * keeps firing iterations 2..N until the agent calls goal_complete or
+ * goal_blocked, the budget runs out, or the user interrupts.
+ */
+function buildGoalKickoffPrompt(goal: import('./goalStore.js').Goal, mode: 'start' | 'resume'): string {
+  const header = mode === 'start' ? '[GOAL KICKOFF — iteration 1]' : '[GOAL RESUME]';
+  return [
+    header,
+    '',
+    `Your active goal is: ${goal.text}`,
+    `Iteration budget: ${goal.budget.iterationsUsed}/${goal.budget.maxIterations} used.`,
+    '',
+    '## What to do right now',
+    mode === 'start'
+      ? '1. **Open with memory.** Run `memory_search` / `memory_recall` for prior work in this workspace. Cite the recordIds you find.'
+      : '1. **Reload context.** Check what was already done by reading the last few transcript entries, the current plan, and any open child agents (`list_agents`).',
+    '2. **Plan briefly.** If the work has 3+ vertical slices, call `update_plan` with statuses (pending / in_progress / completed; ≤ 1 in_progress).',
+    '3. **Take the first concrete tool action** toward the outcome. Read a file, write code, spawn an explorer child, run a verifier — whatever produces evidence the goal is satisfied.',
+    '4. The CLI will auto-continue you with another turn after this one finishes. Iterate until you can call `goal_complete(proof)` with concrete evidence (test pass / file written / benchmark hit) or `goal_blocked(reason)` if no path remains.',
+    '',
+    'Do NOT respond with prose-only "I will get started" — the CLI suppresses the next auto-continuation after a turn with zero tool calls. Begin executing tools now.',
+  ].join('\n');
 }
+
+function safePrintAbovePromptGlobal(msg: string): void {
+  if (!process.stdout.isTTY || !activeReadline) {
+    console.log(msg);
+    return;
+  }
+  process.stdout.write('\r\x1b[2K');
+  console.log(msg);
+  try { (activeReadline as any)._refreshLine?.(); } catch { activeReadline.prompt(true); }
+}
+
+// runOrchestrationPrompt was the second-class turn pipeline used by /spawn,
+// /wait, /kill, /commit, /approve, /spec, /feature-dev, /review,
+// /implement-plan, /skill. It lacked goal continuation, the isProcessing
+// lock, /raw honoring, contradiction surfacing, and token summary — so any
+// command that took the second-class path felt visibly weaker than a plain
+// prompt. Removed in favor of routing every command through the closure's
+// runAgentTurn (which has all of the above).
 
 /**
  * Tab-completion source for `@path/to/file` mentions. Given a partial workspace
@@ -1251,6 +2602,37 @@ function completeWorkspacePath(workspaceRoot: string, partial: string): string[]
     .filter((e) => !ignore.has(e.name) && e.name.startsWith(prefix))
     .map((e) => `${subdir}${e.name}${e.isDirectory() ? '/' : ''}`)
     .sort();
+}
+
+/**
+ * Memory-aware variant of printMcpCall. Calls the tool, extracts the flat
+ * record list from whatever shape it returns, and renders compact cards
+ * (recordId, type, scene, content preview). Falls back to printMcpCall's
+ * raw output only when no records can be parsed.
+ */
+async function printMemoryCards(
+  mcpClient: McpClientWrapper,
+  toolName: string,
+  args: Record<string, unknown>,
+  heading: string,
+): Promise<void> {
+  const spinner = ora(chalk.gray(`${toolName}…`)).start();
+  const res = await callMcpTool<any>(mcpClient, toolName, args);
+  spinner.stop();
+  console.log();
+  if (res.isError) {
+    console.log(chalk.red(`${heading}: tool error — ${res.text || '(no message)'}`));
+    return;
+  }
+  const cards = extractMemories(res.parsed);
+  if (cards.length > 0) {
+    console.log(renderMemoryCards(cards, heading));
+  } else {
+    console.log(chalk.bold(heading));
+    const preview = clampPayload(res.text, 2000).trim();
+    console.log(preview ? chalk.gray(preview) : chalk.yellow('  (empty result)'));
+    console.log();
+  }
 }
 
 async function printMcpCall(
