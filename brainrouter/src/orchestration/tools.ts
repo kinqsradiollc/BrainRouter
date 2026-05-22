@@ -1,6 +1,6 @@
-import { Agent } from './agent.js';
-import type { McpClientWrapper } from './mcpClient.js';
-import type { LLMConfig } from './config.js';
+import { Agent } from '../agent/agent.js';
+import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import type { LLMConfig } from '../config/config.js';
 import {
   createSession,
   formatSessionSummary,
@@ -9,11 +9,11 @@ import {
   updateSession,
   type ChildSessionRecord,
 } from './orchestrator.js';
-import { buildRolePrompt, resolveRole, type AccessMode } from './agentRoles.js';
-import { buildSystemPrompt, loadWorkspaceInstructionSummary } from './systemPrompt.js';
-import { readTranscriptEntries } from './sessionStore.js';
-import { callMcpTool, childSessionKey } from './mcpUtils.js';
-import { readPreferences } from './preferencesStore.js';
+import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
+import { readTranscriptEntries } from '../state/sessionStore.js';
+import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
+import { readPreferences } from '../state/preferencesStore.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;

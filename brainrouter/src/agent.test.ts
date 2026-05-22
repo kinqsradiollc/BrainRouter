@@ -11,29 +11,29 @@ import {
   LOCAL_TOOLS,
   matchGlob,
   resolveWorkspacePath,
-} from './agent.js';
-import { getCliStateDir, getCliStateFile } from './cliState.js';
-import { appendTranscriptEntry, readTranscriptEntries, redactText } from './sessionStore.js';
-import { buildSystemPrompt } from './systemPrompt.js';
-import { formatPlan, readPlan, updatePlan } from './taskStore.js';
-import { findWorkspaceRoot } from './workspace.js';
-import { buildRolePrompt, listRoles, resolveRole } from './agentRoles.js';
-import { createSession, getSession, listSessions, updateSession } from './orchestrator.js';
-import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from './skillRunner.js';
-import { buildMemoryBriefing, selectCitedRecordIds } from './memoryBriefing.js';
-import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from './mcpUtils.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify, updateWorkflowStatus } from './workflowArtifacts.js';
-import { initAgentMd } from './initAgentMd.js';
-import { expandMentions } from './mentions.js';
-import { listTranscripts } from './sessionStore.js';
-import { clearGoal, formatGoalBlock, readGoal, setGoal } from './goalStore.js';
-import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from './hooksStore.js';
-import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from './loopRunner.js';
-import { Agent } from './agent.js';
-import { readPreferences, writePreferences } from './preferencesStore.js';
-import { resolveSandboxConfig } from './sandbox.js';
-import { startSpan, traceEnabled } from './tracing.js';
-import { clampPayload, extractMemories, renderMemoryCards } from './memoryFormatters.js';
+} from './agent/agent.js';
+import { getCliStateDir, getCliStateFile } from './state/cliState.js';
+import { appendTranscriptEntry, readTranscriptEntries, redactText } from './state/sessionStore.js';
+import { buildSystemPrompt } from './prompt/systemPrompt.js';
+import { formatPlan, readPlan, updatePlan } from './state/taskStore.js';
+import { findWorkspaceRoot } from './config/workspace.js';
+import { buildRolePrompt, listRoles, resolveRole } from './orchestration/roles.js';
+import { createSession, getSession, listSessions, updateSession } from './orchestration/orchestrator.js';
+import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from './prompt/skillRunner.js';
+import { buildMemoryBriefing, selectCitedRecordIds } from './memory/briefing.js';
+import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from './runtime/mcpUtils.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify, updateWorkflowStatus } from './state/workflowArtifacts.js';
+import { initAgentMd } from './prompt/initAgentMd.js';
+import { expandMentions } from './memory/mentions.js';
+import { listTranscripts } from './state/sessionStore.js';
+import { clearGoal, formatGoalBlock, readGoal, setGoal } from './state/goalStore.js';
+import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from './state/hooksStore.js';
+import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from './runtime/loopRunner.js';
+import { Agent } from './agent/agent.js';
+import { readPreferences, writePreferences } from './state/preferencesStore.js';
+import { resolveSandboxConfig } from './runtime/sandbox.js';
+import { startSpan, traceEnabled } from './runtime/tracing.js';
+import { clampPayload, extractMemories, renderMemoryCards } from './memory/formatters.js';
 
 // Construct an Agent without touching MCP or the LLM. We only exercise the
 // pure state-machine extensions added in Tier 1/2 (model, accessMode, history,
@@ -389,7 +389,7 @@ test('buildMemoryBriefing merges parallel memory sources into one block with red
 });
 
 test('orchestration: extractChildPreview prefers a Headline/Summary section over head-of-output', async () => {
-  const { extractChildPreview } = await import('./orchestratorTools.js');
+  const { extractChildPreview } = await import('./orchestration/tools.js');
   // When the child wrote a Headline block, the preview returns THAT,
   // not the framing intro the head-slice would have captured.
   const withHeadline =
@@ -412,7 +412,7 @@ test('orchestration: extractChildPreview prefers a Headline/Summary section over
 });
 
 test('sessionStore: appendTranscriptEntry dedupes consecutive identical user prompts', async () => {
-  const { appendTranscriptEntry, readTranscriptEntries } = await import('./sessionStore.js');
+  const { appendTranscriptEntry, readTranscriptEntries } = await import('./state/sessionStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:dedup';
     appendTranscriptEntry(workspace, sk, { role: 'user', content: 'help me with X' });
@@ -430,7 +430,7 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
   // Stub the global fetch with three scenarios that have historically crashed
   // the agent loop with `Cannot read properties of undefined (reading '0')`
   // when the upstream returned HTTP 200 + a non-standard body.
-  const { callOpenAI } = await import('./agent.js');
+  const { callOpenAI } = await import('./agent/agent.js');
   const realFetch = global.fetch;
   const llmConfig = { provider: 'openai' as const, apiKey: 'test', model: 'gpt-oss-120b', endpoint: 'http://localhost:9999/v1' };
 
@@ -471,7 +471,7 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
 
 test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
   const { acquireLLMSlot, getLLMSemaphoreState, resetLLMSemaphoreForTests } =
-    await import('./llmSemaphore.js');
+    await import('./runtime/llmSemaphore.js');
   // Force a known cap of 2 for this test.
   process.env.BRAINROUTER_LLM_MAX_CONCURRENT = '2';
   resetLLMSemaphoreForTests();
@@ -512,7 +512,7 @@ test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
 });
 
 test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not', async () => {
-  const { shouldSuggestFanOut } = await import('./breadthHint.js');
+  const { shouldSuggestFanOut } = await import('./prompt/breadthHint.js');
   // Prompts that obviously want fan-out — the original calibration missed
   // several of these (they all scored 1.5, just under the old 1.8 threshold).
   const broad = [
@@ -541,7 +541,7 @@ test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not',
 });
 
 test('normalizeToolName resolves common LLM hallucinations to the canonical tool name', async () => {
-  const { normalizeToolName } = await import('./agent.js');
+  const { normalizeToolName } = await import('./agent/agent.js');
   const candidates = ['read_file', 'list_dir', 'grep_search', 'memory_recall'];
   // Exact match passes through unchanged.
   assert.equal(normalizeToolName('read_file', candidates), 'read_file');
@@ -562,7 +562,7 @@ test('normalizeToolName resolves common LLM hallucinations to the canonical tool
 });
 
 test('orchestration: clampAccess prevents a child from exceeding the parent\'s access mode', async () => {
-  const { clampAccess } = await import('./orchestratorTools.js');
+  const { clampAccess } = await import('./orchestration/tools.js');
   // Same level: no clamp.
   assert.equal(clampAccess('shell', 'shell'), 'shell');
   assert.equal(clampAccess('write', 'write'), 'write');
@@ -806,7 +806,7 @@ test('goalStore: set/read/clear round-trip and formatGoalBlock includes outcome 
 });
 
 test('goalStore: setGoal rejects text longer than GOAL_TEXT_MAX_CHARS', async () => {
-  const { GoalTooLongError, GOAL_TEXT_MAX_CHARS } = await import('./goalStore.js');
+  const { GoalTooLongError, GOAL_TEXT_MAX_CHARS } = await import('./state/goalStore.js');
   withTempWorkspace((workspace) => {
     // At-cap input is accepted.
     const atCap = 'x'.repeat(GOAL_TEXT_MAX_CHARS);
@@ -826,7 +826,7 @@ test('goalStore: setGoal rejects text longer than GOAL_TEXT_MAX_CHARS', async ()
 });
 
 test('goalStore: lifecycle helpers — pause, resume, complete, blocked, budget, tick', async () => {
-  const { pauseGoal, resumeGoal, completeGoal, blockGoal, setGoalBudget, tickGoalIteration } = await import('./goalStore.js');
+  const { pauseGoal, resumeGoal, completeGoal, blockGoal, setGoalBudget, tickGoalIteration } = await import('./state/goalStore.js');
   withTempWorkspace((workspace) => {
     const sessionKey = 'brainrouter-cli:test:main';
     setGoal(workspace, 'reach the moon', sessionKey);
@@ -853,7 +853,7 @@ test('goalStore: lifecycle helpers — pause, resume, complete, blocked, budget,
 });
 
 test('goalStore: legacy { text, setAt } gets normalized with active status and default budget', async () => {
-  const { getCliStateFile } = await import('./cliState.js');
+  const { getCliStateFile } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     fs.writeFileSync(
       getCliStateFile(workspace, 'goal.json'),
@@ -1136,7 +1136,7 @@ test('preferencesStore: writePreferences merges new theme/personality fields', (
 });
 
 test('hookifyStore: parse, create, list, toggle, delete roundtrip', async () => {
-  const { createHookifyRule, listHookifyRules, toggleHookifyRule, deleteHookifyRule, parseHookifyFile, evaluateHookify, buildHookifyContext } = await import('./hookifyStore.js');
+  const { createHookifyRule, listHookifyRules, toggleHookifyRule, deleteHookifyRule, parseHookifyFile, evaluateHookify, buildHookifyContext } = await import('./state/hookifyStore.js');
   withTempWorkspace((workspace) => {
     const rule = createHookifyRule(workspace, {
       name: 'block-rm-rf',
@@ -1172,7 +1172,7 @@ test('hookifyStore: parse, create, list, toggle, delete roundtrip', async () => 
 });
 
 test('hookifyStore: condition-based file event matches new_text and file_path', async () => {
-  const { createHookifyRule, evaluateHookify, buildHookifyContext, listHookifyRules } = await import('./hookifyStore.js');
+  const { createHookifyRule, evaluateHookify, buildHookifyContext, listHookifyRules } = await import('./state/hookifyStore.js');
   withTempWorkspace((workspace) => {
     createHookifyRule(workspace, {
       name: 'no-console-log',
@@ -1193,7 +1193,7 @@ test('hookifyStore: condition-based file event matches new_text and file_path', 
 });
 
 test('memoryConsolidation: writes per-type files and MEMORY.md index', async () => {
-  const { consolidateMemories, memoriesDir } = await import('./memoryConsolidation.js');
+  const { consolidateMemories, memoriesDir } = await import('./memory/consolidation.js');
   await withTempWorkspaceAsync(async (workspace) => {
     const stubMcp: any = {
       listTools: async () => ({ tools: [] }),
@@ -1233,7 +1233,7 @@ test('memoryConsolidation: writes per-type files and MEMORY.md index', async () 
 });
 
 test('compactor: renderCompactSystemMessage tags the summary clearly', async () => {
-  const { renderCompactSystemMessage } = await import('./compactor.js');
+  const { renderCompactSystemMessage } = await import('./prompt/compactor.js');
   const rendered = renderCompactSystemMessage('# Goals\n- Ship feature X');
   assert.match(rendered, /Compacted conversation summary/);
   assert.match(rendered, /Ship feature X/);
@@ -1257,7 +1257,7 @@ test('goalStore: per-session goals are isolated from each other', () => {
 });
 
 test('goalStore: legacy workspace-level goal is read as a fallback', async () => {
-  const { getCliStateFile, getSessionStateDir } = await import('./cliState.js');
+  const { getCliStateFile, getSessionStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     // Old layout — write directly to the workspace-level file.
     fs.writeFileSync(getCliStateFile(workspace, 'goal.json'), JSON.stringify({ text: 'legacy goal', setAt: '2026-01-01T00:00:00Z' }));
@@ -1273,7 +1273,7 @@ test('goalStore: legacy workspace-level goal is read as a fallback', async () =>
 });
 
 test('taskStore: per-session plans are isolated and updatePlan writes the bucket', async () => {
-  const { getSessionStateDir } = await import('./cliState.js');
+  const { getSessionStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     const sessionA = 'brainrouter-cli:project:main';
     const sessionB = 'brainrouter-cli:project:side';
@@ -1291,7 +1291,7 @@ test('taskStore: per-session plans are isolated and updatePlan writes the bucket
 });
 
 test('sessionStore: transcripts land in sessions/<key>/transcript.jsonl', async () => {
-  const { getSessionStateDir } = await import('./cliState.js');
+  const { getSessionStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     appendTranscriptEntry(workspace, 'brainrouter-cli:project:main', { role: 'user', content: 'hi there' });
     const bucket = getSessionStateDir(workspace, 'brainrouter-cli:project:main');
@@ -1303,7 +1303,7 @@ test('sessionStore: transcripts land in sessions/<key>/transcript.jsonl', async 
 });
 
 test('sessionStore: legacy transcripts/<encoded>.jsonl remains discoverable', async () => {
-  const { getCliStateDir, encodeSessionKey } = await import('./cliState.js');
+  const { getCliStateDir, encodeSessionKey } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     const stateDir = getCliStateDir(workspace);
     const legacyDir = path.join(stateDir, 'transcripts');
@@ -1380,7 +1380,7 @@ test('runTurn: repeat-loop guard short-circuits identical (tool, args) calls aft
 });
 
 test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" / parallel hints', async () => {
-  const { detectBreadthIntent, shouldSuggestFanOut } = await import('./breadthHint.js');
+  const { detectBreadthIntent, shouldSuggestFanOut } = await import('./prompt/breadthHint.js');
 
   const cases: Array<{ prompt: string; expectFanOut: boolean; expectSignal?: string }> = [
     { prompt: 'test all the MCP tools in 1 go, as much as you could', expectFanOut: true, expectSignal: 'one-shot' },
@@ -1402,7 +1402,7 @@ test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" /
 });
 
 test('inferRoleFromTask routes verbs to the right child role', async () => {
-  const { inferRoleFromTask } = await import('./orchestratorTools.js');
+  const { inferRoleFromTask } = await import('./orchestration/tools.js');
   assert.equal(inferRoleFromTask('investigate the auth middleware'), 'explorer');
   assert.equal(inferRoleFromTask('Map the MCP package layout'), 'explorer');
   assert.equal(inferRoleFromTask('Design the data model for the chat feature'), 'architect');
@@ -1415,7 +1415,7 @@ test('inferRoleFromTask routes verbs to the right child role', async () => {
 });
 
 test('explainUnknownToolName: skill-shaped names get the skill correction; others get the generic hint', async () => {
-  const { explainUnknownToolName } = await import('./agent.js');
+  const { explainUnknownToolName } = await import('./agent/agent.js');
   assert.match(explainUnknownToolName('incremental-implementation'), /tried to invoke a SKILL/);
   assert.match(explainUnknownToolName('spec-driven-skill'), /load its instructions/);
   assert.match(explainUnknownToolName('code-structure-cleanup'), /tried to invoke a SKILL/);
@@ -1487,7 +1487,7 @@ test('resolveWorkspacePath uses the explicit workspace, not process.cwd()', asyn
 });
 
 test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (preserves workflows/)', async () => {
-  const { getCliStateDir } = await import('./cliState.js');
+  const { getCliStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     const legacy = path.join(workspace, '.brainrouter');
     fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
@@ -1507,7 +1507,7 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (prese
 });
 
 test('cliState: BRAINROUTER_HOME pins the user-global state root', async () => {
-  const { getBrainrouterHome, getWorkspaceStateRoot } = await import('./cliState.js');
+  const { getBrainrouterHome, getWorkspaceStateRoot } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     const home = process.env.BRAINROUTER_HOME!;
     assert.equal(getBrainrouterHome(), fs.realpathSync(home));
@@ -1520,7 +1520,7 @@ test('cliState: BRAINROUTER_HOME pins the user-global state root', async () => {
 });
 
 test('cliState: legacy <workspace>/.brainrouter/ migrates to the user home on first use', async () => {
-  const { getCliStateDir } = await import('./cliState.js');
+  const { getCliStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     // Plant legacy files inside the workspace as if they came from an older build.
     const legacyDir = path.join(workspace, '.brainrouter', 'cli');
@@ -1540,7 +1540,7 @@ test('cliState: legacy <workspace>/.brainrouter/ migrates to the user home on fi
 });
 
 test('workflowArtifacts: stay in the workspace so they can be committed', async () => {
-  const { getWorkflowsRoot } = await import('./workflowArtifacts.js');
+  const { getWorkflowsRoot } = await import('./state/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const root = getWorkflowsRoot(workspace);
     assert.equal(root, path.join(fs.realpathSync(workspace), '.brainrouter', 'workflows'));
@@ -1549,7 +1549,7 @@ test('workflowArtifacts: stay in the workspace so they can be committed', async 
 });
 
 test('cliState: listSessionDirs surfaces every session bucket newest first', async () => {
-  const { listSessionDirs } = await import('./cliState.js');
+  const { listSessionDirs } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     appendTranscriptEntry(workspace, 'sess:a', { role: 'user', content: 'A' });
     appendTranscriptEntry(workspace, 'sess:b', { role: 'user', content: 'B' });

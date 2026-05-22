@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-05-22
+
+### Changed
+- **Source tree restructured into responsibility folders.** All 32 source modules under `brainrouter/src/` were moved out of the flat root into 8 semantic subdirectories: `agent/`, `cli/`, `config/`, `memory/`, `orchestration/`, `prompt/`, `runtime/`, `state/`. `index.ts`, `agent.test.ts`, and `types.d.ts` stay at the root. Three modules picked up shorter names now that the folder gives the context — `memoryBriefing.ts → memory/briefing.ts`, `memoryFormatters.ts → memory/formatters.ts`, `memoryConsolidation.ts → memory/consolidation.ts`, `orchestratorTools.ts → orchestration/tools.ts`, `agentRoles.ts → orchestration/roles.ts`. All 125 intra-src import sites were rewritten in lockstep. Tests still green (89/89). Used `git mv` throughout so blame history is preserved on every file.
+- README's repository-structure section refreshed to mirror the new tree with one-line summaries per module.
+
 ## [0.3.2] - 2026-05-22
 
 ### Added (Claude Code 2.1.147 parity)

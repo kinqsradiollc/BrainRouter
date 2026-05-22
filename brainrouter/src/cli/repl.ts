@@ -7,31 +7,31 @@ import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
-import type { Agent } from './agent.js';
-import type { McpClientWrapper } from './mcpClient.js';
-import type { Config } from './config.js';
-import { getConfigPath } from './config.js';
-import { LOCAL_TOOLS } from './agent.js';
-import { listTranscripts, loadTranscript, readTranscriptEntries } from './sessionStore.js';
-import { initAgentMd } from './initAgentMd.js';
-import { expandMentions } from './mentions.js';
-import { clearGoal, completeGoal, goalHasBudgetLeft, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, tickGoalIteration } from './goalStore.js';
-import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from './hooksStore.js';
-import { copyToClipboard } from './clipboard.js';
-import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from './loopRunner.js';
+import type { Agent } from '../agent/agent.js';
+import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import type { Config } from '../config/config.js';
+import { getConfigPath } from '../config/config.js';
+import { LOCAL_TOOLS } from '../agent/agent.js';
+import { listTranscripts, loadTranscript, readTranscriptEntries } from '../state/sessionStore.js';
+import { initAgentMd } from '../prompt/initAgentMd.js';
+import { expandMentions } from '../memory/mentions.js';
+import { clearGoal, completeGoal, goalHasBudgetLeft, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, tickGoalIteration } from '../state/goalStore.js';
+import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '../state/hooksStore.js';
+import { copyToClipboard } from '../runtime/clipboard.js';
+import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from '../runtime/loopRunner.js';
 import { randomUUID } from 'node:crypto';
-import { readPreferences, writePreferences } from './preferencesStore.js';
+import { readPreferences, writePreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
-import { clampPayload, extractMemories, renderMemoryCards } from './memoryFormatters.js';
-import { formatPlan, readPlan, updatePlan } from './taskStore.js';
-import type { WorkspaceInfo } from './workspace.js';
-import { listRoles } from './agentRoles.js';
-import { formatSessionSummary, getSession, listSessions, reconcileStale } from './orchestrator.js';
-import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from './skillRunner.js';
-import { callMcpTool, childSessionKey } from './mcpUtils.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from './workflowArtifacts.js';
-import { consolidateMemories } from './memoryConsolidation.js';
-import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from './hookifyStore.js';
+import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
+import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
+import type { WorkspaceInfo } from '../config/workspace.js';
+import { listRoles } from '../orchestration/roles.js';
+import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../orchestration/orchestrator.js';
+import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
+import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from '../state/workflowArtifacts.js';
+import { consolidateMemories } from '../memory/consolidation.js';
+import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '../state/hookifyStore.js';
 import { safePrintAbovePrompt as safePrintAbovePromptGlobalShared, setActiveReadline } from './cliPrompt.js';
 
 const execPromise = promisify(exec);
@@ -257,7 +257,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
    * audit, refuse prose-only "I will continue" answers.
    */
   const buildGoalContinuationPrompt = (
-    goal: import('./goalStore.js').Goal,
+    goal: import('../state/goalStore.js').Goal,
     lastPrompt: string,
     lastAnswer: string,
   ): string => {
@@ -1571,7 +1571,7 @@ async function handleSlashCommand(
       const arg = args.join(' ').trim();
       const ws = agent.workspaceRoot;
       const sk = agent.sessionKey;
-      const showStatus = (g: import('./goalStore.js').Goal | null) => {
+      const showStatus = (g: import('../state/goalStore.js').Goal | null) => {
         if (!g) {
           console.log(chalk.yellow('\nNo active goal. Set one with: /goal <outcome statement>\n'));
           console.log(chalk.gray('Outcome-first format works best:'));
@@ -1633,7 +1633,7 @@ async function handleSlashCommand(
         break;
       }
       // Anything else is a new goal text.
-      let goal: import('./goalStore.js').Goal;
+      let goal: import('../state/goalStore.js').Goal;
       try {
         goal = setGoal(ws, arg, sk);
       } catch (err: any) {
@@ -2393,7 +2393,7 @@ async function handleSlashCommand(
     }
 
     case '/rollout': {
-      const { getSessionStateDir } = await import('./cliState.js');
+      const { getSessionStateDir } = await import('../state/cliState.js');
       const sessionDir = getSessionStateDir(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nSession bucket'));
       console.log(`  Session:   ${chalk.cyan(agent.sessionKey)}`);
@@ -2461,7 +2461,7 @@ async function handleSlashCommand(
         console.log(chalk.gray(`\nNo credentials were set on profile "${profile}".\n`));
         break;
       }
-      const { saveConfig } = await import('./config.js');
+      const { saveConfig } = await import('../config/config.js');
       saveConfig(config);
       console.log(chalk.green(`\n✓ Cleared ${removed.join(', ')} from profile "${profile}".`));
       console.log(chalk.gray('  Re-attach with /login.\n'));
@@ -2746,7 +2746,7 @@ let activeReadline: readline.Interface | undefined;
  * keeps firing iterations 2..N until the agent calls goal_complete or
  * goal_blocked, the budget runs out, or the user interrupts.
  */
-function buildGoalKickoffPrompt(goal: import('./goalStore.js').Goal, mode: 'start' | 'resume'): string {
+function buildGoalKickoffPrompt(goal: import('../state/goalStore.js').Goal, mode: 'start' | 'resume'): string {
   const header = mode === 'start' ? '[GOAL KICKOFF — iteration 1]' : '[GOAL RESUME]';
   return [
     header,

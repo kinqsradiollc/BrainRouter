@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { LLMConfig, ServerConfig } from './config.js';
+import type { LLMConfig, ServerConfig } from '../config/config.js';
 
 export class McpClientWrapper {
   public client: Client;

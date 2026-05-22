@@ -169,18 +169,56 @@ BrainRouter/
 │   └── tsconfig.json
 ├── brainrouter/              # Terminal Agent CLI (memory-native coding agent)
 │   └── src/
-│       ├── agent.ts                # Tool-calling loop, hookify integration, compaction
-│       ├── repl.ts                 # 60+ slash commands, @mentions, statusline, vim mode
-│       ├── compactor.ts            # LLM-driven /compact summarizer
-│       ├── hookifyStore.ts         # Markdown-rule guardrails (.brainrouter/hooks/*.md)
-│       ├── memoryConsolidation.ts  # Phase 2 filesystem artifacts on the client side
-│       ├── orchestrator*.ts        # Multi-agent: spawn_agent, wait_agent, roles
-│       ├── workflowArtifacts.ts    # spec.md / tasks.md / walkthrough.md scaffolding
-│       ├── cliState.ts             # Per-session bucket helpers (sessions/<key>/…)
-│       ├── goalStore.ts            # Per-session sticky goal
-│       ├── taskStore.ts            # Per-session durable plan
-│       ├── sessionStore.ts         # Per-session transcript.jsonl + legacy fallback
-│       └── ...                     # mcp client, sandbox, tracing, etc.
+│       ├── index.ts               # CLI entry — argv parsing, env loading, top-level commands
+│       ├── agent.test.ts          # Test suite (89+ cases)
+│       │
+│       ├── agent/                 # Tool-calling loop + LLM client
+│       │   └── agent.ts           # Agent class, callOpenAI, captureTurn, retry
+│       │
+│       ├── cli/                   # Interactive surface
+│       │   ├── repl.ts            # 60+ slash commands, statusline, /help paginator
+│       │   └── cliPrompt.ts       # askYesNo, safePrintAbovePrompt
+│       │
+│       ├── config/                # Configuration + workspace detection
+│       │   ├── config.ts          # LLMConfig, ServerConfig, ~/.config/brainrouter
+│       │   └── workspace.ts       # findWorkspaceRoot (walks for AGENT.md or .git)
+│       │
+│       ├── memory/                # Memory layer (CLI side)
+│       │   ├── briefing.ts        # Per-turn buildMemoryBriefing
+│       │   ├── formatters.ts      # Render recalled records as cards
+│       │   ├── consolidation.ts   # Phase 2 filesystem snapshots
+│       │   └── mentions.ts        # @-mention expansion
+│       │
+│       ├── orchestration/         # Multi-agent
+│       │   ├── orchestrator.ts    # ChildSessionRecord CRUD
+│       │   ├── tools.ts           # spawn_agent / wait_agent / route_agent dispatch
+│       │   └── roles.ts           # explorer / architect / reviewer / worker / verifier
+│       │
+│       ├── prompt/                # Prompt construction + skill resolution
+│       │   ├── systemPrompt.ts    # Base system prompt builder
+│       │   ├── skillRunner.ts     # Skill name → prompt resolver
+│       │   ├── compactor.ts       # LLM-driven /compact summarizer
+│       │   ├── breadthHint.ts     # Fan-out signal detection
+│       │   └── initAgentMd.ts     # AGENT.md scaffolder
+│       │
+│       ├── runtime/               # Host-touching infrastructure
+│       │   ├── mcpClient.ts       # MCP wrapper (stdio + HTTP transports)
+│       │   ├── mcpUtils.ts        # callMcpTool, extractToolText, …
+│       │   ├── sandbox.ts         # sandbox-exec / bwrap / firejail wrapper
+│       │   ├── tracing.ts         # OTEL-style spans (BRAINROUTER_TRACE_LOG)
+│       │   ├── loopRunner.ts      # /loop background scheduler
+│       │   ├── llmSemaphore.ts    # Concurrent-LLM-call cap (CLI side)
+│       │   └── clipboard.ts       # Copy helper for /copy
+│       │
+│       └── state/                 # Per-session persistence
+│           ├── cliState.ts        # Workspace state dir layout, atomic JSON I/O
+│           ├── goalStore.ts       # Goal lifecycle (status + budget)
+│           ├── taskStore.ts       # Durable plan
+│           ├── sessionStore.ts    # transcript.jsonl + redaction
+│           ├── preferencesStore.ts# theme, statusline, etc.
+│           ├── hooksStore.ts      # Lifecycle hook config
+│           ├── hookifyStore.ts    # Markdown rule guards
+│           └── workflowArtifacts.ts # spec.md / tasks.md / walkthrough.md scaffolding
 │
 │   Personal CLI state lives in the user-global home (NOT inside the project):
 │   ~/.brainrouter/

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
-import { resolveRole, type AccessMode } from './agentRoles.js';
+import { getCliStateFile, readJsonFile, writeJsonFile } from '../state/cliState.js';
+import { resolveRole, type AccessMode } from './roles.js';
 
 export type ChildStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stale' | 'closed';
 
