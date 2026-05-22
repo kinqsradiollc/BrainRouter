@@ -1782,7 +1782,7 @@ export function buildChatCompletionPayload(config: LLMConfig, messages: any[], t
   return body;
 }
 
-async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
+export async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
   const endpoint = config.endpoint || 'https://api.openai.com/v1';
   let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
   const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
@@ -1841,12 +1841,50 @@ async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
   }
 
   const data = await res.json() as any;
+
+  // Defensive response-shape parsing. Some endpoints (LM Studio with certain
+  // models, OpenRouter on specific upstream errors, local vLLM under load,
+  // gpt-oss reasoning models with a non-standard envelope) return a 200 OK
+  // with NO `choices` array — they smuggle the failure into the body as
+  // `{error: ...}` or change the schema entirely. Unguarded `data.choices[0]`
+  // then crashes with "Cannot read properties of undefined" and the user
+  // has no idea what the upstream actually sent. Surface the body in the
+  // error so they can spot the actual problem (wrong model name, OOM,
+  // content-filter refusal, etc.).
+  if (data && typeof data === 'object' && data.error) {
+    const errMsg = typeof data.error === 'string'
+      ? data.error
+      : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
+    throw new Error(`LLM endpoint returned an error envelope (HTTP 200): ${errMsg}`);
+  }
+  if (!Array.isArray(data?.choices) || data.choices.length === 0) {
+    throw new Error(
+      `LLM endpoint returned no choices. ` +
+      `Model "${config.model}" at ${endpoint} may not support chat/completions, ` +
+      `may need a different request shape (reasoning/harmony format?), or be misconfigured. ` +
+      `Response body: ${JSON.stringify(data).slice(0, 600)}`,
+    );
+  }
   const choice = data.choices[0];
   if (!choice?.message) {
+    // Streaming-style frames have `delta` instead of `message` — accept both
+    // so a partially-misconfigured endpoint at least surfaces what it sent.
+    const delta = choice?.delta;
+    if (delta && typeof delta === 'object') {
+      return {
+        content: delta.content || '',
+        toolCalls: delta.tool_calls,
+        usage: data.usage,
+      };
+    }
     throw new Error(`OpenAI-compatible endpoint returned an invalid chat completion response: ${JSON.stringify(data).slice(0, 1000)}`);
   }
   return {
-    content: choice.message.content || '',
+    // Some reasoning models put the visible answer in `message.content` and
+    // chain-of-thought in `message.reasoning_content` / `reasoning`. We use
+    // content (the canonical user-visible field) but tolerate it being null
+    // when there are tool_calls but no prose.
+    content: choice.message.content ?? '',
     toolCalls: choice.message.tool_calls,
     usage: data.usage,
   };

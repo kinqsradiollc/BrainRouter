@@ -411,6 +411,49 @@ test('orchestration: extractChildPreview prefers a Headline/Summary section over
   assert.match(preview2, /…/); // contains the divider
 });
 
+test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
+  // Stub the global fetch with three scenarios that have historically crashed
+  // the agent loop with `Cannot read properties of undefined (reading '0')`
+  // when the upstream returned HTTP 200 + a non-standard body.
+  const { callOpenAI } = await import('./agent.js');
+  const realFetch = global.fetch;
+  const llmConfig = { provider: 'openai' as const, apiKey: 'test', model: 'gpt-oss-120b', endpoint: 'http://localhost:9999/v1' };
+
+  const cases: Array<{ name: string; body: any; expectMatch: RegExp }> = [
+    {
+      name: 'error envelope with HTTP 200 (common with OpenRouter upstream failures)',
+      body: { error: { message: 'Model "gpt-oss-120b" not found' } },
+      expectMatch: /error envelope.*Model "gpt-oss-120b" not found/,
+    },
+    {
+      name: 'missing choices array (some local servers under load)',
+      body: { id: 'cmpl-xxx', object: 'chat.completion' },
+      expectMatch: /no choices.*gpt-oss-120b/,
+    },
+    {
+      name: 'empty choices array',
+      body: { choices: [] },
+      expectMatch: /no choices/,
+    },
+  ];
+
+  try {
+    for (const c of cases) {
+      global.fetch = (async () => new Response(JSON.stringify(c.body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as any;
+      await assert.rejects(
+        () => callOpenAI(llmConfig, [], []),
+        (err: any) => c.expectMatch.test(err.message ?? ''),
+        `case "${c.name}" should reject with descriptive error, not TypeError`,
+      );
+    }
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
   const { acquireLLMSlot, getLLMSemaphoreState, resetLLMSemaphoreForTests } =
     await import('./llmSemaphore.js');
