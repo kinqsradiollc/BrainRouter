@@ -58,7 +58,7 @@ const SLASH_COMMANDS = [
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
-  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.4'));
+  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.5'));
   console.log(chalk.gray('Midnight Ledger / Obsidian Surface theme active.'));
   console.log(chalk.gray(`Workspace root: ${workspace?.workspaceRoot || process.cwd()}`));
   // Surface offline mode prominently — easy to miss the warning that scrolled

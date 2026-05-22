@@ -168,7 +168,7 @@ const program = new Command();
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.4');
+  .version('0.3.5');
 
 // Chat Command (default)
 program
