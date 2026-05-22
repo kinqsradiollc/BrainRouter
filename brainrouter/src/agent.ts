@@ -106,6 +106,15 @@ export interface AgentOptions {
   systemPromptOverride?: string;
   /** When true (default for silent children: false), pre-turn memory recall runs even in silent mode. */
   enableRecall?: boolean;
+  /**
+   * Parent OTEL trace context. Set by `spawn_agent` so the child's per-turn
+   * spans nest under the parent's `brainrouter.turn` span. Without this each
+   * child started a fresh trace tree and fan-out runs flattened in trace
+   * viewers — you couldn't see "this child belongs to that parent turn".
+   * Matches Claude Code 2.1.147's agent_id / parent_agent_id attributes.
+   */
+  parentTraceId?: string;
+  parentSpanId?: string;
 }
 
 export const LOCAL_TOOLS = [
@@ -420,6 +429,22 @@ export class Agent {
    * Null/undefined when no skill is active.
    */
   public activeSkill?: string;
+  /**
+   * Parent trace context (set by spawn_agent for child agents). When present,
+   * the per-turn span uses these as its trace/parent so OTEL viewers can
+   * stitch the fan-out tree together. Top-level (REPL) agents leave these
+   * undefined and get a fresh trace per turn.
+   */
+  private parentTraceId?: string;
+  private parentSpanId?: string;
+  /**
+   * Synthetic agent id used in OTEL attributes so child spans can be grouped
+   * even without trace links. Equals `agent-<6 random hex>` per Agent
+   * instance. Matches Claude Code's `agent_id` / `parent_agent_id` attrs.
+   */
+  public readonly agentId: string = `agent-${Math.random().toString(36).slice(2, 8)}`;
+  /** agent_id of the parent (set by spawn_agent for children). */
+  private parentAgentId?: string;
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -434,6 +459,17 @@ export class Agent {
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
     this.systemPromptOverride = options.systemPromptOverride;
+    this.parentTraceId = options.parentTraceId;
+    this.parentSpanId = options.parentSpanId;
+  }
+
+  /** Expose for orchestration so spawn_agent can record the parent linkage. */
+  public getAgentId(): string {
+    return this.agentId;
+  }
+  /** Internal — used by spawn_agent to record which parent dispatched us. */
+  public setParentAgentId(id: string | undefined): void {
+    this.parentAgentId = id;
   }
 
   private allowedToolsForAccess(): Set<string> {
@@ -461,11 +497,19 @@ export class Agent {
     this.lastTurnToolCalls = 0;
     this.lastGoalTransition = undefined;
     // OTEL-style span: one trace per turn, tool calls become child spans.
+    // When this Agent was spawned as a child, inherit the parent's traceId
+    // + spanId so fan-out runs stitch into one tree across processes (or
+    // promises). Top-level REPL agents get a fresh trace per turn.
     const turnSpan = startSpan('brainrouter.turn', {
       session_key: this.sessionKey,
       access_mode: this.accessMode,
       model: this.llmConfig.model,
       role_overlay: this.roleOverlay ? 'set' : 'none',
+      agent_id: this.agentId,
+      parent_agent_id: this.parentAgentId,
+    }, {
+      traceId: this.parentTraceId,
+      parentSpanId: this.parentSpanId,
     });
 
     callbacks.onStatusUpdate('Loading available tools...');
@@ -699,6 +743,12 @@ export class Agent {
               workspaceRoot: this.workspaceRoot,
               parentSessionKey: this.sessionKey,
               parentAccessMode: this.accessMode,
+              // Thread the parent's trace context so child agents nest their
+              // per-turn spans under THIS turn instead of starting a fresh
+              // trace tree. Lets observability backends reconstruct fan-out.
+              parentTraceId: turnSpan.traceId,
+              parentSpanId: turnSpan.spanId,
+              parentAgentId: this.agentId,
               mcpClient: this.mcpClient,
               llmConfig: this.llmConfig,
               launchCwd: this.launchCwd,

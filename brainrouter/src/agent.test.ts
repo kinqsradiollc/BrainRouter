@@ -411,6 +411,21 @@ test('orchestration: extractChildPreview prefers a Headline/Summary section over
   assert.match(preview2, /…/); // contains the divider
 });
 
+test('sessionStore: appendTranscriptEntry dedupes consecutive identical user prompts', async () => {
+  const { appendTranscriptEntry, readTranscriptEntries } = await import('./sessionStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:dedup';
+    appendTranscriptEntry(workspace, sk, { role: 'user', content: 'help me with X' });
+    appendTranscriptEntry(workspace, sk, { role: 'user', content: 'help me with X' }); // dup — skip
+    appendTranscriptEntry(workspace, sk, { role: 'assistant', content: 'sure!' });
+    appendTranscriptEntry(workspace, sk, { role: 'user', content: 'help me with X' }); // not consecutive — keep
+    const entries = readTranscriptEntries(workspace, sk, 100);
+    const userEntries = entries.filter((e) => e.role === 'user');
+    assert.equal(userEntries.length, 2, 'consecutive duplicate user prompts should collapse to one; non-consecutive duplicates are kept');
+    assert.equal(entries.length, 3); // 1 user + 1 assistant + 1 user
+  });
+});
+
 test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
   // Stub the global fetch with three scenarios that have historically crashed
   // the agent loop with `Cannot read properties of undefined (reading '0')`
