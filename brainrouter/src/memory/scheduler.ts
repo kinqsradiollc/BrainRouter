@@ -12,7 +12,7 @@ export const IDENTITY_TRIGGER_EVERY_N = parseInt(process.env.BRAINROUTER_IDENTIT
 /** Focus auto-merge max scenes threshold (default: 20). */
 export const MAX_FOCUS_SCENES = parseInt(process.env.BRAINROUTER_MAX_FOCUS_SCENES ?? "20", 10);
 
-import type { SchedulerState } from "@brainrouter/types";
+import type { SchedulerState } from "@kinqs/brainrouter-types";
 
 export function shouldRunFocusDistill(state: SchedulerState): boolean {
   return state.cognitiveCountSinceLastFocus >= FOCUS_TRIGGER_EVERY_N;

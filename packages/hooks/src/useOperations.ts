@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { MemoryOperation, OperationsResponse } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { MemoryOperation, OperationsResponse } from "@kinqs/brainrouter-types";
 
 export interface OperationFilters {
   userId?: string;

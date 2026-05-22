@@ -1,5 +1,5 @@
-import type { IMemoryStore } from "@brainrouter/types";
-import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus } from "@kinqs/brainrouter-types";
 import { extractCognitiveMemories } from "./pipeline/cognitive-extractor.js";
 import { deduplicateMemories } from "./pipeline/cognitive-dedup.js";
 import { detectContradictions } from "./pipeline/cognitive-contradiction.js";

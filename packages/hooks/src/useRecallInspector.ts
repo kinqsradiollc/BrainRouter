@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { ExplainRecallRequest, ExplainRecallResponse } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { ExplainRecallRequest, ExplainRecallResponse } from "@kinqs/brainrouter-types";
 
 export function useRecallInspector(client: BrainRouterClient) {
   const [result, setResult] = useState<ExplainRecallResponse | null>(null);

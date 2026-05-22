@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import { CoreIdentityRecord } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import { CoreIdentityRecord } from "@kinqs/brainrouter-types";
 
 export function usePersona(client: BrainRouterClient) {
   const [persona, setPersona] = useState<CoreIdentityRecord | null>(null);

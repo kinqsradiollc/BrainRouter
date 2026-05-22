@@ -1,5 +1,5 @@
 {
-  "name": "@brainrouter/types",
+  "name": "@kinqs/brainrouter-types",
   "version": "0.3.4",
   "description": "Shared TypeScript types for BrainRouter — used by the CLI, MCP server, and SDK.",
   "type": "module",

@@ -1,4 +1,4 @@
-import type { SensoryRecord } from "@brainrouter/types";
+import type { SensoryRecord } from "@kinqs/brainrouter-types";
 
 // ============================
 // System Prompt

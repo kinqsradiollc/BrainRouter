@@ -1,5 +1,5 @@
-import type { IMemoryStore } from "@brainrouter/types";
-import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation } from "@kinqs/brainrouter-types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";

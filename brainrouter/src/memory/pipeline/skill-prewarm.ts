@@ -8,7 +8,7 @@
  * This is opt-in via BRAINROUTER_PREWARM_ENABLED=true (disabled by default).
  */
 
-import type { IMemoryStore } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 export interface PrewarmResult {
   skillName: string;

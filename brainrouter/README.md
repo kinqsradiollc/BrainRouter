@@ -1,6 +1,6 @@
-# @brainrouter/mcp-server
+# @kinqs/brainrouter-mcp-server
 
-The cognitive memory engine behind [BrainRouter](https://github.com/kinqsradiollc/BrainRouter) — exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) server so any MCP-speaking agent (Claude Desktop, Cursor, [`@brainrouter/cli`](https://www.npmjs.com/package/@brainrouter/cli), custom clients) can recall, capture, and reason over long-term memory.
+The cognitive memory engine behind [BrainRouter](https://github.com/kinqsradiollc/BrainRouter) — exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) server so any MCP-speaking agent (Claude Desktop, Cursor, [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli), custom clients) can recall, capture, and reason over long-term memory.
 
 ## What it gives you
 
@@ -13,7 +13,7 @@ The cognitive memory engine behind [BrainRouter](https://github.com/kinqsradioll
 ## Install
 
 ```bash
-npm install @brainrouter/mcp-server
+npm install @kinqs/brainrouter-mcp-server
 ```
 
 ## Run

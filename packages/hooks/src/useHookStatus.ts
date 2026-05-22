@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
 import type {
   HookRegisterRequest,
   HookRegisterResponse,
   HookStatusParams,
   RegisteredHook,
-} from "@brainrouter/types";
+} from "@kinqs/brainrouter-types";
 
 export function useHookStatus(client: BrainRouterClient, params: HookStatusParams = {}) {
   const [hooks, setHooks] = useState<RegisteredHook[]>([]);

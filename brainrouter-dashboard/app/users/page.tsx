@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getClient } from "../../lib/client";
-import { useUsers } from "@brainrouter/hooks";
+import { useUsers } from "@kinqs/brainrouter-hooks";
 import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
@@ -13,7 +13,7 @@ import { PremiumModal } from "../../components/PremiumModal";
 import { EmptyState } from "../../components/EmptyState";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { motion, AnimatePresence } from "framer-motion";
-import { PublicUserRecord } from "@brainrouter/types";
+import { PublicUserRecord } from "@kinqs/brainrouter-types";
 
 const containerVariants = {
   hidden: { opacity: 0 },

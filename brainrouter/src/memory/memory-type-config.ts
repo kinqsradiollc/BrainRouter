@@ -1,4 +1,4 @@
-import type { MemoryTaskIntent, MemoryType } from "@brainrouter/types";
+import type { MemoryTaskIntent, MemoryType } from "@kinqs/brainrouter-types";
 
 export interface TypeConfig {
   halfLifeDays: number | null;

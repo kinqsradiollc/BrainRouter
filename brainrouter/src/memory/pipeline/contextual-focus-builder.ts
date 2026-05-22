@@ -1,5 +1,5 @@
-import type { IMemoryStore } from "@brainrouter/types";
-import type { LLMRunner, ContextualFocusRecord } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import type { LLMRunner, ContextualFocusRecord } from "@kinqs/brainrouter-types";
 import { FOCUS_SCENE_SYSTEM_PROMPT, formatFocusScenePrompt } from "../prompts/focus-scene.js";
 import { FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT, formatFocusSceneClusterPrompt } from "../prompts/focus-scene-cluster.js";
 import { MAX_FOCUS_SCENES } from "../scheduler.js";

@@ -1,5 +1,5 @@
-import type { IMemoryStore } from "@brainrouter/types";
-import type { LLMRunner, CoreIdentityRecord } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import type { LLMRunner, CoreIdentityRecord } from "@kinqs/brainrouter-types";
 import { CORE_IDENTITY_SYSTEM_PROMPT, formatCoreIdentityPrompt } from "../prompts/core-identity.js";
 
 /**

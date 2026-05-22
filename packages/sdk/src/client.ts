@@ -36,7 +36,7 @@ import {
   ActiveSessionsResponse,
   CoreIdentityRecord,
   SkillActivationsResponse,
-} from "@brainrouter/types";
+} from "@kinqs/brainrouter-types";
 
 export class BrainRouterApiError extends Error {
   constructor(

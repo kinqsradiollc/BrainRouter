@@ -8,9 +8,9 @@
     "start": "next start"
   },
   "dependencies": {
-    "@brainrouter/hooks": "*",
-    "@brainrouter/sdk": "*",
-    "@brainrouter/types": "*",
+    "@kinqs/brainrouter-hooks": "*",
+    "@kinqs/brainrouter-sdk": "*",
+    "@kinqs/brainrouter-types": "*",
     "framer-motion": "^12.39.0",
     "next": "15.3.3",
     "react": "19.0.0",

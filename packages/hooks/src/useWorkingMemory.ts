@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
 import type {
   WorkingContextRequest,
   WorkingContextResponse,
@@ -8,7 +8,7 @@ import type {
   WorkingResetRequest,
   WorkingResetResponse,
   ActiveSessionInfo,
-} from "@brainrouter/types";
+} from "@kinqs/brainrouter-types";
 
 export function useWorkingMemory(client: BrainRouterClient) {
   const [context, setContext] = useState<WorkingContextResponse | null>(null);

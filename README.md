@@ -29,18 +29,18 @@ run your own MCP server, hack on the engine, or use the dashboard.
 
 ```bash
 # Terminal agent
-npm install -g @brainrouter/cli          # exposes `brainrouter` on $PATH
+npm install -g @kinqs/brainrouter-cli          # exposes `brainrouter` on $PATH
 
 # MCP server (only if you want to run your own — the CLI also works against a hosted one)
-npm install -g @brainrouter/mcp-server   # exposes `brainrouter-mcp`
+npm install -g @kinqs/brainrouter-mcp-server   # exposes `brainrouter-mcp`
 ```
 
-Published packages: [`@brainrouter/cli`](https://www.npmjs.com/package/@brainrouter/cli)
+Published packages: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli)
 (CLI — installs the `brainrouter` binary),
-[`@brainrouter/mcp-server`](https://www.npmjs.com/package/@brainrouter/mcp-server)
+[`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server)
 (MCP server — installs the `brainrouter-mcp` binary), plus their dependencies
-[`@brainrouter/sdk`](https://www.npmjs.com/package/@brainrouter/sdk)
-and [`@brainrouter/types`](https://www.npmjs.com/package/@brainrouter/types).
+[`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk)
+and [`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types).
 The dashboard and React hooks stay in the repo — they ship as a server, not a library.
 
 ### From source (full monorepo)

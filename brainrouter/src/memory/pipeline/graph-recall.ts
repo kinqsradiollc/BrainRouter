@@ -1,4 +1,4 @@
-import type { IMemoryStore } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 /**
  * Hybrid GraphRAG Recall Expansion

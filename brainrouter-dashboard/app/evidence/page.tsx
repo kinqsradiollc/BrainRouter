@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useEvidence } from "@brainrouter/hooks";
-import type { EvidenceKind, CognitiveRecord } from "@brainrouter/types";
+import { useEvidence } from "@kinqs/brainrouter-hooks";
+import type { EvidenceKind, CognitiveRecord } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";

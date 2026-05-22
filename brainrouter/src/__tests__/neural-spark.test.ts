@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { IMemoryStore } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import { NeuralSparkEngine } from "../memory/pipeline/neural-spark.js";
 
 class MockMemoryStore implements Partial<IMemoryStore> {

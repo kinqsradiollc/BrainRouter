@@ -1,8 +1,8 @@
 # BrainRouter Roadmap
 
 Active version: **0.3.4** — first npm-published release. The CLI, MCP server,
-and shared types/SDK now install with `npm install -g @brainrouter/cli` /
-`@brainrouter/mcp-server`. The dashboard and React hooks remain in-repo
+and shared types/SDK now install with `npm install -g @kinqs/brainrouter-cli` /
+`@kinqs/brainrouter-mcp-server`. The dashboard and React hooks remain in-repo
 deliverables.
 
 ---
@@ -10,7 +10,7 @@ deliverables.
 ## Recently Completed
 
 ### 0.3.4 — First npm release
-- **Published packages**: [`@brainrouter/cli`](https://www.npmjs.com/package/@brainrouter/cli) (CLI — installs the `brainrouter` binary), [`@brainrouter/mcp-server`](https://www.npmjs.com/package/@brainrouter/mcp-server), [`@brainrouter/sdk`](https://www.npmjs.com/package/@brainrouter/sdk), [`@brainrouter/types`](https://www.npmjs.com/package/@brainrouter/types). License, repository, keywords, `publishConfig.access: public`, `files` allowlist, and `prepack` hooks on each.
+- **Published packages**: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli) (CLI — installs the `brainrouter` binary), [`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server), [`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk), [`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types). License, repository, keywords, `publishConfig.access: public`, `files` allowlist, and `prepack` hooks on each.
 - **CLI offline mode**: degrades cleanly when the MCP server is unreachable instead of hard-exiting; `--strict-mcp` opts back into the old fail-fast behavior. Startup banner surfaces `⚠️  OFFLINE MODE`.
 - **CLI inspection-tool previews**: `list_dir`, `grep_search`, `glob_files` now render their results indented under the tool-completion line, so users see the content even when small models forget to echo it.
 - **CLI env separation**: `~/.config/brainrouter/config.json` is the canonical source for chat-LLM creds; `.env` loading is restricted to runtime knobs (sandbox, timeouts, trace log, web search). Removed silent LLM-cred precedence bug where `brainrouter/.env` could shadow `config.json`.
@@ -51,4 +51,4 @@ deliverables.
 - **Dashboard memory explorer**: Surface FTS/vector ranking signals + `memory_explain_recall` inline so users can audit *why* a record surfaced.
 - **Dashboard parity with CLI**: Match goal lifecycle, hookify rules, and multi-agent orchestration in the browser surface (`brainrouter-dashboard`).
 - **Provider matrix**: Verified configs for OpenAI, Anthropic, Gemini, OpenRouter, and local backends (LM Studio, Ollama).
-- **`@brainrouter/sdk` 1.0**: Lock the public surface so external integrators can build against it without expecting renames.
+- **`@kinqs/brainrouter-sdk` 1.0**: Lock the public surface so external integrators can build against it without expecting renames.

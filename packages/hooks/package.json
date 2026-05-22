@@ -1,5 +1,5 @@
 {
-  "name": "@brainrouter/hooks",
+  "name": "@kinqs/brainrouter-hooks",
   "version": "0.3.4",
   "private": true,
   "type": "module",
@@ -9,8 +9,8 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@brainrouter/sdk": "*",
-    "@brainrouter/types": "*",
+    "@kinqs/brainrouter-sdk": "*",
+    "@kinqs/brainrouter-types": "*",
     "react": "^18.3.1"
   },
   "devDependencies": {

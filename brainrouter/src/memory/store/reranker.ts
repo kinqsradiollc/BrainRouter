@@ -1,4 +1,4 @@
-import type { RerankerServiceConfig } from "@brainrouter/types";
+import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../retry.js";
 
 export interface RankedResult {
