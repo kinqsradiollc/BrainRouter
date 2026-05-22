@@ -345,79 +345,100 @@ Look for:
 
 ### 5.5 Publish in dependency order
 
+We use a **granular access token with "Bypass 2FA" enabled** — the path
+of least friction for a solo maintainer. No interactive `npm login`, no
+OTP per publish, just `npm publish`.
+
+#### 5.5.1 First-time: install the access token
+
+Do this once per machine (or after rotating the token).
+
+1. Generate a token at <https://www.npmjs.com/settings/kinqs/tokens>:
+   - **Type**: Granular Access Token
+   - **Expiration**: 90 days (or whatever you're comfortable with)
+   - **Packages scope**: `@kinqs/*`
+   - **Permissions**: Read and write
+   - **Bypass 2FA on token**: ✅ (this is the key — without it you'd
+     still get per-publish OTP prompts)
+2. Copy the token (`npm_...` prefix) — npm only shows it once.
+3. Write it into `~/.npmrc`:
+
 ```bash
-npm login              # one-time per session
-npm whoami             # confirm you're authenticated as the right user
+echo "//registry.npmjs.org/:_authToken=npm_PASTE_TOKEN_HERE" >> ~/.npmrc
+npm whoami
 ```
 
-**Three gotchas — read before you paste the publish commands:**
+`npm whoami` should print `kinqs`. If it returns `E401`, the token line
+is wrong — re-check it. (No 6-digit OTP code is needed; the token IS
+the credential, and the "Bypass 2FA" flag tells npm to accept it
+without further challenge.)
 
-1. **`@kinqs` is your personal scope.** npm auto-creates a scope
-   matching every user's username, so `@kinqs/*` works the moment
-   you log in — no `npm org create` step needed. (If you ever rename
-   to a different scope like `@brainrouter`, you'd have to create
-   that as a Free org at <https://www.npmjs.com/org/create> first,
-   otherwise publishes fail with a misleading `404 Not Found - PUT`.)
-2. **Inline `#` comments don't work in zsh interactive mode.** zsh
-   treats `# anything` as positional args, not a comment, unless
-   you've enabled `setopt interactive_comments` (not the default).
-   The commands below deliberately have NO inline comments — paste
-   them as-is.
-3. **2FA is required.** npm requires a TOTP code per publish (mode
-   `auth-and-publish`). Either pass `--otp=XXXXXX` on each command
-   (paste a fresh code from your authenticator each time), or omit
-   the flag and npm will prompt interactively.
+#### 5.5.2 Publish (every release)
+
+**Two gotchas — read before pasting:**
+
+1. **Use absolute paths.** Relative `cd` chains break when cwd isn't
+   where you assumed, and on macOS the case-insensitive filesystem
+   makes `cd ../brainrouter` silently land on the monorepo root
+   `BrainRouter/` (which is `"private": true`), triggering `EPRIVATE`
+   on the wrong package.json.
+2. **No inline `#` comments.** zsh interactive mode treats `# foo` as
+   positional args, not a comment, unless you've enabled
+   `setopt interactive_comments`. The commands below have none —
+   paste them as-is.
 
 ```bash
-# Use ABSOLUTE paths — they're immune to whatever cwd you're starting
-# from. Relative `cd` chains break when cwd isn't where you assumed,
-# and on macOS the case-insensitive filesystem makes `cd ../brainrouter`
-# silently land on the monorepo root `BrainRouter/` (which is private)
-# when you actually wanted the sibling `brainrouter/` package. That
-# triggers EPRIVATE on the wrong package.json.
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish --otp=PASTE_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish --otp=PASTE_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish --otp=PASTE_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish --otp=PASTE_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish
+cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish
+cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish
 ```
 
 The order matters because each package's `dependencies` reference real
 semver of the prior ones; publishing in dependency order guarantees the
 registry resolves cleanly.
 
-If you see `EPRIVATE`, check `pwd` — you're probably in the monorepo
-root, which has `"private": true` (that's correct — only the four
-workspace packages above are publishable).
-
 Each `package.json` has `publishConfig.access: public` (required because
 `@kinqs/*` is a scoped namespace — npm defaults scoped packages to
 restricted). You don't need `--access public` on the command line.
 
-#### 5.5.1 Avoiding the per-publish OTP friction
-
-Two options to skip the OTP prompts:
-
-**Option A — switch 2FA to `auth-only` mode** (one OTP per login, then
-publishes use the cached session):
+#### 5.5.3 Verify
 
 ```bash
-npm profile set otp-mode auth-only --otp=PASTE_CODE
+for p in @kinqs/brainrouter-types @kinqs/brainrouter-sdk @kinqs/brainrouter-mcp-server @kinqs/brainrouter-cli; do
+  echo -n "$p: "; npm view "$p" version 2>&1 | head -1
+done
 ```
 
-**Option B — granular access token with 2FA bypass** (best for
-CI/automation). At <https://www.npmjs.com/settings/YOUR_USERNAME/tokens>
-create a token with:
+Should print `0.3.X` four times.
 
-- Permissions: **Read and write**
-- Packages scope: **`@kinqs/*`** (or just the four `@kinqs/brainrouter-*` packages individually)
-- "Bypass 2FA for this token": **✓**
+#### 5.5.4 Common errors
 
-Then:
+| Error | Cause | Fix |
+|---|---|---|
+| `E401 Unauthorized` on `npm whoami` | Token line missing or malformed in `~/.npmrc` | Re-run the `echo "//registry.npmjs.org/:_authToken=..." >> ~/.npmrc` line |
+| `404 Not Found - PUT @kinqs%2f...` | npm reads `404` instead of `401` when auth is missing on a write. Almost always means token isn't installed | Re-run §5.5.1 |
+| `EPRIVATE` | You're in the monorepo root (which is `"private": true`), not a publishable workspace | Check `pwd` — must be one of the 4 paths in §5.5.2 |
+| `--otp required` | Token doesn't have "Bypass 2FA" enabled | Regenerate the token at npm.com with the bypass flag checked |
+| `EUSAGE` from a pasted command | zsh ate `#` as args, or a `cd` failed silently | Use absolute paths, no inline comments |
+
+#### 5.5.5 Without a token (fallback)
+
+If you prefer interactive login + per-publish OTP, skip §5.5.1 and use:
 
 ```bash
-export NPM_TOKEN=npm_...        # or store in ~/.npmrc with //registry.npmjs.org/:_authToken=...
-# Now `npm publish` works with no OTP prompt
+npm login --auth-type=legacy   # username, password, OTP — token lands in ~/.npmrc
+npm whoami
+# Then publish each one, passing a fresh 6-digit code per command:
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish --otp=PASTE_6_DIGIT_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish --otp=PASTE_6_DIGIT_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish --otp=PASTE_6_DIGIT_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish --otp=PASTE_6_DIGIT_CODE
 ```
+
+`--otp=` takes a **6-digit TOTP code from your authenticator app**, NOT
+an access token. The two are different things — tokens replace the
+need for OTP entirely.
 
 ### 5.6 Tag and push
 
