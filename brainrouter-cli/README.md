@@ -111,7 +111,7 @@ The CLI resolves a skill body in this order:
 
 #### Catalogue bundling at publish time
 
-The `@brainrouter/mcp-server` package ships with the full BrainRouter skill catalogue baked in, so a user who only runs `npm install @brainrouter/mcp-server brainrouter` in their own workspace gets all 70+ canonical skills out of the box — no monorepo checkout required.
+The `@brainrouter/mcp-server` package ships with the full BrainRouter skill catalogue baked in, so a user who only runs `npm install @brainrouter/mcp-server @brainrouter/cli` in their own workspace gets all 70+ canonical skills out of the box — no monorepo checkout required.
 
 This is done via two lifecycle scripts in `brainrouter/scripts/`:
 

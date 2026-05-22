@@ -1,14 +1,37 @@
 {
   "name": "@brainrouter/types",
-  "version": "0.3.3",
-  "private": true,
+  "version": "0.3.4",
+  "description": "Shared TypeScript types for BrainRouter — used by the CLI, MCP server, and SDK.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "typescript": "^5.5.4"
+  },
+  "keywords": [
+    "brainrouter",
+    "types",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "packages/types"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

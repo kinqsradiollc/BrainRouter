@@ -1,10 +1,23 @@
 # BrainRouter Roadmap
 
-Pre-release. No tagged versions yet; everything below is descriptive of work in progress.
+Active version: **0.3.4** — first npm-published release. The CLI, MCP server,
+and shared types/SDK now install with `npm install -g @brainrouter/cli` /
+`@brainrouter/mcp-server`. The dashboard and React hooks remain in-repo
+deliverables.
 
 ---
 
 ## Recently Completed
+
+### 0.3.4 — First npm release
+- **Published packages**: [`@brainrouter/cli`](https://www.npmjs.com/package/@brainrouter/cli) (CLI — installs the `brainrouter` binary), [`@brainrouter/mcp-server`](https://www.npmjs.com/package/@brainrouter/mcp-server), [`@brainrouter/sdk`](https://www.npmjs.com/package/@brainrouter/sdk), [`@brainrouter/types`](https://www.npmjs.com/package/@brainrouter/types). License, repository, keywords, `publishConfig.access: public`, `files` allowlist, and `prepack` hooks on each.
+- **CLI offline mode**: degrades cleanly when the MCP server is unreachable instead of hard-exiting; `--strict-mcp` opts back into the old fail-fast behavior. Startup banner surfaces `⚠️  OFFLINE MODE`.
+- **CLI inspection-tool previews**: `list_dir`, `grep_search`, `glob_files` now render their results indented under the tool-completion line, so users see the content even when small models forget to echo it.
+- **CLI env separation**: `~/.config/brainrouter/config.json` is the canonical source for chat-LLM creds; `.env` loading is restricted to runtime knobs (sandbox, timeouts, trace log, web search). Removed silent LLM-cred precedence bug where `brainrouter/.env` could shadow `config.json`.
+- **bash/shell tool alias**: `bash`, `Bash`, `shell`, `sh` all route to `run_command` for cross-vendor model familiarity (Claude Code parity).
+- **README**: documents the two-config (MCP env vs CLI config.json) split, the install-from-npm path, MCP-required-for-full-power dependency, and the offline-mode escape hatch.
+
+
 
 ### Dashboard & Backend
 - **Hardened Dashboard Authentication**: "Remember Me" for session JWT persistence, dynamic JWT cleanup after API validation failures, signup password strength validation, and descriptive error messages.
@@ -34,7 +47,8 @@ Pre-release. No tagged versions yet; everything below is descriptive of work in 
 
 ## Up Next
 
-- **First tagged release**: Stabilize versioning across the monorepo, cut the initial public release with a packaged install path (`npx brainrouter`, Docker image for the MCP server).
+- **Docker image for the MCP server**: One-command `docker run` deploy so users don't have to manage Node/SQLite/embedding-dimension drift themselves.
 - **Dashboard memory explorer**: Surface FTS/vector ranking signals + `memory_explain_recall` inline so users can audit *why* a record surfaced.
-- **Web chat parity with CLI**: Match goal lifecycle, hookify rules, and multi-agent orchestration in the browser surface.
+- **Dashboard parity with CLI**: Match goal lifecycle, hookify rules, and multi-agent orchestration in the browser surface (`brainrouter-dashboard`).
 - **Provider matrix**: Verified configs for OpenAI, Anthropic, Gemini, OpenRouter, and local backends (LM Studio, Ollama).
+- **`@brainrouter/sdk` 1.0**: Lock the public surface so external integrators can build against it without expecting renames.

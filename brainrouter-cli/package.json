@@ -1,21 +1,28 @@
 {
-  "name": "brainrouter",
-  "version": "0.3.3",
-  "description": "BrainRouter Terminal Agent CLI — premium interactive terminal-based agent client.",
+  "name": "@brainrouter/cli",
+  "version": "0.3.4",
+  "description": "Memory-native terminal coding agent. Talks to the BrainRouter MCP cognitive engine for recall, skills, capture, persona, focus scenes, and contradiction tracking.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "brainrouter": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    ".env.example"
+  ],
   "scripts": {
-    "build": "tsc",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test \"dist/**/*.test.js\""
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "prepack": "npm run build && find dist -name '*.test.*' -delete"
   },
   "dependencies": {
-    "@brainrouter/sdk": "*",
-    "@brainrouter/types": "*",
+    "@brainrouter/sdk": "^0.3.4",
+    "@brainrouter/types": "^0.3.4",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
@@ -34,5 +41,31 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "llm",
+    "coding-agent",
+    "terminal",
+    "brainrouter"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "brainrouter-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

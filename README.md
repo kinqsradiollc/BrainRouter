@@ -1,99 +1,49 @@
-# 🧠 BrainRouter
+# BrainRouter
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%233178c6.svg)](https://www.typescriptlang.org/)
-[![Model: MCP Server](https://img.shields.io/badge/Protocol-MCP-orange.svg)](https://modelcontextprotocol.io/)
+[![Protocol: MCP](https://img.shields.io/badge/Protocol-MCP-orange.svg)](https://modelcontextprotocol.io/)
 
-> **Biologically-Inspired Dual-Process Memory Network and Multi-Agent Orchestration Router**
+A cognitive memory engine for LLM agents.
 
-BrainRouter is a Model Context Protocol (MCP) server and routing layer that equips LLM agents with a multi-layered, biologically-modeled memory network. Designed to emulate human cognitive recall, it prevents context-window saturation, eliminates catastrophic forgetting, and handles real-time knowledge graph propagation, skill-priming, and automated conflict reconciliation.
+Captures dialogue, classifies it, decays unused facts over time, reinforces
+the ones the agent actually uses, and surfaces the right memories on the
+next prompt — so your agent stops re-learning the same things every session.
 
----
+## What you get
 
-## 🎨 System Overview
+- **MCP server (`brainrouter`)** — drop-in memory tools for any MCP-speaking client.
+- **Terminal CLI (`brainrouter-cli`)** — memory-native coding agent with
+  slash commands, hookify rules, multi-agent orchestration.
+- **Dashboard (`brainrouter-dashboard`)** — Next.js web UI for browsing
+  captured memories, focus scenes, contradictions, recall traces, working
+  memory, timelines, persona, skills, and a hosted chat.
 
-Human memory doesn't dump everything into a single context window. It filters, consolidates, decays, and reinforces information dynamically. BrainRouter brings these exact mechanisms to LLM agents:
+## Install
 
-```mermaid
-graph TD
-    User([User Prompt]) --> Query[User Query]
-    
-    subgraph Recall ["Recall Pipeline (System 1 & System 2)"]
-        Query --> FTS[Keyword Search: FTS5 BM25]
-        Query --> Vec[Vector Search: Cosine Similarity]
-        Query --> Path[File-path Heuristic Matches]
-        
-        FTS --> RRF{Reciprocal Rank Fusion}
-        Vec --> RRF
-        Path --> RRF
-        
-        RRF --> Blend[Effective Priority Blend<br/>Decay & Citation Boost]
-        Blend --> Rerank[System 2 Reranker]
-        Rerank --> GraphExp[2-Hop Graph RAG Expansion]
-        GraphExp --> Context[Relevant Memories injected as Context]
-    end
+Two paths — pick one. **Install from npm** is the fast path for trying the
+agent against a hosted MCP server. **Clone the repo** is needed if you want to
+run your own MCP server, hack on the engine, or use the dashboard.
 
-    Context --> Agent[LLM Agent Execution]
-    Agent --> Response([Agent Response])
-    Response --> ACE[ACE Citation Audit<br/>Boost Cited / Prune Unused]
-    
-    subgraph Consolidation ["Memory Consolidation"]
-        Dialogue[Interaction Dialogue] --> Sensory[SensoryStream Buffer]
-        Sensory --> CogExtract[Cognitive Extractor Pipeline]
-        CogExtract --> Cognitive[(CognitiveRecord DB)]
-        Cognitive --> Focus[ContextualFocus Scenes]
-        Cognitive --> Identity[CoreIdentity Profile]
-        Cognitive --> GraphBuilder[Knowledge Graph Builder]
-    end
+### From npm (CLI + MCP server)
 
-    ACE --> Consolidation
+```bash
+# Terminal agent
+npm install -g @brainrouter/cli          # exposes `brainrouter` on $PATH
+
+# MCP server (only if you want to run your own — the CLI also works against a hosted one)
+npm install -g @brainrouter/mcp-server   # exposes `brainrouter-mcp`
 ```
 
----
+Published packages: [`@brainrouter/cli`](https://www.npmjs.com/package/@brainrouter/cli)
+(CLI — installs the `brainrouter` binary),
+[`@brainrouter/mcp-server`](https://www.npmjs.com/package/@brainrouter/mcp-server)
+(MCP server — installs the `brainrouter-mcp` binary), plus their dependencies
+[`@brainrouter/sdk`](https://www.npmjs.com/package/@brainrouter/sdk)
+and [`@brainrouter/types`](https://www.npmjs.com/package/@brainrouter/types).
+The dashboard and React hooks stay in the repo — they ship as a server, not a library.
 
-## 🚀 Key Features
-
-*   **⚡ Hierarchical Memory Stack**: Emulates sensory buffer (`SensoryStream`), semantic/episodic storage (`CognitiveRecord`), active session focus (`ContextualFocus` scenes), and long-term user profile instructions (`CoreIdentity`).
-*   **🔄 ACE (Agent Citation & Evaluation) Loop**: Synaptic reinforcement and pruning. Recalled memories used by the agent get priority boosts (Long-Term Potentiation); neglected ones are archived automatically (Synaptic Pruning).
-*   **📉 Forgetting Curve & Half-Life Decay**: Integrates an Ebbinghaus forgetting curve into the retrieval blend, ensuring stale memories decay unless regularly reinforced.
-*   **🔗 Graph RAG (2-Hop BFS)**: Extracts entities and relations from memories, building an association graph to pull in adjacent details during query execution.
-*   **🔥 Skill Pre-warming**: Automatically spikes active skill potential on trigger keyword detection and injects critical skill context.
-*   **⚠️ Contradiction Resolution**: Detects conflicting information and determines if it represents a temporal update (superseding the old fact) or a genuine conflict (flagged for review).
-*   **🖥️ Terminal Agent CLI (`brainrouter`)**: Memory-aware coding agent — slash commands, hookify rules, LLM-driven `/compact`, multi-agent orchestration, and durable workflow artifacts. See [Brainrouter CLI](#-brainrouter-cli) below.
-*   **🪝 Hookify Markdown Rules**: Drop a `.md` file into `.brainrouter/hooks/` to install warn/block guardrails on tool calls — no code, just YAML frontmatter and a regex.
-*   **🗂️ Filesystem Memory Consolidation**: Phase-2-style artifacts (`MEMORY.md`, `user.md`, `feedback.md`, `project.md`, `reference.md`, `raw_memories.md`) written under `.brainrouter/memories/` so the cognitive store has a human-readable view.
-*   **🔎 Filtered & Freshness-Boosted Recall**: `memory_recall` / `memory_search` accept `filters` (types, scenes, time window, minPriority, skillTag); ranking adds a freshness boost so brand-new captures surface immediately.
-*   **🛰️ Batched Multi-Agent Fan-Out**: `spawn_agent` + `wait_agent` + `route_agent` for parallel children in one tool call. Five built-in roles (`explorer / architect / reviewer / worker / verifier`) chosen heuristically from the prompt's leading verb. Large child outputs auto-offload to a working-memory canvas.
-*   **🌐 Web Chat & HTTP Endpoint**: Drive the agent from a browser at [`/chat`](web/app/chat), or call the MCP server's `/api/chat-completions` route from any HTTP client and inherit the full memory stack.
-*   **🛡️ Memory Governance & Engineering**: `memory_governance_*` (audit, import/export, prune), `memory_engineering_*` (manual edits), and `memory_explain_recall` for ranking introspection — production-grade controls over the cognitive store.
-
----
-
-## 🤖 Multi-Agent Roles
-
-`spawn_agent(role, prompt, …)` and `route_agent(task)` dispatch to five bounded, memory-aware roles. Each opens with a mandatory memory-first phase (`memory_search` → `memory_graph_query` → file history) before doing any work.
-
-| Role | Access | Purpose |
-| :--- | :--- | :--- |
-| **explorer** | read-only | Codebase investigation, surface key files & symbols, no edits |
-| **architect** | read-only | Design alternatives & tradeoffs grounded in prior decisions |
-| **reviewer** | read-only | Severity-ordered findings; cites prior reviews to avoid re-flagging |
-| **worker** | read/write | Implementation; must read before editing; auto-marks task complete |
-| **verifier** | shell | Run tests, type-checks, lint; reports blocker states |
-
-Outputs over ~6k chars are written to a **working-memory canvas** (`memory_working_*`) so the parent agent can inspect them on demand without burning context.
-
----
-
-## 🖥️ Brainrouter CLI
-
-The repo ships a terminal agent at [`brainrouter-cli/`](brainrouter-cli/) — a memory-native coding agent that uses the BrainRouter cognitive stack as a first-class tool. Type `/help` in the REPL for the full slash-command reference. See [BRAINROUTER.md](BRAINROUTER.md) for compaction, hookify rules, and memory consolidation details.
-
----
-
-## 🛠️ Getting Started
-
-### 1. Install
+### From source (full monorepo)
 
 ```bash
 git clone https://github.com/kinqsradiollc/BrainRouter.git
@@ -102,59 +52,104 @@ npm install
 npm run build
 ```
 
-### 2. Configure
+### Configure your models
 
-Create `brainrouter/.env` (template lives at [`brainrouter/.env.example`](brainrouter/.env.example)):
+BrainRouter ships **two independent processes** with two separate configurations.
+The MCP server runs the cognitive engine (extraction, embeddings, optional
+reranker). The CLI runs the terminal agent you actually chat with. They can
+use the same model for both, or different ones — extraction wants something
+cheap, chat wants something smart.
 
-```env
-BRAINROUTER_LLM_ENDPOINT="https://api.openai.com/v1/chat/completions"
-BRAINROUTER_LLM_API_KEY="your-api-key"
-BRAINROUTER_LLM_MODEL="gpt-4o-mini"
+#### 1. MCP server — `brainrouter/.env`
 
-# Optional: embedding + reranker
-BRAINROUTER_EMBEDDING_MODEL="text-embedding-3-small"
-BRAINROUTER_RERANKER_ENDPOINT="https://api.cohere.com/v1/rerank"
-BRAINROUTER_RERANKER_API_KEY="your-cohere-key"
-
-# Memory store path (relative is fine; defaults inside the MCP server pkg)
-BRAINROUTER_MEMORY_DB="./memory.db"
-```
-
-### 3. Run the CLI
-
-The CLI auto-spawns the MCP server in stdio mode — no separate process needed.
+Copy `brainrouter/.env.example` to `brainrouter/.env` and fill in at minimum:
 
 ```bash
-npm run cli                          # interactive REPL (from repo root)
-# or
-node brainrouter-cli/dist/index.js run "summarize src/"   # one-shot non-interactive
+# Cognitive extraction / synthesis LLM (any OpenAI-compatible endpoint:
+# OpenAI, OpenRouter, LM Studio, Ollama, vLLM…)
+BRAINROUTER_LLM_API_KEY=sk-...
+BRAINROUTER_LLM_ENDPOINT=https://api.openai.com/v1/chat/completions
+BRAINROUTER_LLM_MODEL=gpt-4o-mini
+
+# Embeddings — required for vector recall. Key falls back to BRAINROUTER_LLM_API_KEY.
+BRAINROUTER_EMBEDDING_ENDPOINT=https://api.openai.com/v1/embeddings
+BRAINROUTER_EMBEDDING_MODEL=text-embedding-3-small
+BRAINROUTER_EMBEDDING_DIMENSIONS=1536
+
+# Server auth — change before exposing the server
+BRAINROUTER_ADMIN_PASSWORD=change_me_before_use
+BRAINROUTER_JWT_SECRET=replace_with_a_long_random_secret  # `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
 ```
 
-### 4. Run the Web Chat
+Optional advanced knobs (split extraction/synthesis models, reranker,
+pre-warming, focus-scene triggers, sandbox) are documented inline in
+[`brainrouter/.env.example`](brainrouter/.env.example).
+
+#### 2. CLI agent — `~/.config/brainrouter/config.json`
+
+The CLI's chat LLM and MCP connection are stored in `config.json`, not `.env`.
+Set them up once with the interactive commands:
 
 ```bash
-# Terminal A — start the MCP HTTP server
-cd brainrouter
-npm run start:http                   # listens on http://localhost:3747
-
-# Terminal B — start the Next.js dashboard
-cd web
-npm run dev                          # http://localhost:3000
+brainrouter login    # connect to a hosted/local MCP server (HTTP/SSE)
+brainrouter config   # set chat LLM provider, model, API key, endpoint
 ```
 
-Open `http://localhost:3000/chat` in a browser to talk to the agent through the same memory stack the CLI uses.
+Tool-runtime knobs that don't fit `config.json` (sandbox, trace log, web-search
+backend, tool-loop limits) live in `brainrouter-cli/.env` — see
+[`brainrouter-cli/.env.example`](brainrouter-cli/.env.example).
 
----
+### Run
 
-## 📚 Documentation
+The CLI's full power — memory recall, skills, capture, persona, focus scenes,
+contradiction tracking — comes from the MCP server. Start it first, then the
+CLI:
 
-- [BRAINROUTER.md](BRAINROUTER.md) — concept specs, decay formulas, recall pipeline, CLI architecture
-- [PRESENTATION.md](PRESENTATION.md) — slide-deck overview
-- [AGENT.md](AGENT.md) — guidelines for AI coding agents working in this repo
-- [ROADMAP.md](ROADMAP.md) — milestones and future direction
+```bash
+# Terminal A — MCP HTTP server on :3747 (cognitive memory engine)
+cd brainrouter && npm run start:http
 
----
+# Terminal B — CLI agent
+npm run cli
+```
 
-## 📄 License
+Type `/help` in the REPL.
+
+**Offline mode.** If the MCP server isn't reachable, the CLI still boots — but
+only local tools (file edits, shell, web fetch, spawn_agent) work. Memory
+recall, capture, and skills are disabled until the server is back. The startup
+banner shows `⚠️  OFFLINE MODE` when this happens. Pass `--strict-mcp` to make
+the CLI exit instead of degrading.
+
+**Stdio mode.** If you'd rather run the MCP as a spawned child of the CLI
+(instead of a separate HTTP service), point your active server profile at the
+`default` stdio profile via `brainrouter config` → "Set Active Server Profile".
+You don't need to run `start:http` in that case — the CLI spawns the server
+on demand.
+
+### Web dashboard (optional)
+
+With the MCP HTTP server already running (Terminal A above), start the
+dashboard in a third terminal:
+
+```bash
+cd brainrouter-dashboard && npm install && npm run dev
+```
+
+Open <http://localhost:3000>. The dashboard exposes the chat surface at
+`/chat` plus inspectors for memories, scenes, contradictions, recall traces,
+working memory, persona, hooks, and the user/admin console.
+
+## Docs
+
+- **[SETUP.md](SETUP.md)** — maintainer runbook: first-time setup, daily run, upgrade, publish, troubleshooting, and reset.
+- **[BRAINROUTER.md](BRAINROUTER.md)** — what the memory engine actually does.
+- **[PRESENTATION.md](PRESENTATION.md)** — slide-deck overview.
+- **[brainrouter-docs/](brainrouter-docs/)** — deep dives (math, env vars, CLI internals).
+- **[AGENT.md](AGENT.md)** — guidance for AI coding agents working in this repo.
+- **[ROADMAP.md](ROADMAP.md)** — what's next.
+- **[CHANGELOG.md](CHANGELOG.md)** — release notes.
+
+## License
 
 MIT — see [LICENSE](LICENSE).
