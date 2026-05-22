@@ -55,6 +55,7 @@ import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from './too
 import { memoryExplainToolSchema, handleMemoryExplainRecall } from './tools/memory-explain.js';
 import { memoryHookToolSchemas, handleMemoryHookTool } from './tools/memory-hooks.js';
 import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memory-working.js';
+import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { usersRouter } from './api/routes/users.js';
@@ -65,6 +66,7 @@ import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
 import { graphRouter } from './api/routes/graph.js';
 import { authRouter } from './api/routes/auth.js';
+import { chatCompletionsRouter } from './api/routes/chat-completions.js';
 import { governanceRouter } from './api/routes/governance.js';
 import { evidenceRouter } from './api/routes/evidence.js';
 import { hooksRouter } from './api/routes/hooks.js';
@@ -246,6 +248,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryExplainToolSchema,
       ...memoryHookToolSchemas,
       ...memoryWorkingToolSchemas,
+      memoryConsolidateToolSchema,
     ],
   }));
 
@@ -305,6 +308,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_working_offload':
         case 'memory_working_reset':
           return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_consolidate':
+          return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
@@ -383,6 +388,10 @@ if (USE_HTTP) {
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
   app.use("/api/skills", skillsRouter);
+  // OpenAI-compatible chat endpoint (memory-augmented):
+  //   POST /v1/chat/completions  — standard OpenAI body, sessionKey via body.brainrouter.sessionKey or X-BrainRouter-Session header
+  //   GET  /v1/models            — returns the configured upstream model
+  app.use("/v1", chatCompletionsRouter);
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream)
   async function handleMcp(req: Request, res: Response) {

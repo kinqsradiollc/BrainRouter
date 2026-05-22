@@ -281,8 +281,28 @@ export interface RecallExplanation {
   rerankerCandidates: number;
   /** Final ranked records (recordId → finalScore). */
   scoredRecords: Array<{ recordId: string; finalScore: number; type: string }>;
-  /** IDs of memory nodes that triggered/sparked during spreading activation. */
-  sparkedNodes?: string[];
+  /**
+   * Per-node trace of the neural-spark spreading activation pass.
+   *
+   * Each entry carries the node id, its final potential (clamped to [0, 1]),
+   * whether it crossed the firing threshold, and human-readable label fields
+   * so the UI can show "codebase_fact · the cli uses sqlite for…" instead of
+   * an opaque record id. The full id stays on the entry for click-through.
+   *
+   * Order is: initial seeds first (whether or not they fired), then propagated
+   * nodes that fired via 2-hop excitation.
+   */
+  sparkedNodes?: Array<{
+    id: string;
+    potential: number;
+    fired: boolean;
+    /** Memory type, e.g. "codebase_fact", "instruction". */
+    type?: string;
+    /** Optional short content preview (≤ 100 chars, single-line). */
+    preview?: string;
+    /** Optional focus-scene name the memory belongs to. */
+    sceneName?: string;
+  }>;
 }
 
 export interface RecallResult {
@@ -302,6 +322,14 @@ export interface RecallResult {
   recallExplanation?: RecallExplanation;
 }
 
+/**
+ * Outcome of the cognitive extraction step for a single capture call. Lets
+ * the CLI distinguish "the LLM said nothing notable here" (ok, zero records)
+ * from "the LLM call itself failed" (failed) from "extraction wasn't tried
+ * this turn" (skipped — below the every-N-turns threshold).
+ */
+export type CognitiveExtractionStatus = "ok" | "failed" | "skipped";
+
 export interface CaptureResult {
   /** Number of Sensory messages recorded. */
   sensoryRecordedCount: number;
@@ -309,6 +337,15 @@ export interface CaptureResult {
   cognitiveExtractionTriggered: boolean;
   /** Number of Cognitive memories extracted (if triggered). */
   cognitiveExtractedCount: number;
+  /**
+   * Status of the extraction LLM call. `ok` means it ran and returned a
+   * (possibly empty) list of records. `failed` means the LLM call itself
+   * errored. `skipped` means we didn't try this turn. Callers should only
+   * surface a warning to the user on `failed`.
+   */
+  cognitiveExtractionStatus?: CognitiveExtractionStatus;
+  /** Error string when status === "failed", for diagnostic display. */
+  cognitiveExtractionError?: string;
 }
 
 // ============================

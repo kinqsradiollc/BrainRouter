@@ -1,5 +1,5 @@
 import type { IMemoryStore } from "@brainrouter/types";
-import type { SensoryRecord, CaptureResult, LLMRunner } from "@brainrouter/types";
+import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus } from "@brainrouter/types";
 import { extractCognitiveMemories } from "./pipeline/cognitive-extractor.js";
 import { deduplicateMemories } from "./pipeline/cognitive-dedup.js";
 import { detectContradictions } from "./pipeline/cognitive-contradiction.js";
@@ -55,20 +55,26 @@ export class MemoryCapturePipeline {
 
     // 2. Decide if we should trigger Cognitive extraction
     const unextractedCount = this.store.getUnextractedSensoryCount(userId, sessionKey);
-    
+
     let cognitiveExtractionTriggered = false;
     let cognitiveExtractedCount = 0;
+    let cognitiveExtractionStatus: CaptureResult["cognitiveExtractionStatus"] = "skipped";
+    let cognitiveExtractionError: string | undefined;
 
     if (unextractedCount >= this.extractEveryNTurns) {
       const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints });
       cognitiveExtractionTriggered = result.triggered;
       cognitiveExtractedCount = result.extractedCount;
+      cognitiveExtractionStatus = result.status;
+      cognitiveExtractionError = result.errorMessage;
     }
 
     return {
       sensoryRecordedCount: sensoryRecords.length,
       cognitiveExtractionTriggered,
-      cognitiveExtractedCount
+      cognitiveExtractedCount,
+      cognitiveExtractionStatus,
+      cognitiveExtractionError,
     };
   }
 
@@ -78,7 +84,7 @@ export class MemoryCapturePipeline {
     sessionId?: string;
     activeSkill?: string;
     skillHints?: string;
-  }): Promise<{ triggered: boolean; extractedCount: number }> {
+  }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
     return this.extractPendingSensory(params);
   }
 
@@ -88,11 +94,11 @@ export class MemoryCapturePipeline {
     sessionId?: string;
     activeSkill?: string;
     skillHints?: string;
-  }): Promise<{ triggered: boolean; extractedCount: number }> {
+  }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
     const { userId, sessionKey, sessionId = "", activeSkill, skillHints } = params;
     const recentSensory = this.store.getRecentSensoryMessages(userId, sessionKey, 20);
     if (recentSensory.length === 0) {
-      return { triggered: false, extractedCount: 0 };
+      return { triggered: false, extractedCount: 0, status: "skipped" };
     }
 
     const extractionResult = await extractCognitiveMemories({
@@ -108,14 +114,22 @@ export class MemoryCapturePipeline {
 
     if (!extractionResult.success) {
       this.store.recordExtractionFailure(userId, extractionResult.errorMessage ?? "Cognitive extraction failed");
-      return { triggered: true, extractedCount: 0 };
+      return {
+        triggered: true,
+        extractedCount: 0,
+        status: "failed",
+        errorMessage: extractionResult.errorMessage ?? "Cognitive extraction failed",
+      };
     }
 
     this.store.markSensoryExtracted(userId, sessionKey, recentSensory.map((record) => record.id));
     this.store.resetExtractionFailures(userId);
 
     if (extractionResult.records.length === 0) {
-      return { triggered: true, extractedCount: 0 };
+      // LLM returned an empty list — legitimate "nothing notable" outcome
+      // (e.g. a greeting or trivial exchange). Status is "ok" so the CLI
+      // doesn't surface a misleading "extractor broke" warning.
+      return { triggered: true, extractedCount: 0, status: "ok" };
     }
 
     // Run active deduplication BEFORE storing
@@ -188,7 +202,9 @@ export class MemoryCapturePipeline {
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {
-      return { triggered: true, extractedCount: 0 };
+      // All extracted records were duplicates of existing memories — the
+      // LLM ran fine, dedup just dropped everything. Still "ok".
+      return { triggered: true, extractedCount: 0, status: "ok" };
     }
 
     // Update scheduler counters
@@ -251,6 +267,6 @@ export class MemoryCapturePipeline {
         .catch(err => console.error("[BrainRouter] Background core identity distillation failed:", err.message));
     }
 
-    return { triggered: true, extractedCount: cognitiveExtractedCount };
+    return { triggered: true, extractedCount: cognitiveExtractedCount, status: "ok" };
   }
 }

@@ -92,20 +92,33 @@ export async function handleMemoryExplainRecall(
     }
   }
 
+  const previewByRecordId = new Map<string, { type?: string; content?: string }>();
+  for (const m of (result.recalledCognitiveMemories ?? []) as any[]) {
+    if (m?.recordId) previewByRecordId.set(m.recordId, { type: m.type, content: m.content });
+  }
+
+  const shortenId = (id: string): string => {
+    const tail = id.split(/[:_]/).pop() ?? id;
+    return tail.length > 12 ? tail.slice(0, 8) : tail;
+  };
+
+  const oneLine = (s: string, max = 100): string => {
+    const flat = s.replace(/\s+/g, " ").trim();
+    return flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
+  };
+
   if (explanation?.scoredRecords && explanation.scoredRecords.length > 0) {
     lines.push("", "### Ranked Results");
     explanation.scoredRecords.forEach((r, i) => {
-      lines.push(`${i + 1}. [${r.type}] ${r.recordId} (score: ${r.finalScore.toFixed(4)})`);
+      const preview = previewByRecordId.get(r.recordId);
+      const snippet = preview?.content ? oneLine(preview.content) : "";
+      lines.push(
+        `${i + 1}. **[${r.type}]** ${r.finalScore.toFixed(4)} · \`${shortenId(r.recordId)}\``
+      );
+      if (snippet) lines.push(`   ${snippet}`);
     });
   } else {
     lines.push("", "_(No memories matched this query)_");
-  }
-
-  if (result.recalledCognitiveMemories && result.recalledCognitiveMemories.length > 0) {
-    lines.push("", "### Memory Content Preview");
-    result.recalledCognitiveMemories.slice(0, 5).forEach((m: any, i: number) => {
-      lines.push(`${i + 1}. **[${m.type}]** ${m.content.slice(0, 120)}${m.content.length > 120 ? "…" : ""}`);
-    });
   }
 
   return {

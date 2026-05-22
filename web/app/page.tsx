@@ -1685,6 +1685,83 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
         </motion.div>
       </motion.section>
 
+      {/* Terminal CLI & Multi-Agent Orchestration */}
+      <motion.section
+        variants={itemVariants}
+        style={{
+          background: "rgba(255, 255, 255, 0.01)",
+          border: "1px solid var(--border-med)",
+          borderRadius: "16px",
+          padding: "40px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "28px",
+          boxShadow: "0 4px 30px rgba(0, 0, 0, 0.2)"
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <span style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--color-golden-accent)", fontWeight: 700 }}>
+            TERMINAL · MULTI-AGENT · MEMORY-NATIVE
+          </span>
+          <h2 className="serif-display" style={{ fontSize: "28px", margin: 0, fontWeight: 500, color: "var(--color-pure-white)" }}>
+            The brainrouter CLI Ships With Its Own Brain.
+          </h2>
+          <p style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: 1.6, margin: 0, maxWidth: "780px" }}>
+            A memory-native coding agent that opens every task with a memory-first phase, dispatches work across five bounded roles, and consolidates what it learns back into the cognitive store. ~70 slash commands. LLM-driven compaction. Markdown-rule guardrails. Durable per-session transcripts.
+          </p>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
+          {[
+            { tag: "EXPLORER", title: "Read-only research", body: "Surfaces files, symbols, and prior decisions before any change." },
+            { tag: "ARCHITECT", title: "Design tradeoffs", body: "Proposes alternatives grounded in cited memories." },
+            { tag: "REVIEWER", title: "Severity-ordered findings", body: "Cites prior reviews; refuses to re-flag known issues." },
+            { tag: "WORKER", title: "Bounded implementation", body: "Reads before editing; auto-marks tasks complete." },
+            { tag: "VERIFIER", title: "Tests & validation", body: "Runs checks, reports blockers, never silently passes." }
+          ].map((role) => (
+            <div
+              key={role.tag}
+              style={{
+                background: "var(--overlay-bg-hover)",
+                border: "1px solid var(--border-hover-accent)",
+                borderRadius: "12px",
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px"
+              }}
+            >
+              <span style={{ fontSize: "10px", letterSpacing: "0.12em", color: "var(--color-golden-accent)", fontWeight: 700 }}>{role.tag}</span>
+              <div style={{ color: "var(--color-pure-white)", fontSize: "14px", fontWeight: 600 }}>{role.title}</div>
+              <div style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5 }}>{role.body}</div>
+            </div>
+          ))}
+        </div>
+
+        <div
+          style={{
+            background: "rgba(0,0,0,0.35)",
+            border: "1px solid var(--border-dim)",
+            borderRadius: "12px",
+            padding: "20px 22px",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: "13px",
+            color: "var(--color-porcelain-text)",
+            lineHeight: 1.7,
+            whiteSpace: "pre",
+            overflowX: "auto"
+          }}
+        >
+{`$ brainrouter
+brainrouter › /spawn explorer "map the auth flow"
+  ↳ memory_search → memory_graph_query → file history
+brainrouter › /spawn architect "propose token rotation"
+brainrouter › /wait                # block until children land
+brainrouter › /memories consolidate
+  → wrote MEMORY.md, user.md, feedback.md, project.md`}
+        </div>
+      </motion.section>
+
       {/* Advanced Capabilities Row: Model Routing & Skill Prewarming */}
       <motion.section 
         variants={itemVariants}

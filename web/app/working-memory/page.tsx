@@ -7,6 +7,7 @@ import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
+import { FilterBar } from "../../components/FilterBar";
 import { PremiumCard } from "../../components/PremiumCard";
 import { motion } from "framer-motion";
 
@@ -84,67 +85,77 @@ export default function WorkingMemoryPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Working Memory" description="Short-term session refs, step summaries, and Mermaid task canvas." />
+        <PageHeader title="Working Memory" description="Short-term session refs, step summaries, and Mermaid task canvas.">
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="pill-btn pill-btn-ghost"
+          >
+            {showAdvanced ? "Hide config" : "Configure session"}
+          </button>
+        </PageHeader>
 
-        <div className="table-container" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <div style={{ display: "flex", gap: "16px", alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "14px", color: "var(--color-stone-text)" }}>
-              Active Session:
-            </span>
-            {sessions.length > 0 ? (
-              <select
-                value={selectedSessionVal}
-                onChange={(event) => handleSessionChange(event.target.value)}
-                className="premium-select"
-              >
-                {sessions.map((s) => (
-                  <option key={`${s.workspaceId}-${s.sessionKey}`} value={`${s.sessionKey}::${s.workspaceId}`}>
-                    {s.sessionKey} (Workspace: {s.workspaceId})
-                  </option>
-                ))}
-                <option value="default::global">default (global)</option>
-              </select>
-            ) : (
-              <strong style={{ color: "var(--color-pure-white)" }}>{sessionKey}</strong>
-            )}
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              style={{
-                marginLeft: "auto",
-                background: "transparent",
-                border: "none",
-                color: "var(--color-golden-accent)",
-                fontSize: "13px",
-                cursor: "pointer",
-                padding: "4px 8px",
-              }}
-            >
-              {showAdvanced ? "Hide Session Config" : "Configure Session"}
-            </button>
-          </div>
+        <FilterBar>
+          <FilterBar.Row>
+            <FilterBar.Label text="Active session">
+              {sessions.length > 0 ? (
+                <select
+                  value={selectedSessionVal}
+                  onChange={(event) => handleSessionChange(event.target.value)}
+                  className="premium-select"
+                >
+                  {sessions.map((s) => (
+                    <option key={`${s.workspaceId}-${s.sessionKey}`} value={`${s.sessionKey}::${s.workspaceId}`}>
+                      {s.sessionKey} (Workspace: {s.workspaceId})
+                    </option>
+                  ))}
+                  <option value="default::global">default (global)</option>
+                </select>
+              ) : (
+                <strong style={{ color: "var(--color-pure-white)" }}>{sessionKey}</strong>
+              )}
+            </FilterBar.Label>
+          </FilterBar.Row>
 
           {showAdvanced && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "8px", borderTop: "1px solid rgba(226,227,233,0.06)", paddingTop: "12px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
-                <input value={sessionKey} onChange={(event) => setSessionKey(event.target.value)} placeholder="Session key" style={inputStyle} />
-                <input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="Workspace path / id" style={inputStyle} />
-                <input value={nodeId} onChange={(event) => setNodeId(event.target.value)} placeholder="Ref node ID" style={inputStyle} />
-              </div>
-              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                <button onClick={() => void handleLoad()} disabled={!canUseSession || isLoading} style={buttonStyle}>Load Context</button>
-                <button onClick={() => void handleReset()} disabled={!canUseSession} style={buttonStyle}>Reset Session</button>
-              </div>
-            </div>
+            <>
+              <div style={{ height: "1px", background: "var(--border-dim)" }} />
+              <FilterBar.Row gap={12}>
+                <FilterBar.Label text="Session key">
+                  <input value={sessionKey} onChange={(event) => setSessionKey(event.target.value)} placeholder="e.g. brainrouter-cli:/path" className="pill-input" style={{ minWidth: "220px" }} />
+                </FilterBar.Label>
+                <FilterBar.Label text="Workspace path">
+                  <input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/absolute/path" className="pill-input" style={{ minWidth: "220px" }} />
+                </FilterBar.Label>
+                <FilterBar.Label text="Ref node id">
+                  <input value={nodeId} onChange={(event) => setNodeId(event.target.value)} placeholder="optional" className="pill-input" style={{ minWidth: "180px" }} />
+                </FilterBar.Label>
+              </FilterBar.Row>
+              <FilterBar.Row align="end">
+                <button onClick={() => void handleReset()} disabled={!canUseSession} className="pill-btn pill-btn-ghost">Reset session</button>
+                <button onClick={() => void handleLoad()} disabled={!canUseSession || isLoading} className="pill-btn">Load context</button>
+              </FilterBar.Row>
+            </>
           )}
 
           {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
-        </div>
+        </FilterBar>
 
-        <div className="table-container" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Payload title (optional)" style={inputStyle} />
-          <textarea value={payload} onChange={(event) => setPayload(event.target.value)} rows={5} placeholder="Payload to offload" style={{ ...inputStyle, resize: "vertical" }} />
-          <button onClick={() => void handleOffload()} disabled={!canUseSession || !payload.trim()} style={buttonStyle}>Offload Payload</button>
-        </div>
+        <FilterBar>
+          <FilterBar.Label text="Offload payload">
+            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title (optional)" className="pill-input" />
+          </FilterBar.Label>
+          <textarea
+            value={payload}
+            onChange={(event) => setPayload(event.target.value)}
+            rows={5}
+            placeholder="Payload to offload into working memory"
+            className="pill-input"
+            style={{ resize: "vertical", borderRadius: "10px", padding: "12px 16px" }}
+          />
+          <FilterBar.Row align="end">
+            <button onClick={() => void handleOffload()} disabled={!canUseSession || !payload.trim()} className="pill-btn">Offload payload</button>
+          </FilterBar.Row>
+        </FilterBar>
 
         {!context ? (
           <EmptyState title="No Working Context Loaded" description="Configure or load a session to inspect short-term working memory state." />

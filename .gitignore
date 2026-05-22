@@ -30,7 +30,15 @@ out/
 .env.test.local
 .env.production.local
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Per-user tooling state (Claude Code, brainrouter migration leftovers)
+.claude/
+.brainrouter.migrated/
+
 # Local Projects
+.brainrouter/
 projects
 conceptCode
 mcp/brain.db
@@ -48,6 +56,9 @@ openSrc/langchain
 openSrc/openai-node
 openSrc/prototypes
 openSrc/TencentDB-Agent-Memory
+openSrc/openclaw
+openSrc/antigravity-cli
+
 CodexImplementationPlan.md
 CodexTasks.md
 BRAINROUTER_TASKS.md
