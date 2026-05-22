@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-05-22
+
+### Added — `/goal` state machine
+- **`usage_limited` status.** New resumable state distinct from `paused` (user-initiated) and `blocked` (agent gave up). Used when the iteration OR token cap runs out; the user can raise the cap and `/goal resume`. ([goalStore.ts](brainrouter/src/goalStore.ts))
+- **Token budget alongside iteration budget.** Optional `maxTokens` cap on the goal that tallies prompt + completion tokens per turn. When the cap is reached, the goal transitions to `usage_limited` instead of consuming another iteration. Lets users protect a fixed dollar budget without estimating turn counts. ([goalStore.ts](brainrouter/src/goalStore.ts), [repl.ts](brainrouter/src/repl.ts))
+- **Replace-confirmation prompt.** `/goal <new text>` now refuses to silently overwrite an `active`, `paused`, `blocked`, or `usage_limited` goal — the REPL surfaces a `y/N` confirmation citing the existing objective and iteration progress. Replacing a `complete` goal is allowed silently (the prior work is done, starting fresh isn't a risk). ([goalStore.ts](brainrouter/src/goalStore.ts) — new `GoalConflictError`)
+- **Wrap-up steering on the final budget turn.** When the next continuation would be the last turn before the iteration cap (or 80% of the token cap), the loop injects a hidden directive telling the model to consolidate, call `goal_complete` with evidence, or call `goal_blocked` with a specific unblocker — instead of starting new investigations that won't finish. ([goalStore.ts](brainrouter/src/goalStore.ts) — `buildBudgetSteeringMessage`)
+- **Resume-paused-goal prompt on `/resume`.** When `/resume <session>` loads a session whose goal is `paused`, `blocked`, or `usage_limited`, the REPL prompts whether to resume the goal now. Eliminates the "loop silently stays paused" footgun. ([repl.ts](brainrouter/src/repl.ts))
+- **`/goal edit <field> <value>`** — unified update entrypoint for status / text / budget / tokens. Replaces stringing pause→budget→resume by hand. Fields: `text`, `status`, `budget`, `tokens`. ([repl.ts](brainrouter/src/repl.ts), [goalStore.ts](brainrouter/src/goalStore.ts) — `editGoal`)
+- **`/goal tokens <N>`** — set or clear the per-goal token cap (0 to clear). ([repl.ts](brainrouter/src/repl.ts))
+
+### Changed
+- Goal continuation now transitions to `usage_limited` (with a reason string) when the iteration cap is exhausted, instead of remaining `active` with `goalHasBudgetLeft === false`. Gives the UI and `/goal` status output a single consistent resumable state regardless of which cap tripped.
+- `formatGoalBlock` shows token usage alongside iteration usage when a token cap is set.
+
+### Tests
+- 95 passing (up from 89). New coverage: `GoalConflictError` shield + bypass with `force`, status-aware error message, token budget tally + `goalIsOnFinalBudgetTurn` heuristic, `editGoal` unified mutation, empty-text edit refusal, `buildBudgetSteeringMessage` per-trigger wording, `removeTaggedSystemMessage` idempotency.
+
+### Review-driven follow-ups (applied this commit)
+- **Stale budget-steering messages cleared on budget extension.** When the user raises the iteration or token cap (via `/goal budget`, `/goal tokens`, `/goal edit`, `/goal resume`, or the resume prompt after `/resume`), any prior "this is your last turn" steering message is dropped from chat history. Without this, the directive would persist and tell the model to wrap up even after it gained more headroom. The post-turn continuation also now removes the steering when the next turn would NOT be on a final budget.
+- **`removeTaggedSystemMessage(tag)`** added to the Agent — companion to `replaceTaggedSystemMessage`. Lets the REPL retract one-off directives once their motivating condition no longer holds. Idempotent.
+- **`GoalConflictError` message reports the actual existing status.** Previously hardcoded "already active" even when the existing goal was `paused`, `blocked`, or `usage_limited`, which surfaced verbatim to users via the REPL catch path. Now reads "A goal already is in progress" for active goals and "A goal already exists with status: paused/blocked/usage limited" otherwise.
+- **`buildBudgetSteeringMessage` differentiates iteration-tight vs token-tight triggers.** Previously always claimed "one turn left within the iteration budget" even when only the token-cap heuristic (80% used) tripped — misleading on token-budgeted runs with plenty of iterations remaining. The message now describes whichever cap is actually tight (iteration, token, or both) with the real remaining counts.
+
 ## [0.3.2] - 2026-05-22
 
 ### Added (Claude Code 2.1.147 parity)

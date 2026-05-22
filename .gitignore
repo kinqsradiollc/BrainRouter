@@ -37,6 +37,10 @@ out/
 .claude/
 .brainrouter.migrated/
 
+# Top-level test/ scratchpad for LLM-scaffolded throwaway demos
+# (not the package-local test folders under brainrouter/, mcp/, etc.)
+/test/
+
 # Local Projects
 .brainrouter/
 projects
