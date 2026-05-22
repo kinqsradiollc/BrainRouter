@@ -58,9 +58,14 @@ const SLASH_COMMANDS = [
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
-  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.3'));
+  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.4'));
   console.log(chalk.gray('Midnight Ledger / Obsidian Surface theme active.'));
   console.log(chalk.gray(`Workspace root: ${workspace?.workspaceRoot || process.cwd()}`));
+  // Surface offline mode prominently — easy to miss the warning that scrolled
+  // by during startup, and the user needs to know memory tools won't fire.
+  if (!mcpClient.isConnected()) {
+    console.log(chalk.yellow('⚠️  OFFLINE MODE — MCP server unreachable. Local tools only; memory recall / skills disabled.'));
+  }
   console.log(chalk.gray('Type ') + chalk.cyan('/help') + chalk.gray(' for commands, or start typing your prompt.\n'));
 
   const rl = readline.createInterface({
@@ -271,9 +276,9 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       '## What to do this turn',
       '1. **Audit the evidence in this thread** against the goal\'s outcome. Look at files you wrote, tests you ran, tools that returned ok=true.',
       '2. **Decide one of three:**',
-      '   - If the outcome is met with concrete evidence (file paths, test names, command outputs), call `goal_complete` with a 1–2 sentence proof.',
-      '   - If no defensible path forward remains without user input or missing materials, call `goal_blocked` with a reason + needed input.',
-      '   - Otherwise, take the **next concrete tool action** (read a file, write code, spawn a worker child, run a verifier). Do NOT respond with prose like "I will now do X" — that\'s a no-op and the CLI will stop the continuation.',
+      '   - If the outcome is met with concrete evidence (file paths, test names, command outputs), **write the user-visible answer / analysis / summary as prose AND THEN call `goal_complete` with a short 1–2 sentence proof — in the SAME response.** The proof is audit metadata; the prose is what the user reads. Skipping the prose means the user sees a placeholder.',
+      '   - If no defensible path forward remains without user input or missing materials, **write the user-visible explanation as prose AND THEN call `goal_blocked` with a reason + needed input.**',
+      '   - Otherwise (mid-goal), take the **next concrete tool action** (read a file, write code, spawn a worker child, run a verifier). Do NOT respond with prose like "I will now do X" — that\'s a no-op and the CLI will stop the continuation. Anti-spin applies to mid-goal turns; the final goal-completing turn requires prose.',
       '3. Use update_plan to track progress if you haven\'t already.',
       '',
       'Reminder: budget is finite. Pick the highest-leverage action that moves the goal forward.',
@@ -357,8 +362,17 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           const line = result.success
             ? chalk.green('✓  Tool ') + chalk.cyan(name) + chalk.green(' completed: ') + chalk.gray(result.summary)
             : chalk.red('❌  Tool ') + chalk.cyan(name) + chalk.red(' failed: ') + chalk.yellow(result.summary);
-          if (parentDone) { safePrintAbovePrompt(line); return; }
-          console.log(line);
+          // Inspection-tool preview: indented under the summary so the user
+          // sees the actual result (directory listing, grep matches, glob
+          // paths) even when the LLM later replies with only a stub like
+          // "I have listed the directory." Capped to a handful of lines in
+          // getToolPreview itself.
+          const previewBlock = result.preview
+            ? '\n' + result.preview.split('\n').map((l) => chalk.gray('    ' + l)).join('\n')
+            : '';
+          const composed = line + previewBlock;
+          if (parentDone) { safePrintAbovePrompt(composed); return; }
+          console.log(composed);
           tickStatus('Thinking');
           spinner.start();
         },

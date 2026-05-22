@@ -8,12 +8,24 @@ import type { LLMConfig, ServerConfig } from '../config/config.js';
 export class McpClientWrapper {
   public client: Client;
   private transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
+  /**
+   * True only after a successful `connect()`. Lets the CLI run in a degraded
+   * "offline" mode when the MCP server is unreachable at startup — `listTools`
+   * returns an empty list and `callTool` returns an error envelope instead of
+   * blowing up, which the agent's existing try/catch wrappers already handle.
+   */
+  private connected = false;
 
   constructor() {
     this.client = new Client(
-      { name: 'brainrouter-cli', version: '0.3.3' },
+      { name: 'brainrouter-cli', version: '0.3.4' },
       { capabilities: {} }
     );
+  }
+
+  /** Whether this wrapper has an active MCP transport. */
+  public isConnected(): boolean {
+    return this.connected;
   }
 
   async connect(serverConfig: ServerConfig, llmConfig?: LLMConfig): Promise<void> {
@@ -22,10 +34,38 @@ export class McpClientWrapper {
         throw new Error('Stdio server configuration missing "command".');
       }
 
-      // Merge environment variables safely
+      // Merge environment variables safely. The CLI and MCP server have
+      // separate `.env` files (brainrouter-cli/.env vs brainrouter/.env); we
+      // do NOT want CLI-specific knobs (sandbox, tool-loop limit, web search
+      // backend) leaking into the MCP child, and we do NOT want
+      // process-specific vars where each side wants its own default (e.g.
+      // LLM_MAX_CONCURRENT defaults to 4 in the CLI and 2 in the MCP). The
+      // MCP child's own `dotenv/config` will load brainrouter/.env via the
+      // cwd hint below, so those vars come in from the right source.
+      const CLI_ONLY_VARS = new Set([
+        'BRAINROUTER_MCP_TIMEOUT_MS',
+        'BRAINROUTER_MAX_TOOL_RESULT_CHARS',
+        'BRAINROUTER_AUTO_COMPACT_TOKENS',
+        'BRAINROUTER_MAX_TOOL_LOOPS',
+        'BRAINROUTER_TRACE_LOG',
+        'BRAINROUTER_SANDBOX',
+        'BRAINROUTER_SANDBOX_NETWORK',
+        'BRAINROUTER_SANDBOX_READ_PATHS',
+        'BRAINROUTER_SANDBOX_WRITE_PATHS',
+        'BRAINROUTER_WEB_SEARCH_ENDPOINT',
+      ]);
+      // Process-specific: same var name, but each process has its own
+      // semantic / default. Don't propagate — let brainrouter/.env decide.
+      const PROCESS_SPECIFIC_VARS = new Set([
+        'BRAINROUTER_LLM_MAX_CONCURRENT',
+        'BRAINROUTER_LLM_TIMEOUT_MS',
+      ]);
       const mergedEnv: Record<string, string> = {};
       for (const [k, v] of Object.entries(process.env)) {
-        if (v !== undefined) mergedEnv[k] = v;
+        if (v === undefined) continue;
+        if (CLI_ONLY_VARS.has(k)) continue;
+        if (PROCESS_SPECIFIC_VARS.has(k)) continue;
+        mergedEnv[k] = v;
       }
       if (serverConfig.env) {
         for (const [k, v] of Object.entries(serverConfig.env)) {
@@ -123,6 +163,7 @@ export class McpClientWrapper {
       });
 
       await this.client.connect(this.transport);
+      this.connected = true;
     } else if (serverConfig.type === 'http') {
       if (!serverConfig.url) {
         throw new Error('HTTP server configuration missing "url".');
@@ -143,16 +184,34 @@ export class McpClientWrapper {
       this.transport = httpTransport;
 
       await this.client.connect(httpTransport);
+      this.connected = true;
     } else {
       throw new Error(`Unsupported connection type: ${(serverConfig as any).type}`);
     }
   }
 
   async listTools() {
+    // Offline mode: return an empty tool list so the agent's runTurn proceeds
+    // with only local tools instead of crashing when it tries to enumerate.
+    if (!this.connected) return { tools: [] };
     return this.client.listTools({});
   }
 
   async callTool(name: string, args: Record<string, any>) {
+    // Offline mode: synthesize an error envelope that downstream consumers
+    // (callMcpTool, agent.captureTurn, memory_recall pipelines) already know
+    // how to ignore via their existing isError checks. Without this the SDK
+    // would throw "Not connected" from inside transport code, which surfaces
+    // as a hard crash instead of a graceful degradation.
+    if (!this.connected) {
+      return {
+        isError: true,
+        content: [{
+          type: 'text' as const,
+          text: `MCP server is not connected. Tool "${name}" is unavailable in offline mode. Start the BrainRouter MCP server and reconnect (or restart the CLI) to use memory, skills, and recall.`,
+        }],
+      };
+    }
     // A hung MCP server used to hang the entire runTurn forever — there was
     // no per-tool timeout, and the LLM call timeout only fired between tool
     // rounds. Race the tool call against a configurable timeout so a flaky
@@ -190,5 +249,6 @@ export class McpClientWrapper {
       // ignore
     }
     this.transport = null;
+    this.connected = false;
   }
 }

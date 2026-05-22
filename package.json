@@ -1,11 +1,11 @@
 {
   "name": "brainrouter-monorepo",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "workspaces": [
     "packages/*",
     "brainrouter",
-    "web",
+    "brainrouter-dashboard",
     "brainrouter-cli"
   ],
   "scripts": {
@@ -19,5 +19,8 @@
     "react-router-dom": "^7.15.1",
     "ts-jest": "^29.4.10",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@brainrouter/mcp-server": "^0.3.4"
   }
 }

@@ -2,8 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
+
+## [0.3.4] - 2026-05-22
+
+### Changed — separate `.env` per package
+
+The MCP server and the CLI agent are separate processes with separate
+concerns. Up to this release they shared a single `brainrouter/.env`
+file, which conflated cognitive-extraction config with agent-runtime
+config and meant `BRAINROUTER_LLM_MAX_CONCURRENT=4` (CLI's preferred
+default) silently overrode the MCP's `=2` default on the same machine.
+
+- **Split `.env.example` per package.** `brainrouter/.env.example` keeps
+  the MCP-side knobs (cognitive extraction LLM, embeddings, reranker,
+  memory engine, server auth, JWT, admin seed). New
+  `brainrouter-cli/.env.example` carries the CLI-only knobs (chat LLM,
+  tool loop limits, sandbox, web search backend, trace log, workspace
+  override).
+- **CLI loads its own `.env` first.** [`index.ts`](brainrouter-cli/src/index.ts)
+  reads `brainrouter-cli/.env` as PRIMARY and `brainrouter/.env` as
+  FALLBACK (so single-file legacy setups keep working until users
+  migrate). The previous code referenced a stale `mcp/.env` path that
+  no longer exists after the `mcp/` → `brainrouter/` rename in 0.3.3.
+- **Env-propagation denylist.** [`runtime/mcpClient.ts`](brainrouter-cli/src/runtime/mcpClient.ts)
+  no longer forwards CLI-only vars (`BRAINROUTER_SANDBOX*`,
+  `BRAINROUTER_MAX_TOOL_LOOPS`, `BRAINROUTER_AUTO_COMPACT_TOKENS`,
+  `BRAINROUTER_MCP_TIMEOUT_MS`, `BRAINROUTER_MAX_TOOL_RESULT_CHARS`,
+  `BRAINROUTER_TRACE_LOG`, `BRAINROUTER_WEB_SEARCH_ENDPOINT`) to the
+  MCP child. Process-specific vars where each side wants a different
+  value (`BRAINROUTER_LLM_MAX_CONCURRENT`, `BRAINROUTER_LLM_TIMEOUT_MS`)
+  are also filtered, so each process honors its own `.env`.
+
+### Fixed — `/goal` completion contract
+
+The model could call `goal_complete` while skipping the user-visible prose
+summary and while plan items were still open. Two complementary fixes:
+
+- **Prose alongside the tool call is now required.** `goal_complete` /
+  `goal_blocked` tool descriptions and the per-turn goal block in
+  `formatGoalBlock` both say it explicitly: the same assistant message
+  must contain the user-visible deliverable as prose. The proof / reason
+  fields are short audit metadata, not the deliverable.
+- **Safety net for the empty-prose case.** When the model still skips
+  prose, the CLI fallback now surfaces the recorded proof from
+  `goal.json` instead of "Tool calls completed (N) and the model returned
+  no additional commentary."
+- **Plan-honesty guard on `goal_complete`.** If any item in the active
+  plan is `pending` or `in_progress`, the tool throws with a corrective
+  message listing the open items and three remediation paths (finish the
+  work, mark dropped items completed with rationale, or call
+  `goal_blocked`).
+
+### Tests
+- 97 passing (up from 95). New: plan-honesty guard, empty-prose fallback surfaces proof.
+
+### Docs
+- README / BRAINROUTER / PRESENTATION rewritten short. Heavy content
+  (math, env-var table, CLI internals, storage layout) moved to a new
+  `brainrouter-docs/` folder.
 
 ## [0.3.3] - 2026-05-22
 

@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   applyPatchEnvelope,
   buildChatCompletionPayload,
+  getToolPreview,
   globFiles,
   isPathInside,
   LOCAL_TOOLS,
@@ -126,6 +127,82 @@ test('globFiles ignores generated directories and returns workspace-relative mat
 
     assert.deepEqual(globFiles('**/*.ts'), ['src/index.ts']);
   });
+});
+
+test('getToolPreview renders list_dir entries with type icons and sizes', () => {
+  const result = JSON.stringify([
+    { name: 'src', type: 'directory' },
+    { name: 'README.md', type: 'file', size: 1536 },
+    { name: 'binary.bin', type: 'file', size: 2 * 1024 * 1024 },
+  ]);
+  const preview = getToolPreview('list_dir', { path: '.' }, result);
+  assert.ok(preview);
+  assert.match(preview!, /📁 src/);
+  assert.match(preview!, /📄 README\.md \(1\.5 KB\)/);
+  assert.match(preview!, /📄 binary\.bin \(2\.0 MB\)/);
+});
+
+test('getToolPreview truncates list_dir to a cap with overflow notice', () => {
+  const items = Array.from({ length: 45 }, (_, i) => ({ name: `f${i}.ts`, type: 'file', size: 10 }));
+  const preview = getToolPreview('list_dir', {}, JSON.stringify(items));
+  assert.ok(preview);
+  assert.match(preview!, /…and 15 more/);
+});
+
+test('getToolPreview signals an empty list_dir without crashing', () => {
+  assert.equal(getToolPreview('list_dir', {}, '[]'), '(empty directory)');
+});
+
+test('getToolPreview formats grep_search matches with file:line:text', () => {
+  const matches = JSON.stringify([
+    { path: 'src/foo.ts', line: 42, text: 'const x = 1;' },
+    { path: 'src/bar.ts', line: 7, text: 'function bar() {}' },
+  ]);
+  const preview = getToolPreview('grep_search', { query: 'x' }, matches);
+  assert.ok(preview);
+  assert.match(preview!, /src\/foo\.ts:42\s+const x = 1;/);
+  assert.match(preview!, /src\/bar\.ts:7\s+function bar/);
+});
+
+test('getToolPreview lists glob_files paths and caps with overflow notice', () => {
+  const paths = Array.from({ length: 25 }, (_, i) => `src/file-${i}.ts`);
+  const preview = getToolPreview('glob_files', { pattern: 'src/**/*.ts' }, JSON.stringify(paths));
+  assert.ok(preview);
+  assert.match(preview!, /src\/file-0\.ts/);
+  assert.match(preview!, /…and 5 more/);
+});
+
+test('getToolPreview returns undefined for tools without an inline preview', () => {
+  assert.equal(getToolPreview('read_file', { path: 'x' }, 'file contents'), undefined);
+  assert.equal(getToolPreview('run_command', { command: 'ls' }, 'output'), undefined);
+});
+
+test('getToolPreview returns undefined when result JSON is malformed', () => {
+  assert.equal(getToolPreview('list_dir', {}, 'not-json'), undefined);
+  assert.equal(getToolPreview('grep_search', { query: 'x' }, 'not-json'), undefined);
+});
+
+test('McpClientWrapper.isConnected is false before connect', async () => {
+  const { McpClientWrapper } = await import('./runtime/mcpClient.js');
+  const wrapper = new McpClientWrapper();
+  assert.equal(wrapper.isConnected(), false);
+});
+
+test('McpClientWrapper.listTools returns empty list when disconnected (offline mode)', async () => {
+  const { McpClientWrapper } = await import('./runtime/mcpClient.js');
+  const wrapper = new McpClientWrapper();
+  const res = await wrapper.listTools();
+  assert.deepEqual(res, { tools: [] });
+});
+
+test('McpClientWrapper.callTool returns an error envelope when disconnected (offline mode)', async () => {
+  const { McpClientWrapper } = await import('./runtime/mcpClient.js');
+  const wrapper = new McpClientWrapper();
+  const res = await wrapper.callTool('memory_recall', { query: 'anything' });
+  const env = res as { isError: boolean; content: Array<{ type: string; text: string }> };
+  assert.equal(env.isError, true);
+  assert.match(env.content[0].text, /MCP server is not connected/);
+  assert.match(env.content[0].text, /memory_recall/);
 });
 
 test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
@@ -559,6 +636,26 @@ test('normalizeToolName resolves common LLM hallucinations to the canonical tool
   // Ambiguous collision: if two candidates would normalize to the same form,
   // we fall back to the input rather than silently picking one.
   assert.equal(normalizeToolName('foo', ['foo_', 'foo-']), 'foo');
+});
+
+test('normalizeToolName resolves cross-vendor shell aliases to run_command', async () => {
+  const { normalizeToolName } = await import('./agent/agent.js');
+  const candidates = ['run_command', 'read_file', 'list_dir'];
+  // Claude Code convention.
+  assert.equal(normalizeToolName('Bash', candidates), 'run_command');
+  assert.equal(normalizeToolName('bash', candidates), 'run_command');
+  // Generic shell synonyms.
+  assert.equal(normalizeToolName('shell', candidates), 'run_command');
+  assert.equal(normalizeToolName('sh', candidates), 'run_command');
+});
+
+test('normalizeToolName does NOT alias bash when run_command is not in the registry', async () => {
+  const { normalizeToolName } = await import('./agent/agent.js');
+  // Read-only access mode strips run_command. Aliasing must not silently
+  // re-create access the agent doesn't have — let dispatch return "unknown
+  // tool" instead.
+  const candidates = ['read_file', 'list_dir'];
+  assert.equal(normalizeToolName('bash', candidates), 'bash');
 });
 
 test('orchestration: clampAccess prevents a child from exceeding the parent\'s access mode', async () => {
@@ -1645,6 +1742,152 @@ test('runTurn empty LLM answer after a tool call returns a useful summary (not t
       assert.match(answer, /Tool calls completed/);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: goal_complete is refused while the active plan has pending / in_progress items (plan honesty guard)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    setGoal(workspace, 'analyze the CLI architecture');
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls === 1) {
+        // First LLM call: build a plan with one ✓ and three ☐.
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_plan',
+                type: 'function',
+                function: {
+                  name: 'update_plan',
+                  arguments: JSON.stringify({
+                    plan: [
+                      { step: 'Reload context', status: 'completed' },
+                      { step: 'Analyze skillRunner.ts', status: 'pending' },
+                      { step: 'Inspect runtime files', status: 'pending' },
+                      { step: 'Synthesize summary', status: 'in_progress' },
+                    ],
+                  }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (llmCalls === 2) {
+        // Second LLM call: try to declare done while plan items are open.
+        // The guard must refuse this with a clear remediation hint.
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_done',
+                type: 'function',
+                function: {
+                  name: 'goal_complete',
+                  arguments: JSON.stringify({ proof: 'Architecture synthesized.' }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // Third call: empty exit.
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'I will finish the work first.' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await agent.runTurn('analyze', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      });
+      // The guard should have refused goal_complete — goal status stays active.
+      const goalAfter = readGoal(workspace);
+      assert.equal(goalAfter?.status, 'active', 'goal must remain active when plan is incomplete');
+      assert.equal(agent.lastGoalTransition, undefined, 'lastGoalTransition must not be set when goal_complete was refused');
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearGoal(workspace);
+    }
+  });
+});
+
+test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    setGoal(workspace, 'analyze the CLI architecture');
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls === 1) {
+        // First LLM call: empty prose + goal_complete tool call. This is the
+        // exact bug-shape — the model declares done via tool but skips the
+        // user-visible summary.
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_done',
+                type: 'function',
+                function: {
+                  name: 'goal_complete',
+                  arguments: JSON.stringify({ proof: 'Architecture mapped to memory_working_offload; src/agent.ts L491 is the loop.' }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // Second LLM call (post tool-result): empty prose, no further tools.
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 0 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('analyze', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      });
+      // The fallback must now surface the proof string from goal_complete.
+      // Old behavior: "Tool calls completed (N) and the model returned no
+      // additional commentary." — proof was buried in goal.json.
+      assert.equal(agent.lastGoalTransition, 'complete');
+      assert.match(answer, /Goal completed/);
+      assert.match(answer, /Architecture mapped to memory_working_offload/);
+      assert.doesNotMatch(answer, /no additional commentary/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearGoal(workspace);
     }
   });
 });

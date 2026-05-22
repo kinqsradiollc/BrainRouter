@@ -1,7 +1,7 @@
 {
   "name": "@brainrouter/mcp-server",
-  "version": "0.3.3",
-  "description": "BrainRouter MCP Server — exposes skills, docs, and personas as MCP tools to minimize agent context size.",
+  "version": "0.3.4",
+  "description": "BrainRouter MCP server — the cognitive memory engine. Exposes recall, capture, focus scenes, persona, contradictions, skills, and graph queries as MCP tools for any MCP-speaking agent.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -13,7 +13,8 @@
     "agents",
     "references",
     "docs",
-    "README.md"
+    "README.md",
+    ".env.example"
   ],
   "scripts": {
     "prepack": "node scripts/prepack.mjs",
@@ -44,7 +45,7 @@
     "gray-matter": "^4.0.3",
     "sqlite-vec": "^0.1.9",
     "zod": "^3.22.4",
-    "@brainrouter/types": "*"
+    "@brainrouter/types": "^0.3.4"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -56,5 +57,32 @@
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",
     "vitest": "^1.4.0"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "cognitive-memory",
+    "llm",
+    "rag",
+    "embeddings",
+    "graphrag",
+    "brainrouter"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "brainrouter"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

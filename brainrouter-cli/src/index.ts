@@ -13,73 +13,162 @@ import { startREPL } from './cli/repl.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
 
 /**
- * Load `brainrouter/.env` (the canonical config home for BRAINROUTER_LLM_*,
- * embedding, reranker, etc.) into the CLI's own `process.env` if not already
- * set.
+ * Load `.env` files into the CLI's `process.env`.
  *
- * Why this exists: the MCP child uses `import "dotenv/config"`, which resolves
- * relative to whatever `process.cwd()` the child was spawned with — that's
- * the user's launch directory, NOT the MCP server package dir. So
- * `brainrouter/.env` was never read by the CLI-spawned MCP child, and the
- * cognitive extractor silently disabled itself because
- * `BRAINROUTER_LLM_API_KEY` was empty.
+ * The CLI and the MCP server have separate concerns and now ship separate
+ * config files:
  *
- * Loading here is the belt: once these vars are in `process.env`, the
- * propagation step in mcpClient.ts (the suspenders) forwards them to the
- * spawned child verbatim. We do not overwrite values already set in the
- * shell — explicit env > .env file, as is conventional.
+ *   - `brainrouter-cli/.env`  — CLI-only knobs (chat LLM, tool loop,
+ *                                sandbox, web search, trace log).
+ *   - `brainrouter/.env`      — MCP-only knobs (extraction LLM, embeddings,
+ *                                reranker, memory engine, server auth).
+ *
+ * Loading order:
+ *   1) `brainrouter-cli/.env` (PRIMARY for CLI process).
+ *   2) `brainrouter/.env`     (FALLBACK — only for the LLM credentials, so
+ *                              a user who set up only the MCP config still
+ *                              gets a working CLI agent and vice versa).
+ *
+ * Shell env (anything already in `process.env`) wins over both — explicit
+ * env > .env file, as is conventional.
+ *
+ * The MCP child uses `import "dotenv/config"` which resolves relative to
+ * `process.cwd()`. The CLI sets the spawned child's cwd to the MCP package
+ * directory (see runtime/mcpClient.ts), so `brainrouter/.env` is loaded by
+ * the child directly — the CLI does NOT need to pre-load it for the MCP's
+ * sake.
  */
-function loadBrainrouterEnv(): { loaded: string; count: number } | null {
-  const here = path.dirname(url.fileURLToPath(import.meta.url));
-  // dist/index.js → ../.. → repo root. Try common locations.
-  const candidates = [
-    path.resolve(here, '..', '..', 'mcp', '.env'),       // monorepo layout
-    path.resolve(here, '..', '..', '..', 'mcp', '.env'), // installed/nested
-    path.resolve(process.cwd(), 'mcp', '.env'),          // running from repo root
-    path.resolve(process.cwd(), '.env'),                 // local override
-  ];
-  for (const file of candidates) {
-    if (!fs.existsSync(file)) continue;
-    try {
-      const raw = fs.readFileSync(file, 'utf8');
-      let count = 0;
-      for (const line of raw.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eq = trimmed.indexOf('=');
-        if (eq <= 0) continue;
-        const key = trimmed.slice(0, eq).trim();
-        let value = trimmed.slice(eq + 1).trim();
-        // Strip surrounding quotes if present.
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-          value = value.slice(1, -1);
-        }
-        if (key && !(key in process.env)) {
-          process.env[key] = value;
-          count++;
-        }
+/**
+ * Vars the CLI process consumes from a sibling `brainrouter/.env` fallback.
+ *
+ * LLM credentials are deliberately EXCLUDED — `~/.config/brainrouter/config.json`
+ * is the canonical source for chat-LLM creds, endpoint, and model (set via
+ * `brainrouter login` or `brainrouter config`). Pulling them from `.env` in
+ * parallel created a silent precedence bug: env would shadow `config.json`
+ * because `loadBrainrouterEnv()` runs at module-load time before
+ * `loadConfig()`, and downstream callers like `mcpClient.connect()` check
+ * `mergedEnv.BRAINROUTER_LLM_ENDPOINT` before falling back to `llmConfig`.
+ *
+ * The only var we still allow through the fallback is `BRAINROUTER_API_KEY`
+ * — that's MCP-server auth (not LLM), and stdio mode propagates it from the
+ * CLI's process.env into the spawned child. If your `config.json` server
+ * profile already carries the API key in its `env` block, you don't need
+ * this fallback either, and it can go away in a follow-up cleanup.
+ *
+ * Anything outside this set is a pure MCP-server knob (embedding endpoint,
+ * JWT secret, extraction sweep config, prewarming, graph timeouts, admin
+ * creds) that just pollutes the CLI's environment with no effect — the MCP
+ * child loads `brainrouter/.env` directly via its own `dotenv/config`.
+ */
+const CLI_FALLBACK_ALLOWLIST = new Set([
+  'BRAINROUTER_API_KEY',
+]);
+
+function loadEnvFile(file: string, allowlist?: Set<string>): number {
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    let count = 0;
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
       }
-      return { loaded: file, count };
-    } catch {
-      // Skip silently; the loud diagnostic in mcpClient will warn if nothing reached the child.
+      // Allowlist gate: when loading the MCP fallback file, only adopt vars
+      // the CLI actually reads. Primary CLI .env loads pass no allowlist and
+      // accept everything (it's the CLI's own config).
+      if (allowlist && !allowlist.has(key)) continue;
+      if (key && !(key in process.env)) {
+        process.env[key] = value;
+        count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+function loadBrainrouterEnv(): { primary?: string; fallback?: string; count: number } {
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  let count = 0;
+  let primary: string | undefined;
+  let fallback: string | undefined;
+
+  // PRIMARY: brainrouter-cli/.env (this package's own config).
+  // dist/index.js → ../.. = brainrouter-cli/, so .env sits next to package.json.
+  const cliCandidates = [
+    path.resolve(here, '..', '..', '.env'),                          // monorepo: brainrouter-cli/.env
+    path.resolve(here, '..', '..', '..', 'brainrouter-cli', '.env'), // installed/nested
+    path.resolve(process.cwd(), 'brainrouter-cli', '.env'),          // running from repo root
+  ];
+  for (const file of cliCandidates) {
+    if (fs.existsSync(file)) {
+      primary = file;
+      count += loadEnvFile(file);
+      break;
     }
   }
-  return null;
+
+  // FALLBACK: brainrouter/.env (MCP-side config). Only used to backstop the
+  // LLM credentials so a partial setup still works. The MCP child loads
+  // brainrouter/.env on its own anyway via cwd hint, so we don't need to
+  // import its server-only knobs (embedding endpoint, JWT secret, sweep
+  // intervals, prewarming) — those just clutter the CLI's process.env. The
+  // allowlist limits the fallback to vars the CLI actually reads.
+  //
+  // Only record the fallback in the result when it actually contributed at
+  // least one new var. If the primary file already set all the LLM creds,
+  // mentioning the fallback path in the startup banner is noise — the user
+  // already has the CLI fully configured locally and doesn't need to know
+  // a sibling .env was read but ignored.
+  const mcpCandidates = [
+    path.resolve(here, '..', '..', '..', 'brainrouter', '.env'),
+    path.resolve(process.cwd(), 'brainrouter', '.env'),
+  ];
+  for (const file of mcpCandidates) {
+    if (fs.existsSync(file)) {
+      const added = loadEnvFile(file, CLI_FALLBACK_ALLOWLIST);
+      if (added > 0) {
+        fallback = file;
+        count += added;
+      }
+      break;
+    }
+  }
+  return { primary, fallback, count };
 }
 
 const envLoadResult = loadBrainrouterEnv();
-if (envLoadResult) {
-  // Visible-but-quiet startup line so users know which .env was picked up.
-  const tag = envLoadResult.count > 0 ? chalk.gray(` (${envLoadResult.count} new var${envLoadResult.count === 1 ? '' : 's'})`) : chalk.gray(' (all keys already set in shell)');
-  console.error(chalk.gray(`env: loaded ${envLoadResult.loaded}`) + tag);
+if (envLoadResult.primary || envLoadResult.fallback) {
+  // Something contributed at least one var — show what loaded so the user can
+  // trace where runtime knobs (sandbox, timeouts, trace log, web search) are
+  // coming from. LLM creds intentionally do NOT flow through this path; they
+  // live in ~/.config/brainrouter/config.json.
+  const sources: string[] = [];
+  if (envLoadResult.primary) sources.push(envLoadResult.primary);
+  if (envLoadResult.fallback) sources.push(`${envLoadResult.fallback} (fallback)`);
+  const tag = envLoadResult.count > 0
+    ? chalk.gray(` (${envLoadResult.count} new var${envLoadResult.count === 1 ? '' : 's'})`)
+    : chalk.gray(' (all keys already set in shell)');
+  console.error(chalk.gray(`env: loaded ${sources.join(', ')}`) + tag);
 }
+// No banner when nothing loaded — that's the normal case for users who
+// configured the CLI via `brainrouter login` / `brainrouter config`. The old
+// "set BRAINROUTER_LLM_API_KEY in your shell" hint contradicted the
+// config.json-is-canonical design and confused users who already had a
+// fully populated config.
 
 const program = new Command();
 
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.3');
+  .version('0.3.4');
 
 // Chat Command (default)
 program
@@ -88,6 +177,7 @@ program
   .option('-p, --profile <name>', 'Connection profile name')
   .option('-m, --model <name>', 'LLM model override')
   .option('-w, --workspace <path>', 'Workspace root for files, commands, memory session, and MCP --root')
+  .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .action(async (options) => {
     if (options.workspace) {
       process.env.BRAINROUTER_WORKSPACE = options.workspace;
@@ -133,8 +223,23 @@ program
       await mcpClient.connect(serverConfig, llm);
       console.log(chalk.green('Successfully connected to BrainRouter MCP Server!'));
     } catch (err: any) {
+      // Degraded "offline mode": the MCP server is the cognitive memory layer
+      // (recall, skills, capture, citations) — losing it is painful but not
+      // fatal. Local tools (read_file, write_file, list_dir, grep_search,
+      // run_command, spawn_agent) still work, and the agent's runTurn already
+      // try/catches every MCP call. Keep the REPL up so the user can edit
+      // code, drive shell commands, and recover when the server comes back.
+      // Pass --strict-mcp to flip back to hard-fail (useful in CI).
       console.error(chalk.red(`Failed to connect to MCP server: ${err.message}`));
-      process.exit(1);
+      if (options.strictMcp) {
+        console.error(chalk.gray('--strict-mcp set; exiting.'));
+        process.exit(1);
+      }
+      console.warn(chalk.yellow(
+        '⚠️  Continuing in OFFLINE MODE — memory recall, skills, and capture are disabled.\n' +
+        '    Local tools (file edits, shell, web fetch, spawn_agent) remain available.\n' +
+        '    Start the MCP server and restart the CLI to restore full functionality.\n',
+      ));
     }
 
     const agent = new Agent(mcpClient, llm, {
@@ -159,6 +264,7 @@ program
   .option('--json', 'Emit one JSON line { answer, usage, durationMs, sessionKey }')
   .option('--session <key>', 'Resume a specific sessionKey')
   .option('--timeout <ms>', 'LLM request timeout in ms')
+  .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .action(async (promptParts: string[], options) => {
     if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
     if (options.timeout) process.env.BRAINROUTER_LLM_TIMEOUT_MS = String(options.timeout);
@@ -219,7 +325,12 @@ program
       await mcpClient.connect(serverConfig, llm);
     } catch (err: any) {
       console.error(`MCP connect failed: ${err.message}`);
-      process.exit(1);
+      if (options.strictMcp) process.exit(1);
+      // Offline mode for one-shot: same rationale as the chat command — local
+      // tools still work, MCP-backed calls return error envelopes the agent
+      // already tolerates. Useful when piping a quick "read this file and
+      // summarize" while the MCP server is down. CI can pass --strict-mcp.
+      console.error('Continuing in offline mode (no memory recall / skills). Pass --strict-mcp to exit instead.');
     }
 
     const agent = new Agent(mcpClient, llm, {

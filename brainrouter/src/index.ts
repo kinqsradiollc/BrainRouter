@@ -105,7 +105,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
   const server = new Server(
-    { name: 'brainrouter-mcp-server', version: '0.3.3' },
+    { name: 'brainrouter-mcp-server', version: '0.3.4' },
     { capabilities: { tools: {} } }
   );
 

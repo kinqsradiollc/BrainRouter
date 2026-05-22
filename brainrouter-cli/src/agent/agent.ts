@@ -8,7 +8,7 @@ import { askYesNo } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
 import { appendTranscriptEntry } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
-import { formatPlan, updatePlan } from '../state/taskStore.js';
+import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
 import {
   createSpawnAgentTool,
@@ -40,7 +40,7 @@ const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.nex
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
   onToolStart: (name: string, args: Record<string, any>) => void;
-  onToolEnd: (name: string, result: { success: boolean; summary: string }) => void;
+  onToolEnd: (name: string, result: { success: boolean; summary: string; preview?: string }) => void;
   /**
    * Optional: invoked whenever the agent calls update_plan during a turn,
    * so the REPL can render a live ✓ / ⏳ / ☐ checklist instead of leaving the
@@ -267,11 +267,11 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_complete',
     description:
-      'Mark the active /goal complete. CALL ONLY when concrete evidence in the thread (tests passing, file written, benchmark hit, artifact produced) proves the outcome is satisfied. Pass a 1–2 sentence proof citing the evidence.',
+      'Mark the active /goal complete. CALL ONLY when concrete evidence in the thread (tests passing, file written, benchmark hit, artifact produced) proves the outcome is satisfied. Pass a 1–2 sentence proof citing the evidence. PRECONDITION: if you have an active plan (from update_plan), every item must be marked `completed` before this call succeeds — call update_plan first to mark finished work done (or mark intentionally-dropped items completed with a rationale). The CLI hard-refuses goal_complete while pending / in_progress items remain. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible deliverable as prose — the actual answer, analysis, summary, or report the user asked for. The `proof` field is short audit metadata (file paths, test names, command exit codes), NOT the deliverable. If you skip the prose, the user sees only a placeholder and your work is invisible to them.',
     inputSchema: {
       type: 'object',
       properties: {
-        proof: { type: 'string', description: 'Evidence-based justification (file path / test name / output).' },
+        proof: { type: 'string', description: 'Short evidence-based justification (file path / test name / output). Audit metadata only — NOT the user-visible answer; put that in the assistant message text.' },
       },
       required: ['proof'],
     },
@@ -279,11 +279,11 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {
-        reason: { type: 'string', description: 'Why progress stalled.' },
+        reason: { type: 'string', description: 'Short reason progress stalled. Audit metadata only — write the full explanation in the assistant message text.' },
         needed: { type: 'string', description: 'What user input or external resource would unblock progress.' },
       },
       required: ['reason'],
@@ -332,9 +332,26 @@ export function explainUnknownToolName(name: string): string {
 }
 
 /**
+ * Cross-vendor tool-name aliases. Models trained on Claude Code's tool
+ * vocabulary often emit `Bash` / `bash` when they want to run a shell command;
+ * BrainRouter's canonical name is `run_command`. Rather than rename the tool
+ * (breaking transcripts and prompts), normalize the alias at dispatch time.
+ *
+ * Keep this list short: every alias is a hint the LLM doesn't read its own
+ * tool list before calling. Aliases for read_file / write_file / etc. could
+ * follow if observed empirically.
+ */
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  bash: 'run_command',
+  shell: 'run_command',
+  sh: 'run_command',
+};
+
+/**
  * Normalize a tool name the LLM emitted into the canonical form used by the
  * tool registry. Handles common variants: case (`Read_File`), separators
- * (`read-file`, `read.file`), surrounding whitespace.
+ * (`read-file`, `read.file`), surrounding whitespace, and a short list of
+ * cross-vendor aliases (`Bash` → `run_command`).
  *
  * Returns the exact canonical name if a unique match is found among the
  * provided candidates; otherwise returns the trimmed input (so the regular
@@ -347,6 +364,12 @@ export function normalizeToolName(raw: string, candidates: string[]): string {
   if (candidates.includes(trimmed)) return trimmed;
   const flatten = (s: string) => s.toLowerCase().replace(/[-.\s_]+/g, '');
   const target = flatten(trimmed);
+  // Cross-vendor alias resolution: check before generic case/separator
+  // matching so `Bash` resolves to `run_command` even though the flattened
+  // forms differ. Only honored when the canonical target is actually
+  // registered — keeps us from silently rerouting in unexpected configs.
+  const aliased = TOOL_NAME_ALIASES[target];
+  if (aliased && candidates.includes(aliased)) return aliased;
   const matches = candidates.filter((c) => flatten(c) === target);
   if (matches.length === 1) return matches[0];
   return trimmed;
@@ -797,7 +820,13 @@ export class Agent {
         }
 
         const finalSummary = hookifyWarnings.length > 0 ? `${summary} | ${hookifyWarnings.join(' | ')}` : summary;
-        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary });
+        // Inspection tools (list_dir, grep_search, glob_files) commonly fail to
+        // surface anything when the LLM gets lazy and replies with a stub like
+        // "I have listed the directory" instead of echoing the contents. Compute
+        // a short preview from the raw result so the REPL can show the user
+        // SOMETHING even when the model declines to.
+        const preview = !isError ? getToolPreview(name, args, resultText) : undefined;
+        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview });
         traceEvent('brainrouter.tool', {
           tool: name,
           ok: !isError,
@@ -847,9 +876,27 @@ export class Agent {
         `Use \`/continue\` to pick up where I left off (drain pending children, finish writing artifacts), ` +
         `\`/agents\` to see what's running, or set BRAINROUTER_MAX_TOOL_LOOPS to a higher number.`;
     } else if (!finalAnswer.trim()) {
-      finalAnswer = this.lastTurnToolCalls > 0
-        ? `Tool calls completed (${this.lastTurnToolCalls}) and the model returned no additional commentary.`
-        : 'The model returned an empty response.';
+      if (this.lastGoalTransition && this.lastTurnToolCalls > 0) {
+        // The model fired goal_complete / goal_blocked but skipped the
+        // user-visible prose summary in the same response. Without this
+        // branch the user saw "Tool calls completed (N)..." and the proof
+        // string was buried in goal.json — invisible to them. Surface the
+        // proof/reason directly so the work isn't wasted, and warn that
+        // the model should have written a real answer.
+        const goal = readGoal(this.workspaceRoot, this.sessionKey);
+        const evidence = goal?.blockedReason?.trim() || '(no detail recorded)';
+        const action = this.lastGoalTransition === 'complete' ? 'completed' : 'blocked';
+        const field = this.lastGoalTransition === 'complete' ? 'proof' : 'reason';
+        finalAnswer =
+          `Goal ${action} after ${this.lastTurnToolCalls} tool call${this.lastTurnToolCalls === 1 ? '' : 's'}, ` +
+          `but the model skipped writing a user-visible answer in this turn.\n\n` +
+          `Recorded ${field}:\n${evidence}\n\n` +
+          `(If you wanted a full analysis/report, ask "summarize what you just analyzed" — the work is in memory.)`;
+      } else {
+        finalAnswer = this.lastTurnToolCalls > 0
+          ? `Tool calls completed (${this.lastTurnToolCalls}) and the model returned no additional commentary.`
+          : 'The model returned an empty response.';
+      }
     }
     this.lastAnswer = finalAnswer;
 
@@ -1062,7 +1109,7 @@ export class Agent {
         try {
           const res = await fetch(url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.3)'
+              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.4)'
             }
           });
           if (!res.ok) {
@@ -1104,6 +1151,29 @@ export class Agent {
       case 'goal_complete': {
         const proof = String(args.proof ?? '').trim();
         if (!proof) throw new Error('goal_complete requires a non-empty proof.');
+        // Plan-honesty guard: refuse to mark the goal complete while the
+        // active plan still has pending / in_progress items. The model
+        // built that plan as its own contract — declaring done while items
+        // remain open is misleading (this is the exact bug the user hit
+        // when /goal analyze fired with 3 of 4 plan items still ☐). The
+        // model must either finish the work, explicitly mark dropped
+        // items completed via update_plan (creating an audit trail), or
+        // switch to goal_blocked.
+        const plan = readPlan(this.workspaceRoot, this.sessionKey);
+        const open = plan.items.filter((i) => i.status !== 'completed');
+        if (open.length > 0) {
+          const open_summary = open
+            .map((i) => `  - [${i.status === 'in_progress' ? '⏳' : '☐'}] ${i.step}`)
+            .join('\n');
+          throw new Error(
+            `goal_complete refused: the active plan still has ${open.length} incomplete item(s):\n${open_summary}\n\n` +
+            `Do ONE of:\n` +
+            `  1. Finish the remaining work, then call update_plan to mark those items completed.\n` +
+            `  2. If you decided to drop them, call update_plan FIRST and mark them completed with a brief explanation (the plan is your honest record — leaving items pending while declaring done is misleading).\n` +
+            `  3. Call goal_blocked instead if no defensible path remains.\n\n` +
+            `Then retry goal_complete in the same response as the user-visible prose summary.`
+          );
+        }
         const goal = completeGoal(this.workspaceRoot, this.sessionKey, proof);
         if (!goal) return 'No active goal to complete.';
         this.lastGoalTransition = 'complete';
@@ -1496,7 +1566,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
 
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.3' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.4' } });
     if (!res.ok) {
       return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
     }
@@ -1795,6 +1865,74 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
     default:
       return `${name} executed`;
   }
+}
+
+/**
+ * Optional inline preview for inspection-style tools. The REPL renders this
+ * indented below the one-line summary so the user can SEE the result even if
+ * the LLM forgets to echo it in its reply. Limited to a handful of tools where
+ * the result is concise and the user's intent is almost always "show me this":
+ * `list_dir`, `grep_search`, `glob_files`. Other tools (read_file, run_command)
+ * fire too often as internal exploration steps — previewing them would flood
+ * the terminal. Returns undefined when no useful preview is available.
+ */
+export function getToolPreview(name: string, args: Record<string, any>, result: string): string | undefined {
+  switch (name) {
+    case 'list_dir': {
+      try {
+        const items = JSON.parse(result) as Array<{ name: string; type: string; size?: number }>;
+        if (!Array.isArray(items)) return undefined;
+        if (items.length === 0) return '(empty directory)';
+        const MAX = 30;
+        const sliced = items.slice(0, MAX);
+        const lines = sliced.map((it) => {
+          const tag = it.type === 'directory' ? '📁' : '📄';
+          const size = it.type === 'file' && typeof it.size === 'number' ? ` (${formatBytes(it.size)})` : '';
+          return `${tag} ${it.name}${size}`;
+        });
+        if (items.length > MAX) lines.push(`…and ${items.length - MAX} more`);
+        return lines.join('\n');
+      } catch {
+        return undefined;
+      }
+    }
+    case 'grep_search': {
+      try {
+        const matches = JSON.parse(result) as Array<{ path: string; line: number; text: string }>;
+        if (!Array.isArray(matches)) return undefined;
+        if (matches.length === 0) return '(no matches)';
+        const MAX = 10;
+        const sliced = matches.slice(0, MAX);
+        const lines = sliced.map((m) => `${m.path}:${m.line}  ${m.text.slice(0, 120)}`);
+        if (matches.length > MAX) lines.push(`…and ${matches.length - MAX} more`);
+        return lines.join('\n');
+      } catch {
+        return undefined;
+      }
+    }
+    case 'glob_files': {
+      try {
+        const paths = JSON.parse(result) as string[];
+        if (!Array.isArray(paths)) return undefined;
+        if (paths.length === 0) return '(no matches)';
+        const MAX = 20;
+        const sliced = paths.slice(0, MAX);
+        const lines = sliced.map((p) => p);
+        if (paths.length > MAX) lines.push(`…and ${paths.length - MAX} more`);
+        return lines.join('\n');
+      } catch {
+        return undefined;
+      }
+    }
+    default:
+      return undefined;
+  }
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // Internal marker lines used by Agent.replaceTaggedSystemMessage to dedupe

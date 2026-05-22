@@ -1,17 +1,43 @@
 {
   "name": "@brainrouter/sdk",
-  "version": "0.3.3",
-  "private": true,
+  "version": "0.3.4",
+  "description": "BrainRouter SDK — typed client helpers for talking to a BrainRouter MCP server from your own Node/browser code.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
   },
   "dependencies": {
-    "@brainrouter/types": "*"
+    "@brainrouter/types": "^0.3.4"
   },
   "devDependencies": {
     "typescript": "^5.5.4"
+  },
+  "keywords": [
+    "brainrouter",
+    "sdk",
+    "mcp",
+    "model-context-protocol",
+    "client",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
