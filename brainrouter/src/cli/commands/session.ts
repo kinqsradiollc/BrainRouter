@@ -1,0 +1,179 @@
+/**
+ * AUTO-EXTRACTED from cli/repl.ts as part of the slash-command split.
+ * Hand-tune imports if the compiler complains.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { exec } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import chalk from 'chalk';
+import ora from 'ora';
+import { marked } from 'marked';
+import { LOCAL_TOOLS } from '../../agent/agent.js';
+import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
+import { listRoles } from '../../orchestration/roles.js';
+import { createSession, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '../../orchestration/orchestrator.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, readArtifact, slugify, updateWorkflowStatus } from '../../state/workflowArtifacts.js';
+import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
+import { addHook, readHooks, removeHook, runHooks, setHookEnabled, type HookEvent } from '../../state/hooksStore.js';
+import { buildHookifyContext, createHookifyRule, deleteHookifyRule, evaluateHookify, listHookifyRules, toggleHookifyRule } from '../../state/hookifyStore.js';
+import { clearGoal, completeGoal, goalHasBudgetLeft, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, tickGoalIteration } from '../../state/goalStore.js';
+import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
+import { appendTranscriptEntry, listTranscripts, loadTranscript, readTranscriptEntries } from '../../state/sessionStore.js';
+import { getCliStateDir, getCliStateFile } from '../../state/cliState.js';
+import { findWorkspaceRoot } from '../../config/workspace.js';
+import { getConfigPath, saveConfig } from '../../config/config.js';
+import { copyToClipboard } from '../../runtime/clipboard.js';
+import { initAgentMd } from '../../prompt/initAgentMd.js';
+import { expandMentions } from '../../memory/mentions.js';
+import { getLoopState, isLoopRunning, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
+import { resolveSandboxConfig } from '../../runtime/sandbox.js';
+import { askYesNo } from '../cliPrompt.js';
+import type { CommandContext } from './_context.js';
+import { buildGoalKickoffPrompt, formatTranscriptContent, printMcpCall, printMemoryCards, runSkillByName, runSkillCommand } from './_helpers.js';
+
+
+export async function tryHandleSessionCommand(ctx: CommandContext): Promise<boolean> {
+  const { command, args, agent, mcpClient, config, rl, repl } = ctx;
+  // 'ctx' alias to keep references to the old ReplContext name working
+  const replCtx = repl;
+  switch (command) {
+    case '/sessions':
+    {
+      const transcripts = listTranscripts(agent.workspaceRoot);
+      console.log(chalk.bold('\nPersisted sessions:'));
+      if (transcripts.length === 0) {
+        console.log(chalk.yellow('  (none — start chatting and your transcript will appear here)'));
+      } else {
+        for (const t of transcripts.slice(0, 30)) {
+          const when = t.modifiedAt.replace('T', ' ').slice(0, 19);
+          const isCurrent = t.sessionKey === agent.sessionKey;
+          const tag = isCurrent ? chalk.green(' (current)') : '';
+          console.log(`  ${chalk.cyan(t.sessionKey)}${tag}`);
+          console.log(`    ${chalk.gray(`${t.turnCount} entries · ${when}`)}`);
+          if (t.firstUserMessage) console.log(`    ${chalk.gray(`"${t.firstUserMessage}"`)}`);
+        }
+        console.log(chalk.gray('\nResume one with: /resume <sessionKey>'));
+      }
+      console.log();
+      return true;
+    }
+    case '/resume':
+    {
+      const sessionKey = args.join(' ').trim();
+      if (!sessionKey) {
+        console.log(chalk.red('\nUsage: /resume <sessionKey>\n'));
+        console.log(chalk.gray('Tip: copy a sessionKey from /sessions.\n'));
+        return true;
+      }
+      const entries = loadTranscript(agent.workspaceRoot, sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.red(`\nNo transcript found for "${sessionKey}".\n`));
+        return true;
+      }
+      agent.sessionKey = sessionKey;
+      const loaded = agent.loadHistory(entries);
+      console.log(chalk.green(`\n✓ Resumed session ${chalk.cyan(sessionKey)} with ${loaded} prior messages.`));
+      console.log(chalk.gray('Your next message will continue the conversation.\n'));
+      return true;
+    }
+    case '/fork':
+    {
+      const label = args.join(' ').trim() || `fork-${new Date().toISOString().slice(11, 19)}`;
+      const newKey = `${agent.sessionKey}:fork:${randomUUID().slice(0, 8)}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+      const previous = agent.sessionKey;
+      agent.fork(newKey);
+      console.log(chalk.green(`\n✓ Forked session.`));
+      console.log(chalk.gray(`  Parent : ${previous}`));
+      console.log(chalk.gray(`  New    : ${newKey}`));
+      console.log(chalk.gray('  Your next message starts a new transcript while keeping prior context.\n'));
+      return true;
+    }
+    case '/rename':
+    {
+      const newName = args.join(' ').trim();
+      if (!newName) {
+        console.log(chalk.red('\nUsage: /rename <new session label>\n'));
+        return true;
+      }
+      const safe = newName.replace(/[^A-Za-z0-9._-]+/g, '-');
+      const previous = agent.sessionKey;
+      const newKey = `${previous.split(':')[0]}:${safe}`;
+      agent.sessionKey = newKey;
+      agent.refreshSystemPrompt();
+      console.log(chalk.green(`\n✓ Session renamed`));
+      console.log(chalk.gray(`  Old: ${previous}`));
+      console.log(chalk.gray(`  New: ${newKey}`));
+      console.log(chalk.gray('  (Future transcript entries land under the new key; existing entries stay under the old.)\n'));
+      return true;
+    }
+    case '/compact':
+    {
+      const spinner = ora(chalk.gray('Summarizing conversation for compaction...')).start();
+      try {
+        const result = await agent.compactHistory();
+        if (!result) {
+          spinner.warn(chalk.yellow('Nothing to compact — chat history is already short.'));
+          return true;
+        }
+        spinner.succeed(chalk.green(`Compacted ${result.replacedMessages} messages → ~${result.estimatedTokens} tokens (${result.durationMs}ms).`));
+        console.log(chalk.bold('\nCompaction summary:'));
+        console.log(marked.parse(result.summary));
+        console.log(chalk.gray('The summary is now part of system context. Continue normally.\n'));
+      } catch (err: any) {
+        spinner.fail(chalk.red(`Compaction failed: ${err.message}`));
+        console.log(chalk.gray('Fallback: nothing was changed. Use /clear if you want to drop history without summarizing.\n'));
+      }
+      return true;
+    }
+    case '/new':
+    {
+      const label = args.join(' ').trim() || `new-${new Date().toISOString().slice(11, 19)}`;
+      const newKey = `${agent.sessionKey.split(':')[0]}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+      const previous = agent.sessionKey;
+      agent.sessionKey = newKey;
+      agent.clearHistory();
+      console.log(chalk.green(`\n✓ Started a new chat.`));
+      console.log(chalk.gray(`  Old: ${previous}`));
+      console.log(chalk.gray(`  New: ${newKey}\n`));
+      return true;
+    }
+    case '/side':
+    case '/btw':
+    {
+      const prompt = args.join(' ').trim();
+      if (!prompt) {
+        console.log(chalk.red(`\nUsage: ${command} <ephemeral side question>\n`));
+        console.log(chalk.gray('  Side conversations run in a forked chat history and discard the result on exit.\n'));
+        return true;
+      }
+      const original = agent.sessionKey;
+      const sideKey = `${original}:side:${randomUUID().slice(0, 6)}`;
+      agent.sessionKey = sideKey;
+      console.log(chalk.gray(`(side conversation in ${sideKey} — answer is ephemeral)\n`));
+      // Fire-and-forget BUT restore the sessionKey when the turn finishes,
+      // not after a fixed 100ms. The old setTimeout race restored the key
+      // long before the turn finished its async work — capture, transcript
+      // writes, contradiction checks — so side-conversation tool messages
+      // and the assistant reply ended up appended to the MAIN session.
+      void ctx.repl.runAgentTurnAsync(prompt).finally(() => {
+        agent.sessionKey = original;
+      });
+      return true;
+    }
+    case '/clear': {
+      agent.clearHistory();
+      console.log(chalk.yellow('\nConversation history cleared.\n'));
+      return true;
+    }
+    case '/quit':
+    case '/exit': {
+      rl.close();
+      return true;
+    }
+  }
+  return false;
+}
