@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
-import { usePersona } from "@brainrouter/hooks";
+import { usePersona } from "@kinqs/brainrouter-hooks";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";

@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useScenes } from "@brainrouter/hooks";
-import type { ContextualFocusRecord } from "@brainrouter/types";
+import { useScenes } from "@kinqs/brainrouter-hooks";
+import type { ContextualFocusRecord } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { SceneCard } from "../../components/SceneCard";
 import { PremiumModal } from "../../components/PremiumModal";

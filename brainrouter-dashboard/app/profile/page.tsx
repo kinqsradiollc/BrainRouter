@@ -10,7 +10,7 @@ import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { PremiumModal } from "../../components/PremiumModal";
 import { motion } from "framer-motion";
-import { MeResponse } from "@brainrouter/types";
+import { MeResponse } from "@kinqs/brainrouter-types";
 
 function maskKey(key: string) {
   if (!key) return "";

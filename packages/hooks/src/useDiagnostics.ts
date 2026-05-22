@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { DiagnosticsBundle } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { DiagnosticsBundle } from "@kinqs/brainrouter-types";
 
 export function useDiagnostics(
   client: BrainRouterClient,

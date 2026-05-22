@@ -1,6 +1,6 @@
 import { useCallback } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { PublicUserRecord } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { PublicUserRecord } from "@kinqs/brainrouter-types";
 import { useCursorPagination } from "./useCursorPagination.js";
 
 export function useUsers(client: BrainRouterClient) {

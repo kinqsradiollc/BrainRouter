@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { MemoryStatsResponse } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { MemoryStatsResponse } from "@kinqs/brainrouter-types";
 
 export function useStats(client: BrainRouterClient) {
   const [data, setData] = useState<MemoryStatsResponse | null>(null);

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import type { MemoryListItem } from "@brainrouter/types";
+import type { MemoryListItem } from "@kinqs/brainrouter-types";
 import { MemoryBadge } from "./MemoryBadge";
 import { PremiumButton } from "./PremiumButton";
 

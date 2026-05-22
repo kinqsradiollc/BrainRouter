@@ -1,4 +1,4 @@
-import type { EmbeddingServiceConfig } from "@brainrouter/types";
+import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../retry.js";
 import { acquireLLMSlot } from "../llm-semaphore.js";
 

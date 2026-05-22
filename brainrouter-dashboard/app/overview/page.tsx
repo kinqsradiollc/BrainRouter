@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { MemoryListItem } from "@brainrouter/types";
+import type { MemoryListItem } from "@kinqs/brainrouter-types";
 import { motion } from "framer-motion";
-import { useDiagnostics, useStats } from "@brainrouter/hooks";
+import { useDiagnostics, useStats } from "@kinqs/brainrouter-hooks";
 import { getClient } from "../../lib/client";
 import { StatCard } from "../../components/StatCard";
 import { AuthGuard } from "../../components/AuthGuard";

@@ -1,5 +1,5 @@
 {
-  "name": "@brainrouter/sdk",
+  "name": "@kinqs/brainrouter-sdk",
   "version": "0.3.4",
   "description": "BrainRouter SDK — typed client helpers for talking to a BrainRouter MCP server from your own Node/browser code.",
   "type": "module",
@@ -13,7 +13,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@brainrouter/types": "^0.3.4"
+    "@kinqs/brainrouter-types": "^0.3.4"
   },
   "devDependencies": {
     "typescript": "^5.5.4"

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { SkillActivationsResponse } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { SkillActivationsResponse } from "@kinqs/brainrouter-types";
 
 export function useSkillActivations(client: BrainRouterClient) {
   const [data, setData] = useState<SkillActivationsResponse | null>(null);

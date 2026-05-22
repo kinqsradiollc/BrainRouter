@@ -88,7 +88,7 @@ function readSkillFromFilesystem(workspaceRoot: string, name: string): string | 
 /**
  * Roots to search for SKILL.md when the MCP server is unavailable. Includes:
  *  - the user's workspace (so per-project skills win locally)
- *  - the installed @brainrouter/mcp-server package directory (so the canonical
+ *  - the installed @kinqs/brainrouter-mcp-server package directory (so the canonical
  *    BrainRouter catalogue is found even when MCP is down, because prepack
  *    bundles `skills/` into the published package)
  *  - the monorepo root (when running from source during development)
@@ -105,7 +105,7 @@ function skillSearchRoots(workspaceRoot: string): string[] {
 
 function resolveInstalledMcpPackageDir(): string | undefined {
   try {
-    const pkgJsonPath = requireFromHere.resolve('@brainrouter/mcp-server/package.json');
+    const pkgJsonPath = requireFromHere.resolve('@kinqs/brainrouter-mcp-server/package.json');
     return path.dirname(pkgJsonPath);
   } catch {
     return undefined;

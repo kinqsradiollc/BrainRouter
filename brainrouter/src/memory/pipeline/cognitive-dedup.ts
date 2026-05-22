@@ -1,5 +1,5 @@
-import type { CognitiveRecord } from "@brainrouter/types";
-import type { IMemoryStore } from "@brainrouter/types";
+import type { CognitiveRecord } from "@kinqs/brainrouter-types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 /**
  * Result of the deduplication process

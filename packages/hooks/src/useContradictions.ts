@@ -1,6 +1,6 @@
 import { useCallback } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { ContradictionRecord } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { ContradictionRecord } from "@kinqs/brainrouter-types";
 import { useCursorPagination } from "./useCursorPagination.js";
 
 export function useContradictions(client: BrainRouterClient) {

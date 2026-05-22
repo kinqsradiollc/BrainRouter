@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { IMemoryStore, SkillActivationRecord, SkillHintsRecord } from "@brainrouter/types";
+import type { IMemoryStore, SkillActivationRecord, SkillHintsRecord } from "@kinqs/brainrouter-types";
 import { detectPrewarmSkills, decayPotential, spikeSkill } from "../memory/pipeline/skill-prewarm.js";
 
 class InMemoryActivationStore {

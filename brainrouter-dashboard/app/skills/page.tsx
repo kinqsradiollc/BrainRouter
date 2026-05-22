@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useSkillActivations } from "@brainrouter/hooks";
+import { useSkillActivations } from "@kinqs/brainrouter-hooks";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";

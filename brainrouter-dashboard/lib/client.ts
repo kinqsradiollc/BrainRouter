@@ -1,6 +1,6 @@
 "use client";
 
-import { BrainRouterClient } from "@brainrouter/sdk";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
 import { getApiKey, getJwt } from "./client-auth";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3747";

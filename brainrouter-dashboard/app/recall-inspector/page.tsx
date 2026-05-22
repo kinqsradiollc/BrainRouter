@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRecallInspector } from "@brainrouter/hooks";
+import { useRecallInspector } from "@kinqs/brainrouter-hooks";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";

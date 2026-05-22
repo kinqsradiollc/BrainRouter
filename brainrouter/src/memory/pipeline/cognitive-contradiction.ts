@@ -1,5 +1,5 @@
-import type { IMemoryStore } from "@brainrouter/types";
-import type { LLMRunner, CognitiveRecord, CognitiveFtsResult } from "@brainrouter/types";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import type { LLMRunner, CognitiveRecord, CognitiveFtsResult } from "@kinqs/brainrouter-types";
 import { COGNITIVE_CONTRADICTION_PROMPT } from "../prompts/cognitive-contradiction.js";
 import crypto from "node:crypto";
 

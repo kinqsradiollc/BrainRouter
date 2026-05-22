@@ -4,7 +4,7 @@ Operational runbook for the maintainer. **First-time setup, daily run,
 upgrade, publish, and recovery — everything in one file.** Skim the
 table of contents and jump to the section you need.
 
-For end-user install (`npm install -g @brainrouter/cli`), see
+For end-user install (`npm install -g @kinqs/brainrouter-cli`), see
 [README.md](README.md). For architecture, see
 [BRAINROUTER.md](BRAINROUTER.md). For env-var reference, see
 [brainrouter-docs/configuration.md](brainrouter-docs/configuration.md).
@@ -258,10 +258,10 @@ If you need to nuke the DB and re-migrate from scratch, see
 
 ## 5. Publishing a new release to npm
 
-We publish 4 packages: [`@brainrouter/cli`](https://www.npmjs.com/package/@brainrouter/cli),
-[`@brainrouter/mcp-server`](https://www.npmjs.com/package/@brainrouter/mcp-server),
-[`@brainrouter/sdk`](https://www.npmjs.com/package/@brainrouter/sdk),
-[`@brainrouter/types`](https://www.npmjs.com/package/@brainrouter/types).
+We publish 4 packages: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli),
+[`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server),
+[`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk),
+[`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types).
 The dashboard and React hooks stay private.
 
 ### 5.1 Pre-flight
@@ -311,7 +311,7 @@ brainrouter/src/index.ts                 # MCP server metadata
 ```
 
 Also bump the workspace-dep version pins in the 4 publishable packages —
-e.g. `"@brainrouter/types": "^0.3.4"` → `"^0.3.5"` — so a fresh install
+e.g. `"@kinqs/brainrouter-types": "^0.3.4"` → `"^0.3.5"` — so a fresh install
 from npm pulls the right inter-package versions.
 
 Quick sanity grep to catch stragglers:
@@ -352,22 +352,21 @@ npm whoami             # confirm you're authenticated as the right user
 
 **Three gotchas — read before you paste the publish commands:**
 
-1. **The `@brainrouter` scope must exist as an npm org.** A scoped
-   package can only be published if the scope (a) matches your npm
-   username OR (b) is a registered npm organization you belong to. The
-   first time you publish, create the org at
-   <https://www.npmjs.com/org/create> — name `brainrouter`, **Free**
-   plan (unlimited public packages). Without this, `npm publish`
-   returns a misleading `404 Not Found - PUT .../@brainrouter%2ftypes`.
+1. **`@kinqs` is your personal scope.** npm auto-creates a scope
+   matching every user's username, so `@kinqs/*` works the moment
+   you log in — no `npm org create` step needed. (If you ever rename
+   to a different scope like `@brainrouter`, you'd have to create
+   that as a Free org at <https://www.npmjs.com/org/create> first,
+   otherwise publishes fail with a misleading `404 Not Found - PUT`.)
 2. **Inline `#` comments don't work in zsh interactive mode.** zsh
    treats `# anything` as positional args, not a comment, unless
    you've enabled `setopt interactive_comments` (not the default).
    The commands below deliberately have NO inline comments — paste
    them as-is.
-3. **2FA is required.** The `@brainrouter` scope expects a TOTP code
-   per publish (mode `auth-and-publish`). Either pass `--otp=XXXXXX`
-   on each command (paste a fresh code from your authenticator each
-   time), or omit the flag and npm will prompt interactively.
+3. **2FA is required.** npm requires a TOTP code per publish (mode
+   `auth-and-publish`). Either pass `--otp=XXXXXX` on each command
+   (paste a fresh code from your authenticator each time), or omit
+   the flag and npm will prompt interactively.
 
 ```bash
 # Use ABSOLUTE paths — they're immune to whatever cwd you're starting
@@ -391,7 +390,7 @@ root, which has `"private": true` (that's correct — only the four
 workspace packages above are publishable).
 
 Each `package.json` has `publishConfig.access: public` (required because
-`@brainrouter/*` is a scoped namespace — npm defaults scoped packages to
+`@kinqs/*` is a scoped namespace — npm defaults scoped packages to
 restricted). You don't need `--access public` on the command line.
 
 #### 5.5.1 Avoiding the per-publish OTP friction
@@ -410,7 +409,7 @@ CI/automation). At <https://www.npmjs.com/settings/YOUR_USERNAME/tokens>
 create a token with:
 
 - Permissions: **Read and write**
-- Packages scope: **`@brainrouter/*`**
+- Packages scope: **`@kinqs/*`** (or just the four `@kinqs/brainrouter-*` packages individually)
 - "Bypass 2FA for this token": **✓**
 
 Then:
@@ -439,8 +438,8 @@ gh release create "v0.3.X" --title "0.3.X" --notes-from-tag
 ### 5.7 Verify it landed
 
 ```bash
-npm view @brainrouter/cli version            # should print the new version
-npx @brainrouter/cli@latest --version        # smoke test
+npm view @kinqs/brainrouter-cli version            # should print the new version
+npx @kinqs/brainrouter-cli@latest --version        # smoke test
 ```
 
 ### 5.8 Rolling back a bad publish
@@ -453,10 +452,10 @@ pulled. Prefer publishing a patch over a deprecation:
 npm version patch && npm publish
 
 # Last resort within 72h, if no users yet
-npm unpublish @brainrouter/cli@0.3.X
+npm unpublish @kinqs/brainrouter-cli@0.3.X
 ```
 
-After 72 hours `npm deprecate @brainrouter/cli@0.3.X "reason"` is the
+After 72 hours `npm deprecate @kinqs/brainrouter-cli@0.3.X "reason"` is the
 right move.
 
 ---
@@ -528,7 +527,7 @@ BRAINROUTER_PORT=3748 npm run start:http   # use a different port
 
 ### 6.6 Workspace deps fail to resolve after `git pull`
 
-Symptoms: `Cannot find module '@brainrouter/sdk'` or similar. Solution:
+Symptoms: `Cannot find module '@kinqs/brainrouter-sdk'` or similar. Solution:
 
 ```bash
 npm install           # rebuilds the workspace symlink tree

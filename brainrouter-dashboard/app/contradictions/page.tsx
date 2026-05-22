@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useContradictions } from "@brainrouter/hooks";
-import type { ContradictionRecord } from "@brainrouter/types";
+import { useContradictions } from "@kinqs/brainrouter-hooks";
+import type { ContradictionRecord } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";

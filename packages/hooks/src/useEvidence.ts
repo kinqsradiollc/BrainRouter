@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrainRouterClient } from "@brainrouter/sdk";
-import type { EvidenceKind, EvidenceResponse, MemoryEvidence } from "@brainrouter/types";
+import { BrainRouterClient } from "@kinqs/brainrouter-sdk";
+import type { EvidenceKind, EvidenceResponse, MemoryEvidence } from "@kinqs/brainrouter-types";
 
 export interface EvidenceFilters {
   userId?: string;

@@ -106,12 +106,12 @@ The CLI resolves a skill body in this order:
 2. **Filesystem fallback** (used only when MCP is unreachable) searches, in order:
    - `<workspace>/skills/**/SKILL.md`
    - `<workspace>/.brainrouter/skills/**/SKILL.md`
-   - The installed `@brainrouter/mcp-server` package directory (resolved via `require.resolve`). This works because the MCP package bundles the canonical catalogue at publish time (see below).
+   - The installed `@kinqs/brainrouter-mcp-server` package directory (resolved via `require.resolve`). This works because the MCP package bundles the canonical catalogue at publish time (see below).
 3. Otherwise the CLI hands the agent a benign placeholder and asks it to use general judgement.
 
 #### Catalogue bundling at publish time
 
-The `@brainrouter/mcp-server` package ships with the full BrainRouter skill catalogue baked in, so a user who only runs `npm install @brainrouter/mcp-server @brainrouter/cli` in their own workspace gets all 70+ canonical skills out of the box — no monorepo checkout required.
+The `@kinqs/brainrouter-mcp-server` package ships with the full BrainRouter skill catalogue baked in, so a user who only runs `npm install @kinqs/brainrouter-mcp-server @kinqs/brainrouter-cli` in their own workspace gets all 70+ canonical skills out of the box — no monorepo checkout required.
 
 This is done via two lifecycle scripts in `brainrouter/scripts/`:
 

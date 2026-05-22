@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useHookStatus } from "@brainrouter/hooks";
-import type { HostHookSource } from "@brainrouter/types";
+import { useHookStatus } from "@kinqs/brainrouter-hooks";
+import type { HostHookSource } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
