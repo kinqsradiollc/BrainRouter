@@ -1,525 +1,535 @@
 #!/usr/bin/env node
+// ─────────────────────────────────────────────
+// BrainRouter MCP Server — Entry Point
+// ─────────────────────────────────────────────
+//
+// Supports two transport modes:
+//
+//   stdio (default)
+//     The AI tool spawns this process and communicates via stdin/stdout.
+//     No URL, no port. Tool manages the lifecycle.
+//     Usage: node dist/index.js --root /path/to/project
+//
+//   HTTP (--http flag)
+//     Runs an Express HTTP server. Connect via serverUrl in tool config.
+//     Usage: node dist/index.js --root /path/to/project --http --port 3747
+//
 
-import fs from 'node:fs';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {
+  CallToolRequestSchema,
+  ErrorCode,
+  ListToolsRequestSchema,
+  McpError,
+} from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'node:crypto';
+import express, { type Request, type Response } from 'express';
+import { z } from 'zod';
+import fs from "node:fs";
+
+import { Registry } from './registry.js';
+import { resolveRegistryConfig } from './resolver.js';
+
+// Import tools
+import { listSkills, listSkillsSchema } from './tools/list_skills.js';
+import { getSkill, getSkillSchema } from './tools/get_skill.js';
+import { searchSkills, searchSkillsSchema } from './tools/search_skills.js';
+import { getPersona, getPersonaSchema } from './tools/get_persona.js';
+import { getReference, getReferenceSchema } from './tools/get_reference.js';
+import { listTemplateDocs, listTemplateDocsSchema } from './tools/list_template_docs.js';
+import { getTemplateDoc, getTemplateDocSchema } from './tools/get_template_doc.js';
+import { createSkill, createSkillSchema } from './tools/create_skill.js';
+import { updateSkill, updateSkillSchema } from './tools/update_skill.js';
+import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from './tools/memory_capture_turn.js';
+import { memoryRecallToolSchema, handleMemoryRecall } from './tools/memory_recall.js';
+import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
+import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
+import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
+import { memoryResolveSessionToolSchema, handleMemoryResolveSession } from './tools/memory_resolve_session.js';
+import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from './tools/memory_graph_query.js';
+import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from './tools/memory_mark_cited.js';
+import { memoryGovernanceToolSchemas, handleMemoryGovernanceTool } from './tools/memory-governance.js';
+import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from './tools/memory-engineering.js';
+import { memoryExplainToolSchema, handleMemoryExplainRecall } from './tools/memory-explain.js';
+import { memoryHookToolSchemas, handleMemoryHookTool } from './tools/memory-hooks.js';
+import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memory-working.js';
+import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
+import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
-import url from 'node:url';
-import { Command } from 'commander';
-import inquirer from 'inquirer';
-import chalk from 'chalk';
-import { loadConfig, saveConfig } from './config/config.js';
-import { McpClientWrapper } from './runtime/mcpClient.js';
-import { Agent } from './agent/agent.js';
-import { startREPL } from './cli/repl.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
+import { usersRouter } from './api/routes/users.js';
+import { memoriesRouter } from './api/routes/memories.js';
+import { scenesRouter } from './api/routes/scenes.js';
+import { personaRouter } from './api/routes/persona.js';
+import { contradictionsRouter } from './api/routes/contradictions.js';
+import { statsRouter } from './api/routes/stats.js';
+import { graphRouter } from './api/routes/graph.js';
+import { authRouter } from './api/routes/auth.js';
+import { chatCompletionsRouter } from './api/routes/chat-completions.js';
+import { governanceRouter } from './api/routes/governance.js';
+import { evidenceRouter } from './api/routes/evidence.js';
+import { hooksRouter } from './api/routes/hooks.js';
+import { workingRouter } from './api/routes/working.js';
+import { skillsRouter } from './api/routes/skills.js';
+import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
+const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
-/**
- * Load `mcp/.env` (the canonical config home for BRAINROUTER_LLM_*, embedding,
- * reranker, etc.) into the CLI's own `process.env` if not already set.
- *
- * Why this exists: the MCP child uses `import "dotenv/config"`, which resolves
- * relative to whatever `process.cwd()` the child was spawned with — that's
- * the user's launch directory, NOT `mcp/`. So `mcp/.env` was never read by
- * the CLI-spawned MCP child, and the cognitive extractor silently disabled
- * itself because `BRAINROUTER_LLM_API_KEY` was empty.
- *
- * Loading here is the belt: once these vars are in `process.env`, the
- * propagation step in mcpClient.ts (the suspenders) forwards them to the
- * spawned child verbatim. We do not overwrite values already set in the
- * shell — explicit env > .env file, as is conventional.
- */
-function loadBrainrouterEnv(): { loaded: string; count: number } | null {
-  const here = path.dirname(url.fileURLToPath(import.meta.url));
-  // dist/index.js → ../.. → repo root. Try common locations.
-  const candidates = [
-    path.resolve(here, '..', '..', 'mcp', '.env'),       // monorepo layout
-    path.resolve(here, '..', '..', '..', 'mcp', '.env'), // installed/nested
-    path.resolve(process.cwd(), 'mcp', '.env'),          // running from repo root
-    path.resolve(process.cwd(), '.env'),                 // local override
-  ];
-  for (const file of candidates) {
-    if (!fs.existsSync(file)) continue;
-    try {
-      const raw = fs.readFileSync(file, 'utf8');
-      let count = 0;
-      for (const line of raw.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eq = trimmed.indexOf('=');
-        if (eq <= 0) continue;
-        const key = trimmed.slice(0, eq).trim();
-        let value = trimmed.slice(eq + 1).trim();
-        // Strip surrounding quotes if present.
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-          value = value.slice(1, -1);
-        }
-        if (key && !(key in process.env)) {
-          process.env[key] = value;
-          count++;
-        }
-      }
-      return { loaded: file, count };
-    } catch {
-      // Skip silently; the loud diagnostic in mcpClient will warn if nothing reached the child.
-    }
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function authRateLimit(req: Request, res: Response, next: () => void) {
+  const now = Date.now();
+  const key = req.ip ?? "unknown";
+  const current = authAttempts.get(key);
+  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + 15 * 60 * 1000 };
+  bucket.count += 1;
+  authAttempts.set(key, bucket);
+  if (bucket.count > 20) {
+    res.status(429).json({ error: "Too many authentication attempts" });
+    return;
   }
-  return null;
+  next();
 }
 
-const envLoadResult = loadBrainrouterEnv();
-if (envLoadResult) {
-  // Visible-but-quiet startup line so users know which .env was picked up.
-  const tag = envLoadResult.count > 0 ? chalk.gray(` (${envLoadResult.count} new var${envLoadResult.count === 1 ? '' : 's'})`) : chalk.gray(' (all keys already set in shell)');
-  console.error(chalk.gray(`env: loaded ${envLoadResult.loaded}`) + tag);
+// ─── CLI flags ────────────────────────────────────────────────────────────────
+function parseFlag(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  return idx !== -1 && process.argv[idx + 1] ? process.argv[idx + 1] : undefined;
 }
 
-const program = new Command();
+const USE_HTTP = process.argv.includes('--http');
+const PORT = parseInt(parseFlag('--port') ?? '3747', 10);
 
-program
-  .name('brainrouter')
-  .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.3');
+// ─── Server factory ───────────────────────────────────────────────────────────
+function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean }): Server {
+  const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
+  const isAdmin = options?.isAdmin ?? false;
+  const server = new Server(
+    { name: 'brainrouter-mcp-server', version: '0.3.3' },
+    { capabilities: { tools: {} } }
+  );
 
-// Chat Command (default)
-program
-  .command('chat', { isDefault: true })
-  .description('Start interactive agent REPL chat session (default)')
-  .option('-p, --profile <name>', 'Connection profile name')
-  .option('-m, --model <name>', 'LLM model override')
-  .option('-w, --workspace <path>', 'Workspace root for files, commands, memory session, and MCP --root')
-  .action(async (options) => {
-    if (options.workspace) {
-      process.env.BRAINROUTER_WORKSPACE = options.workspace;
-    }
-    const workspace = findWorkspaceRoot();
-    applyWorkspaceRoot(workspace.workspaceRoot);
-    console.log(chalk.gray(`Workspace: ${workspace.workspaceRoot} (${workspace.reason})`));
+  // ── Tool list ──────────────────────────────────────────────────────────────
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: 'list_skills',
+        description: 'List all available skills (global + local merged).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            category: { type: 'string', description: 'Filter by category folder' },
+            scope: { type: 'string', enum: ['global', 'local', 'all'], description: 'Filter by scope' },
+          },
+        },
+      },
+      {
+        name: 'get_skill',
+        description: 'Fetch a specific section of a skill (default: workflow) or read an auxiliary file within the skill directory.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'kebab-case skill name' },
+            section: {
+              type: 'string',
+              enum: [
+                'description', 'overview', 'when_to_use', 'workflow', 'usage',
+                'detailed_instructions', 'phases', 'checklist', 'red_flags',
+                'rationalizations', 'full',
+              ],
+              description: 'Section to load',
+            },
+            file: { type: 'string', description: 'Optional filename to read instead of a section (e.g. "examples.md")' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'search_skills',
+        description: 'Fuzzy search across all skills.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Keyword to search for' },
+            scope: { type: 'string', enum: ['global', 'local', 'all'] },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'get_persona',
+        description: 'Fetch a persona definition.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Persona name (e.g. code-reviewer)' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'get_reference',
+        description: 'Fetch a reference document.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Reference name (e.g. security-checklist)' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'list_template_docs',
+        description: 'List all project-specific template documentation.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            category: { type: 'string', enum: ['api', 'design', 'schema', 'deployment', 'hooks', 'strategy', 'other'] },
+          },
+        },
+      },
+      {
+        name: 'get_template_doc',
+        description: 'Read a project template document or section.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Doc name (e.g. api, design)' },
+            section: { type: 'string', description: '## heading to load' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'create_skill',
+        description: 'Scaffold a new skill. If scope is "global", ensure content is universal (replace project-specific terms like "YourProject" with generic ones like "the project") UNLESS the category is a project name.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            category: { type: 'string' },
+            description: { type: 'string' },
+            overview: { type: 'string' },
+            when_to_use: { type: 'string' },
+            workflow: { type: 'array', items: { type: 'string' } },
+            usage: { type: 'string' },
+            checklist: { type: 'array', items: { type: 'string' } },
+            scope: { type: 'string', enum: ['global', 'local'], description: 'Where to save: "local" (default) or "global" (BrainRouter repo)' },
+            project: { type: 'string', description: 'Optional project name for project-specific skills (e.g. "YourProject")' },
+          },
+          required: ['name', 'category', 'description'],
+        },
+      },
+      {
+        name: 'update_skill',
+        description: 'Update an existing skill section. Supports "shadowing" global skills locally or updating global skills directly.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            section: { type: 'string', enum: ['overview', 'workflow', 'usage', 'detailed_instructions', 'checklist', 'full'] },
+            content: { type: 'string' },
+            targetScope: { type: 'string', enum: ['global', 'local'], description: 'Override where to save the update' },
+            project: { type: 'string', description: 'Optional project name if elevating to global' },
+          },
+          required: ['name', 'section', 'content'],
+        },
+      },
+      memoryCaptureTurnToolSchema,
+      memoryRecallToolSchema,
+      memorySearchToolSchema,
+      memoryContradictionsToolSchema,
+      memoryRegisterSkillHintsToolSchema,
+      memoryResolveSessionToolSchema,
+      memoryGraphQueryToolSchema,
+      memoryMarkCitedToolSchema,
+      ...memoryGovernanceToolSchemas,
+      ...memoryEngineeringToolSchemas,
+      memoryExplainToolSchema,
+      ...memoryHookToolSchemas,
+      ...memoryWorkingToolSchemas,
+      memoryConsolidateToolSchema,
+    ],
+  }));
 
-    const config = loadConfig();
-    const profileName = options.profile || config.activeServer;
-    const configuredServer = config.servers[profileName];
-
-    if (!configuredServer) {
-      console.error(chalk.red(`Error: Profile "${profileName}" not found in config.`));
-      process.exit(1);
-    }
-
-    const serverConfig = { ...configuredServer };
-
-    if (serverConfig.type === 'stdio') {
-      const args = serverConfig.args ?? [];
-      const rootIndex = args.indexOf('--root');
-      serverConfig.args = rootIndex >= 0
-        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-        : [...args, '--root', workspace.workspaceRoot];
-    }
-    config.servers[profileName] = serverConfig;
-
-    const llm = config.llm || {
-      provider: 'openai',
-      model: 'gpt-4o-mini',
-      apiKey: ''
-    };
-
-    if (options.model) {
-      llm.model = options.model;
-    }
-
-    const mcpClient = new McpClientWrapper();
-    console.log(chalk.gray(`Connecting to MCP server profile "${profileName}"...`));
-
+  // ── Tool dispatcher ────────────────────────────────────────────────────────
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
-      await mcpClient.connect(serverConfig, llm);
-      console.log(chalk.green('Successfully connected to BrainRouter MCP Server!'));
-    } catch (err: any) {
-      console.error(chalk.red(`Failed to connect to MCP server: ${err.message}`));
-      process.exit(1);
+      switch (request.params.name) {
+        case 'list_skills':   return await listSkills(registry, listSkillsSchema.parse(request.params.arguments));
+        case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
+        case 'search_skills': return await searchSkills(registry, searchSkillsSchema.parse(request.params.arguments));
+        case 'get_persona':   return await getPersona(registry, getPersonaSchema.parse(request.params.arguments));
+        case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
+        case 'list_template_docs': return await listTemplateDocs(registry, listTemplateDocsSchema.parse(request.params.arguments));
+        case 'get_template_doc':   return await getTemplateDoc(registry, getTemplateDocSchema.parse(request.params.arguments));
+        case 'create_skill':
+        case 'update_skill':
+          if (!isAdmin) {
+            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
+          }
+          if (request.params.name === "create_skill") {
+            return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
+          }
+          return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
+        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
+        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
+        case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
+        case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
+        case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
+        case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
+        case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments, { defaultUserId });
+        case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments, { defaultUserId });
+        case 'memory_get':
+        case 'memory_update':
+        case 'memory_evidence_add':
+        case 'memory_evidence_get':
+        case 'memory_export':
+        case 'memory_import':
+        case 'memory_governance_delete':
+        case 'memory_audit':
+        case 'memory_diagnostics':
+          return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_debug_trace_save':
+        case 'memory_debug_trace_search':
+        case 'memory_failed_attempts':
+        case 'memory_file_history':
+        case 'memory_task_state':
+        case 'memory_task_update':
+        case 'memory_handover':
+        case 'memory_verify':
+          return await handleMemoryEngineeringTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_explain_recall':
+          return await handleMemoryExplainRecall(request.params.arguments, { defaultUserId });
+        case 'memory_hook_register':
+        case 'memory_hook_status':
+          return await handleMemoryHookTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_working_context':
+        case 'memory_working_offload':
+        case 'memory_working_reset':
+          return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
+        case 'memory_consolidate':
+          return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
+        default:
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new McpError(ErrorCode.InvalidParams, `Invalid arguments: ${error.errors.map(e => e.message).join(', ')}`);
+      }
+      throw error;
     }
-
-    const agent = new Agent(mcpClient, llm, {
-      workspaceRoot: workspace.workspaceRoot,
-      launchCwd: workspace.launchCwd,
-    });
-    startREPL(agent, mcpClient, config, workspace);
   });
 
-// One-shot non-interactive run — pipe-friendly for scripting/CI.
-//   brainrouter run "summarize the changes in src/"
-//   echo "what is this repo?" | brainrouter run -
-//   brainrouter run --print "..."        → print answer only
-//   brainrouter run --json "..."         → JSON-line with answer + usage
-program
-  .command('run [prompt...]')
-  .description('Run a single agent turn non-interactively and print the answer (use "-" to read prompt from stdin)')
-  .option('-p, --profile <name>', 'Connection profile name')
-  .option('-m, --model <name>', 'LLM model override')
-  .option('-w, --workspace <path>', 'Workspace root')
-  .option('--print', 'Print the answer text only, no chrome')
-  .option('--json', 'Emit one JSON line { answer, usage, durationMs, sessionKey }')
-  .option('--session <key>', 'Resume a specific sessionKey')
-  .option('--timeout <ms>', 'LLM request timeout in ms')
-  .action(async (promptParts: string[], options) => {
-    if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
-    if (options.timeout) process.env.BRAINROUTER_LLM_TIMEOUT_MS = String(options.timeout);
+  server.onerror = (error) => console.error('[MCP Error]', error);
+  return server;
+}
 
-    let prompt = (promptParts ?? []).join(' ').trim();
-    if (prompt === '-' || !prompt) {
-      // Read from stdin
-      prompt = await new Promise<string>((resolve) => {
-        let buf = '';
-        process.stdin.setEncoding('utf8');
-        process.stdin.on('data', (chunk) => { buf += chunk; });
-        process.stdin.on('end', () => resolve(buf.trim()));
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
+const config = resolveRegistryConfig();
+const registry = new Registry(config);
+registry.build();
+
+// Auto-scan skills dirs for memory_hints on startup
+const skillsDirsToScan = [
+  path.join(config.globalRoot, 'skills'),
+  config.localRoot ? path.join(config.localRoot, 'skills') : undefined,
+].filter((d): d is string => !!d); // remove undefined and deduplicate
+const uniqueSkillsDirs = [...new Set(skillsDirsToScan)];
+memoryEngine.autoScanSkillHints(uniqueSkillsDirs);
+
+if (USE_HTTP) {
+  // ── HTTP / Streamable-HTTP transport ────────────────────────────────────────
+  // Each client session gets its own Server + Transport instance.
+  const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+
+  const app = express();
+  
+  // Custom CORS middleware to support cross-origin requests from Dashboard
+  app.use((req, res, next) => {
+    const allowedOrigin = process.env.BRAINROUTER_CORS_ORIGIN || "http://localhost:3000";
+    const requestOrigin = req.headers.origin;
+    if (!requestOrigin || requestOrigin === allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", requestOrigin ?? allowedOrigin);
+    }
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(200);
+      return;
+    }
+    next();
+  });
+
+  app.use(express.json());
+  if (USING_FALLBACK_JWT_SECRET) {
+    console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
+  }
+
+  // Health check
+  app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok', transport: 'http', root: config.localRoot });
+  });
+
+  app.use("/api/auth/signin", authRateLimit);
+  app.use("/api/auth/signup", authRateLimit);
+  app.use("/api/auth", authRouter);
+  app.use("/api/users", usersRouter);
+  app.use("/api/memories", memoriesRouter);
+  app.use("/api/scenes", scenesRouter);
+  app.use("/api/persona", personaRouter);
+  app.use("/api/contradictions", contradictionsRouter);
+  app.use("/api/stats", statsRouter);
+  app.use("/api/graph", graphRouter);
+  app.use("/api", governanceRouter);
+  app.use("/api/evidence", evidenceRouter);
+  app.use("/api/hooks", hooksRouter);
+  app.use("/api/working", workingRouter);
+  app.use("/api/skills", skillsRouter);
+  // OpenAI-compatible chat endpoint (memory-augmented):
+  //   POST /v1/chat/completions  — standard OpenAI body, sessionKey via body.brainrouter.sessionKey or X-BrainRouter-Session header
+  //   GET  /v1/models            — returns the configured upstream model
+  app.use("/v1", chatCompletionsRouter);
+
+  // MCP endpoint — handles POST (requests) and GET (SSE stream)
+  async function handleMcp(req: Request, res: Response) {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    const authHeader = req.headers.authorization;
+    const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!bearerKey) {
+      res.status(401).json({ error: 'API key required. Set Authorization: Bearer <your_api_key>' });
+      return;
+    }
+    const user = memoryEngine.getUserByApiKey(bearerKey);
+    if (!user) {
+      res.status(403).json({ error: 'Invalid API key' });
+      return;
+    }
+    if (user.status === "disabled") {
+      res.status(403).json({ error: "Account disabled" });
+      return;
+    }
+    const effectiveUserId = user.userId;
+
+    if (req.method === 'POST' && !sessionId) {
+      // New session — initialise
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          sessions.set(id, { server: mcpServer, transport });
+        },
       });
-    }
-    if (!prompt) {
-      console.error('Error: no prompt provided (pass as args or via stdin).');
-      process.exit(2);
-    }
 
-    // Reject slash commands in headless mode. The REPL handles them via
-    // handleSlashCommand, but `run` skips straight to agent.runTurn — so a
-    // user piping `/help` or `/sessions` was silently routed to the LLM and
-    // got back a confused chat response instead of a real CLI error.
-    // Headless mode now exits with a real error instead of consuming a turn.
-    if (prompt.startsWith('/')) {
-      const cmdName = prompt.split(/\s+/)[0];
-      console.error(
-        `Error: slash commands are not supported in 'run' (headless) mode. ` +
-        `"${cmdName}" must be invoked from the interactive REPL (run \`brainrouter\` with no args).`,
-      );
-      console.error(`Hint: if you meant to send "${cmdName}" as a literal prompt, escape it with a leading space.`);
-      process.exit(2);
+      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin });
+
+      transport.onclose = () => {
+        const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];
+        if (id) sessions.delete(id);
+      };
+
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      return;
     }
 
-    const workspace = findWorkspaceRoot();
-    applyWorkspaceRoot(workspace.workspaceRoot);
-
-    const config = loadConfig();
-    const profileName = options.profile || config.activeServer;
-    const serverConfig = { ...config.servers[profileName] };
-    if (!serverConfig) {
-      console.error(`Error: Profile "${profileName}" not found.`);
-      process.exit(1);
-    }
-    if (serverConfig.type === 'stdio') {
-      const args = serverConfig.args ?? [];
-      const rootIndex = args.indexOf('--root');
-      serverConfig.args = rootIndex >= 0
-        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-        : [...args, '--root', workspace.workspaceRoot];
+    // Existing session
+    const session = sessionId ? sessions.get(sessionId) : undefined;
+    if (!session) {
+      res.status(404).json({ error: 'Session not found. Send a POST without mcp-session-id to initialise.' });
+      return;
     }
 
-    const llm = config.llm ?? { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
-    if (options.model) llm.model = options.model;
+    await session.transport.handleRequest(req, res, req.body);
+  }
 
-    const mcpClient = new McpClientWrapper();
-    try {
-      await mcpClient.connect(serverConfig, llm);
-    } catch (err: any) {
-      console.error(`MCP connect failed: ${err.message}`);
-      process.exit(1);
-    }
+  app.post('/mcp', handleMcp);
+  app.get('/mcp', handleMcp);
 
-    const agent = new Agent(mcpClient, llm, {
-      workspaceRoot: workspace.workspaceRoot,
-      launchCwd: workspace.launchCwd,
-      sessionKey: options.session,
+  // DELETE — client-side session teardown
+  app.delete('/mcp', (req: Request, res: Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (sessionId) sessions.delete(sessionId);
+    res.status(204).send();
+  });
+
+  const dashboardDist = path.resolve(process.cwd(), "..", "dashboard", "dist");
+  if (fs.existsSync(dashboardDist)) {
+    app.use("/dashboard", express.static(dashboardDist));
+    app.get("/dashboard/*", (_req: Request, res: Response) => {
+      res.sendFile(path.join(dashboardDist, "index.html"));
     });
+  }
 
-    const startedAt = Date.now();
-    let answer = '';
-    try {
-      answer = await agent.runTurn(prompt, {
-        onStatusUpdate: () => {},
-        onToolStart: (name) => { if (!options.print && !options.json) process.stderr.write(`  · ${name}\n`); },
-        onToolEnd: () => {},
-      });
-    } catch (err: any) {
-      console.error(`run failed: ${err.message}`);
-      await mcpClient.close();
-      process.exit(1);
-    }
-    const durationMs = Date.now() - startedAt;
-    await mcpClient.close();
+  const httpServer = app.listen(PORT, () => {
+    console.log(`\n🧠 BrainRouter MCP Server`);
+    console.log(`   Transport : HTTP (Streamable)`);
+    console.log(`   Endpoint  : http://localhost:${PORT}/mcp`);
+    console.log(`   Health    : http://localhost:${PORT}/health`);
+    console.log(`   Root      : ${config.localRoot}\n`);
+  });
 
-    if (options.json) {
-      process.stdout.write(JSON.stringify({
-        answer,
-        sessionKey: agent.sessionKey,
-        usage: agent.lastTurnUsage,
-        durationMs,
-      }) + '\n');
-    } else {
-      process.stdout.write(answer + (answer.endsWith('\n') ? '' : '\n'));
-      if (!options.print) {
-        const u = agent.lastTurnUsage;
-        process.stderr.write(`\n[done · ${Math.round(durationMs / 1000)}s · ${u.promptTokens} in / ${u.completionTokens} out across ${u.calls} call${u.calls === 1 ? '' : 's'}]\n`);
+  process.on('SIGINT', () => {
+    httpServer.close(() => process.exit(0));
+  });
+
+} else {
+  // ── stdio transport (default) ───────────────────────────────────────────────
+  
+  // Redirect console.log and console.warn to stderr to avoid polluting stdout.
+  // In stdio mode, stdout is strictly reserved for the MCP protocol.
+  console.log = (...args) => console.error(...args);
+  console.warn = (...args) => console.error(...args);
+
+  // Authenticate user via environment variable or CLI flag
+  let stdioUserId = "";
+  let stdioIsAdmin = false;
+  
+  const stdioApiKey = (process.env.BRAINROUTER_API_KEY ?? parseFlag('--apiKey'))?.trim();
+  if (!stdioApiKey) {
+    console.error("[BrainRouter] FATAL: Connection aborted. Authentication is strictly required for all tool operations.");
+    console.error("[BrainRouter] To fix this, please configure BRAINROUTER_API_KEY inside your MCP client config environment variables.");
+    console.error("[BrainRouter] Example configuration:");
+    console.error(JSON.stringify({
+      mcpServers: {
+        brainrouter: {
+          command: "node",
+          args: [
+            "/absolute/path/to/BrainRouter/brainrouter/dist/index.js",
+            "--root",
+            "/absolute/path/to/your/workspace"
+          ],
+          env: {
+            BRAINROUTER_API_KEY: "br_YOUR_API_KEY"
+          }
+        }
       }
-    }
+    }, null, 2));
+    process.exit(1);
+  }
+
+  const user = memoryEngine.getUserByApiKey(stdioApiKey);
+  if (!user) {
+    console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY is invalid. Connection aborted.");
+    process.exit(1);
+  }
+  if (user.status === "disabled") {
+    console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY belongs to a disabled account.");
+    process.exit(1);
+  }
+  
+  stdioUserId = user.userId;
+  stdioIsAdmin = user.isAdmin;
+  console.error(`[BrainRouter] Authenticated via BRAINROUTER_API_KEY. Mapping local session to user: ${user.displayName || user.userId}`);
+
+  const server = buildMcpServer(registry, { defaultUserId: stdioUserId, isAdmin: stdioIsAdmin });
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error('BrainRouter MCP server running on stdio');
+
+  process.on('SIGINT', async () => {
+    await server.close();
     process.exit(0);
   });
-
-// Login Command
-program
-  .command('login')
-  .description('Configure and authenticate connection to a hosted HTTP/SSE BrainRouter server')
-  .action(async () => {
-    console.log(chalk.bold.hex('#CC9166')('\n🔑 hosted BrainRouter Authentication Setup'));
-
-    const answers = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'url',
-        message: 'Enter BrainRouter HTTP/SSE MCP Endpoint URL:',
-        default: 'http://localhost:3747/mcp',
-        validate: (input) => {
-          try {
-            new URL(input);
-            return true;
-          } catch {
-            return 'Please enter a valid URL (e.g. http://localhost:3747/mcp)';
-          }
-        }
-      },
-      {
-        type: 'input',
-        name: 'apiKey',
-        message: 'Enter Authorization / API Key (leave empty if none):',
-      },
-      {
-        type: 'input',
-        name: 'profileName',
-        message: 'Enter profile name to save this connection as:',
-        default: 'hosted-team',
-        validate: (input) => input.trim() ? true : 'Profile name cannot be empty.'
-      }
-    ]);
-
-    const mcpClient = new McpClientWrapper();
-    const spinner = inquirer.ui.BottomBar ? null : console.log(chalk.gray('Testing connection...'));
-    
-    try {
-      await mcpClient.connect({
-        type: 'http',
-        url: answers.url,
-        apiKey: answers.apiKey || undefined
-      });
-      await mcpClient.close();
-
-      // Save to config
-      const config = loadConfig();
-      config.servers[answers.profileName] = {
-        type: 'http',
-        url: answers.url,
-        apiKey: answers.apiKey || undefined
-      };
-      config.activeServer = answers.profileName;
-      saveConfig(config);
-
-      console.log(chalk.green(`\n✔ Successfully connected and saved profile "${answers.profileName}"!`));
-      console.log(`Set "${answers.profileName}" as the active connection profile.\n`);
-    } catch (err: any) {
-      console.error(chalk.red(`\n✖ Connection test failed: ${err.message}`));
-      console.log(chalk.yellow('No profile changes were saved. Check the URL and credentials and try again.\n'));
-    }
-  });
-
-// Config Command
-program
-  .command('config')
-  .description('Interactively configure your LLM provider and MCP servers')
-  .action(async () => {
-    const config = loadConfig();
-
-    const menu = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'action',
-        message: 'Select configuration action:',
-        choices: [
-          'Configure LLM Provider',
-          'Configure Server Profile',
-          'Set Active Server Profile',
-          'View Configuration',
-          'Cancel'
-        ]
-      }
-    ]);
-
-    if (menu.action === 'Configure LLM Provider') {
-      const llmAnswers = await inquirer.prompt([
-        {
-          type: 'input',
-          name: 'apiKey',
-          message: 'Enter LLM API Key (leave blank to use system env variables or local endpoints):',
-          default: config.llm?.apiKey || ''
-        },
-        {
-          type: 'input',
-          name: 'model',
-          message: 'Enter LLM Model (e.g. gpt-4o-mini, llama3):',
-          default: config.llm?.model || 'gpt-4o-mini'
-        },
-        {
-          type: 'input',
-          name: 'endpoint',
-          message: 'Enter Custom API Endpoint URL (optional, e.g. for Ollama/LM Studio):',
-          default: config.llm?.endpoint || ''
-        }
-      ]);
-
-      config.llm = {
-        provider: 'openai',
-        apiKey: llmAnswers.apiKey,
-        model: llmAnswers.model,
-        endpoint: llmAnswers.endpoint || undefined
-      };
-      saveConfig(config);
-      console.log(chalk.green('\n✔ LLM configuration updated successfully!\n'));
-
-    } else if (menu.action === 'Configure Server Profile') {
-      const typeAnswer = await inquirer.prompt([
-        {
-          type: 'list',
-          name: 'type',
-          message: 'Select connection type:',
-          choices: ['stdio', 'http']
-        }
-      ]);
-
-      let serverOpts: any = { type: typeAnswer.type };
-
-      if (typeAnswer.type === 'stdio') {
-        const stdioAnswers = await inquirer.prompt([
-          {
-            type: 'input',
-            name: 'command',
-            message: 'Enter executable command (e.g., node, npx):',
-            default: 'node'
-          },
-          {
-            type: 'input',
-            name: 'args',
-            message: 'Enter space-separated arguments (e.g. dist/index.js --root .):',
-          }
-        ]);
-        serverOpts.command = stdioAnswers.command;
-        serverOpts.args = stdioAnswers.args.trim() ? stdioAnswers.args.split(' ') : [];
-      } else {
-        const httpAnswers = await inquirer.prompt([
-          {
-            type: 'input',
-            name: 'url',
-            message: 'Enter Server URL (e.g., http://localhost:3747/mcp):',
-            default: 'http://localhost:3747/mcp'
-          },
-          {
-            type: 'input',
-            name: 'apiKey',
-            message: 'Enter API authorization key (if any):'
-          }
-        ]);
-        serverOpts.url = httpAnswers.url;
-        serverOpts.apiKey = httpAnswers.apiKey || undefined;
-      }
-
-      const nameAnswer = await inquirer.prompt([
-        {
-          type: 'input',
-          name: 'name',
-          message: 'Enter profile name for this server:',
-          default: 'custom-server'
-        }
-      ]);
-
-      config.servers[nameAnswer.name] = serverOpts;
-      saveConfig(config);
-      console.log(chalk.green(`\n✔ Server profile "${nameAnswer.name}" saved successfully!\n`));
-
-    } else if (menu.action === 'Set Active Server Profile') {
-      const activeChoices = Object.keys(config.servers);
-      if (activeChoices.length === 0) {
-        console.log(chalk.red('\nNo server profiles exist. Create one first.\n'));
-        return;
-      }
-
-      const activeAnswers = await inquirer.prompt([
-        {
-          type: 'list',
-          name: 'active',
-          message: 'Select active server profile:',
-          choices: activeChoices,
-          default: config.activeServer
-        }
-      ]);
-
-      config.activeServer = activeAnswers.active;
-      saveConfig(config);
-      console.log(chalk.green(`\n✔ Active server profile set to "${activeAnswers.active}"!\n`));
-
-    } else if (menu.action === 'View Configuration') {
-      console.log(chalk.bold('\n⚙️  Current configuration:'));
-      const scrubbed = JSON.parse(JSON.stringify(config));
-      if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = 'br_••••••••';
-      for (const s of Object.values(scrubbed.servers)) {
-        const srv = s as any;
-        if (srv.apiKey) srv.apiKey = 'br_••••••••';
-        if (srv.env?.BRAINROUTER_API_KEY) srv.env.BRAINROUTER_API_KEY = 'br_••••••••';
-      }
-      console.log(chalk.gray(JSON.stringify(scrubbed, null, 2)));
-      console.log();
-    }
-  });
-
-// `brainrouter agents` — list live + recent child sessions without entering the REPL.
-// Lets scripting integrations (tmux-resurrect, status bars, agent pickers) pull
-// the list without an interactive session. `--json` for machine-readable;
-// default is human-readable.
-program
-  .command('agents')
-  .description('List child agent sessions (workspace-scoped)')
-  .option('--json', 'Emit a single JSON line on stdout for scripting')
-  .option('-w, --workspace <path>', 'Workspace root override')
-  .action(async (options) => {
-    if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
-    const workspace = findWorkspaceRoot();
-    applyWorkspaceRoot(workspace.workspaceRoot);
-    // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('./orchestration/orchestrator.js');
-    reconcileStale(workspace.workspaceRoot);
-    const sessions = listSessions(workspace.workspaceRoot);
-    if (options.json) {
-      const payload = sessions.map((s) => ({
-        id: s.id,
-        role: s.role,
-        status: s.status,
-        label: s.label,
-        startedAt: s.startedAt,
-        updatedAt: s.updatedAt,
-        completedAt: s.completedAt,
-        prompt: s.prompt,
-        usage: s.usage,
-        parentSessionKey: s.parentSessionKey,
-        finalOutputPreview: s.finalOutput ? String(s.finalOutput).slice(0, 280) : undefined,
-      }));
-      process.stdout.write(JSON.stringify({ sessions: payload }) + '\n');
-      return;
-    }
-    if (sessions.length === 0) {
-      console.log(chalk.yellow('No child agents yet.'));
-      console.log(chalk.gray('Start one from the REPL with: /spawn <role> <prompt>'));
-      return;
-    }
-    console.log(chalk.bold(`\nChild Agent Sessions (${sessions.length}):`));
-    for (const s of sessions) {
-      const status = s.status === 'completed' ? chalk.green(s.status)
-        : s.status === 'failed' ? chalk.red(s.status)
-        : s.status === 'stale' ? chalk.yellow(s.status)
-        : s.status === 'closed' ? chalk.gray(s.status) : chalk.cyan(s.status);
-      console.log(`  ${status}  ${chalk.cyan(s.id)}  ${chalk.magenta(s.role)}  ${chalk.gray(s.startedAt)}`);
-      if (s.prompt) console.log(chalk.gray(`    ${s.prompt.replace(/\s+/g, ' ').slice(0, 100)}`));
-    }
-    console.log();
-  });
-
-program.parse(process.argv);
+}

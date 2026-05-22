@@ -84,10 +84,10 @@ Connections in the graph adjust dynamically based on usage (Hebbian learning: *"
 
 ## 🛠️ 3. Proposed Code Architecture
 
-We can implement this by introducing a new module `mcp/src/memory/pipeline/neural-spark.ts` and integrating it directly into `mcp/src/memory/recall.ts`.
+We can implement this by introducing a new module `brainrouter/src/memory/pipeline/neural-spark.ts` and integrating it directly into `brainrouter/src/memory/recall.ts`.
 
 ### Step A: Database Schema Extension
-Update `mcp/src/memory/store/sqlite.ts` to track edge weights and resting activation levels:
+Update `brainrouter/src/memory/store/sqlite.ts` to track edge weights and resting activation levels:
 ```sql
 -- Track dynamic relationship edge weights (dendritic spines)
 CREATE TABLE IF NOT EXISTS cognitive_connections (
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS cognitive_connections (
 ```
 
 ### Step B: The Spark Propagation Engine
-Create `mcp/src/memory/pipeline/neural-spark.ts`:
+Create `brainrouter/src/memory/pipeline/neural-spark.ts`:
 ```typescript
 import type { Database } from "better-sqlite3";
 

@@ -77,12 +77,16 @@ export function saveConfig(config: Config): void {
 }
 
 function createDefaultConfig(): Config {
-  // Derive path to default local mcp dist relative to this module
+  // Derive path to the default local MCP server dist relative to this module.
+  // After build: brainrouter-cli/dist/config/config.js → walk three levels up
+  // to the monorepo root, then into the sibling `brainrouter/` package
+  // (formerly `mcp/`) which is the MCP server.
   const defaultMcpPath = path.resolve(
     import.meta.dirname,
     '..',
     '..',
-    'mcp',
+    '..',
+    'brainrouter',
     'dist',
     'index.js'
   );

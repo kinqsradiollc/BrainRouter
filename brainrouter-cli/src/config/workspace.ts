@@ -58,14 +58,14 @@ function maybePromoteBrainRouterPackage(root: string): { root: string; reason: s
   const parent = path.dirname(root);
   const packageJsonPath = path.join(parent, 'package.json');
   if (
-    path.basename(root) === 'brainrouter' &&
+    path.basename(root) === 'brainrouter-cli' &&
     fs.existsSync(path.join(parent, 'AGENT.md')) &&
     fs.existsSync(packageJsonPath)
   ) {
     try {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
       const workspaces = Array.isArray(packageJson.workspaces) ? packageJson.workspaces : [];
-      if (workspaces.includes('brainrouter') || workspaces.includes('brainrouter/*')) {
+      if (workspaces.includes('brainrouter-cli') || workspaces.includes('brainrouter-cli/*')) {
         return { root: fs.realpathSync(parent), reason: 'parent monorepo workspace' };
       }
     } catch {

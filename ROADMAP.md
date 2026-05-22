@@ -28,7 +28,7 @@ Pre-release. No tagged versions yet; everything below is descriptive of work in 
 ## Current Status & Verification
 
 - **Manual Verification**: Run the late-phase integration test scenarios against a live MCP HTTP server and dev server.
-- **Security Check**: Evaluate whether to migrate the custom IP-based rate limiter in `mcp/src/index.ts` to `express-rate-limit` depending on production deployment security requirements.
+- **Security Check**: Evaluate whether to migrate the custom IP-based rate limiter in `brainrouter/src/index.ts` to `express-rate-limit` depending on production deployment security requirements.
 
 ---
 

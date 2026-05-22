@@ -87,7 +87,7 @@ Outputs over ~6k chars are written to a **working-memory canvas** (`memory_worki
 
 ## 🖥️ Brainrouter CLI
 
-The repo ships a terminal agent at [`brainrouter/`](brainrouter/) — a memory-native coding agent that uses the BrainRouter cognitive stack as a first-class tool. Type `/help` in the REPL for the full slash-command reference. See [BRAINROUTER.md](BRAINROUTER.md) for compaction, hookify rules, and memory consolidation details.
+The repo ships a terminal agent at [`brainrouter-cli/`](brainrouter-cli/) — a memory-native coding agent that uses the BrainRouter cognitive stack as a first-class tool. Type `/help` in the REPL for the full slash-command reference. See [BRAINROUTER.md](BRAINROUTER.md) for compaction, hookify rules, and memory consolidation details.
 
 ---
 
@@ -104,7 +104,7 @@ npm run build
 
 ### 2. Configure
 
-Create `mcp/.env` (template lives at [`mcp/.env.example`](mcp/.env.example)):
+Create `brainrouter/.env` (template lives at [`brainrouter/.env.example`](brainrouter/.env.example)):
 
 ```env
 BRAINROUTER_LLM_ENDPOINT="https://api.openai.com/v1/chat/completions"
@@ -116,7 +116,7 @@ BRAINROUTER_EMBEDDING_MODEL="text-embedding-3-small"
 BRAINROUTER_RERANKER_ENDPOINT="https://api.cohere.com/v1/rerank"
 BRAINROUTER_RERANKER_API_KEY="your-cohere-key"
 
-# Memory store path (relative is fine; defaults inside mcp/)
+# Memory store path (relative is fine; defaults inside the MCP server pkg)
 BRAINROUTER_MEMORY_DB="./memory.db"
 ```
 
@@ -127,14 +127,14 @@ The CLI auto-spawns the MCP server in stdio mode — no separate process needed.
 ```bash
 npm run cli                          # interactive REPL (from repo root)
 # or
-node brainrouter/dist/index.js run "summarize src/"   # one-shot non-interactive
+node brainrouter-cli/dist/index.js run "summarize src/"   # one-shot non-interactive
 ```
 
 ### 4. Run the Web Chat
 
 ```bash
 # Terminal A — start the MCP HTTP server
-cd mcp
+cd brainrouter
 npm run start:http                   # listens on http://localhost:3747
 
 # Terminal B — start the Next.js dashboard
@@ -143,27 +143,6 @@ npm run dev                          # http://localhost:3000
 ```
 
 Open `http://localhost:3000/chat` in a browser to talk to the agent through the same memory stack the CLI uses.
-
-### 5. (Optional) Register the MCP with another host
-
-To connect the MCP to an external MCP host (e.g. Cursor), add it to the host's config:
-
-```json
-{
-  "mcpServers": {
-    "brainrouter": {
-      "command": "node",
-      "args": ["/absolute/path/to/BrainRouter/mcp/dist/index.js"],
-      "env": {
-        "BRAINROUTER_LLM_ENDPOINT": "https://api.openai.com/v1/chat/completions",
-        "BRAINROUTER_LLM_API_KEY": "your-openai-key",
-        "BRAINROUTER_LLM_MODEL": "gpt-4o-mini",
-        "BRAINROUTER_MEMORY_DB": "./memory.db"
-      }
-    }
-  }
-}
-```
 
 ---
 

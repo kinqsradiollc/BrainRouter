@@ -1,38 +1,60 @@
 {
-  "name": "brainrouter",
+  "name": "@brainrouter/mcp-server",
   "version": "0.3.3",
-  "description": "BrainRouter Terminal Agent CLI — premium interactive terminal-based agent client.",
+  "description": "BrainRouter MCP Server — exposes skills, docs, and personas as MCP tools to minimize agent context size.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "brainrouter": "dist/index.js"
+    "brainrouter-mcp": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "skills",
+    "agents",
+    "references",
+    "docs",
+    "README.md"
+  ],
   "scripts": {
+    "prepack": "node scripts/prepack.mjs",
+    "postpack": "node scripts/postpack.mjs",
     "build": "tsc",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "dev:http": "tsx watch src/index.ts -- --http --port 3747",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test \"dist/**/*.test.js\""
+    "start:http": "node dist/index.js --http --port 3747",
+    "test": "vitest run",
+    "setup:mcp": "node scripts/setup-mcp.js",
+    "bench:longmemeval": "npx tsx benchmark/longmemeval-bench.ts fts",
+    "bench:longmemeval:hybrid": "npx tsx benchmark/longmemeval-bench.ts hybrid",
+    "bench:quality": "npx tsx benchmark/quality-eval.ts",
+    "bench:scale": "npx tsx benchmark/scale-eval.ts",
+    "bench:load": "npx tsx benchmark/load-100k-bench.ts",
+    "bench:real-embeddings": "npx tsx benchmark/real-embeddings-eval.ts",
+    "bench:e2e": "npx tsx benchmark/end-to-end-bench.ts",
+    "bench:download": "npx tsx benchmark/lib/dataset-loader.ts",
+    "bench:overnight": "npx tsx benchmark/run-overnight.ts",
+    "setup:admin": "node scripts/setup-admin.js"
   },
   "dependencies": {
-    "@brainrouter/sdk": "*",
-    "@brainrouter/types": "*",
     "@modelcontextprotocol/sdk": "^1.11.0",
-    "chalk": "^5.3.0",
-    "commander": "^12.1.0",
     "dotenv": "^16.4.5",
-    "inquirer": "^9.3.2",
-    "marked": "^12.0.1",
-    "marked-terminal": "^7.0.0",
-    "ora": "^8.0.1"
-  },
-  "devDependencies": {
-    "@types/inquirer": "^9.0.7",
-    "@types/marked": "^4.0.8",
-    "@types/node": "^22.0.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.5.4"
+    "express": "^5.2.1",
+    "glob": "^11.0.0",
+    "gray-matter": "^4.0.3",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^3.22.4",
+    "@brainrouter/types": "*"
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "@xenova/transformers": "^2.17.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
   }
 }

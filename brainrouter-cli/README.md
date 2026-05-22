@@ -96,7 +96,7 @@ Within the chat session, type `/` to access commands:
 
 ### Skill-driven workflows
 
-The CLI ships with a thin slash → skill mapping (see `brainrouter/src/skillRunner.ts`). Slash commands do **not** carry monolithic hard-coded prompts; they delegate to the SKILL.md authored under `skills/`. This means improving a workflow is a documentation edit, not a code change. Add a new mapping in `SLASH_TO_SKILL` to expose a new slash command, or use `/skill <name>` to invoke any skill ad-hoc.
+The CLI ships with a thin slash → skill mapping (see `brainrouter-cli/src/prompt/skillRunner.ts`). Slash commands do **not** carry monolithic hard-coded prompts; they delegate to the SKILL.md authored under `skills/`. This means improving a workflow is a documentation edit, not a code change. Add a new mapping in `SLASH_TO_SKILL` to expose a new slash command, or use `/skill <name>` to invoke any skill ad-hoc.
 
 #### How the skill catalogue is discovered
 
@@ -113,12 +113,12 @@ The CLI resolves a skill body in this order:
 
 The `@brainrouter/mcp-server` package ships with the full BrainRouter skill catalogue baked in, so a user who only runs `npm install @brainrouter/mcp-server brainrouter` in their own workspace gets all 70+ canonical skills out of the box — no monorepo checkout required.
 
-This is done via two lifecycle scripts in `mcp/scripts/`:
+This is done via two lifecycle scripts in `brainrouter/scripts/`:
 
 - `prepack.mjs` — runs before `npm pack`/`npm publish`. Copies `skills/`, `agents/`, `references/`, and `docs/` from the monorepo root into the package directory and records what it copied in `.bundled-content.json`.
 - `postpack.mjs` — runs after pack. Reads the marker and removes exactly what `prepack` added, leaving the working tree clean.
 
-The MCP server's resolver ([mcp/src/resolver.ts](../mcp/src/resolver.ts)) prefers the package's own `skills/` when present (installed-package mode) and otherwise walks up to the monorepo root (development mode). Both layouts work identically from the CLI's point of view.
+The MCP server's resolver ([brainrouter/src/resolver.ts](../brainrouter/src/resolver.ts)) prefers the package's own `skills/` when present (installed-package mode) and otherwise walks up to the monorepo root (development mode). Both layouts work identically from the CLI's point of view.
 
 ### Durable workflow artifacts (one folder per workflow)
 

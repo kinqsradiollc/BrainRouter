@@ -25,13 +25,15 @@ function findRepoRoot(start: string): string {
     }
 
     // 2. Monorepo mode: a parent directory that contains skills/ or docs/ but
-    //    where the current "mcp" subfolder is the package install.
+    //    where the current "brainrouter" subfolder is the MCP server package
+    //    install (formerly named "mcp/"). The CLI lives at the sibling
+    //    "brainrouter-cli/" so we don't promote from there.
     if (
       existsSync(join(current, 'skills')) ||
       existsSync(join(current, 'docs')) ||
       existsSync(join(current, 'package.json'))
     ) {
-      if (basename(current) === 'mcp') {
+      if (basename(current) === 'brainrouter') {
         return dirname(current);
       }
       return current;

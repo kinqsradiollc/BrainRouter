@@ -20,7 +20,7 @@
 - **`skills/`**: Universal skill workflows and markdown definitions (organized by category: `agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`).
 - **`brainrouter-cli/`**: Node.js/TypeScript CLI interface for working with local session memories and skills.
 - **`dashboard/`**: React/Vite/Next.js dashboard for visualizing cognitive graphs, recall histories, and memory states.
-- **`mcp/`**: Model Context Protocol (MCP) server implementations and tool definitions.
+- **`brainrouter/`**: Model Context Protocol (MCP) server implementations and tool definitions — the BrainRouter core (memory engine + tool registry).
 - **`packages/`**: Shared core utility libraries and modules.
 - **`openSrc/`** *(Conditional)*: Optional repository of open-source projects. Check this directory for reference patterns when creating new modules or refactoring existing ones.
 
