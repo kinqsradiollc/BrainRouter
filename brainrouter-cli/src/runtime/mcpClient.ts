@@ -89,16 +89,17 @@ export class McpClientWrapper {
       }
 
       // Spawn the MCP child with cwd set to the MCP package directory if we
-      // can find it from the first arg (typically `node /path/to/mcp/dist/index.js`).
-      // The child uses `import "dotenv/config"` which resolves `.env`
-      // relative to `process.cwd()` — defaulting to the user's launch dir
-      // meant `mcp/.env` was never read. With cwd hinted, dotenv finds the
-      // canonical config without the user having to copy/symlink files.
+      // can find it from the first arg (typically
+      // `node /path/to/BrainRouter/brainrouter/dist/index.js`). The child
+      // uses `import "dotenv/config"` which resolves `.env` relative to
+      // `process.cwd()` — defaulting to the user's launch dir meant
+      // `brainrouter/.env` was never read. With cwd hinted, dotenv finds
+      // the canonical config without the user having to copy/symlink files.
       const firstArg = serverConfig.args?.[0];
       let childCwd: string | undefined;
       if (firstArg && firstArg.endsWith('.js')) {
         try {
-          // mcp/dist/index.js → mcp/
+          // brainrouter/dist/index.js → brainrouter/
           const distDir = path.dirname(firstArg);
           const pkgRoot = path.resolve(distDir, '..');
           // Sanity: only set if the directory contains a `.env` or `package.json`

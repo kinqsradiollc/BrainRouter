@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
  * Returns a guaranteed new incremental output directory path for the current date.
  * Creates the directory if it doesn't exist.
- * Format: `mcp/benchmark/results/YYYY-MM-DD/{incremental_index}`
+ * Format: `brainrouter/benchmark/results/YYYY-MM-DD/{incremental_index}`
  */
 export function getIncrementalOutputDir(): string {
   if (process.env.BENCH_OUT_DIR) {

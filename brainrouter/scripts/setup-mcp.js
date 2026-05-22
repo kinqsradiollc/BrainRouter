@@ -43,7 +43,7 @@ const brainRouterDistPath = path.resolve(__dirname, '..', 'dist', 'index.js');
 
 if (!fs.existsSync(brainRouterDistPath)) {
   console.warn(`⚠️  Build not found at: ${brainRouterDistPath}`);
-  console.warn(`   Run 'npm run build' inside the mcp/ directory first.\n`);
+  console.warn(`   Run 'npm run build' inside the brainrouter/ directory first.\n`);
 }
 
 // ─── Output directory inside the project ─────────────────────────────────────
