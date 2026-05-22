@@ -99,36 +99,32 @@ function isWorkspaceId(value: string): boolean {
 }
 
 export function getWorkingMemoryDir(workspacePath: string | undefined, userId: string, sessionKey: string): string {
-  let root = workspacePath ?? "";
-  let isWritable = false;
-
-  if (root.trim() && !isWorkspaceId(root)) {
-    if (!isForeignAbsolutePath(root)) {
-      try {
-        root = path.resolve(root);
-        const targetDir = path.join(root, ".brainrouter", "work", pathSegment(userId));
-        fs.mkdirSync(targetDir, { recursive: true });
-        fs.accessSync(targetDir, fs.constants.W_OK);
-        isWritable = true;
-      } catch {
-        isWritable = false;
-      }
-    }
+  // Working memory is per-session ephemeral state. It lives ENTIRELY under
+  // the user home — never inside the project tree — so the workspace stays
+  // clean and so two clones of the same repo don't share state.
+  //
+  // Why not write to `<workspace>/.brainrouter/work/`? Two reasons:
+  //   1. Pollution: the brainrouter CLI's migration archives anything that
+  //      isn't `<workspace>/.brainrouter/workflows/` into
+  //      `<workspace>/.brainrouter.migrated/` on each launch — so the
+  //      MCP would re-create the dir, the CLI would re-archive it, and the
+  //      user would see both folders reappear on every session.
+  //   2. Misuse: a non-absolute `workspacePath` like "global" (a skill
+  //      scope token) would resolve relative to the MCP process cwd and
+  //      build a phantom `<cwd>/global/.brainrouter/work/` that has
+  //      nothing to do with any real workspace.
+  //
+  // Layout: ~/.brainrouter/work/<userId>/<workspaceId>/<sessionKey>/
+  const root = path.join(os.homedir(), ".brainrouter");
+  const workspaceId = getWorkspaceId(workspacePath);
+  const targetDir = path.join(root, "work", pathSegment(userId), workspaceId);
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+  } catch {
+    // Best-effort. If the home dir is unwritable the next write call will
+    // surface the error with a useful path.
   }
-
-  if (!isWritable) {
-    root = path.join(os.homedir(), ".brainrouter");
-    const workspaceId = getWorkspaceId(workspacePath);
-    try {
-      const targetDir = path.join(root, "work", pathSegment(userId), workspaceId);
-      fs.mkdirSync(targetDir, { recursive: true });
-    } catch {
-      // Ignore directory creation error in fallback if it already exists or system fails
-    }
-    return path.join(root, "work", pathSegment(userId), workspaceId, pathSegment(sessionKey));
-  }
-
-  return path.join(root, ".brainrouter", "work", pathSegment(userId), pathSegment(sessionKey));
+  return path.join(targetDir, pathSegment(sessionKey));
 }
 
 function refPathFor(workDir: string, nodeId: string): string {
@@ -174,8 +170,11 @@ export function offloadWorkingPayload(input: WorkingOffloadInput): WorkingOffloa
   fs.mkdirSync(refsDir, { recursive: true });
 
   const nodeId = `w${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const relativeRefPath = path.join(".brainrouter", "work", pathSegment(input.userId), pathSegment(input.sessionKey), "refs", `${nodeId}.md`);
   const absoluteRefPath = refPathFor(workDir, nodeId);
+  // Stored as a display-friendly path relative to the user home (where
+  // workDir now always lives). We don't reconstruct the workspace prefix
+  // here because the working-memory tree no longer touches the workspace.
+  const relativeRefPath = path.relative(os.homedir(), absoluteRefPath);
   const observedAt = new Date().toISOString();
   const tokenEstimate = estimateTokens(input.payload);
   const estimatedTokens = input.estimatedTokens ?? tokenEstimate;

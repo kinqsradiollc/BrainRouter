@@ -32,28 +32,28 @@ When you are assigned a development task in this codebase, look up the scenario 
 
 ### 🔍 Scenario: Planning & Architecture
 *Focus: Clarifying ambiguous requirements, creating specs, and defining tasks.*
-- **[planning-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/planning-skill/SKILL.md)**: Standard planning mode, tracking progress in `task.md`.
-- **[spec-driven-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `docs/specs/` before writing core code.
-- **[adr-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `docs/decisions/` for major database or routing decisions.
+- **[planning-skill](skills/agent/planning-skill/SKILL.md)**: Standard planning mode, tracking progress in `task.md`.
+- **[spec-driven-skill](skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `docs/specs/` before writing core code.
+- **[adr-skill](skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `docs/decisions/` for major database or routing decisions.
 
 ### 💻 Scenario: Code Implementation & Cleanups
 *Focus: Writing robust code, refactoring layers, and codebase cleanup.*
-- **[incremental-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/lifecycle/incremental-skill/SKILL.md)**: Implementing features in small, vertical micro-slices.
-- **[code-structure-cleanup](file:///Users/anhdang/Documents/Github/BrainRouter/skills/codebase/code-structure-cleanup/SKILL.md)**: Cleaning structural entropy, removing dead code, and standardizing service layers.
-- **[code-simplification](file:///Users/anhdang/Documents/Github/BrainRouter/skills/codebase/code-simplification/SKILL.md)**: Refactoring complex routines for high comprehension speed.
-- **[conventions-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/codebase/conventions-skill/SKILL.md)**: Checking import order, type annotations, and naming style.
+- **[incremental-skill](skills/lifecycle/incremental-skill/SKILL.md)**: Implementing features in small, vertical micro-slices.
+- **[code-structure-cleanup](skills/codebase/code-structure-cleanup/SKILL.md)**: Cleaning structural entropy, removing dead code, and standardizing service layers.
+- **[code-simplification](skills/codebase/code-simplification/SKILL.md)**: Refactoring complex routines for high comprehension speed.
+- **[conventions-skill](skills/codebase/conventions-skill/SKILL.md)**: Checking import order, type annotations, and naming style.
 
 ### 🧪 Scenario: Testing, Debugging & QA
 *Focus: Running test runners, browser test cases, and error recovery.*
-- **[debugging-and-error-recovery](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/debugging-and-error-recovery/SKILL.md)**: Systematic Reproduce → Localize → Fix → Guard debugging.
-- **[testing-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/api/testing-skill/SKILL.md)**: Writing Vitest/Jest unit and integration tests.
-- **[browser-testing-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/qa/browser-testing-skill/SKILL.md)**: Inspecting and testing dashboard UI.
+- **[debugging-and-error-recovery](skills/agent/debugging-and-error-recovery/SKILL.md)**: Systematic Reproduce → Localize → Fix → Guard debugging.
+- **[testing-skill](skills/api/testing-skill/SKILL.md)**: Writing Vitest/Jest unit and integration tests.
+- **[browser-testing-skill](skills/qa/browser-testing-skill/SKILL.md)**: Inspecting and testing dashboard UI.
 
 ### 🚀 Scenario: Shipping & Handovers
 *Focus: Creating changelogs, preparing rollouts, and documenting changes.*
-- **[shipping-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/lifecycle/shipping-skill/SKILL.md)**: Pre-flight checklist before finishing tasks.
-- **[changelog-generator](file:///Users/anhdang/Documents/Github/BrainRouter/skills/lifecycle/changelog-generator/SKILL.md)**: Compiling structured release changelogs.
-- **[handover-skill](file:///Users/anhdang/Documents/Github/BrainRouter/skills/agent/handover-skill/SKILL.md)**: Summarizing accomplishments in `walkthrough.md`.
+- **[shipping-skill](skills/lifecycle/shipping-skill/SKILL.md)**: Pre-flight checklist before finishing tasks.
+- **[changelog-generator](skills/lifecycle/changelog-generator/SKILL.md)**: Compiling structured release changelogs.
+- **[handover-skill](skills/agent/handover-skill/SKILL.md)**: Summarizing accomplishments in `walkthrough.md`.
 
 ---
 
