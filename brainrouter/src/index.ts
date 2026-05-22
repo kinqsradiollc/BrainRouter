@@ -6,11 +6,11 @@ import url from 'node:url';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, saveConfig } from './config.js';
-import { McpClientWrapper } from './mcpClient.js';
-import { Agent } from './agent.js';
-import { startREPL } from './repl.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from './workspace.js';
+import { loadConfig, saveConfig } from './config/config.js';
+import { McpClientWrapper } from './runtime/mcpClient.js';
+import { Agent } from './agent/agent.js';
+import { startREPL } from './cli/repl.js';
+import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
 
 /**
  * Load `mcp/.env` (the canonical config home for BRAINROUTER_LLM_*, embedding,
@@ -77,7 +77,7 @@ const program = new Command();
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.2.0');
+  .version('0.3.3');
 
 // Chat Command (default)
 program
@@ -486,7 +486,7 @@ program
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('./orchestrator.js');
+    const { reconcileStale, listSessions } = await import('./orchestration/orchestrator.js');
     reconcileStale(workspace.workspaceRoot);
     const sessions = listSessions(workspace.workspaceRoot);
     if (options.json) {

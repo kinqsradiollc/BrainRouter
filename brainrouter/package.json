@@ -1,6 +1,6 @@
 {
   "name": "brainrouter",
-  "version": "0.2.0",
+  "version": "0.3.3",
   "description": "BrainRouter Terminal Agent CLI — premium interactive terminal-based agent client.",
   "type": "module",
   "main": "dist/index.js",

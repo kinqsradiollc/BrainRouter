@@ -1,6 +1,6 @@
 {
   "name": "@brainrouter/mcp-server",
-  "version": "0.2.0",
+  "version": "0.3.3",
   "description": "BrainRouter MCP Server — exposes skills, docs, and personas as MCP tools to minimize agent context size.",
   "type": "module",
   "main": "dist/index.js",
