@@ -10,7 +10,7 @@ Conventions:
 - **Update CHANGELOG.md** under `[0.3.6] - Unreleased` for every PR that changes user-visible behavior.
 - **Update this file** — tick the boxes as you go. The next agent reads ticked state to know what's done.
 
-**Status:** Item 0 merged. Item 1 (goal-leakage) is in PR review — see the link at the bottom. **Item 2 / 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 still gated on Item 1.
+**Status:** Item 0 merged. Item 1 (goal-leakage) is in PR review — [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26). **Item 2 / 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 still gated on Item 1.
 
 ---
 
@@ -110,7 +110,7 @@ Depends on Item 1 (correct goal-scoping primitive). See [ROADMAP.md](ROADMAP.md)
 ## Build order (tick when merged)
 
 - [x] **Item 0** — JSON-repair hotfix — merged in [PR #22](https://github.com/kinqsradiollc/BrainRouter/pull/22) on 2026-05-23
-- [ ] **Item 1** — Goal-leakage fix *(in PR review — see top of file for link)*
+- [ ] **Item 1** — Goal-leakage fix *(in PR review — [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26))*
 - [ ] **Item 2** — CLI shell redesign
 - [ ] **Item 2b** — `ask_user_choice` tool
 - [ ] **Item 2c** — Reasoning-step capture
