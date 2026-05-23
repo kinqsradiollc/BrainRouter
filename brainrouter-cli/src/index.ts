@@ -244,7 +244,10 @@ program
     }
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
-    console.log(chalk.gray(`Workspace: ${workspace.workspaceRoot} (${workspace.reason})`));
+    // Workspace path + detection reason intentionally NOT printed here — the
+    // boxed startup banner shows the workspace row, and `/workspace` exposes
+    // the launch CWD + detection reason on demand. Keeping a duplicate
+    // stale-chrome line above the banner undermines the banner-first design.
 
     const config = loadConfig();
     const profileName = options.profile || config.activeServer;
@@ -277,11 +280,14 @@ program
     }
 
     const mcpClient = new McpClientWrapper();
-    console.log(chalk.gray(`Connecting to MCP server profile "${profileName}"...`));
-
+    // "Connecting..." / "Successfully connected!" status lines intentionally
+    // dropped — they printed for the ~1-2s of connect AND scrolled the
+    // banner up. On success the banner's `mcp ... online` row IS the
+    // success signal; on failure the catch-block error + the post-banner
+    // OFFLINE MODE warning in startREPL together cover both diagnosis and
+    // remediation.
     try {
       await mcpClient.connect(serverConfig, llm);
-      console.log(chalk.green('Successfully connected to BrainRouter MCP Server!'));
     } catch (err: any) {
       // Degraded "offline mode": the MCP server is the cognitive memory layer
       // (recall, skills, capture, citations) — losing it is painful but not
@@ -295,11 +301,8 @@ program
         console.error(chalk.gray('--strict-mcp set; exiting.'));
         process.exit(1);
       }
-      console.warn(chalk.yellow(
-        '⚠️  Continuing in OFFLINE MODE — memory recall, skills, and capture are disabled.\n' +
-        '    Local tools (file edits, shell, web fetch, spawn_agent) remain available.\n' +
-        '    Start the MCP server and restart the CLI to restore full functionality.\n',
-      ));
+      // The banner-adjacent OFFLINE MODE warning in startREPL covers the
+      // remediation hint. No second warning here.
     }
 
     const agent = new Agent(mcpClient, llm, {
