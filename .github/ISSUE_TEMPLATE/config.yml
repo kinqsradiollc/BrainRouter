@@ -1,0 +1,15 @@
+# Disable the "Open a blank issue" escape hatch so every issue lands on a
+# template — bug or feature. If you genuinely have a question that fits
+# neither, the discussion link below catches it.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Documentation
+    url: https://github.com/kinqsradiollc/BrainRouter/tree/main/brainrouter-docs
+    about: Start here — configuration, memory engine, retrieval pipeline.
+  - name: Roadmap
+    url: https://github.com/kinqsradiollc/BrainRouter/blob/main/ROADMAP.md
+    about: See what's planned for the next release before opening a feature request.
+  - name: Changelog
+    url: https://github.com/kinqsradiollc/BrainRouter/blob/main/CHANGELOG.md
+    about: Verify whether your bug was already fixed in a newer release.

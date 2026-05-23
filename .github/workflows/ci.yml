@@ -1,0 +1,88 @@
+name: CI
+
+# Runs on every push to main and every pull request targeting any branch.
+# The PR trigger is the gate that protects main from broken merges; the
+# push-to-main trigger catches anything that slipped through (force-pushes,
+# bypass-protected admin merges, etc.).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs on the same PR when a new commit arrives — saves
+# CI minutes and means the "latest" run is the one you care about. The
+# main-branch ref is excluded so historical commits keep their green tick.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Default to least-privilege; individual jobs can widen if needed. Read is
+# enough for build + test workflows that don't push artifacts.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One failing Node version shouldn't cancel the other — we want to
+      # see if a regression is version-specific or universal.
+      fail-fast: false
+      matrix:
+        node-version: ['20.x', '22.x']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        # `npm ci` is the deterministic install: refuses to run if
+        # package-lock.json is out of sync, never mutates it. Faster than
+        # `npm install` in CI because it skips dep resolution.
+        run: npm ci
+
+      - name: Build all workspaces
+        # Root `build` fans out to every workspace via `npm run build -ws
+        # --if-present`. Packages without a build script (none currently,
+        # but covered) are skipped.
+        run: npm run build
+
+      - name: Run tests
+        # Root `test` fans out via `-ws --if-present`. brainrouter uses
+        # vitest, brainrouter-cli rebuilds + runs node --test, dashboard
+        # has no test script and is skipped.
+        run: npm run test
+        env:
+          # Hide the `ExperimentalWarning: SQLite is an experimental
+          # feature` noise from the CI log. Mirrors the planned 0.3.5
+          # CLI shell redesign (see ROADMAP).
+          NODE_NO_WARNINGS: '1'
+
+  dashboard-build:
+    name: Dashboard (Next.js production build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build dashboard
+        # The dashboard's production build catches React/Next-specific
+        # issues (server/client boundary, RSC, missing 'use client', stale
+        # generateStaticParams) that plain tsc won't surface. Even with
+        # no test suite, a successful build is meaningful coverage.
+        run: npm run build --workspace=dashboard
