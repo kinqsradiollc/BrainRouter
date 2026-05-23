@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
 import { askYesNo } from '../cli/cliPrompt.js';
@@ -473,7 +474,15 @@ export class Agent {
     this.llmConfig = llmConfig;
     this.workspaceRoot = options.workspaceRoot;
     this.launchCwd = options.launchCwd;
-    this.sessionKey = options.sessionKey ?? `brainrouter-cli:${this.workspaceRoot}`;
+    // Each CLI process gets a fresh sessionKey by default. The previous
+    // workspace-derived fallback (`brainrouter-cli:<workspaceRoot>`) made
+    // MCP's `memory_resolve_session` fall into its workspace-cache branch
+    // and return the same UUID for every CLI in the workspace, so two
+    // concurrent CLIs shared one goal/plan/working bucket. A randomUUID
+    // here is accepted by MCP's `isUniqueId` and echoed back as-is, so
+    // each CLI is its own session for local state. The memory DB is
+    // userId-scoped, so cross-CLI recall continuity is unaffected.
+    this.sessionKey = options.sessionKey ?? randomUUID();
     this.roleOverlay = options.roleOverlay;
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
