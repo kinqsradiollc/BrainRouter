@@ -1,0 +1,108 @@
+name: Bug report
+description: Something in BrainRouter is broken or behaving unexpectedly.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. Please fill in the sections below so
+        we can reproduce it quickly. If you can include a minimal repro
+        (a `/goal`, a memory query, or a CLI command sequence) you'll save
+        us a round-trip.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences. What did you expect to happen, and what happened instead?
+      placeholder: "Goals from old sessions leak into new sessions — opening a new CLI shows the previous session's goal as 'already active'."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Numbered steps. The shorter the better.
+      placeholder: |
+        1. Open `brainrouter` REPL.
+        2. `/goal explore the codebase`
+        3. Exit the REPL.
+        4. Open a fresh `brainrouter` REPL in the same workspace.
+        5. `/goal start something new`
+        6. ⚠️  See "A goal is already active" pointing at the old goal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: "New CLI session should start with no active goal."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include any error messages, stack traces, or unexpected logs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface is affected?
+      multiple: true
+      options:
+        - brainrouter-cli
+        - brainrouter MCP server
+        - brainrouter-dashboard
+        - packages/types | sdk | hooks
+        - Docs / README / ROADMAP
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: BrainRouter version
+      description: Output of `brainrouter --version` (or commit SHA if running from source).
+      placeholder: "0.3.5 / 24c7ca6"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: "v22.16.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "macOS 15.2 (Darwin 25.2.0)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Relevant environment / config
+      description: |
+        Which LLM backend, which transport (stdio / HTTP), which optional
+        retrieval stages enabled (embeddings / reranker / judge).
+        Redact any secrets.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Screenshots, links to related PRs / discussions, anything else.
