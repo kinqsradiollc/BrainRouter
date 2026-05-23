@@ -16,14 +16,14 @@ Conventions:
 
 Surfaced during the 0.3.5 → 0.3.6 handoff code review. Already on `main` as part of PR #7. Silently corrupts any cognitive memory record whose extracted JSON contains Windows-style paths or Unix paths starting with `\b`/`\f`/`\n`/`\r`/`\t`.
 
-- [ ] Reproduce the bug locally with the four-case test in [`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](brainrouter/src/memory/pipeline/cognitive-extractor.ts) `parseJsonWithEscapeRepair`. Cases:
+- [x] Reproduce the bug locally with the four-case test in [`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](brainrouter/src/memory/pipeline/cognitive-extractor.ts) `parseJsonWithEscapeRepair`. Cases:
   - `C:\users\file` → currently parses with a form-feed character mid-path
   - `C:\bin\node.exe` → currently parses with backspace + newline
   - `/repos/\target/release` → currently parses with a tab
   - `\release\foo.txt` → currently parses with CR + form-feed
-- [ ] Fix the regex at [cognitive-extractor.ts:231](brainrouter/src/memory/pipeline/cognitive-extractor.ts:231). Replace the lookahead `(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})` with `(?!["\\\/])` (drop bfnrt and u — when we're in the repair branch, JSON was already malformed; doubling ALL ambiguous backslashes is safer than silently corrupting paths).
-- [ ] Add a focused test fixture: a JSON payload with the four pathological path inputs above, plus one legitimate-escape input (`"line1\nline2"`) to confirm the conservative path still works. Lives at `brainrouter/src/__tests__/cognitive-extractor.test.ts` (new file).
-- [ ] Document the behavior change in CHANGELOG.md under "Fixed".
+- [x] Fix the regex at [cognitive-extractor.ts:231](brainrouter/src/memory/pipeline/cognitive-extractor.ts:231). Replace the lookahead `(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})` with `(?!["\\\/])` (drop bfnrt and u — when we're in the repair branch, JSON was already malformed; doubling ALL ambiguous backslashes is safer than silently corrupting paths).
+- [x] Add a focused test fixture: a JSON payload with the four pathological path inputs above, plus one legitimate-escape input (`"line1\nline2"`) to confirm the conservative path still works. Lives at `brainrouter/src/__tests__/cognitive-extractor.test.ts` (new file).
+- [x] Document the behavior change in CHANGELOG.md under "Fixed".
 
 **Acceptance:** all four path inputs round-trip with byte-identical bytes; legitimate `\n` in content becomes literal `\n` (two chars) in repair-branch output but newline (one char) on the happy-path. Tests cover both.
 
