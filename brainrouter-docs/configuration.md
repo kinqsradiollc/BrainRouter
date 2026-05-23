@@ -10,7 +10,7 @@ concerns. They each get their own `.env`:
 
 | File | Owns |
 | --- | --- |
-| **`brainrouter/.env`** | MCP server: cognitive-extraction LLM, embeddings, reranker, memory engine knobs, server auth, JWT, admin seed. |
+| **`brainrouter/.env`** | MCP server: shared LLM, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
 | **`brainrouter-cli/.env`** | CLI agent: chat LLM, tool loop limits, sandbox, web search backend, trace log, workspace override. |
 
 Templates: [`brainrouter/.env.example`](../brainrouter/.env.example) and
@@ -204,8 +204,9 @@ response.
 
 ## Reranker provider
 
-A cross-encoder reranker rescores the top-K System-1 candidates before
-graph expansion. Optional but recommended for noisy stores.
+A cross-encoder reranker rescores the top-K candidates before the final
+gate. Optional but recommended for noisy stores. The reranker only
+**reorders** — it never filters; that's the judge's job (next section).
 
 ### Cohere
 
@@ -227,6 +228,66 @@ BRAINROUTER_RERANKER_TOP_N=20
 
 Custom rerankers must accept `POST { model, query, documents: string[], top_n }`
 and return `{ results: [{ index, relevance_score }] }`.
+
+---
+
+## Relevance judge
+
+The final retrieval stage. An LLM grades each rerank finalist with a
+binary verdict (`relevant: true | false`) plus a short reason, and any
+candidate the judge rejects is dropped before the memories ever reach the
+agent's context window. Off by default — opt in with the `_ENABLED` flag.
+
+When to enable it:
+
+- Your memory store has grown noisy and false-positive recalls keep
+  surfacing memories that share vocabulary with the query but aren't
+  actually about the same subject.
+- Accuracy matters more than ~500ms-1s of extra recall latency.
+
+How it works:
+
+1. The reranker hands the judge its top-K candidates (default 10).
+2. The judge sends them in a **single batched LLM call** with the query
+   and returns one verdict per candidate.
+3. Rejected candidates are dropped. If the judge rejects everything, the
+   `<relevant-memories>` block is omitted entirely — an empty block is
+   misleading.
+4. If the judge call errors or times out, the reranker output passes
+   through unchanged. A flaky judge never breaks recall.
+
+Verdicts (with reasons) land in `recallExplanation.judgeVerdicts` so you
+can audit and tune the prompt without code changes.
+
+### Default (reuses BRAINROUTER_LLM_*)
+
+```env
+BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true
+# Everything else inherits from BRAINROUTER_LLM_* — endpoint, key, model.
+```
+
+### Dedicated fast model
+
+Use a cheaper model for judging so you don't pay GPT-4o prices on every
+recall:
+
+```env
+BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true
+BRAINROUTER_RELEVANCE_JUDGE_MODEL=gpt-4o-mini
+BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES=10
+BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS=15000
+```
+
+### Dedicated endpoint + key
+
+For a fully separate judging backend (e.g. a local Haiku replica):
+
+```env
+BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true
+BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT=http://localhost:1234/v1/chat/completions
+BRAINROUTER_RELEVANCE_JUDGE_API_KEY=lm-studio
+BRAINROUTER_RELEVANCE_JUDGE_MODEL=google/gemma-2-2b-it
+```
 
 ---
 
@@ -287,6 +348,17 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RERANKER_MODEL` | _(provider default)_ | e.g. `rerank-english-v3.0`. |
 | `BRAINROUTER_RERANKER_TOP_N` | `10` | Top-K to rerank. |
 
+### Relevance judge — `brainrouter/.env`
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `BRAINROUTER_RELEVANCE_JUDGE_ENABLED` | `false` | Master flag. When false the judge stage is skipped entirely. |
+| `BRAINROUTER_RELEVANCE_JUDGE_API_KEY` | inherits `BRAINROUTER_LLM_API_KEY` | Judge credential. |
+| `BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT` | inherits `BRAINROUTER_LLM_ENDPOINT` | OpenAI-compatible chat-completions endpoint. |
+| `BRAINROUTER_RELEVANCE_JUDGE_MODEL` | inherits `BRAINROUTER_LLM_MODEL` | Model id. A fast/cheap model is usually right. |
+| `BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES` | `10` | Max candidates batched into a single judge call. |
+| `BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS` | `15000` | Per-call timeout. On timeout the reranker output passes through unchanged. |
+
 ### Memory engine — `brainrouter/.env`
 
 | Var | Default | Purpose |
@@ -301,7 +373,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_FOCUS_TRIGGER_N` | `10` | New records before scene distillation fires. |
 | `BRAINROUTER_IDENTITY_TRIGGER_N` | `50` | New records before identity distillation fires. |
 | `BRAINROUTER_MAX_FOCUS_SCENES` | `20` | Cap on active scenes (oldest evicted). |
-| `BRAINROUTER_PERSONA_CACHE_TTL_MS` | `3600000` (1h) | L3 persona cache lifetime. |
+| `BRAINROUTER_PERSONA_CACHE_TTL_MS` | `3600000` (1h) | Persona-synthesis in-memory cache lifetime. |
 | `BRAINROUTER_EXTRACTION_SWEEP_INTERVAL_MS` | `300000` (5m) | Background extractor sweep. Floored at 30s. |
 | `BRAINROUTER_EXTRACTION_SWEEP_MIN_AGE_MS` | `120000` | Minimum sensory-row age before sweep. |
 | `BRAINROUTER_EXTRACTION_MAX_FAILURES` | `5` | Per-user failure budget before background pause. |
