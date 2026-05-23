@@ -74,9 +74,9 @@ npm run build
 
 BrainRouter ships **two independent processes** with two separate configurations.
 The MCP server runs the cognitive engine (extraction, embeddings, optional
-reranker). The CLI runs the terminal agent you actually chat with. They can
-use the same model for both, or different ones — extraction wants something
-cheap, chat wants something smart.
+reranker + relevance judge). The CLI runs the terminal agent you actually
+chat with. They can use the same model for both, or different ones —
+extraction wants something cheap, chat wants something smart.
 
 #### 1. MCP server — `brainrouter/.env`
 
@@ -85,7 +85,7 @@ Copy `brainrouter/.env.example` to `brainrouter/.env` and fill in at minimum:
 ```bash
 # Cognitive extraction / synthesis LLM (any OpenAI-compatible endpoint:
 # OpenAI, OpenRouter, LM Studio, Ollama, vLLM…)
-BRAINROUTER_LLM_API_KEY=sk-...
+BRAINROUTER_LLM_API_KEY=
 BRAINROUTER_LLM_ENDPOINT=https://api.openai.com/v1/chat/completions
 BRAINROUTER_LLM_MODEL=gpt-4o-mini
 
@@ -94,14 +94,16 @@ BRAINROUTER_EMBEDDING_ENDPOINT=https://api.openai.com/v1/embeddings
 BRAINROUTER_EMBEDDING_MODEL=text-embedding-3-small
 BRAINROUTER_EMBEDDING_DIMENSIONS=1536
 
-# Server auth — change before exposing the server
-BRAINROUTER_ADMIN_PASSWORD=change_me_before_use
-BRAINROUTER_JWT_SECRET=replace_with_a_long_random_secret  # `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+# Server auth — leave blank to seed on first boot. Generate a JWT secret with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+BRAINROUTER_ADMIN_PASSWORD=
+BRAINROUTER_JWT_SECRET=
 ```
 
-Optional advanced knobs (split extraction/synthesis models, reranker,
-pre-warming, focus-scene triggers, sandbox) are documented inline in
-[`brainrouter/.env.example`](brainrouter/.env.example).
+Optional advanced knobs are documented inline in
+[`brainrouter/.env.example`](brainrouter/.env.example), grouped into five
+numbered sections: LLM, retrieval pipeline (embeddings → reranker → judge),
+memory engine, skill pre-warming, server auth.
 
 #### 2. CLI agent — `~/.config/brainrouter/config.json`
 
