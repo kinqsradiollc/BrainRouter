@@ -10,7 +10,7 @@ Conventions:
 - **Update CHANGELOG.md** under `[0.3.6] - Unreleased` for every PR that changes user-visible behavior.
 - **Update this file** — tick the boxes as you go. The next agent reads ticked state to know what's done.
 
-**Status:** Item 0 merged. Item 1 (goal-leakage) is in PR review — [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26). **Item 2 / 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 still gated on Item 1.
+**Status:** Items 0 and 1 merged. **Item 2 / 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 (multi-workflow) is now unblocked but should still land last per the build order.
 
 ---
 
@@ -34,7 +34,7 @@ Surfaced during the 0.3.5 → 0.3.6 handoff code review. Was on `main` as part o
 
 ---
 
-## Item 1 — Goal-leakage fix (in PR review)
+## Item 1 — Goal-leakage fix (✅ MERGED — PR #26)
 
 **Reported bug:** opening a new CLI session in the same workspace shows the previous session's goal as "already active." See [ROADMAP.md](ROADMAP.md) "In-flight for 0.3.6 → 1. Goal-leakage across sessions" for the full diagnosis.
 
@@ -125,7 +125,7 @@ Depends on Item 1 (correct goal-scoping primitive). See [ROADMAP.md](ROADMAP.md)
 ## Build order (tick when merged)
 
 - [x] **Item 0** — JSON-repair hotfix — merged in [PR #22](https://github.com/kinqsradiollc/BrainRouter/pull/22) on 2026-05-23
-- [ ] **Item 1** — Goal-leakage fix *(in PR review — [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26))*
+- [x] **Item 1** — Goal-leakage fix — merged in [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26) on 2026-05-23
 - [ ] **Item 2** — CLI shell redesign
 - [ ] **Item 2b** — `ask_user_choice` tool
 - [ ] **Item 2c** — Reasoning-step capture
@@ -148,4 +148,4 @@ These came out of the 0.3.5 → 0.3.6 handoff code review. Each is genuinely sma
 
 ---
 
-*Last updated: 2026-05-23 (Item 1 PR #26 expanded — primary fix is sessionKey-per-process; goalStore legacy-fallback hardening kept as defense-in-depth).*
+*Last updated: 2026-05-23 (after Item 1 / PR #26 merged — sessionKey-per-process fix + goalStore hardening). Update the date when you tick boxes.*
