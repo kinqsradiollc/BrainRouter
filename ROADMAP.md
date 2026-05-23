@@ -6,8 +6,10 @@ global-install users). Shipped to npm. See [`CHANGELOG.md`](CHANGELOG.md).
 
 In-flight: **0.3.6** — Stage 4 relevance judge, dashboard
 markdown/Mermaid/KaTeX, `.env` template reorg, goal-loop hardening, LLM
-pipeline robustness fixes. Plus the planned items in "In-flight for 0.3.6"
-below (goal-leakage bug, CLI shell redesign, multi-workflow concurrency).
+pipeline robustness fixes. Goal-leakage bug (Item 1) and JSON-repair
+hotfix (Item 0) shipped. Remaining planned items in "In-flight for 0.3.6"
+below: CLI shell redesign, `ask_user_choice` tool, reasoning-step
+capture, multi-workflow concurrency.
 
 Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance, shared
 memory). Design sketched below in "Next Major Release."
@@ -32,6 +34,7 @@ memory). Design sketched below in "Next Major Release."
 - **`.env` templates reorganized.** Numbered sections in both `brainrouter/.env.example` (5 sections) and `brainrouter-cli/.env.example` (6 sections); placeholder strings blanked so committed examples never look like real secrets. New `BRAINROUTER_RELEVANCE_JUDGE_*` tunables documented.
 - **LLM-pipeline robustness fixes.** Relevance judge now survives LM Studio's idle-model auto-unload (detects "no models loaded" / "model is unloaded" 400, waits 1.5s, retries once — mirrors `ModelLLMRunner`). Cognitive extractor no longer drops a whole batch over one bad JSON escape: new `parseJsonWithEscapeRepair` doubles any `\X` that isn't a legal JSON escape and retries the parse, so Windows paths / LaTeX / regex literals in `content` fields parse cleanly. ([`brainrouter/src/memory/store/relevance-judge.ts`](brainrouter/src/memory/store/relevance-judge.ts), [`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](brainrouter/src/memory/pipeline/cognitive-extractor.ts))
 - **JSON-repair path-escape correctness fix** (PR #22). The original `parseJsonWithEscapeRepair` preserved `\b\f\n\r\t` and `\uXXXX` as JSON escapes during repair, which silently corrupted Windows paths and Unix path segments starting with those letters (`\bin`, `\target`, `\release`, etc.). Repair now only preserves `\"`, `\\`, `\/`; everything else doubles to literal. Tradeoff: legitimate `\n` in repair-branch content becomes literal two-char `\n`; happy-path `\n` still becomes a newline. New test file [`brainrouter/src/__tests__/cognitive-extractor.test.ts`](brainrouter/src/__tests__/cognitive-extractor.test.ts) covers the four pathological path inputs and the unicode-escape tradeoff (4 tests, all passing).
+- **Goal-leakage across CLI sessions fixed** (PR #26). Two leaks closed. Primary: `agent.ts` now defaults `sessionKey` to `randomUUID()` instead of the workspace-derived `brainrouter-cli:<workspaceRoot>` string. The old default failed MCP's `isUniqueId` check in [`memory_resolve_session`](brainrouter/src/tools/memory_resolve_session.ts), forcing the workspace-cache branch — which returned the same UUID to every CLI launched in the workspace, so concurrent CLIs read/wrote the same goal/plan/working bucket. UUIDs pass `isUniqueId` and are echoed back unchanged, so each CLI process is its own session for local state. Memory recall is unaffected (DB is userId-scoped). Secondary (defense-in-depth): `readGoal(workspace, sessionKey)` no longer silently falls through to the legacy workspace-level `cli/goal.json` when the session bucket is empty; any leftover legacy file is archived to `getCliStateDir(workspace)/.brainrouter.migrated/legacy-goal-<ts>.json` on first session-scoped `setGoal`. Banner now surfaces the session prefix so two concurrent CLIs are visually distinct from launch. ([`brainrouter-cli/src/agent/agent.ts`](brainrouter-cli/src/agent/agent.ts), [`brainrouter-cli/src/state/goalStore.ts`](brainrouter-cli/src/state/goalStore.ts), [`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts))
 - **CI / Dependabot hardening.** First-run `directories:` (plural) replaced with `directory: /` for npm workspaces; major-bump PRs ignored during 0.3.6 stabilization; `react-ecosystem` group added so React + React-DOM always bump together (prevents the "Incompatible React versions" Next.js failure). Root `build` script split into dependency-ordered `build:packages` + `build:apps` phases; redundant `dashboard-build` CI job removed. CI matrix narrowed to Node 22.x only (matching `engines.node >= 22.0.0`).
 - **Flaky JWT-tampering test fixed.** `brainrouter/src/__tests__/crypto.test.ts` was hard-coding `"x"` as the tampering character; when the JWT signature happened to end in `"x"` (~1/64 base64url collision odds) the "tampered" token equalled the original and the test failed intermittently. Replacement char now guaranteed to differ. Side effect: the Node 20.x ci.yml comment that blamed `crypto.timingSafeEqual` was wrong — it was this flakiness.
 - **Docs.** New "Relevance judge" section in [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) with three setup recipes; recall-pipeline diagram in [`brainrouter-docs/memory-engine.md`](brainrouter-docs/memory-engine.md), [`BRAINROUTER.md`](BRAINROUTER.md), and [`PRESENTATION.md`](PRESENTATION.md) updated to show the judge as the final gate; README aligned with the new placeholder-blank style. New [`CLAUDE.md`](CLAUDE.md) (Claude Code repo instructions) + [`Tasks.md`](Tasks.md) (0.3.6 living checklist) + [`openSrc/REFERENCES.md`](openSrc/REFERENCES.md) (router for vendored research material; gitignored). PR + issue templates + Dependabot config added under [`.github/`](.github/).
@@ -282,14 +285,16 @@ The "five BrainRouter CLIs open" case falls out of the same machinery:
 
 ## In-flight for 0.3.6
 
-Five workstreams beyond what's already shipped in 0.3.6 (judge, goal-loop
-hardening, dashboard markdown, env reorg, pipeline fixes, CI bootstrap, and
-the JSON-repair path-escape fix — see "Recently Completed → 0.3.6" above).
-Item 1 is a confirmed bug; items 2–5 are designed features. A recommended
-build order is at the end of this section, and the live progress checklist
-lives in [`Tasks.md`](Tasks.md).
+Four remaining workstreams (items 2–5) beyond what's already shipped in
+0.3.6 (judge, goal-loop hardening, dashboard markdown, env reorg, pipeline
+fixes, CI bootstrap, the JSON-repair path-escape fix, and the
+goal-leakage fix — see "Recently Completed → 0.3.6" above). Items 2–5 are
+designed features; the live progress checklist lives in [`Tasks.md`](Tasks.md).
+Item 1 (below) is retained as the post-mortem on the goal-leakage bug;
+both fixes (sessionKey-per-process + legacy-fallback hardening) shipped
+in PR #26.
 
-### 1. Goal-leakage across sessions (bug fix)
+### 1. Goal-leakage across sessions (✅ shipped in PR #26)
 
 **Symptom (reported by user).** Open a new CLI session, type `/goal …`,
 get a `GoalConflictError` showing a goal from a *previous* session in the
