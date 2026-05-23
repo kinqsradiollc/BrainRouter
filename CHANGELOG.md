@@ -22,6 +22,7 @@ Smarter memory recall, friendlier dashboard, more reliable agent loop.
 ### Fixes
 - **Memory paths no longer corrupted.** The extractor's JSON-escape repair was silently turning Windows paths and Unix path segments like `\bin` / `\target` / `\release` into control characters when the LLM emitted malformed JSON. Path strings now survive intact.
 - **Relevance judge survives LM Studio model auto-unload.** Detects the "no models loaded" 400, waits 1.5s, and retries once.
+- **Goal stops leaking across sessions.** Opening a new CLI session in the same workspace no longer shows the previous session's goal as "already active." Any legacy workspace-level `goal.json` is archived to `cli/.brainrouter.migrated/` on the first session-scoped goal write so future sessions cannot rediscover it.
 - **Intermittent CI test failure fixed** — flaky JWT-tampering assertion (~1/64 base64 collision odds), previously misdiagnosed as a Node-20 crypto incompatibility.
 
 ### Docs & tooling
