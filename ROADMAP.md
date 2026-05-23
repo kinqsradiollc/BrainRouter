@@ -521,6 +521,66 @@ choice in context.
   attached to the same MCP wouldn't see it. Federation Stage 3 (v0.4.0)
   is where cross-process user prompts would land if we want them.
 
+### 5. Structured reasoning-step capture in working memory
+
+**State of play.** BrainRouter's working memory ([`brainrouter/src/memory/working/`](brainrouter/src/memory/working/)) is fully wired and the `WorkingStep.kind` field is free-form, so the primitive for capturing reasoning steps already exists. What's missing is the **discipline / guidance** for the agent to actually emit them.
+
+Today's behaviour, audited end-to-end:
+
+| Category | Captured? | Where |
+|---|---|---|
+| Current Plan | ✅ | [`taskStore.ts`](brainrouter-cli/src/state/taskStore.ts) → `<session>/tasks.json` |
+| Tool Outputs | ⚠️ opt-in | Working memory `steps.jsonl` IF the agent calls `memory_working_offload` (default `kind="tool_output"`) |
+| Sub Tasks | ⚠️ flat only | Plan items; no nesting |
+| **Reasoning Steps** | ❌ | **Nowhere durable** — lives only as prose inside assistant messages in the transcript |
+
+Reasoning is the gap. The system prompt at
+[`brainrouter-cli/src/prompt/systemPrompt.ts:25`](brainrouter-cli/src/prompt/systemPrompt.ts:25)
+already says "walk through your reasoning before tool calls when the
+task is non-trivial," but that reasoning evaporates into chat-content
+prose — the next turn's briefing has the recall block and the working
+canvas, but nothing structured about *why* the agent did what it did
+in the previous batch. After a long session, `/working` shows the
+offloaded tool payloads but no reasoning trail.
+
+**Scope for 0.3.6.**
+
+- **System-prompt rule.** Update
+  [`brainrouter-cli/src/prompt/systemPrompt.ts`](brainrouter-cli/src/prompt/systemPrompt.ts)
+  with a new line: "After every non-trivial tool batch (≥3 tool calls
+  OR any tool that produced >2KB of output), call
+  `memory_working_offload` once with `kind: \"reasoning\"`, `title:
+  \"Why: <short>\"`, and a 1-paragraph summary of the *decision* you
+  made and *why* (not what the tools returned)." Pairs with the
+  existing >1000-token offload rule, which covers payloads but not
+  decisions.
+- **Canvas + state.json updates.** The working-memory canvas
+  ([`brainrouter/src/memory/working/canvas.ts`](brainrouter/src/memory/working/canvas.ts))
+  already renders steps by `kind` in the Mermaid tree. Confirm that
+  `kind: "reasoning"` gets a distinct node style (e.g. dashed border)
+  so reasoning steps are visually separable from tool outputs and
+  compressed summaries.
+- **Briefing surface.** When `memory_working_context` is pulled into
+  the next turn's briefing
+  ([`brainrouter-cli/src/memory/briefing.ts:50`](brainrouter-cli/src/memory/briefing.ts:50)),
+  ensure reasoning-kind steps surface in the recentSteps tail (not just
+  the most recent tool outputs). Possibly cap at the last 3 reasoning
+  steps to avoid stuffing the briefing.
+- **Tests.** Add a `kind: "reasoning"` round-trip test in the
+  working-memory suite ([`brainrouter/src/__tests__/working-memory.test.ts`](brainrouter/src/__tests__/working-memory.test.ts)).
+  Also a CLI-side check that the system-prompt change actually surfaces
+  in the assembled prompt.
+
+**Out of scope for 0.3.6.**
+
+- **Auto-capture of reasoning** (CLI intercepts and writes the
+  reasoning step itself without LLM call). Different tradeoff — would
+  require parsing assistant content for a reasoning-block convention,
+  more brittle. Defer to v0.4.x.
+- **Auto-offload of large tool outputs** under token pressure. Related
+  but distinct — see the "auto-offload-under-pressure" discussion
+  notes; skipped from this release on user direction.
+
 ### Recommended build order
 
 ```
@@ -531,6 +591,12 @@ choice in context.
   2b. ask_user_choice tool  (item 4)  — small, independent, can ride
                                         along with item 2 since both are
                                         CLI UX work
+  2c. Reasoning-step capture(item 5)  — system-prompt + tiny canvas /
+                                        briefing tweaks; independent of
+                                        items 1/3, complements item 2's
+                                        "what's the agent doing right
+                                        now" status line by surfacing
+                                        the *why*
   3.  Multi-workflow        (item 3)  — depends on item 1 (correct goal
                                         scoping primitive); displays via
                                         item 2's new status line
