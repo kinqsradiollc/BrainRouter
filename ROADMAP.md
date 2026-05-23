@@ -282,10 +282,12 @@ The "five BrainRouter CLIs open" case falls out of the same machinery:
 
 ## In-flight for 0.3.6
 
-Three workstreams beyond what's already on the `chore/0.3.5-and-ci` PR branch
-(judge, goal-loop hardening, dashboard markdown, env reorg, pipeline fixes,
-CI bootstrap). Item 1 is a confirmed bug, items 2–3 are designed features.
-A recommended build order is at the end of this section.
+Five workstreams beyond what's already shipped in 0.3.6 (judge, goal-loop
+hardening, dashboard markdown, env reorg, pipeline fixes, CI bootstrap, and
+the JSON-repair path-escape fix — see "Recently Completed → 0.3.6" above).
+Item 1 is a confirmed bug; items 2–5 are designed features. A recommended
+build order is at the end of this section, and the live progress checklist
+lives in [`Tasks.md`](Tasks.md).
 
 ### 1. Goal-leakage across sessions (bug fix)
 

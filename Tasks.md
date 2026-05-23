@@ -10,7 +10,7 @@ Conventions:
 - **Update CHANGELOG.md** under `[0.3.6] - Unreleased` for every PR that changes user-visible behavior.
 - **Update this file** — tick the boxes as you go. The next agent reads ticked state to know what's done.
 
-**Status:** Item 0 merged. **Item 1 (goal-leakage) is the next recommended pick** — WIP for it is preserved as `git stash@{0}` on local. See the build order at the bottom for the full sequence.
+**Status:** Item 0 merged. Item 1 (goal-leakage) is in PR review — see the link at the bottom. **Item 2 / 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 still gated on Item 1.
 
 ---
 
@@ -34,17 +34,17 @@ Surfaced during the 0.3.5 → 0.3.6 handoff code review. Was on `main` as part o
 
 ---
 
-## Item 1 — Goal-leakage fix (recommended starting point after Item 0)
+## Item 1 — Goal-leakage fix (in PR review)
 
 **Reported bug:** opening a new CLI session in the same workspace shows the previous session's goal as "already active." See [ROADMAP.md](ROADMAP.md) "In-flight for 0.3.6 → 1. Goal-leakage across sessions" for the full diagnosis.
 
-- [ ] Update [`brainrouter-cli/src/state/goalStore.ts`](brainrouter-cli/src/state/goalStore.ts) — when `readGoal` is called with a sessionKey, return `null` if no session-scoped `goal.json` exists. Do NOT fall back to the legacy workspace-level path. (The fallback at lines 173-176 is the bug.)
-- [ ] Preserve the no-sessionKey fallback branch (for very old installs that never had session-scoped goals).
-- [ ] One-shot migration: on the first `setGoal` of a new session that finds an existing legacy `<workspace>/cli/goal.json`, rename it to `<workspace>/cli/.brainrouter.migrated/legacy-goal-<timestamp>.json`. Use the existing `getCliStateFile` + `path.rename` machinery — don't reinvent.
-- [ ] New regression test in [`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts): "Setting a goal in session A, opening session B, calling `readGoal(B)` returns null." Currently fails.
-- [ ] Re-run the affected callers and confirm they still behave: `/goal` slash handler in [workflow.ts:373+](brainrouter-cli/src/cli/commands/workflow.ts:373), the eager-init path in [`agent/agent.ts`](brainrouter-cli/src/agent/agent.ts), the goal-continuation loop in [`cli/repl.ts`](brainrouter-cli/src/cli/repl.ts).
+- [x] Updated [`brainrouter-cli/src/state/goalStore.ts`](brainrouter-cli/src/state/goalStore.ts) — when `readGoal` is called with a sessionKey, returns `null` if no session-scoped `goal.json` exists (added explicit `return null;` in the session branch — the prior code silently fell through to the legacy path).
+- [x] Preserved the no-sessionKey fallback branch (for very old installs that never had session-scoped goals — covered by the `readGoal(workspace)` assertion in the test).
+- [x] One-shot migration in `setGoal`: when a sessionKey is passed and a legacy `goal.json` exists, the new `archiveLegacyGoal` helper renames it to `getCliStateDir(workspace)/.brainrouter.migrated/legacy-goal-<timestamp>.json`. Uses `getCliStateDir` so the archive follows the per-user state root (`~/.brainrouter/workspaces/<encoded>/cli/`) — the project workspace tree stays untouched (preserves the 0.3.3 "don't pollute the project" invariant). Collision suffix ensures idempotency under same-millisecond writes.
+- [x] Regression tests added in [`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts): existing `goalStore: legacy workspace-level goal...` test rewritten to cover the strict-scoping + archive behavior; new dedicated `goalStore: session A goal does not leak into session B (regression for cross-session legacy fallback)` test. Both pass.
+- [x] Affected callers re-verified — `/goal` handler at [workflow.ts:411](brainrouter-cli/src/cli/commands/workflow.ts:411), eager-init/runTurn at [agent.ts:622](brainrouter-cli/src/agent/agent.ts:622) and [agent.ts:909](brainrouter-cli/src/agent/agent.ts:909) and [agent.ts:1441](brainrouter-cli/src/agent/agent.ts:1441), continuation loop at [repl.ts:508](brainrouter-cli/src/cli/repl.ts:508). All pass `agent.sessionKey` after `ensureInitialized()`; none rely on the workspace-fallback path.
 
-**Acceptance:** fresh CLI session shows no inherited goal from prior session. Test added. CHANGELOG.md updated.
+**Acceptance:** ✅ all 114 brainrouter-cli tests pass (was 112). Fresh CLI session no longer inherits a goal from a prior session; first session-scoped write archives the legacy file into the per-user state dir. CHANGELOG.md `### Fixes` updated with a single user-facing bullet.
 
 ---
 
@@ -110,7 +110,7 @@ Depends on Item 1 (correct goal-scoping primitive). See [ROADMAP.md](ROADMAP.md)
 ## Build order (tick when merged)
 
 - [x] **Item 0** — JSON-repair hotfix — merged in [PR #22](https://github.com/kinqsradiollc/BrainRouter/pull/22) on 2026-05-23
-- [ ] **Item 1** — Goal-leakage fix *(recommended next; WIP preserved on `git stash@{0}`)*
+- [ ] **Item 1** — Goal-leakage fix *(in PR review — see top of file for link)*
 - [ ] **Item 2** — CLI shell redesign
 - [ ] **Item 2b** — `ask_user_choice` tool
 - [ ] **Item 2c** — Reasoning-step capture
@@ -133,4 +133,4 @@ These came out of the 0.3.5 → 0.3.6 handoff code review. Each is genuinely sma
 
 ---
 
-*Last updated: 2026-05-23 (after Item 0 / PR #22 merged). Update the date when you tick boxes.*
+*Last updated: 2026-05-23 (Item 1 PR opened — goal-leakage fix on `fix/goal-leakage`). Update the date when you tick boxes.*
