@@ -1,8 +1,13 @@
 # BrainRouter Roadmap
 
-Active version: **0.3.5** (in-flight) — Stage 4 relevance judge, dashboard
+Active released version: **0.3.5** — global-install UX fix
+(`brainrouter-mcp init`, env-loader priority chain, README rewrites for
+global-install users). Shipped to npm. See [`CHANGELOG.md`](CHANGELOG.md).
+
+In-flight: **0.3.6** — Stage 4 relevance judge, dashboard
 markdown/Mermaid/KaTeX, `.env` template reorg, goal-loop hardening, LLM
-pipeline robustness fixes. See [`CHANGELOG.md`](CHANGELOG.md).
+pipeline robustness fixes. Plus the planned items in "In-flight for 0.3.6"
+below (goal-leakage bug, CLI shell redesign, multi-workflow concurrency).
 
 Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance, shared
 memory). Design sketched below in "Next Major Release."
@@ -11,7 +16,14 @@ memory). Design sketched below in "Next Major Release."
 
 ## Recently Completed
 
-### 0.3.5 — Relevance judge, goal-loop hardening, dashboard markdown
+### 0.3.5 — Global-install UX fix (shipped)
+- **`brainrouter-mcp init` subcommand.** Scaffolds `~/.config/brainrouter/server.env` from the bundled `.env.example` (chmod 0600). Won't overwrite an existing file.
+- **MCP env-loader priority chain.** Three slots, in order: `$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`. Server prints which file it loaded at startup.
+- **Published READMEs rewritten for global-install users.** Both `@kinqs/brainrouter-cli` and `@kinqs/brainrouter-mcp-server` now document the install + configure + run flow that ends with `brainrouter` on `$PATH`, including the sudo caveat (don't sudo if you're on nvm/Homebrew).
+- **`SETUP.md` restructured** into §2A (install from npm) and §2B (clone and build).
+- Backward compatible: existing monorepo dev (`brainrouter/.env`) still works in the third priority slot. 109 CLI tests still passing.
+
+### 0.3.6 — Relevance judge, goal-loop hardening, dashboard markdown (in-flight)
 - **Stage 4 relevance judge.** Opt-in LLM-as-judge gate runs *after* the reranker and drops candidates that share vocabulary with the query but aren't actually relevant. Verdicts are auditable via `RecallExplanation.judgeVerdicts[]`. Falls back to reranker output on any failure — a flaky judge never breaks recall. ([`brainrouter/src/memory/store/relevance-judge.ts`](brainrouter/src/memory/store/relevance-judge.ts), [`brainrouter/src/memory/recall.ts`](brainrouter/src/memory/recall.ts))
 - **Goal-loop hardening.** Per-turn `goal-anchor` system message re-injection so the goal stays in immediate context across long `/goal` loops; `Agent.ensureInitialized()` resolves the MCP sessionKey before the first `runTurn` (fixes the split-brain where the first `/goal` wrote to the fallback key); `/plan clear` escape hatch for stale plan items; inline `budget: N iterations` parsing in `/goal`; auto-reconcile of stale plan items on a new goal. ([`brainrouter-cli/src/agent/agent.ts`](brainrouter-cli/src/agent/agent.ts), [`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts))
 - **Default goal budget effectively unlimited.** `DEFAULT_GOAL_BUDGET` raised `10` → `1_000_000` with a new `formatBudget()` that renders ≥100k as "unlimited"; anti-spin, repeat-loop, and manual `/goal pause` remain the real safety nets. Continuation prompt rewritten with an explicit re-anchor block, drift check, and a "tool-call mechanics" reminder. ([`brainrouter-cli/src/state/goalStore.ts`](brainrouter-cli/src/state/goalStore.ts), [`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts), [`brainrouter-cli/src/prompt/systemPrompt.ts`](brainrouter-cli/src/prompt/systemPrompt.ts))
@@ -265,9 +277,11 @@ The "five BrainRouter CLIs open" case falls out of the same machinery:
 
 ---
 
-## In-flight for 0.3.5
+## In-flight for 0.3.6
 
-Three workstreams. Item 1 is a confirmed bug, items 2–3 are designed features.
+Three workstreams beyond what's already on the `chore/0.3.5-and-ci` PR branch
+(judge, goal-loop hardening, dashboard markdown, env reorg, pipeline fixes,
+CI bootstrap). Item 1 is a confirmed bug, items 2–3 are designed features.
 A recommended build order is at the end of this section.
 
 ### 1. Goal-leakage across sessions (bug fix)
@@ -343,7 +357,7 @@ once the REPL is running — no current workflow, no goal status, no
 session id, no model. Users have to type `/goal status`, `/workflows`,
 `/agents`, `/config` separately just to know where they are.
 
-**Scope for 0.3.5.**
+**Scope for 0.3.6.**
 
 - **Suppress non-actionable Node warnings.** Launch the CLI with
   `NODE_NO_WARNINGS=1` (or a filtered `process.emitWarning` interceptor
@@ -378,7 +392,7 @@ session id, no model. Users have to type `/goal status`, `/workflows`,
   > 30s with nothing typed: "Press `?` for help, `/where` to see
   current state." One-time-per-session, dismissible.
 
-**Out of scope for 0.3.5:**
+**Out of scope for 0.3.6:**
 
 - A full TUI (split panes, scrollback regions, persistent sidebar).
   That's a 0.5.x candidate — would benefit from referencing
@@ -410,7 +424,7 @@ a time*:
   at a time inside a single REPL.
   ([`cli/repl.ts:249`](brainrouter-cli/src/cli/repl.ts:249))
 
-**Scope for 0.3.5.**
+**Scope for 0.3.6.**
 
 - **`/workflow switch <slug>`** — refocus on an existing workflow.
   Updates the current pointer; loads the workflow's saved goal state
@@ -436,7 +450,7 @@ a time*:
   `GoalConflictError`. Users should never lose track of a workflow
   because they typed a new `/spec` while another was open.
 
-**Out of scope for 0.3.5** (deferred to 0.4.0 federation or later):
+**Out of scope for 0.3.6** (deferred to 0.4.0 federation or later):
 
 - **Concurrent goal execution within one CLI process.** The
   `isProcessing` lock stays. Two parallel continuation loops in the

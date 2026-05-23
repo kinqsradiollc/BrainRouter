@@ -67,6 +67,8 @@ openSrc/agentscope
 openSrc/chrome-devtools-mcp
 openSrc/local-deep-research
 openSrc/pi-intercom
+openSrc/DeepSeek-TUI
+openSrc/codegraph
 
 # Local agent reference doc for openSrc/ vendored projects — useful but
 # personal (machine-specific paths, evolving notes) so it stays out of git.

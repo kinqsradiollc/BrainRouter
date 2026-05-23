@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.5] - Unreleased
+## [0.3.6] - Unreleased
 
 ### Added — Stage 3 relevance judge
 
@@ -109,6 +109,61 @@ instead of three loose sections.
 
 - **Breadth-hint veto coverage** — new tests assert that negation phrases ("no fan-out", "in one turn", "do it directly", etc.) override high-breadth scores and surface as `vetoed:<phrase>` signals. ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts))
 - **Goal budget formatter coverage** — tests for `formatBudget`, `goalHasBudgetLeft` under the new effectively-unlimited default, and the inline `Budget N` regex used by `/goal`. ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts))
+
+## [0.3.5] - 2026-05-22
+
+### Fixed — global-install UX gap exposed by 0.3.4
+
+0.3.4 shipped to npm but exposed a real UX gap: users who ran
+`npm install -g @kinqs/brainrouter-mcp-server` had no obvious place to put
+their `.env` file. The server loaded `.env` from `process.cwd()` — which
+meant nothing for someone launching the binary from their home directory —
+and the bundled `.env.example` lived deep inside the npm prefix where users
+couldn't easily edit it.
+
+### Added
+
+- **`brainrouter-mcp init` subcommand.** Scaffolds
+  `~/.config/brainrouter/server.env` from the bundled `.env.example`
+  (chmod 0600). Won't overwrite if you already have one.
+- **MCP env-loader priority chain.** The server now looks for `.env` in
+  three places, in order:
+  1. `$BRAINROUTER_ENV_FILE` — explicit override
+  2. `~/.config/brainrouter/server.env` — canonical user location
+     (what `init` writes)
+  3. `./.env` — cwd (matches dotenv default, keeps monorepo dev working)
+  At startup the server prints which file it loaded — e.g.
+  `env: loaded 17 vars from /Users/you/.config/brainrouter/server.env`.
+
+### Changed
+
+- **Published READMEs rewritten for global-install users.** Both
+  `@kinqs/brainrouter-cli` and `@kinqs/brainrouter-mcp-server` READMEs now
+  document the actual install + configure + run flow that ends with
+  `brainrouter` on `$PATH`, including the sudo caveat (don't sudo if
+  you're on nvm/Homebrew). The 0.3.4 READMEs still had the old
+  "clone the monorepo, npm run build" instructions, which is the wrong
+  advice for an npm install.
+- **`SETUP.md` restructured.** §2 split into two paths — §2A "Install
+  from npm (end users)" and §2B "Clone and build (development)" — plus a
+  table-of-contents update.
+
+### Recommended install path (fresh)
+
+```bash
+npm install -g @kinqs/brainrouter-cli @kinqs/brainrouter-mcp-server
+brainrouter-mcp init                                    # scaffold env
+$EDITOR ~/.config/brainrouter/server.env                # set keys
+brainrouter-mcp --http --port 3747                      # terminal 1
+brainrouter config && brainrouter login                 # configure CLI
+brainrouter                                             # terminal 2
+```
+
+### Compatibility
+
+Backward compatible — existing monorepo dev (`brainrouter/.env`) still
+works (it's the third slot in the priority chain). All 109 CLI tests
+still passing at release.
 
 ## [0.3.4] - 2026-05-22
 
