@@ -22,6 +22,7 @@ Smarter memory recall, friendlier dashboard, more reliable agent loop.
 ### Fixes
 - **Memory paths no longer corrupted.** The extractor's JSON-escape repair was silently turning Windows paths and Unix path segments like `\bin` / `\target` / `\release` into control characters when the LLM emitted malformed JSON. Path strings now survive intact.
 - **Relevance judge survives LM Studio model auto-unload.** Detects the "no models loaded" 400, waits 1.5s, and retries once.
+- **Goal stops leaking across sessions.** Each CLI process now gets a fresh sessionKey (a UUID at agent startup), so two concurrent CLIs in the same workspace no longer share goal / plan / working state. Previously the MCP `memory_resolve_session` workspace-cache handed every CLI in a workspace the same UUID, which surfaced as "A goal is already active" from a prior session on every fresh launch. Memory recall is unaffected — the memory DB is userId-scoped, sessionKey is just a grouping tag. The startup banner now prints the session prefix so you can tell two CLIs apart at a glance. Belt-and-suspenders: a secondary leak path where `readGoal(workspace, sessionKey)` silently fell through to the legacy `cli/goal.json` is also closed, and any leftover legacy file is archived to `cli/.brainrouter.migrated/` on the first session-scoped goal write.
 - **Intermittent CI test failure fixed** — flaky JWT-tampering assertion (~1/64 base64 collision odds), previously misdiagnosed as a Node-20 crypto incompatibility.
 
 ### Docs & tooling
