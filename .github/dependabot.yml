@@ -2,26 +2,23 @@
 # without drowning us in PRs. Strategy:
 #   - npm minor/patch updates: grouped weekly so dev-deps + production-deps
 #     each land in one PR per week instead of one PR per dependency.
-#   - npm major updates: ungrouped, surfaced individually so we can audit
-#     the changelog before merging.
-#   - GitHub Actions: monthly, ungrouped — pin floats happen rarely enough
-#     that grouping isn't worth the merge-conflict risk.
+#   - npm major updates: IGNORED while we stabilize 0.3.6. We bump majors
+#     manually after the release so we can verify behaviour (Next 16,
+#     dotenv 17, ora 9, etc. each have real breaking changes that CI
+#     alone won't catch). Re-enable by removing the ignore block below.
+#   - GitHub Actions: monthly, grouped, ungrouped majors allowed (Action
+#     version bumps are usually metadata-only and low-risk).
 #
-# The `directories` field (plural) covers the monorepo: Dependabot updates
-# the root lockfile AND each workspace's package.json in a single PR. If
-# you add a new workspace, add it here too.
+# IMPORTANT: this repo uses npm workspaces. There is exactly ONE
+# package-lock.json at the root — Dependabot updates EVERY workspace's
+# package.json from that one entry. Do NOT add per-workspace directory
+# entries; that caused the duplicate-PR problem that motivated this fix
+# (one PR per directory all touching the same lockfile).
 
 version: 2
 updates:
   - package-ecosystem: npm
-    directories:
-      - "/"
-      - "/brainrouter"
-      - "/brainrouter-cli"
-      - "/brainrouter-dashboard"
-      - "/packages/types"
-      - "/packages/sdk"
-      - "/packages/hooks"
+    directory: /
     schedule:
       interval: weekly
       day: monday
@@ -34,6 +31,13 @@ updates:
       prefix: "chore(deps)"
       prefix-development: "chore(dev-deps)"
       include: "scope"
+    ignore:
+      # Block all major-version PRs while 0.3.6 is in flight. Delete
+      # this block after 0.3.6 ships if you want majors back as
+      # individual PRs.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       dev-dependencies:
         dependency-type: development
