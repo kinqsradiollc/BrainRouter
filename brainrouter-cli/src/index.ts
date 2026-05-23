@@ -1,5 +1,58 @@
 #!/usr/bin/env node
 
+/**
+ * Filter out Node.js platform warnings that the user has no way to act on
+ * and that scroll real CLI banner content off-screen on short terminals.
+ *
+ *   - `ExperimentalWarning: SQLite is an experimental feature` — emitted by
+ *     `node:sqlite` (which both this CLI and the MCP server use). Stable in
+ *     Node 22+ in practice; the warning is correct but uninformative.
+ *   - `DeprecationWarning: ... dotenv ...` — dotenv@16 prints a teaser for
+ *     its hosted product on every load on newer Node releases.
+ *
+ * BrainRouter's own warnings flow through unchanged. `NODE_NO_WARNINGS=1`
+ * would silence those too, so we intercept selectively instead.
+ *
+ * Two interception points: (1) remove Node's built-in `warning` listener
+ * and add our own filtered one — this catches warnings emitted during ESM
+ * import resolution (e.g. `import 'node:sqlite'` at the top of any module
+ * that runs BEFORE the user code that would otherwise call `emitWarning`);
+ * (2) replace `process.emitWarning` so future direct callers also get the
+ * filter. Both are needed: ESM hoists imports above any code in this file,
+ * so an emitWarning override alone misses the import-time warnings.
+ */
+function isSuppressibleWarning(message: string, type: string): boolean {
+  const looksExperimental =
+    type === 'ExperimentalWarning' ||
+    /experimental feature|SQLite is an experimental/i.test(message);
+  const looksDotenvNoise =
+    /dotenv@\d|dotenvx|dotenv\.org/i.test(message);
+  return looksExperimental || looksDotenvNoise;
+}
+
+// Detach Node's default warning printer and replace with a filtered one.
+// process.listeners returns each Function attached; the default one is a
+// single internal listener that does the stderr printing.
+for (const listener of process.listeners('warning')) {
+  process.removeListener('warning', listener);
+}
+process.on('warning', (warning: any) => {
+  if (isSuppressibleWarning(warning?.message ?? '', warning?.name ?? '')) return;
+  // Mirror Node's default formatting for everything else so users see the
+  // familiar "(node:PID) <Name>: <message>" shape.
+  process.stderr.write(`(node:${process.pid}) ${warning?.name ?? 'Warning'}: ${warning?.message ?? warning}\n`);
+});
+
+const originalEmitWarning = process.emitWarning.bind(process);
+process.emitWarning = ((warning: string | Error, ...rest: any[]) => {
+  const message = typeof warning === 'string' ? warning : warning?.message ?? '';
+  const type = typeof rest[0] === 'string' ? rest[0]
+    : (rest[0] && typeof rest[0] === 'object' && 'type' in rest[0]) ? (rest[0] as any).type
+    : (warning instanceof Error ? (warning as any).name : '');
+  if (isSuppressibleWarning(message, type)) return;
+  return (originalEmitWarning as any)(warning, ...rest);
+}) as typeof process.emitWarning;
+
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
@@ -178,13 +231,23 @@ program
   .option('-m, --model <name>', 'LLM model override')
   .option('-w, --workspace <path>', 'Workspace root for files, commands, memory session, and MCP --root')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
+  .option('--quiet', 'Suppress recall tables, briefing dumps, and tool-completion previews (model prose only). Toggle in-session with /quiet.')
   .action(async (options) => {
     if (options.workspace) {
       process.env.BRAINROUTER_WORKSPACE = options.workspace;
     }
+    if (options.quiet) {
+      // Quiet mode is durable in preferences, but `--quiet` should turn it
+      // on for THIS session without permanently flipping the user's saved
+      // setting. Set a process env that the REPL preference-merger checks.
+      process.env.BRAINROUTER_QUIET = '1';
+    }
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
-    console.log(chalk.gray(`Workspace: ${workspace.workspaceRoot} (${workspace.reason})`));
+    // Workspace path + detection reason intentionally NOT printed here — the
+    // boxed startup banner shows the workspace row, and `/workspace` exposes
+    // the launch CWD + detection reason on demand. Keeping a duplicate
+    // stale-chrome line above the banner undermines the banner-first design.
 
     const config = loadConfig();
     const profileName = options.profile || config.activeServer;
@@ -217,11 +280,14 @@ program
     }
 
     const mcpClient = new McpClientWrapper();
-    console.log(chalk.gray(`Connecting to MCP server profile "${profileName}"...`));
-
+    // "Connecting..." / "Successfully connected!" status lines intentionally
+    // dropped — they printed for the ~1-2s of connect AND scrolled the
+    // banner up. On success the banner's `mcp ... online` row IS the
+    // success signal; on failure the catch-block error + the post-banner
+    // OFFLINE MODE warning in startREPL together cover both diagnosis and
+    // remediation.
     try {
       await mcpClient.connect(serverConfig, llm);
-      console.log(chalk.green('Successfully connected to BrainRouter MCP Server!'));
     } catch (err: any) {
       // Degraded "offline mode": the MCP server is the cognitive memory layer
       // (recall, skills, capture, citations) — losing it is painful but not
@@ -235,11 +301,8 @@ program
         console.error(chalk.gray('--strict-mcp set; exiting.'));
         process.exit(1);
       }
-      console.warn(chalk.yellow(
-        '⚠️  Continuing in OFFLINE MODE — memory recall, skills, and capture are disabled.\n' +
-        '    Local tools (file edits, shell, web fetch, spawn_agent) remain available.\n' +
-        '    Start the MCP server and restart the CLI to restore full functionality.\n',
-      ));
+      // The banner-adjacent OFFLINE MODE warning in startREPL covers the
+      // remediation hint. No second warning here.
     }
 
     const agent = new Agent(mcpClient, llm, {

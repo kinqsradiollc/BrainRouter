@@ -95,22 +95,26 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
     {
       const session = agent.sessionUsage;
       const metrics = agent.memoryMetrics;
-      const children = listSessions(agent.workspaceRoot).filter((s) => s.usage);
+      // Scope to the live parent: sessions.json is workspace-wide and
+      // persists across CLI restarts, so an unfiltered list mixes in every
+      // child spawned by every prior CLI process. Filtering by
+      // parentSessionKey limits the row to children spawned by THIS parent.
+      const children = listSessions(agent.workspaceRoot).filter(
+        (s) => s.usage && s.parentSessionKey === agent.sessionKey,
+      );
       const childPrompt = children.reduce((acc, c) => acc + (c.usage?.promptTokens ?? 0), 0);
       const childCompletion = children.reduce((acc, c) => acc + (c.usage?.completionTokens ?? 0), 0);
       const childCalls = children.reduce((acc, c) => acc + (c.usage?.calls ?? 0), 0);
 
-      // Memory savings estimate:
-      // - Each recalled record (avg ~200 chars ≈ 50 tokens) supplies cross-
-      //   session context that would otherwise require either a manual
-      //   user explanation, a re-read of files, or skill re-discovery.
-      //   Conservative multiplier of 5× to account for the "without memory
-      //   you would have read 3-5 files" replacement cost.
-      // - Offloaded child output bytes are subtracted from what the parent
-      //   would otherwise have had to carry in context.
-      const recallSavings = metrics.briefingTokensInjected * 5;
-      const offloadSavings = Math.round(metrics.offloadCharsAvoided / 4);
-      const totalSaved = recallSavings + offloadSavings;
+      // What we can actually measure:
+      //   - offload: bytes of child output that did NOT land in the parent's
+      //     context. These are real tokens not spent on the parent. We
+      //     subtract the preview that DID land (OFFLOAD_PREVIEW_CHARS is
+      //     already netted out in tools.ts before recordOffload fires).
+      //   - briefing tokens: cost, not savings. They're already counted in
+      //     session.promptTokens. We report them so the user can see how
+      //     much of the prompt budget memory is consuming.
+      const offloadSavedTokens = Math.round(metrics.offloadCharsAvoided / 4);
       const totalSpent = session.promptTokens + session.completionTokens + childPrompt + childCompletion;
 
       console.log(chalk.bold('\nToken usage — this session'));
@@ -125,18 +129,16 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       }
       console.log(`  Total this session: ${chalk.bold.cyan(totalSpent.toLocaleString())} tokens`);
 
-      console.log(chalk.bold('\nMemory savings (estimated)'));
-      console.log(`  Briefing tokens injected:  ${chalk.gray(metrics.briefingTokensInjected.toLocaleString())}  (${metrics.recallRecordsConsulted} records consulted)`);
-      console.log(`  Cross-session recall value: ~${chalk.green(recallSavings.toLocaleString())} tokens you'd otherwise spend re-reading files / re-explaining context`);
-      console.log(`  Offload bytes avoided:     ${chalk.gray(metrics.offloadCharsAvoided.toLocaleString())} chars (large child outputs that stayed out of parent context)`);
-      console.log(`  → Offload value:           ~${chalk.green(offloadSavings.toLocaleString())} tokens`);
-      console.log(`  ${chalk.bold('Total estimated savings:')}  ${chalk.bold.green('~' + totalSaved.toLocaleString())} tokens`);
+      console.log(chalk.bold('\nMemory'));
+      console.log(`  Briefing tokens injected: ${chalk.gray(metrics.briefingTokensInjected.toLocaleString())}  ${chalk.gray(`(${metrics.recallRecordsConsulted} records consulted — already included in parent ↑)`)}`);
+      console.log(`  Child output offloaded:   ${chalk.gray(metrics.offloadCharsAvoided.toLocaleString())} chars  ${chalk.gray(`(≈${offloadSavedTokens.toLocaleString()} parent tokens not spent)`)}`);
 
-      if (totalSpent > 0) {
-        const ratio = totalSaved / totalSpent;
-        console.log(chalk.gray(`  Ratio: for every 1 token spent, memory saved ~${ratio.toFixed(2)} tokens of context.`));
+      if (offloadSavedTokens > 0 && totalSpent > 0) {
+        const ratio = offloadSavedTokens / totalSpent;
+        const display = ratio >= 0.01 ? ratio.toFixed(2) : '<0.01';
+        console.log(chalk.gray(`  Offload ratio: ~${display} saved per token spent.`));
       }
-      console.log(chalk.gray('\n  (Estimates use a 5× multiplier on briefing tokens — a heuristic for "you would have needed to re-derive this from files/prompts otherwise". Treat as directional, not exact.)\n'));
+      console.log(chalk.gray('\n  (Offload is measured; briefing tokens are an information-gain stat, not a savings number.)\n'));
       return true;
     }
     case '/feedback':

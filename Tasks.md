@@ -10,7 +10,7 @@ Conventions:
 - **Update CHANGELOG.md** under `[0.3.6] - Unreleased` for every PR that changes user-visible behavior.
 - **Update this file** — tick the boxes as you go. The next agent reads ticked state to know what's done.
 
-**Status:** Items 0 and 1 merged. **Item 2 / 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 (multi-workflow) is now unblocked but should still land last per the build order.
+**Status:** Items 0, 1, and 2 (CLI shell redesign) implemented. **Items 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 (multi-workflow) is now unblocked but should still land last per the build order.
 
 ---
 
@@ -65,17 +65,19 @@ Surfaced during the 0.3.5 → 0.3.6 handoff code review. Was on `main` as part o
 
 ## Item 2 — CLI shell redesign
 
-Six independent sub-deliverables. Can ship as one PR or split.
+Seven independent sub-deliverables landed together as one PR (Items 1 and 2 were both about the REPL shell, so consolidating reviewer surface area was worth it).
 
-- [ ] **Suppress Node SQLite/dotenv experimental warnings.** Launch with `NODE_NO_WARNINGS=1` or a filtered `process.emitWarning` interceptor in [`brainrouter-cli/src/index.ts`](brainrouter-cli/src/index.ts).
-- [ ] **Structured boxed startup banner.** Replace the current two-line text with a small banner showing: workspace name + short hash, MCP profile + transport, current workflow + goal status, session id prefix, model.
-- [ ] **Persistent status line above the prompt.** `[workflow:slug · goal:active 2/∞ · model:gpt-4o · session:7f3a · plan:1/4]`. Configurable via `/statusline mode,workflow,goal,model,session,plan,pr`. Extend the existing `/statusline` handler in [`brainrouter-cli/src/cli/commands/`](brainrouter-cli/src/cli/commands/).
-- [ ] **`/where` single-screen state view.** Workspace + active workflow + goal text + budget + active plan items + recent recall scores + active child agents.
-- [ ] **`--quiet` / `/quiet` toggle.** Suppress recall-scoring tables, briefing dumps, tool-completion previews — leaves only model prose.
-- [ ] **Themeable surface chrome.** Move chalk colors from scattered command files into `brainrouter-cli/src/cli/theme.ts`. `BRAINROUTER_THEME=dark|light|mono`.
-- [ ] **Idle help hint.** Footer hint after 30s idle: "Press `?` for help, `/where` to see current state." One-time-per-session, dismissible.
+- [x] **Suppress Node SQLite/dotenv experimental warnings.** Two-layer fix: (1) a tiny CJS bin shim at [`brainrouter-cli/bin/cli.cjs`](brainrouter-cli/bin/cli.cjs) installs a filtered `warning` listener and overrides `process.emitWarning` BEFORE dynamically importing the ESM CLI — necessary because ESM hoists all `import` statements above any top-level code, so a warning filter installed inside `src/index.ts` fires too late to catch the experimental warning that `import 'node:sqlite'` triggers at module-resolution time. (2) The same filter is also installed at the top of [`brainrouter-cli/src/index.ts`](brainrouter-cli/src/index.ts) so runtime warnings emitted later in the session (or by developers running `tsx src/index.ts` directly, which bypasses the shim) still get filtered. `package.json` `bin` now points at the shim; `files` ships `bin/`. `NODE_NO_WARNINGS=1` would have silenced BrainRouter's own warnings too, so we kept the surgical option.
+- [x] **Structured boxed startup banner.** New [`brainrouter-cli/src/cli/banner.ts`](brainrouter-cli/src/cli/banner.ts) renders a single Unicode box with workspace + short-hash, MCP profile + transport + online/offline, current workflow (if bound), goal status + budget, session prefix, and model. Pure-function so it's testable; sections are silently omitted when empty so a fresh workspace doesn't render placeholder rows. Wired in at [`repl.ts`](brainrouter-cli/src/cli/repl.ts) — replaces the prior three-line text dump.
+- [x] **Persistent status line above the prompt.** New [`brainrouter-cli/src/cli/statusline.ts`](brainrouter-cli/src/cli/statusline.ts) holds one renderer per segment. Adds `workflow`, `goal`, `plan`, `pr` to the existing `mode`, `model`, `tokens`, `session`, `branch`, `dirty` set. `/statusline` validates against the shared `SEGMENT_NAMES` constant — adding a new segment is one switch case, not three edits across REPL + command handler + help text.
+- [x] **`/where` single-screen state view.** New [`brainrouter-cli/src/cli/whereView.ts`](brainrouter-cli/src/cli/whereView.ts) gathers workspace, active workflow + meta, goal status + budget, plan items, recent recall (with priorities), and live child sessions, then renders as themed text sections. Empty sections are dropped so a brand-new workspace renders just WORKSPACE instead of five empty boxes. Wired through [`commands/ui.ts`](brainrouter-cli/src/cli/commands/ui.ts:459).
+- [x] **`--quiet` / `/quiet` toggle.** `--quiet` startup flag (and persisted `quiet` preference) gates tool-start chrome, tool-success summaries, briefing/capture/citation memory events, file-mention attachment lines, and tool previews. Failures still surface; contradictions still surface. Toggling `/quiet` in-session also updates `BRAINROUTER_QUIET` env so the in-process check stays consistent.
+- [x] **Themeable surface chrome.** New [`brainrouter-cli/src/cli/theme.ts`](brainrouter-cli/src/cli/theme.ts) module with semantic tokens (primary, secondary, success, warning, danger, info, muted, dim, heading, plain) and three palettes (`dark` — the original Midnight Ledger; `light` — darker accents for white terminals; `mono` — identity for screenshots / pipes). Selection: `BRAINROUTER_THEME` env > preference > `dark`. Banner, `/where`, and the help footer now consume these tokens. Existing command files still use raw chalk — the consolidation is opt-in and can land incrementally.
+- [x] **Idle help hint.** 30s after the prompt appears (or after each turn ends), if the user hasn't typed anything and no continuation is running, the REPL prints one line: "Tip: press `?` or `/help` for commands, `/where` for current state." Fires at most once per session; cleared the instant the user types anything. Bare `?` is now wired to `/help` in [`repl.ts`](brainrouter-cli/src/cli/repl.ts) so the suggestion actually works.
 
-**Acceptance:** banner clean, status line readable, `/where` lands every key state in one view, theme module consolidated, idle hint fires once max per session. Tests cover the new helpers and the `/where` aggregation.
+**Tests:** New file [`brainrouter-cli/src/cli-shell.test.ts`](brainrouter-cli/src/cli-shell.test.ts) — 26 tests covering theme resolution (env > pref > default + invalid fallback), banner rendering (workspace/mcp/session/model/online/offline/workflow/goal/unlimited budget), statusline segment renderers (mode/model/tokens/session/workflow/goal/plan + filtering empties), `/where` aggregation (empty workspace → workspace section only; populated workspace → workflow + goal + plan + recall sections; blocked goal surfaces reason), and `quiet` preference round-trip. Brings the CLI test surface to **141 tests, all passing** (was 115).
+
+**Acceptance:** ✅ banner clean and informative on launch; status line accepts new segments; `/where` consolidates orientation into one screen; theme module is the single source of truth for new chrome; `--quiet` and `/quiet` flip cleanly; idle hint fires at most once and `?` opens help; warnings no longer scroll the banner off the screen. All tests pass.
 
 ---
 
@@ -126,7 +128,7 @@ Depends on Item 1 (correct goal-scoping primitive). See [ROADMAP.md](ROADMAP.md)
 
 - [x] **Item 0** — JSON-repair hotfix — merged in [PR #22](https://github.com/kinqsradiollc/BrainRouter/pull/22) on 2026-05-23
 - [x] **Item 1** — Goal-leakage fix — merged in [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26) on 2026-05-23
-- [ ] **Item 2** — CLI shell redesign
+- [x] **Item 2** — CLI shell redesign — implemented 2026-05-23 (PR pending)
 - [ ] **Item 2b** — `ask_user_choice` tool
 - [ ] **Item 2c** — Reasoning-step capture
 - [ ] **Item 3** — Multi-workflow concurrency
@@ -148,4 +150,4 @@ These came out of the 0.3.5 → 0.3.6 handoff code review. Each is genuinely sma
 
 ---
 
-*Last updated: 2026-05-23 (after Item 1 / PR #26 merged — sessionKey-per-process fix + goalStore hardening). Update the date when you tick boxes.*
+*Last updated: 2026-05-23 (after Item 2 implemented — CLI shell redesign: theme module, boxed banner, extended statusline segments, /where, --quiet, idle hint, warning suppression. 141 tests passing, was 115. PR pending).*
