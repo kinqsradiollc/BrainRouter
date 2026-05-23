@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - Unreleased
+
+### Added — Stage 3 relevance judge
+
+The recall pipeline already had a cross-encoder reranker, but the reranker
+only **reorders** candidates by a learned score — it never filters. So a
+memory that shares vocabulary with the query but is actually about a
+different subject still landed in the prompt. We now have an opt-in
+LLM-as-judge stage that runs after the reranker and gates the final list.
+
+- **New `RelevanceJudgeService`** at [`brainrouter/src/memory/store/relevance-judge.ts`](brainrouter/src/memory/store/relevance-judge.ts).
+  Batched LLM call (single round-trip per recall, default top-10
+  candidates) returns one verdict per candidate:
+  `{index, relevant: boolean, reason: string}`. Rejected candidates are
+  dropped before the `<relevant-memories>` block is built; if every
+  candidate is rejected the block is omitted entirely (an empty block is
+  misleading). On any judge failure the reranker output passes through
+  unchanged — a flaky judge never breaks recall.
+- **Wired into `MemoryRecallPipeline`** as the fourth stage at
+  [`brainrouter/src/memory/recall.ts`](brainrouter/src/memory/recall.ts).
+  The recall strategy label gets a `+judge` suffix when the judge fires
+  (e.g. `hybrid+rerank+judge`), and the audit log records
+  `judgeApproved` / `judgeRejected` counts.
+- **`RecallExplanation` extended** with `judgeUsed`, `judgeApproved`,
+  `judgeRejected`, and a full `judgeVerdicts[]` array (index, verdict,
+  reason) so you can audit and tune the judge prompt without code
+  changes. Lives in [`packages/types/src/memory.ts`](packages/types/src/memory.ts).
+- **Off by default.** Opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`.
+  Falls back to `BRAINROUTER_LLM_*` for endpoint / key / model so a single
+  credential covers extraction, synthesis, and judging. Tunables:
+  `BRAINROUTER_RELEVANCE_JUDGE_MODEL`, `_API_KEY`, `_ENDPOINT`,
+  `_MAX_CANDIDATES` (default 10), `_TIMEOUT_MS` (default 15000).
+
+Latency tradeoff: adds one LLM round-trip per recall (~500ms-1s on a
+small/fast model). Worth it when the memory store has grown noisy and
+false-positive recalls keep surfacing keyword-matched but off-topic memories.
+
+### Added — goal-loop & breadth-hint hardening
+
+- **Per-turn goal anchor.** `runTurn` now re-injects a fresh `goal-anchor` system message every iteration so the goal text stays in immediate context during long `/goal` loops; stale anchors are dropped when no goal is active. ([`brainrouter-cli/src/agent/agent.ts`](brainrouter-cli/src/agent/agent.ts))
+- **`Agent.ensureInitialized()`** — public idempotent wrapper around `bootstrapSession` so slash commands (notably `/goal`) can resolve the MCP sessionKey before the first `runTurn`. Fixes the split-brain where the first `/goal` wrote state under the fallback sessionKey but later turns read from the UUID sessionKey. ([`brainrouter-cli/src/agent/agent.ts`](brainrouter-cli/src/agent/agent.ts), [`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts))
+- **`/plan clear`** — explicit escape hatch to drop stale plan items that would otherwise block `goal_complete` from a previous workflow. ([`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts), [`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts))
+- **Inline `Budget N` parsing in `/goal`.** The goal text now accepts an embedded `budget: 30 iterations` (or `budget 30`, `budget: 30 turns`) — parsed out of the prose, capped to 1–200, and applied as `maxIterations` so the cap travels with the goal rather than being a separate `/goal budget` call. ([`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts))
+- **Auto-reconcile stale plan on new `/goal`.** Starting a new goal now clears any non-completed plan items from prior workflows and prints a transparent summary (first 5 entries + total count) so the user sees exactly what was dropped. ([`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts))
+- **Fan-out veto detector.** New `detectFanOutVeto` honors negation phrases ("no spawn_agent", "do this in one turn", "directly with read_file", "don't fan out") as hard vetoes that override high breadth scores. Veto surfaces in the breadth signal as `vetoed:<phrase>` so the orchestrator hint stays single-agent regardless of complexity. ([`brainrouter-cli/src/prompt/breadthHint.ts`](brainrouter-cli/src/prompt/breadthHint.ts))
+
+### Added — dashboard markdown & diagrams
+
+- **Markdown rendering in chat.** Assistant bubbles now render markdown via a new shared `Markdown` component with LaTeX support (`remark-math` + `rehype-katex`, auto-normalizes `\[…\]`, `\(…\)`, and named math environments like `align*`). ([`brainrouter-dashboard/components/Markdown.tsx`](brainrouter-dashboard/components/Markdown.tsx), [`app/chat/page.tsx`](brainrouter-dashboard/app/chat/page.tsx))
+- **Mermaid diagrams in the Working Memory canvas.** New theme-aware `Mermaid` component that re-reads CSS color tokens on theme switch replaces the previous raw `<pre>` dump. ([`brainrouter-dashboard/components/Mermaid.tsx`](brainrouter-dashboard/components/Mermaid.tsx), [`app/working-memory/page.tsx`](brainrouter-dashboard/app/working-memory/page.tsx))
+- **`.markdown-content--chat` variant.** Tighter vertical rhythm for chat bubbles vs. document-style layouts (Persona, Working Memory). ([`brainrouter-dashboard/app/globals.css`](brainrouter-dashboard/app/globals.css))
+- **Dashboard deps** — `mermaid ^11.15.0`, `katex ^0.17.0`, `remark-math ^6.0.0`, `rehype-katex ^7.0.1`; `katex.min.css` imported globally in [`app/layout.tsx`](brainrouter-dashboard/app/layout.tsx). ([`brainrouter-dashboard/package.json`](brainrouter-dashboard/package.json))
+
+### Changed — `/goal` defaults & continuation prompt
+
+- **Default goal budget is effectively unlimited.** `DEFAULT_GOAL_BUDGET` raised from `10` → `1_000_000`. New `formatBudget()` + `UNLIMITED_BUDGET_THRESHOLD` render any value ≥ 100k as "unlimited" across the REPL status output, kickoff banners, and goal block. Anti-spin detection, repeat-loop guard, and manual `/goal pause` remain as the real safety nets — the hard iteration cap stops being the first thing that trips. ([`brainrouter-cli/src/state/goalStore.ts`](brainrouter-cli/src/state/goalStore.ts), [`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts), [`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts))
+- **Goal-continuation prompt rewritten.** Adds an explicit re-anchor block (the goal text quoted with `>`), a mandatory drift check, and a "tool-call mechanics" reminder warning that prose-formatted tool calls do nothing. ([`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts))
+- **System prompt: new "Tool-call mechanics" section.** Explains that tool calls must go via the structured `tool_calls` channel and that prose like `<spawn_agent>{…}</spawn_agent>` is a hallucination the model must not emit. ([`brainrouter-cli/src/prompt/systemPrompt.ts`](brainrouter-cli/src/prompt/systemPrompt.ts))
+- **Persona and `SceneCard` switched to the shared `Markdown` component.** Replaces direct `ReactMarkdown` usage so KaTeX/Mermaid/math support is consistent across every surface that renders model output. ([`brainrouter-dashboard/app/persona/page.tsx`](brainrouter-dashboard/app/persona/page.tsx), [`brainrouter-dashboard/components/SceneCard.tsx`](brainrouter-dashboard/components/SceneCard.tsx))
+
+### Changed — `.env` templates reorganized
+
+`.env.example` files are now structured around numbered sections.
+The MCP-side template groups the retrieval pipeline (embeddings, reranker,
+judge) under a single heading so the three stages read as a progression
+instead of three loose sections.
+
+- **`brainrouter/.env.example`** — five numbered sections (LLM, retrieval
+  pipeline, memory engine, skill pre-warming, server auth). All placeholder
+  strings (`your_api_key_here`, `change_me_before_use`,
+  `replace_with_a_long_random_secret`) blanked so committed examples never
+  look like real secrets.
+- **`brainrouter-cli/.env.example`** — same numbered treatment, six
+  sections (chat LLM, tool runtime, sandbox, workspace, web search,
+  observability).
+
+### Fixed — LLM-pipeline robustness
+
+- **Relevance judge now survives LM Studio model auto-unload.** When LM Studio's idle-model auto-unloader returns `400 — No models loaded` / `Model is unloaded`, the judge waits 1.5s and retries once (mirroring `ModelLLMRunner`'s existing handling). The previous code surfaced a noisy error on every recall while LM Studio re-loaded the model, even though recall itself was already falling through to the reranker output. ([`brainrouter/src/memory/store/relevance-judge.ts`](brainrouter/src/memory/store/relevance-judge.ts))
+- **Cognitive extractor no longer drops a whole batch over one bad escape.** `parseExtractionResult` now goes through a new `parseJsonWithEscapeRepair` helper: on `SyntaxError` it doubles any backslash not followed by a valid JSON escape (`" \ / b f n r t` or `uXXXX`) and retries the parse. Windows paths, LaTeX (`\section`), regex literals, and shell snippets in `content` fields no longer cause the extractor to log `Bad escaped character in JSON at position …` and discard every memory in the batch. ([`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](brainrouter/src/memory/pipeline/cognitive-extractor.ts))
+
+### Docs
+
+- [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) —
+  new "Relevance judge" narrative section with three setup recipes
+  (default-inherited, dedicated fast model, dedicated endpoint), plus a
+  new env-reference table for the six `BRAINROUTER_RELEVANCE_JUDGE_*` vars.
+  Reranker section now explicitly notes "reorders, never filters" and
+  forward-links to the judge.
+- [`brainrouter-docs/memory-engine.md`](brainrouter-docs/memory-engine.md) —
+  recall pipeline diagram updated to show the judge as the final gate;
+  table of ranking knobs gains a "Relevance judge" row.
+- Top-level [`BRAINROUTER.md`](BRAINROUTER.md) and [`PRESENTATION.md`](PRESENTATION.md)
+  recall diagrams updated for consistency.
+- [`README.md`](README.md) — server-auth `.env` example aligned with the new
+  blank-placeholder style; advanced-knobs pointer rewritten around the five
+  numbered sections of `brainrouter/.env.example`.
+- [`AGENT.md`](AGENT.md) — `dashboard/` → `brainrouter-dashboard/` path
+  rename and a recall-pipeline blurb that mentions the judge.
+
+### Tests
+
+- **Breadth-hint veto coverage** — new tests assert that negation phrases ("no fan-out", "in one turn", "do it directly", etc.) override high-breadth scores and surface as `vetoed:<phrase>` signals. ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts))
+- **Goal budget formatter coverage** — tests for `formatBudget`, `goalHasBudgetLeft` under the new effectively-unlimited default, and the inline `Budget N` regex used by `/goal`. ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts))
+
 ## [0.3.4] - 2026-05-22
 
 ### Changed — separate `.env` per package
