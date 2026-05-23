@@ -69,8 +69,12 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   console.log('\n' + banner);
   // Offline-mode advisory stays as a separate line below the box so the
   // colored warning isn't easy to miss when scanning past banner chrome.
+  // Carries the remediation hint that used to live as a duplicate pre-banner
+  // warning in the chat command's catch block.
   if (!mcpClient.isConnected()) {
-    console.log(theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Local tools only; memory recall / skills disabled.'));
+    console.log(theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Memory recall, skills, and capture are disabled.'));
+    console.log(theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.'));
+    console.log(theme.muted('       Start the MCP server and restart the CLI to restore full functionality.'));
   }
   console.log(
     theme.muted('  Type ') + theme.info('/help') +
@@ -81,7 +85,11 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.hex('#CC9166')('brainrouter> '),
+    // Initial prompt uses the resolved theme's primary accent so light/mono
+    // users get a readable prompt even on the first draw. refreshPromptForMode
+    // re-renders immediately after wiring up the access-mode accent, so this
+    // initial value mostly governs the millisecond before that runs.
+    prompt: theme.primary('brainrouter> '),
     // Tab-completion: complete slash commands when the line begins with "/"
     // and complete workspace file paths when the user is mid-`@mention`.
     completer: (line: string): [string[], string] => {
@@ -144,7 +152,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   };
   const refreshPromptForMode = () => {
     const mode = agent.getAccessMode();
-    const accent = mode === 'shell' ? chalk.red : mode === 'write' ? chalk.hex('#CC9166') : chalk.green;
+    // Mode-to-token mapping reads as semantic intent rather than raw color:
+    //   read  → success  (least dangerous; matches the ✓ established for "ok")
+    //   write → primary  (brand accent; the default writable mode)
+    //   shell → danger   (escalated capability; same color as failed tools)
+    // Theme tokens mean BRAINROUTER_THEME=light|mono actually affects the
+    // prompt — the surface the user stares at most. Previously hard-coded
+    // chalk.hex('#CC9166')/red/green ignored the user's theme entirely.
+    const accent = mode === 'shell' ? theme.danger : mode === 'write' ? theme.primary : theme.success;
     const line = renderStatusline();
     rl.setPrompt(accent(`brainrouter[${line}]> `));
     // The terminal title shares the same trigger conditions as the prompt:
