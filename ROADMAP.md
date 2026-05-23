@@ -18,13 +18,6 @@ memory). Design sketched below in "Next Major Release."
 
 ## Recently Completed
 
-### 0.3.5 — Global-install UX fix (shipped)
-- **`brainrouter-mcp init` subcommand.** Scaffolds `~/.config/brainrouter/server.env` from the bundled `.env.example` (chmod 0600). Won't overwrite an existing file.
-- **MCP env-loader priority chain.** Three slots, in order: `$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`. Server prints which file it loaded at startup.
-- **Published READMEs rewritten for global-install users.** Both `@kinqs/brainrouter-cli` and `@kinqs/brainrouter-mcp-server` now document the install + configure + run flow that ends with `brainrouter` on `$PATH`, including the sudo caveat (don't sudo if you're on nvm/Homebrew).
-- **`SETUP.md` restructured** into §2A (install from npm) and §2B (clone and build).
-- Backward compatible: existing monorepo dev (`brainrouter/.env`) still works in the third priority slot. 109 CLI tests still passing.
-
 ### 0.3.6 — Relevance judge, goal-loop hardening, dashboard markdown (in-flight)
 - **Stage 4 relevance judge.** Opt-in LLM-as-judge gate runs *after* the reranker and drops candidates that share vocabulary with the query but aren't actually relevant. Verdicts are auditable via `RecallExplanation.judgeVerdicts[]`. Falls back to reranker output on any failure — a flaky judge never breaks recall. ([`brainrouter/src/memory/store/relevance-judge.ts`](brainrouter/src/memory/store/relevance-judge.ts), [`brainrouter/src/memory/recall.ts`](brainrouter/src/memory/recall.ts))
 - **Goal-loop hardening.** Per-turn `goal-anchor` system message re-injection so the goal stays in immediate context across long `/goal` loops; `Agent.ensureInitialized()` resolves the MCP sessionKey before the first `runTurn` (fixes the split-brain where the first `/goal` wrote to the fallback key); `/plan clear` escape hatch for stale plan items; inline `budget: N iterations` parsing in `/goal`; auto-reconcile of stale plan items on a new goal. ([`brainrouter-cli/src/agent/agent.ts`](brainrouter-cli/src/agent/agent.ts), [`brainrouter-cli/src/cli/commands/workflow.ts`](brainrouter-cli/src/cli/commands/workflow.ts))
@@ -39,6 +32,13 @@ memory). Design sketched below in "Next Major Release."
 - **Flaky JWT-tampering test fixed.** `brainrouter/src/__tests__/crypto.test.ts` was hard-coding `"x"` as the tampering character; when the JWT signature happened to end in `"x"` (~1/64 base64url collision odds) the "tampered" token equalled the original and the test failed intermittently. Replacement char now guaranteed to differ. Side effect: the Node 20.x ci.yml comment that blamed `crypto.timingSafeEqual` was wrong — it was this flakiness.
 - **Docs.** New "Relevance judge" section in [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) with three setup recipes; recall-pipeline diagram in [`brainrouter-docs/memory-engine.md`](brainrouter-docs/memory-engine.md), [`BRAINROUTER.md`](BRAINROUTER.md), and [`PRESENTATION.md`](PRESENTATION.md) updated to show the judge as the final gate; README aligned with the new placeholder-blank style. New [`CLAUDE.md`](CLAUDE.md) (Claude Code repo instructions) + [`Tasks.md`](Tasks.md) (0.3.6 living checklist) + [`openSrc/REFERENCES.md`](openSrc/REFERENCES.md) (router for vendored research material; gitignored). PR + issue templates + Dependabot config added under [`.github/`](.github/).
 - **Tests.** New coverage for breadth-hint vetoes, goal-budget formatter, and `goalHasBudgetLeft` under the effectively-unlimited default ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts)) plus the new cognitive-extractor and crypto fixes above.
+
+### 0.3.5 — Global-install UX fix (shipped)
+- **`brainrouter-mcp init` subcommand.** Scaffolds `~/.config/brainrouter/server.env` from the bundled `.env.example` (chmod 0600). Won't overwrite an existing file.
+- **MCP env-loader priority chain.** Three slots, in order: `$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`. Server prints which file it loaded at startup.
+- **Published READMEs rewritten for global-install users.** Both `@kinqs/brainrouter-cli` and `@kinqs/brainrouter-mcp-server` now document the install + configure + run flow that ends with `brainrouter` on `$PATH`, including the sudo caveat (don't sudo if you're on nvm/Homebrew).
+- **`SETUP.md` restructured** into §2A (install from npm) and §2B (clone and build).
+- Backward compatible: existing monorepo dev (`brainrouter/.env`) still works in the third priority slot. 109 CLI tests still passing.
 
 ### 0.3.4 — First npm release
 - **Published packages**: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli) (CLI — installs the `brainrouter` binary), [`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server), [`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk), [`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types). License, repository, keywords, `publishConfig.access: public`, `files` allowlist, and `prepack` hooks on each.
