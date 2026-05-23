@@ -61,6 +61,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.5'));
   console.log(chalk.gray('Midnight Ledger / Obsidian Surface theme active.'));
   console.log(chalk.gray(`Workspace root: ${workspace?.workspaceRoot || process.cwd()}`));
+  console.log(chalk.gray(`Session:        ${agent.sessionKey.slice(0, 8)} (full: ${agent.sessionKey})`));
   // Surface offline mode prominently — easy to miss the warning that scrolled
   // by during startup, and the user needs to know memory tools won't fire.
   if (!mcpClient.isConnected()) {
