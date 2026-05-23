@@ -5,9 +5,10 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "brainrouter": "dist/index.js"
+    "brainrouter": "bin/cli.cjs"
   },
   "files": [
+    "bin",
     "dist",
     "README.md",
     ".env.example"

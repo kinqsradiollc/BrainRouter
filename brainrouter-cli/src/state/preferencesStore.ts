@@ -39,6 +39,12 @@ export interface Preferences {
   sandboxReadPaths: string[];
   /** Extra write-allowed paths granted to sandboxed run_command. */
   sandboxWritePaths: string[];
+  /**
+   * When true, hide non-essential chrome from the REPL: briefing/recall
+   * tables, tool-completion previews, spawn dumps. Leaves spinner + model
+   * prose. Tied to /quiet and the --quiet startup flag. Off by default.
+   */
+  quiet: boolean;
 }
 
 const DEFAULT: Preferences = {
@@ -55,6 +61,7 @@ const DEFAULT: Preferences = {
   keymap: '',
   sandboxReadPaths: [],
   sandboxWritePaths: [],
+  quiet: false,
 };
 
 export function readPreferences(workspaceRoot: string): Preferences {

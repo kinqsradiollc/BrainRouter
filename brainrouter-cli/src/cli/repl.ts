@@ -17,6 +17,9 @@ import { execSync } from 'node:child_process';
 import type { WorkspaceInfo } from '../config/workspace.js';
 import { listSessions } from '../orchestration/orchestrator.js';
 import { setActiveReadline } from './cliPrompt.js';
+import { resolveTheme } from './theme.js';
+import { buildBannerInputs, renderBanner } from './banner.js';
+import { isKnownSegment, renderSegments } from './statusline.js';
 // Category dispatch — extracted slash-command handlers. Each module exports
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
 // in order; first match wins, no match falls through to the legacy switch.
@@ -40,14 +43,14 @@ marked.use(markedTerminal({
  * the readline completer. Keep alphabetically grouped roughly by surface area.
  */
 const SLASH_COMMANDS = [
-  '/help', '/status', '/workspace', '/tools', '/skills', '/plan', '/transcript',
+  '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait',
   '/spec', '/feature-dev', '/review', '/implement-plan', '/skill', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
   '/init', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop',
-  '/continue', '/auto-review', '/vim', '/statusline',
+  '/continue', '/auto-review', '/vim', '/statusline', '/quiet',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
   '/tokens', '/watch', '/yolo', '/sandbox', '/kill',
@@ -58,21 +61,35 @@ const SLASH_COMMANDS = [
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
-  console.log(chalk.bold.hex('#CC9166')('\n🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.5'));
-  console.log(chalk.gray('Midnight Ledger / Obsidian Surface theme active.'));
-  console.log(chalk.gray(`Workspace root: ${workspace?.workspaceRoot || process.cwd()}`));
-  console.log(chalk.gray(`Session:        ${agent.sessionKey.slice(0, 8)} (full: ${agent.sessionKey})`));
-  // Surface offline mode prominently — easy to miss the warning that scrolled
-  // by during startup, and the user needs to know memory tools won't fire.
+  const theme = resolveTheme(agent.workspaceRoot);
+  const banner = renderBanner(
+    buildBannerInputs(config, agent, mcpClient),
+    theme,
+  );
+  console.log('\n' + banner);
+  // Offline-mode advisory stays as a separate line below the box so the
+  // colored warning isn't easy to miss when scanning past banner chrome.
+  // Carries the remediation hint that used to live as a duplicate pre-banner
+  // warning in the chat command's catch block.
   if (!mcpClient.isConnected()) {
-    console.log(chalk.yellow('⚠️  OFFLINE MODE — MCP server unreachable. Local tools only; memory recall / skills disabled.'));
+    console.log(theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Memory recall, skills, and capture are disabled.'));
+    console.log(theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.'));
+    console.log(theme.muted('       Start the MCP server and restart the CLI to restore full functionality.'));
   }
-  console.log(chalk.gray('Type ') + chalk.cyan('/help') + chalk.gray(' for commands, or start typing your prompt.\n'));
+  console.log(
+    theme.muted('  Type ') + theme.info('/help') +
+    theme.muted(' for commands · ') + theme.info('/where') +
+    theme.muted(' for current state · just start typing your prompt.\n'),
+  );
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.hex('#CC9166')('brainrouter> '),
+    // Initial prompt uses the resolved theme's primary accent so light/mono
+    // users get a readable prompt even on the first draw. refreshPromptForMode
+    // re-renders immediately after wiring up the access-mode accent, so this
+    // initial value mostly governs the millisecond before that runs.
+    prompt: theme.primary('brainrouter> '),
     // Tab-completion: complete slash commands when the line begins with "/"
     // and complete workspace file paths when the user is mid-`@mention`.
     completer: (line: string): [string[], string] => {
@@ -118,38 +135,31 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
 
   // Reflect the current access mode and any configured statusline segments
   // in the prompt. Configurable via /statusline; default just shows the mode.
+  // Segment expansion lives in ./statusline.ts so the segment vocabulary is
+  // one source of truth for both /statusline and the prompt renderer.
   const renderStatusline = (): string => {
     const prefs = readPreferences(agent.workspaceRoot);
-    const segments = prefs.statusline.split(',').map((s) => s.trim()).filter(Boolean);
-    const out: string[] = [];
-    for (const seg of segments) {
-      if (seg === 'mode') out.push(agent.getAccessMode());
-      else if (seg === 'model') out.push(agent.getModel());
-      else if (seg === 'tokens') {
-        const u = agent.lastTurnUsage;
-        if (u.calls > 0) out.push(`${u.promptTokens}↑${u.completionTokens}↓`);
-      } else if (seg === 'session') {
-        const k = agent.sessionKey;
-        out.push(k.length > 22 ? `${k.slice(0, 22)}…` : k);
-      } else if (seg === 'branch' || seg === 'dirty') {
-        try {
-          const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: agent.workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-          const dirty = execSync('git status --porcelain', { cwd: agent.workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() !== '';
-          if (seg === 'branch') out.push(branch);
-          else if (seg === 'dirty' && dirty) out.push('*');
-        } catch { /* not a git repo */ }
-      } else if (seg === 'pr') {
-        // Detect open GitHub PR for the current branch — 30s cache so the
-        // prompt refresh is cheap (re-shells out only on a stale window).
-        const pr = detectGitHubPR(agent.workspaceRoot);
-        if (pr) out.push(pr);
-      }
-    }
-    return out.filter(Boolean).join(' · ');
+    const requested = prefs.statusline.split(',').map((s) => s.trim()).filter(Boolean);
+    const segments = requested.filter(isKnownSegment);
+    return renderSegments(segments, {
+      workspaceRoot: agent.workspaceRoot,
+      sessionKey: agent.sessionKey,
+      accessMode: agent.getAccessMode(),
+      model: agent.getModel(),
+      lastTurnUsage: agent.lastTurnUsage,
+      prDetector: () => detectGitHubPR(agent.workspaceRoot),
+    }).join(' · ');
   };
   const refreshPromptForMode = () => {
     const mode = agent.getAccessMode();
-    const accent = mode === 'shell' ? chalk.red : mode === 'write' ? chalk.hex('#CC9166') : chalk.green;
+    // Mode-to-token mapping reads as semantic intent rather than raw color:
+    //   read  → success  (least dangerous; matches the ✓ established for "ok")
+    //   write → primary  (brand accent; the default writable mode)
+    //   shell → danger   (escalated capability; same color as failed tools)
+    // Theme tokens mean BRAINROUTER_THEME=light|mono actually affects the
+    // prompt — the surface the user stares at most. Previously hard-coded
+    // chalk.hex('#CC9166')/red/green ignored the user's theme entirely.
+    const accent = mode === 'shell' ? theme.danger : mode === 'write' ? theme.primary : theme.success;
     const line = renderStatusline();
     rl.setPrompt(accent(`brainrouter[${line}]> `));
     // The terminal title shares the same trigger conditions as the prompt:
@@ -208,6 +218,19 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     } catch { /* terminal doesn't support OSC titles */ }
   };
 
+  // Quiet mode: hides recall tables, briefing dumps, tool-completion previews.
+  // Env var (`BRAINROUTER_QUIET`, set by --quiet flag) wins for the session;
+  // /quiet writes through to preferences AND mirrors into the env so toggling
+  // back-and-forth keeps a single source of truth at read time.
+  const isQuiet = (): boolean => {
+    if (process.env.BRAINROUTER_QUIET === '1') return true;
+    try {
+      return readPreferences(agent.workspaceRoot).quiet === true;
+    } catch {
+      return false;
+    }
+  };
+
   refreshPromptForMode();
   refreshTerminalTitle();
 
@@ -249,6 +272,39 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
 
   let isProcessing = false;
   // (pendingContinuation declared earlier alongside the title refresh helpers.)
+
+  // Idle help hint: one-time per session. 30s after the prompt appears (and
+  // while neither a turn nor a pending continuation is running), print a
+  // single discoverability nudge so first-time users find /help and /where.
+  // Dismissed permanently as soon as it fires or the user starts typing.
+  // safePrintAbovePrompt is defined further down — the actual call only
+  // happens via setTimeout (30s after declaration), so by firing time
+  // safePrintAbovePrompt has been bound, no TDZ in practice.
+  let idleHintFired = false;
+  let idleHintTimer: NodeJS.Timeout | undefined;
+  const clearIdleHint = () => {
+    if (idleHintTimer) {
+      clearTimeout(idleHintTimer);
+      idleHintTimer = undefined;
+    }
+  };
+  const armIdleHint = () => {
+    if (idleHintFired || !process.stdout.isTTY) return;
+    clearIdleHint();
+    idleHintTimer = setTimeout(() => {
+      if (idleHintFired || isProcessing || pendingContinuation) return;
+      idleHintFired = true;
+      safePrintAbovePrompt(
+        chalk.gray('  Tip: press ') + chalk.cyan('?') + chalk.gray(' or ') +
+        chalk.cyan('/help') + chalk.gray(' for commands, ') + chalk.cyan('/where') +
+        chalk.gray(' for current state.'),
+      );
+    }, 30_000);
+    if (typeof (idleHintTimer as any).unref === 'function') {
+      // unref so a fully-idle CLI can still exit cleanly on Ctrl-C / SIGTERM.
+      (idleHintTimer as any).unref();
+    }
+  };
 
   /**
    * Prompt the agent receives for iterations 2..N of an active goal —
@@ -314,6 +370,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     try { (rl as any)._refreshLine?.(); } catch { rl.prompt(true); }
   };
 
+  // Now that safePrintAbovePrompt is bound, arm the idle hint for the first
+  // time. Subsequent arming happens after each prompt redraw in runAgentTurn.
+  armIdleHint();
+
   /** Run a turn programmatically (used by `/continue` and the line handler). */
   const runAgentTurn = async (rawInput: string): Promise<void> => {
     if (isProcessing) {
@@ -323,7 +383,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     isProcessing = true;
     rl.pause();
     const { expanded, mentions } = expandMentions(rawInput, agent.workspaceRoot);
-    if (mentions.length > 0) {
+    if (mentions.length > 0 && !isQuiet()) {
       console.log(chalk.gray(`📎  Attached ${mentions.length} file${mentions.length === 1 ? '' : 's'}: ${mentions.map((m) => m.token).join(', ')}`));
     }
     const startedAt = Date.now();
@@ -344,6 +404,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
         onToolStart: (name, args) => {
+          // Quiet mode: skip tool-start chrome entirely. The spinner already
+          // reflects "something is happening" and the final prose tells the
+          // story. Errors still surface via onToolEnd's failure branch.
+          if (isQuiet()) return;
           // Render spawn_agent / spawn_agents specially — a one-liner
           // ("Ran agent <role> — <one-line task>") so a fan-out of 5
           // children produces 5 clean lines instead of 5 JSON dumps. The
@@ -369,6 +433,13 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           console.log(line);
         },
         onToolEnd: (name, result) => {
+          // Quiet mode: only print on failure. Successes are invisible — the
+          // prose answer or downstream tool calls speak for themselves.
+          if (isQuiet() && result.success) {
+            tickStatus('Thinking');
+            spinner.start();
+            return;
+          }
           const line = result.success
             ? chalk.green('✓  Tool ') + chalk.cyan(name) + chalk.green(' completed: ') + chalk.gray(result.summary)
             : chalk.red('❌  Tool ') + chalk.cyan(name) + chalk.red(' failed: ') + chalk.yellow(result.summary);
@@ -376,8 +447,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           // sees the actual result (directory listing, grep matches, glob
           // paths) even when the LLM later replies with only a stub like
           // "I have listed the directory." Capped to a handful of lines in
-          // getToolPreview itself.
-          const previewBlock = result.preview
+          // getToolPreview itself. Quiet mode drops the preview even on
+          // failure — the summary tells the user what broke; the preview is
+          // for diagnosing why and isn't worth the screen real-estate.
+          const previewBlock = result.preview && !isQuiet()
             ? '\n' + result.preview.split('\n').map((l) => chalk.gray('    ' + l)).join('\n')
             : '';
           const composed = line + previewBlock;
@@ -419,6 +492,9 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           spinner.start();
         },
         onMemoryEvent: (event) => {
+          // Quiet mode: silence briefing/capture/citation chatter. Keep
+          // contradictions audible — those are warnings the user should see.
+          if (isQuiet() && event.kind !== 'contradiction') return;
           let line: string | undefined;
           if (event.kind === 'briefing') {
             const src = event.sources.length > 0 ? event.sources.join(', ') : '(none)';
@@ -555,6 +631,9 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       rl.resume();
       refreshPromptForMode(); // pick up token-meter / branch updates
       rl.prompt();
+      // Re-arm the idle hint after each completed turn — a user who walks
+      // away after a turn ends still gets one nudge if they hadn't seen it.
+      armIdleHint();
       if (shouldContinue && goalAfter) {
         pendingContinuation = true;
         const next = goalAfter.budget.iterationsUsed + 1;
@@ -588,6 +667,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   };
 
   rl.on('line', async (line) => {
+    // User typed anything → drop the pending idle-hint timer regardless of
+    // whether the input itself is meaningful. Empty enter still counts as
+    // engagement; we don't want to nag a user who's clearly at the keyboard.
+    clearIdleHint();
     // User typed: any pending goal continuation is cancelled.
     if (pendingContinuation) {
       pendingContinuation = false;
@@ -596,6 +679,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     const input = line.trim();
 
     if (!input) {
+      rl.prompt();
+      return;
+    }
+
+    // Treat a bare "?" as /help — the idle-hint tip advertises it, so make
+    // it actually work. Anything beyond "?" (a real prompt) falls through.
+    if (input === '?') {
+      renderHelp();
       rl.prompt();
       return;
     }
@@ -684,6 +775,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
+      { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
       { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
       { cmd: '/config', desc: 'View active configuration profile' },
       { cmd: '/clear', desc: 'Clear chat history for the active session' },
@@ -791,6 +883,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/statusline <segments>', desc: 'Prompt (mode,branch,dirty,model,tokens,session,pr)' },
       { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
       { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
+      { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },
       { cmd: '/vim', desc: 'Toggle vi-mode for the composer' },
       { cmd: '/keymap [json]', desc: 'Show built-in bindings and set overrides' },
       { cmd: '/copy', desc: 'Copy last assistant response to clipboard' },

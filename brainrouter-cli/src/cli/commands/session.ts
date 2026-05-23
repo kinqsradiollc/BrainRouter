@@ -55,6 +55,11 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         return true;
       }
       agent.sessionKey = sessionKey;
+      // The persisted transcript doesn't record per-call token usage, so
+      // we can't reconstruct counters for the resumed session — start
+      // counting from this point forward instead of carrying over the
+      // pre-resume parent counts (which were for a different session).
+      agent.resetSessionCounters();
       const loaded = agent.loadHistory(entries);
       console.log(chalk.green(`\n✓ Resumed session ${chalk.cyan(sessionKey)} with ${loaded} prior messages.`));
 
