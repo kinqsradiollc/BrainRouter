@@ -27,7 +27,14 @@ describe("crypto auth helpers", () => {
 
   it("verifyJwt returns null for tampered signature", () => {
     const token = signJwt({ userId: "u1" }, "secret", 60);
-    const tampered = `${token.slice(0, -1)}x`;
+    // Pick a replacement char that is GUARANTEED to differ from the
+    // original last char. The previous version hard-coded "x"; whenever
+    // the JWT's base64url signature happened to end in "x" (~1/64 odds),
+    // the "tampered" token equalled the original and verification
+    // succeeded — flaky failure. See PR #22 CI run 26323691062.
+    const lastChar = token.slice(-1);
+    const replacement = lastChar === "A" ? "B" : "A";
+    const tampered = token.slice(0, -1) + replacement;
     expect(verifyJwt(tampered, "secret")).toBeNull();
   });
 });

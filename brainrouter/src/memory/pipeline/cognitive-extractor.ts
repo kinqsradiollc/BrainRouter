@@ -220,15 +220,15 @@ function parseExtractionResult(raw: string): ParsedScene[] {
 // aren't valid JSON escapes — Windows paths (\users), regex literals,
 // LaTeX (\section), or shell snippets. JSON.parse rejects the entire
 // payload on the first bad escape, so we'd drop an otherwise-good batch
-// of memories over one stray backslash. This repair pass doubles any
-// backslash that isn't followed by a legal JSON escape (" \ / b f n r t)
-// or a \uXXXX Unicode escape, then retries the parse.
+// of memories over one stray backslash. Once the first parse has failed,
+// preserve ambiguous backslashes literally; otherwise valid JSON escapes
+// like \b, \f, \n, \r, \t, or \uXXXX can silently corrupt paths.
 function parseJsonWithEscapeRepair(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch (err) {
     if (!(err instanceof SyntaxError)) throw err;
-    const repaired = raw.replace(/\\(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})/g, "\\\\");
+    const repaired = raw.replace(/\\(?!["\\\/])/g, "\\\\");
     return JSON.parse(repaired);
   }
 }
