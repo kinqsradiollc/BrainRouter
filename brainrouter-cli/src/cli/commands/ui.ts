@@ -269,18 +269,18 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     {
       const prefs = readPreferences(agent.workspaceRoot);
       const arg = args.join(' ').trim();
+      const { SEGMENT_NAMES, isKnownSegment } = await import('../statusline.js');
       if (!arg) {
         console.log(chalk.bold('\nStatusline'));
         console.log(`  Current: ${chalk.cyan(prefs.statusline)}`);
-        console.log(chalk.gray('  Available segments: mode, branch, dirty, model, tokens, session'));
-        console.log(chalk.gray('  Example: /statusline mode,branch,dirty,tokens\n'));
+        console.log(chalk.gray(`  Available segments: ${SEGMENT_NAMES.join(', ')}`));
+        console.log(chalk.gray('  Example: /statusline mode,workflow,goal,model,session,plan\n'));
         return true;
       }
-      const valid = new Set(['mode', 'branch', 'dirty', 'model', 'tokens', 'session']);
       const requested = arg.split(',').map((s) => s.trim()).filter(Boolean);
-      const unknown = requested.filter((s) => !valid.has(s));
+      const unknown = requested.filter((s) => !isKnownSegment(s));
       if (unknown.length > 0) {
-        console.log(chalk.red(`\nUnknown segment(s): ${unknown.join(', ')}. Valid: ${Array.from(valid).join(', ')}\n`));
+        console.log(chalk.red(`\nUnknown segment(s): ${unknown.join(', ')}. Valid: ${SEGMENT_NAMES.join(', ')}\n`));
         return true;
       }
       writePreferences(agent.workspaceRoot, { statusline: requested.join(',') });
@@ -365,6 +365,25 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       const next = arg ? (arg === 'on' || arg === 'true' || arg === '1') : !prefs.rawScrollback;
       writePreferences(agent.workspaceRoot, { rawScrollback: next });
       console.log(chalk.green(`\n✓ Raw scrollback ${next ? 'enabled' : 'disabled'}. Markdown rendering ${next ? 'OFF' : 'ON'} for next turn.\n`));
+      return true;
+    }
+    case '/quiet':
+    {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      const next = arg ? (arg === 'on' || arg === 'true' || arg === '1') : !prefs.quiet;
+      writePreferences(agent.workspaceRoot, { quiet: next });
+      // `--quiet` set a one-shot env override at startup; once the user
+      // explicitly toggles in-session their choice wins from now on.
+      if (next) {
+        process.env.BRAINROUTER_QUIET = '1';
+      } else {
+        delete process.env.BRAINROUTER_QUIET;
+      }
+      const detail = next
+        ? 'recall tables, briefing dumps, and tool-completion previews are now hidden.'
+        : 'full chrome restored — recall tables, previews, and briefings will print again.';
+      console.log(chalk.green(`\n✓ Quiet mode ${next ? 'enabled' : 'disabled'}: ${detail}\n`));
       return true;
     }
     case '/apps':
@@ -454,6 +473,28 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       console.log(`  Detected: ${detected.length > 0 ? chalk.cyan(detected.join(', ')) : chalk.gray('(none — running standalone)')}`);
       console.log(chalk.gray('  Brainrouter reads files via the workspace root; if your IDE has an open selection, paste it with @ mentions or copy/paste.'));
       console.log(chalk.gray('  Tip: configure IDE to launch brainrouter with -w <workspace> so paths match.\n'));
+      return true;
+    }
+    case '/where':
+    {
+      const { gatherWhereInputs, renderWhere } = await import('../whereView.js');
+      const { resolveTheme } = await import('../theme.js');
+      const theme = resolveTheme(agent.workspaceRoot);
+      const profileName = config.activeServer;
+      const server = config.servers[profileName];
+      const briefing = agent.getLastBriefing();
+      const inputs = gatherWhereInputs({
+        workspaceRoot: agent.workspaceRoot,
+        sessionKey: agent.sessionKey,
+        model: agent.getModel(),
+        mcpProfile: profileName,
+        mcpTransport: server?.type ?? 'unknown',
+        mcpOnline: mcpClient.isConnected(),
+        accessMode: agent.getAccessMode(),
+        recalledRecords: agent.getRecalledRecords(),
+        briefingSources: briefing.sources,
+      });
+      console.log('\n' + renderWhere(inputs, theme) + '\n');
       return true;
     }
     case '/help': {

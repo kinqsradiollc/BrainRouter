@@ -1374,6 +1374,21 @@ export class Agent {
     );
   }
 
+  /**
+   * Zero the in-process counters that back `/tokens`. Call this on any
+   * conceptual session boundary (`/resume`, `fork`) — otherwise the parent
+   * row keeps accumulating across the switch and "this session" no longer
+   * matches the displayed sessionKey.
+   */
+  public resetSessionCounters(): void {
+    this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+    this.memoryMetrics = {
+      briefingTokensInjected: 0,
+      offloadCharsAvoided: 0,
+      recallRecordsConsulted: 0,
+    };
+  }
+
   /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
   public fork(newSessionKey: string): string {
     this.sessionKey = newSessionKey;
@@ -1384,6 +1399,7 @@ export class Agent {
     } else {
       this.chatHistory = [this.createSystemMessage(), ...this.chatHistory];
     }
+    this.resetSessionCounters();
     return this.sessionKey;
   }
 
@@ -1493,6 +1509,16 @@ export class Agent {
   /** Inspectable summary of the most recent memory briefing. Used by the `/briefing` slash command. */
   public getLastBriefing(): { sources: string[]; recordIds: string[] } {
     return { sources: [...this.lastBriefingSources], recordIds: [...this.recalledRecordIds] };
+  }
+
+  /**
+   * Snapshot of the records produced by the most recent pre-turn briefing.
+   * `/where` surfaces a few of these to give the user a sense of what the
+   * agent is leaning on right now. Returns a shallow copy so callers can't
+   * mutate the agent's internal state.
+   */
+  public getRecalledRecords(): RecalledRecord[] {
+    return [...this.recalledRecords];
   }
 
   /** One-line summary of any new contradiction surfaced after the last capture, or undefined if none. */
