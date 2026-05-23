@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { getCliStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from './cliState.js';
+import path from 'node:path';
+import { getCliStateDir, getCliStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from './cliState.js';
 
 /**
  * Persistent goal / continuation contract for the agent. A goal is not just
@@ -30,9 +31,10 @@ import { getCliStateFile, getSessionStateFile, readJsonFile, writeJsonFile } fro
  * Storage (per-session bucket):
  *   ~/.brainrouter/workspaces/<encoded>/cli/sessions/<encodedKey>/goal.json
  *
- * Legacy fallback paths exist for sessions created before per-session
- * goal isolation was added. normalize() fills missing fields with defaults
- * so resumed sessions don't crash on first read.
+ * The legacy workspace-level path is only read when no sessionKey is
+ * available. Session-scoped reads stay isolated and never fall back to a
+ * prior session's goal. normalize() fills missing fields with defaults so
+ * resumed sessions don't crash on first read.
  */
 
 export type GoalStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'usage_limited';
@@ -169,12 +171,31 @@ export function readGoal(workspaceRoot: string, sessionKey?: string): Goal | nul
     if (fs.existsSync(sessionPath)) {
       return normalize(readJsonFile<Partial<Goal> | null>(sessionPath, null));
     }
+    return null;
   }
   const legacyPath = getCliStateFile(workspaceRoot, 'goal.json');
   if (fs.existsSync(legacyPath)) {
     return normalize(readJsonFile<Partial<Goal> | null>(legacyPath, null));
   }
   return null;
+}
+
+function archiveLegacyGoal(workspaceRoot: string): void {
+  const legacyPath = getCliStateFile(workspaceRoot, 'goal.json');
+  if (!fs.existsSync(legacyPath)) return;
+
+  const archiveDir = path.join(getCliStateDir(workspaceRoot), '.brainrouter.migrated');
+  fs.mkdirSync(archiveDir, { recursive: true });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let archivePath = path.join(archiveDir, `legacy-goal-${stamp}.json`);
+  let suffix = 1;
+  while (fs.existsSync(archivePath)) {
+    archivePath = path.join(archiveDir, `legacy-goal-${stamp}-${suffix}.json`);
+    suffix += 1;
+  }
+
+  fs.renameSync(legacyPath, archivePath);
 }
 
 /**
@@ -204,6 +225,9 @@ export function setGoal(
     if (existing && existing.status !== 'complete') {
       throw new GoalConflictError(existing);
     }
+  }
+  if (sessionKey) {
+    archiveLegacyGoal(workspaceRoot);
   }
   const now = new Date().toISOString();
   const goal: Goal = {

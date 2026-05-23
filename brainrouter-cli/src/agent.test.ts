@@ -1122,13 +1122,13 @@ test('Agent.loadHistory replaces chat history and refreshSystemPrompt updates it
     const count = agent.loadHistory(replay);
     assert.equal(count, 2);
     // System message replaced; goal etc. would land here if set.
-    setGoal(workspace, 'finish the auth refactor');
+    setGoal(workspace, 'finish the auth refactor', agent.sessionKey);
     agent.refreshSystemPrompt();
     const sys = (agent as any).chatHistory[0];
     assert.equal(sys.role, 'system');
     assert.match(sys.content, /Active Goal/);
     assert.match(sys.content, /finish the auth refactor/);
-    clearGoal(workspace);
+    clearGoal(workspace, agent.sessionKey);
   });
 });
 
@@ -1609,22 +1609,43 @@ test('goalStore: editGoal unified update changes text/status/budget/tokens in on
   });
 });
 
-test('goalStore: legacy workspace-level goal is read as a fallback', async () => {
-  const { getCliStateFile, getSessionStateDir } = await import('./state/cliState.js');
+test('goalStore: legacy workspace-level goal only falls back for no-session reads; first session-scoped setGoal archives it', async () => {
+  const { getCliStateDir, getCliStateFile, getSessionStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
     // Old layout — write directly to the workspace-level file.
     fs.writeFileSync(getCliStateFile(workspace, 'goal.json'), JSON.stringify({ text: 'legacy goal', setAt: '2026-01-01T00:00:00Z' }));
     const sessionKey = 'brainrouter-cli:project:main';
-    assert.equal(readGoal(workspace, sessionKey)?.text, 'legacy goal');
+    // Without sessionKey, legacy is still readable (back-compat for very old installs).
+    assert.equal(readGoal(workspace)?.text, 'legacy goal');
+    // With sessionKey and no session bucket yet → null, not the legacy goal (the leakage fix).
+    assert.equal(readGoal(workspace, sessionKey), null);
 
-    // Setting a per-session goal shadows the legacy one without removing it.
-    // The legacy fallback DOES count as an existing goal under the new
-    // conflict-detection rule, so pass force=true to bypass the prompt
-    // path (REPL will do this after confirming with the user).
-    setGoal(workspace, 'session-scoped', sessionKey, { force: true });
+    setGoal(workspace, 'session-scoped', sessionKey);
     assert.equal(readGoal(workspace, sessionKey)?.text, 'session-scoped');
-    // Bucket exists at the expected path.
+    // Session bucket holds the new goal.
     assert.equal(fs.existsSync(path.join(getSessionStateDir(workspace, sessionKey), 'goal.json')), true);
+    // Legacy file is gone (archived, not left where another session would re-pick it up).
+    assert.equal(fs.existsSync(getCliStateFile(workspace, 'goal.json')), false);
+    // Archived into the per-user cli state dir, NOT into the project workspace tree.
+    const archiveDir = path.join(getCliStateDir(workspace), '.brainrouter.migrated');
+    const migrated = fs.readdirSync(archiveDir);
+    assert.equal(migrated.length, 1);
+    assert.match(migrated[0]!, /^legacy-goal-.*\.json$/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(archiveDir, migrated[0]!), 'utf8')).text, 'legacy goal');
+    // Guardrail: the project workspace tree is not polluted (0.3.3 invariant).
+    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
+  });
+});
+
+test('goalStore: session A goal does not leak into session B (regression for cross-session legacy fallback)', async () => {
+  withTempWorkspace((workspace) => {
+    const sessionA = 'brainrouter-cli:project:sessionA';
+    const sessionB = 'brainrouter-cli:project:sessionB';
+    setGoal(workspace, 'A is working on the auth refactor', sessionA);
+    // Opening a fresh session in the same workspace must not see A's goal.
+    assert.equal(readGoal(workspace, sessionB), null);
+    // A's own session still has it.
+    assert.equal(readGoal(workspace, sessionA)?.text, 'A is working on the auth refactor');
   });
 });
 
@@ -1829,7 +1850,8 @@ test('runTurn empty LLM answer after a tool call returns a useful summary (not t
 
 test('runTurn: goal_complete is refused while the active plan has pending / in_progress items (plan honesty guard)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
-    setGoal(workspace, 'analyze the CLI architecture');
+    const sessionKey = `brainrouter-cli:${workspace}`;
+    setGoal(workspace, 'analyze the CLI architecture', sessionKey);
     const originalFetch = globalThis.fetch;
     let llmCalls = 0;
     globalThis.fetch = (async () => {
@@ -1901,19 +1923,20 @@ test('runTurn: goal_complete is refused while the active plan has pending / in_p
         onToolEnd: () => {},
       });
       // The guard should have refused goal_complete — goal status stays active.
-      const goalAfter = readGoal(workspace);
+      const goalAfter = readGoal(workspace, sessionKey);
       assert.equal(goalAfter?.status, 'active', 'goal must remain active when plan is incomplete');
       assert.equal(agent.lastGoalTransition, undefined, 'lastGoalTransition must not be set when goal_complete was refused');
     } finally {
       globalThis.fetch = originalFetch;
-      clearGoal(workspace);
+      clearGoal(workspace, sessionKey);
     }
   });
 });
 
 test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
-    setGoal(workspace, 'analyze the CLI architecture');
+    const sessionKey = `brainrouter-cli:${workspace}`;
+    setGoal(workspace, 'analyze the CLI architecture', sessionKey);
     const originalFetch = globalThis.fetch;
     let llmCalls = 0;
     globalThis.fetch = (async () => {
@@ -1968,7 +1991,7 @@ test('runTurn: when goal_complete fires with empty prose, the fallback surfaces 
       assert.doesNotMatch(answer, /no additional commentary/);
     } finally {
       globalThis.fetch = originalFetch;
-      clearGoal(workspace);
+      clearGoal(workspace, sessionKey);
     }
   });
 });
