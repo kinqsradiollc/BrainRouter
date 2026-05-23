@@ -10,6 +10,16 @@ Captures dialogue, classifies it, decays unused facts over time, reinforces
 the ones the agent actually uses, and surfaces the right memories on the
 next prompt — so your agent stops re-learning the same things every session.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=kinqsradiollc%2FBrainRouter&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kinqsradiollc/BrainRouter&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kinqsradiollc/BrainRouter&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kinqsradiollc/BrainRouter&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## What you get
 
 - **MCP server (`brainrouter`)** — drop-in memory tools for any MCP-speaking client.
