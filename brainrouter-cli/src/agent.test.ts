@@ -1649,6 +1649,32 @@ test('goalStore: session A goal does not leak into session B (regression for cro
   });
 });
 
+test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
+  withTempWorkspace((workspace) => {
+    const stubMcp: any = {
+      listTools: async () => ({ tools: [] }),
+      callTool: async () => ({ content: [{ text: '{}' }] }),
+      close: async () => {},
+    };
+    const llm = { provider: 'openai' as const, apiKey: 'k', model: 'test-model' };
+    // Two agents constructed back-to-back, no explicit sessionKey passed —
+    // simulates two `brainrouter` CLI processes started in the same workspace.
+    const agentA = new Agent(stubMcp, llm, { workspaceRoot: workspace, launchCwd: workspace, silent: true });
+    const agentB = new Agent(stubMcp, llm, { workspaceRoot: workspace, launchCwd: workspace, silent: true });
+    // The previous workspace-derived fallback returned the same key for both.
+    // randomUUID() must give us distinct keys per agent.
+    assert.notEqual(agentA.sessionKey, agentB.sessionKey);
+    // And the new keys are valid UUIDs so MCP's isUniqueId accepts them
+    // and skips the workspace-cache branch entirely.
+    assert.match(agentA.sessionKey, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.match(agentB.sessionKey, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    // End-to-end: a goal set on agent A's session is invisible to agent B.
+    setGoal(workspace, 'agent A is reviewing the cli refactor', agentA.sessionKey);
+    assert.equal(readGoal(workspace, agentB.sessionKey), null);
+    assert.equal(readGoal(workspace, agentA.sessionKey)?.text, 'agent A is reviewing the cli refactor');
+  });
+});
+
 test('taskStore: per-session plans are isolated and updatePlan writes the bucket', async () => {
   const { getSessionStateDir } = await import('./state/cliState.js');
   withTempWorkspace((workspace) => {
@@ -1850,7 +1876,7 @@ test('runTurn empty LLM answer after a tool call returns a useful summary (not t
 
 test('runTurn: goal_complete is refused while the active plan has pending / in_progress items (plan honesty guard)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
-    const sessionKey = `brainrouter-cli:${workspace}`;
+    const sessionKey = 'fixed-test-session-key-for-deterministic-agent-state';
     setGoal(workspace, 'analyze the CLI architecture', sessionKey);
     const originalFetch = globalThis.fetch;
     let llmCalls = 0;
@@ -1915,7 +1941,7 @@ test('runTurn: goal_complete is refused while the active plan has pending / in_p
         close: async () => {},
       };
       const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
-        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+        workspaceRoot: workspace, launchCwd: workspace, silent: true, sessionKey,
       });
       await agent.runTurn('analyze', {
         onStatusUpdate: () => {},
@@ -1935,7 +1961,7 @@ test('runTurn: goal_complete is refused while the active plan has pending / in_p
 
 test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
-    const sessionKey = `brainrouter-cli:${workspace}`;
+    const sessionKey = 'fixed-test-session-key-for-goal-complete-fallback';
     setGoal(workspace, 'analyze the CLI architecture', sessionKey);
     const originalFetch = globalThis.fetch;
     let llmCalls = 0;
@@ -1975,7 +2001,7 @@ test('runTurn: when goal_complete fires with empty prose, the fallback surfaces 
         close: async () => {},
       };
       const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
-        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+        workspaceRoot: workspace, launchCwd: workspace, silent: true, sessionKey,
       });
       const answer = await agent.runTurn('analyze', {
         onStatusUpdate: () => {},
