@@ -181,7 +181,7 @@ function parseExtractionResult(raw: string): ParsedScene[] {
     const match = cleaned.match(/\[[\s\S]*\]/);
     if (!match) return [];
 
-    const parsed = JSON.parse(match[0]);
+    const parsed = parseJsonWithEscapeRepair(match[0]);
     if (!Array.isArray(parsed)) return [];
 
     const scenes: ParsedScene[] = [];
@@ -213,6 +213,23 @@ function parseExtractionResult(raw: string): ParsedScene[] {
   } catch (err) {
     console.error("[BrainRouter] Failed to parse extraction result", err);
     return [];
+  }
+}
+
+// LLMs frequently emit JSON where string values contain backslashes that
+// aren't valid JSON escapes — Windows paths (\users), regex literals,
+// LaTeX (\section), or shell snippets. JSON.parse rejects the entire
+// payload on the first bad escape, so we'd drop an otherwise-good batch
+// of memories over one stray backslash. This repair pass doubles any
+// backslash that isn't followed by a legal JSON escape (" \ / b f n r t)
+// or a \uXXXX Unicode escape, then retries the parse.
+function parseJsonWithEscapeRepair(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    const repaired = raw.replace(/\\(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})/g, "\\\\");
+    return JSON.parse(repaired);
   }
 }
 

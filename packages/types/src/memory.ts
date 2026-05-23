@@ -271,6 +271,14 @@ export interface RecallExplanation {
   skillBoostApplied: boolean;
   /** Whether the neural reranker was used in Stage 3. */
   rerankerUsed: boolean;
+  /** Whether the LLM relevance judge was used in Stage 4. */
+  judgeUsed?: boolean;
+  /** How many candidates the judge approved as relevant. */
+  judgeApproved?: number;
+  /** How many candidates the judge rejected as not relevant. */
+  judgeRejected?: number;
+  /** Per-candidate verdicts (index, relevant, reason) for audit/tuning. */
+  judgeVerdicts?: RelevanceVerdict[];
   /** Whether graph context expansion was appended. */
   graphExpansion: boolean;
   /** Per-record citation boost contribution (recordId → boost). */
@@ -364,6 +372,30 @@ export interface RerankerServiceConfig {
   apiKey?: string;
   model?: string;
   topN?: number;
+}
+
+export interface RelevanceJudgeServiceConfig {
+  /** Enable flag — when false, the judge stage is skipped entirely. */
+  enabled?: boolean;
+  /** OpenAI-compatible chat-completions endpoint. Falls back to BRAINROUTER_LLM_ENDPOINT. */
+  endpoint?: string;
+  /** API key. Falls back to BRAINROUTER_LLM_API_KEY. */
+  apiKey?: string;
+  /** Model id for the judge. Defaults to a fast/cheap model. */
+  model?: string;
+  /** Max candidates sent to the judge in a single batched call. Default 10. */
+  maxCandidates?: number;
+  /** Per-call timeout in ms. Default 15000. */
+  timeoutMs?: number;
+}
+
+export interface RelevanceVerdict {
+  /** Index into the candidate list passed to the judge. */
+  index: number;
+  /** Whether the judge approves this candidate as relevant to the query. */
+  relevant: boolean;
+  /** Short justification from the judge (for audit + tuning). */
+  reason: string;
 }
 
 export interface SkillHintsRecord {

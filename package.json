@@ -9,7 +9,9 @@
     "brainrouter-cli"
   ],
   "scripts": {
-    "build": "npm run build -ws --if-present",
+    "build": "npm run build:packages && npm run build:apps",
+    "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
+    "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard",
     "test": "npm run test -ws --if-present",
     "cli": "node brainrouter-cli/dist/index.js"
   },

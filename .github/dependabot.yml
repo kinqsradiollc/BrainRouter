@@ -1,0 +1,58 @@
+# Dependabot keeps npm dependencies and GitHub Actions versions current
+# without drowning us in PRs. Strategy:
+#   - npm minor/patch updates: grouped weekly so dev-deps + production-deps
+#     each land in one PR per week instead of one PR per dependency.
+#   - npm major updates: ungrouped, surfaced individually so we can audit
+#     the changelog before merging.
+#   - GitHub Actions: monthly, ungrouped — pin floats happen rarely enough
+#     that grouping isn't worth the merge-conflict risk.
+#
+# The `directories` field (plural) covers the monorepo: Dependabot updates
+# the root lockfile AND each workspace's package.json in a single PR. If
+# you add a new workspace, add it here too.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - "/"
+      - "/brainrouter"
+      - "/brainrouter-cli"
+      - "/brainrouter-dashboard"
+      - "/packages/types"
+      - "/packages/sdk"
+      - "/packages/hooks"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Asia/Singapore"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+      include: "scope"
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types:
+          - "minor"
+          - "patch"
+      production-minor-patch:
+        dependency-type: production
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    labels:
+      - "ci"
+      - "dependencies"
+    commit-message:
+      prefix: "chore(actions)"

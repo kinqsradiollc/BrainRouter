@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import ReactMarkdown from "react-markdown";
+import { Markdown } from "./Markdown";
 import { PremiumCard } from "./PremiumCard";
 
 interface SceneCardProps {
@@ -166,7 +166,7 @@ export function SceneCard({ scene, onEvict }: SceneCardProps) {
             >
               {scene.summaryMd ? (
                 <div className="markdown-content">
-                  <ReactMarkdown>{scene.summaryMd}</ReactMarkdown>
+                  <Markdown>{scene.summaryMd}</Markdown>
                 </div>
               ) : (
                 <div style={{ color: "var(--color-stone-text)" }}>

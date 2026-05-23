@@ -753,3 +753,38 @@ html {
 .markdown-content > *:last-child {
   margin-bottom: 0 !important;
 }
+
+/* ----------------------------------------------------------------------------
+ * Chat-bubble variant
+ *
+ * `.markdown-content` is tuned for document layouts (Core Identity, Scene
+ * summaries) where 24px heading margins and 16px paragraph gaps read as
+ * breathing room. In a chat bubble those same margins read as awkward dead
+ * space between paragraphs and between the bubble label and the body.
+ *
+ * The variant tightens vertical rhythm while inheriting fonts, colors, list
+ * markers, and code styles unchanged.
+ * -------------------------------------------------------------------------- */
+.markdown-content--chat p,
+.markdown-content--chat ul,
+.markdown-content--chat ol,
+.markdown-content--chat pre,
+.markdown-content--chat blockquote {
+  margin-bottom: 6px;
+}
+
+.markdown-content--chat h1,
+.markdown-content--chat h2,
+.markdown-content--chat h3,
+.markdown-content--chat h4 {
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+.markdown-content--chat li {
+  margin-bottom: 2px;
+}
+
+.markdown-content--chat > *:first-child {
+  margin-top: 0 !important;
+}

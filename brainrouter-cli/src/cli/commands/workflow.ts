@@ -15,7 +15,7 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, updateWorkflowStatus } from '../../state/workflowArtifacts.js';
-import { clearGoal, completeGoal, editGoal, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget } from '../../state/goalStore.js';
+import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
@@ -87,13 +87,34 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/plan':
     {
+      // `/plan clear` is the explicit escape hatch when stale items from a
+      // prior workflow are blocking goal_complete (the plan-honesty guard
+      // refuses to complete with open items). `/goal <text>` also
+      // auto-clears, but this lets the user reset without setting a new
+      // goal — useful mid-session if you just abandoned a workflow.
+      if (args[0] === 'clear') {
+        const before = readPlan(agent.workspaceRoot, agent.sessionKey);
+        const pendingCount = before.items.filter((i) => i.status !== 'completed').length;
+        updatePlan(
+          agent.workspaceRoot,
+          { plan: [], explanation: 'cleared by /plan clear' },
+          agent.sessionKey,
+        );
+        console.log(chalk.green(`\n✓ Plan cleared.`));
+        if (pendingCount > 0) {
+          console.log(chalk.gray(`  Removed ${pendingCount} pending item${pendingCount === 1 ? '' : 's'}.\n`));
+        } else {
+          console.log();
+        }
+        return true;
+      }
       const state = readPlan(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nPlan:'));
       console.log(chalk.gray(formatPlan(state)));
       if (state.updatedAt) {
         console.log(chalk.gray(`Updated: ${state.updatedAt}`));
       }
-      console.log();
+      console.log(chalk.gray('\nSubcommands: /plan | /plan clear\n'));
       return true;
     }
     case '/diff':
@@ -352,6 +373,13 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     case '/goal':
     {
       const arg = args.join(' ').trim();
+      // Eager session resolve — without this, the FIRST /goal of a new
+      // CLI session writes goal.json under the deterministic fallback
+      // sessionKey, but every later runTurn reads from the
+      // MCP-resolved UUID key. Split-brain: kickoff banner shows the
+      // new goal, the agent reads a stale one from a different file.
+      // ensureInitialized is idempotent and tolerates missing MCP.
+      await agent.ensureInitialized();
       const ws = agent.workspaceRoot;
       const sk = agent.sessionKey;
       const showStatus = (g: import('../../state/goalStore.js').Goal | null) => {
@@ -370,7 +398,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         console.log(chalk.bold('\nGoal'));
         console.log(`  Status:     ${status}`);
         console.log(`  Outcome:    ${chalk.cyan(g.text)}`);
-        console.log(`  Iterations: ${g.budget.iterationsUsed}/${g.budget.maxIterations} used`);
+        console.log(`  Iterations: ${g.budget.iterationsUsed}/${formatBudget(g.budget.maxIterations)} used`);
         if (g.budget.maxTokens) {
           console.log(`  Tokens:     ${(g.budget.tokensUsed ?? 0).toLocaleString()}/${g.budget.maxTokens.toLocaleString()} used`);
         }
@@ -401,7 +429,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         // the resumed turn doesn't see contradictory directives.
         agent.removeTaggedSystemMessage('goal-budget-steering');
         agent.refreshSystemPrompt();
-        console.log(chalk.green(`\n▶  Goal resumed (${g.budget.iterationsUsed}/${g.budget.maxIterations} used). Starting next iteration…\n`));
+        console.log(chalk.green(`\n▶  Goal resumed (${g.budget.iterationsUsed}/${formatBudget(g.budget.maxIterations)} used). Starting next iteration…\n`));
         // Fire the next iteration immediately so the user doesn't have to type
         // a "proceed" message — the whole point of /goal is autonomy.
         ctx.repl.runAgentTurn(buildGoalKickoffPrompt(g, 'resume'));
@@ -428,7 +456,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           // the new state still puts us on a final-budget turn.
           agent.removeTaggedSystemMessage('goal-budget-steering');
           agent.refreshSystemPrompt();
-          console.log(chalk.green(`\n✓ Iteration budget set to ${g.budget.maxIterations} (${g.budget.iterationsUsed} already used).\n`));
+          console.log(chalk.green(`\n✓ Iteration budget set to ${formatBudget(g.budget.maxIterations)} (${g.budget.iterationsUsed} already used).\n`));
         }
         return true;
       }
@@ -523,9 +551,26 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       // GoalConflictError and prompt the user before overwriting; a
       // complete goal is replaced silently (the prior work is done, this
       // is just starting fresh and the prompt would be noise).
+      //
+      // Inline budget parsing: users naturally write "/goal do X. Budget 3
+      // iterations." and expect that to set the cap. Without parsing, the
+      // goal store falls back to the default (10) and the user is
+      // confused by "Budget: 10" in the kickoff banner. We extract the
+      // first `budget[:\s]+N[\s iterations?]?` pattern from the text,
+      // strip it, and pass N as the maxIterations option.
+      let parsedBudget: number | undefined;
+      let cleanedText = arg;
+      const budgetMatch = arg.match(/\bbudget[:\s]+(\d+)(?:\s*(?:iterations?|turns?|rounds?))?\.?/i);
+      if (budgetMatch) {
+        const n = Number(budgetMatch[1]);
+        if (Number.isFinite(n) && n >= 1 && n <= 200) {
+          parsedBudget = Math.floor(n);
+          cleanedText = arg.replace(budgetMatch[0], '').replace(/\s{2,}/g, ' ').trim();
+        }
+      }
       let goal: import('../../state/goalStore.js').Goal;
       try {
-        goal = setGoal(ws, arg, sk);
+        goal = setGoal(ws, cleanedText, sk, parsedBudget !== undefined ? { maxIterations: parsedBudget } : undefined);
       } catch (err: any) {
         if (err instanceof GoalTooLongError) {
           console.log(chalk.red(`\n✗ ${err.message}`));
@@ -536,15 +581,19 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           const existing = err.existing;
           console.log(chalk.yellow(`\n⚠️  A goal is already ${existing.status.replace('_', ' ')}:`));
           console.log(`     ${chalk.cyan(existing.text)}`);
-          console.log(`     ${chalk.gray(`${existing.budget.iterationsUsed}/${existing.budget.maxIterations} iterations used`)}`);
+          console.log(`     ${chalk.gray(`${existing.budget.iterationsUsed}/${formatBudget(existing.budget.maxIterations)} iterations used`)}`);
           const confirmed = await askYesNo('Replace it with the new objective? (y/N) ', false);
           if (!confirmed) {
             console.log(chalk.gray('\nKeeping the current goal. Use `/goal edit text <new>` to change just the wording.\n'));
             return true;
           }
-          // Force-replace.
+          // Force-replace. Use the cleaned text + parsed budget so the
+          // inline "Budget N" still applies on the second-try path.
           try {
-            goal = setGoal(ws, arg, sk, { force: true });
+            goal = setGoal(ws, cleanedText, sk, {
+              force: true,
+              ...(parsedBudget !== undefined ? { maxIterations: parsedBudget } : {}),
+            });
           } catch (err2: any) {
             console.log(chalk.red(`\n✗ ${err2?.message ?? err2}\n`));
             return true;
@@ -555,7 +604,43 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       }
       agent.refreshSystemPrompt();
       console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}`));
-      console.log(chalk.gray(`Budget: ${goal.budget.maxIterations} iterations. The CLI will auto-continue after each turn until the agent calls goal_complete / goal_blocked or you /goal pause | clear.`));
+
+      // Reconcile stale plan items from prior workflows. The plan store is
+      // sessionKey-scoped, so a leftover `[⏳]` from an abandoned
+      // /feature-dev run blocks goal_complete for an unrelated new goal —
+      // the plan-honesty guard correctly refuses, but the user is bitten
+      // by cross-contamination they didn't sign up for. Mirror what a
+      // smart agent does when context shifts: drop the orphan items and
+      // start the new objective with a fresh slate. The cleared items
+      // are printed so it's transparent, not silent.
+      try {
+        const existingPlan = readPlan(ws, sk);
+        const orphans = existingPlan.items.filter((i) => i.status !== 'completed');
+        if (orphans.length > 0) {
+          updatePlan(
+            ws,
+            { plan: [], explanation: `auto-cleared on new /goal: ${goal.text.slice(0, 80)}` },
+            sk,
+          );
+          console.log(chalk.yellow(`⚠️  Cleared ${orphans.length} stale plan item${orphans.length === 1 ? '' : 's'} from prior work:`));
+          for (const it of orphans.slice(0, 5)) {
+            const mark = it.status === 'in_progress' ? '⏳' : '☐';
+            console.log(chalk.gray(`     ${mark} ${it.step.slice(0, 100)}`));
+          }
+          if (orphans.length > 5) console.log(chalk.gray(`     …and ${orphans.length - 5} more.`));
+          console.log(chalk.gray(`   The agent can rebuild a new plan for this goal via update_plan.`));
+        }
+      } catch {
+        // Plan reconciliation is best-effort — never fatal to the /goal flow.
+      }
+
+      {
+        const b = formatBudget(goal.budget.maxIterations);
+        const budgetLine = b === 'unlimited'
+          ? `Budget: unlimited (cap with "/goal budget N" or include "Budget N" in the goal text). The CLI auto-continues until the agent calls goal_complete / goal_blocked or you /goal pause | clear.`
+          : `Budget: ${b} iterations. The CLI auto-continues after each turn until the agent calls goal_complete / goal_blocked or you /goal pause | clear.`;
+        console.log(chalk.gray(budgetLine));
+      }
       console.log(chalk.gray('Kicking off iteration 1 now — type anything to cancel.\n'));
       // Fire the first turn immediately so /goal doesn't require a "proceed"
       // follow-up. The post-turn continuation loop in runAgentTurn handles

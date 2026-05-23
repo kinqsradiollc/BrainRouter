@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { FilterBar } from "../../components/FilterBar";
+import { Mermaid } from "../../components/Mermaid";
 import { PremiumCard } from "../../components/PremiumCard";
 import { motion } from "framer-motion";
 
@@ -163,7 +164,11 @@ export default function WorkingMemoryPage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: "18px" }}>
             <section className="table-container" style={{ padding: "18px" }}>
               <h2 style={{ margin: 0, fontSize: "18px" }}>Canvas</h2>
-              <pre style={preStyle}>{context.canvas}</pre>
+              {context.canvas?.trim()
+                ? <Mermaid>{context.canvas}</Mermaid>
+                : <div style={{ color: "var(--color-stone-text)", fontStyle: "italic", padding: "20px 0", textAlign: "center" }}>
+                    No working memory steps yet.
+                  </div>}
             </section>
             <section className="table-container" style={{ padding: "18px" }}>
               <h2 style={{ margin: 0, fontSize: "18px" }}>State</h2>

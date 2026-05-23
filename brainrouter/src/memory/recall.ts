@@ -1,7 +1,8 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
-import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation } from "@kinqs/brainrouter-types";
+import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation, RelevanceVerdict } from "@kinqs/brainrouter-types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
+import type { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
@@ -77,7 +78,8 @@ export class MemoryRecallPipeline {
   constructor(
     private store: IMemoryStore,
     private embeddingService: EmbeddingService,
-    private rerankerService: RerankerService
+    private rerankerService: RerankerService,
+    private relevanceJudge?: RelevanceJudgeService,
   ) { }
 
   public async recall(params: {
@@ -312,16 +314,46 @@ export class MemoryRecallPipeline {
     if (this.rerankerService.isReady()) {
       try {
         const documents = rerankCandidates.map(r => r.record.content);
-        const ranked = await this.rerankerService.rerank({ 
-          query, 
-          documents, 
-          topN: this.rerankerService.getTopN() 
+        const ranked = await this.rerankerService.rerank({
+          query,
+          documents,
+          topN: this.rerankerService.getTopN()
         });
-        
+
         topResults = ranked.map(r => rerankCandidates[r.index]);
         usedReranker = true;
       } catch (e) {
         console.error("[BrainRouter] Reranker failed during recall, falling back to RRF:", (e as Error).message);
+      }
+    }
+
+    // Stage 4 — LLM Relevance Judge (semantic approve/reject gate)
+    //
+    // The reranker orders candidates by a learned relevance score but never
+    // *filters* — so a memory that shares vocabulary with the query but is
+    // about a different subject still makes the cut. The judge fixes that by
+    // asking a fast LLM "is each of these actually relevant?" and dropping
+    // the rejects. On any failure we keep the reranker output unchanged so a
+    // flaky judge call never breaks recall.
+    let judgeUsed = false;
+    let judgeApproved = 0;
+    let judgeRejected = 0;
+    let judgeVerdicts: RelevanceVerdict[] | undefined;
+
+    if (this.relevanceJudge?.isReady() && topResults.length > 0) {
+      try {
+        const judgeCandidates = topResults.map(r => ({
+          id: r.record.record_id,
+          content: r.record.content,
+        }));
+        const judgeResult = await this.relevanceJudge.judge({ query, candidates: judgeCandidates });
+        judgeUsed = true;
+        judgeVerdicts = judgeResult.verdicts;
+        judgeApproved = judgeResult.approvedIndices.length;
+        judgeRejected = topResults.length - judgeApproved;
+        topResults = judgeResult.approvedIndices.map((i) => topResults[i]);
+      } catch (e) {
+        console.error("[BrainRouter] Relevance judge failed during recall, keeping reranker output:", (e as Error).message);
       }
     }
 
@@ -335,7 +367,13 @@ export class MemoryRecallPipeline {
       return line;
     });
 
-    const prependContext = `<relevant-memories>\n  The following memories are relevant to this query. Reference only if helpful:\n\n  ${memoryLines.join("\n  ")}\n</relevant-memories>`;
+    // If the judge rejected everything, skip the prepend block entirely —
+    // an empty <relevant-memories> tag is worse than no tag because it
+    // implies "we looked and nothing helped," which the agent should infer
+    // from the absence of the block.
+    const prependContext = memoryLines.length > 0
+      ? `<relevant-memories>\n  The following memories are relevant to this query. Reference only if helpful:\n\n  ${memoryLines.join("\n  ")}\n</relevant-memories>`
+      : undefined;
 
     // Build appendSystemContext with Contextual Focus Navigation + tools guide
     const topScenes = this.store.getTopContextualFocus(userId, 3);
@@ -391,9 +429,10 @@ export class MemoryRecallPipeline {
       skillTag: r.record.skill_tag
     }));
 
-    const recallStrategy = vecResults.length > 0
+    const baseStrategy = vecResults.length > 0
       ? (usedReranker ? "hybrid+rerank" : "hybrid")
       : (usedReranker ? "keyword+rerank" : (filePathResults.length > 0 ? "keyword+file" : "keyword"));
+    const recallStrategy = judgeUsed ? `${baseStrategy}+judge` : baseStrategy;
 
     const durationMs = Date.now() - startTime;
 
@@ -406,6 +445,10 @@ export class MemoryRecallPipeline {
       typeBoosts,
       skillBoostApplied,
       rerankerUsed: usedReranker,
+      judgeUsed,
+      judgeApproved,
+      judgeRejected,
+      judgeVerdicts,
       graphExpansion: hasGraphExpansion,
       citationBoosts,
       durationMs,
@@ -469,6 +512,9 @@ export class MemoryRecallPipeline {
           vecHits: explanation?.vecHits ?? 0,
           intentDetected: explanation?.intentDetected ?? "none",
           rerankerUsed: explanation?.rerankerUsed ?? false,
+          judgeUsed: explanation?.judgeUsed ?? false,
+          judgeApproved: explanation?.judgeApproved ?? 0,
+          judgeRejected: explanation?.judgeRejected ?? 0,
         },
       });
     } catch {

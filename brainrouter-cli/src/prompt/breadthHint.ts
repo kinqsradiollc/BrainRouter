@@ -74,8 +74,53 @@ export function detectBreadthIntent(prompt: string): BreadthIntent {
  */
 export const BREADTH_FAN_OUT_THRESHOLD = 1.5;
 
-export function shouldSuggestFanOut(prompt: string): { suggest: boolean; intent: BreadthIntent } {
+/**
+ * Negation hints — explicit signals from the user that they DO NOT want
+ * fan-out for this prompt. Honored as a hard veto: even a high breadth
+ * score won't trigger the hint if any of these match.
+ *
+ * Common cases we want to honor:
+ *  - "(no spawn_agent, no fan-out, files are small)"  — explicit opt-out
+ *  - "do this in one turn"                            — wants serial
+ *  - "directly with read_file, no fan-out"            — explicit tool
+ *  - "yourself, don't spawn agents"                   — explicit self
+ *
+ * Without this veto, a prompt like
+ *   "audit every file (no spawn_agent, files are small)"
+ * still scores high on `verb-object-broad` + `every` and the model gets
+ * told "fan out!" — directly contradicting the user's instruction.
+ */
+const NEGATION_PATTERNS: RegExp[] = [
+  /\bno\s+(spawn[_-]?agents?|fan[- ]?out|children?|sub[- ]?agents?|orchestration)\b/i,
+  /\b(don'?t|do not)\s+(spawn|fan[- ]?out|delegate|orchestrate)\b/i,
+  /\b(in\s+one\s+turn|single\s+turn|sequentially|one[- ]by[- ]one|in[- ]process)\b/i,
+  /\bdirectly\s+(with|using|via)\b/i,
+  /\b(yourself|by\s+yourself|on\s+your\s+own)\b/i,
+];
+
+export function detectFanOutVeto(prompt: string): { vetoed: boolean; pattern?: string } {
+  const text = (prompt ?? '').toString();
+  for (const re of NEGATION_PATTERNS) {
+    const match = text.match(re);
+    if (match) return { vetoed: true, pattern: match[0] };
+  }
+  return { vetoed: false };
+}
+
+export function shouldSuggestFanOut(prompt: string): { suggest: boolean; intent: BreadthIntent; veto?: string } {
   const intent = detectBreadthIntent(prompt);
+  const veto = detectFanOutVeto(prompt);
+  if (veto.vetoed) {
+    // Reflect the veto in the intent's signals so onToolEnd's surfacing
+    // shows the user why we didn't fan out, even though the breadth
+    // score was high. The score itself isn't zeroed — it's still useful
+    // signal for other heuristics.
+    return {
+      suggest: false,
+      intent: { ...intent, signals: [...intent.signals, `vetoed:${veto.pattern}`] },
+      veto: veto.pattern,
+    };
+  }
   return { suggest: intent.score >= BREADTH_FAN_OUT_THRESHOLD, intent };
 }
 

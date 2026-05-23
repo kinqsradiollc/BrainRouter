@@ -54,12 +54,15 @@ persist or evict based on activity.
 graph LR
     Q[Query] --> R[Keyword + vector + filepath]
     R --> F[Fuse + rank by decay & freshness]
-    F --> G[2-hop graph walk]
+    F --> J[LLM relevance judge]
+    J --> G[2-hop graph walk]
     G --> P[Prompt context]
 ```
 
 - **Fuse** three retrievers with Reciprocal Rank Fusion.
 - **Rerank** by decayed priority, citation boost, freshness, query intent.
+- **Judge** each finalist with a binary "is this actually relevant?" check —
+  rejected candidates get dropped. The reranker reorders; the judge filters.
 - **Expand** via the knowledge graph to pull in related facts.
 
 ---
@@ -73,7 +76,8 @@ memory's priority gets boosted (up to +30%). Its decay clock resets.
 times), it's archived — the index stays high-fidelity over time.
 
 That's the difference from a flat vector DB: the memory store actually
-*learns* which records matter.
+*learns* which records matter — and the relevance judge stops the ones it
+gets wrong from polluting the prompt.
 
 ---
 
@@ -99,8 +103,7 @@ agent.
 | --- | --- | --- |
 | **MCP server** | `brainrouter/` | Plug into any MCP client (Claude Desktop, etc.) |
 | **CLI** | `brainrouter-cli/` | Terminal coding agent |
-| **Web chat** | `web/` | Browser UI for the same agent |
-| **HTTP API** | `/api/chat-completions` | OpenAI-shaped endpoint |
+| **Web chat** | `brainrouter-dashboard` | Dashboard for memory management |
 
 All four share the same memory store.
 
