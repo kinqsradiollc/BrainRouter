@@ -25,7 +25,6 @@ Smarter memory recall, friendlier dashboard, more reliable agent loop.
 - **Intermittent CI test failure fixed** — flaky JWT-tampering assertion (~1/64 base64 collision odds), previously misdiagnosed as a Node-20 crypto incompatibility.
 
 ### Docs & tooling
-- **`Tasks.md`** — living checklist at the repo root for the 0.3.6 cycle. Agents tick boxes as they work.
 - **`CLAUDE.md`** added as Claude Code's repo-level instructions (vendor-specific sibling to `AGENT.md`).
 - **`openSrc/REFERENCES.md`** (gitignored) routes agents through vendored research projects so they don't grep the world.
 - **CI**: Dependabot keeps React + React-DOM in lockstep; major-version bumps ignored until 0.3.6 ships; build runs in proper dependency order (`build:packages` → `build:apps`); Node matrix narrowed to 22.x (matches `engines.node`).
