@@ -39,6 +39,21 @@ updates:
         update-types:
           - "version-update:semver-major"
     groups:
+      # Listed FIRST so react / react-dom always land in this group
+      # instead of leaking into `production-minor-patch`. Dependabot
+      # evaluates groups top-down; first match wins.
+      #
+      # Why: Next.js refuses to build if `react` and `react-dom` are
+      # at different versions ("Incompatible React versions" — verified
+      # on the closed Dependabot PR #21). Without this group, a minor
+      # bump on `react` opened a PR that didn't also bump `react-dom`,
+      # which broke the dashboard build every Monday.
+      react-ecosystem:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
       dev-dependencies:
         dependency-type: development
         update-types:
