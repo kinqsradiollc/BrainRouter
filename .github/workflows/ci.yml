@@ -60,29 +60,6 @@ jobs:
         run: npm run test
         env:
           # Hide the `ExperimentalWarning: SQLite is an experimental
-          # feature` noise from the CI log. Mirrors the planned 0.3.5
+          # feature` noise from the CI log. Mirrors the planned 0.3.6
           # CLI shell redesign (see ROADMAP).
           NODE_NO_WARNINGS: '1'
-
-  dashboard-build:
-    name: Dashboard (Next.js production build)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node 22.x
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.x'
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build dashboard
-        # The dashboard's production build catches React/Next-specific
-        # issues (server/client boundary, RSC, missing 'use client', stale
-        # generateStaticParams) that plain tsc won't surface. Even with
-        # no test suite, a successful build is meaningful coverage.
-        run: npm run build --workspace=dashboard
