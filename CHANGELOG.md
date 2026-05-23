@@ -104,11 +104,29 @@ instead of three loose sections.
   numbered sections of `brainrouter/.env.example`.
 - [`AGENT.md`](AGENT.md) — `dashboard/` → `brainrouter-dashboard/` path
   rename and a recall-pipeline blurb that mentions the judge.
+- **`CLAUDE.md` added** as the Claude Code repo-level instructions file. Auto-detected by Claude Code; intentional vendor-specific sibling to [`AGENT.md`](AGENT.md) (which Codex and other agents read). Kept in sync manually for now.
+- **`Tasks.md` added** at the repo root as a living checklist for the 0.3.6 cycle. Mirrors `ROADMAP.md` "In-flight for 0.3.6" with per-item sub-checkboxes plus a build-order block. Agents tick boxes as they work; the next agent reads state from this file. ([`Tasks.md`](Tasks.md))
+- **`openSrc/REFERENCES.md`** (gitignored) added as a router for vendored open-source projects under `openSrc/`. Quick-lookup table maps "which project for which kind of question." `AGENT.md` and `CLAUDE.md` both updated to require reading `REFERENCES.md` before grepping `openSrc/`.
+- **PR template + issue templates** added under [`.github/`](.github/) — bug report, feature request, and PR template with summary / test plan / changelog / breaking-changes sections.
 
 ### Tests
 
 - **Breadth-hint veto coverage** — new tests assert that negation phrases ("no fan-out", "in one turn", "do it directly", etc.) override high-breadth scores and surface as `vetoed:<phrase>` signals. ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts))
 - **Goal budget formatter coverage** — tests for `formatBudget`, `goalHasBudgetLeft` under the new effectively-unlimited default, and the inline `Budget N` regex used by `/goal`. ([`brainrouter-cli/src/agent.test.ts`](brainrouter-cli/src/agent.test.ts))
+- **JSON-escape repair behaviour** — new test file [`brainrouter/src/__tests__/cognitive-extractor.test.ts`](brainrouter/src/__tests__/cognitive-extractor.test.ts) locks down round-trip for the four pathological Windows / Unix path inputs, the happy-path `\n` → newline contract, and the `\uXXXX` repair-vs-happy-path tradeoff (4 tests).
+- **Flaky JWT-tampering test fixed.** The signature-tampering assertion in [`brainrouter/src/__tests__/crypto.test.ts`](brainrouter/src/__tests__/crypto.test.ts) hard-coded `"x"` as the tampering character; when the JWT signature happened to end in `"x"` (≈1/64 odds on base64url) the "tampered" token equalled the original and verification succeeded. Replacement now picks a char guaranteed to differ from the original last char. Repairs a long-standing intermittent CI failure that was previously misdiagnosed as a Node 20.x `crypto.timingSafeEqual` incompatibility.
+
+### CI / tooling
+
+- **Dependabot config hardened.** Three fixes for the first Dependabot runs in this repo:
+  1. **Workspace duplication eliminated.** `directories:` (plural, 7 entries) replaced with `directory: /` since this is an npm workspaces monorepo and there is one root `package-lock.json`. The earlier config produced one PR per directory all touching the same lockfile, causing duplicate / conflicting PRs.
+  2. **Major-version PRs ignored** while 0.3.6 stabilizes. Inline comment in [`.github/dependabot.yml`](.github/dependabot.yml) points at the line to delete after 0.3.6 ships if we want major-bump visibility back. Security advisories are NOT suppressed by this ignore block.
+  3. **`react-ecosystem` group added** so `react`, `react-dom`, `@types/react`, `@types/react-dom` always bump together. Listed FIRST in `groups:` so Dependabot's top-down match pulls React packages out before they fall into the generic `production-minor-patch` group. Prevents the "Incompatible React versions" Next.js build failure observed when react was bumped without react-dom.
+- **Build job dependency-order fix.** Root `npm run build` script split into `build:packages` (types → sdk → hooks) and `build:apps` (mcp-server → cli → dashboard) chained with `&&`. Earlier alphabetical workspace iteration caused hooks and sdk to attempt to compile before types had emitted declarations, breaking CI on every clean install. ([`package.json`](package.json))
+- **Dashboard CI job consolidated.** The separate `dashboard-build` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) was removed; it ran `next build` without first building the workspace deps, hitting the exact same dependency-order issue as the main matrix. The main `build-and-test` job already exercises `next build` via `build:apps`, so the separate job was redundant.
+- **Node matrix narrowed to 22.x only.** `brainrouter/package.json` declares `engines.node >= 22.0.0`; Node 20.x was speculative on the original matrix. The known 20.x blockers (`node:sqlite` stability, recursive `**` glob in `node --test`) are documented inline next to the matrix definition so the next person knows what to fix before adding 20.x back. The JWT-tampering test that previously failed on Node 20 turns out to have been flakiness, not a true 20.x incompat — see Tests above.
+- **`.github/workflow/` (singular, empty, misnamed) removed.** GitHub only reads `.github/workflows/` plural; anything in the singular form never triggered.
+- **`.github/java-upgrade/` removed.** Vestigial Claude Code skill scaffolding for an unrelated Java migration, not BrainRouter content.
 
 ## [0.3.5] - 2026-05-22
 

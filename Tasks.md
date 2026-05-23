@@ -10,22 +10,27 @@ Conventions:
 - **Update CHANGELOG.md** under `[0.3.6] - Unreleased` for every PR that changes user-visible behavior.
 - **Update this file** — tick the boxes as you go. The next agent reads ticked state to know what's done.
 
+**Status:** Item 0 merged. **Item 1 (goal-leakage) is the next recommended pick** — WIP for it is preserved as `git stash@{0}` on local. See the build order at the bottom for the full sequence.
+
 ---
 
-## Item 0 — Hotfix: JSON-escape repair corrupts paths (🔴 MUST FIX FIRST)
+## Item 0 — Hotfix: JSON-escape repair corrupts paths (✅ MERGED — PR #22)
 
-Surfaced during the 0.3.5 → 0.3.6 handoff code review. Already on `main` as part of PR #7. Silently corrupts any cognitive memory record whose extracted JSON contains Windows-style paths or Unix paths starting with `\b`/`\f`/`\n`/`\r`/`\t`.
+Surfaced during the 0.3.5 → 0.3.6 handoff code review. Was on `main` as part of PR #7. Silently corrupted any cognitive memory record whose extracted JSON contained Windows-style paths or Unix paths starting with `\b`/`\f`/`\n`/`\r`/`\t`.
+
+**Resolution:** PR #22 narrowed the repair regex to preserve only `\"`, `\\`, `\/` as JSON escapes during the repair branch; everything else (including the previously-trusted `\b\f\n\r\t` and `\uXXXX`) gets doubled to literal. Tradeoff: legitimate `\n` in repair-branch content becomes literal two-char `\n`; happy-path `\n` still becomes a newline. Covered by [`brainrouter/src/__tests__/cognitive-extractor.test.ts`](brainrouter/src/__tests__/cognitive-extractor.test.ts) — 4 tests, all passing.
 
 - [x] Reproduce the bug locally with the four-case test in [`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](brainrouter/src/memory/pipeline/cognitive-extractor.ts) `parseJsonWithEscapeRepair`. Cases:
-  - `C:\users\file` → currently parses with a form-feed character mid-path
-  - `C:\bin\node.exe` → currently parses with backspace + newline
-  - `/repos/\target/release` → currently parses with a tab
-  - `\release\foo.txt` → currently parses with CR + form-feed
-- [x] Fix the regex at [cognitive-extractor.ts:231](brainrouter/src/memory/pipeline/cognitive-extractor.ts:231). Replace the lookahead `(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})` with `(?!["\\\/])` (drop bfnrt and u — when we're in the repair branch, JSON was already malformed; doubling ALL ambiguous backslashes is safer than silently corrupting paths).
+  - `C:\users\file` → was parsing with a form-feed character mid-path
+  - `C:\bin\node.exe` → was parsing with backspace + newline
+  - `/repos/\target/release` → was parsing with a tab
+  - `\release\foo.txt` → was parsing with CR + form-feed
+- [x] Fix the regex at [cognitive-extractor.ts:231](brainrouter/src/memory/pipeline/cognitive-extractor.ts:231). Replaced the lookahead `(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})` with `(?!["\\\/])` (dropped bfnrt and u — when we're in the repair branch, JSON was already malformed; doubling ALL ambiguous backslashes is safer than silently corrupting paths).
 - [x] Add a focused test fixture: a JSON payload with the four pathological path inputs above, plus one legitimate-escape input (`"line1\nline2"`) to confirm the conservative path still works. Lives at `brainrouter/src/__tests__/cognitive-extractor.test.ts` (new file).
+- [x] Lock down `\uXXXX` behavior: happy path decodes to the code point, repair path preserves the literal escape (deliberate tradeoff with path correctness). Test added.
 - [x] Document the behavior change in CHANGELOG.md under "Fixed".
 
-**Acceptance:** all four path inputs round-trip with byte-identical bytes; legitimate `\n` in content becomes literal `\n` (two chars) in repair-branch output but newline (one char) on the happy-path. Tests cover both.
+**Acceptance:** ✅ all four path inputs round-trip with byte-identical bytes; legitimate `\n` in content becomes literal `\n` (two chars) in repair-branch output but newline (one char) on the happy-path. Tests cover both.
 
 ---
 
@@ -104,14 +109,14 @@ Depends on Item 1 (correct goal-scoping primitive). See [ROADMAP.md](ROADMAP.md)
 
 ## Build order (tick when merged)
 
-- [ ] **Item 0** — JSON-repair hotfix (must be first; corrupts data on main today)
-- [ ] **Item 1** — Goal-leakage fix
+- [x] **Item 0** — JSON-repair hotfix — merged in [PR #22](https://github.com/kinqsradiollc/BrainRouter/pull/22) on 2026-05-23
+- [ ] **Item 1** — Goal-leakage fix *(recommended next; WIP preserved on `git stash@{0}`)*
 - [ ] **Item 2** — CLI shell redesign
 - [ ] **Item 2b** — `ask_user_choice` tool
 - [ ] **Item 2c** — Reasoning-step capture
 - [ ] **Item 3** — Multi-workflow concurrency
 
-Items 2 / 2b / 2c are independent and can land in any order. Item 3 must come after Item 1. Item 0 should come first because the bug is on `main` today.
+Items 2 / 2b / 2c are independent and can land in any order. Item 3 must come after Item 1.
 
 ---
 
@@ -124,7 +129,8 @@ These came out of the 0.3.5 → 0.3.6 handoff code review. Each is genuinely sma
 - [ ] **Log when judge returns a partial verdict set** at [`brainrouter/src/memory/store/relevance-judge.ts:222`](brainrouter/src/memory/store/relevance-judge.ts:222) — `parseVerdicts` defaults missing entries to `relevant: false` (right choice), but when `byIndex.size < candidateCount` we should `console.error` so it's diagnosable.
 - [ ] **Document the security-advisory carve-out** in [`.github/dependabot.yml`](.github/dependabot.yml) — the `ignore` block for majors does NOT suppress Dependabot security PRs (they still flow). Add an inline comment so the next reader doesn't assume "ignore = total freeze."
 - [ ] **Add `relevance-judge` tests** (no test file exists today): mock fetch, exercise the LM Studio retry branch, the non-`unloaded`-400 branch, the `data.error` envelope branch, and `parseVerdicts` defaulting to `relevant: false` when a candidate index is missing.
+- [ ] **Revisit Node 20.x in the CI matrix.** The inline comment in [`.github/workflows/ci.yml:33`](.github/workflows/ci.yml:33) blames `crypto.timingSafeEqual` for the JWT-tampering failure on Node 20. PR #22 proved that was actually flakiness (~1/64 base64 collision), not a Node-version incompat. With the flakiness fixed, Node 20 may pass — the genuine blockers left are `node:sqlite` stability (only stable in 22+) and the recursive `**` glob in `node --test`. Reassess whether to add Node 20 back to the matrix after Item 0 is shipped to npm.
 
 ---
 
-*Last updated by: this file's author. Update the date in your commit message when you tick boxes.*
+*Last updated: 2026-05-23 (after Item 0 / PR #22 merged). Update the date when you tick boxes.*
