@@ -6,10 +6,10 @@ global-install users). Shipped to npm. See [`CHANGELOG.md`](CHANGELOG.md).
 
 In-flight: **0.3.6** — Stage 4 relevance judge, dashboard
 markdown/Mermaid/KaTeX, `.env` template reorg, goal-loop hardening, LLM
-pipeline robustness fixes. Goal-leakage bug (Item 1) and JSON-repair
-hotfix (Item 0) shipped. Remaining planned items in "In-flight for 0.3.6"
-below: CLI shell redesign, `ask_user_choice` tool, reasoning-step
-capture, multi-workflow concurrency.
+pipeline robustness fixes. Goal-leakage bug (Item 1), JSON-repair
+hotfix (Item 0), and CLI shell redesign (Item 2) shipped. Remaining
+planned items in "In-flight for 0.3.6" below: `ask_user_choice` tool,
+reasoning-step capture, multi-workflow concurrency.
 
 Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance, shared
 memory). Design sketched below in "Next Major Release."
@@ -28,6 +28,7 @@ memory). Design sketched below in "Next Major Release."
 - **LLM-pipeline robustness fixes.** Relevance judge now survives LM Studio's idle-model auto-unload (detects "no models loaded" / "model is unloaded" 400, waits 1.5s, retries once — mirrors `ModelLLMRunner`). Cognitive extractor no longer drops a whole batch over one bad JSON escape: new `parseJsonWithEscapeRepair` doubles any `\X` that isn't a legal JSON escape and retries the parse, so Windows paths / LaTeX / regex literals in `content` fields parse cleanly. ([`brainrouter/src/memory/store/relevance-judge.ts`](brainrouter/src/memory/store/relevance-judge.ts), [`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](brainrouter/src/memory/pipeline/cognitive-extractor.ts))
 - **JSON-repair path-escape correctness fix** (PR #22). The original `parseJsonWithEscapeRepair` preserved `\b\f\n\r\t` and `\uXXXX` as JSON escapes during repair, which silently corrupted Windows paths and Unix path segments starting with those letters (`\bin`, `\target`, `\release`, etc.). Repair now only preserves `\"`, `\\`, `\/`; everything else doubles to literal. Tradeoff: legitimate `\n` in repair-branch content becomes literal two-char `\n`; happy-path `\n` still becomes a newline. New test file [`brainrouter/src/__tests__/cognitive-extractor.test.ts`](brainrouter/src/__tests__/cognitive-extractor.test.ts) covers the four pathological path inputs and the unicode-escape tradeoff (4 tests, all passing).
 - **Goal-leakage across CLI sessions fixed** (PR #26). Two leaks closed. Primary: `agent.ts` now defaults `sessionKey` to `randomUUID()` instead of the workspace-derived `brainrouter-cli:<workspaceRoot>` string. The old default failed MCP's `isUniqueId` check in [`memory_resolve_session`](brainrouter/src/tools/memory_resolve_session.ts), forcing the workspace-cache branch — which returned the same UUID to every CLI launched in the workspace, so concurrent CLIs read/wrote the same goal/plan/working bucket. UUIDs pass `isUniqueId` and are echoed back unchanged, so each CLI process is its own session for local state. Memory recall is unaffected (DB is userId-scoped). Secondary (defense-in-depth): `readGoal(workspace, sessionKey)` no longer silently falls through to the legacy workspace-level `cli/goal.json` when the session bucket is empty; any leftover legacy file is archived to `getCliStateDir(workspace)/.brainrouter.migrated/legacy-goal-<ts>.json` on first session-scoped `setGoal`. Banner now surfaces the session prefix so two concurrent CLIs are visually distinct from launch. ([`brainrouter-cli/src/agent/agent.ts`](brainrouter-cli/src/agent/agent.ts), [`brainrouter-cli/src/state/goalStore.ts`](brainrouter-cli/src/state/goalStore.ts), [`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts))
+- **CLI shell redesign shipped** (PR #27). Boxed startup banner replaces the three-line text dump (workspace, MCP, workflow, goal, session, model in one block); new `/where` collapses orientation-state (workspace + workflow + goal + plan + recall + children) into a single screen so users don't chain four commands to know where they are; statusline extended with `workflow` / `goal` / `plan` / `pr` segments; `/quiet` and `brainrouter --quiet` hide recall tables, briefing dumps, and tool-completion previews; new [`brainrouter-cli/src/cli/theme.ts`](brainrouter-cli/src/cli/theme.ts) consolidates colors with `BRAINROUTER_THEME=dark|light|mono` and the readline prompt + access-mode accent now consume those tokens; bare `?` opens `/help` and a one-time idle hint fires after 30s of silence; Node's `ExperimentalWarning` and dotenv noise no longer scroll the banner off-screen, filtered via a CJS bin shim at [`brainrouter-cli/bin/cli.cjs`](brainrouter-cli/bin/cli.cjs) that installs the listener BEFORE the ESM CLI's hoisted `import 'node:sqlite'` fires the warning. Also bundled: `/tokens` now scopes child usage by `parentSessionKey === agent.sessionKey` (fresh runs no longer show inflated "31 children" from prior workspace sessions); `/resume` / `/fork` zero in-process parent counters; the synthetic 5× memory-savings heuristic is dropped in favor of measured offload chars. New [`brainrouter-cli/src/cli-shell.test.ts`](brainrouter-cli/src/cli-shell.test.ts) brings the suite to 141 tests (was 115). ([`brainrouter-cli/src/cli/banner.ts`](brainrouter-cli/src/cli/banner.ts), [`brainrouter-cli/src/cli/statusline.ts`](brainrouter-cli/src/cli/statusline.ts), [`brainrouter-cli/src/cli/whereView.ts`](brainrouter-cli/src/cli/whereView.ts), [`brainrouter-cli/src/cli/repl.ts`](brainrouter-cli/src/cli/repl.ts))
 - **CI / Dependabot hardening.** First-run `directories:` (plural) replaced with `directory: /` for npm workspaces; major-bump PRs ignored during 0.3.6 stabilization; `react-ecosystem` group added so React + React-DOM always bump together (prevents the "Incompatible React versions" Next.js failure). Root `build` script split into dependency-ordered `build:packages` + `build:apps` phases; redundant `dashboard-build` CI job removed. CI matrix narrowed to Node 22.x only (matching `engines.node >= 22.0.0`).
 - **Flaky JWT-tampering test fixed.** `brainrouter/src/__tests__/crypto.test.ts` was hard-coding `"x"` as the tampering character; when the JWT signature happened to end in `"x"` (~1/64 base64url collision odds) the "tampered" token equalled the original and the test failed intermittently. Replacement char now guaranteed to differ. Side effect: the Node 20.x ci.yml comment that blamed `crypto.timingSafeEqual` was wrong — it was this flakiness.
 - **Docs.** New "Relevance judge" section in [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) with three setup recipes; recall-pipeline diagram in [`brainrouter-docs/memory-engine.md`](brainrouter-docs/memory-engine.md), [`BRAINROUTER.md`](BRAINROUTER.md), and [`PRESENTATION.md`](PRESENTATION.md) updated to show the judge as the final gate; README aligned with the new placeholder-blank style. New [`CLAUDE.md`](CLAUDE.md) (Claude Code repo instructions) + [`Tasks.md`](Tasks.md) (0.3.6 living checklist) + [`openSrc/REFERENCES.md`](openSrc/REFERENCES.md) (router for vendored research material; gitignored). PR + issue templates + Dependabot config added under [`.github/`](.github/).
@@ -285,14 +286,14 @@ The "five BrainRouter CLIs open" case falls out of the same machinery:
 
 ## In-flight for 0.3.6
 
-Four remaining workstreams (items 2–5) beyond what's already shipped in
+Three remaining workstreams (items 3–5) beyond what's already shipped in
 0.3.6 (judge, goal-loop hardening, dashboard markdown, env reorg, pipeline
-fixes, CI bootstrap, the JSON-repair path-escape fix, and the
-goal-leakage fix — see "Recently Completed → 0.3.6" above). Items 2–5 are
-designed features; the live progress checklist lives in [`Tasks.md`](Tasks.md).
-Item 1 (below) is retained as the post-mortem on the goal-leakage bug;
-both fixes (sessionKey-per-process + legacy-fallback hardening) shipped
-in PR #26.
+fixes, CI bootstrap, the JSON-repair path-escape fix, the goal-leakage
+fix, and the CLI shell redesign — see "Recently Completed → 0.3.6"
+above). Items 3–5 are designed features; the live progress checklist
+lives in [`Tasks.md`](Tasks.md). Items 1 and 2 are retained below as
+post-mortems on the bug + redesign that shipped in PR #26 and PR #27
+respectively.
 
 ### 1. Goal-leakage across sessions (✅ shipped in PR #26)
 
@@ -350,65 +351,93 @@ docs claim.
   [`cli/repl.ts`](brainrouter-cli/src/cli/repl.ts) (the `setTimeout`
   re-arm after a turn completes).
 
-### 2. CLI shell redesign — clean banner, persistent status, navigable surfaces
+### 2. CLI shell redesign (✅ shipped in PR #27)
 
-**State of play.** Startup output today is technical noise:
+**Symptom.** Startup output was technical noise: a Node
+`ExperimentalWarning` from `node:sqlite` followed by two free-form
+`console.log` lines (`Workspace: …`, `Connecting to MCP server profile
+"local-http"…`) and then a green `Successfully connected!` — all of
+which scrolled real content off-screen on short terminals. Once the
+REPL was up there was no visible state: no current workflow, no goal
+status, no session id, no model. Users had to chain `/goal status`,
+`/workflows`, `/agents`, `/config` separately just to orient.
 
-```
-(node:67029) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
-Workspace: /Users/anhdang/Documents/Github/BrainRouter (nearest workspace marker)
-Connecting to MCP server profile "local-http"...
-```
+**Fix.** Seven sub-deliverables landed together as one PR (the surfaces
+all touched the same REPL chrome so splitting would have produced
+churn for no review-quality gain):
 
-Node's experimental warning is irrelevant to the user, the workspace
-line repeats info the prompt already shows, and there's no visible state
-once the REPL is running — no current workflow, no goal status, no
-session id, no model. Users have to type `/goal status`, `/workflows`,
-`/agents`, `/config` separately just to know where they are.
-
-**Scope for 0.3.6.**
-
-- **Suppress non-actionable Node warnings.** Launch the CLI with
-  `NODE_NO_WARNINGS=1` (or a filtered `process.emitWarning` interceptor
-  that lets through anything BrainRouter itself raises). The SQLite
-  experimental warning and dotenv-deprecation chatter both go away.
-- **Structured startup banner.** Replace the current two-line text with
-  a small boxed banner showing: workspace name + short hash, MCP
-  profile + transport (stdio/HTTP), current workflow + goal status (one
-  line), session id (short prefix only), model in use. Render in muted
-  gray so it doesn't compete with the user's first prompt.
-- **Persistent status line above the prompt.** A single line that
-  re-renders before each prompt: `[workflow:slug · goal:active 2/∞ ·
-  model:gpt-4o · session:7f3a · plan:1/4]`. Configurable segments via
-  `/statusline mode,workflow,goal,model,session,plan,pr` — keeps the
-  existing `/statusline` API and extends it.
-- **`/where` (or repurpose `/status`)** as a single-screen "where am I"
-  view: workspace, active workflow, goal text + budget, active plan
-  items, recent recall scores, active child agents. Replaces having to
-  string four commands together.
-- **Quiet mode for hot output.** A `--quiet` startup flag (and a
-  `/quiet` toggle) that suppresses recall-scoring tables, briefing
-  dumps, and tool-completion previews, leaving only the model's prose.
-  For users who want a clean transcript in screenshots.
-- **Themeable surface chrome.** Move the chalk colors used in
-  banners / prompts / status line into a single
+- **Boxed startup banner.** New pure renderer
+  [`brainrouter-cli/src/cli/banner.ts`](brainrouter-cli/src/cli/banner.ts)
+  draws a single Unicode box with workspace + short-hash, MCP profile +
+  transport + online/offline, current workflow (if bound), goal status
+  + budget, session prefix, model. Sections silently omit when empty so
+  a fresh workspace renders only the rows that apply. The three
+  pre-banner `console.log` lines (workspace / connecting / success)
+  were deleted — `/workspace` exposes the launch CWD + detection reason
+  on demand, and the banner itself IS the success signal.
+- **`/where` single-screen state.**
+  [`brainrouter-cli/src/cli/whereView.ts`](brainrouter-cli/src/cli/whereView.ts)
+  gathers workspace, active workflow + meta, goal status + budget, plan
+  items, recent recall (with priorities), and live child sessions, then
+  renders themed sections. Empty sections drop out, so the output stays
+  proportional to actual state.
+- **Persistent status line.** New
+  [`brainrouter-cli/src/cli/statusline.ts`](brainrouter-cli/src/cli/statusline.ts)
+  centralizes segment renderers. Added `workflow`, `goal`, `plan`, `pr`
+  alongside the existing `mode`, `model`, `tokens`, `session`,
+  `branch`, `dirty`. `/statusline` now validates against the shared
+  `SEGMENT_NAMES` constant — adding a new segment is one switch case,
+  not three edits across REPL + handler + help text.
+- **`--quiet` + `/quiet` toggle.** Persisted `quiet: boolean` in
+  preferences plus a `BRAINROUTER_QUIET=1` env override gate
+  tool-start chrome, tool-success summaries, briefing / capture /
+  citation memory events, file-mention attachment lines, and tool
+  previews. Failures and memory contradictions still surface.
+- **Theme module.**
   [`brainrouter-cli/src/cli/theme.ts`](brainrouter-cli/src/cli/theme.ts)
-  module with a `BRAINROUTER_THEME` env var that picks `dark` /
-  `light` / `mono`. Today colors are scattered across every command
-  file; the rewrite would consolidate them and unblock the
-  light-terminal users who can't read certain grays.
-- **Help discoverability.** Footer hint shown when the REPL is idle for
-  > 30s with nothing typed: "Press `?` for help, `/where` to see
-  current state." One-time-per-session, dismissible.
+  with semantic tokens (primary, secondary, success, warning, danger,
+  info, muted, dim, heading, plain) and three palettes (`dark` —
+  original Midnight Ledger; `light` — darker accents for white
+  terminals; `mono` — identity for screenshots and pipes). Selection:
+  `BRAINROUTER_THEME` env > preference > `dark`. The readline prompt
+  and the access-mode accent (read→success, write→primary,
+  shell→danger) now consume theme tokens, so `light`/`mono` actually
+  reach the surface the user stares at most. Remaining hard-coded
+  `chalk.green`/`red` calls in tool-feedback chrome (✓/❌, plan marks,
+  error messages) intentionally left for an incremental follow-up.
+- **Idle help hint.** 30s after the prompt appears (or after each turn
+  ends), if no input arrived and no continuation is running, the REPL
+  prints one nudge: "Tip: press `?` or `/help` for commands, `/where`
+  for current state." Fires once per session; bare `?` is now wired to
+  `/help` so the tip actually works.
+- **Node warning suppression — via a CJS bin shim.** The first attempt
+  installed the warning filter at the top of `src/index.ts` and didn't
+  work: ESM hoists every `import` (including `import 'node:sqlite'`
+  transitively through `config/config.ts`) above any top-level code in
+  the file, so the warning fires before the filter is registered. The
+  fix is a tiny CJS entrypoint at
+  [`brainrouter-cli/bin/cli.cjs`](brainrouter-cli/bin/cli.cjs) that
+  installs a filtered `warning` listener and `process.emitWarning`
+  override synchronously, THEN dynamic-imports the ESM CLI. `package.json`
+  `bin` was repointed at the shim; `src/index.ts` keeps a defense-in-depth
+  filter for `tsx`/dev runs that bypass the shim.
 
-**Out of scope for 0.3.6:**
+Also bundled (independent but small and already accounted for in
+CHANGELOG): `/tokens` no longer sums every child ever spawned in the
+workspace — child usage is now filtered by `parentSessionKey ===
+agent.sessionKey`, and `/resume` / `/fork` zero the in-process parent
+counters since the persisted transcript doesn't carry per-call usage.
+
+**Out of scope for 0.3.6 (deferred):**
 
 - A full TUI (split panes, scrollback regions, persistent sidebar).
   That's a 0.5.x candidate — would benefit from referencing
   [`antigravity-cli/`](openSrc/antigravity-cli/) for ergonomic patterns
   before committing.
 - Mouse support / clickable links.
+- Broader theme sweep across the remaining tool-feedback chrome in
+  `repl.ts` (per the Tasks.md "consolidation is opt-in and can land
+  incrementally" note). Tracked for a follow-up.
 
 ### 3. Multi-workflow concurrency
 
@@ -594,41 +623,36 @@ offloaded tool payloads but no reasoning trail.
 ### Recommended build order
 
 ```
-  1.  Goal-leakage fix      (item 1)  — small, reported bug, unblocks item 3
-  2.  CLI shell redesign    (item 2)  — self-contained polish, sets the
-                                        visual frame the status line will
-                                        live in
-  2b. ask_user_choice tool  (item 4)  — small, independent, can ride
-                                        along with item 2 since both are
-                                        CLI UX work
+  1.  Goal-leakage fix      (item 1)  ✅ shipped — PR #26
+  2.  CLI shell redesign    (item 2)  ✅ shipped — PR #27
+  2b. ask_user_choice tool  (item 4)  — small, independent, CLI UX. Banner
+                                        + statusline (item 2) already there
+                                        so prompts render against a
+                                        consistent themed shell.
   2c. Reasoning-step capture(item 5)  — system-prompt + tiny canvas /
-                                        briefing tweaks; independent of
-                                        items 1/3, complements item 2's
-                                        "what's the agent doing right
-                                        now" status line by surfacing
-                                        the *why*
+                                        briefing tweaks; complements item 2's
+                                        "what's the agent doing right now"
+                                        status line by surfacing the *why*.
   3.  Multi-workflow        (item 3)  — depends on item 1 (correct goal
                                         scoping primitive); displays via
-                                        item 2's new status line
+                                        item 2's new `workflow` + `goal`
+                                        statusline segments.
 ```
 
-Why this order:
+Why the ordering held:
 
-- **Item 1 first** because it's a bug the user is hitting *now*, the fix
-  is small (one branch + a rename-on-write), and item 3's per-workflow
-  goal binding builds on a corrected primitive. If we ship item 3 on
-  top of the broken legacy fallback, the multi-workflow UX inherits the
-  cross-session leak.
-- **Item 2 second** because it's mostly orthogonal to the goal/workflow
-  data model and largely independent — the status line just *reads*
-  whatever's authoritative. Doing it second means item 3's
-  `/workflow switch` immediately has a visible status-line indicator
-  for free.
-- **Item 3 last** because it touches the most surfaces (storage,
-  commands, status line, conflict prompts) and benefits most from the
-  cleanups in items 1 and 2 being in place. Also the biggest
-  reviewable-PR surface — easier to land in one focused pass once the
-  ground is settled.
+- **Item 1 first** because it was a bug the user was hitting *now*. Per-workflow
+  goal binding in item 3 builds on the corrected primitive — shipping item 3
+  on top of the broken legacy fallback would have inherited the cross-session
+  leak.
+- **Item 2 second** because it's mostly orthogonal to the goal/workflow data
+  model — the status line just *reads* whatever's authoritative. Doing it
+  second means item 3's eventual `/workflow switch` lights up the new
+  `workflow` statusline segment immediately, no extra wiring.
+- **Item 3 last** because it touches the most surfaces (storage, commands,
+  status line, conflict prompts) and benefits most from items 1 + 2 being
+  in place. Also the largest reviewable-PR surface — easier to land in one
+  focused pass once the ground is settled.
 
 ---
 

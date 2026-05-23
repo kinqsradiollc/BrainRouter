@@ -10,7 +10,7 @@ Conventions:
 - **Update CHANGELOG.md** under `[0.3.6] - Unreleased` for every PR that changes user-visible behavior.
 - **Update this file** — tick the boxes as you go. The next agent reads ticked state to know what's done.
 
-**Status:** Items 0, 1, and 2 (CLI shell redesign) implemented. **Items 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 (multi-workflow) is now unblocked but should still land last per the build order.
+**Status:** Items 0, 1, and 2 merged. **Items 2b / 2c (CLI UX tranche) are the next picks — independent, can land in any order.** Item 3 (multi-workflow) is now unblocked but should still land last per the build order.
 
 ---
 
@@ -63,9 +63,9 @@ Surfaced during the 0.3.5 → 0.3.6 handoff code review. Was on `main` as part o
 
 ---
 
-## Item 2 — CLI shell redesign
+## Item 2 — CLI shell redesign (✅ MERGED — PR #27)
 
-Seven independent sub-deliverables landed together as one PR (Items 1 and 2 were both about the REPL shell, so consolidating reviewer surface area was worth it).
+Seven independent sub-deliverables landed together as one PR (the surfaces all touched the same REPL chrome so splitting would have produced churn for no review-quality gain).
 
 - [x] **Suppress Node SQLite/dotenv experimental warnings.** Two-layer fix: (1) a tiny CJS bin shim at [`brainrouter-cli/bin/cli.cjs`](brainrouter-cli/bin/cli.cjs) installs a filtered `warning` listener and overrides `process.emitWarning` BEFORE dynamically importing the ESM CLI — necessary because ESM hoists all `import` statements above any top-level code, so a warning filter installed inside `src/index.ts` fires too late to catch the experimental warning that `import 'node:sqlite'` triggers at module-resolution time. (2) The same filter is also installed at the top of [`brainrouter-cli/src/index.ts`](brainrouter-cli/src/index.ts) so runtime warnings emitted later in the session (or by developers running `tsx src/index.ts` directly, which bypasses the shim) still get filtered. `package.json` `bin` now points at the shim; `files` ships `bin/`. `NODE_NO_WARNINGS=1` would have silenced BrainRouter's own warnings too, so we kept the surgical option.
 - [x] **Structured boxed startup banner.** New [`brainrouter-cli/src/cli/banner.ts`](brainrouter-cli/src/cli/banner.ts) renders a single Unicode box with workspace + short-hash, MCP profile + transport + online/offline, current workflow (if bound), goal status + budget, session prefix, and model. Pure-function so it's testable; sections are silently omitted when empty so a fresh workspace doesn't render placeholder rows. Wired in at [`repl.ts`](brainrouter-cli/src/cli/repl.ts) — replaces the prior three-line text dump.
@@ -128,7 +128,7 @@ Depends on Item 1 (correct goal-scoping primitive). See [ROADMAP.md](ROADMAP.md)
 
 - [x] **Item 0** — JSON-repair hotfix — merged in [PR #22](https://github.com/kinqsradiollc/BrainRouter/pull/22) on 2026-05-23
 - [x] **Item 1** — Goal-leakage fix — merged in [PR #26](https://github.com/kinqsradiollc/BrainRouter/pull/26) on 2026-05-23
-- [x] **Item 2** — CLI shell redesign — implemented 2026-05-23 (PR pending)
+- [x] **Item 2** — CLI shell redesign — merged in [PR #27](https://github.com/kinqsradiollc/BrainRouter/pull/27) on 2026-05-23
 - [ ] **Item 2b** — `ask_user_choice` tool
 - [ ] **Item 2c** — Reasoning-step capture
 - [ ] **Item 3** — Multi-workflow concurrency
@@ -150,4 +150,4 @@ These came out of the 0.3.5 → 0.3.6 handoff code review. Each is genuinely sma
 
 ---
 
-*Last updated: 2026-05-23 (after Item 2 implemented — CLI shell redesign: theme module, boxed banner, extended statusline segments, /where, --quiet, idle hint, warning suppression. 141 tests passing, was 115. PR pending).*
+*Last updated: 2026-05-23 (after Item 2 / PR #27 merged — CLI shell redesign: theme module, boxed banner, extended statusline segments, /where, --quiet, idle hint, warning suppression. 141 tests passing, was 115).*
