@@ -606,6 +606,29 @@ export class Agent {
         callbacks.onToolEnd('breadth-detector', { success: true, summary: `fan-out hint injected (${intent.signals.length} signals)` });
       }
     }
+
+    // Per-turn goal anchor: re-inject a FRESH goal block at the end of the
+    // chatHistory's system messages (replaceTaggedSystemMessage appends), so
+    // it lands right before the user prompt. The goal block is also embedded
+    // in the FIRST system message (via createSystemMessage), but during a
+    // long /goal continuation loop that initial block recedes — tool results,
+    // explorer outputs, and prior assistant turns pile up between it and the
+    // current prompt, and the model's attention drifts. This per-turn re-push
+    // keeps the goal in immediate-context distance every iteration, with the
+    // up-to-date iteration counter, which is the single biggest fix for
+    // "agent forgot its main goal" hallucination in long auto-continuation
+    // loops.
+    if (!this.silent) {
+      const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
+      if (activeGoal?.text && activeGoal.status === 'active') {
+        this.replaceTaggedSystemMessage('goal-anchor', formatGoalBlock(activeGoal));
+      } else {
+        // No active goal — drop any stale anchor from a prior /goal so the
+        // model doesn't keep seeing a completed/cleared goal as "current."
+        this.removeTaggedSystemMessage('goal-anchor');
+      }
+    }
+
     const userMsg = { role: 'user', content: prompt };
     this.chatHistory.push(userMsg);
     this.recordTranscript(userMsg);
@@ -1373,6 +1396,30 @@ export class Agent {
 
     this.chatHistory = [this.createSystemMessage()];
     this.initialized = true;
+  }
+
+  /**
+   * Public, callback-free wrapper around bootstrapSession for slash commands
+   * that mutate per-session state (notably `/goal`) BEFORE any runTurn has
+   * fired. Without this, the FIRST `/goal` of a session writes goal.json
+   * under the deterministic fallback sessionKey ("brainrouter-cli:<path>")
+   * because bootstrap hasn't happened yet, but every subsequent runTurn
+   * reads from the MCP-resolved UUID sessionKey — split-brain that left
+   * the agent reading a stale goal from a different directory.
+   *
+   * Idempotent: returns immediately if already initialized. Tolerates
+   * missing MCP — falls back to the deterministic key the same way
+   * bootstrapSession does.
+   */
+  public async ensureInitialized(): Promise<void> {
+    if (this.initialized) return;
+    // Stub the callbacks bootstrapSession expects — no UI plumbing needed
+    // for the eager-init path; the status line is for runTurn's spinner.
+    await this.bootstrapSession({
+      onStatusUpdate: () => {},
+      onToolStart: () => {},
+      onToolEnd: () => {},
+    });
   }
 
   private createSystemMessage() {

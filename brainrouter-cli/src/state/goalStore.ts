@@ -65,7 +65,28 @@ export interface Goal {
   blockedReason?: string;
 }
 
-export const DEFAULT_GOAL_BUDGET = 10;
+/**
+ * Default iteration cap when the user doesn't pass one.
+ *
+ * Set to a very high number (effectively "unlimited" for any real task)
+ * rather than a tight 10. Rationale: the goal lifecycle has three
+ * independent safety nets that already prevent runaway loops —
+ *   1. Anti-spin   — a turn that made zero tool calls doesn't continue
+ *   2. Repeat-loop — calling the same tool with identical args 3× errors
+ *   3. Manual stop — Ctrl-C, /goal pause, /goal clear
+ *
+ * A hard iteration cap on top of those is overly paternalistic for users
+ * running local models (no $ cost) and is easily lifted with /goal budget
+ * <n> when wanted. Display layers should treat any value >= UNLIMITED_THRESHOLD
+ * as "unlimited" for friendlier UX.
+ */
+export const DEFAULT_GOAL_BUDGET = 1_000_000;
+export const UNLIMITED_BUDGET_THRESHOLD = 100_000;
+
+/** Format helper — used by REPL display + status output. */
+export function formatBudget(maxIterations: number): string {
+  return maxIterations >= UNLIMITED_BUDGET_THRESHOLD ? 'unlimited' : String(maxIterations);
+}
 
 /**
  * Hard cap on the goal text length. A goal is supposed to be a 1–3 sentence
@@ -465,7 +486,10 @@ export function buildBudgetSteeringMessage(goal: Goal): string {
 }
 
 export function formatGoalBlock(goal: Goal): string {
-  const remaining = Math.max(0, goal.budget.maxIterations - goal.budget.iterationsUsed);
+  const cap = formatBudget(goal.budget.maxIterations);
+  const remaining = cap === 'unlimited'
+    ? 'unlimited'
+    : String(Math.max(0, goal.budget.maxIterations - goal.budget.iterationsUsed));
   const tokenLine = goal.budget.maxTokens
     ? `**Tokens:** ${(goal.budget.tokensUsed ?? 0).toLocaleString()} of ${goal.budget.maxTokens.toLocaleString()} used`
     : '';
@@ -473,7 +497,7 @@ export function formatGoalBlock(goal: Goal): string {
     `## Active Goal — ${goal.status.toUpperCase().replace('_', ' ')}`,
     '',
     `**Outcome:** ${goal.text}`,
-    `**Iteration:** ${goal.budget.iterationsUsed + 1} of ${goal.budget.maxIterations} (${remaining} remaining)`,
+    `**Iteration:** ${goal.budget.iterationsUsed + 1} of ${cap} (${remaining} remaining)`,
     tokenLine,
     `**Started:** ${goal.startedAt}`,
     goal.blockedReason ? `**Reason:** ${goal.blockedReason}` : '',

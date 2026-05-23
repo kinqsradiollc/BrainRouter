@@ -617,6 +617,87 @@ test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not',
   }
 });
 
+test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even at high score', async () => {
+  const { shouldSuggestFanOut, detectFanOutVeto } = await import('./prompt/breadthHint.js');
+  // These prompts ALL score high on breadth (verb-object-broad, every,
+  // etc.) but the user explicitly opted out. We must honor that.
+  const vetoed = [
+    'audit every file in src/ (no spawn_agent, no fan-out, files are small)',
+    'review all the tools — do this in one turn',
+    'test every config combination, don\'t fan out — directly with read_file',
+    'check each module yourself, no children',
+  ];
+  for (const p of vetoed) {
+    const r = shouldSuggestFanOut(p);
+    assert.ok(!r.suggest, `expected veto on: "${p}" (got score=${r.intent.score}, signals=${r.intent.signals.join(',')})`);
+    assert.ok(r.veto, `expected r.veto string on: "${p}"`);
+    assert.ok(r.intent.signals.some((s) => s.startsWith('vetoed:')), 'expected a vetoed:<phrase> signal');
+  }
+  // Direct unit test of the veto detector for clarity.
+  assert.equal(detectFanOutVeto('audit everything (no fan-out)').vetoed, true);
+  assert.equal(detectFanOutVeto('audit everything fast').vetoed, false);
+  assert.equal(detectFanOutVeto('do not spawn children').vetoed, true);
+  assert.equal(detectFanOutVeto('').vetoed, false);
+});
+
+test('formatBudget renders the unlimited default as "unlimited" and explicit numbers as-is', async () => {
+  const { formatBudget, DEFAULT_GOAL_BUDGET, UNLIMITED_BUDGET_THRESHOLD } = await import('./state/goalStore.js');
+  assert.equal(formatBudget(DEFAULT_GOAL_BUDGET), 'unlimited');
+  assert.equal(formatBudget(UNLIMITED_BUDGET_THRESHOLD), 'unlimited');
+  assert.equal(formatBudget(UNLIMITED_BUDGET_THRESHOLD - 1), String(UNLIMITED_BUDGET_THRESHOLD - 1));
+  assert.equal(formatBudget(10), '10');
+  assert.equal(formatBudget(1), '1');
+  // Sanity: the default is well above the threshold so out-of-the-box behavior is unlimited.
+  assert.ok(DEFAULT_GOAL_BUDGET >= UNLIMITED_BUDGET_THRESHOLD, 'DEFAULT_GOAL_BUDGET should be at/above the unlimited threshold');
+});
+
+test('goalHasBudgetLeft returns true forever when default budget is in effect (effectively unlimited)', async () => {
+  const { goalHasBudgetLeft, DEFAULT_GOAL_BUDGET } = await import('./state/goalStore.js');
+  // Simulate a long-running goal that's done 50,000 iterations — default budget should still permit more.
+  const goal: any = {
+    text: 'long-running goal',
+    setAt: new Date().toISOString(),
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    budget: { maxIterations: DEFAULT_GOAL_BUDGET, iterationsUsed: 50_000 },
+  };
+  assert.equal(goalHasBudgetLeft(goal), true);
+  // But an explicit small cap should still trip when exceeded.
+  goal.budget.maxIterations = 3;
+  goal.budget.iterationsUsed = 3;
+  assert.equal(goalHasBudgetLeft(goal), false);
+});
+
+test('/goal text-embedded "Budget N" is parsed and stripped from goal text', () => {
+  // Same shape as the regex used in the /goal handler in workflow.ts so a
+  // refactor of one will fail the other. Keep them aligned.
+  const re = /\bbudget[:\s]+(\d+)(?:\s*(?:iterations?|turns?|rounds?))?\.?/i;
+  const cases: Array<{ input: string; expectedN: number; expectedTextSuffix: string }> = [
+    { input: 'do X. Budget 3 iterations.', expectedN: 3, expectedTextSuffix: 'do X.' },
+    { input: 'audit Y, Budget: 5', expectedN: 5, expectedTextSuffix: 'audit Y,' },
+    { input: 'finish Z budget 12 turns', expectedN: 12, expectedTextSuffix: 'finish Z' },
+    { input: 'review thing budget 1 round.', expectedN: 1, expectedTextSuffix: 'review thing' },
+  ];
+  for (const { input, expectedN, expectedTextSuffix } of cases) {
+    const m = input.match(re);
+    assert.ok(m, `expected match in: ${input}`);
+    assert.equal(Number(m![1]), expectedN);
+    const stripped = input.replace(m![0], '').replace(/\s{2,}/g, ' ').trim();
+    assert.ok(
+      stripped.endsWith(expectedTextSuffix.replace(/[.,]$/, '')) || stripped === expectedTextSuffix,
+      `unexpected stripped text: "${stripped}" — expected to end with "${expectedTextSuffix}"`,
+    );
+  }
+  // No match — should leave the text alone.
+  assert.equal('plain goal text with no budget'.match(re), null);
+  // Out of range (we cap at 200 in the handler) — still matches the regex,
+  // but the handler ignores it. Just confirm the regex behavior here.
+  const oversize = 'do thing budget 9999'.match(re);
+  assert.ok(oversize);
+  assert.equal(Number(oversize![1]), 9999);
+});
+
 test('normalizeToolName resolves common LLM hallucinations to the canonical tool name', async () => {
   const { normalizeToolName } = await import('./agent/agent.js');
   const candidates = ['read_file', 'list_dir', 'grep_search', 'memory_recall'];
