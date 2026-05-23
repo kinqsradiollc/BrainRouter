@@ -4,6 +4,7 @@ import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
+import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
@@ -196,8 +197,28 @@ export class MemoryEngine {
       endpoint: process.env.BRAINROUTER_RERANKER_ENDPOINT,
       apiKey: process.env.BRAINROUTER_RERANKER_API_KEY,
       model: process.env.BRAINROUTER_RERANKER_MODEL,
-      topN: process.env.BRAINROUTER_RERANKER_TOP_N 
-        ? parseInt(process.env.BRAINROUTER_RERANKER_TOP_N, 10) 
+      topN: process.env.BRAINROUTER_RERANKER_TOP_N
+        ? parseInt(process.env.BRAINROUTER_RERANKER_TOP_N, 10)
+        : undefined,
+    });
+
+    // Relevance judge sits behind a flag (off by default) — opt in with
+    // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true. Falls back to the shared
+    // BRAINROUTER_LLM_* settings unless explicitly overridden so a single
+    // LLM credential covers extraction, synthesis, and judging.
+    const relevanceJudge = new RelevanceJudgeService({
+      enabled: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENABLED === "true",
+      endpoint: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT
+        ?? process.env.BRAINROUTER_LLM_ENDPOINT,
+      apiKey: process.env.BRAINROUTER_RELEVANCE_JUDGE_API_KEY
+        ?? process.env.BRAINROUTER_LLM_API_KEY,
+      model: process.env.BRAINROUTER_RELEVANCE_JUDGE_MODEL
+        ?? process.env.BRAINROUTER_LLM_MODEL,
+      maxCandidates: process.env.BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES
+        ? parseInt(process.env.BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES, 10)
+        : undefined,
+      timeoutMs: process.env.BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS
+        ? parseInt(process.env.BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS, 10)
         : undefined,
     });
 
@@ -213,7 +234,7 @@ export class MemoryEngine {
     }
     
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
-    this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService);
+    this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.startExtractionSweeper();
   }
 
