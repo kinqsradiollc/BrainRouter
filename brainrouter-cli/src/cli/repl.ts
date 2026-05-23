@@ -11,7 +11,7 @@ import type { Agent } from '../agent/agent.js';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
 import type { Config } from '../config/config.js';
 import { expandMentions } from '../memory/mentions.js';
-import { addGoalTokens, buildBudgetSteeringMessage, goalHasBudgetLeft, goalIsOnFinalBudgetTurn, readGoal, tickGoalIteration, usageLimitGoal } from '../state/goalStore.js';
+import { addGoalTokens, buildBudgetSteeringMessage, formatBudget, goalHasBudgetLeft, goalIsOnFinalBudgetTurn, readGoal, tickGoalIteration, usageLimitGoal } from '../state/goalStore.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
 import type { WorkspaceInfo } from '../config/workspace.js';
@@ -264,11 +264,18 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     lastAnswer: string,
   ): string => {
     const iter = goal.budget.iterationsUsed + 1;
-    const remaining = Math.max(0, goal.budget.maxIterations - iter);
+    const cap = formatBudget(goal.budget.maxIterations);
+    const remaining = cap === 'unlimited' ? 'unlimited' : String(Math.max(0, goal.budget.maxIterations - iter));
     return [
-      `[GOAL CONTINUATION — iteration ${iter}/${goal.budget.maxIterations}, ${remaining} remaining]`,
+      `[GOAL CONTINUATION — iteration ${iter}/${cap}, ${remaining} remaining]`,
       '',
-      `Your active goal is: ${goal.text}`,
+      '## ⚠️  Your goal (re-anchor — read before doing anything else)',
+      '',
+      `> ${goal.text}`,
+      '',
+      'Every action this turn MUST serve that goal. If a tool result, child agent\'s output, or prior turn\'s conclusion is pulling you toward a tangent, IGNORE the tangent and refocus. The goal is your contract — not the most recent shiny thing in the chat.',
+      '',
+      '**Drift check (mandatory):** if the last 2 tool calls didn\'t move toward the goal statement above, STOP and either (a) take a tool action that does, or (b) call `goal_complete`/`goal_blocked`. Restating intent in prose without a tool call is anti-spin and the loop will halt.',
       '',
       `Last user message: ${lastPrompt || '(none)'}`,
       `Your previous response (truncated): ${lastAnswer.slice(0, 600)}${lastAnswer.length > 600 ? '…' : ''}`,
@@ -281,7 +288,9 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       '   - Otherwise (mid-goal), take the **next concrete tool action** (read a file, write code, spawn a worker child, run a verifier). Do NOT respond with prose like "I will now do X" — that\'s a no-op and the CLI will stop the continuation. Anti-spin applies to mid-goal turns; the final goal-completing turn requires prose.',
       '3. Use update_plan to track progress if you haven\'t already.',
       '',
-      'Reminder: budget is finite. Pick the highest-leverage action that moves the goal forward.',
+      '**Tool call mechanics reminder:** `goal_complete({...})` / `goal_blocked({...})` / `update_plan({...})` MUST be invoked via the structured `tool_calls` channel of your assistant message. Writing the function name and arguments as text/markdown/pseudo-code in your prose does NOTHING — the framework does not parse prose. If you intend to call a tool, emit it as a tool call.',
+      '',
+      'Reminder: each iteration costs context. Pick the highest-leverage action that moves the goal forward.',
     ].join('\n');
   };
 
@@ -535,7 +544,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       } else if (goalAfter && goalAfter.status === 'active' && !goalHasBudgetLeft(goalAfter)) {
         // Iteration cap reached — transition to usage_limited so the user
         // gets a consistent resumable state regardless of which cap tripped.
-        const reason = `Iteration budget exhausted (${goalAfter.budget.iterationsUsed}/${goalAfter.budget.maxIterations}).`;
+        const reason = `Iteration budget exhausted (${goalAfter.budget.iterationsUsed}/${formatBudget(goalAfter.budget.maxIterations)}).`;
         const limited = usageLimitGoal(agent.workspaceRoot, agent.sessionKey, reason);
         console.log(chalk.yellow(`\n⏸  ${reason} Extend with /goal budget <n> and /goal resume, mark /goal complete, or /goal clear.\n`));
         if (limited) goalAfter = limited;
@@ -565,7 +574,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         } else {
           agent.removeTaggedSystemMessage('goal-budget-steering');
         }
-        console.log(chalk.gray(`(goal continuation queued — iteration ${next}/${goalAfter.budget.maxIterations}; type anything to cancel)`));
+        console.log(chalk.gray(`(goal continuation queued — iteration ${next}/${formatBudget(goalAfter.budget.maxIterations)}; type anything to cancel)`));
         const followUp = buildGoalContinuationPrompt(goalAfter, agent.lastUserPrompt, agent.lastAnswer);
         setImmediate(() => {
           if (!pendingContinuation || isProcessing) return; // user cancelled or busy
@@ -724,7 +733,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/workflows', desc: 'List durable workflow folders' },
       { cmd: '/skill <name> [input]', desc: 'Run any catalogued skill' },
       { cmd: '/skills', desc: 'List installed BrainRouter skills' },
-      { cmd: '/plan', desc: 'Show the durable CLI task plan' },
+      { cmd: '/plan  /plan clear', desc: 'Show the durable CLI task plan; clear it (drops stale items)' },
       { cmd: '/tools', desc: 'List local + MCP tools available to the agent' },
       { cmd: '/goal [text|clear|complete|pause|resume|budget <n>]', desc: 'Sticky goal' },
       { cmd: '/continue', desc: 'Resume after a loop-limit abort' },

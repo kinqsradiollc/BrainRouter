@@ -83,13 +83,16 @@ graph TD
     RRF --> Blend[Priority blend<br/>decay + freshness]
     Blend --> Affinity[Intent affinity]
     Affinity --> Rerank[Cross-encoder rerank]
-    Rerank --> Graph[2-hop graph expansion]
+    Rerank --> Judge[LLM relevance judge]
+    Judge --> Graph[2-hop graph expansion]
     Graph --> Out([Prompt context])
 ```
 
 Three System-1 retrievers run in parallel; RRF merges them. System 2 then
 blends in the decayed priority, intent affinity, an optional cross-encoder
-reranker, and a 2-hop graph walk for spreading activation.
+reranker, an optional LLM judge that drops candidates that aren't actually
+relevant (the reranker only reorders), and a 2-hop graph walk for
+spreading activation.
 
 ### Reciprocal Rank Fusion
 
@@ -114,6 +117,7 @@ finalScore(r)        = rrfScore(r) * 30 * 0.7
 | **Skill boost** | Score ×1.2 when `record.skill_tag` matches active skill. |
 | **Neural sparks** | 2-hop spreading activation — records firing above threshold join the candidate pool. |
 | **Reranker** | Cross-encoder (Cohere / vLLM `/v1/rerank`) replaces top-K ordering when configured. |
+| **Relevance judge** | LLM-as-judge stage that filters the reranked finalists. Each candidate gets a binary verdict + reason; rejects are dropped. Off by default — opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`. Adds one LLM round-trip; on failure the reranker output passes through unchanged. |
 
 ## Filters
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 import { AuthGuard } from "../components/AuthGuard";
 import { AuthProvider } from "../components/AuthProvider";
 import { LayoutWrapper } from "../components/LayoutWrapper";

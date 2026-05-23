@@ -1,0 +1,70 @@
+name: Feature request
+description: Suggest a new capability, improvement, or change of behaviour.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. The most useful feature requests describe
+        the *problem* first and the *solution* second — that way we can
+        consider alternatives rather than locking in on an early sketch.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What pain point or limitation are you trying to solve?
+      placeholder: "I want to work on two BrainRouter workflows in parallel without losing goal state when I switch between them."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: How would you like BrainRouter to behave? Be specific — commands, file paths, UX.
+      placeholder: "Add a `/workflow switch <slug>` command that updates current-workflow.json AND swaps the active goal to that workflow's per-workflow goal.json."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds exist today? Why aren't they enough?
+      placeholder: "Today I can list workflows with `/workflows` and reference them by slug in `/approve` and `/implement-plan`, but the active goal stays bound to the workspace and gets clobbered."
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface is affected?
+      multiple: true
+      options:
+        - brainrouter-cli
+        - brainrouter MCP server
+        - brainrouter-dashboard
+        - packages/types | sdk | hooks
+        - Docs / README / ROADMAP
+        - Other / cross-cutting
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Rough scope
+      description: How big do you think this is? (We'll re-estimate.)
+      options:
+        - "Small — one file or one command"
+        - "Medium — touches a few modules"
+        - "Large — design pass needed"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Links to upstream prior art (other CLIs / MCP servers / docs), mockups, related issues.

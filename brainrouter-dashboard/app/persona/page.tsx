@@ -2,10 +2,10 @@
 
 import { useMemo } from "react";
 import { motion } from "framer-motion";
-import ReactMarkdown from "react-markdown";
 import { usePersona } from "@kinqs/brainrouter-hooks";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
+import { Markdown } from "../../components/Markdown";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 
@@ -64,7 +64,7 @@ export default function PersonaPage() {
             <div style={{ position: "relative" }}>
               {persona ? (
                 <div className="markdown-content">
-                  <ReactMarkdown>{persona.personaMd}</ReactMarkdown>
+                  <Markdown>{persona.personaMd}</Markdown>
                 </div>
               ) : (
                 <div style={{ color: "var(--color-stone-text)", fontStyle: "italic", padding: "40px 0", textAlign: "center" }}>

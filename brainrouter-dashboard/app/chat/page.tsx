@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
+import { Markdown } from "../../components/Markdown";
 import { PageHeader } from "../../components/PageHeader";
 
 interface ChatMessage {
@@ -495,7 +496,15 @@ export default function ChatPage() {
             <div style={bubbleLabelStyle}>
               {m.role === "user" ? "You" : "BrainRouter"}{m.pending && " · thinking…"}
             </div>
-            <div>{m.content || (m.pending ? "…" : "")}</div>
+            {m.role === "user" ? (
+              <div>{m.content || (m.pending ? "…" : "")}</div>
+            ) : (
+              <div className="markdown-content markdown-content--chat">
+                {m.content
+                  ? <Markdown>{m.content}</Markdown>
+                  : (m.pending ? "…" : "")}
+              </div>
+            )}
           </div>
         ))}
         {error && <div style={errorBoxStyle}>{error}</div>}
