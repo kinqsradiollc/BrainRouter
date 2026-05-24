@@ -114,10 +114,26 @@ Tool calls open OTEL-style child spans under the turn's root span. Set
 
 Cycle with **Shift+Tab**. Set explicitly with `/permissions read|write|shell`.
 
-`run_command` is gated by a y/N confirmation prompt unless `/yolo on` is
-set. Silent child agents refuse shell unless their parent has
-auto-approve enabled — closes a privilege-escalation path where a
-read-mode parent spawned a shell-mode child.
+`run_command` is gated by a y/N confirmation prompt by default. The
+session-wide `/mode` and `/review-policy` commands consolidate the
+gating knobs into one mental model:
+
+| Command | Default | What it changes |
+| --- | --- | --- |
+| `/mode planning` | ✅ | Every `run_command` routes through the y/N prompt. |
+| `/mode fast` | | Safe commands auto-run; dangerous ones (`rm -rf`, `sudo`, `git push --force`, `dd`, `mkfs`, `kubectl delete`, `curl … \| sh`, …) **still** prompt. |
+| `/review-policy request` | ✅ | At multi-file / workflow gates the agent surfaces the plan and waits for `/approve`. |
+| `/review-policy proceed` | | The agent applies the plan and reports after; `/approve` still works as an explicit lever. |
+| `/yolo on` | | One-line alias: flips both axes to `fast` + `proceed`. `/yolo off` restores the defaults. |
+
+`/approve` is unchanged — it's the explicit "approve this specific
+workflow now" gesture, independent of session policy.
+
+Silent child agents refuse shell unless the session is in `fast` mode
+(or the legacy `autoApproveShell` flag is set) — closes a
+privilege-escalation path where a read-mode parent spawned a shell-mode
+child. Dangerous commands in silent children are always denied because
+there's nobody to answer the y/N.
 
 ---
 
@@ -382,9 +398,11 @@ tall ones. `/help <category>` drills in.
 | Command | Purpose |
 | --- | --- |
 | `/permissions [read\|write\|shell]` | Show / set access mode. |
+| `/mode [planning\|fast]` | Session execution stance. `planning` (default) routes `run_command` through y/N; `fast` skips it for safe commands and still gates dangerous ones. |
+| `/review-policy [request\|proceed]` | How the agent treats multi-file / workflow approval gates. `request` (default) surfaces the plan and waits for `/approve`; `proceed` applies and reports after. |
+| `/yolo [on\|off]` | Alias for `/mode fast` + `/review-policy proceed`; flips both axes in one go. |
 | `/hooks` | List shell lifecycle hooks. |
 | `/hookify [list\|add\|remove\|enable\|disable]` | Manage markdown guardrail rules. |
-| `/yolo [on\|off]` | Auto-approve shell commands (off by default). |
 | `/sandbox [on\|off\|status]` | Toggle `BRAINROUTER_SANDBOX` at runtime. |
 | `/logout` | Clear cached API credentials. |
 
