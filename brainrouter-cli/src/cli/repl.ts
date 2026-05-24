@@ -46,7 +46,7 @@ const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait',
-  '/spec', '/feature-dev', '/review', '/implement-plan', '/skill', '/workflows', '/approve',
+  '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
   '/init', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop',
@@ -596,10 +596,15 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     } finally {
       isProcessing = false;
       // Clear any active skill latched by /skill / /feature-dev / /spec /
-      // /review / /implement-plan so subsequent plain prompts don't keep
-      // spiking the same skill. The skill memetic potential still decays
-      // server-side on its own half-life; this just stops attribution.
+      // /review / /implement-plan / /grill-me so subsequent plain prompts
+      // don't keep spiking the same skill. The skill memetic potential
+      // still decays server-side on its own half-life; this just stops
+      // attribution. Also refresh the system prompt so skill-conditional
+      // overlays (e.g. grill-me's CLARIFY block) disappear from
+      // chatHistory[0] before the user's next prompt — otherwise the
+      // model would see "do not make file edits" carrying over.
       agent.activeSkill = undefined;
+      agent.refreshSystemPrompt();
 
       // Auto-continuation logic. Rules:
       //   - the goal must be active (not paused / complete / blocked / usage_limited)
@@ -857,6 +862,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/spec <title>', desc: 'Produce spec.md (spec-driven-skill)' },
       { cmd: '/feature-dev <feat>', desc: 'Multi-agent feature dev with spec + tasks' },
+      { cmd: '/grill-me [--force] <task>', desc: 'Clarify 2–5 questions before implementing (CLARIFY mode)' },
       { cmd: '/review [scope]', desc: 'Multi-agent code review → review.md' },
       { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
       { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },

@@ -26,6 +26,34 @@ import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from './_help
 // Promise-flavored exec for case bodies that shell out.
 const execPromise = promisify(exec);
 
+/**
+ * Decide whether `/grill-me` should refuse to fire because the current
+ * workflow already has a written `spec.md`. The clarifying pass is meant to
+ * happen BEFORE the spec is committed — once a spec exists, asking again
+ * usually means we're re-litigating answers the user already gave, which
+ * wastes a turn. `--force` is the explicit escape hatch when the user
+ * genuinely wants a second clarifying pass (e.g., scope has drifted).
+ *
+ * Exported helper for unit tests so the guard logic can be exercised
+ * without standing up the whole REPL context. NOT pure: reads workflow
+ * state from disk (`getCurrentWorkflow`, `readArtifact`) and the latter
+ * may mkdirSync the workflow folder as a side effect.
+ */
+export function shouldSkipGrillMe(
+  workspaceRoot: string,
+  force: boolean,
+): { skip: boolean; slug?: string; specPath?: string } {
+  if (force) return { skip: false };
+  const slug = getCurrentWorkflow(workspaceRoot);
+  if (!slug) return { skip: false };
+  const spec = readArtifact(workspaceRoot, slug, ARTIFACT.spec);
+  if (!spec) return { skip: false };
+  return {
+    skip: true,
+    slug,
+    specPath: artifactRelativePath(workspaceRoot, slug, ARTIFACT.spec),
+  };
+}
 
 export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config, rl, repl } = ctx;
@@ -227,6 +255,42 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         '',
         'Phase 4 — STOP: present a short summary in chat referencing the file paths, then explicitly ask the user to confirm before any `worker` implementation begins.',
       ].join('\n'), ctx.repl.runAgentTurn);
+      return true;
+    }
+    case '/grill-me':
+    {
+      // `/grill-me` doesn't render its own picker — it just nudges the model
+      // (via the CLARIFY-mode overlay in systemPrompt.ts) to ask 2–5
+      // questions back instead of jumping to implementation tools. The
+      // picker UI lives in cliPrompt.ts and stays untouched.
+      const force = args.includes('--force');
+      const task = args.filter((a) => a !== '--force').join(' ').trim();
+      if (!task) {
+        console.log(chalk.red('\nUsage: /grill-me [--force] <task description>\n'));
+        return true;
+      }
+      const decision = shouldSkipGrillMe(agent.workspaceRoot, force);
+      if (decision.skip) {
+        console.log(chalk.yellow(`\nPlan already exists at ${chalk.cyan(decision.specPath)}.`));
+        console.log(chalk.gray(
+          `  Drop into it with \`/workflow switch ${decision.slug}\`, or use \`/grill-me --force\` to clarify additional details.\n`,
+        ));
+        return true;
+      }
+      // Latch activeSkill BEFORE refreshing the system prompt so the
+      // CLARIFY overlay lands in chatHistory[0]. The post-turn hook in
+      // repl.ts clears activeSkill + refreshes again, so the overlay
+      // doesn't bleed into the user's next plain prompt.
+      agent.activeSkill = 'grill-me';
+      agent.refreshSystemPrompt();
+      const prompt = [
+        '[CLARIFY — grill-me]',
+        '',
+        `The user wants help with: ${task}`,
+        '',
+        'Before doing anything, ask 2–5 short questions back to disambiguate scope, format, and unstated assumptions. Use `ask_user_choice` for mutually-exclusive options; plain prose for free-form input. End with a one-paragraph "what I\'ll do once you answer" so the user can sanity-check your read of the request.',
+      ].join('\n');
+      ctx.repl.runAgentTurn(prompt);
       return true;
     }
     case '/spec':

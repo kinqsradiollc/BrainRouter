@@ -249,6 +249,50 @@ Implementation lives at
 (pure reducer + renderer + orchestrator). Tool registration + access
 classification at [`brainrouter-cli/src/agent/agent.ts`](../brainrouter-cli/src/agent/agent.ts).
 
+### Clarify before implementing — `/grill-me`
+
+`ask_user_choice` is the picker; `/grill-me [--force] <task>` is the
+user-initiated trigger that tells the agent to *use* it before
+touching files. Typing `/grill-me add a /uptime slash command` latches
+a `grill-me` activeSkill on the agent and refreshes the system prompt
+with a six-line CLARIFY overlay:
+
+> Do NOT make file edits, run shell commands, or spawn worker agents
+> this turn. Ask 2–5 questions to disambiguate scope, format, and
+> unstated assumptions. Prefer `ask_user_choice` for mutually-exclusive
+> options; plain prose for free-form input. End with a one-paragraph
+> "what I'll do once you answer" so the user can sanity-check the read.
+
+The overlay is scoped to that single turn — the post-turn hook clears
+`activeSkill` and refreshes the prompt again, so the next plain user
+message runs without the edit ban.
+
+**Skip-if-plan-exists guardrail.** If the current workflow already has
+a `spec.md`, `/grill-me` refuses with:
+
+```
+Plan already exists at .brainrouter/workflows/<slug>/spec.md.
+  Drop into it with `/workflow switch <slug>`, or use `/grill-me --force`
+  to clarify additional details.
+```
+
+This stops `/grill-me` from re-litigating answers the user already gave
+during the spec phase. `--force` is the explicit escape hatch when scope
+has drifted enough to warrant a second clarifying pass.
+
+**When to use which.**
+
+| Tool / command | Who initiates | When |
+| --- | --- | --- |
+| `askYesNo` | CLI gates | Binary confirmation inside an existing flow (shell approval, workflow clobber). Agent never calls directly. |
+| `ask_user_choice` | Agent | Mid-task, when the agent hit a genuine fork with 2–4 mutually-exclusive reasonable approaches. |
+| `/grill-me` | User | Up-front, when the request is ambiguous on multiple axes (scope, format, dependencies) and you want a clarify pass before any edits. |
+
+Implementation: command handler + skip guard at
+[`brainrouter-cli/src/cli/commands/workflow.ts`](../brainrouter-cli/src/cli/commands/workflow.ts);
+CLARIFY overlay in
+[`brainrouter-cli/src/prompt/systemPrompt.ts`](../brainrouter-cli/src/prompt/systemPrompt.ts).
+
 ---
 
 ## Slash commands
@@ -310,6 +354,7 @@ tall ones. `/help <category>` drills in.
 | `/tools` | List local + MCP tool inventory. |
 | `/spec <title>` | Scaffold a spec workflow folder. |
 | `/feature-dev <title>` | Full spec → tasks → implement workflow. |
+| `/grill-me [--force] <task>` | Pause the agent for 2–5 clarifying questions before any file edit. See [Clarify before implementing](#clarify-before-implementing--grill-me). |
 | `/review [target]` | Reviewer pass. |
 | `/implement-plan` | Execute the current `tasks.md`. |
 | `/approve` | Mark workflow complete; write `walkthrough.md`. |
