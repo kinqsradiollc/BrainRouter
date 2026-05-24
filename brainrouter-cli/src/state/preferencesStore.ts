@@ -10,6 +10,7 @@ import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
 
 export type ExecutionMode = 'planning' | 'fast';
 export type ReviewPolicy = 'request' | 'proceed';
+export type EffortLevel = 'low' | 'medium' | 'high';
 
 export interface Preferences {
   /** When true, every worker spawn is auto-followed by a reviewer pass on the diff. */
@@ -64,6 +65,16 @@ export interface Preferences {
    * prose. Tied to /quiet and the --quiet startup flag. Off by default.
    */
   quiet: boolean;
+  /**
+   * Reasoning depth preference. `medium` (default) is today's behaviour and
+   * emits no system-prompt overlay and no provider-side reasoning slot.
+   * `low` adds a "be terse, skip ceremony" overlay; `high` adds a
+   * step-by-step audit overlay. When the LLM endpoint exposes a reasoning
+   * slot (gpt-5 / o-series via Chat Completions accept `reasoning_effort`),
+   * the level is also forwarded as the provider-native enum. Tied to
+   * `/effort` and the `BRAINROUTER_EFFORT` env override.
+   */
+  effort: EffortLevel;
 }
 
 const DEFAULT: Preferences = {
@@ -83,6 +94,7 @@ const DEFAULT: Preferences = {
   sandboxReadPaths: [],
   sandboxWritePaths: [],
   quiet: false,
+  effort: 'medium',
 };
 
 /**
@@ -141,4 +153,46 @@ export function applyYoloOff(workspaceRoot: string): Preferences {
     reviewPolicy: 'request',
     autoApproveShell: false,
   });
+}
+
+export interface ResolvedEffort {
+  effort: EffortLevel;
+  source: 'env' | 'preference' | 'default';
+}
+
+function normalizeEffort(raw: unknown): EffortLevel | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const v = raw.trim().toLowerCase();
+  return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
+}
+
+/**
+ * Resolve the active reasoning-depth level using env > preference > default.
+ * Matches the precedence pattern set by `resolveTheme` and the
+ * `BRAINROUTER_QUIET` override.
+ *
+ * A garbled `BRAINROUTER_EFFORT` value (e.g. `BRAINROUTER_EFFORT=ludicrous`)
+ * is treated as unset so users don't get cryptic crashes — the preference
+ * takes over.
+ *
+ * We read the raw file (not `readPreferences`) so we can distinguish a
+ * preference that was explicitly written from the default that
+ * `readPreferences` injects via its spread.
+ */
+export function resolveEffort(workspaceRoot?: string): ResolvedEffort {
+  const envEffort = normalizeEffort(process.env.BRAINROUTER_EFFORT);
+  if (envEffort) return { effort: envEffort, source: 'env' };
+  if (workspaceRoot) {
+    try {
+      const stored = readJsonFile<Partial<Preferences>>(
+        getCliStateFile(workspaceRoot, 'preferences.json'),
+        {},
+      );
+      const prefEffort = normalizeEffort(stored.effort);
+      if (prefEffort) return { effort: prefEffort, source: 'preference' };
+    } catch {
+      // Preferences file unreadable — fall through to default.
+    }
+  }
+  return { effort: 'medium', source: 'default' };
 }

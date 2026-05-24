@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Agent } from '../agent/agent.js';
+import { Agent, buildChatCompletionPayload } from '../agent/agent.js';
 import { clearGoal, readGoal, setGoal } from '../state/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
@@ -314,6 +314,101 @@ test('runTurn: goal_complete is refused while the active plan has pending / in_p
       clearGoal(workspace, sessionKey);
     }
   });
+});
+
+test('buildChatCompletionPayload: forwards reasoning_effort for a known reasoning model on the OpenAI endpoint (0.3.6 item 2f)', () => {
+  // gpt-5 + api.openai.com is the most clear-cut case: OpenAI's Chat
+  // Completions schema lists `reasoning_effort: low|medium|high` and gpt-5
+  // is a reasoning model. The forwarding must happen for low/high but stay
+  // silent on medium — that's the default and forwarding it would change
+  // request shape for every user who never touched /effort.
+  const supported = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: 'k',
+      model: 'gpt-5',
+      endpoint: 'https://api.openai.com/v1',
+    },
+    [{ role: 'user', content: 'plan a refactor' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((supported as any).reasoning_effort, 'high');
+
+  const lowEffort = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: 'k',
+      model: 'gpt-5',
+      endpoint: 'https://api.openai.com/v1',
+    },
+    [{ role: 'user', content: 'plan a refactor' }],
+    [],
+    { effort: 'low' },
+  );
+  assert.equal((lowEffort as any).reasoning_effort, 'low');
+
+  // medium is the default — forwarding it would silently change request
+  // shape for users who never set /effort. The field must be absent.
+  const medium = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: 'k',
+      model: 'gpt-5',
+      endpoint: 'https://api.openai.com/v1',
+    },
+    [{ role: 'user', content: 'plan a refactor' }],
+    [],
+    { effort: 'medium' },
+  );
+  assert.equal((medium as any).reasoning_effort, undefined);
+
+  // Omitting the option entirely is identical to medium — no change in shape.
+  const noOption = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: 'k',
+      model: 'gpt-5',
+      endpoint: 'https://api.openai.com/v1',
+    },
+    [{ role: 'user', content: 'plan a refactor' }],
+    [],
+  );
+  assert.equal((noOption as any).reasoning_effort, undefined);
+});
+
+test('buildChatCompletionPayload: does NOT forward reasoning_effort for non-reasoning models / unknown endpoints (0.3.6 item 2f)', () => {
+  // gpt-4o-mini on the OpenAI endpoint: not a reasoning model, must not
+  // receive reasoning_effort even when /effort is set — sending it would
+  // be at best a no-op and at worst a 400 on stricter compatible servers.
+  const nonReasoning = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: 'k',
+      model: 'gpt-4o-mini',
+      endpoint: 'https://api.openai.com/v1',
+    },
+    [{ role: 'user', content: 'just answer' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((nonReasoning as any).reasoning_effort, undefined);
+
+  // Custom OpenAI-compatible endpoint (LM Studio / Ollama / vLLM): we can't
+  // know the model behind a generic local URL, so fall through silently —
+  // the system-prompt overlay still steers the model.
+  const localCustom = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: '',
+      model: 'qwen2.5-coder',
+      endpoint: 'http://localhost:1234/v1',
+    },
+    [{ role: 'user', content: 'just answer' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((localCustom as any).reasoning_effort, undefined);
 });
 
 test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {
