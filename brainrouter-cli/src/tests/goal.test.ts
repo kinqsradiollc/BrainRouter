@@ -592,6 +592,93 @@ test('applyMigrationResolution(import-session): archives target goal, moves sess
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: /workflow switch <slug> — WorkflowConflictError + plan helper
+// -----------------------------------------------------------------------
+
+test('planWorkflowSwitch: session → workflow flag is set when session has a goal', async () => {
+  const { planWorkflowSwitch } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-session';
+    // Create a target workflow but unbind so subsequent setGoal lands in session bucket.
+    const target = createWorkflow(workspace, { title: 'target', kind: 'feature-dev' });
+    setCurrentWorkflow(workspace, '');
+    setGoal(workspace, 'session work', sk);
+
+    const plan = planWorkflowSwitch(workspace, sk, target.slug);
+    assert.equal(plan.fromScope.scope, 'session');
+    assert.equal(plan.needsMigration, true);
+    assert.equal(plan.sourceGoal?.text, 'session work');
+    assert.equal(plan.targetGoal, null);
+  });
+});
+
+test('planWorkflowSwitch: workflow → workflow flip with both active goals throws WorkflowConflictError', async () => {
+  const { planWorkflowSwitch, WorkflowConflictError } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-conflict';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A is active', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B is active', sk);
+    // Both A and B have active goals. Currently bound to B. Asking to switch
+    // back to A must refuse with WorkflowConflictError.
+    setCurrentWorkflow(workspace, b.slug);
+    assert.throws(
+      () => planWorkflowSwitch(workspace, sk, a.slug),
+      (err: unknown) =>
+        err instanceof WorkflowConflictError &&
+        (err as any).sourceSlug === b.slug &&
+        (err as any).targetSlug === a.slug,
+    );
+  });
+});
+
+test('planWorkflowSwitch: workflow → workflow flip is allowed when source goal is paused', async () => {
+  const { planWorkflowSwitch, pauseGoal } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-paused';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A is paused', sk);
+    pauseGoal(workspace, sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B is active', sk);
+
+    // Bound to B; A is paused → no conflict, just a normal switch.
+    setCurrentWorkflow(workspace, b.slug);
+    const plan = planWorkflowSwitch(workspace, sk, a.slug);
+    assert.equal(plan.fromScope.scope, 'workflow');
+    assert.equal(plan.needsMigration, false);
+    assert.equal(plan.targetGoal?.status, 'paused');
+  });
+});
+
+test('WorkflowConflictError carries both slugs + goals and a clear remediation in the message', async () => {
+  const { planWorkflowSwitch, WorkflowConflictError } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-err-msg';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+    setCurrentWorkflow(workspace, b.slug);
+    try {
+      planWorkflowSwitch(workspace, sk, a.slug);
+      assert.fail('expected WorkflowConflictError');
+    } catch (err) {
+      assert.ok(err instanceof WorkflowConflictError);
+      assert.equal((err as InstanceType<typeof WorkflowConflictError>).sourceSlug, b.slug);
+      assert.equal((err as InstanceType<typeof WorkflowConflictError>).targetSlug, a.slug);
+      assert.match((err as Error).message, /Pause one first/);
+      assert.match((err as Error).message, /\/goal pause/);
+    }
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {

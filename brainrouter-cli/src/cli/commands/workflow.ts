@@ -14,8 +14,8 @@ import { marked } from 'marked';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, updateWorkflowStatus } from '../../state/workflowArtifacts.js';
-import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget } from '../../state/goalStore.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
+import { applyMigrationResolution, clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, migrateSessionGoalToWorkflow, pauseGoal, planWorkflowSwitch, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, WorkflowConflictError, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
@@ -53,6 +53,25 @@ export function shouldSkipGrillMe(
     slug,
     specPath: artifactRelativePath(workspaceRoot, slug, ARTIFACT.spec),
   };
+}
+
+/**
+ * Print the one-line confirmation banner after a successful `/workflow
+ * switch <slug>` (or a no-op switch onto the already-current workflow).
+ * Format: `Switched to workflow <slug> — goal: <status>, iteration N of cap`
+ * — or `goal: —` when no goal is bound.
+ */
+function printWorkflowSwitchConfirmation(slug: string, goal: import('../../state/goalStore.js').Goal | null): void {
+  if (!goal) {
+    console.log(chalk.green(`\n✓ Switched to workflow "${slug}" — goal: —.\n`));
+    return;
+  }
+  const statusLabel = goal.status.replace('_', ' ');
+  const iter = goal.budget.iterationsUsed;
+  const cap = formatBudget(goal.budget.maxIterations);
+  console.log(chalk.green(
+    `\n✓ Switched to workflow "${slug}" — goal: ${statusLabel}, iteration ${iter} of ${cap}.\n`,
+  ));
 }
 
 export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boolean> {
@@ -395,6 +414,82 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         `5. Append a section to \`${walkPath}\` (read+write) recording the outcome.\n` +
         `6. STOP after the first task and ask whether to continue. Do not silently work through every task — the user approves slices, not the whole batch.`,
       );
+      return true;
+    }
+    case '/workflow':
+    {
+      // Subcommands: switch <slug> | pause | resume <slug>
+      // The plural `/workflows` (next case) is the list command. Singular
+      // `/workflow` carries actions on the current pointer / a named slug.
+      const sub = (args[0] ?? '').toLowerCase();
+      if (!sub) {
+        console.log(chalk.red('\nUsage: /workflow switch <slug> | pause | resume <slug>\n'));
+        return true;
+      }
+      if (sub === 'switch') {
+        const targetSlug = (args[1] ?? '').trim();
+        if (!targetSlug) {
+          console.log(chalk.red('\nUsage: /workflow switch <slug>\n'));
+          console.log(chalk.gray('  See /workflows for available slugs.\n'));
+          return true;
+        }
+        if (!workflowExists(agent.workspaceRoot, targetSlug)) {
+          console.log(chalk.red(`\nNo such workflow: "${targetSlug}".`));
+          console.log(chalk.gray('  Use /workflows to see what exists, or /spec / /feature-dev to create a new one.\n'));
+          return true;
+        }
+        if (getCurrentWorkflow(agent.workspaceRoot) === targetSlug) {
+          // Already on it — print the same banner as if we'd switched so
+          // the user gets a consistent confirmation instead of "no-op".
+          const g = readGoal(agent.workspaceRoot, agent.sessionKey);
+          printWorkflowSwitchConfirmation(targetSlug, g);
+          return true;
+        }
+        try {
+          const plan = planWorkflowSwitch(agent.workspaceRoot, agent.sessionKey, targetSlug);
+          // Session → workflow migration path (Subtask 2). Workflow-to-
+          // workflow flips never run migration — each workflow's goal stays
+          // in its own folder.
+          if (plan.needsMigration) {
+            const outcome = migrateSessionGoalToWorkflow(agent.workspaceRoot, agent.sessionKey, targetSlug);
+            if (outcome.conflict === 'target-has-active-goal') {
+              console.log(chalk.yellow(
+                `\n⚠️  Target workflow "${targetSlug}" already has an active goal:`,
+              ));
+              console.log(`     ${chalk.cyan(outcome.target!.text)}`);
+              console.log(chalk.gray(`     Session-scoped goal: ${outcome.source!.text}`));
+              const importIt = await askYesNo(
+                `Import session's goal into "${targetSlug}" (overwrites the target's)? (y/N — picks "keep target") `,
+                false,
+              );
+              applyMigrationResolution(
+                agent.workspaceRoot,
+                agent.sessionKey,
+                targetSlug,
+                importIt ? 'import-session' : 'keep-target',
+              );
+              if (!importIt) {
+                console.log(chalk.gray('  Session goal archived under .brainrouter.migrated/ — target kept its goal.'));
+              }
+            }
+          }
+          setCurrentWorkflow(agent.workspaceRoot, targetSlug);
+          agent.refreshSystemPrompt();
+          const next = readGoal(agent.workspaceRoot, agent.sessionKey);
+          printWorkflowSwitchConfirmation(targetSlug, next);
+        } catch (err: any) {
+          if (err instanceof WorkflowConflictError) {
+            console.log(chalk.red(`\n⚠️  ${err.message}\n`));
+          } else {
+            console.log(chalk.red(`\n✗ ${err?.message ?? err}\n`));
+          }
+        }
+        return true;
+      }
+      // /workflow pause + /workflow resume <slug> land in Subtask 5 — they
+      // share this dispatcher but represent a distinct surface.
+      console.log(chalk.red(`\nUnknown /workflow subcommand: "${sub}".`));
+      console.log(chalk.gray('  Subcommands: switch <slug>\n'));
       return true;
     }
     case '/workflows':
