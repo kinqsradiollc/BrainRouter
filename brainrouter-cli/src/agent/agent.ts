@@ -2411,7 +2411,15 @@ export async function callOpenAI(
   tools: any[],
   options: BuildPayloadOptions = {},
 ) {
-  const endpoint = config.endpoint || 'https://api.openai.com/v1';
+  // Normalize the endpoint to a base URL (everything UP TO `/chat/completions`
+  // exclusive). Earlier callers stored the full chat-completions URL in
+  // `config.endpoint` (e.g. "https://api.openai.com/v1/chat/completions")
+  // because the in-terminal wizard's provider catalog wrote the full path.
+  // We then re-append `/chat/completions` below, producing a duplicate
+  // `/chat/completions/chat/completions` and a 404. Strip the suffix
+  // defensively so both shapes (full URL or base URL) work.
+  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
   let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
   const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
   if (!apiKey && !isLocal) {

@@ -38,11 +38,18 @@ export interface ProviderEntry {
 }
 
 export const PROVIDER_CATALOG: ProviderEntry[] = [
+  // NOTE: endpoint values are the BASE URL (ending in `/v1` or
+  // `/api/v1`), NOT the full `/chat/completions` URL. The agent's
+  // callOpenAI() in agent.ts appends `/chat/completions` itself. An
+  // older revision of this catalog stored the full URL, which led to
+  // a duplicated `/chat/completions/chat/completions` and a 404 on
+  // the first chat turn. agent.ts now normalizes either shape, but
+  // the catalog stays on the base-URL form going forward.
   {
     id: 'openai',
     label: 'OpenAI',
     hint: 'cloud · gpt-4o / gpt-5 / o-series',
-    endpoint: 'https://api.openai.com/v1/chat/completions',
+    endpoint: 'https://api.openai.com/v1',
     envKey: 'OPENAI_API_KEY',
     local: false,
     models: ['gpt-4o-mini', 'gpt-4o', 'gpt-5', 'o3-mini', 'gpt-5-mini'],
@@ -52,7 +59,7 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     id: 'deepseek',
     label: 'DeepSeek',
     hint: 'cloud · deepseek-chat / deepseek-reasoner',
-    endpoint: 'https://api.deepseek.com/v1/chat/completions',
+    endpoint: 'https://api.deepseek.com/v1',
     envKey: 'DEEPSEEK_API_KEY',
     local: false,
     models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'],
@@ -62,7 +69,7 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     id: 'openrouter',
     label: 'OpenRouter',
     hint: 'cloud gateway · any vendor through one key',
-    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    endpoint: 'https://openrouter.ai/api/v1',
     envKey: 'OPENROUTER_API_KEY',
     local: false,
     models: [
@@ -86,7 +93,7 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     id: 'anthropic-via-gateway',
     label: 'Claude (via OpenRouter)',
     hint: 'cloud · claude-* models routed through OpenRouter\'s OpenAI-compat gateway',
-    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    endpoint: 'https://openrouter.ai/api/v1',
     envKey: 'OPENROUTER_API_KEY',
     local: false,
     models: [
@@ -102,7 +109,7 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     id: 'gemini',
     label: 'Gemini (OpenAI-compat)',
     hint: 'cloud · Google\'s OpenAI-compat endpoint',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
     envKey: 'GEMINI_API_KEY',
     local: false,
     models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
@@ -112,7 +119,7 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     id: 'lmstudio',
     label: 'LM Studio (local)',
     hint: 'local · http://localhost:1234 · blank API key OK',
-    endpoint: 'http://localhost:1234/v1/chat/completions',
+    endpoint: 'http://localhost:1234/v1',
     envKey: 'LMSTUDIO_API_KEY',
     local: true,
     models: ['qwen2.5-coder', 'gpt-oss-20b', 'deepseek-r1-distill-qwen-32b'],
@@ -122,7 +129,7 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     id: 'ollama',
     label: 'Ollama (local)',
     hint: 'local · http://localhost:11434 · blank API key OK',
-    endpoint: 'http://localhost:11434/v1/chat/completions',
+    endpoint: 'http://localhost:11434/v1',
     envKey: 'OLLAMA_API_KEY',
     local: true,
     models: ['qwen2.5-coder:7b', 'llama3.1:8b', 'deepseek-r1:14b'],

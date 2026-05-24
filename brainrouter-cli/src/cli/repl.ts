@@ -341,24 +341,25 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       return;
     }
     // `/` at an empty prompt opens the slash command palette.
+    //
+    // Important timing: this keypress handler runs AFTER readline has
+    // already updated its line buffer. So checking `line.length === 0`
+    // before the keystroke would never be true. Instead we schedule
+    // a setImmediate that checks `line === '/'` — i.e. the buffer
+    // contains EXACTLY the `/` we just typed (with nothing else). That
+    // distinguishes "user typed `/` on an empty line" (open palette)
+    // from "user pasted `/help` quickly" (don't open — let readline
+    // process the whole thing normally).
     if (str === '/' && !key?.ctrl && !key?.meta) {
-      const line = (rl as any).line ?? '';
-      if (line.length === 0) {
-        // Don't echo the `/` to readline — the palette starts with
-        // it already in its buffer. We intercept here BEFORE readline
-        // sees it. (Note: readline still gets the keypress because we
-        // can't prevent that on Node's stdin; the palette opens
-        // synchronously after this handler and the `/` ends up in
-        // readline's buffer too. We clear readline's buffer right
-        // after to avoid the duplicate `/`.)
-        setImmediate(() => {
-          // Clear readline's line BEFORE opening the palette so we
-          // don't get `/` echoed under the palette frame.
-          try { (rl as any).line = ''; (rl as any).cursor = 0; } catch { /* ignore */ }
-          void openSlashPalette();
-        });
-        return;
-      }
+      setImmediate(() => {
+        const line = (rl as any).line ?? '';
+        if (line !== '/') return;
+        // Clear readline's line BEFORE opening the palette so we don't
+        // get `/` echoed beneath the Ink frame after the palette closes.
+        try { (rl as any).line = ''; (rl as any).cursor = 0; } catch { /* ignore */ }
+        void openSlashPalette();
+      });
+      return;
     }
     if (key && key.name === 'tab' && key.shift) {
       const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
