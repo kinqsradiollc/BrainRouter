@@ -5,7 +5,7 @@ import { readPlan, type PlanState } from '../state/taskStore.js';
 import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '../state/workflowArtifacts.js';
 import { listSessions, type ChildSessionRecord } from '../orchestration/orchestrator.js';
 import type { RecalledRecord } from '../memory/briefing.js';
-import { readPreferences, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
+import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
 import { BOX, type Theme } from './theme.js';
 
 /**
@@ -44,6 +44,8 @@ export interface WhereInputs {
   accessMode: string;
   executionMode: ExecutionMode;
   reviewPolicy: ReviewPolicy;
+  effort: EffortLevel;
+  effortSource: 'env' | 'preference' | 'default';
   workflowSlug?: string;
   workflowMeta?: WorkflowMeta;
   goal?: Goal;
@@ -68,14 +70,19 @@ function renderHeader(title: string, theme: Theme): string {
 function renderWorkspace(inputs: WhereInputs, theme: Theme): string[] {
   const base = path.basename(inputs.workspaceRoot) || inputs.workspaceRoot;
   const dim = theme.muted;
+  // /where is the "tell me everything" surface, so we show the effort level
+  // regardless of whether it's at default — unlike the statusline, which
+  // hides medium to keep the prompt quiet. Tag the source in parens when
+  // env beat the preference so users can see why the value differs from
+  // what they set with /effort.
+  const effortLine = inputs.effortSource === 'env'
+    ? `effort  ${inputs.effort}  ${dim('(env)')}`
+    : `effort  ${inputs.effort}`;
   return [
     renderHeader('Workspace', theme),
     indent(theme.plain(`${base}  ${dim('(' + inputs.workspaceRoot + ')')}`)),
     indent(dim(`session ${inputs.sessionKey.slice(0, 8)}  ·  model ${inputs.model}  ·  mode ${inputs.accessMode}`)),
-    // /where is the "tell me everything" surface, so we show both new policy
-    // knobs regardless of whether they're at default — unlike the statusline,
-    // which hides defaults to keep the prompt quiet.
-    indent(dim(`exec    ${inputs.executionMode}  ·  review ${inputs.reviewPolicy}`)),
+    indent(dim(`exec    ${inputs.executionMode}  ·  review ${inputs.reviewPolicy}  ·  ${effortLine}`)),
     indent(dim(`mcp     ${inputs.mcpProfile}  ·  ${inputs.mcpTransport}  ·  ${inputs.mcpOnline ? 'online' : 'offline'}`)),
   ];
 }
@@ -247,10 +254,13 @@ export function gatherWhereInputs(args: {
     try { return listSessions(args.workspaceRoot); } catch { return []; }
   })();
   const prefs = readPreferences(args.workspaceRoot);
+  const resolvedEffort = resolveEffort(args.workspaceRoot);
   return {
     ...args,
     executionMode: prefs.executionMode,
     reviewPolicy: prefs.reviewPolicy,
+    effort: resolvedEffort.effort,
+    effortSource: resolvedEffort.source,
     workflowSlug,
     workflowMeta,
     goal,

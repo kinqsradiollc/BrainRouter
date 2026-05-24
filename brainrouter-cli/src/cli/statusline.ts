@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { formatBudget, readGoal } from '../state/goalStore.js';
 import { readPlan } from '../state/taskStore.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
-import { readPreferences } from '../state/preferencesStore.js';
+import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
 
 /**
  * Status-line segment renderers. Each segment is a pure-ish function from
@@ -17,6 +17,7 @@ import { readPreferences } from '../state/preferencesStore.js';
  * Segments deliberately stay narrow:
  *   - `mode`     — access mode (read/write/shell)
  *   - `exec`     — execution mode (fast); hidden when planning (the default)
+ *   - `effort`   — reasoning depth (low / high); hidden when medium (the default)
  *   - `model`    — chat-LLM model name
  *   - `tokens`   — last turn's input/output tokens, only when calls > 0
  *   - `session`  — first ~22 chars of the sessionKey
@@ -37,6 +38,7 @@ import { readPreferences } from '../state/preferencesStore.js';
 export const SEGMENT_NAMES = [
   'mode',
   'exec',
+  'effort',
   'model',
   'tokens',
   'session',
@@ -80,6 +82,18 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       try {
         const { executionMode } = readPreferences(inputs.workspaceRoot);
         return executionMode === 'fast' ? 'fast' : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    case 'effort': {
+      // Mirror the `exec` "show only when non-default" rule. `medium` is the
+      // default and would just add chrome on every prompt for users who never
+      // touched /effort.
+      try {
+        const resolved = resolveEffort(inputs.workspaceRoot);
+        if (resolved.effort === 'medium') return undefined;
+        return `effort:${resolved.effort}`;
       } catch {
         return undefined;
       }

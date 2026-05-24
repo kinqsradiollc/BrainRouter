@@ -27,6 +27,12 @@ export interface SystemPromptContext {
    * an overlay; `request` is the default behaviour.
    */
   reviewPolicy?: 'request' | 'proceed';
+  /**
+   * Reasoning-depth overlay set by `/effort` (or `BRAINROUTER_EFFORT`).
+   * `medium` is the default and emits no overlay — adding prose for it
+   * would silently change behaviour for every existing user on upgrade.
+   */
+  effort?: 'low' | 'medium' | 'high';
 }
 
 function personalityOverlay(style: SystemPromptContext['personality']): string {
@@ -73,6 +79,26 @@ function policyOverlay(
   }
   if (lines.length === 0) return '';
   return ['## Session policy overrides', ...lines].join('\n');
+}
+
+function effortOverlay(effort: SystemPromptContext['effort']): string {
+  // `medium` (and unset) is today's behaviour; emitting no overlay keeps the
+  // upgrade path silent for users who never touch /effort. `low` and `high`
+  // each get a single short directive — overlapping with the personality
+  // overlay (concise / detailed) is fine, both can stack.
+  if (effort === 'low') {
+    return [
+      '## Reasoning depth: low',
+      '- Be terse. Skip ceremony. One-paragraph answers when the question fits in one paragraph.',
+    ].join('\n');
+  }
+  if (effort === 'high') {
+    return [
+      '## Reasoning depth: high',
+      '- Reason step-by-step before acting. Audit your evidence against the goal before each tool call.',
+    ].join('\n');
+  }
+  return '';
 }
 
 function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string {
@@ -239,6 +265,7 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     '',
     personalityOverlay(context.personality),
     policyOverlay(context.executionMode, context.reviewPolicy),
+    effortOverlay(context.effort),
     clarifyOverlay(context.activeSkill),
   ].join('\n');
 }

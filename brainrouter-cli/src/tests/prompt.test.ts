@@ -212,3 +212,42 @@ test('systemPrompt: activeSkill="grill-me" appends a CLARIFY-mode block; other a
   });
   assert.doesNotMatch(specMode, /CLARIFY mode/i);
 });
+
+test('systemPrompt: effort overlay emits for low/high and stays silent for medium (0.3.6 item 2f)', () => {
+  // `medium` is the default — emitting an overlay for it would silently
+  // change every user's behaviour on upgrade and waste prompt tokens. The
+  // low/high overlays must mention "Reasoning depth" so we can pin the
+  // header without freezing the exact body wording.
+  const baseline = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+  });
+  assert.doesNotMatch(baseline, /Reasoning depth/i, 'no effort field → no overlay');
+
+  const mediumExplicit = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+    effort: 'medium',
+  });
+  assert.doesNotMatch(mediumExplicit, /Reasoning depth/i, 'medium is the default → still no overlay');
+
+  const low = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+    effort: 'low',
+  });
+  assert.match(low, /Reasoning depth/i, 'low must emit an overlay header');
+  assert.match(low, /terse/i, 'low overlay should encourage terseness');
+
+  const high = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+    effort: 'high',
+  });
+  assert.match(high, /Reasoning depth/i, 'high must emit an overlay header');
+  assert.match(high, /step.?by.?step/i, 'high overlay should encourage step-by-step reasoning');
+});

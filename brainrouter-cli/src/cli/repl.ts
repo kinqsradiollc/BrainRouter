@@ -55,7 +55,7 @@ const SLASH_COMMANDS = [
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
   '/tokens', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
-  '/theme', '/title', '/personality', '/new', '/side', '/btw', '/raw',
+  '/theme', '/title', '/personality', '/effort', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
@@ -925,8 +925,9 @@ const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
       { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
-      { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,branch,dirty,model,tokens,session,pr,workflow,goal,plan)' },
+      { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,goal,plan)' },
       { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
+      { cmd: '/effort [low|medium|high]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step (env: BRAINROUTER_EFFORT)' },
       { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
       { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },
       { cmd: '/vim', desc: 'Toggle vi-mode for the composer' },
