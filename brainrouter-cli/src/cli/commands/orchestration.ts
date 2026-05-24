@@ -7,7 +7,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import chalk from 'chalk';
-import ora from 'ora';
 import { childSessionKey } from '../../runtime/mcpUtils.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';

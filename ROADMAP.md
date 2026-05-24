@@ -6,9 +6,13 @@ See [`CHANGELOG.md`](CHANGELOG.md).
 
 In-flight: **0.3.6** — relevance judge, goal-loop hardening, dashboard
 markdown/Mermaid/KaTeX, `.env` template reorg, LLM pipeline robustness
-fixes. One remaining workstream (Item 3, multi-workflow concurrency):
-see [`brainrouter-roadmap/0.3.6.md`](brainrouter-roadmap/0.3.6.md). Live
-progress checklist in [`Tasks.md`](Tasks.md).
+fixes, multi-workflow concurrency (PR #38). Late-cycle additions
+(planned): **context budget** (system-prompt trim + recall gating),
+**MCP identity + offline UX** (distinguish the BrainRouter cloud brain
+from third-party MCPs, graceful degradation when offline), and a
+**multi-MCP foundation** (scope-limited; full federation deferred to
+0.4.0). See [`brainrouter-roadmap/0.3.6.md`](brainrouter-roadmap/0.3.6.md).
+Live progress checklist in [`Tasks.md`](Tasks.md).
 
 Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance,
 shared memory) — see [`brainrouter-roadmap/0.4.0.md`](brainrouter-roadmap/0.4.0.md).
@@ -24,7 +28,7 @@ detail.
 
 | Release | Theme | Status |
 |---|---|---|
-| **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge | _In-flight_ — 8 items, 7 shipped (Items 1 + 2 + 2b + 2c + 2d + 2e + 2f via PR #26 + #27 + #30 + #32 + #31 + #35 + #36); Item 3 multi-workflow concurrency is the last remaining workstream |
+| **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge + context budget | _In-flight_ — 11 items, 8 shipped (Items 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 via PRs #26 + #27 + #38 + #30 + #32 + #31 + #35 + #36); late-cycle Items 9 (context budget), 10 (MCP identity + offline UX), and 11 (multi-MCP foundation) are the remaining workstreams |
 | [0.3.7](brainrouter-roadmap/0.3.7.md) | Quick wins post-0.3.6 | Planned — cron `/schedule`, `/release-notes`, hooks JSON doc, "Strict Tool-Call Recovery" (deer-flow), per-vendor MCP install snippets (semble) |
 | [0.4.0](brainrouter-roadmap/0.4.0.md) | **Federation — many agents, one memory** | Designed — 5 stages + memory-quality augmentations from deer-flow / semble |
 | [0.4.x](brainrouter-roadmap/0.4.x.md) | Post-federation polish | Planned — dynamic subagents, worktree isolation, `/rewind`, `/context per-skill`, benchmark harness, progressive skill loading, code-aware chunking |

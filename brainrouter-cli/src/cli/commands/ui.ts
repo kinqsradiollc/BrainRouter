@@ -209,40 +209,10 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
       return true;
     }
-    case '/mcp':
-    {
-      const profileName = config.activeServer;
-      const server = config.servers[profileName];
-      console.log(chalk.bold('\nMCP server'));
-      console.log(`  Profile: ${chalk.green(profileName)} (${chalk.cyan(server?.type ?? 'unknown')})`);
-      if (server?.type === 'http') {
-        console.log(`  URL:     ${chalk.blue(server.url)}`);
-      } else if (server?.type === 'stdio') {
-        console.log(`  Cmd:     ${chalk.blue(server.command)} ${server.args?.join(' ') || ''}`);
-      }
-      const spinner = makeSpinner(chalk.gray('Fetching MCP tool surface...')).start();
-      try {
-        const res = await mcpClient.listTools();
-        const tools = res.tools || [];
-        spinner.succeed(chalk.green(`${tools.length} MCP tools available`));
-        const namespaces: Record<string, string[]> = {};
-        for (const t of tools) {
-          const parts = (t.name || '').split('_');
-          const ns = parts.length > 1 ? parts[0] : 'misc';
-          (namespaces[ns] ||= []).push(t.name);
-        }
-        for (const ns of Object.keys(namespaces).sort()) {
-          console.log(`\n  ${chalk.bold.cyan(ns)} (${namespaces[ns].length})`);
-          for (const name of namespaces[ns].sort()) {
-            console.log(`    ${chalk.gray('•')} ${name}`);
-          }
-        }
-      } catch (err: any) {
-        spinner.fail(chalk.red(`Failed: ${err.message}`));
-      }
-      console.log();
-      return true;
-    }
+    // /mcp moved to its own command file (commands/mcp.ts) as part of 0.3.6
+    // Item 11. The new dispatcher supports `/mcp list`, `/mcp reconnect`,
+    // and the original no-arg "show tools by namespace" behaviour is now
+    // covered by `/mcp tools` (handled in commands/mcp.ts).
     case '/copy':
     {
       if (!agent.lastAnswer) {
@@ -527,6 +497,11 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         mcpProfile: profileName,
         mcpTransport: server?.type ?? 'unknown',
         mcpOnline: mcpClient.isConnected(),
+        // 10c: identity flows from the live wrapper; falls back to the
+        // config field when present, otherwise 'unknown'.
+        mcpIdentity: typeof (mcpClient as any).getIdentity === 'function'
+          ? (mcpClient as any).getIdentity()
+          : (server?.identity ?? 'unknown'),
         accessMode: agent.getAccessMode(),
         recalledRecords: agent.getRecalledRecords(),
         briefingSources: briefing.sources,

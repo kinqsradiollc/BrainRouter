@@ -144,6 +144,74 @@ test('banner: offline mode reflected in mcp row', () => {
   });
 });
 
+test('banner: brain row renders for BrainRouter MCP with online/offline state (10c)', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const online = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'brainrouter-cloud',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      mcpIdentity: 'brainrouter',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    assert.match(online, /brain/, 'brain row label present when identity=brainrouter');
+    assert.match(online, /online/);
+
+    const offline = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'brainrouter-cloud',
+      mcpTransport: 'http',
+      mcpOnline: false,
+      mcpIdentity: 'brainrouter',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    assert.match(offline, /brain/, 'brain row label present even when offline');
+    assert.match(offline, /cloud unreachable/);
+  });
+});
+
+test('banner: brain row omitted when identity is third-party (10c)', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'github',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      mcpIdentity: 'third-party',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    // Only the generic `mcp` row should mention online/offline state; the
+    // distinct brain row is reserved for BrainRouter (or unknown / pending
+    // detection). Third-party MCPs use the existing mcp row.
+    const lines = banner.split('\n');
+    const brainRows = lines.filter((l) => /\bbrain\b/.test(l));
+    assert.equal(brainRows.length, 0, 'brain row must NOT appear for third-party MCPs');
+  });
+});
+
+test('banner: brain row omitted when identity is unknown (10c)', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'local',
+      mcpTransport: 'stdio',
+      mcpOnline: true,
+      mcpIdentity: 'unknown',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    const lines = banner.split('\n');
+    const brainRows = lines.filter((l) => /\bbrain\b/.test(l));
+    assert.equal(brainRows.length, 0, 'unknown identity = wait for tool-signature detection, no brain row yet');
+  });
+});
+
 test('banner: workflow row appears when workflow is bound', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
@@ -158,6 +226,51 @@ test('banner: workflow row appears when workflow is bound', () => {
     }, theme);
     assert.match(banner, /workflow/);
     assert.match(banner, /cli-shell-redesign/);
+  });
+});
+
+test('banner: "last on" hint appears when session unbound but workspace has a last-used workflow', () => {
+  // Post-decoupling, fresh CLI sessions don't auto-bind to whatever
+  // workflow the previous CLI was on. The banner surfaces the workspace-
+  // level "last used" hint as a one-line nudge instead — user can
+  // `/workflow switch <slug>` to resume continuity, or just ignore it.
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'p',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      sessionKey: 'fresh',
+      model: 'm',
+      // Note: workflow is NOT set (unbound), lastUsedWorkflow IS set.
+      lastUsedWorkflow: 'auth-refactor',
+    }, theme);
+    assert.match(banner, /last on/);
+    assert.match(banner, /auth-refactor/);
+    // The full "/workflow switch <slug>" hint may be clipped at the box
+    // width on narrow terminals — just assert the lead-in is there.
+    assert.match(banner, /\/workflow switch/);
+  });
+});
+
+test('banner: "last on" hint NOT shown when current workflow IS bound', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'p',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      sessionKey: 'bound',
+      model: 'm',
+      workflow: { slug: 'cli-shell-redesign', status: 'bound' },
+      // Both set — workflow wins, hint is suppressed.
+      lastUsedWorkflow: 'some-other-workflow',
+    }, theme);
+    assert.match(banner, /cli-shell-redesign/);
+    assert.doesNotMatch(banner, /last on/);
+    assert.doesNotMatch(banner, /some-other-workflow/);
   });
 });
 
@@ -264,7 +377,11 @@ test('statusline: tokens segment surfaces last-turn counts when calls > 0', () =
 
 test('statusline: workflow segment returns wf:<slug> when bound', () => {
   withTempWorkspace((workspace) => {
-    createWorkflow(workspace, { title: 'My Feature', kind: 'feature-dev' });
+    // 9d-bugfix: pass sessionKey through createWorkflow so the binding
+    // is per-session; otherwise getCurrentWorkflow(ws, sessionKey)
+    // returns undefined for this fresh test session and the segment
+    // renders as undefined.
+    createWorkflow(workspace, { title: 'My Feature', kind: 'feature-dev', sessionKey: 'sk' });
     const seg = renderSegment('workflow', {
       workspaceRoot: workspace,
       sessionKey: 'sk',
@@ -286,47 +403,39 @@ test('statusline: workflow segment undefined when no workflow bound', () => {
   });
 });
 
-test('statusline: workflow segment annotates the slug with the goal\'s halt state (Item 3)', async () => {
-  // Item 3 brief: the workflow segment should pick up paused / blocked /
-  // usage_limited as a parenthesized tag. Active and no-goal stay terse.
+test('statusline: workflow segment is pure navigation (no goal-status annotation, post-decoupling)', async () => {
+  // Pre-decoupling (Item 3) the workflow segment picked up paused /
+  // blocked / usage_limited as a parenthesized tag because workflows
+  // carried their own goals. Post-decoupling the workflow segment is
+  // purely "which folder is this session writing artifacts to" — goal
+  // status lives entirely in the separate `goal` segment.
   const { pauseGoal, blockGoal, usageLimitGoal } = await import('../state/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:wf-segment';
-    createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev' });
+    createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev', sessionKey: sk });
+    const renderWf = () => renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+
     // Pre-goal: bare slug.
-    let seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature');
-    // Active goal: still bare (common case stays quiet).
+    assert.equal(renderWf(), 'wf:flagged-feature');
+
+    // Active goal: still bare.
     setGoal(workspace, 'do the thing', sk);
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature');
-    // Paused.
+    assert.equal(renderWf(), 'wf:flagged-feature');
+
+    // Paused: STILL bare (workflow segment is navigation-only).
     pauseGoal(workspace, sk);
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature (paused)');
-    // Blocked.
+    assert.equal(renderWf(), 'wf:flagged-feature', 'workflow segment must NOT annotate goal halt-state post-decoupling');
+
+    // Blocked: same.
     blockGoal(workspace, sk, 'waiting on prod creds');
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature (blocked)');
-    // usage_limited → "limited" (matches the goal segment compression).
+    assert.equal(renderWf(), 'wf:flagged-feature');
+
+    // usage_limited: same.
     usageLimitGoal(workspace, sk, 'iteration cap reached');
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature (limited)');
+    assert.equal(renderWf(), 'wf:flagged-feature');
   });
 });
 
@@ -409,7 +518,7 @@ test('/where: empty workspace renders only the workspace section', () => {
 test('/where: shows workflow, goal, and plan sections when populated', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
-    createWorkflow(workspace, { title: 'CLI Shell Redesign', kind: 'feature-dev' });
+    createWorkflow(workspace, { title: 'CLI Shell Redesign', kind: 'feature-dev', sessionKey: 'sk-where' });
     setGoal(workspace, 'land the CLI shell redesign cleanly', 'sk-where', { maxIterations: 8 });
     updatePlan(workspace, {
       explanation: 'shape the work into bite-sized commits',
