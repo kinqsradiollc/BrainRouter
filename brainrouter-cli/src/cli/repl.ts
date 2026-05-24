@@ -16,7 +16,7 @@ import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
 import type { WorkspaceInfo } from '../config/workspace.js';
 import { listSessions } from '../orchestration/orchestrator.js';
-import { setActiveReadline } from './cliPrompt.js';
+import { isPickerActive, setActiveReadline } from './cliPrompt.js';
 import { resolveTheme } from './theme.js';
 import { buildBannerInputs, renderBanner } from './banner.js';
 import { isKnownSegment, renderSegments } from './statusline.js';
@@ -247,10 +247,18 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
 
   // Shift+Tab cycles the access mode.
   // Order: read → write → shell → read …
-  if (process.stdin.isTTY) {
-    try { (process.stdin as any).setRawMode?.(false); } catch { /* noop */ }
-  }
+  // NOTE: a previous version called `setRawMode(false)` here, claiming it
+  // was needed for keypress events. The opposite is true — readline enables
+  // raw mode automatically for a TTY input, and disabling it breaks BOTH
+  // (a) keypress event delivery for shift+tab (which depend on raw bytes)
+  // and (b) Backspace handling at the prompt (readline expects to receive
+  // the raw 0x7F itself; in cooked mode the terminal's line discipline
+  // owns it and readline's internal buffer drifts out of sync). Leave the
+  // default in place.
   process.stdin.on('keypress', (_str, key) => {
+    // The ask_user_choice picker owns stdin while it's on screen; yield to
+    // it or shift+tab would cycle the access mode mid-picker.
+    if (isPickerActive()) return;
     if (key && key.name === 'tab' && key.shift) {
       const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
       const current = agent.getAccessMode() as 'read' | 'write' | 'shell';
