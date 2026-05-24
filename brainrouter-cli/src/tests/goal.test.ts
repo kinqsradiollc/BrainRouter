@@ -679,6 +679,56 @@ test('WorkflowConflictError carries both slugs + goals and a clear remediation i
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: /workflows column upgrade — formatWorkflowGoalColumn + read
+// -----------------------------------------------------------------------
+
+test('formatWorkflowGoalColumn: renders each status compactly + uses formatBudget for the cap', async () => {
+  const { formatWorkflowGoalColumn, DEFAULT_GOAL_BUDGET } = await import('../state/goalStore.js');
+  // No goal → em-dash.
+  assert.equal(formatWorkflowGoalColumn(null), 'goal:—');
+  // Active with explicit budget.
+  const active: any = {
+    text: 't', setAt: '', status: 'active', startedAt: '', updatedAt: '',
+    budget: { maxIterations: 10, iterationsUsed: 3 },
+  };
+  assert.equal(formatWorkflowGoalColumn(active), 'goal:active 3/10');
+  // Active with the default (unlimited) budget renders the budget word, not 1000000.
+  const unlimited: any = {
+    ...active,
+    budget: { maxIterations: DEFAULT_GOAL_BUDGET, iterationsUsed: 7 },
+  };
+  assert.equal(formatWorkflowGoalColumn(unlimited), 'goal:active 7/unlimited');
+  // Non-active statuses are terse — no iteration ratio.
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'paused' }), 'goal:paused');
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'complete' }), 'goal:complete');
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'blocked' }), 'goal:blocked');
+  // usage_limited compresses to `limited` (mirrors statusline.ts).
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'usage_limited' }), 'goal:limited');
+});
+
+test('readWorkflowGoal: returns the workflow folder goal regardless of which workflow is currently bound', async () => {
+  const { readWorkflowGoal } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:read-foreign';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+
+    // Currently bound to B — readWorkflowGoal(A) must still read A's goal,
+    // not B's, and not require flipping the pointer.
+    setCurrentWorkflow(workspace, b.slug);
+    assert.equal(readWorkflowGoal(workspace, a.slug)?.text, 'A goal');
+    assert.equal(readWorkflowGoal(workspace, b.slug)?.text, 'B goal');
+    // A workflow with no goal returns null.
+    const c = createWorkflow(workspace, { title: 'C (no goal)', kind: 'spec' });
+    setCurrentWorkflow(workspace, b.slug); // unbind C (createWorkflow flipped to C)
+    assert.equal(readWorkflowGoal(workspace, c.slug), null);
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {
