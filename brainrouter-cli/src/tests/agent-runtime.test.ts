@@ -377,10 +377,10 @@ test('buildChatCompletionPayload: forwards reasoning_effort for a known reasonin
   assert.equal((noOption as any).reasoning_effort, undefined);
 });
 
-test('buildChatCompletionPayload: does NOT forward reasoning_effort for non-reasoning models / unknown endpoints (0.3.6 item 2f)', () => {
+test('buildChatCompletionPayload: skips reasoning_effort for non-reasoning models regardless of endpoint (0.3.6 item 2f)', () => {
   // gpt-4o-mini on the OpenAI endpoint: not a reasoning model, must not
-  // receive reasoning_effort even when /effort is set — sending it would
-  // be at best a no-op and at worst a 400 on stricter compatible servers.
+  // receive reasoning_effort even when /effort is set — gpt-4o-mini
+  // doesn't have a reasoning channel and the field would be a no-op.
   const nonReasoning = buildChatCompletionPayload(
     {
       provider: 'openai',
@@ -394,10 +394,10 @@ test('buildChatCompletionPayload: does NOT forward reasoning_effort for non-reas
   );
   assert.equal((nonReasoning as any).reasoning_effort, undefined);
 
-  // Custom OpenAI-compatible endpoint (LM Studio / Ollama / vLLM): we can't
-  // know the model behind a generic local URL, so fall through silently —
-  // the system-prompt overlay still steers the model.
-  const localCustom = buildChatCompletionPayload(
+  // Non-reasoning model on a local OpenAI-compatible endpoint (LM Studio /
+  // Ollama / vLLM): same answer — qwen2.5-coder has no reasoning channel,
+  // so we don't forward. The model name is the signal, not the endpoint.
+  const localNonReasoning = buildChatCompletionPayload(
     {
       provider: 'openai',
       apiKey: '',
@@ -408,7 +408,56 @@ test('buildChatCompletionPayload: does NOT forward reasoning_effort for non-reas
     [],
     { effort: 'high' },
   );
-  assert.equal((localCustom as any).reasoning_effort, undefined);
+  assert.equal((localNonReasoning as any).reasoning_effort, undefined);
+});
+
+test('buildChatCompletionPayload: forwards reasoning_effort for reasoning models on local OpenAI-compatible servers (LM Studio, Ollama)', () => {
+  // LM Studio 0.3.29+ implements `reasoning_effort` on /v1/chat/completions
+  // for `openai/gpt-oss-20b` (per their release notes). Ollama does the
+  // same for its reasoning models. Gating purely on endpoint hostname
+  // would silently drop the forwarding for these legitimate cases — so
+  // the heuristic keys on the model name and accepts ANY OpenAI-compatible
+  // endpoint.
+  const lmStudio = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: '',
+      model: 'openai/gpt-oss-20b',
+      endpoint: 'http://localhost:1234/v1',
+    },
+    [{ role: 'user', content: 'think hard' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((lmStudio as any).reasoning_effort, 'high');
+
+  // Ollama: deepseek-r1 served from the default Ollama port.
+  const ollama = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: '',
+      model: 'deepseek-r1:14b',
+      endpoint: 'http://localhost:11434/v1',
+    },
+    [{ role: 'user', content: 'reason' }],
+    [],
+    { effort: 'low' },
+  );
+  assert.equal((ollama as any).reasoning_effort, 'low');
+
+  // Qwen3 thinking variant (LM Studio naming).
+  const qwen = buildChatCompletionPayload(
+    {
+      provider: 'openai',
+      apiKey: '',
+      model: 'qwen3-30b-a3b-thinking',
+      endpoint: 'http://localhost:1234/v1',
+    },
+    [{ role: 'user', content: 'go' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((qwen as any).reasoning_effort, 'high');
 });
 
 test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {

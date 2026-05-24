@@ -2135,41 +2135,51 @@ function formatBytes(n: number): string {
 const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
 
 /**
- * Heuristic for "does this endpoint+model accept the OpenAI Chat Completions
- * `reasoning_effort` field?". Best-effort: detect known-reasoning models on
- * known endpoints (api.openai.com, deepseek.com, openrouter.ai) by model
- * name pattern. When we can't tell — generic OpenAI-compatible URLs like
- * LM Studio, Ollama, vLLM, custom proxies — fall through silently so we
- * don't 400 a custom server with an unrecognised field. The system-prompt
- * overlay still steers behaviour for those endpoints.
+ * Heuristic for "does this model accept the OpenAI Chat Completions
+ * `reasoning_effort` field?". The signal that actually matters is the
+ * **model name**, not the endpoint hostname — modern OpenAI-compatible
+ * servers (LM Studio 0.3.29+, Ollama, vLLM, OpenRouter, OpenAI itself)
+ * all accept the field on /v1/chat/completions for the reasoning-capable
+ * model classes below, and silently ignore it for everything else. So a
+ * `gpt-oss-20b` served from localhost via LM Studio gets the same
+ * treatment as `gpt-5` on `api.openai.com`.
  *
  * Borrowed shape from openai-node's `ReasoningEffort` enum
  * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
- * straight through to the provider field, and DeepSeek's OpenAI-compatible
- * gateway accepts the same field name.
+ * straight through to the provider field across OpenAI, DeepSeek,
+ * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic models
+ * (`claude-*`) use a different field shape (`thinking: { budget_tokens }`)
+ * and a different endpoint (`/v1/messages`), so they're intentionally
+ * skipped here — brainrouter would need a separate provider adapter to
+ * forward into Anthropic's native API.
  */
 export function supportsReasoningEffortField(config: LLMConfig): boolean {
-  const endpoint = (config.endpoint ?? 'https://api.openai.com/v1').toLowerCase();
-  const model = (config.model ?? '').toLowerCase();
+  // Normalize the model name: strip any `<vendor>/` prefix so OpenRouter /
+  // LM Studio naming (`openai/gpt-oss-20b`, `mistralai/magistral-small`,
+  // `deepseek/deepseek-r1`) matches the same patterns as a bare model name.
+  // Some servers stack multiple prefixes (`openai/gpt-oss/20b-variant`), so
+  // we keep only the segment after the LAST `/`.
+  const raw = (config.model ?? '').toLowerCase();
+  const model = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
 
-  // Custom / self-hosted endpoints: we don't know the server's tolerance
-  // for unknown body fields, so play it safe and skip the field. The model
-  // name doesn't override this — a "gpt-5-clone" served from localhost is
-  // probably a renamed local model that won't recognise reasoning_effort.
-  const knownHosts = ['api.openai.com', 'api.deepseek.com', 'openrouter.ai'];
-  const onKnownHost = knownHosts.some((host) => endpoint.includes(host));
-  if (!onKnownHost) return false;
-
-  // Reasoning-model name patterns. Conservative — anything not on this list
-  // gets the system-prompt overlay only. Pattern set is loose enough to
-  // catch dated suffixes ("gpt-5-2025-08-07", "o3-mini-2025") without
-  // sweeping non-reasoning chat models ("gpt-4o-mini" — distinct from
-  // "gpt-4o" alone, which also lacks reasoning_effort support).
+  // Reasoning-model name patterns. The list covers the major reasoning
+  // model families running through OpenAI-compatible /chat/completions
+  // surfaces in 2026: OpenAI's gpt-5 / o-series / open-weights gpt-oss,
+  // DeepSeek's R1 / R2 / V3+ thinking variants, Alibaba's Qwen3 thinking
+  // models, Mistral's Magistral, and Microsoft's Phi-4-reasoning. Any
+  // model whose name itself contains "reasoning" or "thinking" is
+  // included too — that catches new entrants we haven't enumerated yet
+  // (e.g. `phi-4-reasoning-plus`, `qwen3-30b-a3b-thinking`).
   const reasoningPatterns = [
-    /^gpt-5/,         // gpt-5, gpt-5-mini, gpt-5-pro, gpt-5.1 (Chat Completions accepts the field)
-    /^o[134](-|$)/,   // o1, o3, o4 (and dated variants)
-    /^deepseek-r1/,   // DeepSeek R1 series
-    /^deepseek-v[34]/,// DeepSeek V3.1+ reasoning variants
+    /^gpt-5/,            // gpt-5, gpt-5-mini, gpt-5-pro, gpt-5.1, gpt-5-codex-max
+    /^o[134](-|$|\.)/,   // o1, o3, o4 and dated / sized variants
+    /^gpt-oss/,          // gpt-oss-20b / 120b (LM Studio 0.3.29+, Ollama, llama.cpp)
+    /^deepseek-r[12]/,   // DeepSeek R1, R2
+    /^deepseek-v[34]/,   // DeepSeek V3.1+, V4 reasoning variants
+    /^qwen3/,            // Qwen3 reasoning variants (LM Studio, Ollama)
+    /^magistral/,        // Mistral Magistral (small/medium reasoning)
+    /reasoning/,         // catch-all for `phi-4-reasoning`, `*-reasoning-plus`, …
+    /thinking/,          // catch-all for `qwen3-30b-a3b-thinking`, `*-thinking-*`, …
   ];
   return reasoningPatterns.some((re) => re.test(model));
 }

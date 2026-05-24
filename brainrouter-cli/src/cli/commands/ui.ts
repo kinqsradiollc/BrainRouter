@@ -381,8 +381,9 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.gray('  low     — terse, one-paragraph answers; minimal ceremony.'));
         console.log(chalk.gray('  medium  — current default; no overlay, no provider reasoning slot. (default)'));
         console.log(chalk.gray('  high    — step-by-step reasoning; audits evidence before each tool call.'));
-        console.log(chalk.gray('  When the LLM endpoint supports it (gpt-5, o-series, DeepSeek R1/V3+), the'));
-        console.log(chalk.gray('  level is also forwarded as `reasoning_effort` in the chat/completions call.'));
+        console.log(chalk.gray('  When the model supports it (gpt-5, o-series, gpt-oss, DeepSeek R1/V3+, Qwen3,'));
+        console.log(chalk.gray('  Magistral, *-reasoning, *-thinking — works on OpenAI, DeepSeek, OpenRouter,'));
+        console.log(chalk.gray('  LM Studio 0.3.29+, Ollama), the level is also forwarded as `reasoning_effort`.'));
         console.log(chalk.gray('  Toggle with: /effort low | /effort medium | /effort high'));
         console.log(chalk.gray('  Env override (one-shot): BRAINROUTER_EFFORT=high brainrouter\n'));
         return true;
