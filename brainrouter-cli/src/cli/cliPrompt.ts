@@ -321,7 +321,6 @@ function runPicker(
     // mode for a TTY input; this is belt-and-suspenders for cases where the
     // parent code disabled raw mode somewhere along the way.
     readline.emitKeypressEvents(process.stdin);
-    const wasRaw = !!(process.stdin as any).isRaw;
     try { (process.stdin as any).setRawMode?.(true); } catch { /* not a real TTY */ }
     process.stdin.resume();
     // Hide cursor while the picker is on screen — keeps the rendering tight.
@@ -343,9 +342,15 @@ function runPicker(
 
     const cleanup = () => {
       process.stdin.removeListener('keypress', onKeypress);
-      // Restore cursor visibility, raw mode, and parent rl.
+      // Restore cursor visibility. Leave raw mode TRUE — the REPL expects it
+      // on (Backspace + arrow keys + readline's editing all rely on raw mode)
+      // and a previous version that restored a captured `wasRaw` flipped raw
+      // mode back to false in terminals where readline's auto-init never
+      // fully engaged, which manifested as Backspace echoing `^?` after the
+      // picker exited. Picker is the one component that's GUARANTEED to know
+      // raw mode is needed, so it's the right place to assert the invariant.
       stdout.write('\x1b[?25h');
-      try { (process.stdin as any).setRawMode?.(wasRaw); } catch { /* noop */ }
+      try { (process.stdin as any).setRawMode?.(true); } catch { /* noop */ }
       pickerActive = false;
       // Don't auto-resume the parent rl — runAgentTurn paused it intentionally
       // and will resume on its own schedule.
