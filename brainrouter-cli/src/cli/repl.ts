@@ -49,8 +49,12 @@ marked.use(markedTerminal({
 /**
  * All slash commands the REPL recognizes. Used for tab autocomplete and for
  * the readline completer. Keep alphabetically grouped roughly by surface area.
+ *
+ * Exported so the Ink REPL (cli/ink/runChat.tsx) can build the same slash
+ * catalog without duplicating the list — keeps the readline + Ink paths
+ * in lockstep as new commands land.
  */
-const SLASH_COMMANDS = [
+export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait',
@@ -68,7 +72,20 @@ const SLASH_COMMANDS = [
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
-export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
+export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo): Promise<void> | void {
+  // 0.3.8 — Ink-based chat REPL. Behind a feature flag while the readline
+  // path remains the fallback. Flip the default by removing this gate or
+  // changing the comparison once the Ink path has feature-parity (and
+  // gate the OLD path with BRAINROUTER_INK_REPL=0 for one-release safety).
+  // See HANDOFF_INK_REPL.md sequence step 8.
+  if (process.env.BRAINROUTER_INK_REPL === '1') {
+    // Lazy-import so the readline path doesn't pull React/Ink into its
+    // module graph when the flag is off — keeps startup cost flat for
+    // users who haven't opted in.
+    return import('./ink/runChat.js').then(({ runChat }) =>
+      runChat({ agent, mcpClient, config, workspace }),
+    );
+  }
   // Belt-and-suspenders: even if the post-wizard / post-picker stdin
   // handoff in cli/ink/stdinHandoff.ts somehow gets bypassed (e.g.
   // future code mounts Ink without going through runWizard/runPicker),
@@ -1059,7 +1076,7 @@ export function renderHelp(category?: string): void {
  * after the first space when matching by cmd token so e.g. `/config`
  * matches `cmd: "/config [key] [value]"`.
  */
-function lookupSlashDescription(cmd: string): string {
+export function lookupSlashDescription(cmd: string): string {
   for (const cat of HELP_CATEGORIES) {
     for (const entry of cat.entries) {
       const token = entry.cmd.split(/\s+/)[0];
@@ -1078,7 +1095,7 @@ function printHelpCategory(c: HelpCategory): void {
   }
 }
 
-async function handleSlashCommand(
+export async function handleSlashCommand(
   command: string,
   args: string[],
   agent: Agent,
