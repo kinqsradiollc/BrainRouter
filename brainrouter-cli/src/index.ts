@@ -65,7 +65,7 @@ import { McpClientWrapper } from './runtime/mcpClient.js';
 import { Agent } from './agent/agent.js';
 import { startREPL } from './cli/repl.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
-import { runWizard, isOnboarded } from './cli/wizard/runner.js';
+import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
 
 /**
  * Load `.env` files into the CLI's `process.env`.
@@ -261,7 +261,6 @@ program
     if (!fs.existsSync(getConfigPath()) || !isOnboarded()) {
       try {
         const wizardResult = await runWizard({
-          ownsReadline: true,
           workspaceRoot: workspace.workspaceRoot,
         });
         if (wizardResult.state.aborted) {

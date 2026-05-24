@@ -12,7 +12,15 @@ import {
 } from '../../state/preferencesStore.js';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
 import { PROVIDER_CATALOG, findProvider, maskApiKey, validateApiKey } from '../wizard/providers.js';
-import { pickFromList, promptText, type PickerRow } from '../wizard/picker.js';
+// 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
+// promptText primitives had compounding redraw bugs (frame creep on
+// every keystroke, stacking on step transitions). Ink owns the render
+// loop and diffs the cell grid, so all those issues are eliminated by
+// design. The thin runPicker / runTextField wrappers mount + unmount
+// a single Ink app per modal.
+import { runPicker, runTextField, type PickerRow, type PickerResult, type TextFieldResult } from '../ink/runPicker.js';
+const pickFromList = runPicker;
+const promptText = runTextField;
 import { buildTheme, type Theme } from '../theme.js';
 
 /**

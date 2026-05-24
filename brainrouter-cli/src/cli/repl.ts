@@ -282,19 +282,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   // the raw 0x7F itself; in cooked mode the terminal's line discipline
   // owns it and readline's internal buffer drifts out of sync). Leave the
   // default in place.
-  // 0.3.7 — slash-command autosuggest popup. Renders below the prompt
-  // as the user types `/`, filtered by prefix-then-includes. Hides
-  // automatically when input no longer starts with `/`. Pattern from
-  // openSrc/grok-cli/src/ui/slash-menu.ts + claude-code CHANGELOG
-  // (line 378: cap visible commands ~3-5 instead of scaling with rows).
-  const slashSuggest = createSlashSuggest({
-    rl,
-    theme,
-    commands: SLASH_COMMANDS.map((cmd): SlashCommand => ({
-      cmd,
-      description: lookupSlashDescription(cmd),
-    })),
-  });
+  // 0.3.7 slash-suggest popup was readline-based and mangled output on
+  // every keystroke (each draw appended a fresh popup below the prompt
+  // instead of replacing the previous one — fundamentally fragile when
+  // readline owns the prompt line). Disabled here; a proper Ink-based
+  // slash menu lands with the full Ink REPL rewrite (0.3.8 roadmap
+  // item). Until then Tab completion via readline's completer is the
+  // discovery path (already wired below in createInterface().completer).
+  // The createSlashSuggest export is kept for future use.
 
   process.stdin.on('keypress', (_str, key) => {
     // Any active picker (the LLM-tool ask_user_choice picker OR the
@@ -303,16 +298,8 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     // access mode mid-picker AND inject stdout noise into the picker
     // frame's redraw region.
     if (isPickerActive() || isInternalPickerActive()) {
-      // Also hide the popup if it was visible — the picker now owns
-      // the screen below the prompt.
-      slashSuggest.hide();
       return;
     }
-    // Refresh the slash-suggest popup on every keystroke. The
-    // controller no-ops when the input doesn't start with `/`.
-    // process.nextTick gives readline a chance to update `rl.line`
-    // before we read it.
-    process.nextTick(() => slashSuggest.onKey());
     if (key && key.name === 'tab' && key.shift) {
       const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
       const current = agent.getAccessMode() as 'read' | 'write' | 'shell';
@@ -691,10 +678,6 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     // whether the input itself is meaningful. Empty enter still counts as
     // engagement; we don't want to nag a user who's clearly at the keyboard.
     clearIdleHint();
-    // Hide the slash-suggest popup on submit — the line is going to be
-    // processed (slash command OR prompt), so the popup is no longer
-    // contextual.
-    slashSuggest.hide();
     // User typed: any pending goal continuation is cancelled.
     if (pendingContinuation) {
       pendingContinuation = false;

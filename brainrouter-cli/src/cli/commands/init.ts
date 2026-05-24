@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
-import { runWizard } from '../wizard/runner.js';
+import { runWizard } from '../ink/runWizard.js';
 
 /**
  * `/init` slash command — 0.3.7 redesign.
@@ -38,10 +38,11 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
     return true;
   }
 
-  // Wizard mode. The REPL owns stdin / rl; the wizard reuses both.
+  // Wizard mode. Ink owns stdin while the wizard is mounted; once it
+  // unmounts the REPL's readline resumes naturally because we kept the
+  // process.stdin handle around (Ink restores raw mode on exit).
   try {
     const result = await runWizard({
-      ownsReadline: false,
       workspaceRoot: agent.workspaceRoot,
     });
     if (result.config?.llm) {
