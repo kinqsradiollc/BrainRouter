@@ -5,8 +5,10 @@
  * and that scroll real CLI banner content off-screen on short terminals.
  *
  *   - `ExperimentalWarning: SQLite is an experimental feature` — emitted by
- *     `node:sqlite` (which both this CLI and the MCP server use). Stable in
- *     Node 22+ in practice; the warning is correct but uninformative.
+ *     `node:sqlite`. The CLI itself no longer imports sqlite, but the
+ *     stdio MCP child process does, and its warnings surface on the parent's
+ *     stderr. Stable in Node 22+ in practice; the warning is correct but
+ *     uninformative.
  *   - `DeprecationWarning: ... dotenv ...` — dotenv@16 prints a teaser for
  *     its hosted product on every load on newer Node releases.
  *
@@ -14,12 +16,11 @@
  * would silence those too, so we intercept selectively instead.
  *
  * Two interception points: (1) remove Node's built-in `warning` listener
- * and add our own filtered one — this catches warnings emitted during ESM
- * import resolution (e.g. `import 'node:sqlite'` at the top of any module
- * that runs BEFORE the user code that would otherwise call `emitWarning`);
- * (2) replace `process.emitWarning` so future direct callers also get the
- * filter. Both are needed: ESM hoists imports above any code in this file,
- * so an emitWarning override alone misses the import-time warnings.
+ * and add our own filtered one — this catches warnings emitted from
+ * subprocesses or transitive imports during ESM resolution; (2) replace
+ * `process.emitWarning` so future direct callers also get the filter.
+ * Both are needed because ESM hoists imports above any code in this file,
+ * so an emitWarning override alone misses import-time warnings.
  */
 function isSuppressibleWarning(message: string, type: string): boolean {
   const looksExperimental =
@@ -59,7 +60,7 @@ import url from 'node:url';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, saveConfig } from './config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { Agent } from './agent/agent.js';
 import { startREPL } from './cli/repl.js';
@@ -482,8 +483,9 @@ program
       });
       await mcpClient.close();
 
-      // Save to config
-      const config = loadConfig();
+      // Save to config — `loadOrInitConfig` lets first-run users build a
+      // fresh config.json instead of hitting the strict no-config error.
+      const config = loadOrInitConfig();
       config.servers[answers.profileName] = {
         type: 'http',
         url: answers.url,
@@ -505,7 +507,9 @@ program
   .command('config')
   .description('Interactively configure your LLM provider and MCP servers')
   .action(async () => {
-    const config = loadConfig();
+    // `loadOrInitConfig` because this command IS the first-run setup
+    // wizard — it must work even when no config.json exists yet.
+    const config = loadOrInitConfig();
 
     const menu = await inquirer.prompt([
       {
