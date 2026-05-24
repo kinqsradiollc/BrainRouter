@@ -30,7 +30,7 @@ import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goa
 import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
 import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
-import { readPreferences } from '../state/preferencesStore.js';
+import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
 import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
@@ -96,6 +96,12 @@ export interface ChatCompletionPayload {
     };
   }>;
   tool_choice?: 'auto';
+  /**
+   * OpenAI Chat Completions reasoning slot — accepted by gpt-5 / o-series.
+   * Only set when the user has chosen a non-default `/effort` AND the
+   * endpoint+model combo accepts the field (see `supportsReasoningEffortField`).
+   */
+  reasoning_effort?: EffortLevel;
 }
 
 export interface AgentOptions {
@@ -706,7 +712,11 @@ export class Agent {
 
       let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       try {
-        response = await callOpenAI(this.llmConfig, this.chatHistory, allTools);
+        // Re-resolve every loop iteration so an in-session `/effort` flip
+        // (which only refreshes the system prompt) also updates the next
+        // request's reasoning_effort slot — no restart needed.
+        const effort = resolveEffort(this.workspaceRoot).effort;
+        response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
       } catch (err: any) {
         throw new Error(`LLM Execution failed: ${err.message}`);
       }
@@ -1556,6 +1566,7 @@ export class Agent {
       activeSkill: this.activeSkill,
       executionMode: prefs.executionMode,
       reviewPolicy: prefs.reviewPolicy,
+      effort: resolveEffort(this.workspaceRoot).effort,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
@@ -2123,7 +2134,57 @@ function formatBytes(n: number): string {
 // payload reaches the LLM so the model doesn't see the bookkeeping.
 const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
 
-export function buildChatCompletionPayload(config: LLMConfig, messages: any[], tools: any[]): ChatCompletionPayload {
+/**
+ * Heuristic for "does this endpoint+model accept the OpenAI Chat Completions
+ * `reasoning_effort` field?". Best-effort: detect known-reasoning models on
+ * known endpoints (api.openai.com, deepseek.com, openrouter.ai) by model
+ * name pattern. When we can't tell — generic OpenAI-compatible URLs like
+ * LM Studio, Ollama, vLLM, custom proxies — fall through silently so we
+ * don't 400 a custom server with an unrecognised field. The system-prompt
+ * overlay still steers behaviour for those endpoints.
+ *
+ * Borrowed shape from openai-node's `ReasoningEffort` enum
+ * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
+ * straight through to the provider field, and DeepSeek's OpenAI-compatible
+ * gateway accepts the same field name.
+ */
+export function supportsReasoningEffortField(config: LLMConfig): boolean {
+  const endpoint = (config.endpoint ?? 'https://api.openai.com/v1').toLowerCase();
+  const model = (config.model ?? '').toLowerCase();
+
+  // Custom / self-hosted endpoints: we don't know the server's tolerance
+  // for unknown body fields, so play it safe and skip the field. The model
+  // name doesn't override this — a "gpt-5-clone" served from localhost is
+  // probably a renamed local model that won't recognise reasoning_effort.
+  const knownHosts = ['api.openai.com', 'api.deepseek.com', 'openrouter.ai'];
+  const onKnownHost = knownHosts.some((host) => endpoint.includes(host));
+  if (!onKnownHost) return false;
+
+  // Reasoning-model name patterns. Conservative — anything not on this list
+  // gets the system-prompt overlay only. Pattern set is loose enough to
+  // catch dated suffixes ("gpt-5-2025-08-07", "o3-mini-2025") without
+  // sweeping non-reasoning chat models ("gpt-4o-mini" — distinct from
+  // "gpt-4o" alone, which also lacks reasoning_effort support).
+  const reasoningPatterns = [
+    /^gpt-5/,         // gpt-5, gpt-5-mini, gpt-5-pro, gpt-5.1 (Chat Completions accepts the field)
+    /^o[134](-|$)/,   // o1, o3, o4 (and dated variants)
+    /^deepseek-r1/,   // DeepSeek R1 series
+    /^deepseek-v[34]/,// DeepSeek V3.1+ reasoning variants
+  ];
+  return reasoningPatterns.some((re) => re.test(model));
+}
+
+export interface BuildPayloadOptions {
+  /** Reasoning-depth preference, when provider supports it. `medium` is a no-op. */
+  effort?: EffortLevel;
+}
+
+export function buildChatCompletionPayload(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+): ChatCompletionPayload {
   const stripTag = (content: any) =>
     typeof content === 'string' && TAG_MARKER_RE.test(content)
       ? content.replace(TAG_MARKER_RE, '')
@@ -2165,10 +2226,23 @@ export function buildChatCompletionPayload(config: LLMConfig, messages: any[], t
     body.tool_choice = 'auto';
   }
 
+  // Forward reasoning_effort only when the level is non-default AND the
+  // endpoint+model combo is a known reasoning surface. `medium` is the
+  // CLI default and forwarding it would change every existing user's
+  // request shape on upgrade for no behavioural gain.
+  if (options.effort && options.effort !== 'medium' && supportsReasoningEffortField(config)) {
+    body.reasoning_effort = options.effort;
+  }
+
   return body;
 }
 
-export async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
+export async function callOpenAI(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+) {
   const endpoint = config.endpoint || 'https://api.openai.com/v1';
   let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
   const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
@@ -2179,7 +2253,7 @@ export async function callOpenAI(config: LLMConfig, messages: any[], tools: any[
     apiKey = 'sk-local-placeholder';
   }
 
-  const body = buildChatCompletionPayload(config, messages, tools);
+  const body = buildChatCompletionPayload(config, messages, tools, options);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
