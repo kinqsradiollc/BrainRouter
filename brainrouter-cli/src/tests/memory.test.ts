@@ -55,6 +55,98 @@ test('buildMemoryBriefing merges parallel memory sources into one block with red
   assert.match(briefing.block, /\[REDACTED\]/);
 });
 
+test('buildMemoryBriefing surfaces working-memory recent steps and the last 3 reasoning steps (0.3.6 item 2c)', async () => {
+  // The MCP returns the full working-context JSON; the CLI now parses it
+  // and renders BOTH the recentSteps tail (what the agent has been doing)
+  // AND a separate "why trail" of the last 3 kind:"reasoning" steps that
+  // the chatty tool-output tail might have pushed off. Without this, a
+  // reasoning step offloaded 8 tool-batches ago would be invisible to the
+  // next turn even though it lives in the canvas / steps.jsonl.
+  const stubClient: any = {
+    callTool: async (name: string) => {
+      if (name !== 'memory_working_context') return { isError: true };
+      return {
+        content: [{
+          text: JSON.stringify({
+            steps: [
+              { nodeId: 'r-old', title: 'Why: chose hybrid recall', summary: 'Indices were both warm.', kind: 'reasoning' },
+              { nodeId: 't1', title: 'Read recall.ts', summary: '4 stages run in order.', kind: 'tool_output' },
+              { nodeId: 't2', title: 'Read judge.ts', summary: 'LLM-as-judge sits behind a flag.', kind: 'tool_output' },
+              { nodeId: 't3', title: 'Read canvas.ts', summary: 'Mermaid render is per-step.', kind: 'tool_output' },
+              { nodeId: 't4', title: 'Read offload.ts', summary: 'kind: free-form, no validation.', kind: 'tool_output' },
+              { nodeId: 'r-new', title: 'Why: keep kind free-form', summary: 'Avoids a breaking type change in 0.3.6.', kind: 'reasoning' },
+            ],
+            state: {
+              injectedState: {
+                recentSteps: [
+                  { nodeId: 't3', title: 'Read canvas.ts', summary: 'Mermaid render is per-step.', kind: 'tool_output' },
+                  { nodeId: 't4', title: 'Read offload.ts', summary: 'kind: free-form, no validation.', kind: 'tool_output' },
+                  { nodeId: 'r-new', title: 'Why: keep kind free-form', summary: 'Avoids a breaking type change in 0.3.6.', kind: 'reasoning' },
+                ],
+              },
+            },
+          }),
+        }],
+      };
+    },
+  };
+  const briefing = await buildMemoryBriefing({
+    mcpClient: stubClient,
+    mcpTools: [{ name: 'memory_working_context' }],
+    sessionKey: 'session:working',
+    workspaceRoot: '/tmp/example',
+    query: 'pick up item 2c',
+  });
+
+  // Recent steps tail rendered structurally.
+  assert.match(briefing.block, /Recent steps:/);
+  assert.match(briefing.block, /Read offload\.ts/);
+  // Why-trail surfaces the reasoning step that fell off the recent tail.
+  assert.match(briefing.block, /Recent reasoning \(why-trail\):/);
+  assert.match(briefing.block, /Why: chose hybrid recall/);
+  // The reasoning step already inside recentSteps shouldn't be duplicated
+  // in the why-trail bucket — that would just be noise.
+  const whyTrailIndex = briefing.block.indexOf('Recent reasoning (why-trail):');
+  assert.equal(briefing.block.indexOf('Why: keep kind free-form', whyTrailIndex), -1);
+});
+
+test('buildMemoryBriefing caps the why-trail at the last 3 reasoning steps', async () => {
+  const reasoningSteps = Array.from({ length: 8 }, (_, i) => ({
+    nodeId: `r${i}`,
+    title: `Why: decision ${i}`,
+    summary: `Rationale ${i}.`,
+    kind: 'reasoning',
+  }));
+  const stubClient: any = {
+    callTool: async (name: string) => {
+      if (name !== 'memory_working_context') return { isError: true };
+      return {
+        content: [{
+          text: JSON.stringify({
+            steps: reasoningSteps,
+            state: { injectedState: { recentSteps: [] } },
+          }),
+        }],
+      };
+    },
+  };
+  const briefing = await buildMemoryBriefing({
+    mcpClient: stubClient,
+    mcpTools: [{ name: 'memory_working_context' }],
+    sessionKey: 'session:cap',
+    workspaceRoot: '/tmp/example',
+    query: 'cap test',
+  });
+
+  // Last 3 reasoning steps surface; the older 5 do NOT — a chatty agent
+  // can't stuff the briefing with its own past commentary.
+  assert.match(briefing.block, /Why: decision 5/);
+  assert.match(briefing.block, /Why: decision 6/);
+  assert.match(briefing.block, /Why: decision 7/);
+  assert.doesNotMatch(briefing.block, /Why: decision 4/);
+  assert.doesNotMatch(briefing.block, /Why: decision 0/);
+});
+
 test('buildMemoryBriefing extracts records from the canonical recalledCognitiveMemories key', async () => {
   // Tight regression test for the typo fix: previously the CLI looked for
   // `recalledCognitiveRecords` which the MCP never emitted, so every briefing
