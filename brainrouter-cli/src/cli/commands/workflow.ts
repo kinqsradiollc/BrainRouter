@@ -34,8 +34,10 @@ const execPromise = promisify(exec);
  * wastes a turn. `--force` is the explicit escape hatch when the user
  * genuinely wants a second clarifying pass (e.g., scope has drifted).
  *
- * Exported as a pure function so the test suite can exercise the guard
- * without standing up the whole REPL context.
+ * Exported helper for unit tests so the guard logic can be exercised
+ * without standing up the whole REPL context. NOT pure: reads workflow
+ * state from disk (`getCurrentWorkflow`, `readArtifact`) and the latter
+ * may mkdirSync the workflow folder as a side effect.
  */
 export function shouldSkipGrillMe(
   workspaceRoot: string,

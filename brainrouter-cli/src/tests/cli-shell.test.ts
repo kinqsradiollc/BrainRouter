@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildTheme, resolveTheme } from './cli/theme.js';
-import { renderBanner } from './cli/banner.js';
-import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from './cli/statusline.js';
-import { gatherWhereInputs, renderWhere } from './cli/whereView.js';
-import { readPreferences, writePreferences } from './state/preferencesStore.js';
-import { blockGoal, setGoal, tickGoalIteration } from './state/goalStore.js';
-import { updatePlan } from './state/taskStore.js';
-import { createWorkflow } from './state/workflowArtifacts.js';
+import { buildTheme, resolveTheme } from '../cli/theme.js';
+import { renderBanner } from '../cli/banner.js';
+import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '../cli/statusline.js';
+import { gatherWhereInputs, renderWhere } from '../cli/whereView.js';
+import { readPreferences, writePreferences } from '../state/preferencesStore.js';
+import { blockGoal, setGoal, tickGoalIteration } from '../state/goalStore.js';
+import { updatePlan } from '../state/taskStore.js';
+import { createWorkflow } from '../state/workflowArtifacts.js';
 
 /**
  * Tests for the 0.3.6 CLI shell redesign — theme, banner, statusline,
