@@ -159,6 +159,18 @@ export function getWorkflowGoalFile(workspaceRoot: string, slug: string): string
 }
 
 /**
+ * True iff a workflow folder with the given slug exists (and carries a
+ * meta.json). Used by `/workflow switch <slug>` to surface "no such
+ * workflow" without the side-effect mkdir that `getWorkflowDir` performs.
+ */
+export function workflowExists(workspaceRoot: string, slug: string): boolean {
+  const safeSlug = slugify(slug);
+  const root = getWorkflowsRoot(workspaceRoot);
+  const candidate = path.join(root, safeSlug, 'meta.json');
+  return fs.existsSync(candidate);
+}
+
+/**
  * Path (relative to workspace root) the LLM should `write_file` to for a
  * given artifact. We return a workspace-relative path because that's the
  * unit `write_file` expects.

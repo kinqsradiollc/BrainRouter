@@ -289,6 +289,66 @@ export interface GoalMigrationOutcome {
 export type GoalMigrationResolution = 'keep-target' | 'import-session';
 
 /**
+ * Refusal when `/workflow switch <slug>` would orphan an active goal. Two
+ * active workflows pointing at independent threads of work shouldn't be
+ * silently flipped between — the user must pause/complete one explicitly.
+ * Mirrors `GoalConflictError`'s shape so the catch path in the slash
+ * handler can take a parallel branch (print + exit cleanly, no rethrow).
+ */
+export class WorkflowConflictError extends Error {
+  constructor(
+    public readonly sourceSlug: string,
+    public readonly sourceGoal: Goal,
+    public readonly targetSlug: string,
+    public readonly targetGoal: Goal,
+  ) {
+    super(
+      `Source workflow "${sourceSlug}" has an active goal AND target workflow "${targetSlug}" has an active goal. ` +
+      `Pause one first (/goal pause) before switching, or mark one /goal complete.`,
+    );
+    this.name = 'WorkflowConflictError';
+  }
+}
+
+/**
+ * Preview a `/workflow switch <slug>` without mutating anything. Returns
+ * the source scope, the target's existing goal (if any), and whether the
+ * caller will need to migrate a session goal into the target folder. Throws
+ * `WorkflowConflictError` when BOTH the source and target are active
+ * workflows with active goals.
+ */
+export function planWorkflowSwitch(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetSlug: string,
+): { fromScope: GoalScope; sourceGoal: Goal | null; targetGoal: Goal | null; needsMigration: boolean } {
+  const fromScope = resolveGoalScope(workspaceRoot, sessionKey);
+  const targetPath = getWorkflowGoalFile(workspaceRoot, targetSlug);
+  const targetGoal = normalize(
+    fs.existsSync(targetPath) ? readJsonFile<Partial<Goal> | null>(targetPath, null) : null,
+  );
+  const sourceGoal = normalize(
+    fs.existsSync(fromScope.path) ? readJsonFile<Partial<Goal> | null>(fromScope.path, null) : null,
+  );
+
+  if (
+    fromScope.scope === 'workflow' &&
+    fromScope.slug !== targetSlug &&
+    sourceGoal?.status === 'active' &&
+    targetGoal?.status === 'active'
+  ) {
+    throw new WorkflowConflictError(fromScope.slug, sourceGoal, targetSlug, targetGoal);
+  }
+
+  // Migration is needed only when the source is the SESSION bucket (not a
+  // sibling workflow, not legacy) AND the session bucket has a goal worth
+  // moving. workflow→workflow flips never trigger migration: each workflow
+  // keeps its own goal exactly where it lives.
+  const needsMigration = fromScope.scope === 'session' && !!sourceGoal;
+  return { fromScope, sourceGoal, targetGoal, needsMigration };
+}
+
+/**
  * Migrate the session-scoped goal (if any) into the target workflow's
  * `goal.json` when `/workflow switch <slug>` fires. Idempotent — running
  * it twice with no session goal left is a no-op. Refuses to clobber a
