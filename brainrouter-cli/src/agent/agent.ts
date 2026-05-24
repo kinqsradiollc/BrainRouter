@@ -30,7 +30,7 @@ import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goa
 import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
 import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
-import { readPreferences } from '../state/preferencesStore.js';
+import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
 import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
@@ -96,6 +96,12 @@ export interface ChatCompletionPayload {
     };
   }>;
   tool_choice?: 'auto';
+  /**
+   * OpenAI Chat Completions reasoning slot — accepted by gpt-5 / o-series.
+   * Only set when the user has chosen a non-default `/effort` AND the
+   * endpoint+model combo accepts the field (see `supportsReasoningEffortField`).
+   */
+  reasoning_effort?: EffortLevel;
 }
 
 export interface AgentOptions {
@@ -706,7 +712,11 @@ export class Agent {
 
       let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       try {
-        response = await callOpenAI(this.llmConfig, this.chatHistory, allTools);
+        // Re-resolve every loop iteration so an in-session `/effort` flip
+        // (which only refreshes the system prompt) also updates the next
+        // request's reasoning_effort slot — no restart needed.
+        const effort = resolveEffort(this.workspaceRoot).effort;
+        response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
       } catch (err: any) {
         throw new Error(`LLM Execution failed: ${err.message}`);
       }
@@ -1556,6 +1566,7 @@ export class Agent {
       activeSkill: this.activeSkill,
       executionMode: prefs.executionMode,
       reviewPolicy: prefs.reviewPolicy,
+      effort: resolveEffort(this.workspaceRoot).effort,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
@@ -2123,7 +2134,67 @@ function formatBytes(n: number): string {
 // payload reaches the LLM so the model doesn't see the bookkeeping.
 const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
 
-export function buildChatCompletionPayload(config: LLMConfig, messages: any[], tools: any[]): ChatCompletionPayload {
+/**
+ * Heuristic for "does this model accept the OpenAI Chat Completions
+ * `reasoning_effort` field?". The signal that actually matters is the
+ * **model name**, not the endpoint hostname — modern OpenAI-compatible
+ * servers (LM Studio 0.3.29+, Ollama, vLLM, OpenRouter, OpenAI itself)
+ * all accept the field on /v1/chat/completions for the reasoning-capable
+ * model classes below, and silently ignore it for everything else. So a
+ * `gpt-oss-20b` served from localhost via LM Studio gets the same
+ * treatment as `gpt-5` on `api.openai.com`.
+ *
+ * Borrowed shape from openai-node's `ReasoningEffort` enum
+ * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
+ * straight through to the provider field across OpenAI, DeepSeek,
+ * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic models
+ * (`claude-*`) use a different field shape (`thinking: { budget_tokens }`)
+ * and a different endpoint (`/v1/messages`), so they're intentionally
+ * skipped here — brainrouter would need a separate provider adapter to
+ * forward into Anthropic's native API.
+ */
+export function supportsReasoningEffortField(config: LLMConfig): boolean {
+  // Normalize the model name: strip any `<vendor>/` prefix so OpenRouter /
+  // LM Studio naming (`openai/gpt-oss-20b`, `mistralai/magistral-small`,
+  // `deepseek/deepseek-r1`) matches the same patterns as a bare model name.
+  // Some servers stack multiple prefixes (`openai/gpt-oss/20b-variant`), so
+  // we keep only the segment after the LAST `/`.
+  const raw = (config.model ?? '').toLowerCase();
+  const model = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
+
+  // Reasoning-model name patterns. The list covers the major reasoning
+  // model families running through OpenAI-compatible /chat/completions
+  // surfaces in 2026: OpenAI's gpt-5 / o-series / open-weights gpt-oss,
+  // DeepSeek's R1 / R2 / V3+ thinking variants, Alibaba's Qwen3 thinking
+  // models, Mistral's Magistral, and Microsoft's Phi-4-reasoning. Any
+  // model whose name itself contains "reasoning" or "thinking" is
+  // included too — that catches new entrants we haven't enumerated yet
+  // (e.g. `phi-4-reasoning-plus`, `qwen3-30b-a3b-thinking`).
+  const reasoningPatterns = [
+    /^gpt-5/,            // gpt-5, gpt-5-mini, gpt-5-pro, gpt-5.1, gpt-5-codex-max
+    /^o[134](-|$|\.)/,   // o1, o3, o4 and dated / sized variants
+    /^gpt-oss/,          // gpt-oss-20b / 120b (LM Studio 0.3.29+, Ollama, llama.cpp)
+    /^deepseek-r[12]/,   // DeepSeek R1, R2
+    /^deepseek-v[34]/,   // DeepSeek V3.1+, V4 reasoning variants
+    /^qwen3/,            // Qwen3 reasoning variants (LM Studio, Ollama)
+    /^magistral/,        // Mistral Magistral (small/medium reasoning)
+    /reasoning/,         // catch-all for `phi-4-reasoning`, `*-reasoning-plus`, …
+    /thinking/,          // catch-all for `qwen3-30b-a3b-thinking`, `*-thinking-*`, …
+  ];
+  return reasoningPatterns.some((re) => re.test(model));
+}
+
+export interface BuildPayloadOptions {
+  /** Reasoning-depth preference, when provider supports it. `medium` is a no-op. */
+  effort?: EffortLevel;
+}
+
+export function buildChatCompletionPayload(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+): ChatCompletionPayload {
   const stripTag = (content: any) =>
     typeof content === 'string' && TAG_MARKER_RE.test(content)
       ? content.replace(TAG_MARKER_RE, '')
@@ -2165,10 +2236,23 @@ export function buildChatCompletionPayload(config: LLMConfig, messages: any[], t
     body.tool_choice = 'auto';
   }
 
+  // Forward reasoning_effort only when the level is non-default AND the
+  // endpoint+model combo is a known reasoning surface. `medium` is the
+  // CLI default and forwarding it would change every existing user's
+  // request shape on upgrade for no behavioural gain.
+  if (options.effort && options.effort !== 'medium' && supportsReasoningEffortField(config)) {
+    body.reasoning_effort = options.effort;
+  }
+
   return body;
 }
 
-export async function callOpenAI(config: LLMConfig, messages: any[], tools: any[]) {
+export async function callOpenAI(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+) {
   const endpoint = config.endpoint || 'https://api.openai.com/v1';
   let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
   const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
@@ -2179,7 +2263,7 @@ export async function callOpenAI(config: LLMConfig, messages: any[], tools: any[
     apiKey = 'sk-local-placeholder';
   }
 
-  const body = buildChatCompletionPayload(config, messages, tools);
+  const body = buildChatCompletionPayload(config, messages, tools, options);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'

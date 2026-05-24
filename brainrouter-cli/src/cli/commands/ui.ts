@@ -11,7 +11,7 @@ import { spinner as makeSpinner } from '../spinner.js';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
+import { readPreferences, resolveEffort, writePreferences, type EffortLevel } from '../../state/preferencesStore.js';
 import { readPlan } from '../../state/taskStore.js';
 import { getConfigPath } from '../../config/config.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
@@ -365,6 +365,43 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       const next = arg ? (arg === 'on' || arg === 'true' || arg === '1') : !prefs.rawScrollback;
       writePreferences(agent.workspaceRoot, { rawScrollback: next });
       console.log(chalk.green(`\n✓ Raw scrollback ${next ? 'enabled' : 'disabled'}. Markdown rendering ${next ? 'OFF' : 'ON'} for next turn.\n`));
+      return true;
+    }
+    case '/effort':
+    {
+      const arg = (args[0] ?? '').toLowerCase();
+      const valid: ReadonlyArray<EffortLevel> = ['low', 'medium', 'high'];
+      if (!arg) {
+        const resolved = resolveEffort(agent.workspaceRoot);
+        const sourceTag =
+          resolved.source === 'env' ? chalk.gray(' (env: BRAINROUTER_EFFORT)') :
+          resolved.source === 'preference' ? chalk.gray(' (preference)') :
+          chalk.gray(' (default)');
+        console.log(chalk.bold(`\nReasoning depth: ${chalk.cyan(resolved.effort)}${sourceTag}`));
+        console.log(chalk.gray('  low     — terse, one-paragraph answers; minimal ceremony.'));
+        console.log(chalk.gray('  medium  — current default; no overlay, no provider reasoning slot. (default)'));
+        console.log(chalk.gray('  high    — step-by-step reasoning; audits evidence before each tool call.'));
+        console.log(chalk.gray('  When the model supports it (gpt-5, o-series, gpt-oss, DeepSeek R1/V3+, Qwen3,'));
+        console.log(chalk.gray('  Magistral, *-reasoning, *-thinking — works on OpenAI, DeepSeek, OpenRouter,'));
+        console.log(chalk.gray('  LM Studio 0.3.29+, Ollama), the level is also forwarded as `reasoning_effort`.'));
+        console.log(chalk.gray('  Toggle with: /effort low | /effort medium | /effort high'));
+        console.log(chalk.gray('  Env override (one-shot): BRAINROUTER_EFFORT=high brainrouter\n'));
+        return true;
+      }
+      if (!valid.includes(arg as EffortLevel)) {
+        console.log(chalk.red(`\nUnknown level "${arg}". Choose: ${valid.join(' | ')}\n`));
+        return true;
+      }
+      writePreferences(agent.workspaceRoot, { effort: arg as EffortLevel });
+      agent.refreshSystemPrompt();
+      const after = resolveEffort(agent.workspaceRoot);
+      // Surface a friendly nudge when the env var would still shadow the new
+      // preference on the next process boot.
+      if (process.env.BRAINROUTER_EFFORT && after.source === 'env') {
+        console.log(chalk.yellow(`\n✓ Preference saved as ${arg}, but BRAINROUTER_EFFORT=${process.env.BRAINROUTER_EFFORT} is still active this process — env wins.\n`));
+      } else {
+        console.log(chalk.green(`\n✓ Reasoning depth → ${arg}. Applies on the next turn.\n`));
+      }
       return true;
     }
     case '/quiet':

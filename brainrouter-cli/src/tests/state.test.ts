@@ -284,6 +284,46 @@ test('preferencesStore: explicit new fields override the legacy migration', () =
   });
 });
 
+test('preferencesStore: effort defaults to medium and round-trips through write+read', () => {
+  withTempWorkspace((workspace) => {
+    const defaults = readPreferences(workspace);
+    assert.equal(defaults.effort, 'medium');
+    writePreferences(workspace, { effort: 'high' });
+    assert.equal(readPreferences(workspace).effort, 'high');
+    writePreferences(workspace, { effort: 'low' });
+    assert.equal(readPreferences(workspace).effort, 'low');
+  });
+});
+
+test('resolveEffort: env > preference > default', async () => {
+  const { resolveEffort } = await import('../state/preferencesStore.js');
+  withTempWorkspace((workspace) => {
+    // Default (no env, no pref) → medium.
+    delete process.env.BRAINROUTER_EFFORT;
+    assert.deepEqual(resolveEffort(workspace), { effort: 'medium', source: 'default' });
+
+    // Preference wins when no env is set.
+    writePreferences(workspace, { effort: 'low' });
+    assert.deepEqual(resolveEffort(workspace), { effort: 'low', source: 'preference' });
+
+    // Env beats preference even when preference disagrees.
+    process.env.BRAINROUTER_EFFORT = 'high';
+    try {
+      assert.deepEqual(resolveEffort(workspace), { effort: 'high', source: 'env' });
+    } finally {
+      delete process.env.BRAINROUTER_EFFORT;
+    }
+
+    // Garbled env value falls through to the preference, not crash.
+    process.env.BRAINROUTER_EFFORT = 'ludicrous';
+    try {
+      assert.equal(resolveEffort(workspace).effort, 'low');
+    } finally {
+      delete process.env.BRAINROUTER_EFFORT;
+    }
+  });
+});
+
 test('hookifyStore: parse, create, list, toggle, delete roundtrip', async () => {
   const { createHookifyRule, listHookifyRules, toggleHookifyRule, deleteHookifyRule, parseHookifyFile, evaluateHookify, buildHookifyContext } = await import('../state/hookifyStore.js');
   withTempWorkspace((workspace) => {
