@@ -6,7 +6,6 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
-import { resolveTheme } from '../cli/theme.js';
 import type { LLMConfig } from '../config/config.js';
 import { appendTranscriptEntry } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
@@ -247,11 +246,14 @@ export const LOCAL_TOOLS = [
     name: 'ask_user_choice',
     description:
       'Pause the turn and ask the human to commit to ONE of 2–4 mutually exclusive approaches. ' +
-      'Returns { answer: <chosen label> } (or { answer: [labels…] } when multiSelect is true). ' +
+      'Renders an arrow-key picker (↑/↓ navigate, ENTER confirm; SPACE toggles in multiSelect mode) ' +
+      'with an always-on "Other" row that drops to a free-text prompt — the user is never trapped between bad options. ' +
+      'Returns { answer: <chosen label or free-text> } in single-select, or { answer: [labels/free-text…] } in multiSelect. ' +
       'Use ONLY when there is genuine ambiguity that needs the user\'s judgment — NOT for trivial yes/no confirmations ' +
       '(`askYesNo` is wired into approval gates already), NOT for things you can decide yourself with the available context, ' +
       'and NOT as a substitute for thinking. ' +
-      'Errors in non-interactive runs (CI / piped / `brainrouter run`); on that error, decide yourself and say which option you picked and why.',
+      'Errors in non-interactive runs (CI / piped / `brainrouter run`) and when the user cancels (Esc/q/Ctrl+C); ' +
+      'on either error, decide yourself and say which option you picked and why.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1243,22 +1245,21 @@ export class Agent {
             'state which option you picked and why, and return that as your final answer to the parent.',
           );
         }
-        // Pre-flight TTY check. askChoice does this too, but we need to fail
-        // BEFORE writing the [header] chip to stdout — otherwise non-interactive
-        // runs see an orphan header line above the NoTTYError.
+        // Eager TTY check so we fail without disturbing the screen. askChoice
+        // also checks (defense-in-depth for direct callers), but doing it here
+        // means the LLM gets a clean error before the picker tries to render.
         if (!getActiveReadline() || !process.stdin.isTTY) {
           throw new NoTTYError(
             'ask_user_choice requires an interactive TTY. ' +
             'Fall back to deciding yourself and state which option you picked and why.',
           );
         }
-        // Print the chip-style header above the question so the rendering
-        // mirrors AskUserQuestion's visual shape — a short tag tells the user
-        // at a glance what topic the prompt is about. Theme is resolved fresh
-        // so a `/theme` toggle between turns is honored.
-        const theme = resolveTheme(this.workspaceRoot);
-        console.log(theme.heading(`\n[${header}]`));
-        const answer = await askChoice(question, options, { multiSelect: !!args.multiSelect });
+        // header is rendered by the picker itself (chip line at the top of
+        // the frame), so we just thread it through opts.
+        const answer = await askChoice(question, options, {
+          multiSelect: !!args.multiSelect,
+          header,
+        });
         return JSON.stringify({ answer });
       }
       case 'goal_complete': {
