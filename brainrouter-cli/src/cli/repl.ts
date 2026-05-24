@@ -746,6 +746,19 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       // promise can never leave the REPL without a prompt. Without this, a
       // bug inside any /command (file write, MCP call, etc.) bricks the
       // session because the user never sees the prompt come back.
+      //
+      // Bracket the dispatch in rl.pause()/rl.resume() for the same reason
+      // runAgentTurn does at line 413/665: any ora-based spinner inside a
+      // handler (printMcpCall is the common one) pulls in `stdin-discarder`,
+      // which calls process.stdin.setRawMode(false) and stdin.pause() on
+      // spinner stop. Without our bracket, the parent REPL inherits that
+      // cooked-mode + paused state — arrow keys echo `^[[A` literally,
+      // Backspace echoes `^?`, the prompt looks live but won't accept
+      // input. rl.resume() re-engages raw mode via readline's internal
+      // input._setRawMode(true). We do NOT call setRawMode(true) directly:
+      // per the note at line 666, the external call resets
+      // readableFlowing = null on the stream and breaks input.
+      rl.pause();
       try {
         await handleSlashCommand(command, args, agent, mcpClient, config, rl, {
           refreshPromptForMode,
@@ -756,9 +769,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       } catch (err: any) {
         console.error(chalk.red(`\nSlash command "${command}" failed: ${err?.message ?? err}\n`));
       } finally {
-        // The /continue and /side/btw cases own their own prompt cycle via
-        // runAgentTurn — only re-prompt if no turn is in flight.
-        if (!isProcessing) rl.prompt();
+        // If the handler kicked off a turn (e.g. /grill-me, /spec,
+        // /feature-dev, /continue), runAgentTurn owns its own pause/resume
+        // bracket and its own prompt cycle — leaving the resume to it
+        // avoids racing two resumes on the same readline.
+        if (!isProcessing) {
+          rl.resume();
+          rl.prompt();
+        }
       }
       return;
     }
