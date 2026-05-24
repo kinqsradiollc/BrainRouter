@@ -74,6 +74,7 @@ openSrc/bruno
 openSrc/openhuman
 openSrc/semble
 openSrc/deer-flow
+openSrc/grok-cli
 
 # Local agent reference doc for openSrc/ vendored projects — useful but
 # personal (machine-specific paths, evolving notes) so it stays out of git.
