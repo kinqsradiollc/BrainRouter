@@ -117,7 +117,7 @@ finalScore(r)        = rrfScore(r) * 30 * 0.7
 | **Skill boost** | Score ×1.2 when `record.skill_tag` matches active skill. |
 | **Neural sparks** | 2-hop spreading activation — records firing above threshold join the candidate pool. |
 | **Reranker** | Cross-encoder (Cohere / vLLM `/v1/rerank`) replaces top-K ordering when configured. |
-| **Relevance judge** | LLM-as-judge stage that filters the reranked finalists. Each candidate gets a binary verdict + reason; rejects are dropped. Off by default — opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`. Adds one LLM round-trip; on failure the reranker output passes through unchanged. |
+| **Relevance judge** | LLM-as-judge stage that filters the reranked finalists. Each candidate gets a binary verdict + reason; rejects are dropped. Off by default — opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`. Adds one LLM round-trip; on failure the reranker output passes through unchanged. Survives LM Studio's idle-model auto-unload by detecting the "model is unloaded" 400, waiting 1.5s, and retrying once (mirrors `ModelLLMRunner`). |
 
 ## Filters
 
@@ -137,6 +137,28 @@ filters: {
 Filters constrain the candidate pool *before* ranking, so RRF computes
 ranks within the relevant scope instead of skewing toward globally top
 records.
+
+## Extraction robustness
+
+The cognitive extractor parses JSON emitted by the LLM. Two real-world
+failures showed up frequently enough to warrant guard rails:
+
+- **Bad JSON escapes survive.** `parseJsonWithEscapeRepair`
+  ([`brainrouter/src/memory/pipeline/cognitive-extractor.ts`](../brainrouter/src/memory/pipeline/cognitive-extractor.ts))
+  doubles any `\X` that isn't a legal JSON escape and retries the parse,
+  so Windows paths (`C:\Users\…`), Unix path segments like `\bin` /
+  `\target` / `\release`, LaTeX literals, and regex content survive
+  intact. The repair branch only preserves `\"`, `\\`, `\/` as-is;
+  everything else doubles. (Tradeoff: legitimate `\n` in repair-branch
+  content becomes a literal two-char `\n`. Happy-path `\n` still becomes
+  a newline.)
+- **LM Studio model auto-unload.** Idle local models get unloaded;
+  the first request after that comes back as
+  `400 {"error":"Model is unloaded."}`. The extractor LLM runner and
+  the relevance judge both detect this and retry once after 1.5s.
+
+These two together mean a noisy upstream (idle local model, malformed
+JSON escapes) no longer drops a whole extraction batch.
 
 ## Contradictions
 

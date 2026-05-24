@@ -4,7 +4,7 @@
 
 ## Why
 
-<!-- Context, motivation, linked issues / ROADMAP sections.
+<!-- Context, motivation, linked issues / brainrouter-roadmap/ sections.
      Skip if the summary is self-explanatory. -->
 
 ## Changes
@@ -23,8 +23,8 @@
 
 ## Docs & changelog
 
-- [ ] `CHANGELOG.md` updated under the in-flight version section
-- [ ] `ROADMAP.md` updated if this completes / re-scopes a planned item
+- [ ] `brainrouter-changelog/<in-flight-version>.md` updated (and mirrored to root `CHANGELOG.md` [Unreleased] section)
+- [ ] `brainrouter-roadmap/<target-version>.md` updated if this completes / re-scopes a planned item
 - [ ] Any new env vars documented in `brainrouter/.env.example` or `brainrouter-cli/.env.example`
 
 ## Breaking changes

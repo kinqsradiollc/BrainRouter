@@ -7,13 +7,72 @@ every turn instead of being a sidecar.
 ## Run
 
 ```bash
-npm run cli                                    # interactive REPL
-node brainrouter-cli/dist/index.js run "..."   # one-shot
+brainrouter                                    # interactive REPL (global install)
+npm run cli                                    # interactive REPL (monorepo dev)
+brainrouter run "summarize src/"               # one-shot, headless
 brainrouter agents [--json]                    # list child sessions
 ```
 
+Flags:
+
+| Flag | Behavior |
+| --- | --- |
+| `--strict-mcp` | Exit immediately if the MCP server is unreachable. Default is to continue in **offline mode** (local tools only — no memory recall, skills, or capture). Banner surfaces `⚠️  OFFLINE MODE` when active. |
+| `--quiet` | Suppress recall tables, briefing dumps, and tool-completion previews (model prose only). One-shot override; persist by calling `/quiet on` in-session. |
+| `-w <path>` | Override the workspace root. |
+
 The CLI auto-spawns the MCP server in stdio mode unless your config points
 at an HTTP server. See [configuration.md → MCP client config](configuration.md#mcp-client-config).
+
+---
+
+## Startup banner & shell chrome
+
+The CLI opens with a boxed banner that summarizes the runtime in one block:
+
+```
+┌─────────────────────────────────────────────────┐
+│ workspace   brainrouter (main)                  │
+│ mcp         default · stdio · ✓ connected       │
+│ workflow    spec-driven-skill (in-progress)     │
+│ goal        active · 3 / unlimited              │
+│ session     7f3a1e0c                            │
+│ model       gpt-4o · access:read                │
+└─────────────────────────────────────────────────┘
+```
+
+- **Session prefix** — the leading 8 chars of the per-process UUID
+  `sessionKey`. Two concurrent CLIs in the same workspace get different
+  prefixes, so you can tell them apart at a glance. (See
+  [Goal state machine → Resume across sessions](#resume-across-sessions)
+  for why the UUID matters.)
+- **Theme** — colors come from `brainrouter-cli/src/cli/theme.ts`. Pick
+  with `BRAINROUTER_THEME=dark|light|mono` or `/theme`. `auto` falls
+  through to `dark`.
+- **Quiet mode** — `--quiet` or `/quiet on` hides recall tables,
+  briefing dumps, and tool-completion previews. Useful for screenshots
+  and headless capture.
+- **Idle-help hint** — if you sit idle at the REPL for 30s on a
+  TTY, the CLI prints a one-time tip pointing at `?` / `/help` / `/where`.
+- **`?` keystroke** — a bare `?` on its own line opens `/help`.
+
+### Statusline
+
+`/statusline <segments>` configures a comma-separated subset of:
+
+| Segment | Shows |
+| --- | --- |
+| `mode` | Current access mode (`read` / `write` / `shell`). |
+| `branch` | Git branch. |
+| `pr` | GitHub PR number for the current branch (cached 30s). |
+| `tokens` | Running session token meter. |
+| `time` | Local clock. |
+| `goal` | Goal status + iteration ratio (e.g. `goal:active 3/unlimited`). |
+| `plan` | Plan completion ratio (e.g. `plan:2/5`). |
+| `workflow` | Active workflow slug if any. |
+
+Defaults are `mode,branch,pr,tokens,time,goal`. Implementation:
+[`brainrouter-cli/src/cli/statusline.ts`](../brainrouter-cli/src/cli/statusline.ts).
 
 ---
 
@@ -73,7 +132,7 @@ read-mode parent spawned a shell-mode child.
 | `list_dir` | List a workspace directory. |
 | `grep_search` | String/regex search across files. |
 | `glob_files` | Find files by glob pattern. |
-| `run_command` | Shell command (gated by confirmation + optional sandbox). |
+| `run_command` | Shell command (gated by confirmation + optional sandbox). Aliased as `bash` / `Bash` / `shell` / `sh` for Claude Code parity — all four route to the same gated implementation, so read-only mode can't sneak shell access. |
 | `fetch_url` | HTTP GET; strips HTML tags; clamps at 15kB. |
 | `web_search` | DuckDuckGo or `BRAINROUTER_WEB_SEARCH_ENDPOINT`. |
 | `update_plan` | Create/update the durable task plan. |
@@ -216,7 +275,9 @@ tall ones. `/help <category>` drills in.
 
 | Command | Purpose |
 | --- | --- |
-| `/help [category]` | Paginated help. |
+| `/help [category]` | Paginated help. A bare `?` keystroke is equivalent. |
+| `/where` | One-screen orientation: workspace, workflow, goal, plan, recent recall, child agents — collapses what used to be four commands. |
+| `/quiet [on\|off]` | Toggle quiet output (recall tables, briefing dumps, tool-completion previews suppressed). Persists in workspace preferences. |
 | `/status` | One-line status: model / mode / branch / token meter / goal. |
 | `/workspace` | Show / change workspace root. |
 | `/config` | Show resolved config. |
@@ -230,7 +291,7 @@ tall ones. `/help <category>` drills in.
 | `/raw [on\|off]` | Toggle raw scrollback (skip markdown rendering). |
 | `/vim` | Toggle vim keybindings for the REPL prompt. |
 | `/keymap` | Show current keybinding overlay. |
-| `/statusline mode,branch,pr,tokens,time,goal` | Comma-separated statusline segments. |
+| `/statusline mode,branch,pr,tokens,time,goal,plan,workflow` | Comma-separated statusline segments. See [Statusline](#statusline). |
 | `/mention` | Print the @file mention syntax help. |
 | `/ide` | Detect / set IDE integration (VS Code, JetBrains). |
 | `/apps`, `/plugins`, `/experimental` | Toggle gated feature surfaces. |
@@ -494,7 +555,17 @@ Persists across restarts via `~/.brainrouter/workspaces/<encoded>/cli/preference
 ## Goal state machine
 
 `/goal <text>` sets a sticky outcome. The CLI auto-continues turns until
-one of: `goal_complete(proof)`, `goal_blocked(reason)`, budget exhaustion.
+one of: `goal_complete(proof)`, `goal_blocked(reason)`, budget exhaustion,
+anti-spin/repeat-loop tripwire, or manual `/goal pause`.
+
+Each auto-continued turn injects a `goal-anchor` system message that
+re-states the goal verbatim, so it stays in immediate context across long
+loops even when the conversation drifts. The continuation prompt also
+ships a "tool-call mechanics" reminder and a drift check.
+
+Setting `/goal <new text>` while a goal is already in flight prompts for
+y/N before overwriting — prevents accidental clobbering after a long
+auto-loop.
 
 ### Lifecycle
 
@@ -520,21 +591,46 @@ prose explaining what was tried and what the user needs to provide.
 
 ### Budgets
 
-- **Iteration budget** (`/goal budget <N>`, default 10) — caps auto-continue
-  turns.
-- **Token budget** (`/goal tokens <N>`) — caps cumulative prompt+completion
-  tokens. Optional; `0` clears.
+- **Iteration budget** (`/goal budget <N>`) — caps auto-continue turns.
+  Default is **effectively unlimited** (`1_000_000`, rendered as
+  `unlimited` in the banner / statusline). Anti-spin detection, the
+  repeat-loop tripwire, and explicit `/goal pause` are the real safety
+  nets; the numeric cap is there for users who want a hard ceiling.
+- **Inline budget syntax** — write `budget: N iterations` (or
+  `budget: N`) directly in the goal text. The CLI parses it out and
+  applies the cap without a separate `/goal budget` call.
+- **Token budget** (`/goal tokens <N>`) — caps cumulative
+  prompt+completion tokens. Optional; `0` clears.
 
 When the next turn would be the last within either cap, the CLI injects
 a "wrap up gracefully" steering message so the model lands soft instead
 of being cut off mid-thought. The steering is dropped if the user raises
 the cap before the next tick.
 
+### Plan recovery
+
+`/plan clear` wipes stale plan items when an old plan is blocking
+`goal_complete`. New goals also auto-reconcile stale plan items left
+over from an earlier goal so the contract check doesn't trip on
+leftovers.
+
 ### Resume across sessions
 
 `/resume <session>` will surface a y/N prompt to resume the goal if the
 loaded session has a paused / blocked / usage_limited goal. Prevents the
 "loop silently stays paused" footgun.
+
+### Session isolation
+
+Each CLI process is its own session — the sessionKey is a fresh `randomUUID()`
+at agent startup, not a workspace-derived string. Two concurrent CLIs in
+the same workspace get distinct goal / plan / working-memory buckets;
+recall is unaffected because the memory DB is userId-scoped, not
+session-scoped. The startup banner prints the session prefix so you can
+tell concurrent CLIs apart at a glance. Leftover legacy
+`cli/goal.json` files (from pre-PR-#26 builds) are archived to
+`cli/.brainrouter.migrated/legacy-goal-<ts>.json` on first session-scoped
+goal write.
 
 ---
 
@@ -604,10 +700,29 @@ status bars, and external agent pickers.
 
 ## Storage
 
-All CLI state lives under `~/.brainrouter/workspaces/<basename>-<sha8>/cli/`.
-The memory store is at `~/.brainrouter/memory.db`. Workflow artifacts are
-the only committable files (they live inside the workspace at
+All CLI state lives under `~/.brainrouter/workspaces/<basename>-<sha8>/cli/`,
+keyed inside that bucket by the per-process `sessionKey`. The memory
+store is at `~/.brainrouter/memory.db`. Workflow artifacts are the only
+committable files (they live inside the workspace at
 `.brainrouter/workflows/`).
+
+Notable subdirectories under `cli/`:
+
+- `sessions/<encodedKey>/` — per-session `transcript.jsonl`, `goal.json`,
+  `tasks.json`.
+- `.brainrouter.migrated/` — archive of legacy workspace-level files
+  (e.g. `legacy-goal-<ts>.json`) moved here on first session-scoped
+  write. See [Session isolation](#session-isolation).
+- `preferences.json` — theme, statusline, vim, personality, quiet mode.
+
+`/tokens` and child-agent counters are scoped by
+`parentSessionKey === agent.sessionKey`, so a fresh CLI no longer mixes
+in counts from prior CLI processes in the same workspace. `/resume` and
+`/fork` zero the in-process parent counters (`sessionUsage`,
+`memoryMetrics`) since the persisted transcript doesn't record per-call
+usage and the pre-switch counts belong to a different session.
+`/rename` leaves counters alone — it's the same conversation, just
+relabelled.
 
 See [configuration.md → Storage layout](configuration.md#storage-layout)
 for the complete tree.
