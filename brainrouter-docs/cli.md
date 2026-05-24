@@ -784,6 +784,39 @@ Use cases:
 
 `/working` inspects the canvas. `memory_working_reset()` clears it.
 
+### Reasoning capture (why-trail)
+
+The canvas captures two distinct kinds of step:
+
+| `kind` | Captures | When the agent emits it |
+|---|---|---|
+| `tool_output` (default) | What came back — payload, analysis, child summary | Any output over ~1,000 tokens (token-budget rule). |
+| `reasoning` | **Why** the agent did what it did — the decision and its rationale | After every non-trivial tool batch (≥3 tool calls OR any single tool that returned >2KB). The system prompt steers the agent to call `memory_working_offload` with `kind: "reasoning"`, `title: "Why: <short>"`, and a 1-paragraph summary of the **decision**, not the tool results. |
+
+The two rules are independent and can both fire on the same batch — payload offload is about token budget, reasoning offload is about the audit trail.
+
+Reasoning nodes get a **distinct dashed border** in the Mermaid canvas (`stroke-dasharray:4 4`) so they're visually separable from `tool_output` and `compressed_summary` nodes when you inspect `canvas.mmd` directly or in the dashboard.
+
+The next turn's briefing surfaces working memory in two blocks:
+
+```
+### Working memory canvas
+Recent steps:
+- [tool_output] Read recall.ts — 4 stages run in order.
+- [tool_output] Read judge.ts — LLM-as-judge sits behind a flag.
+- [reasoning] Why: keep kind free-form — avoids a breaking type change.
+
+Recent reasoning (why-trail):
+- [reasoning] Why: chose hybrid recall — indices were both warm.
+```
+
+- **`Recent steps:`** is the MCP's already-injected `recentSteps` tail (last 5–10 steps regardless of kind, in chronological order).
+- **`Recent reasoning (why-trail):`** is up to the **3 most-recent reasoning steps** that have already fallen off the recent tail (dedup'd so a reasoning step still in the tail doesn't double-print).
+
+The cap-at-3 on the why-trail is deliberate — without it, an agent that offloaded reasoning every batch would stuff the next turn's briefing with its own past commentary. The cap keeps the audit trail visible across many turns without runaway growth.
+
+**Note on LLM compliance.** The system-prompt rule is **steering, not enforcement** — smaller / less-aligned models routinely skip explicit "after every batch, call tool X" instructions, and BrainRouter does not currently intercept assistant prose to auto-emit reasoning steps (that's deferred to v0.4.x). If you notice your agent isn't producing reasoning steps unprompted, you can always emit one manually via `memory_working_offload` or simply ask the agent to "call memory_working_offload with kind:'reasoning', title:'Why: …'" — the moment any reasoning step lands, the canvas style + briefing surface pay off.
+
 ---
 
 ## Filesystem memory consolidation
