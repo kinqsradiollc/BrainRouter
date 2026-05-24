@@ -60,7 +60,7 @@ import url from 'node:url';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, saveConfig } from './config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { Agent } from './agent/agent.js';
 import { startREPL } from './cli/repl.js';
@@ -483,8 +483,9 @@ program
       });
       await mcpClient.close();
 
-      // Save to config
-      const config = loadConfig();
+      // Save to config — `loadOrInitConfig` lets first-run users build a
+      // fresh config.json instead of hitting the strict no-config error.
+      const config = loadOrInitConfig();
       config.servers[answers.profileName] = {
         type: 'http',
         url: answers.url,
@@ -506,7 +507,9 @@ program
   .command('config')
   .description('Interactively configure your LLM provider and MCP servers')
   .action(async () => {
-    const config = loadConfig();
+    // `loadOrInitConfig` because this command IS the first-run setup
+    // wizard — it must work even when no config.json exists yet.
+    const config = loadOrInitConfig();
 
     const menu = await inquirer.prompt([
       {
