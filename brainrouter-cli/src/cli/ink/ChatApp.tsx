@@ -58,12 +58,58 @@ export interface ChatAppProps {
   accentColor?: string;
   /** Called when the user submits a line (slash command OR free-form prompt). */
   onSubmit: (text: string, push: PushScrollback) => Promise<void>;
+  /**
+   * Imperative hook — invoked once during mount with a controller object the
+   * orchestrator can use to push scrollback / footer updates from outside the
+   * React tree (e.g. when the parent-turn closure wants to print a side-channel
+   * message after `agent.runTurn` resolved but before the next prompt cycle).
+   */
+  onReady?: (controller: ChatController) => void;
+  /**
+   * Cycle the access mode (read → write → shell → read). Returned label is
+   * appended to the footer pill. Called when the user presses Shift+Tab.
+   */
+  onAccessModeCycle?: () => string;
+  /**
+   * Initial access mode for the footer pill — kept in sync via
+   * `controller.setFooter({ accessMode })`. Defaults to 'read'.
+   */
+  initialAccessMode?: 'read' | 'write' | 'shell';
+  /**
+   * Initial extra footer segments (model, session, effort, branch). Updated
+   * after each turn via `controller.setFooter`.
+   */
+  initialFooter?: FooterState;
+}
+
+export interface FooterState {
+  /** e.g. "gpt-4o-mini". */
+  model?: string;
+  /** e.g. "rep-2026-…-abc123". Truncated for display. */
+  session?: string;
+  /** e.g. "main". */
+  branch?: string;
+  /** "low" | "medium" | "high". Rendered as a pill. */
+  effort?: string;
+  /** Free-form right-side text (statusline segments). */
+  rightExtra?: string;
+}
+
+export interface ChatController {
+  /** Push entries from outside the React tree (e.g. after the parent turn ended). */
+  push: PushScrollback;
+  /** Update the footer status row (model, session, access mode, effort, etc.). */
+  setFooter: (patch: Partial<FooterState & { accessMode: 'read' | 'write' | 'shell' }>) => void;
+  /** Programmatically inject text into the composer (e.g. workflow.ts loop tick). */
+  setComposer: (text: string) => void;
+  /** Exit the chat app gracefully. */
+  exit: () => void;
 }
 
 export type ScrollbackEntry =
   | { id: number; kind: 'raw'; text: string }
   | { id: number; kind: 'user'; text: string }
-  | { id: number; kind: 'assistant'; text: string; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
+  | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
   | { id: number; kind: 'tool'; name: string; ok: boolean; preview?: string }
   | { id: number; kind: 'memory'; level: 'info' | 'warn'; text: string }
   | { id: number; kind: 'plan'; items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[] }
@@ -72,11 +118,16 @@ export type ScrollbackEntry =
 export interface PushScrollback {
   raw(text: string): void;
   user(text: string): void;
-  assistant(text: string, meta?: { durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }): void;
+  /** `raw: true` skips marked-terminal rendering (use when caller already pre-rendered or user wants raw scrollback). */
+  assistant(text: string, meta?: { raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }): void;
   tool(name: string, ok: boolean, preview?: string): void;
   memory(level: 'info' | 'warn', text: string): void;
   plan(items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[]): void;
   notice(text: string): void;
+  /** Update the live spinner label (e.g. "Thinking  5s  1.2k↑ 0.4k↓"). */
+  setStatus(label: string): void;
+  /** Show / hide the spinner without pushing a scrollback entry. */
+  setPhase(phase: 'idle' | 'turn-running'): void;
 }
 
 // --- Main app ---------------------------------------------------------
@@ -89,6 +140,10 @@ export function ChatApp({
   promptLabel,
   accentColor = '#CC9166',
   onSubmit,
+  onReady,
+  onAccessModeCycle,
+  initialAccessMode = 'read',
+  initialFooter = {},
 }: ChatAppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -99,6 +154,8 @@ export function ChatApp({
   const [composerValue, setComposerValue] = useState('');
   const [phase, setPhase] = useState<'idle' | 'turn-running'>('idle');
   const [spinnerLabel, setSpinnerLabel] = useState<string>('');
+  const [accessMode, setAccessMode] = useState<'read' | 'write' | 'shell'>(initialAccessMode);
+  const [footer, setFooter] = useState<FooterState>(initialFooter);
 
   const pushFns = useMemo<PushScrollback>(() => {
     const push = (entry: any) => {
@@ -115,7 +172,28 @@ export function ChatApp({
       memory: (level, text) => push({ kind: 'memory', level, text }),
       plan: (items) => push({ kind: 'plan', items }),
       notice: (text) => push({ kind: 'notice', text }),
+      setStatus: (label) => setSpinnerLabel(label),
+      setPhase: (p) => setPhase(p),
     };
+  }, []);
+
+  // Imperative controller — exposed once on mount via onReady so the
+  // orchestrator can push from outside the React tree (child agent
+  // callbacks fire long after `await agent.runTurn()` resolves and need
+  // a way to inject into scrollback without re-entering React state).
+  useEffect(() => {
+    if (!onReady) return;
+    onReady({
+      push: pushFns,
+      setFooter: (patch) => {
+        if (patch.accessMode) setAccessMode(patch.accessMode);
+        setFooter((prev) => ({ ...prev, ...patch }));
+      },
+      setComposer: (text) => setComposerValue(text),
+      exit,
+    });
+    // Run exactly once — the controller's identity is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Slash palette visibility — open when input is just `/<query>`
@@ -145,10 +223,22 @@ export function ChatApp({
     }
   }, [onSubmit, pushFns]);
 
-  // Ctrl+D / Ctrl+C exit cleanly.
+  // Ctrl+D / Ctrl+C exit cleanly; Shift+Tab cycles the agent's access mode.
+  // ink's `useInput` only fires while the app is mounted AND focused, which is
+  // exactly when we want shift+tab to mean "cycle access". The orchestrator's
+  // onAccessModeCycle callback talks to the Agent and returns the new label so
+  // we can update the footer pill atomically.
   useInput((input, key) => {
     if (key.ctrl && (input === 'c' || input === 'd')) {
       exit();
+      return;
+    }
+    if (key.shift && key.tab && onAccessModeCycle) {
+      const next = onAccessModeCycle();
+      if (next === 'read' || next === 'write' || next === 'shell') {
+        setAccessMode(next);
+        pushFns.notice(`Access mode → ${next}`);
+      }
     }
   });
 
@@ -198,6 +288,8 @@ export function ChatApp({
         promptLabel={promptLabel}
         phase={phase}
         accentColor={accentColor}
+        accessMode={accessMode}
+        footer={footer}
       />
     </Box>
   );
@@ -219,8 +311,11 @@ function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentC
     case 'assistant': {
       // Render the assistant body via marked-terminal so markdown is
       // formatted, then prefix the first line with ⏺ and indent the rest.
+      // `raw: true` skips marked — the caller already rendered (avoids
+      // double-rendering when runChat pre-marks) or the user has the
+      // rawScrollback preference enabled.
       const rendered = typeof entry.text === 'string' ? entry.text : String(entry.text);
-      const lines = (markedSafe(rendered)).trimEnd().split('\n');
+      const lines = (entry.raw ? rendered : markedSafe(rendered)).trimEnd().split('\n');
       const meta = entry.durationMs !== undefined
         ? `  ${Math.floor(entry.durationMs / 1000)}s${entry.tokensIn !== undefined ? ` · ${entry.tokensIn.toLocaleString()} in / ${entry.tokensOut?.toLocaleString() ?? 0} out` : ''}`
         : '';
@@ -310,10 +405,57 @@ function SlashPalettePanel({ query, commands, accentColor }: { query: string; co
   );
 }
 
-function FooterStatus({ promptLabel, phase, accentColor }: { promptLabel: string; phase: 'idle' | 'turn-running'; accentColor: string }) {
+function FooterStatus({
+  promptLabel,
+  phase,
+  accentColor,
+  accessMode,
+  footer,
+}: {
+  promptLabel: string;
+  phase: 'idle' | 'turn-running';
+  accentColor: string;
+  accessMode: 'read' | 'write' | 'shell';
+  footer: FooterState;
+}) {
+  // Pill background mirrors the readline REPL's mode-to-token mapping:
+  //   read  → green   (safe)
+  //   write → accent  (default brand)
+  //   shell → red     (escalated)
+  // See cli/repl.ts:refreshPromptForMode for the rationale.
+  const pillBg = accessMode === 'shell' ? 'red' : accessMode === 'write' ? accentColor : 'green';
+  const pillFg = 'black';
+  // Effort pill — only shown when set. Same visual language as the access pill.
+  const effortBg = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
+
+  // Left side: model · session · branch.  Right side: ? for shortcuts.
+  // Spreads out so the footer feels like claude-code's bottom bar.
+  const leftSegs: string[] = [];
+  if (footer.model) leftSegs.push(footer.model);
+  if (footer.session) leftSegs.push(footer.session.slice(0, 16));
+  if (footer.branch) leftSegs.push(footer.branch);
+  if (footer.rightExtra) leftSegs.push(footer.rightExtra);
+
   return (
     <Box justifyContent="space-between" paddingX={1}>
-      <Text color="gray" dimColor>{promptLabel}{phase === 'turn-running' ? ' · running' : ''}</Text>
+      <Box>
+        <Text backgroundColor={pillBg} color={pillFg}>{` ◉ ${accessMode} `}</Text>
+        {footer.effort ? (
+          <>
+            <Text> </Text>
+            <Text backgroundColor={effortBg} color={pillFg}>{` ${footer.effort} `}</Text>
+          </>
+        ) : null}
+        {leftSegs.length > 0 ? (
+          <Text color="gray" dimColor>{'  ' + leftSegs.join(' · ')}</Text>
+        ) : null}
+        {phase === 'turn-running' ? (
+          <Text color="gray" dimColor>{'  · running'}</Text>
+        ) : null}
+        {leftSegs.length === 0 && phase === 'idle' ? (
+          <Text color="gray" dimColor>{'  ' + promptLabel}</Text>
+        ) : null}
+      </Box>
       <Text color="gray" dimColor>? for shortcuts  ·  / for commands</Text>
     </Box>
   );
