@@ -141,6 +141,24 @@ export function getCurrentWorkflow(workspaceRoot: string): string | undefined {
 }
 
 /**
+ * Path to a workflow's bound `goal.json`. The goal lives ALONGSIDE
+ * `meta.json` / `spec.md` inside the workflow folder so that switching
+ * workflows carries the goal with it (Item 3 of the 0.3.6 cycle). When no
+ * workflow is bound, callers fall back to the per-session goal path —
+ * `resolveGoalScope` in goalStore.ts owns that fall-through.
+ *
+ * Pattern adapted from openSrc/bruno/packages/bruno-schema/src/collections/
+ * — Bruno keeps the active-environment scalar inside the collection doc
+ * rather than in a separate workspace-tree pointer, which avoids the stale-
+ * pointer race we'd hit if `current-workflow.json` and `<workflow>/goal.json`
+ * drifted. (The per-user current-workflow pointer is intentionally kept in
+ * CLI state — it's per-user-per-machine, not part of the committed workflow.)
+ */
+export function getWorkflowGoalFile(workspaceRoot: string, slug: string): string {
+  return path.join(getWorkflowDir(workspaceRoot, slug), 'goal.json');
+}
+
+/**
  * Path (relative to workspace root) the LLM should `write_file` to for a
  * given artifact. We return a workspace-relative path because that's the
  * unit `write_file` expects.

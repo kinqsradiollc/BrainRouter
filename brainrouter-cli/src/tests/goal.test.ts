@@ -349,6 +349,124 @@ test('goalStore: session A goal does not leak into session B (regression for cro
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: per-workflow goal binding + priority chain (workflow > session)
+// -----------------------------------------------------------------------
+
+test('resolveGoalScope: prefers workflow scope when a workflow is bound', async () => {
+  const { resolveGoalScope } = await import('../state/goalStore.js');
+  const { createWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:scope-workflow';
+    // No workflow yet → session scope.
+    const before = resolveGoalScope(workspace, sk);
+    assert.equal(before.scope, 'session');
+
+    // Bind a workflow → resolver should now return the workflow scope.
+    const meta = createWorkflow(workspace, { title: 'multi-workflow demo', kind: 'feature-dev' });
+    const after = resolveGoalScope(workspace, sk);
+    assert.equal(after.scope, 'workflow');
+    if (after.scope === 'workflow') {
+      assert.equal(after.slug, meta.slug);
+      assert.ok(after.path.includes(`workflows/${meta.slug}/goal.json`));
+    }
+  });
+});
+
+test('resolveGoalScope: falls back to session when no workflow bound, then legacy when no sessionKey', async () => {
+  const { resolveGoalScope } = await import('../state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:scope-session';
+    const sessionScope = resolveGoalScope(workspace, sk);
+    assert.equal(sessionScope.scope, 'session');
+    if (sessionScope.scope === 'session') {
+      assert.equal(sessionScope.sessionKey, sk);
+      assert.ok(sessionScope.path.includes(`/sessions/`));
+    }
+    const legacyScope = resolveGoalScope(workspace);
+    assert.equal(legacyScope.scope, 'legacy');
+    assert.ok(legacyScope.path.endsWith('goal.json'));
+  });
+});
+
+test('per-workflow goal binding: setGoal writes inside workflow folder; readGoal reads it back', async () => {
+  const { createWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:bind';
+    const meta = createWorkflow(workspace, { title: 'cache rewrite', kind: 'spec' });
+    setGoal(workspace, 'land the cache rewrite spec', sk);
+
+    // The file lives under the workflow folder, not the session bucket.
+    const goalPath = getWorkflowGoalFile(workspace, meta.slug);
+    assert.ok(fs.existsSync(goalPath), 'expected goal.json inside workflow folder');
+    const onDisk = JSON.parse(fs.readFileSync(goalPath, 'utf8'));
+    assert.equal(onDisk.text, 'land the cache rewrite spec');
+
+    // readGoal returns the same goal regardless of which (or no) sessionKey
+    // is passed, because the priority chain pins it to the workflow.
+    assert.equal(readGoal(workspace, sk)?.text, 'land the cache rewrite spec');
+    assert.equal(readGoal(workspace, 'totally:different:key')?.text, 'land the cache rewrite spec');
+  });
+});
+
+test('per-workflow goal binding: switching workflows changes which goal readGoal returns', async () => {
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:swap';
+    const a = createWorkflow(workspace, { title: 'workflow A', kind: 'feature-dev' });
+    setGoal(workspace, 'goal for A', sk);
+    assert.equal(readGoal(workspace, sk)?.text, 'goal for A');
+
+    const b = createWorkflow(workspace, { title: 'workflow B', kind: 'feature-dev' });
+    // createWorkflow flipped the current pointer to B; B has no goal yet.
+    assert.equal(readGoal(workspace, sk), null);
+
+    setGoal(workspace, 'goal for B', sk);
+    assert.equal(readGoal(workspace, sk)?.text, 'goal for B');
+
+    // Flip back — A's goal is intact, unaffected by B's goal write.
+    setCurrentWorkflow(workspace, a.slug);
+    assert.equal(readGoal(workspace, sk)?.text, 'goal for A');
+  });
+});
+
+test('per-workflow goal binding: clearGoal targets the bound workflow only, leaves other workflows alone', async () => {
+  const { createWorkflow, setCurrentWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:clear-bound';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+
+    // Clearing while B is bound only nulls B's goal.json. A is untouched.
+    clearGoal(workspace, sk);
+    assert.equal(readGoal(workspace, sk), null);
+
+    setCurrentWorkflow(workspace, a.slug);
+    assert.equal(readGoal(workspace, sk)?.text, 'A goal');
+    // B's file still exists but with null payload.
+    const bPath = getWorkflowGoalFile(workspace, b.slug);
+    if (fs.existsSync(bPath)) {
+      const raw = fs.readFileSync(bPath, 'utf8').trim();
+      // writeJsonFile(null) writes "null\n"; readGoal returns null either way.
+      assert.ok(raw === 'null' || raw === '');
+    }
+  });
+});
+
+test('Item 1 regression guard: with no workflow bound, session A goal still does not leak into session B', () => {
+  // The per-workflow refactor must NOT reintroduce the cross-session leak
+  // PR #26 fixed. When no workflow is bound, two sessions stay isolated.
+  withTempWorkspace((workspace) => {
+    const sessionA = 'brainrouter-cli:project:scope-A';
+    const sessionB = 'brainrouter-cli:project:scope-B';
+    setGoal(workspace, 'A is exploring auth', sessionA);
+    assert.equal(readGoal(workspace, sessionB), null);
+    assert.equal(readGoal(workspace, sessionA)?.text, 'A is exploring auth');
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {
