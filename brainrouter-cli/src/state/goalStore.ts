@@ -242,6 +242,145 @@ function archiveLegacyGoal(workspaceRoot: string): void {
 }
 
 /**
+ * Archive a goal payload under `<cliStateDir>/.brainrouter.migrated/`. The
+ * archive lives in the per-user CLI state tree, NOT inside the project
+ * workspace — same invariant as Item 1's legacy-goal archive. We never
+ * write `.migrated/` siblings into a workflow folder because those are
+ * committable artifacts and `git status` shouldn't show migration debris.
+ */
+function archiveGoalPayload(
+  workspaceRoot: string,
+  prefix: string,
+  qualifier: string,
+  goal: Goal,
+): string {
+  const archiveDir = path.join(getCliStateDir(workspaceRoot), '.brainrouter.migrated');
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safe = qualifier.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60);
+  let archivePath = path.join(archiveDir, `${prefix}-${safe}-${stamp}.json`);
+  let suffix = 1;
+  while (fs.existsSync(archivePath)) {
+    archivePath = path.join(archiveDir, `${prefix}-${safe}-${stamp}-${suffix}.json`);
+    suffix += 1;
+  }
+  fs.writeFileSync(archivePath, JSON.stringify(goal, null, 2), 'utf8');
+  return archivePath;
+}
+
+/**
+ * Outcome of a session→workflow goal migration. `migrated: true` means the
+ * session goal has been moved into the workflow folder and the session file
+ * is cleared. `conflict` means the helper REFUSED to move because both sides
+ * have non-complete goals — the caller must prompt the user and call
+ * `applyMigrationResolution` with their choice.
+ */
+export interface GoalMigrationOutcome {
+  migrated: boolean;
+  conflict?: 'target-has-active-goal';
+  /** Session-side goal that was the source (when present). */
+  source?: Goal;
+  /** Target-workflow goal already on disk (when present). */
+  target?: Goal;
+  /** Path of any archive written (loser of a conflict + winner-archived-too if forced). */
+  archivedPath?: string;
+}
+
+export type GoalMigrationResolution = 'keep-target' | 'import-session';
+
+/**
+ * Migrate the session-scoped goal (if any) into the target workflow's
+ * `goal.json` when `/workflow switch <slug>` fires. Idempotent — running
+ * it twice with no session goal left is a no-op. Refuses to clobber a
+ * non-complete target goal; surfaces `conflict: 'target-has-active-goal'`
+ * so the caller can `askYesNo` and route through `applyMigrationResolution`.
+ *
+ * Why session→workflow only (not workflow→workflow)? Two workflows that
+ * each carry their own goal are independent threads of work. Flipping the
+ * pointer between them must not merge them — that's the Item 3 spec's
+ * `WorkflowConflictError` job (Subtask 3). This helper is specifically for
+ * "I was working in session-scope, now I'm binding a workflow."
+ */
+export function migrateSessionGoalToWorkflow(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetSlug: string,
+): GoalMigrationOutcome {
+  const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
+  const sessionRaw = fs.existsSync(sessionPath)
+    ? readJsonFile<Partial<Goal> | null>(sessionPath, null)
+    : null;
+  const sessionGoal = normalize(sessionRaw);
+  if (!sessionGoal) return { migrated: false };
+
+  const targetPath = getWorkflowGoalFile(workspaceRoot, targetSlug);
+  const targetRaw = fs.existsSync(targetPath)
+    ? readJsonFile<Partial<Goal> | null>(targetPath, null)
+    : null;
+  const targetGoal = normalize(targetRaw);
+
+  if (targetGoal && targetGoal.status !== 'complete') {
+    return {
+      migrated: false,
+      conflict: 'target-has-active-goal',
+      source: sessionGoal,
+      target: targetGoal,
+    };
+  }
+
+  // Free path: no contender at the target (or its goal is complete).
+  writeJsonFile(targetPath, sessionGoal);
+  writeJsonFile(sessionPath, null);
+  return { migrated: true, source: sessionGoal };
+}
+
+/**
+ * Resolve a deferred migration after the user chooses between keeping the
+ * target's goal or importing the session's. ALWAYS archives the losing side
+ * to `<cliStateDir>/.brainrouter.migrated/` so nothing is silently lost.
+ */
+export function applyMigrationResolution(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetSlug: string,
+  resolution: GoalMigrationResolution,
+): GoalMigrationOutcome {
+  const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
+  const targetPath = getWorkflowGoalFile(workspaceRoot, targetSlug);
+  const sessionGoal = normalize(
+    fs.existsSync(sessionPath) ? readJsonFile<Partial<Goal> | null>(sessionPath, null) : null,
+  );
+  const targetGoal = normalize(
+    fs.existsSync(targetPath) ? readJsonFile<Partial<Goal> | null>(targetPath, null) : null,
+  );
+
+  if (resolution === 'keep-target') {
+    // Target wins. Archive the (losing) session goal so the user can
+    // recover it if they regret the choice, then clear the session file
+    // so the next switch is idempotent.
+    if (sessionGoal) {
+      const archivedPath = archiveGoalPayload(workspaceRoot, 'session-goal', sessionKey, sessionGoal);
+      writeJsonFile(sessionPath, null);
+      return { migrated: false, source: sessionGoal, target: targetGoal ?? undefined, archivedPath };
+    }
+    return { migrated: false, target: targetGoal ?? undefined };
+  }
+  // 'import-session' — session wins. Archive target's goal (the loser) then
+  // overwrite. If the source somehow disappeared between conflict surfacing
+  // and resolution, do nothing rather than blow away the target silently.
+  if (!sessionGoal) {
+    return { migrated: false, target: targetGoal ?? undefined };
+  }
+  let archivedPath: string | undefined;
+  if (targetGoal) {
+    archivedPath = archiveGoalPayload(workspaceRoot, 'workflow-goal', targetSlug, targetGoal);
+  }
+  writeJsonFile(targetPath, sessionGoal);
+  writeJsonFile(sessionPath, null);
+  return { migrated: true, source: sessionGoal, target: targetGoal ?? undefined, archivedPath };
+}
+
+/**
  * Set a new active goal. Refuses to overwrite an in-progress goal (active,
  * paused, blocked, or usage_limited) unless `force: true` is passed. The
  * REPL catches the resulting GoalConflictError and prompts the user before
