@@ -69,6 +69,20 @@ const SLASH_COMMANDS = [
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
+  // Belt-and-suspenders: even if the post-wizard / post-picker stdin
+  // handoff in cli/ink/stdinHandoff.ts somehow gets bypassed (e.g.
+  // future code mounts Ink without going through runWizard/runPicker),
+  // make sure stdin is ref'd + resumed + in raw mode BEFORE we create
+  // readline. Without this the REPL prints its banner and the event
+  // loop immediately drains because Ink left stdin unref'd. Idempotent
+  // — calling ref() / resume() / setRawMode(true) when already in
+  // that state is a no-op.
+  try { (process.stdin as any).ref?.(); } catch { /* node version without ref */ }
+  try { process.stdin.resume(); } catch { /* already resumed */ }
+  if (process.stdin.isTTY) {
+    try { (process.stdin as any).setRawMode?.(true); } catch { /* not a real TTY */ }
+  }
+
   const theme = resolveTheme(agent.workspaceRoot);
   const banner = renderBanner(
     buildBannerInputs(config, agent, mcpClient),

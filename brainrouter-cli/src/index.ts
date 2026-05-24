@@ -54,6 +54,34 @@ process.emitWarning = ((warning: string | Error, ...rest: any[]) => {
   return (originalEmitWarning as any)(warning, ...rest);
 }) as typeof process.emitWarning;
 
+/**
+ * Crash diagnostics — surface ANY exit reason so the user (or we) can
+ * see WHY the process died if the REPL ever silently quits. The
+ * symptom the user reported was "REPL prints banner, then bash prompt"
+ * with no error. If that happens again under any future regression,
+ * one of these handlers will catch it and print the cause.
+ *
+ * `BRAINROUTER_DEBUG_EXIT=1` (default off) enables verbose exit tracing
+ * including the beforeExit event so we can see whether the event loop
+ * drained (= stdin refcount issue) vs explicit process.exit (= bug).
+ */
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`\n[brainrouter] Uncaught exception killed the process:\n${err?.stack ?? err}\n`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason: any) => {
+  process.stderr.write(`\n[brainrouter] Unhandled promise rejection killed the process:\n${reason?.stack ?? reason}\n`);
+  process.exit(1);
+});
+if (process.env.BRAINROUTER_DEBUG_EXIT === '1') {
+  process.on('beforeExit', (code) => {
+    process.stderr.write(`[brainrouter:debug] beforeExit code=${code} (event loop drained — likely Ink stdin.unref leak)\n`);
+  });
+  process.on('exit', (code) => {
+    process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
+  });
+}
+
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
