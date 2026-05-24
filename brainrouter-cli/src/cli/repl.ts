@@ -304,20 +304,22 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     if (isPickerActive() || isInternalPickerActive()) return;
     slashPaletteOpen = true;
     rl.pause();
+    // Erase the visible readline prompt + the typed `/` BEFORE Ink
+    // takes over the screen — otherwise the prompt + `/` echo on the
+    // same row as the palette's top divider. `\r` goes to col 0,
+    // `\x1b[K` clears to end of line. (Without this the user sees
+    // `brainrouter[…]> /─────────────...` instead of a clean palette.)
+    try { process.stdout.write('\r\x1b[K'); } catch { /* ignore */ }
     try {
       const result = await runSlashPalette({
         initialQuery: '/',
         commands: slashCatalog,
-        accentColor: theme.primary(' ').match(/\x1b\[38;2;(\d+);(\d+);(\d+)m/)
-          ? '#CC9166'
-          : '#CC9166',
+        accentColor: '#CC9166',
       });
       if (result.kind === 'submit') {
         // Feed the chosen command back to readline so the existing
         // line handler processes it as if the user typed + Enter.
-        // We can't use rl.write because we want the line handler
-        // semantics (not just insertion); emit('line', text) is the
-        // direct path.
+        slashPaletteOpen = false;
         rl.resume();
         rl.emit('line', result.text);
         return;
@@ -326,6 +328,8 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       console.error(chalk.red(`\nSlash palette error: ${(err as Error)?.message ?? err}\n`));
     } finally {
       slashPaletteOpen = false;
+      // runSlashPalette already ran resetStdinForReadline, so just
+      // re-prompt — readline can drive input from here.
       rl.resume();
       rl.prompt(true);
     }
@@ -619,7 +623,17 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       turnSpinner.succeed(chalk.green(`Done!${chalk.gray(` ${elapsed}s`)}${tokenSummary}`));
       const prefsForRender = readPreferences(agent.workspaceRoot);
       const rendered = prefsForRender.rawScrollback ? answer : marked.parse(answer);
-      console.log('\n' + rendered + '\n');
+      // claude-code-style assistant turn prefix: `⏺ ` on the FIRST
+      // line of the response, indent continuation lines under it.
+      // Visual reference: openSrc/claude-code/CHANGELOG.md (CHANGELOG
+      // doesn't name the glyph but every assistant turn in claude-code
+      // is bulleted with ⏺). Matches the user's quoted transcript.
+      const renderedStr = typeof rendered === 'string' ? rendered : String(rendered);
+      const lines = renderedStr.trimEnd().split('\n');
+      const assistantBlock = lines.length === 0
+        ? ''
+        : lines.map((line, i) => i === 0 ? `${theme.success('⏺')} ${line}` : `  ${line}`).join('\n');
+      console.log('\n' + assistantBlock + '\n');
       const warning = agent.takeContradictionWarning();
       if (warning) {
         console.log(chalk.yellow(`⚠️  Memory: ${warning}`));

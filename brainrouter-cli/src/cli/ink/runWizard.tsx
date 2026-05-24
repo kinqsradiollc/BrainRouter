@@ -10,6 +10,7 @@ import { writePreferences } from '../../state/preferencesStore.js';
 import { loadOrInitConfig, saveConfig, type Config } from '../../config/config.js';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
 import { NoTTYError } from '../cliPrompt.js';
+import { resetStdinForReadline } from './stdinHandoff.js';
 
 const ONBOARDED_MARKER = path.join(os.homedir(), '.config', 'brainrouter', '.onboarded');
 
@@ -53,9 +54,15 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
   }
 
   const finalState = await new Promise<WizardState>((resolve) => {
+    let captured: WizardState | undefined;
     const instance = render(
       <WizardApp workspaceRoot={opts.workspaceRoot} onFinish={(s) => {
-        resolve(s);
+        // Capture but DON'T resolve yet — we want to wait for Ink's
+        // own unmount to complete (next tick) before handing stdin
+        // back to readline. Resolving prematurely would let our
+        // caller try to read stdin while Ink is still tearing down,
+        // which breaks the next readline.createInterface.
+        captured = s;
       }} />,
       {
         // Don't put Ink's output into the alt-screen buffer — we want
@@ -65,7 +72,19 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
         exitOnCtrlC: true,
       },
     );
-    instance.waitUntilExit().catch(() => { /* swallow */ });
+    instance.waitUntilExit().then(() => {
+      // Hand stdin back to the caller in a state where readline (or
+      // anything else) can take it. Ink leaves stdin unref'd, in raw
+      // mode false, with its 'readable' listener removed; without
+      // this reset the post-wizard REPL would print its banner and
+      // then immediately exit because nothing kept the event loop
+      // alive. See cli/ink/stdinHandoff.ts for the full rationale.
+      resetStdinForReadline();
+      resolve(captured ?? { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] } as WizardState);
+    }).catch(() => {
+      resetStdinForReadline();
+      resolve(captured ?? { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] } as WizardState);
+    });
   });
 
   let savedConfig: Config | undefined;
