@@ -1537,6 +1537,7 @@ export class Agent {
       sessionKey: this.sessionKey,
       instructionSummary: loadWorkspaceInstructionSummary(this.workspaceRoot),
       personality: prefs.personality,
+      activeSkill: this.activeSkill,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);

@@ -596,10 +596,15 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     } finally {
       isProcessing = false;
       // Clear any active skill latched by /skill / /feature-dev / /spec /
-      // /review / /implement-plan so subsequent plain prompts don't keep
-      // spiking the same skill. The skill memetic potential still decays
-      // server-side on its own half-life; this just stops attribution.
+      // /review / /implement-plan / /grill-me so subsequent plain prompts
+      // don't keep spiking the same skill. The skill memetic potential
+      // still decays server-side on its own half-life; this just stops
+      // attribution. Also refresh the system prompt so skill-conditional
+      // overlays (e.g. grill-me's CLARIFY block) disappear from
+      // chatHistory[0] before the user's next prompt — otherwise the
+      // model would see "do not make file edits" carrying over.
       agent.activeSkill = undefined;
+      agent.refreshSystemPrompt();
 
       // Auto-continuation logic. Rules:
       //   - the goal must be active (not paused / complete / blocked / usage_limited)

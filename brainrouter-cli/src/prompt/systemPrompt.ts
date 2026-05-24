@@ -8,6 +8,14 @@ export interface SystemPromptContext {
   instructionSummary?: string;
   /** Communication style overlay set by /personality. */
   personality?: 'concise' | 'standard' | 'detailed' | 'pair-programmer';
+  /**
+   * Name of the active BrainRouter skill latched by a slash command (e.g.
+   * `/spec`, `/feature-dev`, `/grill-me`). Most skills are workflow
+   * directives the model loads via `get_skill` and don't change the system
+   * prompt — `grill-me` is the exception: it appends a CLARIFY-mode block
+   * here so the model asks questions instead of jumping to edits.
+   */
+  activeSkill?: string;
 }
 
 function personalityOverlay(style: SystemPromptContext['personality']): string {
@@ -36,6 +44,24 @@ function personalityOverlay(style: SystemPromptContext['personality']): string {
     default:
       return '';
   }
+}
+
+function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string {
+  // `/grill-me` is the only skill whose runtime behavior lives entirely in
+  // this overlay (no SKILL.md package). Tight on purpose: the model needs to
+  // know what's banned, how many questions to ask, which primitives to use,
+  // and what to end with. askYesNo is intentionally flagged as non-callable
+  // — it's a CLI-internal gate the framework triggers, not a tool the model
+  // can emit.
+  if (activeSkill !== 'grill-me') return '';
+  return [
+    '## CLARIFY mode (grill-me)',
+    '- Do NOT make file edits, run shell commands, or spawn worker agents this turn.',
+    '- Ask 2–5 questions to disambiguate scope, format, and unstated assumptions.',
+    '- Prefer `ask_user_choice` for mutually-exclusive options; plain prose for free-form input.',
+    '- (`askYesNo` is a CLI-internal gate the framework triggers — do NOT try to call it as a tool.)',
+    '- End with a one-paragraph "what I\'ll do once you answer" so the user can sanity-check the read.',
+  ].join('\n');
 }
 
 export function buildSystemPrompt(context: SystemPromptContext): string {
@@ -182,6 +208,7 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     '- The CLI persists per-session state under .brainrouter/cli/sessions/<encodedKey>/ (transcript.jsonl, goal.json, tasks.json) for inspection and future orchestration.',
     '',
     personalityOverlay(context.personality),
+    clarifyOverlay(context.activeSkill),
   ].join('\n');
 }
 
