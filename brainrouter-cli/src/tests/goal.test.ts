@@ -467,6 +467,131 @@ test('Item 1 regression guard: with no workflow bound, session A goal still does
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: migration on first /workflow switch
+// -----------------------------------------------------------------------
+
+test('migrateSessionGoalToWorkflow: moves session goal into target folder; idempotent on re-run', async () => {
+  const { migrateSessionGoalToWorkflow } = await import('../state/goalStore.js');
+  const { getWorkflowDir, createWorkflow } = await import('../state/workflowArtifacts.js');
+  const { getSessionStateFile } = await import('../state/cliState.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:migrate-free';
+    // Set a session-scoped goal first (no workflow bound).
+    setGoal(workspace, 'land the migration test', sk);
+
+    // Create a target workflow but do NOT mark it current (so the resolver
+    // still resolves to session scope for setGoal above — the test would
+    // otherwise route into the workflow folder immediately). For this test,
+    // we set the goal first, then create the target.
+    const target = createWorkflow(workspace, { title: 'target work', kind: 'feature-dev' });
+    // createWorkflow flips the pointer to `target`; that's the realistic
+    // switch sequence. The session bucket still holds the goal at this point.
+
+    const sessionPath = getSessionStateFile(workspace, sk, 'goal.json');
+    assert.ok(fs.existsSync(sessionPath), 'session goal should exist pre-migration');
+
+    const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(outcome.migrated, true);
+    assert.equal(outcome.conflict, undefined);
+
+    // Target now has the goal; session bucket is cleared.
+    const targetGoal = JSON.parse(
+      fs.readFileSync(path.join(getWorkflowDir(workspace, target.slug), 'goal.json'), 'utf8'),
+    );
+    assert.equal(targetGoal.text, 'land the migration test');
+    const sessionRaw = fs.readFileSync(sessionPath, 'utf8').trim();
+    assert.ok(sessionRaw === 'null' || sessionRaw === '');
+
+    // Second invocation is a no-op — session bucket is empty.
+    const again = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(again.migrated, false);
+  });
+});
+
+test('migrateSessionGoalToWorkflow: surfaces conflict when target already has an active goal', async () => {
+  const { migrateSessionGoalToWorkflow } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:migrate-conflict';
+    // Workflow target with its own goal.
+    const target = createWorkflow(workspace, { title: 'busy workflow', kind: 'spec' });
+    setGoal(workspace, 'target keeps working on auth', sk);
+
+    // Flip back to no-workflow scope and set a session goal.
+    setCurrentWorkflow(workspace, ''); // empty slug → effectively no workflow bound for the resolver
+    // (Note: getCurrentWorkflow returns '' which is falsy, so the resolver falls to session.)
+    setGoal(workspace, 'session is exploring caching', sk);
+
+    // Flip the pointer back to the target — that's what /workflow switch
+    // would do BEFORE running migration. The session bucket still has its
+    // goal at this point (workflow scope didn't write it).
+    setCurrentWorkflow(workspace, target.slug);
+
+    const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(outcome.migrated, false);
+    assert.equal(outcome.conflict, 'target-has-active-goal');
+    assert.equal(outcome.source?.text, 'session is exploring caching');
+    assert.equal(outcome.target?.text, 'target keeps working on auth');
+  });
+});
+
+test('applyMigrationResolution(keep-target): archives session goal into .brainrouter.migrated/, clears session bucket', async () => {
+  const { migrateSessionGoalToWorkflow, applyMigrationResolution } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  const { getCliStateDir, getSessionStateFile } = await import('../state/cliState.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:keep-target';
+    const target = createWorkflow(workspace, { title: 'target', kind: 'feature-dev' });
+    setGoal(workspace, 'target goal', sk);
+    setCurrentWorkflow(workspace, '');
+    setGoal(workspace, 'session goal', sk);
+    setCurrentWorkflow(workspace, target.slug);
+
+    const conflict = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(conflict.conflict, 'target-has-active-goal');
+
+    const resolved = applyMigrationResolution(workspace, sk, target.slug, 'keep-target');
+    assert.equal(resolved.migrated, false);
+    assert.ok(resolved.archivedPath, 'expected an archive path for the rejected session goal');
+    assert.ok(resolved.archivedPath!.includes('.brainrouter.migrated'));
+
+    // Target's goal stayed.
+    const onTarget = JSON.parse(fs.readFileSync(getWorkflowGoalFile(workspace, target.slug), 'utf8'));
+    assert.equal(onTarget.text, 'target goal');
+    // Session bucket is cleared.
+    const sessionRaw = fs.readFileSync(getSessionStateFile(workspace, sk, 'goal.json'), 'utf8').trim();
+    assert.ok(sessionRaw === 'null' || sessionRaw === '');
+    // Archive lives in CLI state dir, not the workspace tree (Item 1 invariant).
+    assert.ok(resolved.archivedPath!.startsWith(getCliStateDir(workspace)));
+    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
+  });
+});
+
+test('applyMigrationResolution(import-session): archives target goal, moves session goal into target folder', async () => {
+  const { migrateSessionGoalToWorkflow, applyMigrationResolution } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:import-session';
+    const target = createWorkflow(workspace, { title: 'target', kind: 'feature-dev' });
+    setGoal(workspace, 'target goal', sk);
+    setCurrentWorkflow(workspace, '');
+    setGoal(workspace, 'session goal', sk);
+    setCurrentWorkflow(workspace, target.slug);
+
+    migrateSessionGoalToWorkflow(workspace, sk, target.slug); // surfaces conflict
+    const resolved = applyMigrationResolution(workspace, sk, target.slug, 'import-session');
+    assert.equal(resolved.migrated, true);
+    assert.ok(resolved.archivedPath, 'target goal should be archived when overwritten');
+
+    const onTarget = JSON.parse(fs.readFileSync(getWorkflowGoalFile(workspace, target.slug), 'utf8'));
+    assert.equal(onTarget.text, 'session goal');
+    // Verify the archived target payload is recoverable.
+    const archived = JSON.parse(fs.readFileSync(resolved.archivedPath!, 'utf8'));
+    assert.equal(archived.text, 'target goal');
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {
