@@ -486,10 +486,74 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         }
         return true;
       }
-      // /workflow pause + /workflow resume <slug> land in Subtask 5 — they
-      // share this dispatcher but represent a distinct surface.
+      if (sub === 'pause') {
+        const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
+        if (!currentSlug) {
+          console.log(chalk.yellow('\nNo current workflow to pause. Use /workflow switch <slug> first.\n'));
+          return true;
+        }
+        const g = pauseGoal(agent.workspaceRoot, agent.sessionKey);
+        if (!g) {
+          console.log(chalk.yellow(`\nWorkflow "${currentSlug}" has no goal to pause.\n`));
+          return true;
+        }
+        agent.refreshSystemPrompt();
+        const titlePreview = g.text.length > 60 ? g.text.slice(0, 60) + '…' : g.text;
+        console.log(chalk.yellow(`\n⏸  Paused workflow "${currentSlug}" (goal: ${titlePreview}).`));
+        console.log(chalk.gray(`    /workflow resume ${currentSlug}  to come back here.\n`));
+        return true;
+      }
+      if (sub === 'resume') {
+        const targetSlug = (args[1] ?? '').trim();
+        if (!targetSlug) {
+          console.log(chalk.red('\nUsage: /workflow resume <slug>\n'));
+          return true;
+        }
+        if (!workflowExists(agent.workspaceRoot, targetSlug)) {
+          console.log(chalk.red(`\nNo such workflow: "${targetSlug}".\n`));
+          return true;
+        }
+        // /workflow resume <slug> is sugar for /workflow switch <slug> +
+        // /goal resume. Re-uses the planning + migration steps so the same
+        // conflict handling applies. The keep-target default (no askYesNo
+        // here — resume is meant to be a single-shot recovery action) keeps
+        // resume terse; if the user wants the import branch they can run
+        // /workflow switch <slug> manually.
+        try {
+          const plan = planWorkflowSwitch(agent.workspaceRoot, agent.sessionKey, targetSlug);
+          if (plan.needsMigration) {
+            const outcome = migrateSessionGoalToWorkflow(agent.workspaceRoot, agent.sessionKey, targetSlug);
+            if (outcome.conflict === 'target-has-active-goal') {
+              console.log(chalk.yellow(
+                `\n⚠️  Target workflow "${targetSlug}" already has an active goal — resume keeps it, archiving the session's.`,
+              ));
+              applyMigrationResolution(agent.workspaceRoot, agent.sessionKey, targetSlug, 'keep-target');
+            }
+          }
+          setCurrentWorkflow(agent.workspaceRoot, targetSlug);
+          const resumed = resumeGoal(agent.workspaceRoot, agent.sessionKey);
+          agent.removeTaggedSystemMessage('goal-budget-steering');
+          agent.refreshSystemPrompt();
+          if (!resumed) {
+            console.log(chalk.green(`\n▶  Switched to workflow "${targetSlug}" — no goal to resume.\n`));
+            return true;
+          }
+          console.log(chalk.green(
+            `\n▶  Resumed workflow "${targetSlug}" (${resumed.budget.iterationsUsed}/${formatBudget(resumed.budget.maxIterations)} used). Firing next iteration…\n`,
+          ));
+          ctx.repl.runAgentTurn(buildGoalKickoffPrompt(resumed, 'resume'));
+          return true;
+        } catch (err: any) {
+          if (err instanceof WorkflowConflictError) {
+            console.log(chalk.red(`\n⚠️  ${err.message}\n`));
+          } else {
+            console.log(chalk.red(`\n✗ ${err?.message ?? err}\n`));
+          }
+          return true;
+        }
+      }
       console.log(chalk.red(`\nUnknown /workflow subcommand: "${sub}".`));
-      console.log(chalk.gray('  Subcommands: switch <slug>\n'));
+      console.log(chalk.gray('  Subcommands: switch <slug> | pause | resume <slug>\n'));
       return true;
     }
     case '/workflows':
