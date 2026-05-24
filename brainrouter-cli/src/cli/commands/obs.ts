@@ -7,7 +7,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
-import ora from 'ora';
 import { listSessions } from '../../orchestration/orchestrator.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';

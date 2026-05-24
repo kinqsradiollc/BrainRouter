@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { formatBudget, readGoal, readWorkflowGoal } from '../state/goalStore.js';
+import { formatBudget, readGoal } from '../state/goalStore.js';
 import { readPlan } from '../state/taskStore.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
@@ -48,6 +48,7 @@ export const SEGMENT_NAMES = [
   'workflow',
   'goal',
   'plan',
+  'brain',
 ] as const;
 
 export type SegmentName = typeof SEGMENT_NAMES[number];
@@ -60,6 +61,14 @@ export interface SegmentInputs {
   lastTurnUsage: { calls: number; promptTokens: number; completionTokens: number };
   /** Optional GitHub PR identifier (e.g. "#42"). REPL caches the gh shell-out, so this is precomputed. */
   prDetector?: () => string | null;
+  /**
+   * 10c: brain-status detector (renders `brain` segment). REPL wires this
+   * up by closing over the live `mcpClient.isConnected()` +
+   * `mcpClient.getIdentity()` calls. Returns `'online'` / `'offline'` /
+   * `'degraded'` when the active MCP is the BrainRouter brain, and
+   * `undefined` otherwise so the segment hides for third-party MCPs.
+   */
+  brainStatus?: () => 'online' | 'offline' | 'degraded' | undefined;
 }
 
 export function isKnownSegment(name: string): name is SegmentName {
@@ -130,20 +139,15 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
     case 'pr':
       return inputs.prDetector?.() ?? undefined;
     case 'workflow': {
-      // Item 3 (0.3.6): when the bound workflow's goal is paused / blocked /
-      // usage_limited, annotate the slug so the prompt-line scans the
-      // halt-state without forcing the user to also enable the `goal`
-      // segment. Active goals + no goal both render as bare `wf:<slug>` to
-      // keep the common case quiet.
+      // The workflow segment is a pure navigation indicator: "which
+      // workflow folder is this session writing artifacts to right now?"
+      // Post-goal/workflow-decoupling (0.3.6) it does NOT carry a goal
+      // status suffix — goals live at session scope (the `goal` segment),
+      // workflows live at folder scope. Two orthogonal concerns.
       try {
-        const slug = getCurrentWorkflow(inputs.workspaceRoot);
+        const slug = getCurrentWorkflow(inputs.workspaceRoot, inputs.sessionKey);
         if (!slug) return undefined;
-        const goal = readWorkflowGoal(inputs.workspaceRoot, slug);
-        if (!goal || goal.status === 'active' || goal.status === 'complete') {
-          return `wf:${slug}`;
-        }
-        const tag = goal.status === 'usage_limited' ? 'limited' : goal.status;
-        return `wf:${slug} (${tag})`;
+        return `wf:${slug}`;
       } catch {
         return undefined;
       }
@@ -168,6 +172,23 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
         if (!plan.items.length) return undefined;
         const done = plan.items.filter((i) => i.status === 'completed').length;
         return `plan:${done}/${plan.items.length}`;
+      } catch {
+        return undefined;
+      }
+    }
+    case 'brain': {
+      // 10c: only render when the active MCP is identified as BrainRouter
+      // AND its state is non-default. The `brainStatus` detector returns
+      // `undefined` for third-party MCPs (no brain to surface) and for
+      // BrainRouter-online (default state — hide-when-default mirrors the
+      // `exec` + `effort` pattern). Visible states: `offline` (red signal),
+      // `degraded` (yellow signal — 10d local-only fallback).
+      try {
+        const state = inputs.brainStatus?.();
+        if (!state || state === 'online') return undefined;
+        if (state === 'offline') return 'brain:🔴';
+        if (state === 'degraded') return 'brain:🟡';
+        return undefined;
       } catch {
         return undefined;
       }

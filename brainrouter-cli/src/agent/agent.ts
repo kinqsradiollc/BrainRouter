@@ -482,6 +482,28 @@ export class Agent {
   private recalledRecordIds: string[] = [];
   private recalledRecords: RecalledRecord[] = [];
   private lastBriefingSources: string[] = [];
+  /**
+   * 10b: latest MCP tool inventory captured by `listTools()` calls. Used by
+   * `createSystemMessage` to decide whether the BrainRouter memory section
+   * should render — when `memory_recall` is missing from this list (the
+   * cloud brain is offline), the prompt swaps to a brain-offline notice so
+   * the model doesn't try to call tools that aren't there. Undefined until
+   * the first successful list; treated as "assume online" by the prompt
+   * builder until then (back-compat for callers that don't list pre-turn).
+   */
+  private lastKnownMcpTools?: Array<{ name: string }>;
+  /**
+   * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
+   * first successful briefing injection so subsequent turns can skip the
+   * fresh recall pull unless a gated trigger fires. `recallNextTurnIsPost-
+   * Compaction` is set by `compactHistory()` to force the next turn through
+   * the full briefing path (compaction just dropped the prior briefing as
+   * collateral; replay it once so the model isn't blind). Both are
+   * cleared on `loadHistory` / `fork` / `bootstrapSession` so a fresh
+   * session re-pulls.
+   */
+  private recallHasFiredThisSession = false;
+  private recallNextTurnIsPostCompaction = false;
   private roleOverlay?: string;
   private accessMode: AccessMode;
   private silent: boolean;
@@ -598,6 +620,16 @@ export class Agent {
     } catch (err: any) {
       // Non-fatal: continue with local tools only
     }
+    // 10b: cache the inventory so `createSystemMessage` can render a
+    // brain-online vs brain-offline prompt. Refresh chatHistory[0]
+    // whenever the inventory shape changed (online → offline or vice
+    // versa) so the next LLM call sees the correct system message.
+    const prevTools = this.lastKnownMcpTools?.map((t) => t.name).sort().join(',');
+    this.lastKnownMcpTools = mcpTools.map((t: any) => ({ name: t.name }));
+    const newTools = this.lastKnownMcpTools.map((t) => t.name).sort().join(',');
+    if (prevTools !== newTools && this.chatHistory.length > 0 && this.chatHistory[0].role === 'system') {
+      this.chatHistory[0] = this.createSystemMessage();
+    }
 
     const allowed = this.allowedToolsForAccess();
     const filteredLocalTools = LOCAL_TOOLS.filter(t => allowed.has(t.name));
@@ -665,15 +697,16 @@ export class Agent {
 
     // Per-turn goal anchor: re-inject a FRESH goal block at the end of the
     // chatHistory's system messages (replaceTaggedSystemMessage appends), so
-    // it lands right before the user prompt. The goal block is also embedded
-    // in the FIRST system message (via createSystemMessage), but during a
-    // long /goal continuation loop that initial block recedes — tool results,
-    // explorer outputs, and prior assistant turns pile up between it and the
-    // current prompt, and the model's attention drifts. This per-turn re-push
-    // keeps the goal in immediate-context distance every iteration, with the
-    // up-to-date iteration counter, which is the single biggest fix for
-    // "agent forgot its main goal" hallucination in long auto-continuation
-    // loops.
+    // it lands right before the user prompt. Pre-9d the goal block was ALSO
+    // embedded in the foundational system message (via createSystemMessage),
+    // which meant every turn carried two copies; 9d made this anchor the
+    // single source — `createSystemMessage` no longer touches goal state.
+    // The fresh re-push every iteration keeps the up-to-date iteration
+    // counter in immediate-context distance and prevents the long /goal
+    // continuation-loop drift that PR #26 originally addressed. The anchor
+    // also auto-folds the final-budget-turn wrap-up directive (via
+    // `formatGoalBlock`'s internal `goalIsOnFinalBudgetTurn` check), so
+    // the separate `goal-budget-steering` tagged message is gone too.
     if (!this.silent) {
       const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
       if (activeGoal?.text && activeGoal.status === 'active') {
@@ -1362,6 +1395,10 @@ export class Agent {
     if (lastUserMessage) next.push({ role: 'user', content: lastUserMessage });
     this.chatHistory = next;
     this.initialized = true;
+    // 9b: compaction just dropped the prior briefing as collateral —
+    // force the next turn through the full recall path even in gated
+    // mode so the model isn't blind to what was load-bearing.
+    this.recallNextTurnIsPostCompaction = true;
     return { ...result, replacedMessages: before };
   }
 
@@ -1399,6 +1436,10 @@ export class Agent {
       });
     this.chatHistory = [this.createSystemMessage(), ...replay];
     this.initialized = true;
+    // 9b: a freshly-loaded history is a session boundary; reset gated
+    // recall state so the next turn refreshes the briefing.
+    this.recallHasFiredThisSession = false;
+    this.recallNextTurnIsPostCompaction = false;
     return replay.length;
   }
 
@@ -1495,6 +1536,9 @@ export class Agent {
       offloadCharsAvoided: 0,
       recallRecordsConsulted: 0,
     };
+    // 9b: session-boundary reset for gated recall.
+    this.recallHasFiredThisSession = false;
+    this.recallNextTurnIsPostCompaction = false;
   }
 
   /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
@@ -1557,6 +1601,13 @@ export class Agent {
 
   private createSystemMessage() {
     const prefs = readPreferences(this.workspaceRoot);
+    // 10b: pass the connected MCP tool inventory so `buildSystemPrompt`
+    // can omit the BrainRouter memory section when the brain is offline.
+    // The cached `lastKnownMcpTools` is populated by every successful
+    // `listTools()` (see `runTurn` and `bootstrapSession`); when no tools
+    // have been seen yet, leave it undefined — `buildSystemPrompt` treats
+    // that as "assume brain online" for back-compat.
+    const connectedMcpTools = this.lastKnownMcpTools?.map((t) => t.name);
     const base = this.systemPromptOverride ?? buildSystemPrompt({
       workspaceRoot: this.workspaceRoot,
       launchCwd: this.launchCwd,
@@ -1567,16 +1618,18 @@ export class Agent {
       executionMode: prefs.executionMode,
       reviewPolicy: prefs.reviewPolicy,
       effort: resolveEffort(this.workspaceRoot).effort,
+      connectedMcpTools,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
-    // Sticky goal lives on disk so it survives CLI restarts; injected here so
-    // every turn (including the first after `/resume`) sees it. Goals are
-    // scoped to the current sessionKey so /side and /fork don't drag their
-    // parent's goal along, but a workspace-level legacy goal still works as a
-    // fallback for sessions that don't have one yet.
-    const goal = readGoal(this.workspaceRoot, this.sessionKey);
-    if (goal?.text) parts.push(formatGoalBlock(goal));
+    // Goal text used to be appended here AND re-pushed as a per-turn
+    // `goal-anchor` tagged system message (runTurn around line 680), which
+    // meant the whole goal block landed in the prompt twice every turn.
+    // 9d removed the duplicate; the per-turn anchor is the single owner
+    // of goal state (text, status, budget, contract reminders, and the
+    // final-budget wrap-up directive). `runTurn` re-injects it via
+    // `formatGoalBlock` immediately before the user message is appended,
+    // so even first-turn-after-`/resume` sees the goal.
     return { role: 'system', content: parts.join('\n\n') };
   }
 
@@ -1589,7 +1642,63 @@ export class Agent {
       return;
     }
 
+    // 9b: gate recall instead of firing unconditionally every turn. Pre-9b
+    // every turn paid ~3-10K tokens for a fresh briefing even when the user
+    // message was "thanks" or "/help". The new default `gated` mode fires
+    // recall only when it's likely to pay off:
+    //   - turn 1 of the session (no prior briefing)
+    //   - the turn immediately after auto-compaction (the model just lost
+    //     context — give it back what was load-bearing)
+    //   - when the user message names ≥2 entity-shaped tokens (proper
+    //     nouns, file paths, identifiers) suggesting they're asking about
+    //     something specific that memory might have history on
+    // The env knob `BRAINROUTER_RECALL_MODE=always|gated|off` lets users
+    // preserve pre-9b behaviour or kill recall entirely for benchmarking.
+    const recallMode = resolveRecallMode();
+    if (recallMode === 'off') {
+      this.recalledRecords = [];
+      this.recalledRecordIds = [];
+      this.lastBriefingSources = [];
+      callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'recallMode=off' });
+      return;
+    }
+
+    if (recallMode === 'gated') {
+      const isFirstTurn = !this.recallHasFiredThisSession;
+      const justCompacted = this.recallNextTurnIsPostCompaction;
+      const entityHits = countEntityTokens(prompt);
+      const hasEntityCue = entityHits >= 2;
+      if (!isFirstTurn && !justCompacted && !hasEntityCue) {
+        // Skip the full briefing — emit a lightweight system-reminder so
+        // the model knows it can pull memory itself if it needs to. The
+        // reminder is tagged so the next turn replaces it cleanly.
+        this.replaceTaggedSystemMessage(
+          'memory-hint',
+          [
+            '## Memory available (gated mode)',
+            'BrainRouter memory is available this turn but the auto-briefing was skipped (no first-turn / post-compaction / entity-cue trigger). Call `memory_recall` / `memory_search` / `memory_file_history` yourself if you need history on a specific entity, file, or decision.',
+          ].join('\n'),
+        );
+        this.recalledRecords = [];
+        this.recalledRecordIds = [];
+        this.lastBriefingSources = [];
+        callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'gated (no trigger)' });
+        return;
+      }
+      // Reset the post-compaction flag now that we're firing because of it.
+      this.recallNextTurnIsPostCompaction = false;
+    }
+
+    // Either `recallMode === 'always'` (preserves pre-9b behaviour) or
+    // we hit a gated trigger — fire the full briefing.
     callbacks.onStatusUpdate('Briefing from BrainRouter memory...');
+    // 9d: skip `memory_task_state` in the briefing when a goal-anchor is
+    // already carrying the current objective — avoids re-injecting the
+    // "what we're doing now" context twice. The anchor is set immediately
+    // before this call in `runTurn` (around line 680), so reading the goal
+    // here resolves to the same record the anchor used.
+    const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
+    const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
     const briefing = await buildMemoryBriefing({
       mcpClient: this.mcpClient,
       mcpTools,
@@ -1597,11 +1706,15 @@ export class Agent {
       workspaceRoot: this.workspaceRoot,
       query: prompt,
       activeSkill: this.activeSkill,
+      hasActiveGoal,
     });
 
     this.recalledRecords = briefing.recalledRecords;
     this.recalledRecordIds = briefing.recalledRecordIds;
     this.lastBriefingSources = briefing.sourcesQueried;
+    this.recallHasFiredThisSession = true;
+    // Drop any prior lightweight hint now that the full briefing is live.
+    this.removeTaggedSystemMessage('memory-hint');
 
     if (briefing.block) {
       this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
@@ -2153,6 +2266,51 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  * skipped here — brainrouter would need a separate provider adapter to
  * forward into Anthropic's native API.
  */
+
+/**
+ * 9b: resolve the recall-gating mode for this process. `BRAINROUTER_RECALL_MODE`
+ * env var beats everything; unset defaults to `gated`. Anything outside the
+ * three valid values falls back to `gated` (defensive — better to be helpful
+ * than crash on a typo). Re-resolved each turn so users can flip with
+ * `export BRAINROUTER_RECALL_MODE=always` mid-session via a /run command.
+ */
+export function resolveRecallMode(): 'always' | 'gated' | 'off' {
+  const raw = (process.env.BRAINROUTER_RECALL_MODE ?? '').toLowerCase().trim();
+  if (raw === 'always' || raw === 'gated' || raw === 'off') return raw;
+  return 'gated';
+}
+
+/**
+ * 9b: cheap local heuristic for "the user message names something specific
+ * memory might have history on." Counts entity-shaped tokens: proper nouns
+ * (capitalized words that aren't sentence-starting), file paths (anything
+ * with `/` or `\\` or a `.<ext>` suffix), and identifier-shaped tokens (`camelCase`
+ * / `snake_case` / `PascalCase` longer than 4 chars). Crude but the bar is
+ * "is recall plausibly worth it?" — false positives waste a recall call,
+ * false negatives waste an ask. Tunable threshold via the caller.
+ */
+export function countEntityTokens(text: string): number {
+  if (!text) return 0;
+  let count = 0;
+  // File paths and identifiers (`/` or `\`).
+  const pathMatches = text.match(/[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,8}(?![A-Za-z])|(?:[\w-]+\/){1,}[\w.-]+/g);
+  if (pathMatches) count += pathMatches.length;
+  // Identifier-shaped tokens longer than 4 chars (camelCase, snake_case, PascalCase).
+  const identMatches = text.match(/\b(?:[a-z]+[A-Z][A-Za-z0-9]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+|[a-z]+_[a-z][\w]+)\b/g);
+  if (identMatches) count += identMatches.length;
+  // Proper nouns (capitalized, not at sentence start, ≥3 chars). We split on
+  // sentence boundaries first so the first word of each sentence is skipped.
+  const sentences = text.split(/[.!?]\s+/);
+  for (const s of sentences) {
+    const words = s.split(/\s+/);
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i].replace(/[^A-Za-z]/g, '');
+      if (w.length >= 3 && /^[A-Z][a-z]+$/.test(w)) count++;
+    }
+  }
+  return count;
+}
+
 export function supportsReasoningEffortField(config: LLMConfig): boolean {
   // Normalize the model name: strip any `<vendor>/` prefix so OpenRouter /
   // LM Studio naming (`openai/gpt-oss-20b`, `mistralai/magistral-small`,

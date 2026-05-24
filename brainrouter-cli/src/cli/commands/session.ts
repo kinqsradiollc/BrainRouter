@@ -85,9 +85,12 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
           // before/after. Just unpause and kick off the next iteration.
           const reactivated = resumeGoal(agent.workspaceRoot, sessionKey);
           if (reactivated) {
-            // Same rationale as /goal resume — drop any stale wrap-up
-            // steering left over from the budget-trigger that paused us.
-            agent.removeTaggedSystemMessage('goal-budget-steering');
+            // 9d: pre-9d this branch had to drop a `goal-budget-steering`
+            // tagged system message left over from a budget-trigger pause.
+            // That message no longer exists — the wrap-up directive is
+            // folded into the goal-anchor and the anchor is re-rendered
+            // by the next runTurn. `refreshSystemPrompt` is still useful
+            // here to rebuild any overlays that depend on the active goal.
             agent.refreshSystemPrompt();
             console.log(chalk.green(`\n▶  Goal resumed (${reactivated.budget.iterationsUsed}/${reactivated.budget.maxIterations} used). Starting next iteration…\n`));
             ctx.repl.runAgentTurn(buildGoalKickoffPrompt(reactivated, 'resume'));

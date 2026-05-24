@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCliStateFile, getWorkspaceLocalDir, isPathInside, readJsonFile, writeJsonFile } from './cliState.js';
+import { getCliStateFile, getSessionStateFile, getWorkspaceLocalDir, isPathInside, readJsonFile, writeJsonFile } from './cliState.js';
 
 /**
  * Canonical home for durable workflow artifacts produced by the multi-agent
@@ -19,13 +19,43 @@ import { getCliStateFile, getWorkspaceLocalDir, isPathInside, readJsonFile, writ
  * team shares them, and (b) the agent's `write_file` tool only accepts paths
  * relative to the workspace root. Personal CLI state (sessions, hooks,
  * memories, preferences) lives in `~/.brainrouter/workspaces/<encoded>/` and
- * never touches the project tree. The current-workflow pointer is still per-
- * user (it tracks which workflow YOU are focused on right now) so it lives
- * with the CLI state, not the workspace.
+ * never touches the project tree.
+ *
+ * **Workflows do NOT carry goal state.** Earlier 0.3.6 (Item 3) stored a
+ * `goal.json` inside each workflow folder so switching workflows would
+ * "carry the goal with it." That conflated two different concerns — a goal
+ * is **per-session runtime intent** (let the agent run autonomously until
+ * complete) while a workflow is **durable storage** (committed artifacts
+ * shared across users and CLIs). The conflation produced a cross-session
+ * goal leak (two CLIs in the same workspace bound to the same workflow
+ * shared a goal). The decoupling lives in goalStore.ts's `resolveGoalScope`
+ * — goals are always session-scoped, workflows are pure navigation. The
+ * per-session `workflow.json` pointer here is for "which folder am I
+ * writing artifacts to RIGHT NOW", not "which goal am I working on."
  */
 
 const WORKFLOWS_SUBDIR = 'workflows';
+/**
+ * Workspace-level "last used workflow" pointer. Pre-9d-bugfix this was
+ * BOTH the source of truth for "which workflow is the current CLI
+ * session bound to" AND the display-only "what was the last workflow
+ * touched in this workspace" hint. The two responsibilities are now
+ * split: this file is the hint (any CLI in this workspace can see it),
+ * while `SESSION_POINTER_FILE` carries the per-session binding that
+ * actually drives goal scoping. The hint is still useful for the
+ * `/workflows` listing and for surfacing "you were last on X" in a
+ * fresh CLI without auto-binding it to that workflow's goal.
+ */
 const CURRENT_POINTER_FILE = 'current-workflow.json';
+/**
+ * Per-session workflow binding (the actual source of truth for goal
+ * scoping). Lives under the session state directory so two CLIs in the
+ * same workspace can have independent workflows bound — fixes the
+ * "session A's `/feature-dev` automatically becomes session B's active
+ * workflow + active goal" leak that reintroduced Item 1's cross-session
+ * leak via the Item 3 workspace pointer.
+ */
+const SESSION_POINTER_FILE = 'workflow.json';
 
 export interface WorkflowMeta {
   slug: string;
@@ -74,9 +104,19 @@ export function getWorkflowDir(workspaceRoot: string, slug: string): string {
   return dir;
 }
 
+/**
+ * Create (or reopen) a workflow folder + bind it as the current
+ * workflow.
+ *
+ * `sessionKey` is threaded through to `setCurrentWorkflow` so that the
+ * created workflow is bound to THIS session (not to every other CLI
+ * session in the workspace via the workspace-level pointer). Legacy
+ * callers without a session context fall through to workspace-level
+ * binding only — same back-compat path `setCurrentWorkflow` provides.
+ */
 export function createWorkflow(
   workspaceRoot: string,
-  input: { title: string; kind: WorkflowMeta['kind']; slug?: string },
+  input: { title: string; kind: WorkflowMeta['kind']; slug?: string; sessionKey?: string },
 ): WorkflowMeta {
   const slug = slugify(input.slug ?? input.title);
   const dir = getWorkflowDir(workspaceRoot, slug);
@@ -98,7 +138,7 @@ export function createWorkflow(
     if (input.kind) meta.kind = input.kind;
   }
   writeJsonFile(metaPath, meta);
-  setCurrentWorkflow(workspaceRoot, slug);
+  setCurrentWorkflow(workspaceRoot, slug, input.sessionKey);
   return meta;
 }
 
@@ -131,31 +171,76 @@ export function listWorkflows(workspaceRoot: string): WorkflowMeta[] {
   return out.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
 
-export function setCurrentWorkflow(workspaceRoot: string, slug: string): void {
-  writeJsonFile(getCliStateFile(workspaceRoot, CURRENT_POINTER_FILE), { slug, at: new Date().toISOString() });
+/**
+ * Bind a workflow to the current CLI session AND update the workspace-
+ * level "last used" hint. When `sessionKey` is omitted (legacy callers,
+ * some first-run paths), only the workspace pointer is written — those
+ * callers don't have a session context yet, so per-session binding
+ * doesn't apply.
+ *
+ * The workspace pointer is updated unconditionally because we still
+ * want a fresh CLI in the same workspace to be ABLE to see "X is the
+ * last workflow that was touched here" — for display via
+ * `getLastUsedWorkflow`, for the `/workflows` listing's `★` marker, and
+ * for the post-9d "do you want to switch to <X>?" UX (the latter not
+ * yet shipped, tracked separately).
+ */
+export function setCurrentWorkflow(workspaceRoot: string, slug: string, sessionKey?: string): void {
+  const ts = new Date().toISOString();
+  writeJsonFile(getCliStateFile(workspaceRoot, CURRENT_POINTER_FILE), { slug, at: ts });
+  if (sessionKey) {
+    writeJsonFile(getSessionStateFile(workspaceRoot, sessionKey, SESSION_POINTER_FILE), { slug, at: ts });
+  }
 }
 
-export function getCurrentWorkflow(workspaceRoot: string): string | undefined {
+/**
+ * Which workflow is bound to THIS CLI session?
+ *
+ * - With `sessionKey`: reads ONLY the session-level pointer. A fresh
+ *   CLI session has no session-level pointer → returns `undefined`,
+ *   even when a workspace-level "last used" hint exists. This is the
+ *   load-bearing fix: new sessions don't auto-inherit another session's
+ *   workflow binding (which previously dragged that workflow's goal
+ *   into the new session via `resolveGoalScope`).
+ * - Without `sessionKey` (legacy / display-only callers): falls back
+ *   to the workspace-level pointer for back-compat.
+ *
+ * Display surfaces that want to show "the last workflow touched here,
+ * regardless of session binding" should call `getLastUsedWorkflow`
+ * instead so the distinction stays explicit.
+ */
+export function getCurrentWorkflow(workspaceRoot: string, sessionKey?: string): string | undefined {
+  if (sessionKey) {
+    const sessionPtr = readJsonFile<{ slug?: string } | null>(
+      getSessionStateFile(workspaceRoot, sessionKey, SESSION_POINTER_FILE),
+      null,
+    );
+    return sessionPtr?.slug || undefined;
+  }
   const ptr = readJsonFile<{ slug?: string } | null>(getCliStateFile(workspaceRoot, CURRENT_POINTER_FILE), null);
   return ptr?.slug;
 }
 
 /**
- * Path to a workflow's bound `goal.json`. The goal lives ALONGSIDE
- * `meta.json` / `spec.md` inside the workflow folder so that switching
- * workflows carries the goal with it (Item 3 of the 0.3.6 cycle). When no
- * workflow is bound, callers fall back to the per-session goal path —
- * `resolveGoalScope` in goalStore.ts owns that fall-through.
- *
- * Pattern adapted from openSrc/bruno/packages/bruno-schema/src/collections/
- * — Bruno keeps the active-environment scalar inside the collection doc
- * rather than in a separate workspace-tree pointer, which avoids the stale-
- * pointer race we'd hit if `current-workflow.json` and `<workflow>/goal.json`
- * drifted. (The per-user current-workflow pointer is intentionally kept in
- * CLI state — it's per-user-per-machine, not part of the committed workflow.)
+ * Display-only "last workflow used in this workspace" lookup. Reads
+ * the workspace-level pointer unconditionally — never consults the
+ * session-level binding. Use when you want to render a hint like
+ * "you were last on workflow X" without implying that the current
+ * session is bound to it.
  */
-export function getWorkflowGoalFile(workspaceRoot: string, slug: string): string {
-  return path.join(getWorkflowDir(workspaceRoot, slug), 'goal.json');
+export function getLastUsedWorkflow(workspaceRoot: string): string | undefined {
+  const ptr = readJsonFile<{ slug?: string } | null>(getCliStateFile(workspaceRoot, CURRENT_POINTER_FILE), null);
+  return ptr?.slug;
+}
+
+/**
+ * Clear the session-level workflow binding (workspace-level hint
+ * preserved). Used by `/new` and `/fork` so a freshly-forked session
+ * doesn't drag the parent's binding along.
+ */
+export function clearSessionWorkflow(workspaceRoot: string, sessionKey: string): void {
+  const pointerPath = getSessionStateFile(workspaceRoot, sessionKey, SESSION_POINTER_FILE);
+  try { fs.unlinkSync(pointerPath); } catch { /* idempotent — no file to remove is fine */ }
 }
 
 /**
@@ -168,40 +253,6 @@ export function workflowExists(workspaceRoot: string, slug: string): boolean {
   const root = getWorkflowsRoot(workspaceRoot);
   const candidate = path.join(root, safeSlug, 'meta.json');
   return fs.existsSync(candidate);
-}
-
-/**
- * Lightweight conflict probe used by /feature-dev, /spec, /review BEFORE
- * they call createWorkflow. When the current pointer points at a DIFFERENT
- * workflow whose goal is `active`, returns the slug + a short summary so
- * the slash handler can askYesNo before clobbering it.
- *
- * Reads goal.json directly (not through goalStore.readWorkflowGoal) to
- * avoid a workflowArtifacts → goalStore import cycle. The fields we need
- * (status + text) are stable across the Goal schema's lifetime, so the
- * narrow shape on disk is fine here.
- */
-export interface CreateWorkflowConflict {
-  currentSlug: string;
-  currentGoalStatus: string;
-  currentGoalText: string;
-}
-
-export function detectCreateWorkflowConflict(
-  workspaceRoot: string,
-  newSlugOrTitle: string,
-): CreateWorkflowConflict | null {
-  const currentSlug = getCurrentWorkflow(workspaceRoot);
-  if (!currentSlug) return null;
-  // Creating "the workflow you're already on" is a no-op for the pointer —
-  // no clobber to prompt about.
-  const newSlug = slugify(newSlugOrTitle);
-  if (currentSlug === newSlug) return null;
-  const goalPath = getWorkflowGoalFile(workspaceRoot, currentSlug);
-  if (!fs.existsSync(goalPath)) return null;
-  const raw = readJsonFile<{ text?: string; status?: string } | null>(goalPath, null);
-  if (!raw || !raw.text || raw.status !== 'active') return null;
-  return { currentSlug, currentGoalStatus: raw.status, currentGoalText: raw.text };
 }
 
 /**

@@ -5,8 +5,12 @@ Active released version: **0.3.5** — global-install UX fix
 
 In-flight: **0.3.6** — relevance judge, goal-loop hardening, dashboard
 markdown/Mermaid/KaTeX, `.env` template reorg, LLM pipeline robustness
-fixes. One remaining workstream in [`0.3.6.md`](0.3.6.md) (Item 3,
-multi-workflow concurrency). Live progress checklist in
+fixes, multi-workflow concurrency (PR #38), plus late-cycle context-budget
+work: system-prompt trim (~70%), recall gating via
+`BRAINROUTER_RECALL_MODE`, goal-prompt dedup, MCP identity tagging +
+brain-offline UX, and a scope-limited multi-MCP foundation
+(`/mcp list` / `/mcp reconnect` / `/mcp tools`). Full detail in
+[`0.3.6.md`](0.3.6.md). Live progress checklist in
 [`Tasks.md`](../Tasks.md).
 
 Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance, shared
@@ -18,7 +22,7 @@ memory). Design in [`0.4.0.md`](0.4.0.md).
 
 | Release | Theme | Status |
 |---|---|---|
-| **[0.3.6](0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge | _In-flight_ — 8 items, 7 shipped (Items 1 + 2 + 2b + 2c + 2d + 2e + 2f via PR #26 + #27 + #30 + #32 + #31 + #35 + #36); Item 3 multi-workflow concurrency is the last remaining workstream |
+| **[0.3.6](0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge + context budget | _In-flight_ — 11 items, 11 shipped (Items 1+2+3+4+5+6+7+8 via PRs #26 + #27 + #38 + #30 + #32 + #31 + #35 + #36; late-cycle Items 9 (context budget — system-prompt trim, recall gating, goal dedup), 10 (MCP identity + offline UX, 10d deferred to 0.3.7), and 11 (multi-MCP foundation) shipped in the context-budget branch). |
 | [0.3.7](0.3.7.md) | Quick wins post-0.3.6 | Planned — cron `/schedule`, `/release-notes`, hooks JSON doc, "Strict Tool-Call Recovery" pattern (deer-flow), per-vendor MCP install snippets (semble) |
 | [0.4.0](0.4.0.md) | **Federation — many agents, one memory** | Designed — 5 stages + memory-quality augmentations from deer-flow / semble |
 | [0.4.x](0.4.x.md) | Post-federation polish | Planned — dynamic subagents, worktree isolation, `/rewind`, `/context per-skill`, benchmark harness, progressive skill loading, code-aware chunking |

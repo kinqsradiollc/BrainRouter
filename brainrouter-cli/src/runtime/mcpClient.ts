@@ -15,6 +15,15 @@ export class McpClientWrapper {
    * blowing up, which the agent's existing try/catch wrappers already handle.
    */
   private connected = false;
+  /**
+   * 10a: cached identity. Set once by `detectMcpIdentity` after the first
+   * successful `listTools()` (or by `connect` if the config + URL gave us
+   * a clear signal). The value drives status surfaces and the brain-offline
+   * prompt swap — distinguishes "our brain went down" from "a random
+   * third-party MCP went down" once item 11's multi-MCP support lands.
+   */
+  private identity: 'brainrouter' | 'third-party' | 'unknown' = 'unknown';
+  private serverName?: string;
 
   constructor() {
     this.client = new Client(
@@ -28,7 +37,33 @@ export class McpClientWrapper {
     return this.connected;
   }
 
-  async connect(serverConfig: ServerConfig, llmConfig?: LLMConfig): Promise<void> {
+  /** 10a: who is this MCP? Set by `detectMcpIdentity`; 'unknown' before first list. */
+  public getIdentity(): 'brainrouter' | 'third-party' | 'unknown' {
+    return this.identity;
+  }
+
+  /** 10a: profile name passed at connect (`brainrouter` / `local-http` / etc.). */
+  public getServerName(): string | undefined {
+    return this.serverName;
+  }
+
+  /**
+   * 10a: connect with an optional `name` so the wrapper can render identity
+   * tags ("BrainRouter MCP offline" vs "third-party MCP offline") without
+   * the caller threading it through every error path. The pre-10a single-
+   * arg form remains supported — callers that don't pass a name fall back
+   * to URL-pattern detection.
+   */
+  async connect(serverConfig: ServerConfig, llmConfig?: LLMConfig, name?: string): Promise<void> {
+    this.serverName = name;
+    // Resolve identity upfront from config metadata + name/URL patterns.
+    // The tool-signature fallback (memory_recall + list_skills) runs after
+    // the first successful `listTools` in `refreshIdentityFromTools`.
+    this.identity = resolveIdentityFromConfig(serverConfig, name);
+    return this._connect(serverConfig, llmConfig);
+  }
+
+  private async _connect(serverConfig: ServerConfig, llmConfig?: LLMConfig): Promise<void> {
     if (serverConfig.type === 'stdio') {
       if (!serverConfig.command) {
         throw new Error('Stdio server configuration missing "command".');
@@ -194,7 +229,21 @@ export class McpClientWrapper {
     // Offline mode: return an empty tool list so the agent's runTurn proceeds
     // with only local tools instead of crashing when it tries to enumerate.
     if (!this.connected) return { tools: [] };
-    return this.client.listTools({});
+    const res = await this.client.listTools({});
+    // 10a: tool-signature fallback for identity detection. If the config +
+    // URL didn't already pin the identity, the BrainRouter MCP exposes a
+    // distinctive pair (`memory_recall` AND `list_skills`) that no neutral
+    // third-party MCP will. Cache the result so the next list doesn't
+    // re-probe — identity is stable for the lifetime of a connection.
+    if (this.identity === 'unknown' && Array.isArray(res?.tools)) {
+      const names = new Set(res.tools.map((t: any) => t?.name));
+      if (names.has('memory_recall') && names.has('list_skills')) {
+        this.identity = 'brainrouter';
+      } else {
+        this.identity = 'third-party';
+      }
+    }
+    return res;
   }
 
   async callTool(name: string, args: Record<string, any>) {
@@ -252,3 +301,48 @@ export class McpClientWrapper {
     this.connected = false;
   }
 }
+
+/**
+ * 10a: figure out who an MCP profile belongs to from config metadata + name
+ * + URL alone, before any network call. Explicit `identity` wins; otherwise
+ * we check name prefix and URL host. Returns 'unknown' when nothing matches
+ * — the caller (currently `listTools`) falls back to tool-signature
+ * detection after the first successful enumeration.
+ *
+ * Detection cases:
+ *   - explicit `identity: 'brainrouter'` or `identity: 'third-party'` → that.
+ *   - profile name (case-insensitive) starts with `brainrouter` → brainrouter.
+ *   - http URL hostname matches `*.brainrouter.cloud` / `*.brainrouter.dev`
+ *     / `*.brainrouter.io` / `*.kinqs.brainrouter.*` → brainrouter.
+ *   - stdio command basename matches `brainrouter` / `brainrouter-mcp` → brainrouter.
+ *   - otherwise → unknown (let the tool-signature fallback decide).
+ */
+export function resolveIdentityFromConfig(
+  serverConfig: ServerConfig,
+  name?: string,
+): 'brainrouter' | 'third-party' | 'unknown' {
+  if (serverConfig.identity === 'brainrouter' || serverConfig.identity === 'third-party') {
+    return serverConfig.identity;
+  }
+  if (name && /^brainrouter/i.test(name.trim())) {
+    return 'brainrouter';
+  }
+  if (serverConfig.type === 'http' && serverConfig.url) {
+    try {
+      const url = new URL(serverConfig.url);
+      if (/\.brainrouter\.(cloud|dev|io|com|app)$/i.test(url.hostname)) {
+        return 'brainrouter';
+      }
+    } catch {
+      // Malformed URL; let later code surface the connection error.
+    }
+  }
+  if (serverConfig.type === 'stdio' && serverConfig.command) {
+    const base = serverConfig.command.split(/[/\\]/).pop() ?? '';
+    if (/^brainrouter(-mcp)?$/i.test(base)) {
+      return 'brainrouter';
+    }
+  }
+  return 'unknown';
+}
+

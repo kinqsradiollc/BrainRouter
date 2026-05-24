@@ -11,7 +11,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning:
 
 | Version | Date | Highlights |
 |---|---|---|
-| **[0.3.6](0.3.6.md)** | _Unreleased_ | Relevance judge, CLI shell redesign, goal-leakage fix, JSON-repair path correctness |
+| **[0.3.6](0.3.6.md)** | _Unreleased_ | Relevance judge, CLI shell redesign, multi-workflow concurrency, goal-leakage fix, JSON-repair path correctness, **context-budget** (system-prompt trim ~70%, recall gating via `BRAINROUTER_RECALL_MODE`, goal-prompt dedup), **MCP identity + offline UX** (brain row in banner / statusline / `/where`, dynamic prompt swap), **multi-MCP foundation** (`/mcp list` / `/mcp reconnect` / `/mcp tools`) |
 | [0.3.5](0.3.5.md) | 2026-05-22 | Global-install UX fix (`brainrouter-mcp init`, env-loader priority chain) |
 | [0.3.4](0.3.4.md) | 2026-05-22 | First public npm release across four `@kinqs/` packages |
 | [0.3.3](0.3.3.md) | 2026-05-21 | `/goal` state machine (`usage_limited`, token budget, wrap-up steering) |

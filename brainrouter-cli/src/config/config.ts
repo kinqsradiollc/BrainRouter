@@ -9,6 +9,25 @@ export interface ServerConfig {
   env?: Record<string, string>;
   url?: string;
   apiKey?: string;
+  /**
+   * 0.3.6 item 10a: identity tag for distinguishing the BrainRouter cloud
+   * brain ("our MCP") from third-party MCPs the user might attach (GitHub,
+   * filesystem, Slack, etc.). Drives status surfaces (banner / statusline /
+   * `/where`) and the offline-mode prompt swap: when "the brain" is down
+   * the user gets a clear signal, not a generic "MCP offline" message.
+   *
+   * Detection priority when this field is unset:
+   *   1. Server profile name starts with `brainrouter` (case-insensitive).
+   *   2. URL hostname matches `*.brainrouter.cloud` or `*.brainrouter.dev`.
+   *   3. (Run-time fallback) first successful `listTools()` includes
+   *      both `memory_recall` AND `list_skills` — the BrainRouter signature
+   *      pair. See `detectMcpIdentity` in `runtime/mcpClient.ts`.
+   *
+   * Explicit values always win — if the user marks a third-party MCP as
+   * `identity: 'brainrouter'`, that's their call (e.g. they're running a
+   * local fork that exposes the same tool surface).
+   */
+  identity?: 'brainrouter' | 'third-party';
 }
 
 export interface LLMConfig {

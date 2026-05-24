@@ -213,6 +213,90 @@ test('systemPrompt: activeSkill="grill-me" appends a CLARIFY-mode block; other a
   assert.doesNotMatch(specMode, /CLARIFY mode/i);
 });
 
+test('systemPrompt: token budget — base prompt fits in ~1,800 tokens (9a)', () => {
+  // 9a: pre-trim the system prompt clocked ~4,750 tokens. Most of it was
+  // tool-mechanics prose, orchestration paragraphs, and anti-hallucination
+  // repetition the model could derive from tool descriptions and a few
+  // sharp rules. Target: keep the bulk under ~1,800 tokens at 4 chars/token
+  // estimation. Guards against a future rewrite that silently re-adds 2-3K
+  // tokens of lecturing.
+  const prompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:budget',
+    instructionSummary: 'No workspace AGENT.md or AGENTS.md instruction file was found.',
+  });
+  const estimatedTokens = Math.ceil(prompt.length / 4);
+  assert.ok(
+    estimatedTokens <= 1800,
+    `system prompt over budget: ${estimatedTokens} tokens (cap 1,800). prompt length ${prompt.length} chars.`,
+  );
+});
+
+test('systemPrompt: prompt ordering puts static identity first, workspace last (9c)', () => {
+  // 9c: prompt-cache hits depend on prefix stability. Static blocks
+  // (identity, tool-call mechanics, tool policy, memory section) must
+  // precede the dynamic Runtime Context + Workspace Instructions, which
+  // change per-workspace. Asserting the index ordering lets the cache
+  // hits compound across sessions in the same workspace.
+  const prompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:order',
+    instructionSummary: 'workspace-specific instructions',
+  });
+  const identityIdx = prompt.indexOf('autonomous software engineering agent');
+  const toolMechanicsIdx = prompt.indexOf('## Tool-call mechanics');
+  const memoryIdx = prompt.indexOf('## Memory-First Workflow');
+  const runtimeIdx = prompt.indexOf('## Runtime Context');
+  const workspaceIdx = prompt.indexOf('## Workspace Instructions');
+
+  assert.ok(identityIdx >= 0 && toolMechanicsIdx >= 0 && memoryIdx >= 0 && runtimeIdx >= 0 && workspaceIdx >= 0, 'expected sections present');
+  assert.ok(identityIdx < toolMechanicsIdx, 'identity precedes tool mechanics');
+  assert.ok(toolMechanicsIdx < memoryIdx, 'tool mechanics precedes memory section');
+  assert.ok(memoryIdx < runtimeIdx, 'memory section precedes the (dynamic) runtime context');
+  assert.ok(runtimeIdx < workspaceIdx, 'runtime context precedes workspace instructions');
+});
+
+test('systemPrompt: brain-offline mode omits memory section + tool names (10b)', () => {
+  // 10b: when `connectedMcpTools` is provided but lacks `memory_recall`,
+  // the BrainRouter MCP is offline this turn. The prompt must NOT lie
+  // about which tools exist — drop the entire memory section + every
+  // memory_* tool name + replace with a single offline notice so the
+  // model doesn't waste an iteration on `Unknown tool` errors.
+  const offlinePrompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:offline',
+    connectedMcpTools: [], // brain offline — zero MCP tools connected
+  });
+  assert.match(offlinePrompt, /BrainRouter MCP is OFFLINE/);
+  assert.doesNotMatch(offlinePrompt, /Memory-First Workflow/, 'offline prompt must not claim memory section exists');
+  assert.doesNotMatch(offlinePrompt, /memory_recall/, 'offline prompt must not name memory_recall');
+  assert.doesNotMatch(offlinePrompt, /memory_working_offload/, 'offline prompt must not name memory_working_offload');
+
+  // Same context with the brain online — full memory section back.
+  const onlinePrompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:online',
+    connectedMcpTools: ['memory_recall', 'memory_search', 'list_skills'],
+  });
+  assert.match(onlinePrompt, /Memory-First Workflow/);
+  assert.match(onlinePrompt, /memory_recall/);
+  assert.doesNotMatch(onlinePrompt, /BrainRouter MCP is OFFLINE/);
+
+  // Back-compat: when connectedMcpTools is undefined, assume the brain is
+  // online (older callers that didn't pass the inventory still get the
+  // memory section, no regression).
+  const undefinedPrompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:undefined',
+  });
+  assert.match(undefinedPrompt, /Memory-First Workflow/);
+});
+
 test('systemPrompt: effort overlay emits for low/high and stays silent for medium (0.3.6 item 2f)', () => {
   // `medium` is the default — emitting an overlay for it would silently
   // change every user's behaviour on upgrade and waste prompt tokens. The

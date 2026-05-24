@@ -4,6 +4,58 @@ import { Agent, buildChatCompletionPayload } from '../agent/agent.js';
 import { clearGoal, readGoal, setGoal } from '../state/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
+test('resolveRecallMode: env > default with defensive fallback (9b)', async () => {
+  const { resolveRecallMode } = await import('../agent/agent.js');
+  const prev = process.env.BRAINROUTER_RECALL_MODE;
+  try {
+    delete process.env.BRAINROUTER_RECALL_MODE;
+    assert.equal(resolveRecallMode(), 'gated', 'unset env defaults to gated');
+
+    process.env.BRAINROUTER_RECALL_MODE = 'always';
+    assert.equal(resolveRecallMode(), 'always');
+
+    process.env.BRAINROUTER_RECALL_MODE = 'off';
+    assert.equal(resolveRecallMode(), 'off');
+
+    process.env.BRAINROUTER_RECALL_MODE = 'GATED';
+    assert.equal(resolveRecallMode(), 'gated', 'case-insensitive');
+
+    process.env.BRAINROUTER_RECALL_MODE = 'ludicrous';
+    assert.equal(resolveRecallMode(), 'gated', 'garbled value falls through to gated default — defensive');
+
+    process.env.BRAINROUTER_RECALL_MODE = '';
+    assert.equal(resolveRecallMode(), 'gated', 'empty string falls through to gated default');
+  } finally {
+    if (prev === undefined) delete process.env.BRAINROUTER_RECALL_MODE;
+    else process.env.BRAINROUTER_RECALL_MODE = prev;
+  }
+});
+
+test('countEntityTokens: detects file paths, identifiers, and proper nouns (9b)', async () => {
+  const { countEntityTokens } = await import('../agent/agent.js');
+  // Empty / trivial inputs.
+  assert.equal(countEntityTokens(''), 0);
+  assert.equal(countEntityTokens('thanks'), 0);
+  assert.equal(countEntityTokens('ok'), 0);
+
+  // File paths trigger detection.
+  assert.ok(countEntityTokens('look at src/foo.ts') >= 1);
+  assert.ok(countEntityTokens('compare src/foo.ts vs lib/bar.ts') >= 2);
+
+  // Identifier-shaped tokens (camelCase, snake_case, PascalCase) trigger.
+  assert.ok(countEntityTokens('debug the BillingService and userController paths') >= 2);
+
+  // Sentence-leading capitals do NOT count — only mid-sentence proper nouns.
+  // "The cat" → "The" is leading, not counted; "cat" lowercase doesn't count.
+  assert.equal(countEntityTokens('The cat sat down.'), 0);
+  // "I talked to John about Mary" → John + Mary count.
+  assert.ok(countEntityTokens('I talked to John about Mary') >= 2);
+
+  // A realistic "ambiguous-enough-to-need-recall" message clears the 2-cue bar.
+  const score = countEntityTokens('what did we decide about src/foo.ts and the BillingService?');
+  assert.ok(score >= 2, `expected ≥2 entity hits, got ${score}`);
+});
+
 test('normalizeToolName resolves common LLM hallucinations to the canonical tool name', async () => {
   const { normalizeToolName } = await import('../agent/agent.js');
   const candidates = ['read_file', 'list_dir', 'grep_search', 'memory_recall'];
@@ -77,13 +129,60 @@ test('Agent.loadHistory replaces chat history and refreshSystemPrompt updates it
     ];
     const count = agent.loadHistory(replay);
     assert.equal(count, 2);
-    // System message replaced; goal etc. would land here if set.
+    // Pre-9d the goal block landed in chatHistory[0] AND was re-pushed as a
+    // per-turn `goal-anchor` system message — same content in two places
+    // per turn. 9d made the per-turn anchor the single owner; the
+    // foundational system message no longer mentions the goal. Verify the
+    // ownership change: setting a goal + refreshing the prompt produces a
+    // system message that DOES NOT contain the goal text (the next
+    // runTurn would push it via the anchor).
     setGoal(workspace, 'finish the auth refactor', agent.sessionKey);
     agent.refreshSystemPrompt();
     const sys = (agent as any).chatHistory[0];
     assert.equal(sys.role, 'system');
-    assert.match(sys.content, /Active Goal/);
-    assert.match(sys.content, /finish the auth refactor/);
+    assert.doesNotMatch(sys.content, /Active Goal/, 'foundational system message must not carry the goal block (9d)');
+    assert.doesNotMatch(sys.content, /finish the auth refactor/, 'foundational system message must not echo the goal text (9d)');
+    clearGoal(workspace, agent.sessionKey);
+  });
+});
+
+test('Agent.runTurn pushes the goal-anchor system message as the single owner of goal state (9d)', async () => {
+  // Verifies the per-turn anchor still fires after createSystemMessage
+  // stopped embedding the goal. Without this assertion, future refactors
+  // could silently drop the anchor injection and lose the goal entirely.
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent = makeAgent(workspace);
+    setGoal(workspace, 'reach a stable build', agent.sessionKey);
+    // Seed the chat history with the foundational system message exactly
+    // as bootstrapSession would, so the test mirrors the real runTurn
+    // sequencing (foundational system message first, then per-turn
+    // anchor pushed to the end).
+    agent.loadHistory([]);
+    agent.refreshSystemPrompt();
+    const foundationalSystem = (agent as any).chatHistory[0];
+    assert.doesNotMatch(
+      foundationalSystem.content,
+      /reach a stable build/,
+      'foundational system message must not carry the goal text (9d ownership change)',
+    );
+    // Now drive the anchor injection directly — same code path as
+    // `agent.ts:680` inside `runTurn`.
+    const { formatGoalBlock, readGoal } = await import('../state/goalStore.js');
+    const goal = readGoal(workspace, agent.sessionKey);
+    assert.ok(goal, 'precondition: setGoal succeeded');
+    (agent as any).replaceTaggedSystemMessage('goal-anchor', formatGoalBlock(goal!));
+    const hist = (agent as any).chatHistory;
+    const anchor = hist.find((m: any) =>
+      m.role === 'system' && typeof m.content === 'string' && m.content.includes('brainrouter:goal-anchor'),
+    );
+    assert.ok(anchor, 'goal-anchor must be present after the per-turn re-push');
+    assert.match(anchor.content, /reach a stable build/, 'anchor must contain the goal text');
+    assert.match(anchor.content, /Active Goal/, 'anchor must contain the canonical block header');
+    // Anchor lives AT THE END so it's in immediate-context distance for
+    // the upcoming user message (PR #26 design — the whole point of the
+    // per-turn re-push). chatHistory[0] still must not duplicate it.
+    assert.equal(hist[hist.length - 1], anchor);
+    assert.notEqual(hist[0], anchor, 'foundational system message must not BE the anchor (9d)');
     clearGoal(workspace, agent.sessionKey);
   });
 });

@@ -11,7 +11,7 @@ import type { Agent } from '../agent/agent.js';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
 import type { Config } from '../config/config.js';
 import { expandMentions } from '../memory/mentions.js';
-import { addGoalTokens, buildBudgetSteeringMessage, formatBudget, goalHasBudgetLeft, goalIsOnFinalBudgetTurn, readGoal, tickGoalIteration, usageLimitGoal } from '../state/goalStore.js';
+import { addGoalTokens, buildGoalContinuationPrompt, formatBudget, goalHasBudgetLeft, readGoal, tickGoalIteration, usageLimitGoal } from '../state/goalStore.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
 import type { WorkspaceInfo } from '../config/workspace.js';
@@ -30,6 +30,7 @@ import { tryHandleObsCommand } from './commands/obs.js';
 import { tryHandleOrchestrationCommand } from './commands/orchestration.js';
 import { tryHandleSessionCommand } from './commands/session.js';
 import { tryHandleGuardCommand } from './commands/guard.js';
+import { tryHandleMcpCommand } from './commands/mcp.js';
 
 const execPromise = promisify(exec);
 
@@ -336,51 +337,6 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   };
 
   /**
-   * Prompt the agent receives for iterations 2..N of an active goal —
-   * fired automatically by the post-turn loop after each completed turn.
-   * Orients the model around the active objective, forces an evidence
-   * audit, and refuses prose-only "I will continue" answers.
-   *
-   * Distinct from `buildGoalKickoffPrompt` (in `commands/_helpers.ts`),
-   * which is the FIRST-turn prompt fired by `/goal <text>` and `/goal resume`.
-   */
-  const buildGoalContinuationPrompt = (
-    goal: import('../state/goalStore.js').Goal,
-    lastPrompt: string,
-    lastAnswer: string,
-  ): string => {
-    const iter = goal.budget.iterationsUsed + 1;
-    const cap = formatBudget(goal.budget.maxIterations);
-    const remaining = cap === 'unlimited' ? 'unlimited' : String(Math.max(0, goal.budget.maxIterations - iter));
-    return [
-      `[GOAL CONTINUATION — iteration ${iter}/${cap}, ${remaining} remaining]`,
-      '',
-      '## ⚠️  Your goal (re-anchor — read before doing anything else)',
-      '',
-      `> ${goal.text}`,
-      '',
-      'Every action this turn MUST serve that goal. If a tool result, child agent\'s output, or prior turn\'s conclusion is pulling you toward a tangent, IGNORE the tangent and refocus. The goal is your contract — not the most recent shiny thing in the chat.',
-      '',
-      '**Drift check (mandatory):** if the last 2 tool calls didn\'t move toward the goal statement above, STOP and either (a) take a tool action that does, or (b) call `goal_complete`/`goal_blocked`. Restating intent in prose without a tool call is anti-spin and the loop will halt.',
-      '',
-      `Last user message: ${lastPrompt || '(none)'}`,
-      `Your previous response (truncated): ${lastAnswer.slice(0, 600)}${lastAnswer.length > 600 ? '…' : ''}`,
-      '',
-      '## What to do this turn',
-      '1. **Audit the evidence in this thread** against the goal\'s outcome. Look at files you wrote, tests you ran, tools that returned ok=true.',
-      '2. **Decide one of three:**',
-      '   - If the outcome is met with concrete evidence (file paths, test names, command outputs), **write the user-visible answer / analysis / summary as prose AND THEN call `goal_complete` with a short 1–2 sentence proof — in the SAME response.** The proof is audit metadata; the prose is what the user reads. Skipping the prose means the user sees a placeholder.',
-      '   - If no defensible path forward remains without user input or missing materials, **write the user-visible explanation as prose AND THEN call `goal_blocked` with a reason + needed input.**',
-      '   - Otherwise (mid-goal), take the **next concrete tool action** (read a file, write code, spawn a worker child, run a verifier). Do NOT respond with prose like "I will now do X" — that\'s a no-op and the CLI will stop the continuation. Anti-spin applies to mid-goal turns; the final goal-completing turn requires prose.',
-      '3. Use update_plan to track progress if you haven\'t already.',
-      '',
-      '**Tool call mechanics reminder:** `goal_complete({...})` / `goal_blocked({...})` / `update_plan({...})` MUST be invoked via the structured `tool_calls` channel of your assistant message. Writing the function name and arguments as text/markdown/pseudo-code in your prose does NOTHING — the framework does not parse prose. If you intend to call a tool, emit it as a tool call.',
-      '',
-      'Reminder: each iteration costs context. Pick the highest-leverage action that moves the goal forward.',
-    ].join('\n');
-  };
-
-  /**
    * Print a line of output while the readline prompt is showing without
    * clobbering whatever the user is mid-typing. Used by child-agent callbacks
    * that fire AFTER the parent's runTurn returned — the agent's tool events
@@ -679,23 +635,13 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       if (shouldContinue && goalAfter) {
         pendingContinuation = true;
         const next = goalAfter.budget.iterationsUsed + 1;
-        // Pre-tick steering: if the NEXT turn would be the final one inside
-        // the budget, inject a wrap-up directive so the model lands soft
-        // instead of being cut off mid-thought.
-        //
-        // CRITICAL: also drop any stale steering when the next turn is NOT
-        // final. Without this, a previously-injected "wrap up gracefully"
-        // message would persist after the user extended the budget via
-        // /goal budget or /goal tokens, telling the model "this is your
-        // last turn" for every subsequent turn. The removal is idempotent
-        // — if no steering was set, this is a no-op.
-        const finalBudgetTurn = goalIsOnFinalBudgetTurn(goalAfter);
-        if (finalBudgetTurn) {
-          agent.replaceTaggedSystemMessage('goal-budget-steering', buildBudgetSteeringMessage(goalAfter));
-          console.log(chalk.gray(`(final budget turn — wrap-up steering injected)`));
-        } else {
-          agent.removeTaggedSystemMessage('goal-budget-steering');
-        }
+        // Pre-9d this branch installed a separate `goal-budget-steering`
+        // tagged system message when the next turn was the final one
+        // inside the budget. 9d folded the wrap-up directive into the
+        // goal-anchor itself — `formatGoalBlock` now auto-detects the
+        // final-budget-turn state and prepends the directive — so the
+        // tagged-message bookkeeping disappears entirely. The anchor is
+        // re-rendered at the top of every runTurn (`agent.ts:677-686`).
         console.log(chalk.gray(`(goal continuation queued — iteration ${next}/${formatBudget(goalAfter.budget.maxIterations)}; type anything to cancel)`));
         const followUp = buildGoalContinuationPrompt(goalAfter, agent.lastUserPrompt, agent.lastAnswer);
         setImmediate(() => {
@@ -938,7 +884,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/copy', desc: 'Copy last assistant response to clipboard' },
       { cmd: '/mention [partial]', desc: 'Suggest files for @ mentions' },
       { cmd: '/model <name>', desc: 'Switch the LLM model in-session' },
-      { cmd: '/mcp', desc: 'Show the active MCP server and tool namespaces' },
+      { cmd: '/mcp [list|reconnect|tools]', desc: 'MCP profiles, identity tags, online/offline status, reconnect, tool namespaces' },
       { cmd: '/ide', desc: 'Show detected IDE host' },
       { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
       { cmd: '/feedback [message]', desc: 'Append feedback entry' },
@@ -1015,6 +961,7 @@ async function handleSlashCommand(
   if (await tryHandleOrchestrationCommand(cmdCtx)) return;
   if (await tryHandleSessionCommand(cmdCtx)) return;
   if (await tryHandleGuardCommand(cmdCtx)) return;
+  if (await tryHandleMcpCommand(cmdCtx)) return;
 
   // All commands extracted to category files above. Anything that reaches
   // here didn't match any handler.

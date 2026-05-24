@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Config } from '../config/config.js';
 import type { Goal } from '../state/goalStore.js';
 import { formatBudget } from '../state/goalStore.js';
-import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
+import { getCurrentWorkflow, getLastUsedWorkflow } from '../state/workflowArtifacts.js';
 import { readGoal } from '../state/goalStore.js';
 import { BOX, type Theme } from './theme.js';
 
@@ -43,12 +43,28 @@ export interface BannerInputs {
   mcpTransport: string;
   /** True when the MCP handshake succeeded. */
   mcpOnline: boolean;
+  /**
+   * 10c: which MCP this profile actually IS — drives the distinct "brain"
+   * row when the active MCP is BrainRouter (or unknown, which we treat as
+   * "likely brain"). When the active MCP is explicitly third-party, the
+   * brain row is omitted entirely so the box stays compact.
+   */
+  mcpIdentity?: 'brainrouter' | 'third-party' | 'unknown';
   /** Resolved sessionKey for this CLI process. */
   sessionKey: string;
   /** Chat-LLM model name (e.g. gpt-4o-mini). */
   model: string;
   /** Slug + status of the currently-bound workflow, if any. */
   workflow?: { slug: string; status: string };
+  /**
+   * Slug of the last workflow that was active in this workspace, surfaced
+   * only when the current session has NO workflow bound. Rendered as a
+   * one-line hint so the user can `/workflow switch <slug>` to resume.
+   * Doesn't auto-bind anything — workflows are pure storage now (goals
+   * are session-scoped runtime state). Empty / matching the active
+   * workflow → no hint row.
+   */
+  lastUsedWorkflow?: string;
   /** Goal-store snapshot, if any. */
   goal?: Goal;
   /** Version override (test fixture). */
@@ -92,6 +108,20 @@ function formatMcp(profile: string, transport: string, online: boolean): string 
   return `${profile}  ·  ${transport}  ·  ${dot}`;
 }
 
+/**
+ * 10c: brain row — distinct from the generic MCP row so the user can tell
+ * "the BrainRouter cloud brain is down" from "a third-party MCP is down".
+ * Renders only when the active MCP is BrainRouter (or unknown). Returns
+ * `undefined` when there's nothing meaningful to say (e.g. user only has a
+ * third-party MCP connected).
+ */
+function formatBrain(identity: 'brainrouter' | 'third-party' | 'unknown' | undefined, online: boolean): string | undefined {
+  if (identity === 'third-party') return undefined;
+  if (identity === 'unknown') return undefined; // wait for tool-signature detection
+  if (online) return '🟢 online';
+  return '🔴 offline · cloud unreachable';
+}
+
 function formatWorkflow(workflow?: { slug: string; status: string }): string | undefined {
   if (!workflow) return undefined;
   return `${workflow.slug}  (${workflow.status})`;
@@ -115,8 +145,19 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
   const rows: Row[] = [];
   rows.push({ label: 'workspace', value: formatWorkspace(inputs.workspaceRoot) });
   rows.push({ label: 'mcp', value: formatMcp(inputs.mcpProfile, inputs.mcpTransport, inputs.mcpOnline) });
+  // 10c: brain status sits below the mcp row — same level of visibility,
+  // but distinct so multi-MCP setups (Item 11) won't be ambiguous.
+  const brain = formatBrain(inputs.mcpIdentity, inputs.mcpOnline);
+  if (brain) rows.push({ label: 'brain', value: brain });
   const wf = formatWorkflow(inputs.workflow);
-  if (wf) rows.push({ label: 'workflow', value: wf });
+  if (wf) {
+    rows.push({ label: 'workflow', value: wf });
+  } else if (inputs.lastUsedWorkflow) {
+    // Fresh session with no current workflow but a known last-used
+    // workflow in this workspace — offer the resume incantation without
+    // auto-binding. Quiet so the user notices but isn't pushed into it.
+    rows.push({ label: 'last on', value: `${inputs.lastUsedWorkflow}   /workflow switch ${inputs.lastUsedWorkflow}` });
+  }
   if (inputs.goal) rows.push({ label: 'goal', value: formatGoalSummary(inputs.goal) });
   rows.push({ label: 'session', value: inputs.sessionKey.slice(0, 8) });
   rows.push({ label: 'model', value: inputs.model });
@@ -160,19 +201,33 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
 export function buildBannerInputs(
   config: Config,
   agent: { sessionKey: string; workspaceRoot: string; getModel: () => string },
-  mcpClient: { isConnected: () => boolean },
+  mcpClient: { isConnected: () => boolean; getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown' },
 ): BannerInputs {
   const profile = config.activeServer;
   const server = config.servers[profile];
   const transport = server?.type ?? 'unknown';
+  // 10c: identity comes from the live wrapper when present; fall back to
+  // the config field for callers that pass a thin stub.
+  const mcpIdentity = mcpClient.getIdentity ? mcpClient.getIdentity() : (server?.identity ?? 'unknown');
   let workflow: { slug: string; status: string } | undefined;
+  let lastUsedWorkflow: string | undefined;
   try {
-    const slug = getCurrentWorkflow(agent.workspaceRoot);
+    // 9d-bugfix: read the session-scoped binding so a fresh CLI session
+    // shows no workflow row even when another CLI in the same workspace
+    // has one bound.
+    const slug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
     if (slug) {
       // We don't crack open workflowArtifacts.listWorkflows here — just the
       // pointer file. Status would require parsing meta.json, which has its
       // own cost on a slow disk; "bound" is enough to communicate state.
       workflow = { slug, status: 'bound' };
+    } else {
+      // Fresh session in a workspace where a previous CLI was on
+      // workflow X — surface that as a hint so the user can rebind via
+      // `/workflow switch X` if they want continuity. Doesn't auto-bind
+      // (per the decoupling design — workflows are storage, goals are
+      // runtime, the two have orthogonal lifecycles).
+      try { lastUsedWorkflow = getLastUsedWorkflow(agent.workspaceRoot); } catch { /* ignore */ }
     }
   } catch { /* ignore — no workflow bound */ }
 
@@ -186,9 +241,11 @@ export function buildBannerInputs(
     mcpProfile: profile,
     mcpTransport: transport,
     mcpOnline: mcpClient.isConnected(),
+    mcpIdentity,
     sessionKey: agent.sessionKey,
     model: agent.getModel(),
     workflow,
+    lastUsedWorkflow,
     goal,
   };
 }

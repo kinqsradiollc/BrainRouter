@@ -41,6 +41,13 @@ export interface WhereInputs {
   mcpProfile: string;
   mcpTransport: string;
   mcpOnline: boolean;
+  /**
+   * 10c: identity of the currently-active MCP. When `'brainrouter'`, /where
+   * adds a distinct `brain` line ("brain    🟢 online · cloud") under the
+   * mcp row. When `'third-party'` the line is omitted. `'unknown'` (pre-
+   * detection) is also omitted so we don't show stale state.
+   */
+  mcpIdentity?: 'brainrouter' | 'third-party' | 'unknown';
   accessMode: string;
   executionMode: ExecutionMode;
   reviewPolicy: ReviewPolicy;
@@ -78,13 +85,22 @@ function renderWorkspace(inputs: WhereInputs, theme: Theme): string[] {
   const effortLine = inputs.effortSource === 'env'
     ? `effort  ${inputs.effort}  ${dim('(env)')}`
     : `effort  ${inputs.effort}`;
-  return [
+  const lines = [
     renderHeader('Workspace', theme),
     indent(theme.plain(`${base}  ${dim('(' + inputs.workspaceRoot + ')')}`)),
     indent(dim(`session ${inputs.sessionKey.slice(0, 8)}  ·  model ${inputs.model}  ·  mode ${inputs.accessMode}`)),
     indent(dim(`exec    ${inputs.executionMode}  ·  review ${inputs.reviewPolicy}  ·  ${effortLine}`)),
     indent(dim(`mcp     ${inputs.mcpProfile}  ·  ${inputs.mcpTransport}  ·  ${inputs.mcpOnline ? 'online' : 'offline'}`)),
   ];
+  // 10c: distinct `brain` line for the BrainRouter cloud brain. Shown
+  // unconditionally regardless of state when identity is brainrouter (vs.
+  // the statusline which hides online to stay quiet). Third-party MCPs
+  // skip the line entirely; `unknown` is pre-detection so we wait.
+  if (inputs.mcpIdentity === 'brainrouter') {
+    const brainState = inputs.mcpOnline ? '🟢 online' : '🔴 offline · cloud unreachable';
+    lines.push(indent(dim(`brain   ${brainState}`)));
+  }
+  return lines;
 }
 
 function renderWorkflow(inputs: WhereInputs, theme: Theme): string[] {
@@ -234,12 +250,16 @@ export function gatherWhereInputs(args: {
   mcpProfile: string;
   mcpTransport: string;
   mcpOnline: boolean;
+  /** 10c: pass through from `mcpClient.getIdentity()` when available. */
+  mcpIdentity?: 'brainrouter' | 'third-party' | 'unknown';
   accessMode: string;
   recalledRecords: RecalledRecord[];
   briefingSources: string[];
 }): WhereInputs {
   const workflowSlug = (() => {
-    try { return getCurrentWorkflow(args.workspaceRoot); } catch { return undefined; }
+    // 9d-bugfix: session-scoped binding so a fresh CLI shows no workflow
+    // even when an earlier session in the same workspace had one bound.
+    try { return getCurrentWorkflow(args.workspaceRoot, args.sessionKey); } catch { return undefined; }
   })();
   const workflowMeta = workflowSlug
     ? listWorkflows(args.workspaceRoot).find((w) => w.slug === workflowSlug)

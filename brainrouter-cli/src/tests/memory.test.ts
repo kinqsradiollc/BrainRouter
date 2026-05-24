@@ -55,6 +55,70 @@ test('buildMemoryBriefing merges parallel memory sources into one block with red
   assert.match(briefing.block, /\[REDACTED\]/);
 });
 
+test('buildMemoryBriefing skips memory_task_state when a goal-anchor is active (9d)', async () => {
+  // 9d: when an active `goal-anchor` system message already carries the
+  // current objective, re-fetching memory_task_state would re-inject the
+  // same "what we're doing now" context. Skip it to avoid the double-
+  // injection that audit 2026-05-24 found contributing to per-turn token
+  // bloat in goal loops.
+  const calls: string[] = [];
+  const stubClient: any = {
+    callTool: async (name: string) => {
+      calls.push(name);
+      if (name === 'memory_recall') {
+        return { content: [{ text: JSON.stringify({ recalledCognitiveMemories: [] }) }] };
+      }
+      if (name === 'memory_working_context') {
+        return { content: [{ text: 'canvas state' }] };
+      }
+      if (name === 'memory_task_state') {
+        return { content: [{ text: 'OPEN TASK: should not appear' }] };
+      }
+      return { isError: true };
+    },
+  };
+  const briefing = await buildMemoryBriefing({
+    mcpClient: stubClient,
+    mcpTools: [{ name: 'memory_recall' }, { name: 'memory_working_context' }, { name: 'memory_task_state' }],
+    sessionKey: 'session:x',
+    workspaceRoot: '/tmp/example',
+    query: 'how do we store memory?',
+    hasActiveGoal: true,
+  });
+
+  assert.ok(!calls.includes('memory_task_state'), 'memory_task_state must not be called when hasActiveGoal=true');
+  assert.ok(!briefing.sourcesQueried.includes('memory_task_state'));
+  assert.doesNotMatch(briefing.block, /OPEN TASK: should not appear/);
+});
+
+test('buildMemoryBriefing still pulls memory_task_state when no goal is active (9d regression guard)', async () => {
+  // The flip side of the previous test — without an active goal-anchor,
+  // task_state remains the surface that carries handover notes and prior
+  // blockers, so it must still fire. Default behaviour (hasActiveGoal
+  // omitted) treats the briefing as goalless, matching pre-9d behaviour.
+  const calls: string[] = [];
+  const stubClient: any = {
+    callTool: async (name: string) => {
+      calls.push(name);
+      if (name === 'memory_task_state') {
+        return { content: [{ text: 'OPEN TASK: keep going on the auth refactor.' }] };
+      }
+      return { isError: true };
+    },
+  };
+  const briefing = await buildMemoryBriefing({
+    mcpClient: stubClient,
+    mcpTools: [{ name: 'memory_task_state' }],
+    sessionKey: 'session:x',
+    workspaceRoot: '/tmp/example',
+    query: 'pick up where we left off',
+    // hasActiveGoal intentionally unset
+  });
+
+  assert.ok(calls.includes('memory_task_state'), 'memory_task_state must still fire when no goal is active');
+  assert.match(briefing.block, /OPEN TASK: keep going on the auth refactor/);
+});
+
 test('buildMemoryBriefing surfaces working-memory recent steps and the last 3 reasoning steps (0.3.6 item 2c)', async () => {
   // The MCP returns the full working-context JSON; the CLI now parses it
   // and renders BOTH the recentSteps tail (what the agent has been doing)

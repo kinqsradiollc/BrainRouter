@@ -10,6 +10,69 @@ test('McpClientWrapper.isConnected is false before connect', async () => {
   assert.equal(wrapper.isConnected(), false);
 });
 
+test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', async () => {
+  const { resolveIdentityFromConfig } = await import('../runtime/mcpClient.js');
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://example.com', identity: 'third-party' }, 'brainrouter-cloud'),
+    'third-party',
+    'explicit `identity: third-party` beats a brainrouter-shaped name',
+  );
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'stdio', command: '/usr/bin/foo', identity: 'brainrouter' }),
+    'brainrouter',
+    'explicit `identity: brainrouter` beats a non-brainrouter command path',
+  );
+});
+
+test('resolveIdentityFromConfig: name prefix and URL host detect BrainRouter (10a)', async () => {
+  const { resolveIdentityFromConfig } = await import('../runtime/mcpClient.js');
+  // Name prefix.
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://example.com' }, 'brainrouter-cloud'),
+    'brainrouter',
+  );
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://example.com' }, 'BrainRouter'),
+    'brainrouter',
+    'case-insensitive name prefix',
+  );
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://example.com' }, 'github'),
+    'unknown',
+    'non-brainrouter name → unknown (let tool-signature decide)',
+  );
+
+  // URL host pattern.
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://api.brainrouter.cloud' }, 'local-http'),
+    'brainrouter',
+  );
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://example.brainrouter.dev/mcp' }, 'staging'),
+    'brainrouter',
+  );
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'http', url: 'https://random.example.com' }, 'whatever'),
+    'unknown',
+  );
+
+  // Stdio command basename.
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'stdio', command: '/usr/local/bin/brainrouter-mcp' }),
+    'brainrouter',
+  );
+  assert.equal(
+    resolveIdentityFromConfig({ type: 'stdio', command: 'github-mcp' }),
+    'unknown',
+  );
+});
+
+test('McpClientWrapper.getIdentity returns "unknown" before listTools (10a)', async () => {
+  const { McpClientWrapper } = await import('../runtime/mcpClient.js');
+  const wrapper = new McpClientWrapper();
+  assert.equal(wrapper.getIdentity(), 'unknown');
+});
+
 test('McpClientWrapper.listTools returns empty list when disconnected (offline mode)', async () => {
   const { McpClientWrapper } = await import('../runtime/mcpClient.js');
   const wrapper = new McpClientWrapper();
