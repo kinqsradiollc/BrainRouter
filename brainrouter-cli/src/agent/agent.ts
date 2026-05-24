@@ -29,6 +29,7 @@ import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
 import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
+import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
@@ -1131,36 +1132,51 @@ export class Agent {
         if (this.accessMode !== 'shell') {
           return `Command execution denied: agent access mode is "${this.accessMode}".`;
         }
-        // Approval gating. Two cases:
-        //   • Interactive parent (this.silent === false): show y/N unless
-        //     autoApproveShell is set (i.e. /yolo on).
-        //   • Silent child: cannot prompt; the previous code path silently
-        //     auto-approved, which let a spawn_agent({role:'verifier'}) child
-        //     run arbitrary shell with no user gate — a sandbox bypass. Now
-        //     refuse unless the parent has explicitly opted in via prefs.
+        // Approval gating routes through the pure resolver in
+        // runtime/dangerousCommand.ts. Three outcomes:
+        //   • auto-approve: fast mode + safe command (or silent child whose
+        //     parent has opted in via fast mode).
+        //   • ask: planning mode, OR fast mode but the command matched the
+        //     dangerous heuristic (rm -rf, sudo, force-push, …).
+        //   • deny-silent: silent child agents can't answer y/N, so safe
+        //     commands need parent opt-in (fast mode) and dangerous commands
+        //     are always denied.
         const prefs = readPreferences(this.workspaceRoot);
-        if (this.silent) {
-          if (!prefs.autoApproveShell) {
+        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent });
+        if (approval === 'deny-silent') {
+          if (isDangerousCommand(cmd)) {
             return (
-              `Command execution denied: silent child agents may not run shell ` +
-              `without parent opt-in. Set \`autoApproveShell\` (via /yolo on) ` +
-              `in the workspace preferences, or have a parent agent run this command.`
+              `Command execution denied: dangerous command in a silent child agent. ` +
+              `Silent children can't answer the y/N prompt, so destructive commands ` +
+              `(rm -rf, sudo, force-push, …) are refused regardless of /mode. ` +
+              `Have a parent agent run this command, or split it into a safer ` +
+              `equivalent.`
             );
           }
-          console.log(chalk.gray(`▶  Auto-approved (silent child): ${chalk.cyan(cmd)}`));
-        } else if (!prefs.autoApproveShell) {
-          // Use the parent REPL's readline interface for the y/N prompt.
-          // Spinning up an inquirer prompt opens a second readline against
-          // the same stdin and dumps a stray "line" event back into the
-          // parent rl when it exits, which used to surface as the bogus
-          // "A previous turn is still running" warning.
-          console.log(`\n${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}`);
+          return (
+            `Command execution denied: silent child agents may not run shell ` +
+            `without parent opt-in. Switch the session to \`/mode fast\` (or set ` +
+            `the legacy \`autoApproveShell\` pref) to let silent children run ` +
+            `safe commands, or have a parent agent run this command.`
+          );
+        }
+        if (approval === 'auto-approve') {
+          const tag = this.silent ? 'Auto-approved (silent child)' : 'Auto-approved';
+          console.log(chalk.gray(`▶  ${tag}: ${chalk.cyan(cmd)}`));
+        } else {
+          // approval === 'ask' — interactive y/N. Use the parent REPL's
+          // readline interface; spinning up an inquirer prompt opens a second
+          // readline against the same stdin and dumps a stray "line" event
+          // back into the parent rl when it exits, which used to surface as
+          // the bogus "A previous turn is still running" warning.
+          const dangerNote = isDangerousCommand(cmd)
+            ? chalk.red(' (flagged as potentially destructive)')
+            : '';
+          console.log(`\n${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}${dangerNote}`);
           const approved = await askYesNo('Allow execution? (y/N) ', false);
           if (!approved) {
             return 'Command execution rejected by user.';
           }
-        } else {
-          console.log(chalk.gray(`▶  Auto-approved: ${chalk.cyan(cmd)}`));
         }
 
         const sandboxConfig = resolveSandboxConfig(this.workspaceRoot, {
@@ -1538,6 +1554,8 @@ export class Agent {
       instructionSummary: loadWorkspaceInstructionSummary(this.workspaceRoot),
       personality: prefs.personality,
       activeSkill: this.activeSkill,
+      executionMode: prefs.executionMode,
+      reviewPolicy: prefs.reviewPolicy,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);

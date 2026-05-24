@@ -8,7 +8,7 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import ora from 'ora';
-import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '../../state/hooksStore.js';
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '../../state/hookifyStore.js';
 import { saveConfig } from '../../config/config.js';
@@ -85,25 +85,88 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       console.log(chalk.red('\nUsage: /hooks [list | add <event> <cmd> | remove <id> | enable <id> | disable <id>]\n'));
       return true;
     }
-    case '/yolo':
+    case '/mode':
     {
       const prefs = readPreferences(agent.workspaceRoot);
       const arg = (args[0] ?? '').toLowerCase();
       if (!arg) {
-        console.log(chalk.bold(`\nAuto-approve shell: ${prefs.autoApproveShell ? chalk.red('ON') : chalk.green('off')}`));
-        console.log(chalk.gray('  When ON, run_command skips the per-call confirmation prompt and executes immediately.'));
-        console.log(chalk.gray('  Pair with BRAINROUTER_SANDBOX=on if you still want a safety net.'));
+        console.log(chalk.bold(`\nExecution mode: ${chalk.cyan(prefs.executionMode)}`));
+        console.log(chalk.gray('  planning  — run_command asks before executing; agent leans toward clarify-before-act. (default)'));
+        console.log(chalk.gray('  fast      — run_command auto-approves safe commands (dangerous ones still ask); agent jumps to implementation.'));
+        console.log(chalk.gray('  Toggle with: /mode planning  |  /mode fast\n'));
+        return true;
+      }
+      if (arg !== 'planning' && arg !== 'fast') {
+        console.log(chalk.red(`\nUnknown mode "${arg}". Choose: planning | fast\n`));
+        return true;
+      }
+      writePreferences(agent.workspaceRoot, { executionMode: arg as 'planning' | 'fast' });
+      agent.refreshSystemPrompt();
+      ctx.repl.refreshPromptForMode();
+      if (arg === 'fast') {
+        console.log(chalk.yellow(`\n✓ /mode fast — run_command auto-approves safe commands.`));
+        console.log(chalk.gray('   Dangerous commands (rm -rf, sudo, force-push, …) still prompt for confirmation.'));
+        console.log(chalk.gray('   Pair with /permissions write (no shell) or BRAINROUTER_SANDBOX=on for tighter guardrails.\n'));
+      } else {
+        console.log(chalk.green(`\n✓ /mode planning — run_command asks before each shell call.\n`));
+      }
+      return true;
+    }
+    case '/review-policy':
+    {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      if (!arg) {
+        console.log(chalk.bold(`\nReview policy: ${chalk.cyan(prefs.reviewPolicy)}`));
+        console.log(chalk.gray('  request  — at workflow/multi-file gates, agent surfaces the plan and waits for /approve. (default)'));
+        console.log(chalk.gray('  proceed  — agent applies the plan and reports after; use /approve manually for explicit gates.'));
+        console.log(chalk.gray('  Toggle with: /review-policy request  |  /review-policy proceed\n'));
+        return true;
+      }
+      if (arg !== 'request' && arg !== 'proceed') {
+        console.log(chalk.red(`\nUnknown policy "${arg}". Choose: request | proceed\n`));
+        return true;
+      }
+      writePreferences(agent.workspaceRoot, { reviewPolicy: arg as 'request' | 'proceed' });
+      agent.refreshSystemPrompt();
+      if (arg === 'proceed') {
+        console.log(chalk.yellow(`\n✓ /review-policy proceed — agent will apply plans without halting for prose approval.`));
+        console.log(chalk.gray('   /approve still works as an explicit gesture for workflows that need one.\n'));
+      } else {
+        console.log(chalk.green(`\n✓ /review-policy request — agent will summarize and ask before applying multi-file changes.\n`));
+      }
+      return true;
+    }
+    case '/yolo':
+    {
+      // /yolo is a one-release alias for `/mode fast` + `/review-policy proceed`.
+      // We keep it because the muscle memory is established; new docs point to
+      // the two split commands for finer control.
+      const arg = (args[0] ?? '').toLowerCase();
+      if (!arg) {
+        const prefs = readPreferences(agent.workspaceRoot);
+        const yoloOn = prefs.executionMode === 'fast' && prefs.reviewPolicy === 'proceed';
+        console.log(chalk.bold(`\nYolo (alias): ${yoloOn ? chalk.red('ON') : chalk.green('off')}`));
+        console.log(chalk.gray('  Shorthand for `/mode fast` + `/review-policy proceed` — flip both axes at once.'));
+        console.log(chalk.gray(`  Current state: mode=${prefs.executionMode}, review-policy=${prefs.reviewPolicy}`));
+        console.log(chalk.gray('  Use /mode and /review-policy directly for finer control.'));
         console.log(chalk.gray('  Toggle with: /yolo on  |  /yolo off\n'));
         return true;
       }
       const next = arg === 'on' || arg === 'true' || arg === '1';
-      writePreferences(agent.workspaceRoot, { autoApproveShell: next });
       if (next) {
-        console.log(chalk.red('\n⚠  /yolo ON — run_command will now execute without asking.'));
-        console.log(chalk.gray('   You are in access mode "shell" so the agent CAN call shell commands.'));
-        console.log(chalk.gray('   Lower the risk with /permissions write (no shell), or set BRAINROUTER_SANDBOX=on.\n'));
+        applyYoloOn(agent.workspaceRoot);
+        agent.refreshSystemPrompt();
+        ctx.repl.refreshPromptForMode();
+        console.log(chalk.red('\n⚠  /yolo ON — shorthand for `/mode fast` + `/review-policy proceed`.'));
+        console.log(chalk.gray('   run_command will auto-approve safe commands; dangerous ones still prompt.'));
+        console.log(chalk.gray('   Agent will apply multi-file plans without the prose "ready?" pause.'));
+        console.log(chalk.gray('   Use /mode and /review-policy for finer control next time.\n'));
       } else {
-        console.log(chalk.green('\n✓ /yolo off — run_command will prompt for confirmation again.\n'));
+        applyYoloOff(agent.workspaceRoot);
+        agent.refreshSystemPrompt();
+        ctx.repl.refreshPromptForMode();
+        console.log(chalk.green('\n✓ /yolo off — restored /mode planning + /review-policy request.\n'));
       }
       return true;
     }
