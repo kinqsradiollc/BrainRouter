@@ -35,6 +35,7 @@ import { readPreferences, writePreferences } from './state/preferencesStore.js';
 import { resolveSandboxConfig } from './runtime/sandbox.js';
 import { startSpan, traceEnabled } from './runtime/tracing.js';
 import { clampPayload, extractMemories, renderMemoryCards } from './memory/formatters.js';
+import { askChoice, AmbiguousChoiceError, NoTTYError, setActiveReadline } from './cli/cliPrompt.js';
 
 // Construct an Agent without touching MCP or the LLM. We only exercise the
 // pure state-machine extensions added in Tier 1/2 (model, accessMode, history,
@@ -2127,6 +2128,142 @@ test('systemPrompt: personality overlay adjusts communication style', () => {
     sessionKey: 'brainrouter-cli:/tmp/ws',
   });
   assert.doesNotMatch(standard, /Communication style:/);
+});
+
+// --- askChoice / ask_user_choice -----------------------------------------
+// The Promise.resolve(body) shim around `body()` lets a synchronous body
+// still benefit from `.finally()` cleanup; a sync exception is rethrown
+// through the rejected Promise.
+function withFakeTTY<T>(rl: any, body: () => Promise<T> | T): Promise<T> {
+  const prev = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+  setActiveReadline(rl);
+  return Promise.resolve()
+    .then(() => body())
+    .finally(() => {
+      setActiveReadline(undefined);
+      if (prev) Object.defineProperty(process.stdin, 'isTTY', prev);
+      else delete (process.stdin as any).isTTY;
+    });
+}
+
+function makeFakeReadline(answers: string[]): { rl: any; prompts: string[] } {
+  let i = 0;
+  const prompts: string[] = [];
+  const rl: any = {
+    question(prompt: string, cb: (answer: string) => void) {
+      prompts.push(prompt);
+      const answer = answers[i++] ?? '';
+      setImmediate(() => cb(answer));
+    },
+    resume() {},
+    pause() {},
+  };
+  return { rl, prompts };
+}
+
+test('askChoice: returns chosen option by number', async () => {
+  const { rl, prompts } = makeFakeReadline(['2']);
+  const choice = await withFakeTTY(rl, () =>
+    askChoice('Which framework should we use?', [
+      { label: 'React', description: 'SPA with hooks' },
+      { label: 'Svelte', description: 'Compiled reactive components' },
+      { label: 'Vue', description: 'Template-driven SFCs' },
+    ]),
+  );
+  assert.equal(choice, 'Svelte');
+  // The rendered prompt should include numbered options so the user knows
+  // they can type a digit.
+  assert.match(prompts[0], /1\.\s+React/);
+  assert.match(prompts[0], /3\.\s+Vue/);
+});
+
+test('askChoice: resolves partial label match case-insensitively', async () => {
+  const { rl } = makeFakeReadline(['sve']);
+  const choice = await withFakeTTY(rl, () =>
+    askChoice('Pick one:', [
+      { label: 'React', description: 'a' },
+      { label: 'Svelte', description: 'b' },
+      { label: 'Vue', description: 'c' },
+    ]),
+  );
+  assert.equal(choice, 'Svelte');
+});
+
+test('askChoice: refuses ambiguous prefix instead of silently picking one', async () => {
+  const { rl } = makeFakeReadline(['ap']);
+  await assert.rejects(
+    () => withFakeTTY(rl, () =>
+      askChoice('Pick one:', [
+        { label: 'apply', description: 'execute the change' },
+        { label: 'approve', description: 'rubber-stamp without running' },
+      ]),
+    ),
+    (err: unknown) => {
+      assert.ok(err instanceof AmbiguousChoiceError);
+      assert.match((err as Error).message, /ambiguous/i);
+      assert.match((err as Error).message, /apply/);
+      assert.match((err as Error).message, /approve/);
+      return true;
+    },
+  );
+});
+
+test('askChoice: rejects out-of-range option number with a clear error', async () => {
+  const { rl } = makeFakeReadline(['9']);
+  await assert.rejects(
+    () => withFakeTTY(rl, () =>
+      askChoice('Pick one:', [
+        { label: 'one', description: 'a' },
+        { label: 'two', description: 'b' },
+      ]),
+    ),
+    /out of range|1–2|1-2/i,
+  );
+});
+
+test('askChoice: throws NoTTYError when stdin is not a TTY so the agent falls back instead of guessing for the user', async () => {
+  setActiveReadline(undefined);
+  const prev = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+  try {
+    await assert.rejects(
+      () => askChoice('Pick one:', [
+        { label: 'A', description: 'a' },
+        { label: 'B', description: 'b' },
+      ]),
+      (err: unknown) => {
+        assert.ok(err instanceof NoTTYError);
+        // The message must hint at the fallback path so the agent's tool-call
+        // error feedback gives the LLM a useful next step.
+        assert.match((err as Error).message, /TTY|interactive|fall back/i);
+        return true;
+      },
+    );
+  } finally {
+    if (prev) Object.defineProperty(process.stdin, 'isTTY', prev);
+    else delete (process.stdin as any).isTTY;
+  }
+});
+
+test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () => {
+  const tool = LOCAL_TOOLS.find((t) => t.name === 'ask_user_choice');
+  assert.ok(tool, 'ask_user_choice should be registered in LOCAL_TOOLS');
+  const props = (tool!.inputSchema as any).properties;
+  assert.ok(props.question, 'schema is missing the `question` property');
+  assert.ok(props.header, 'schema is missing the `header` property');
+  assert.ok(props.options, 'schema is missing the `options` property');
+  assert.equal(props.options.minItems, 2, 'options should require ≥2 items');
+  assert.equal(props.options.maxItems, 4, 'options should cap at 4 items');
+  const optionItem = props.options.items;
+  assert.ok(optionItem.properties.label, 'each option needs a label');
+  assert.ok(optionItem.properties.description, 'each option needs a description');
+  assert.ok(props.multiSelect, 'multiSelect should be exposed');
+  // header is required so the agent always provides a chip-style label,
+  // matching the AskUserQuestion shape we're modelling on.
+  assert.ok((tool!.inputSchema as any).required.includes('question'));
+  assert.ok((tool!.inputSchema as any).required.includes('header'));
+  assert.ok((tool!.inputSchema as any).required.includes('options'));
 });
 
 async function withTempWorkspaceAsync<T>(fn: (workspace: string) => Promise<T>): Promise<T> {
