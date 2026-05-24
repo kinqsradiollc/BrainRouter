@@ -317,13 +317,19 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     if (slashPaletteOpen) return;
     if (isPickerActive() || isInternalPickerActive()) return;
     slashPaletteOpen = true;
-    rl.pause();
+
     // Erase the visible readline prompt + the typed `/` BEFORE Ink
-    // takes over the screen — otherwise the prompt + `/` echo on the
-    // same row as the palette's top divider. `\r` goes to col 0,
-    // `\x1b[K` clears to end of line. (Without this the user sees
-    // `brainrouter[…]> /─────────────...` instead of a clean palette.)
+    // takes over the screen.
     try { process.stdout.write('\r\x1b[K'); } catch { /* ignore */ }
+
+    // Defensive design: under ANY failure mode of the palette (Ink
+    // crashing, the promise dropping, etc.), the REPL must still be
+    // usable. We do NOT call `rl.pause()` — pausing/resuming readline
+    // around an Ink mount was a source of "REPL silently exits" bugs.
+    // `runSlashPalette` snapshots + restores stdin listeners on its
+    // own so readline doesn't fight Ink for input bytes during the
+    // mount. After return, readline's listeners are back in place
+    // and we just refresh the prompt.
     try {
       const result = await runSlashPalette({
         initialQuery: '/',
@@ -331,21 +337,22 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         accentColor: '#CC9166',
       });
       if (result.kind === 'submit') {
+        slashPaletteOpen = false;
         // Feed the chosen command back to readline so the existing
         // line handler processes it as if the user typed + Enter.
-        slashPaletteOpen = false;
-        rl.resume();
         rl.emit('line', result.text);
         return;
       }
     } catch (err) {
-      console.error(chalk.red(`\nSlash palette error: ${(err as Error)?.message ?? err}\n`));
+      console.error(chalk.red(`\nSlash palette error (continuing): ${(err as Error)?.message ?? err}\n`));
     } finally {
       slashPaletteOpen = false;
-      // runSlashPalette already ran resetStdinForReadline, so just
-      // re-prompt — readline can drive input from here.
-      rl.resume();
-      rl.prompt(true);
+      // Belt-and-suspenders: re-ref stdin in case the palette path
+      // somehow left it unref'd (mirrors the boot-time defense in
+      // startREPL — see commit 627a964 rationale).
+      try { (process.stdin as any).ref?.(); } catch { /* ignore */ }
+      try { process.stdin.resume(); } catch { /* ignore */ }
+      try { rl.prompt(true); } catch { /* ignore */ }
     }
   };
 
