@@ -144,6 +144,74 @@ test('banner: offline mode reflected in mcp row', () => {
   });
 });
 
+test('banner: brain row renders for BrainRouter MCP with online/offline state (10c)', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const online = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'brainrouter-cloud',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      mcpIdentity: 'brainrouter',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    assert.match(online, /brain/, 'brain row label present when identity=brainrouter');
+    assert.match(online, /online/);
+
+    const offline = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'brainrouter-cloud',
+      mcpTransport: 'http',
+      mcpOnline: false,
+      mcpIdentity: 'brainrouter',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    assert.match(offline, /brain/, 'brain row label present even when offline');
+    assert.match(offline, /cloud unreachable/);
+  });
+});
+
+test('banner: brain row omitted when identity is third-party (10c)', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'github',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      mcpIdentity: 'third-party',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    // Only the generic `mcp` row should mention online/offline state; the
+    // distinct brain row is reserved for BrainRouter (or unknown / pending
+    // detection). Third-party MCPs use the existing mcp row.
+    const lines = banner.split('\n');
+    const brainRows = lines.filter((l) => /\bbrain\b/.test(l));
+    assert.equal(brainRows.length, 0, 'brain row must NOT appear for third-party MCPs');
+  });
+});
+
+test('banner: brain row omitted when identity is unknown (10c)', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'local',
+      mcpTransport: 'stdio',
+      mcpOnline: true,
+      mcpIdentity: 'unknown',
+      sessionKey: 'abc',
+      model: 'm',
+    }, theme);
+    const lines = banner.split('\n');
+    const brainRows = lines.filter((l) => /\bbrain\b/.test(l));
+    assert.equal(brainRows.length, 0, 'unknown identity = wait for tool-signature detection, no brain row yet');
+  });
+});
+
 test('banner: workflow row appears when workflow is bound', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');

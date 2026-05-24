@@ -43,6 +43,13 @@ export interface BannerInputs {
   mcpTransport: string;
   /** True when the MCP handshake succeeded. */
   mcpOnline: boolean;
+  /**
+   * 10c: which MCP this profile actually IS — drives the distinct "brain"
+   * row when the active MCP is BrainRouter (or unknown, which we treat as
+   * "likely brain"). When the active MCP is explicitly third-party, the
+   * brain row is omitted entirely so the box stays compact.
+   */
+  mcpIdentity?: 'brainrouter' | 'third-party' | 'unknown';
   /** Resolved sessionKey for this CLI process. */
   sessionKey: string;
   /** Chat-LLM model name (e.g. gpt-4o-mini). */
@@ -92,6 +99,20 @@ function formatMcp(profile: string, transport: string, online: boolean): string 
   return `${profile}  ·  ${transport}  ·  ${dot}`;
 }
 
+/**
+ * 10c: brain row — distinct from the generic MCP row so the user can tell
+ * "the BrainRouter cloud brain is down" from "a third-party MCP is down".
+ * Renders only when the active MCP is BrainRouter (or unknown). Returns
+ * `undefined` when there's nothing meaningful to say (e.g. user only has a
+ * third-party MCP connected).
+ */
+function formatBrain(identity: 'brainrouter' | 'third-party' | 'unknown' | undefined, online: boolean): string | undefined {
+  if (identity === 'third-party') return undefined;
+  if (identity === 'unknown') return undefined; // wait for tool-signature detection
+  if (online) return '🟢 online';
+  return '🔴 offline · cloud unreachable';
+}
+
 function formatWorkflow(workflow?: { slug: string; status: string }): string | undefined {
   if (!workflow) return undefined;
   return `${workflow.slug}  (${workflow.status})`;
@@ -115,6 +136,10 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
   const rows: Row[] = [];
   rows.push({ label: 'workspace', value: formatWorkspace(inputs.workspaceRoot) });
   rows.push({ label: 'mcp', value: formatMcp(inputs.mcpProfile, inputs.mcpTransport, inputs.mcpOnline) });
+  // 10c: brain status sits below the mcp row — same level of visibility,
+  // but distinct so multi-MCP setups (Item 11) won't be ambiguous.
+  const brain = formatBrain(inputs.mcpIdentity, inputs.mcpOnline);
+  if (brain) rows.push({ label: 'brain', value: brain });
   const wf = formatWorkflow(inputs.workflow);
   if (wf) rows.push({ label: 'workflow', value: wf });
   if (inputs.goal) rows.push({ label: 'goal', value: formatGoalSummary(inputs.goal) });
@@ -160,11 +185,14 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
 export function buildBannerInputs(
   config: Config,
   agent: { sessionKey: string; workspaceRoot: string; getModel: () => string },
-  mcpClient: { isConnected: () => boolean },
+  mcpClient: { isConnected: () => boolean; getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown' },
 ): BannerInputs {
   const profile = config.activeServer;
   const server = config.servers[profile];
   const transport = server?.type ?? 'unknown';
+  // 10c: identity comes from the live wrapper when present; fall back to
+  // the config field for callers that pass a thin stub.
+  const mcpIdentity = mcpClient.getIdentity ? mcpClient.getIdentity() : (server?.identity ?? 'unknown');
   let workflow: { slug: string; status: string } | undefined;
   try {
     const slug = getCurrentWorkflow(agent.workspaceRoot);
@@ -186,6 +214,7 @@ export function buildBannerInputs(
     mcpProfile: profile,
     mcpTransport: transport,
     mcpOnline: mcpClient.isConnected(),
+    mcpIdentity,
     sessionKey: agent.sessionKey,
     model: agent.getModel(),
     workflow,

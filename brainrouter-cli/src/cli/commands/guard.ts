@@ -7,7 +7,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
-import ora from 'ora';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '../../state/hooksStore.js';
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '../../state/hookifyStore.js';

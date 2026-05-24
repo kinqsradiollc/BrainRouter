@@ -449,6 +449,9 @@ These never propagate to the MCP child.
 | `BRAINROUTER_WORKSPACE` | _(auto-detected)_ | Override CLI workspace root. |
 | `BRAINROUTER_THEME` | `dark` | Banner / prompt / accent color scheme. `dark`, `light`, `mono`. `auto` falls through to `dark`. Workspace preferences can override. |
 | `BRAINROUTER_QUIET` | _(unset)_ | Set to `1` to suppress recall tables, briefing dumps, and tool-completion previews. Toggle in-session with `/quiet`. The `--quiet` flag sets this for the process. |
+| `BRAINROUTER_EFFORT` | _(unset)_ | Reasoning-depth override (`low` / `medium` / `high`). Beats the per-workspace preference set by `/effort`; surfaces in `/where` with an `(env)` tag. See [cli.md → Reasoning depth — `/effort`](cli.md#reasoning-depth--effort). |
+| `BRAINROUTER_RECALL_MODE` | `gated` | Memory-recall gating set in 0.3.6 item 9b. `gated` (default) fires the briefing only on turn 1, post-compaction, or when the user message names ≥2 entity-shaped tokens. `always` preserves pre-0.3.6 every-turn behaviour. `off` skips recall entirely. Garbled values fall through to `gated`. See [cli.md → Recall gating](cli.md#recall-gating-brainrouter_recall_mode). |
+| `BRAINROUTER_OFFLINE_LOCAL_RECALL` | _(unset)_ | _Planned for 0.3.7 — item 10d._ When the BrainRouter MCP is offline, setting this to `1` will fall back to a compressed view of the last few transcript entries as the briefing. Not active yet; reserved here so callers can pin behaviour now. |
 
 ### Sandboxing — `brainrouter-cli/.env`
 

@@ -736,18 +736,19 @@ export function goalIsOnFinalBudgetTurn(goal: Goal): boolean {
 }
 
 /**
- * Wrap-up steering message injected on the final-budget turn. The agent
- * loop pushes this into the chat history as a system message so the model
- * pivots from "continue investigating" to "consolidate and report." Plain
- * directive, no role-play.
+ * Wrap-up directive folded into the goal-anchor block when the goal is on
+ * its final budget turn. Reports WHICH cap is tight (iterations, tokens,
+ * or both) so the model isn't told "one turn left" when it actually has
+ * many iterations remaining but is near the token cap, or vice versa.
  *
- * The message specifically reports WHICH cap is tight (iterations, tokens,
- * or both) so the model doesn't get told "one turn left" when it actually
- * has many iterations remaining but is near the token cap, or vice versa.
- * Earlier versions hardcoded the iteration framing even when only the
- * token heuristic tripped, which misled the model on token-budgeted runs.
+ * Pre-0.3.6-9d this lived in its own `buildBudgetSteeringMessage` function
+ * emitted as a separate `goal-budget-steering` tagged system message —
+ * which meant the same iteration/token counts appeared in TWO places per
+ * turn (the goal anchor AND the steering message). 9d folded the wrap-up
+ * directive into the anchor itself; `formatGoalBlock(goal)` calls this
+ * helper internally when `goalIsOnFinalBudgetTurn(goal)` returns true.
  */
-export function buildBudgetSteeringMessage(goal: Goal): string {
+function buildWrapUpDirective(goal: Goal): string {
   const iterationsRemaining = Math.max(0, goal.budget.maxIterations - goal.budget.iterationsUsed - 1);
   const iterationTight = goal.budget.iterationsUsed + 2 >= goal.budget.maxIterations;
   const tokensTight =
@@ -770,7 +771,6 @@ export function buildBudgetSteeringMessage(goal: Goal): string {
       `You have ${iterationsRemaining || 1} iteration(s) left within the goal's iteration budget ` +
       `(cap ${goal.budget.maxIterations})${tokensClause}. This is your last turn.`;
   } else {
-    // Token cap is the trigger; iterations may still have plenty of headroom.
     const tokensUsed = goal.budget.tokensUsed ?? 0;
     const tokensCap = goal.budget.maxTokens ?? 0;
     const tokensRemaining = Math.max(0, tokensCap - tokensUsed);
@@ -781,7 +781,7 @@ export function buildBudgetSteeringMessage(goal: Goal): string {
   }
 
   return [
-    '## Budget about to run out',
+    '## ⚠️ Final iteration — wrap up cleanly',
     headline,
     'Do not start any new long-running investigation, spawn new children, or read more files.',
     'Instead:',
@@ -792,7 +792,16 @@ export function buildBudgetSteeringMessage(goal: Goal): string {
   ].join('\n');
 }
 
-export function formatGoalBlock(goal: Goal): string {
+export interface FormatGoalBlockOptions {
+  /**
+   * Override the auto-detected final-budget-turn state. Useful for tests
+   * and for callers that want to force-render the wrap-up directive. When
+   * omitted, `formatGoalBlock` calls `goalIsOnFinalBudgetTurn(goal)` itself.
+   */
+  finalBudgetTurn?: boolean;
+}
+
+export function formatGoalBlock(goal: Goal, options: FormatGoalBlockOptions = {}): string {
   const cap = formatBudget(goal.budget.maxIterations);
   const remaining = cap === 'unlimited'
     ? 'unlimited'
@@ -800,6 +809,8 @@ export function formatGoalBlock(goal: Goal): string {
   const tokenLine = goal.budget.maxTokens
     ? `**Tokens:** ${(goal.budget.tokensUsed ?? 0).toLocaleString()} of ${goal.budget.maxTokens.toLocaleString()} used`
     : '';
+  const isFinalBudgetTurn = options.finalBudgetTurn ?? goalIsOnFinalBudgetTurn(goal);
+  const wrapUp = isFinalBudgetTurn && goal.status === 'active' ? buildWrapUpDirective(goal) : '';
   return [
     `## Active Goal — ${goal.status.toUpperCase().replace('_', ' ')}`,
     '',
@@ -836,5 +847,38 @@ export function formatGoalBlock(goal: Goal): string {
     '',
     'Always audit the evidence before declaring complete — failing tests, missing files,',
     'or unverified claims mean the goal is NOT done yet.',
+    wrapUp ? '' : '',
+    wrapUp,
   ].filter(Boolean).join('\n');
+}
+
+/**
+ * Drift / ready check used by the goal-continuation prompt. Compressed
+ * from the prose-heavy 4-paragraph form into a 2-line checklist as part
+ * of 9d's prompt deduplication — the goal text, status, and budget are
+ * now owned by the goal-anchor system message; the continuation prompt
+ * carries only the per-turn drift check + a pointer to the anchor.
+ *
+ * Distinct from `buildGoalKickoffPrompt` (in `commands/_helpers.ts`),
+ * which is the FIRST-turn prompt fired by `/goal <text>` and `/goal resume`.
+ */
+export function buildGoalContinuationPrompt(
+  goal: Goal,
+  lastPrompt: string,
+  lastAnswer: string,
+): string {
+  const iter = goal.budget.iterationsUsed + 1;
+  const cap = formatBudget(goal.budget.maxIterations);
+  return [
+    `[GOAL CONTINUATION — iteration ${iter}/${cap}]`,
+    '',
+    'Your goal, budget, and the goal_complete / goal_blocked contract are pinned in the goal-anchor system message above. This turn must serve that contract.',
+    '',
+    '**Drift check (mandatory):**',
+    '1. Does the next tool call advance the outcome stated in the anchor? If no, stop and either pick one that does, or call `goal_complete` / `goal_blocked`.',
+    '2. Restating intent in prose without a tool call is anti-spin — the loop will halt on intermediate turns that emit only prose. Final goal-completing turns require prose alongside the tool call.',
+    '',
+    `Last user message: ${lastPrompt || '(none)'}`,
+    `Your previous response (truncated): ${lastAnswer.slice(0, 600)}${lastAnswer.length > 600 ? '…' : ''}`,
+  ].join('\n');
 }

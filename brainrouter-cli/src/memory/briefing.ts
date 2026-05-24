@@ -11,6 +11,16 @@ export interface BriefingInputs {
   activeSkill?: string;
   /** Cap on injected briefing content per source — guards against runaway payloads eating the context window. */
   maxCharsPerSource?: number;
+  /**
+   * Set by the caller when a `goal-anchor` system message is already
+   * carrying the current objective. The briefing skips `memory_task_state`
+   * in that case to avoid double-injecting the "what we're doing right
+   * now" context — the goal-anchor is the authoritative owner. When
+   * there is no active goal (pre-goal exploration, after `/goal pause`,
+   * silent child agents) the task-state surface still fires so handover
+   * notes and prior blockers stay visible. Part of 0.3.6 item 9d.
+   */
+  hasActiveGoal?: boolean;
 }
 
 export interface RecalledRecord {
@@ -50,7 +60,7 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   if (toolNames.has('memory_working_context')) {
     tasks.push(callSafe('memory_working_context', { sessionKey, workspacePath: workspaceRoot }, mcpClient, maxChars));
   }
-  if (toolNames.has('memory_task_state')) {
+  if (toolNames.has('memory_task_state') && !inputs.hasActiveGoal) {
     tasks.push(callSafe('memory_task_state', { query }, mcpClient, maxChars));
   }
 

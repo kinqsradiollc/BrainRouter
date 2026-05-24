@@ -34,12 +34,26 @@ The CLI opens with a boxed banner that summarizes the runtime in one block:
 ┌─────────────────────────────────────────────────┐
 │ workspace   brainrouter (main)                  │
 │ mcp         default · stdio · ✓ connected       │
+│ brain       🟢 online                           │
 │ workflow    spec-driven-skill (in-progress)     │
 │ goal        active · 3 / unlimited              │
 │ session     7f3a1e0c                            │
 │ model       gpt-4o · access:read                │
 └─────────────────────────────────────────────────┘
 ```
+
+The **brain** row is distinct from `mcp` and appears only when the active
+MCP profile is identified as BrainRouter (`mcpClient.getIdentity() ===
+'brainrouter'`). It surfaces "the cloud brain is up" separately from a
+generic MCP transport state so users with multiple MCPs configured can
+tell `the BrainRouter cloud went down` from `a third-party MCP went
+down`. States: `🟢 online`, `🔴 offline · cloud unreachable`. Third-
+party MCPs skip the row to keep the box compact. Identity detection runs
+in priority order: explicit `ServerConfig.identity` > name prefix
+(`brainrouter*`, case-insensitive) > URL host (`*.brainrouter.cloud /
+.dev / .io / .com / .app`) > stdio command basename (`brainrouter` /
+`brainrouter-mcp`) > tool-signature fallback (`memory_recall` AND
+`list_skills` both present in the first successful `listTools()`).
 
 - **Session prefix** — the leading 8 chars of the per-process UUID
   `sessionKey`. Two concurrent CLIs in the same workspace get different
@@ -63,13 +77,17 @@ The CLI opens with a boxed banner that summarizes the runtime in one block:
 | Segment | Shows |
 | --- | --- |
 | `mode` | Current access mode (`read` / `write` / `shell`). |
+| `exec` | Execution stance set by `/mode` (`fast` only — `planning` is hidden as the default). |
+| `effort` | Reasoning depth set by `/effort` (`low` / `high` only — `medium` is hidden as the default). |
 | `branch` | Git branch. |
+| `dirty` | `*` when the working tree has uncommitted changes. |
 | `pr` | GitHub PR number for the current branch (cached 30s). |
 | `tokens` | Running session token meter. |
-| `time` | Local clock. |
+| `session` | Truncated sessionKey prefix. |
 | `goal` | Goal status + iteration ratio (e.g. `goal:active 3/unlimited`). |
 | `plan` | Plan completion ratio (e.g. `plan:2/5`). |
 | `workflow` | Active workflow slug if any. |
+| `brain` | BrainRouter MCP state — `brain:🔴` (offline) / `brain:🟡` (degraded, local-only fallback). Hidden when online; hidden entirely for third-party MCPs. Mirrors the `exec` + `effort` hide-when-default convention. |
 
 Defaults are `mode,branch,pr,tokens,time,goal`. Implementation:
 [`brainrouter-cli/src/cli/statusline.ts`](../brainrouter-cli/src/cli/statusline.ts).
@@ -506,7 +524,7 @@ tall ones. `/help <category>` drills in.
 | `/config` | Show resolved config. |
 | `/init` | Generate an `AGENT.md` for this workspace. |
 | `/model [name]` | Show / switch chat model at runtime. |
-| `/mcp [use <name>\|list]` | Switch MCP transport profile. |
+| `/mcp [list\|reconnect\|tools]` | Manage MCP connections. `list` (default) shows every configured profile with identity tag (`brainrouter` / `third-party` / `unknown`), transport, online/offline/idle, and the URL or stdio command; `★` marks the active profile. `reconnect` closes the active wrapper and reconnects against the same profile (re-probes tools so identity refreshes). `tools` renders the namespace-grouped tool surface for the active MCP. See [MCP profiles, identity, and offline mode](#mcp-profiles-identity-and-offline-mode). |
 | `/copy` | Copy the last assistant message to clipboard. |
 | `/theme [auto\|light\|dark\|mono]` | Set color theme. |
 | `/title <text>` | Set a custom terminal title. |
@@ -515,7 +533,7 @@ tall ones. `/help <category>` drills in.
 | `/raw [on\|off]` | Toggle raw scrollback (skip markdown rendering). |
 | `/vim` | Toggle vim keybindings for the REPL prompt. |
 | `/keymap` | Show current keybinding overlay. |
-| `/statusline mode,exec,effort,branch,pr,tokens,session,goal,plan,workflow` | Comma-separated statusline segments. See [Statusline](#statusline). |
+| `/statusline mode,exec,effort,branch,pr,tokens,session,goal,plan,workflow,brain` | Comma-separated statusline segments. See [Statusline](#statusline). |
 | `/mention` | Print the @file mention syntax help. |
 | `/ide` | Detect / set IDE integration (VS Code, JetBrains). |
 | `/apps`, `/plugins`, `/experimental` | Toggle gated feature surfaces. |
@@ -550,20 +568,138 @@ Provider-agnostic — works against any OpenAI-compatible endpoint.
 
 ## Memory briefing
 
-Every non-trivial turn opens with an injected briefing built from:
+Each turn the CLI **may** open with an injected briefing built from:
 
 - `memory_recall` against the user prompt.
-- `memory_search` if recall returns thin results.
-- Active scenes (`memory_working_context`).
-- Persona (`get_persona`).
-- Recency window (recent transcripts).
+- `memory_working_context` (active scenes + working canvas).
+- `memory_task_state` (open task / handover state) — **skipped** when an
+  active goal-anchor is present, since the anchor already carries the
+  "what we're doing right now" context (0.3.6 item 9d).
 
-The briefing is tagged with an HTML comment marker so the CLI can replace
-it on each turn instead of stacking copies forever. Marker is stripped
-before the payload reaches the LLM.
+The briefing block is tagged with an HTML comment marker
+(`<!--brainrouter:memory-briefing-->`) so each turn replaces the prior
+copy instead of stacking duplicates. Marker stripped before the payload
+reaches the LLM. The CLI surfaces every memory tool call as a one-liner
+(`🧠 Briefing`, `💾 Captured`, `📌 Reinforced`) so users see what was
+consulted.
 
-The CLI surfaces every memory tool call as a one-liner (`🧠 Briefing`,
-`💾 Captured`, `📌 Reinforced`) so users see what was consulted.
+### Recall gating (`BRAINROUTER_RECALL_MODE`)
+
+Pre-0.3.6 the briefing fired unconditionally — every turn paid 3–10K
+tokens for a fresh recall pull even when the user message was `thanks` or
+`/help`. The 0.3.6 item 9b gating logic skips the briefing unless one of
+three triggers fires:
+
+1. **First turn** of the session (no prior briefing exists yet).
+2. **Post-compaction** — the next turn after `compactHistory()` runs, so
+   the model isn't blind to what was load-bearing.
+3. **Entity cue** — the user message contains ≥2 entity-shaped tokens.
+   The cheap local heuristic (`countEntityTokens`) counts file paths
+   (`src/foo.ts`, `lib/bar.js`), `camelCase` / `snake_case` /
+   `PascalCase` identifiers (≥5 chars), and mid-sentence proper nouns
+   (≥3 chars). Sentence-leading capitals are intentionally skipped.
+
+When skipped, the prompt carries a one-line `## Memory available (gated
+mode)` system-reminder so the model knows it can pull recall itself via
+`memory_recall` / `memory_search` / `memory_file_history` whenever the
+work needs prior context.
+
+The mode is controlled by the `BRAINROUTER_RECALL_MODE` env var:
+
+| Value | Behaviour |
+| --- | --- |
+| `gated` (**default**) | Tiered triggers above; emit lightweight hint when skipped. |
+| `always` | Pre-0.3.6 behaviour — fire the full briefing every turn. Useful when you've measured better outcomes with always-on recall, or as a benchmarking baseline. |
+| `off` | Skip the briefing entirely AND don't emit the hint. Cost-per-token measurement mode. |
+
+Garbled values (`BRAINROUTER_RECALL_MODE=ludicrous`) fall through to
+`gated` defensively rather than crashing. Resolved on every turn so an
+in-session `export BRAINROUTER_RECALL_MODE=always` via `/run` applies on
+the next prompt without restart.
+
+Implementation:
+[`brainrouter-cli/src/agent/agent.ts`](../brainrouter-cli/src/agent/agent.ts)
+(`injectRecallContext`, `resolveRecallMode`, `countEntityTokens`).
+
+---
+
+## MCP profiles, identity, and offline mode
+
+The CLI connects to one **active** MCP profile from `config.json` at
+launch and treats it as the cognitive memory layer (recall, capture,
+skills, working canvas). The 0.3.6 item 10 work added explicit
+**identity tagging** so the CLI can distinguish the BrainRouter cloud
+brain ("our MCP") from third-party MCPs the user might attach (GitHub,
+filesystem, Slack, …) and surface that distinction across banner,
+statusline, `/where`, and the system prompt itself.
+
+### Identity detection
+
+Every `ServerConfig` accepts an optional `identity?: 'brainrouter' |
+'third-party'`. When absent, the wrapper auto-detects in priority order:
+
+1. Server profile name starts with `brainrouter` (case-insensitive).
+2. URL host matches `*.brainrouter.cloud` / `.dev` / `.io` / `.com` /
+   `.app`.
+3. Stdio command basename is `brainrouter` or `brainrouter-mcp`.
+4. **Tool-signature fallback** — first successful `listTools()` contains
+   both `memory_recall` AND `list_skills` (the BrainRouter signature
+   pair).
+
+Detection is cached on `McpClientWrapper` after the first list — exposed
+via `getIdentity()`. Identity drives the banner / statusline / `/where`
+brain row and the system prompt's brain-online vs brain-offline shape
+(below).
+
+### Offline mode
+
+If the active MCP is unreachable at launch the CLI runs in **offline
+mode**: `listTools()` returns `{ tools: [] }`, `callTool()` synthesizes
+an `{ isError: true }` envelope, and the agent's existing try/catch
+handlers route around the failure. The banner prints an OFFLINE MODE
+warning beneath the box, and the system prompt swaps its memory section
+for a brain-offline notice:
+
+```
+## ⚠️ BrainRouter MCP is OFFLINE this turn
+- Long-term memory, skill lookup, and the recall briefing are unavailable.
+- Do NOT call any BrainRouter memory or skill tools — they will fail
+  with "MCP server is not connected". The turn-start tool list reflects
+  this; only tools that appear there are callable.
+- If the user asks about past sessions, prior decisions, or skill-based
+  workflows, tell them the brain is offline and recommend `/mcp reconnect`.
+- Operate against the workspace files directly using local tools
+  (`read_file`, `glob_files`, `grep_search`, `run_command`).
+```
+
+The Agent refreshes `chatHistory[0]` whenever the connected tool
+inventory shape changes (online ↔ offline) so the model sees the right
+prompt on the very next turn without restart. `/mcp reconnect` is the
+manual recovery path; the CLI does not auto-reconnect with backoff (yet
+— tracked for 0.3.7).
+
+### `/mcp` commands
+
+| Subcommand | Purpose |
+| --- | --- |
+| `/mcp list` (bare `/mcp` aliases to this) | List every configured profile with identity tag, transport, online/offline/idle, and target URL or stdio command. ★ marks the active profile. |
+| `/mcp reconnect` | Close the active wrapper and reconnect against the same profile. Re-probes tools so identity refreshes (relevant if the user just installed a new MCP exposing `memory_recall`). |
+| `/mcp tools` | Render the namespace-grouped tool surface for the active MCP (preserves pre-0.3.6 bare-`/mcp` behaviour under a subcommand). |
+
+### Local-only fallback (`BRAINROUTER_OFFLINE_LOCAL_RECALL`)
+
+When the brain is offline the briefing has nothing to inject by default
+— recall and skills are unavailable, so the next turn operates blind on
+history. A planned opt-in path (0.3.7 / item 10d) will let users set
+`BRAINROUTER_OFFLINE_LOCAL_RECALL=1` to fall back to a compressed view
+of the last few transcript entries on disk. Tracked, not yet shipped.
+When the flag eventually lands, the brain statusline segment will flip
+to `brain:🟡` so the degraded mode is visible.
+
+Implementation:
+[`brainrouter-cli/src/runtime/mcpClient.ts`](../brainrouter-cli/src/runtime/mcpClient.ts) (identity detection),
+[`brainrouter-cli/src/prompt/systemPrompt.ts`](../brainrouter-cli/src/prompt/systemPrompt.ts) (`connectedMcpTools` → brain-online vs brain-offline prompt),
+[`brainrouter-cli/src/cli/commands/mcp.ts`](../brainrouter-cli/src/cli/commands/mcp.ts) (slash-command dispatcher).
 
 ---
 

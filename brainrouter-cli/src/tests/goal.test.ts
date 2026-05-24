@@ -214,37 +214,97 @@ test('goalStore: GoalConflictError message reflects the actual existing status',
   });
 });
 
-test('goalStore: buildBudgetSteeringMessage differentiates iteration vs token tightness', async () => {
-  // Copilot review: the message used to always say "one turn left within
-  // the iteration budget" even when only the token heuristic tripped.
-  // Verify each trigger gets the right wording.
-  const { buildBudgetSteeringMessage } = await import('../state/goalStore.js');
+test('goalStore: formatGoalBlock folds wrap-up directive in on the final-budget turn (9d)', async () => {
+  // Pre-9d the wrap-up text lived in a separate `buildBudgetSteeringMessage`
+  // emitted as its own `goal-budget-steering` tagged system message, which
+  // meant the iteration/token counts were sent twice every final-budget
+  // turn (once in the anchor, once in the steering). 9d folded the wrap-up
+  // into `formatGoalBlock` itself; the steering tag is gone.
   const baseGoal = {
     text: 't', setAt: '', status: 'active' as const, startedAt: '', updatedAt: '',
   };
 
-  // Iteration-tight only.
-  const iterationCase = buildBudgetSteeringMessage({
+  // Iteration-tight only — wrap-up section appears, with iteration framing.
+  const iterationBlock = formatGoalBlock({
     ...baseGoal,
     budget: { maxIterations: 10, iterationsUsed: 9 },
-  });
-  assert.match(iterationCase, /iteration budget/);
-  assert.doesNotMatch(iterationCase, /token cap/);
+  }, { finalBudgetTurn: true });
+  assert.match(iterationBlock, /Final iteration — wrap up cleanly/);
+  assert.match(iterationBlock, /iteration budget/);
+  assert.doesNotMatch(iterationBlock, /token cap/);
 
   // Token-tight only (iterations have headroom: 4/20 used).
-  const tokenCase = buildBudgetSteeringMessage({
+  const tokenBlock = formatGoalBlock({
     ...baseGoal,
     budget: { maxIterations: 20, iterationsUsed: 4, maxTokens: 10_000, tokensUsed: 8_500 },
-  });
-  assert.match(tokenCase, /token cap will trip/);
-  assert.match(tokenCase, /8,500\/10,000/);
+  }, { finalBudgetTurn: true });
+  assert.match(tokenBlock, /Final iteration — wrap up cleanly/);
+  assert.match(tokenBlock, /token cap will trip/);
+  assert.match(tokenBlock, /8,500\/10,000/);
 
   // Both tight.
-  const bothCase = buildBudgetSteeringMessage({
+  const bothBlock = formatGoalBlock({
     ...baseGoal,
     budget: { maxIterations: 10, iterationsUsed: 9, maxTokens: 5_000, tokensUsed: 4_500 },
+  }, { finalBudgetTurn: true });
+  assert.match(bothBlock, /Both budgets are nearly exhausted/);
+
+  // Non-final-budget turn (plenty of room) — no wrap-up section.
+  const earlyBlock = formatGoalBlock({
+    ...baseGoal,
+    budget: { maxIterations: 20, iterationsUsed: 3 },
   });
-  assert.match(bothCase, /Both budgets are nearly exhausted/);
+  assert.doesNotMatch(earlyBlock, /Final iteration — wrap up cleanly/);
+  assert.match(earlyBlock, /Active Goal — ACTIVE/);
+});
+
+test('goalStore: formatGoalBlock auto-detects final-budget turn from goal state (9d)', async () => {
+  // No `options.finalBudgetTurn` argument — formatGoalBlock calls
+  // `goalIsOnFinalBudgetTurn(goal)` internally. This is the path the
+  // per-turn anchor takes from `agent.ts:680`; if the heuristic ever
+  // drifts the anchor will silently stop wrapping up, so guard it.
+  const onFinalTurn = formatGoalBlock({
+    text: 't', setAt: '', status: 'active', startedAt: '', updatedAt: '',
+    budget: { maxIterations: 5, iterationsUsed: 4 },
+  });
+  assert.match(onFinalTurn, /Final iteration — wrap up cleanly/);
+
+  const notOnFinalTurn = formatGoalBlock({
+    text: 't', setAt: '', status: 'active', startedAt: '', updatedAt: '',
+    budget: { maxIterations: 5, iterationsUsed: 1 },
+  });
+  assert.doesNotMatch(notOnFinalTurn, /Final iteration — wrap up cleanly/);
+
+  // Non-active goal must never carry the wrap-up — the goal isn't running,
+  // there's nothing to steer toward. Guards the `goal.status === 'active'`
+  // branch in formatGoalBlock.
+  const pausedOnFinalBudget = formatGoalBlock({
+    text: 't', setAt: '', status: 'paused', startedAt: '', updatedAt: '',
+    budget: { maxIterations: 5, iterationsUsed: 4 },
+  });
+  assert.doesNotMatch(pausedOnFinalBudget, /Final iteration — wrap up cleanly/);
+});
+
+test('goalStore: buildGoalContinuationPrompt references the anchor instead of echoing the goal text (9d)', async () => {
+  const { buildGoalContinuationPrompt } = await import('../state/goalStore.js');
+  const goal = {
+    text: 'ship the auth refactor', setAt: '', status: 'active' as const,
+    startedAt: '', updatedAt: '', budget: { maxIterations: 10, iterationsUsed: 3 },
+  };
+  const prompt = buildGoalContinuationPrompt(goal, 'last user msg', 'previous answer');
+  // The continuation prompt MUST NOT re-echo the goal text — the goal-anchor
+  // system message owns it and the model already has it in immediate context.
+  assert.doesNotMatch(prompt, /ship the auth refactor/);
+  // It MUST point the model at the anchor.
+  assert.match(prompt, /goal-anchor system message/);
+  // It MUST still carry the iteration counter so the user-visible
+  // `[GOAL CONTINUATION — iteration N/M]` banner stays informative,
+  // and the per-turn drift check.
+  assert.match(prompt, /GOAL CONTINUATION — iteration 4/);
+  assert.match(prompt, /Drift check/);
+  // Carries the last context for resolution.
+  assert.match(prompt, /Last user message: last user msg/);
+  assert.match(prompt, /previous answer/);
 });
 
 test('goalStore: token budget tracking + usage_limited transition', async () => {

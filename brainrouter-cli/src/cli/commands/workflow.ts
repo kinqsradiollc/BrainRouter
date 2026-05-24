@@ -592,7 +592,6 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           }
           setCurrentWorkflow(agent.workspaceRoot, targetSlug);
           const resumed = resumeGoal(agent.workspaceRoot, agent.sessionKey);
-          agent.removeTaggedSystemMessage('goal-budget-steering');
           agent.refreshSystemPrompt();
           if (!resumed) {
             console.log(chalk.green(`\n▶  Switched to workflow "${targetSlug}" — no goal to resume.\n`));
@@ -726,10 +725,6 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       if (arg === 'resume') {
         const g = resumeGoal(ws, sk);
         if (!g) { console.log(chalk.yellow('\nNo goal to resume.\n')); return true; }
-        // Resume from paused/blocked/usage_limited — any stale "wrap up"
-        // steering from the previous final-budget tick must be dropped so
-        // the resumed turn doesn't see contradictory directives.
-        agent.removeTaggedSystemMessage('goal-budget-steering');
         agent.refreshSystemPrompt();
         console.log(chalk.green(`\n▶  Goal resumed (${g.budget.iterationsUsed}/${formatBudget(g.budget.maxIterations)} used). Starting next iteration…\n`));
         // Fire the next iteration immediately so the user doesn't have to type
@@ -752,11 +747,6 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         const g = setGoalBudget(ws, sk, Math.floor(n));
         if (!g) console.log(chalk.yellow('\nNo goal to update.\n'));
         else {
-          // The user just raised (or rarely lowered) the cap — any stale
-          // wrap-up steering message from the prior tight-budget state is
-          // now misleading. Drop it; the post-turn loop will re-inject if
-          // the new state still puts us on a final-budget turn.
-          agent.removeTaggedSystemMessage('goal-budget-steering');
           agent.refreshSystemPrompt();
           console.log(chalk.green(`\n✓ Iteration budget set to ${formatBudget(g.budget.maxIterations)} (${g.budget.iterationsUsed} already used).\n`));
         }
@@ -774,10 +764,6 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           console.log(chalk.yellow('\nNo goal to update.\n'));
           return true;
         }
-        // Clear stale wrap-up steering — the budget state just changed
-        // and any previously-injected "this is your last turn" directive
-        // would now be misleading.
-        agent.removeTaggedSystemMessage('goal-budget-steering');
         agent.refreshSystemPrompt();
         if (n === 0) {
           console.log(chalk.green('\n✓ Token budget cleared (iteration cap still applies).\n'));
@@ -831,10 +817,6 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           if (!g) {
             console.log(chalk.yellow('\nNo goal to edit. Set one first with /goal <text>.\n'));
           } else {
-            // Any edit may have changed the budget headroom; clear stale
-            // wrap-up steering so subsequent turns aren't told "this is
-            // your last turn" with stale data.
-            agent.removeTaggedSystemMessage('goal-budget-steering');
             agent.refreshSystemPrompt();
             console.log(chalk.green(`\n✓ Updated.\n`));
             showStatus(g);

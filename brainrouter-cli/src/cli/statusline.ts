@@ -48,6 +48,7 @@ export const SEGMENT_NAMES = [
   'workflow',
   'goal',
   'plan',
+  'brain',
 ] as const;
 
 export type SegmentName = typeof SEGMENT_NAMES[number];
@@ -60,6 +61,14 @@ export interface SegmentInputs {
   lastTurnUsage: { calls: number; promptTokens: number; completionTokens: number };
   /** Optional GitHub PR identifier (e.g. "#42"). REPL caches the gh shell-out, so this is precomputed. */
   prDetector?: () => string | null;
+  /**
+   * 10c: brain-status detector (renders `brain` segment). REPL wires this
+   * up by closing over the live `mcpClient.isConnected()` +
+   * `mcpClient.getIdentity()` calls. Returns `'online'` / `'offline'` /
+   * `'degraded'` when the active MCP is the BrainRouter brain, and
+   * `undefined` otherwise so the segment hides for third-party MCPs.
+   */
+  brainStatus?: () => 'online' | 'offline' | 'degraded' | undefined;
 }
 
 export function isKnownSegment(name: string): name is SegmentName {
@@ -168,6 +177,23 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
         if (!plan.items.length) return undefined;
         const done = plan.items.filter((i) => i.status === 'completed').length;
         return `plan:${done}/${plan.items.length}`;
+      } catch {
+        return undefined;
+      }
+    }
+    case 'brain': {
+      // 10c: only render when the active MCP is identified as BrainRouter
+      // AND its state is non-default. The `brainStatus` detector returns
+      // `undefined` for third-party MCPs (no brain to surface) and for
+      // BrainRouter-online (default state — hide-when-default mirrors the
+      // `exec` + `effort` pattern). Visible states: `offline` (red signal),
+      // `degraded` (yellow signal — 10d local-only fallback).
+      try {
+        const state = inputs.brainStatus?.();
+        if (!state || state === 'online') return undefined;
+        if (state === 'offline') return 'brain:🔴';
+        if (state === 'degraded') return 'brain:🟡';
+        return undefined;
       } catch {
         return undefined;
       }

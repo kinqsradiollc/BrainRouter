@@ -288,7 +288,7 @@ program
     // OFFLINE MODE warning in startREPL together cover both diagnosis and
     // remediation.
     try {
-      await mcpClient.connect(serverConfig, llm);
+      await mcpClient.connect(serverConfig, llm, profileName);
     } catch (err: any) {
       // Degraded "offline mode": the MCP server is the cognitive memory layer
       // (recall, skills, capture, citations) — losing it is painful but not
@@ -386,7 +386,7 @@ program
 
     const mcpClient = new McpClientWrapper();
     try {
-      await mcpClient.connect(serverConfig, llm);
+      await mcpClient.connect(serverConfig, llm, profileName);
     } catch (err: any) {
       console.error(`MCP connect failed: ${err.message}`);
       if (options.strictMcp) process.exit(1);
@@ -480,7 +480,7 @@ program
         type: 'http',
         url: answers.url,
         apiKey: answers.apiKey || undefined
-      });
+      }, undefined, answers.profileName);
       await mcpClient.close();
 
       // Save to config — `loadOrInitConfig` lets first-run users build a
