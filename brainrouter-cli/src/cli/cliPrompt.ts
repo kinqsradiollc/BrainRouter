@@ -365,7 +365,8 @@ function runPicker(
       prefilledOther: opts.prefilledOther,
       initialCursor: opts.initialCursor,
     });
-    let renderedLines = 0;
+    let renderedNewlines = 0;
+    let renderedAtLeastOnce = false;
 
     // Pause the parent rl so its `line` handler doesn't fire on our ENTER
     // press. We restore on cleanup.
@@ -382,25 +383,27 @@ function runPicker(
     pickerActive = true;
 
     const clear = () => {
-      if (renderedLines > 0) {
-        // `\x1b[<n>F` = cursor up n lines AND to col 1 (atomic). Then
-        // erase to end of screen. Earlier code used `\x1b[<n>A\r` after
-        // writing the frame with a trailing `\n`, which was off-by-one
-        // (the trailing newline moved the cursor below the frame, so
-        // `up n` landed inside the previous frame instead of at its
-        // top). The new shape writes NO trailing newline and counts
-        // visible lines exactly via the split below.
-        stdout.write(`\x1b[${renderedLines}F\x1b[J`);
+      if (renderedNewlines > 0) {
+        // `\x1b[<n>F` = cursor up n lines AND col 1 (atomic). For an
+        // M-line frame containing M-1 newlines, the cursor sits at
+        // the END of line M after the write (we don't write a
+        // trailing newline). Going up `renderedNewlines` (= M-1)
+        // lines lands EXACTLY at the start of line 1 — no off-by-one.
+        stdout.write(`\x1b[${renderedNewlines}F\x1b[J`);
+      } else if (renderedNewlines === 0 && renderedAtLeastOnce) {
+        // Single-line frame edge case: nothing to scroll up; just
+        // wipe the current line.
+        stdout.write('\r\x1b[K');
       }
     };
     const render = () => {
       clear();
       const text = renderPicker(state, question, opts.header);
       stdout.write(text);
-      // Count actual lines we wrote — no trailing newline added, so
-      // the cursor sits at the END of the last frame line. The next
-      // `clear()` will move up to the START of the top frame line.
-      renderedLines = text.split('\n').length;
+      // Track newlines (NOT lines). For "a\nb\nc" that's 2 — which
+      // is exactly the cursor-up count we need for the next clear().
+      renderedNewlines = (text.match(/\n/g) ?? []).length;
+      renderedAtLeastOnce = true;
     };
 
     const cleanup = () => {

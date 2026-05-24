@@ -27,6 +27,7 @@ import {
   type WizardState,
 } from './types.js';
 import { pickFromList, promptText, type PickerRow } from './picker.js';
+import { fetchOpenAiCompatibleModels } from './modelsApi.js';
 import { buildTheme, type Theme, type ThemeMode } from '../theme.js';
 
 /**
@@ -133,6 +134,7 @@ async function runWelcomeStep(state: WizardState, theme: Theme): Promise<WizardS
       { id: 'abort', label: 'Abort', description: 'Exit without saving anything' },
     ],
     badge: 'Welcome',
+    eraseOnClose: true,
   });
   if (result.kind !== 'pick' || result.id === 'abort') return reduceWizard(state, { kind: 'abort' });
   return reduceWizard(state, { kind: 'advance', patch: {} });
@@ -160,6 +162,7 @@ async function runThemeStep(state: WizardState, workspaceRoot: string): Promise<
         preview.muted('preview › ') + preview.primary('brainrouter>') + ' ' + preview.heading('sample prompt') + '  ' + preview.muted('with ') + preview.success('success') + preview.muted(' and ') + preview.danger('danger') + preview.muted(' accents'),
       ];
     },
+    eraseOnClose: true,
   });
   if (result.kind !== 'pick') return reduceWizard(state, { kind: 'abort' });
   const mode = result.id as ThemeMode;
@@ -197,6 +200,7 @@ async function runProviderStep(state: WizardState, theme: Theme): Promise<Wizard
     allowOther: true,
     otherLabel: 'Other endpoint',
     otherDescription: 'OpenAI-compatible /v1/chat/completions URL',
+    eraseOnClose: true,
   });
   if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
   if (result.kind === 'other') {
@@ -247,6 +251,7 @@ async function runApiKeyStep(state: WizardState, theme: Theme): Promise<WizardSt
       if (verdict.kind === 'reject') return verdict.reason;
       return undefined;
     },
+    eraseOnClose: true,
   });
   if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
   const key = result.text;
@@ -263,22 +268,54 @@ async function runApiKeyStep(state: WizardState, theme: Theme): Promise<WizardSt
 async function runModelStep(state: WizardState, theme: Theme): Promise<WizardState> {
   const provider = state.draft.provider;
   if (!provider) return reduceWizard(state, { kind: 'back' });
-  const rows: PickerRow[] = (provider.models.length > 0 ? provider.models : [provider.defaultModel]).map((m) => ({
+
+  // Try to fetch the live model list from the provider's /v1/models
+  // endpoint (5s timeout). Fall back to the curated static catalog if
+  // the call fails — every provider we ship a catalog for HAS its
+  // canonical model names; the live list is purely an enrichment so
+  // users see what's actually available on their account / local
+  // server (e.g. which LM Studio models are currently loaded).
+  let modelsList: string[] = provider.models;
+  let subtitleHint = `Pick the chat model for ${provider.label}.`;
+  if (state.draft.apiKey !== undefined || provider.local) {
+    const fetched = await fetchOpenAiCompatibleModels(
+      provider,
+      state.draft.apiKey ?? '',
+      state.draft.customEndpoint,
+    );
+    if (fetched.ok) {
+      // Live list wins. Preserve the provider's default model AT TOP
+      // (if present), then append the rest of the live list. This
+      // keeps the default's "(default)" badge in the natural-first
+      // position the user expects.
+      const live = fetched.models;
+      const withDefaultFirst = live.includes(provider.defaultModel)
+        ? [provider.defaultModel, ...live.filter((m) => m !== provider.defaultModel)]
+        : live;
+      modelsList = withDefaultFirst;
+      subtitleHint = `Pick a model — ${live.length} returned by ${provider.label}'s /v1/models endpoint. Use "Other" to type any name.`;
+    } else {
+      subtitleHint = `Pick a model. (Live list unavailable — ${fetched.error}. Showing curated short-list.) Use "Other" to type any name.`;
+    }
+  }
+
+  const rows: PickerRow[] = (modelsList.length > 0 ? modelsList : [provider.defaultModel]).map((m) => ({
     id: m,
     label: m,
     value: m === provider.defaultModel ? 'default' : '',
   }));
-  const initialCursor = Math.max(0, provider.models.indexOf(provider.defaultModel));
+  const initialCursor = Math.max(0, modelsList.indexOf(provider.defaultModel));
   const result = await pickFromList({
     theme,
     title: 'Model',
-    subtitle: `Pick the chat model for ${provider.label}. Use "Other" for anything outside the short-list.`,
+    subtitle: subtitleHint,
     badge: progressBadge('model'),
     rows,
     initialCursor,
     allowOther: true,
     otherLabel: 'Other model',
     otherDescription: 'Type any model name supported by this endpoint',
+    eraseOnClose: true,
   });
   if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
   const model = result.kind === 'other' ? result.text.trim() : result.id;
@@ -302,6 +339,7 @@ async function runMcpStep(state: WizardState, theme: Theme): Promise<WizardState
     badge: progressBadge('mcp'),
     rows,
     initialCursor: 0,
+    eraseOnClose: true,
   });
   if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
   if (result.kind !== 'pick') return state;
@@ -323,6 +361,7 @@ async function runMcpStep(state: WizardState, theme: Theme): Promise<WizardState
         try { new URL(v); } catch { return 'not a valid URL'; }
         return undefined;
       },
+      eraseOnClose: true,
     });
     if (urlResult.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
     final = { kind: 'remote-http', url: urlResult.text.trim() };
@@ -396,6 +435,7 @@ async function runAgentMdStep(state: WizardState, workspaceRoot: string, theme: 
           { id: 'skip',  label: 'Skip',           value: 'no file',    description: 'Write AGENT.md manually later' },
         ],
     initialCursor: 0,
+    eraseOnClose: true,
   });
   if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
   if (result.kind !== 'pick') return state;

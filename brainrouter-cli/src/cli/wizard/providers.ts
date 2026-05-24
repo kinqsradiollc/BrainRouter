@@ -75,18 +75,28 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
     defaultModel: 'anthropic/claude-sonnet-4',
   },
   {
+    // Claude needs an OpenAI-compatible gateway today because the
+    // CLI's chat path drives `/v1/chat/completions` and Anthropic's
+    // native API uses `/v1/messages` with a different request shape
+    // (tool_use blocks inside user messages, `thinking: { budget_tokens }`
+    // instead of `reasoning_effort`, etc.). A native `/v1/messages`
+    // adapter is tracked for 0.3.8 — see brainrouter-roadmap/0.3.7.md
+    // Item 6 "Out of scope". Until then, the OpenRouter gateway path
+    // (this entry) is the supported way to talk to Claude.
     id: 'anthropic-via-gateway',
-    label: 'Anthropic (via OpenRouter)',
-    hint: 'cloud · claude-* models through OpenRouter (no native /v1/chat/completions)',
+    label: 'Claude (via OpenRouter)',
+    hint: 'cloud · claude-* models routed through OpenRouter\'s OpenAI-compat gateway',
     endpoint: 'https://openrouter.ai/api/v1/chat/completions',
     envKey: 'OPENROUTER_API_KEY',
     local: false,
     models: [
+      'anthropic/claude-sonnet-4.5',
+      'anthropic/claude-opus-4.1',
       'anthropic/claude-sonnet-4',
-      'anthropic/claude-opus-4',
+      'anthropic/claude-haiku-4.5',
       'anthropic/claude-haiku-4',
     ],
-    defaultModel: 'anthropic/claude-sonnet-4',
+    defaultModel: 'anthropic/claude-sonnet-4.5',
   },
   {
     id: 'gemini',
