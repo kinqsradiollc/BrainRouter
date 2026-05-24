@@ -72,6 +72,8 @@ openSrc/codegraph
 openSrc/opencode
 openSrc/bruno
 openSrc/openhuman
+openSrc/semble
+openSrc/deer-flow
 
 # Local agent reference doc for openSrc/ vendored projects — useful but
 # personal (machine-specific paths, evolving notes) so it stays out of git.
