@@ -286,6 +286,50 @@ test('statusline: workflow segment undefined when no workflow bound', () => {
   });
 });
 
+test('statusline: workflow segment annotates the slug with the goal\'s halt state (Item 3)', async () => {
+  // Item 3 brief: the workflow segment should pick up paused / blocked /
+  // usage_limited as a parenthesized tag. Active and no-goal stay terse.
+  const { pauseGoal, blockGoal, usageLimitGoal } = await import('../state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:wf-segment';
+    createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev' });
+    // Pre-goal: bare slug.
+    let seg = renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+    assert.equal(seg, 'wf:flagged-feature');
+    // Active goal: still bare (common case stays quiet).
+    setGoal(workspace, 'do the thing', sk);
+    seg = renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+    assert.equal(seg, 'wf:flagged-feature');
+    // Paused.
+    pauseGoal(workspace, sk);
+    seg = renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+    assert.equal(seg, 'wf:flagged-feature (paused)');
+    // Blocked.
+    blockGoal(workspace, sk, 'waiting on prod creds');
+    seg = renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+    assert.equal(seg, 'wf:flagged-feature (blocked)');
+    // usage_limited → "limited" (matches the goal segment compression).
+    usageLimitGoal(workspace, sk, 'iteration cap reached');
+    seg = renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+    assert.equal(seg, 'wf:flagged-feature (limited)');
+  });
+});
+
 test('statusline: goal segment renders status + used/cap for an active goal', () => {
   withTempWorkspace((workspace) => {
     setGoal(workspace, 'test the segments', 'session-x', { maxIterations: 4 });
