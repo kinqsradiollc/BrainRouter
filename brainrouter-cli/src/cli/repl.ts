@@ -18,6 +18,7 @@ import type { WorkspaceInfo } from '../config/workspace.js';
 import { listSessions } from '../orchestration/orchestrator.js';
 import { isPickerActive, setActiveReadline } from './cliPrompt.js';
 import { isInternalPickerActive } from './wizard/picker.js';
+import { createSlashSuggest, type SlashCommand } from './slashSuggest.js';
 import { resolveTheme } from './theme.js';
 import { buildBannerInputs, renderBanner } from './banner.js';
 import { isKnownSegment, renderSegments } from './statusline.js';
@@ -281,13 +282,37 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   // the raw 0x7F itself; in cooked mode the terminal's line discipline
   // owns it and readline's internal buffer drifts out of sync). Leave the
   // default in place.
+  // 0.3.7 — slash-command autosuggest popup. Renders below the prompt
+  // as the user types `/`, filtered by prefix-then-includes. Hides
+  // automatically when input no longer starts with `/`. Pattern from
+  // openSrc/grok-cli/src/ui/slash-menu.ts + claude-code CHANGELOG
+  // (line 378: cap visible commands ~3-5 instead of scaling with rows).
+  const slashSuggest = createSlashSuggest({
+    rl,
+    theme,
+    commands: SLASH_COMMANDS.map((cmd): SlashCommand => ({
+      cmd,
+      description: lookupSlashDescription(cmd),
+    })),
+  });
+
   process.stdin.on('keypress', (_str, key) => {
     // Any active picker (the LLM-tool ask_user_choice picker OR the
     // 0.3.7 internal wizard / /config / /login picker) owns stdin
     // while it's on screen; yield to it or shift+tab would cycle the
     // access mode mid-picker AND inject stdout noise into the picker
     // frame's redraw region.
-    if (isPickerActive() || isInternalPickerActive()) return;
+    if (isPickerActive() || isInternalPickerActive()) {
+      // Also hide the popup if it was visible — the picker now owns
+      // the screen below the prompt.
+      slashSuggest.hide();
+      return;
+    }
+    // Refresh the slash-suggest popup on every keystroke. The
+    // controller no-ops when the input doesn't start with `/`.
+    // process.nextTick gives readline a chance to update `rl.line`
+    // before we read it.
+    process.nextTick(() => slashSuggest.onKey());
     if (key && key.name === 'tab' && key.shift) {
       const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
       const current = agent.getAccessMode() as 'read' | 'write' | 'shell';
@@ -666,6 +691,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
     // whether the input itself is meaningful. Empty enter still counts as
     // engagement; we don't want to nag a user who's clearly at the keyboard.
     clearIdleHint();
+    // Hide the slash-suggest popup on submit — the line is going to be
+    // processed (slash command OR prompt), so the popup is no longer
+    // contextual.
+    slashSuggest.hide();
     // User typed: any pending goal continuation is cancelled.
     if (pendingContinuation) {
       pendingContinuation = false;
@@ -937,6 +966,28 @@ export function renderHelp(category?: string): void {
     console.log(`  ${chalk.cyan('/help ' + c.key.padEnd(14))} ${chalk.gray(`${c.title}  (${c.entries.length} commands)`)}`);
   }
   console.log(chalk.gray('\nYour terminal is short — run /help <category> to drill in. Resize and re-run /help to see all at once.\n'));
+}
+
+/**
+ * Look up a one-line description for a slash command by walking the
+ * help registry. Used to populate the slash-suggest popup. Falls back
+ * to a generic placeholder if the command isn't documented (those
+ * commands still work — they just won't get a custom description
+ * inside the popup until someone adds them to `HELP_CATEGORIES`).
+ *
+ * Description text in `HELP_CATEGORIES` sometimes carries a parenthesised
+ * argument hint (e.g. "/config [key] [value]"); we strip everything
+ * after the first space when matching by cmd token so e.g. `/config`
+ * matches `cmd: "/config [key] [value]"`.
+ */
+function lookupSlashDescription(cmd: string): string {
+  for (const cat of HELP_CATEGORIES) {
+    for (const entry of cat.entries) {
+      const token = entry.cmd.split(/\s+/)[0];
+      if (token === cmd) return entry.desc;
+    }
+  }
+  return '(no description)';
 }
 
 function printHelpCategory(c: HelpCategory): void {
