@@ -195,7 +195,10 @@ export function buildBannerInputs(
   const mcpIdentity = mcpClient.getIdentity ? mcpClient.getIdentity() : (server?.identity ?? 'unknown');
   let workflow: { slug: string; status: string } | undefined;
   try {
-    const slug = getCurrentWorkflow(agent.workspaceRoot);
+    // 9d-bugfix: read the session-scoped binding so a fresh CLI session
+    // shows no workflow row even when another CLI in the same workspace
+    // has one bound.
+    const slug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
     if (slug) {
       // We don't crack open workflowArtifacts.listWorkflows here — just the
       // pointer file. Status would require parsing meta.json, which has its

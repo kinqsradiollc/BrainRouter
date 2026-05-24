@@ -257,7 +257,9 @@ export function gatherWhereInputs(args: {
   briefingSources: string[];
 }): WhereInputs {
   const workflowSlug = (() => {
-    try { return getCurrentWorkflow(args.workspaceRoot); } catch { return undefined; }
+    // 9d-bugfix: session-scoped binding so a fresh CLI shows no workflow
+    // even when an earlier session in the same workspace had one bound.
+    try { return getCurrentWorkflow(args.workspaceRoot, args.sessionKey); } catch { return undefined; }
   })();
   const workflowMeta = workflowSlug
     ? listWorkflows(args.workspaceRoot).find((w) => w.slug === workflowSlug)

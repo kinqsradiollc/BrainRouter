@@ -42,9 +42,14 @@ const execPromise = promisify(exec);
 export function shouldSkipGrillMe(
   workspaceRoot: string,
   force: boolean,
+  sessionKey?: string,
 ): { skip: boolean; slug?: string; specPath?: string } {
   if (force) return { skip: false };
-  const slug = getCurrentWorkflow(workspaceRoot);
+  // 9d-bugfix: scope the "is there an active workflow?" check to THIS
+  // session, not the workspace pointer. A fresh CLI with no session
+  // binding should not be told "plan already exists" just because a
+  // previous CLI ran `/spec` here.
+  const slug = getCurrentWorkflow(workspaceRoot, sessionKey);
   if (!slug) return { skip: false };
   const spec = readArtifact(workspaceRoot, slug, ARTIFACT.spec);
   if (!spec) return { skip: false };
@@ -77,9 +82,13 @@ async function promptIfClobberingWorkflow(
   workspaceRoot: string,
   newTitle: string,
   force: boolean,
+  sessionKey?: string,
 ): Promise<boolean> {
   if (force) return true;
-  const conflict = detectCreateWorkflowConflict(workspaceRoot, newTitle);
+  // 9d-bugfix: scope the conflict check to THIS session. A fresh CLI
+  // session that's never bound a workflow has no conflict — the
+  // workspace-level pointer is just a hint, not an active binding.
+  const conflict = detectCreateWorkflowConflict(workspaceRoot, newTitle, sessionKey);
   if (!conflict) return true;
   console.log(chalk.yellow(`\n⚠️  Workflow "${conflict.currentSlug}" is the current pointer and has an active goal:`));
   console.log(`     ${chalk.cyan(conflict.currentGoalText)}`);
@@ -275,8 +284,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const parsed = parseForceFlag(args);
       const feature = parsed.rest.join(' ').trim();
       if (!feature) { console.log(chalk.red('\nUsage: /feature-dev [--force] <feature description>\n')); break; }
-      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force))) return true;
-      const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'feature-dev' });
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force, agent.sessionKey))) return true;
+      const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'feature-dev', sessionKey: agent.sessionKey });
       const specPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.spec);
       const tasksPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.tasks);
       console.log(chalk.gray(`Workflow folder: ${path.dirname(specPath)}`));
@@ -326,7 +335,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         console.log(chalk.red('\nUsage: /grill-me [--force] <task description>\n'));
         return true;
       }
-      const decision = shouldSkipGrillMe(agent.workspaceRoot, force);
+      const decision = shouldSkipGrillMe(agent.workspaceRoot, force, agent.sessionKey);
       if (decision.skip) {
         console.log(chalk.yellow(`\nPlan already exists at ${chalk.cyan(decision.specPath)}.`));
         console.log(chalk.gray(
@@ -355,8 +364,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const parsed = parseForceFlag(args);
       const feature = parsed.rest.join(' ').trim();
       if (!feature) { console.log(chalk.red('\nUsage: /spec [--force] <feature title>\n')); break; }
-      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force))) return true;
-      const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'spec' });
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force, agent.sessionKey))) return true;
+      const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'spec', sessionKey: agent.sessionKey });
       const specPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.spec);
       console.log(chalk.gray(`Workflow folder: ${path.dirname(specPath)}`));
       await runSkillCommand(agent, mcpClient, '/spec', feature, [
@@ -380,8 +389,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const parsed = parseForceFlag(args);
       const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
       const reviewTitle = `Review: ${scope}`;
-      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, reviewTitle, parsed.force))) return true;
-      const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review' });
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, reviewTitle, parsed.force, agent.sessionKey))) return true;
+      const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review', sessionKey: agent.sessionKey });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
       await runSkillCommand(agent, mcpClient, command, scope, [
@@ -408,8 +417,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       if (!next) { console.log(chalk.yellow('\nNo pending plan items.\n')); break; }
       // Attach this execution turn to the current workflow if there is one, so
       // walkthrough.md accumulates per workflow rather than per CLI session.
-      const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
-      const slug = currentSlug ?? createWorkflow(agent.workspaceRoot, { title: next.step, kind: 'implement-plan' }).slug;
+      const currentSlug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
+      const slug = currentSlug ?? createWorkflow(agent.workspaceRoot, { title: next.step, kind: 'implement-plan', sessionKey: agent.sessionKey }).slug;
       const walkPath = artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.walkthrough);
       console.log(chalk.gray(`Workflow folder: ${path.dirname(walkPath)}`));
       await runSkillCommand(agent, mcpClient, command, `Next plan item: "${next.step}"`, [
@@ -429,7 +438,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/approve':
     {
-      const slug = args[0] || getCurrentWorkflow(agent.workspaceRoot);
+      const slug = args[0] || getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
       if (!slug) {
         console.log(chalk.red('\nNo current workflow. Use /spec or /feature-dev first, or /approve <slug>.\n'));
         return true;
@@ -488,7 +497,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           console.log(chalk.gray('  Use /workflows to see what exists, or /spec / /feature-dev to create a new one.\n'));
           return true;
         }
-        if (getCurrentWorkflow(agent.workspaceRoot) === targetSlug) {
+        if (getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey) === targetSlug) {
           // Already on it — print the same banner as if we'd switched so
           // the user gets a consistent confirmation instead of "no-op".
           const g = readGoal(agent.workspaceRoot, agent.sessionKey);
@@ -527,7 +536,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
               }
             }
           }
-          setCurrentWorkflow(agent.workspaceRoot, targetSlug);
+          setCurrentWorkflow(agent.workspaceRoot, targetSlug, agent.sessionKey);
           agent.refreshSystemPrompt();
           const next = readGoal(agent.workspaceRoot, agent.sessionKey);
           printWorkflowSwitchConfirmation(targetSlug, next);
@@ -541,7 +550,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         return true;
       }
       if (sub === 'pause') {
-        const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
+        const currentSlug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
         if (!currentSlug) {
           console.log(chalk.yellow('\nNo current workflow to pause. Use /workflow switch <slug> first.\n'));
           return true;
@@ -590,7 +599,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
               applyMigrationResolution(agent.workspaceRoot, agent.sessionKey, targetSlug, 'keep-target');
             }
           }
-          setCurrentWorkflow(agent.workspaceRoot, targetSlug);
+          setCurrentWorkflow(agent.workspaceRoot, targetSlug, agent.sessionKey);
           const resumed = resumeGoal(agent.workspaceRoot, agent.sessionKey);
           agent.refreshSystemPrompt();
           if (!resumed) {
@@ -622,12 +631,14 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       if (workflows.length === 0) {
         console.log(chalk.yellow('  (none yet — try /spec or /feature-dev)'));
       } else {
-        const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
+        const currentSlug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
         for (const w of workflows) {
           // Subtask 4: current-pointer marker is now ★ (the spec's chosen
           // glyph). Existing column structure on the first/second lines
           // preserved so script readers don't break — the new goal column
-          // lands at the right of the artifact-markers line.
+          // lands at the right of the artifact-markers line. The ★
+          // reflects THIS session's binding (9d-bugfix), so two CLIs in
+          // the same workspace can each see their own bound workflow.
           const marker = w.slug === currentSlug ? chalk.green(' ★') : '';
           console.log(`  ${chalk.cyan(w.slug)} [${chalk.gray(w.status)}] ${chalk.gray(w.kind)}${marker}`);
           console.log(`    ${w.title}`);

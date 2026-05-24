@@ -143,9 +143,10 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       // usage_limited, annotate the slug so the prompt-line scans the
       // halt-state without forcing the user to also enable the `goal`
       // segment. Active goals + no goal both render as bare `wf:<slug>` to
-      // keep the common case quiet.
+      // keep the common case quiet. 9d-bugfix: read the session-scoped
+      // binding so the statusline reflects THIS session.
       try {
-        const slug = getCurrentWorkflow(inputs.workspaceRoot);
+        const slug = getCurrentWorkflow(inputs.workspaceRoot, inputs.sessionKey);
         if (!slug) return undefined;
         const goal = readWorkflowGoal(inputs.workspaceRoot, slug);
         if (!goal || goal.status === 'active' || goal.status === 'complete') {

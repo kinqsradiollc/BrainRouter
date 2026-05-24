@@ -332,7 +332,11 @@ test('statusline: tokens segment surfaces last-turn counts when calls > 0', () =
 
 test('statusline: workflow segment returns wf:<slug> when bound', () => {
   withTempWorkspace((workspace) => {
-    createWorkflow(workspace, { title: 'My Feature', kind: 'feature-dev' });
+    // 9d-bugfix: pass sessionKey through createWorkflow so the binding
+    // is per-session; otherwise getCurrentWorkflow(ws, sessionKey)
+    // returns undefined for this fresh test session and the segment
+    // renders as undefined.
+    createWorkflow(workspace, { title: 'My Feature', kind: 'feature-dev', sessionKey: 'sk' });
     const seg = renderSegment('workflow', {
       workspaceRoot: workspace,
       sessionKey: 'sk',
@@ -360,7 +364,7 @@ test('statusline: workflow segment annotates the slug with the goal\'s halt stat
   const { pauseGoal, blockGoal, usageLimitGoal } = await import('../state/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:wf-segment';
-    createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev' });
+    createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev', sessionKey: sk });
     // Pre-goal: bare slug.
     let seg = renderSegment('workflow', {
       workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
@@ -477,7 +481,7 @@ test('/where: empty workspace renders only the workspace section', () => {
 test('/where: shows workflow, goal, and plan sections when populated', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
-    createWorkflow(workspace, { title: 'CLI Shell Redesign', kind: 'feature-dev' });
+    createWorkflow(workspace, { title: 'CLI Shell Redesign', kind: 'feature-dev', sessionKey: 'sk-where' });
     setGoal(workspace, 'land the CLI shell redesign cleanly', 'sk-where', { maxIterations: 8 });
     updatePlan(workspace, {
       explanation: 'shape the work into bite-sized commits',

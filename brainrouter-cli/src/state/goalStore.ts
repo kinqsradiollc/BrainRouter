@@ -192,11 +192,26 @@ export type GoalScope =
   | { scope: 'legacy'; path: string };
 
 export function resolveGoalScope(workspaceRoot: string, sessionKey?: string): GoalScope {
-  // Priority 1: workflow-bound. `getCurrentWorkflow` reads the per-user
-  // pointer file in CLI state (not the workspace tree), so two CLI processes
-  // on the same workspace can point at different workflows independently.
+  // Priority 1: workflow-bound — but only via the SESSION-LEVEL pointer.
+  //
+  // Pre-9d-bugfix: `getCurrentWorkflow(workspaceRoot)` read the
+  // workspace-level pointer, so every CLI session in the workspace saw
+  // the same "current workflow" and (via this priority chain) shared its
+  // goal. That silently reintroduced the Item 1 cross-session goal leak
+  // whenever a workflow was bound: open a new CLI in a workspace where
+  // an earlier session had run `/feature-dev` or `/spec`, and the new
+  // session's first `/goal` would refuse with "A goal is already active"
+  // because the workflow's `goal.json` was still on disk.
+  //
+  // 9d-bugfix: pass sessionKey through so `getCurrentWorkflow` reads
+  // the per-session binding. A fresh session has no session-level
+  // pointer → returns undefined → we fall through to session scope and
+  // the session can `/goal` cleanly. Once the user explicitly runs
+  // `/workflow switch <slug>` or `/feature-dev <feat>` IN THIS session,
+  // the session pointer gets written and workflow-binding kicks in for
+  // subsequent reads in the same session.
   try {
-    const slug = getCurrentWorkflow(workspaceRoot);
+    const slug = getCurrentWorkflow(workspaceRoot, sessionKey);
     if (slug) {
       return { scope: 'workflow', slug, path: getWorkflowGoalFile(workspaceRoot, slug) };
     }
