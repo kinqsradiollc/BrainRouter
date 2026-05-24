@@ -16,7 +16,7 @@ import { readPreferences } from '../state/preferencesStore.js';
 import { execSync } from 'node:child_process';
 import type { WorkspaceInfo } from '../config/workspace.js';
 import { listSessions } from '../orchestration/orchestrator.js';
-import { setActiveReadline } from './cliPrompt.js';
+import { isPickerActive, setActiveReadline } from './cliPrompt.js';
 import { resolveTheme } from './theme.js';
 import { buildBannerInputs, renderBanner } from './banner.js';
 import { isKnownSegment, renderSegments } from './statusline.js';
@@ -85,6 +85,13 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
+    // Explicit `terminal: true` instead of relying on the auto-detect from
+    // `input.isTTY`. The auto-detect returns `undefined` in some shells /
+    // terminal multiplexers (tmux on certain platforms, VS Code's integrated
+    // terminal with specific settings, ssh -t pipelines), and a falsy value
+    // means readline falls back to a non-TTY interface — no keypress events,
+    // no raw mode, Backspace echoes as `^?` instead of erasing.
+    terminal: true,
     // Initial prompt uses the resolved theme's primary accent so light/mono
     // users get a readable prompt even on the first draw. refreshPromptForMode
     // re-renders immediately after wiring up the access-mode accent, so this
@@ -106,6 +113,20 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       return [[], line];
     },
   });
+
+  // Belt-and-suspenders: force-engage raw-mode keypress handling on stdin.
+  // readline.createInterface does this internally for a TTY input, but its
+  // auto-init is unreliable across the terminal zoo (tmux, screen, VS Code
+  // integrated terminal, certain SSH setups) — when it doesn't engage, the
+  // symptom is Backspace echoing `^?` and arrow keys echoing `^[[A` instead
+  // of doing what they're supposed to do. Calling these here is a no-op when
+  // readline already did them, and a fix in the cases where it didn't.
+  if (process.stdin.isTTY) {
+    try {
+      readline.emitKeypressEvents(process.stdin);
+      (process.stdin as any).setRawMode?.(true);
+    } catch { /* not a real TTY after all */ }
+  }
 
   // GitHub PR detection cache. `gh pr view` takes ~300ms and prompts often
   // refresh many times per turn; cache the result for 30s. Returns either
@@ -247,10 +268,18 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
 
   // Shift+Tab cycles the access mode.
   // Order: read → write → shell → read …
-  if (process.stdin.isTTY) {
-    try { (process.stdin as any).setRawMode?.(false); } catch { /* noop */ }
-  }
+  // NOTE: a previous version called `setRawMode(false)` here, claiming it
+  // was needed for keypress events. The opposite is true — readline enables
+  // raw mode automatically for a TTY input, and disabling it breaks BOTH
+  // (a) keypress event delivery for shift+tab (which depend on raw bytes)
+  // and (b) Backspace handling at the prompt (readline expects to receive
+  // the raw 0x7F itself; in cooked mode the terminal's line discipline
+  // owns it and readline's internal buffer drifts out of sync). Leave the
+  // default in place.
   process.stdin.on('keypress', (_str, key) => {
+    // The ask_user_choice picker owns stdin while it's on screen; yield to
+    // it or shift+tab would cycle the access mode mid-picker.
+    if (isPickerActive()) return;
     if (key && key.name === 'tab' && key.shift) {
       const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
       const current = agent.getAccessMode() as 'read' | 'write' | 'shell';
@@ -629,6 +658,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         console.log(chalk.gray(`(goal continuation suppressed: last turn made no tool calls — anti-spin)\n`));
       }
       rl.resume();
+      // NOTE: do NOT call setRawMode(true) here. readline's rl.resume()
+      // already calls input._setRawMode(true) internally for terminal
+      // interfaces. A redundant external setRawMode(true) DOES re-engage
+      // raw mode (it's idempotent for the mode itself) BUT it also resets
+      // `this.readableFlowing = null` on the stream as a side effect
+      // (lib/tty.js). After that, the stream is in "auto" flowing state
+      // and keystrokes don't reach readline — user sees a live prompt
+      // they can't type into. Trust the internal call.
       refreshPromptForMode(); // pick up token-meter / branch updates
       rl.prompt();
       // Re-arm the idle hint after each completed turn — a user who walks

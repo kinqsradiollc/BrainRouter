@@ -138,6 +138,7 @@ read-mode parent spawned a shell-mode child.
 | `update_plan` | Create/update the durable task plan. |
 | `goal_complete` | Mark the active `/goal` complete with proof. Hard-refuses while plan items are open. |
 | `goal_blocked` | Mark the active `/goal` blocked with a reason + needed unblocker. |
+| `ask_user_choice` | Pause mid-turn for a 2–4 option arrow-key picker with an always-on "Other" free-text fallback. Available in every access mode (interaction primitive — touches no files). Returns `{ answer }` (string or `string[]` in multi-select). Errors in non-TTY runs with `NoTTYError` and on cancellation with `CancelledChoiceError` so the agent can fall back to deciding itself. See [Mid-turn user prompts](#mid-turn-user-prompts) below. |
 
 ### Orchestration tools (also local)
 
@@ -164,6 +165,89 @@ read-mode parent spawned a shell-mode child.
 The CLI hides a few MCP tools from the LLM because the auto-pipeline owns
 them (`memory_capture_turn`, `memory_mark_cited`, `memory_resolve_session`,
 `memory_register_skill_hints`, `memory_hook_register`, `memory_hook_status`).
+
+---
+
+## Mid-turn user prompts
+
+Two primitives let an agent pause mid-turn and ask the human a question
+without leaving the terminal. They share the same readline bridge in
+[`brainrouter-cli/src/cli/cliPrompt.ts`](../brainrouter-cli/src/cli/cliPrompt.ts)
+— a single `activeReadline` handle published by the REPL and consumed
+by every helper, so a turn-in-flight can stop the agent loop and
+collect input without spawning a competing readline interface.
+
+### `askYesNo` — binary confirmation (used internally)
+
+Already wired into the existing approval gates: `run_command` before
+shell execution, `/goal <text>` when an in-progress goal would be
+overwritten, the workflow-clobber prompt in `/feature-dev` / `/spec`,
+the dangerous-file warning in `write_file`. **The agent does NOT call
+`askYesNo` directly** — it's owned by the CLI gates. Listed here
+because it's the structural model the picker below mirrors.
+
+Non-TTY returns the supplied default (no prompt fires). The model
+sees the result through whatever tool was gated.
+
+### `ask_user_choice` — multi-choice picker (call this directly)
+
+Available to the agent as a local tool. Renders an arrow-key picker
+with an always-on `Other` row that drops to a free-text input — the
+user is never trapped between bad options.
+
+```
+[Storage]
+Which database should backend tier use?
+
+  ▶ Postgres         —  Mature, ACID, our team knows it
+    SQLite           —  Zero ops, single-file, fine up to ~50 GB
+    DynamoDB         —  AWS-native, auto-scales, learning curve
+    Other            —  Type a free-form answer not listed above
+
+↑/↓ navigate  ·  ENTER confirm  ·  q to cancel
+```
+
+| Behaviour | Detail |
+| --- | --- |
+| **Single-select (default)** | Cursor on row, `ENTER` finalises with that label as the answer string. |
+| **Multi-select** (`multiSelect: true`) | `SPACE` toggles ☐ ↔ ☑ on rows; `ENTER` returns an array of selected labels in option order. Empty selection on `ENTER` is a no-op so the user doesn't silently commit `[]`. |
+| **"Other" picked** | Drops to a free-text input phase. `Backspace` edits, `Esc` bails back to the picker, `ENTER` finalises with the typed string replacing the literal "Other" label. Empty `ENTER` is a no-op. |
+| **Cancellation** | `q`, `Esc`, or `Ctrl+C` raises `CancelledChoiceError`. The tool wrapper surfaces this as a tool-call error so the agent can re-plan rather than guess. |
+| **Non-TTY** (CI, piped, `brainrouter run`) | Raises `NoTTYError` instead of defaulting to option 1. The agent gets the error in its tool result and is expected to fall back to deciding itself, stating which option it picked and why. |
+| **Validation** | Eager checks before any screen writes: 2–4 options required; duplicate labels rejected (case-insensitive); `"Other"` reserved (the synthetic free-text row owns it); each option needs both `label` and `description`. |
+| **Access modes** | Always available — it's an interaction primitive, not a workspace mutation. Gated structurally by `activeReadline` + `process.stdin.isTTY`. |
+
+The picker yields stdin while it's on screen by setting an
+`isPickerActive()` flag the REPL's `shift+tab` access-mode handler
+checks before firing, so the access-mode cycle can't interrupt
+mid-prompt.
+
+**Tool schema:**
+
+```ts
+ask_user_choice({
+  question: string,              // ends with `?`
+  header: string,                // ≤12 chars chip shown above the question
+  options: Array<{               // 2–4 items, mutually exclusive
+    label: string,               // 1–5 words
+    description: string,         // one-line explanation
+  }>,
+  multiSelect?: boolean,         // default false
+}) → { answer: string | string[] }
+```
+
+**When to call it.** The system prompt scopes this tightly: only when
+there's genuine ambiguity that needs the user's judgment AND there are
+2–4 mutually exclusive reasonable approaches. It's explicitly not a
+substitute for `askYesNo`-style confirmations (already wired), not for
+things the agent can decide itself with the available context, and not
+a way to shift load-bearing decisions back to the user when the
+spec / files already imply the right answer.
+
+Implementation lives at
+[`brainrouter-cli/src/cli/cliPrompt.ts`](../brainrouter-cli/src/cli/cliPrompt.ts)
+(pure reducer + renderer + orchestrator). Tool registration + access
+classification at [`brainrouter-cli/src/agent/agent.ts`](../brainrouter-cli/src/agent/agent.ts).
 
 ---
 

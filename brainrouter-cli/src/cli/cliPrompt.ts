@@ -26,6 +26,14 @@ export function getActiveReadline(): readline.Interface | undefined {
 }
 
 /**
+ * True while `askChoice` is rendering its raw-mode picker. The REPL's own
+ * keypress handler (shift+tab access-mode cycle) checks this and yields,
+ * so the picker has uncontested control of stdin while it's active.
+ */
+let pickerActive = false;
+export function isPickerActive(): boolean { return pickerActive; }
+
+/**
  * One-shot yes/no question. Returns true only when the user types y/yes
  * (case-insensitive). Returns the supplied default when stdin isn't a TTY
  * (e.g. piped non-interactive runs).
@@ -45,6 +53,340 @@ export function askYesNo(question: string, defaultValue = false): Promise<boolea
       rl.pause();
       resolve(yes);
     });
+  });
+}
+
+/**
+ * Surfaced when `askChoice` is called outside an interactive TTY. The tool
+ * wrapper turns this into a tool-call error so the LLM falls back to deciding
+ * itself — silently picking option 1 for the agent in CI / piped runs would
+ * make a load-bearing decision the user never saw.
+ */
+export class NoTTYError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NoTTYError';
+  }
+}
+
+/**
+ * Surfaced when the user pressed Esc / q / Ctrl+C inside the picker.
+ * The tool wrapper converts this into a tool-call error so the LLM knows
+ * the user declined to commit and can re-plan instead of guessing.
+ */
+export class CancelledChoiceError extends Error {
+  constructor(message = 'ask_user_choice was cancelled by the user before they picked an option.') {
+    super(message);
+    this.name = 'CancelledChoiceError';
+  }
+}
+
+export interface ChoiceOption {
+  label: string;
+  description: string;
+}
+
+// --- Pure picker state machine -------------------------------------------
+// Split out as exported pure functions so they're trivial to unit-test
+// without faking a TTY or piping through keypress events. The orchestrator
+// (`askChoice`) only owns the side-effecting bits: wiring stdin keypress
+// events into the reducer and re-rendering the screen.
+
+/** Synthetic always-on "Other" option appended to every picker. */
+const OTHER_LABEL = 'Other';
+const OTHER_DESCRIPTION = 'Type a free-form answer not listed above';
+
+export interface PickerState {
+  /** Includes the synthetic Other entry at the last index. */
+  options: ChoiceOption[];
+  cursor: number;
+  multiSelect: boolean;
+  /** Indices of options the user has toggled on (multi-select only). */
+  selected: Set<number>;
+  /** True once the user confirmed Other and we're collecting free text. */
+  awaitingOther: boolean;
+  /** Accumulated free-text for the Other prompt. */
+  otherText: string;
+  done: boolean;
+  cancelled: boolean;
+  /** Final resolved value when `done && !cancelled`. */
+  result: string | string[] | null;
+}
+
+/** Normalized keystroke shape the reducer consumes. Decoupled from Node's
+ * raw `keypress` event so the reducer can be driven by test inputs that
+ * don't go through `emitKeypressEvents`. */
+export interface PickerKey {
+  name?: string;
+  ctrl?: boolean;
+  sequence?: string;
+  /** A single printable character for free-text capture (Other phase). */
+  char?: string;
+}
+
+export function initPickerState(
+  options: ChoiceOption[],
+  multiSelect: boolean,
+): PickerState {
+  const augmented = [...options, { label: OTHER_LABEL, description: OTHER_DESCRIPTION }];
+  return {
+    options: augmented,
+    cursor: 0,
+    multiSelect,
+    selected: new Set<number>(),
+    awaitingOther: false,
+    otherText: '',
+    done: false,
+    cancelled: false,
+    result: null,
+  };
+}
+
+function finalizeWithOther(state: PickerState, text: string): PickerState {
+  if (state.multiSelect) {
+    const otherIdx = state.options.length - 1;
+    const indices = Array.from(state.selected).sort((a, b) => a - b);
+    const labels = indices.map((i) => (i === otherIdx ? text : state.options[i].label));
+    return { ...state, done: true, result: labels, otherText: text };
+  }
+  return { ...state, done: true, result: text, otherText: text };
+}
+
+export function reducePicker(state: PickerState, key: PickerKey): PickerState {
+  if (state.done) return state;
+  // Ctrl+C always cancels, in any phase. Don't gate on `key.name === 'c'`
+  // alone — some terminals send the sequence without a named binding.
+  if (key.ctrl && (key.name === 'c' || key.sequence === '')) {
+    return { ...state, done: true, cancelled: true };
+  }
+
+  // --- Free-text "Other" phase ------------------------------------------
+  if (state.awaitingOther) {
+    if (key.name === 'return' || key.sequence === '\r' || key.sequence === '\n') {
+      const text = state.otherText.trim();
+      if (!text) return state; // empty ENTER is a no-op so the user can retry
+      return finalizeWithOther(state, text);
+    }
+    if (key.name === 'backspace') {
+      return { ...state, otherText: state.otherText.slice(0, -1) };
+    }
+    if (key.name === 'escape') {
+      // Bail back to the picker so a stray ENTER on Other isn't a one-way trip.
+      return { ...state, awaitingOther: false, otherText: '' };
+    }
+    if (key.char && key.char.length === 1) {
+      return { ...state, otherText: state.otherText + key.char };
+    }
+    return state;
+  }
+
+  // --- Picker phase -----------------------------------------------------
+  switch (key.name) {
+    case 'up':
+      return { ...state, cursor: (state.cursor - 1 + state.options.length) % state.options.length };
+    case 'down':
+      return { ...state, cursor: (state.cursor + 1) % state.options.length };
+    case 'space': {
+      if (!state.multiSelect) return state;
+      const next = new Set(state.selected);
+      if (next.has(state.cursor)) next.delete(state.cursor);
+      else next.add(state.cursor);
+      return { ...state, selected: next };
+    }
+    case 'return': {
+      const otherIdx = state.options.length - 1;
+      if (state.multiSelect) {
+        // Confirming with nothing selected is a no-op — the user must SPACE
+        // at least one row first. Bailing here keeps "I pressed ENTER too
+        // soon" from silently committing to an empty array.
+        if (state.selected.size === 0) return state;
+        if (state.selected.has(otherIdx)) {
+          return { ...state, awaitingOther: true };
+        }
+        const indices = Array.from(state.selected).sort((a, b) => a - b);
+        return { ...state, done: true, result: indices.map((i) => state.options[i].label) };
+      }
+      if (state.cursor === otherIdx) {
+        return { ...state, awaitingOther: true };
+      }
+      return { ...state, done: true, result: state.options[state.cursor].label };
+    }
+    case 'escape':
+    case 'q':
+      return { ...state, done: true, cancelled: true };
+  }
+  return state;
+}
+
+export function renderPicker(state: PickerState, question: string, header?: string): string {
+  const lines: string[] = [];
+  if (header) lines.push(`[${header}]`);
+  lines.push(question);
+  lines.push('');
+  for (let i = 0; i < state.options.length; i++) {
+    const opt = state.options[i];
+    const cursor = i === state.cursor ? '▶' : ' ';
+    const mark = state.multiSelect ? (state.selected.has(i) ? '☑ ' : '☐ ') : '';
+    lines.push(`  ${cursor} ${mark}${opt.label}  —  ${opt.description}`);
+  }
+  lines.push('');
+  if (state.awaitingOther) {
+    lines.push('[Other] Type your answer and press ENTER  ·  Backspace to edit  ·  Esc to go back');
+    lines.push(`> ${state.otherText}_`);
+  } else if (state.multiSelect) {
+    lines.push('↑/↓ navigate  ·  SPACE toggle  ·  ENTER confirm  ·  q to cancel');
+  } else {
+    lines.push('↑/↓ navigate  ·  ENTER confirm  ·  q to cancel');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Mid-turn multi-choice prompt with arrow-key navigation, a checkbox UI
+ * for multi-select, and an always-on "Other" option that drops to free-text
+ * input. Pause/resume the parent REPL the same way `askYesNo` does, so it
+ * composes cleanly with the existing readline bridge.
+ *
+ * Non-TTY behavior is strict: throws `NoTTYError` instead of defaulting to
+ * option 1. The agent calling this is asking the human for judgment; making
+ * the call for them in CI / piped / `brainrouter run` would silently commit
+ * to a path the user never saw.
+ *
+ * User cancellation (Esc, q, Ctrl+C) throws `CancelledChoiceError` so the
+ * tool wrapper can surface "user declined to commit" as a tool-call error.
+ */
+export function askChoice(
+  question: string,
+  options: ChoiceOption[],
+  opts: { multiSelect?: boolean; header?: string } = {},
+): Promise<string | string[]> {
+  // Input-shape validation first — bad shape is a caller bug regardless of
+  // TTY availability, and surfacing it as "no TTY" would misdirect the agent
+  // toward "decide yourself" when the real fix is "re-emit the call with a
+  // valid options array".
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) {
+    const count = Array.isArray(options) ? options.length : 'invalid';
+    return Promise.reject(
+      new Error(`ask_user_choice requires 2–4 options; received ${count}.`),
+    );
+  }
+  // Reject duplicate labels (case-insensitive). The picker shows labels as
+  // the human-readable identifier and returns them as the result, so two
+  // options with the same label make the return value ambiguous and downstream
+  // branching unreliable. Catch it here, not after the picker is half-drawn.
+  // The synthetic "Other" option also collides with a user-supplied "other",
+  // so reject that too.
+  const seen = new Set<string>();
+  for (const o of options) {
+    const key = (o?.label ?? '').toLowerCase();
+    if (key === OTHER_LABEL.toLowerCase()) {
+      return Promise.reject(
+        new Error(`ask_user_choice cannot use "${o.label}" as a label — "${OTHER_LABEL}" is reserved for the always-on free-text fallback.`),
+      );
+    }
+    if (seen.has(key)) {
+      return Promise.reject(
+        new Error(`ask_user_choice options must have unique labels; "${o.label}" appears more than once (case-insensitive).`),
+      );
+    }
+    seen.add(key);
+  }
+  if (!activeReadline || !process.stdin.isTTY) {
+    return Promise.reject(
+      new NoTTYError(
+        'ask_user_choice requires an interactive TTY (no readline interface is active or stdin is not a TTY). ' +
+        'Fall back to deciding yourself based on the available context, and state which option you picked and why in your reply.',
+      ),
+    );
+  }
+  return runPicker(question, options, opts);
+}
+
+function runPicker(
+  question: string,
+  options: ChoiceOption[],
+  opts: { multiSelect?: boolean; header?: string },
+): Promise<string | string[]> {
+  return new Promise((resolve, reject) => {
+    const rl = activeReadline!;
+    const stdout = process.stdout;
+    let state = initPickerState(options, !!opts.multiSelect);
+    let renderedLines = 0;
+
+    // Pause the parent rl so its `line` handler doesn't fire on our ENTER
+    // press. We restore on cleanup.
+    rl.pause();
+
+    // readline.createInterface already calls emitKeypressEvents and sets raw
+    // mode for a TTY input; this is belt-and-suspenders for cases where the
+    // parent code disabled raw mode somewhere along the way.
+    readline.emitKeypressEvents(process.stdin);
+    try { (process.stdin as any).setRawMode?.(true); } catch { /* not a real TTY */ }
+    process.stdin.resume();
+    // Hide cursor while the picker is on screen — keeps the rendering tight.
+    stdout.write('\x1b[?25l');
+    pickerActive = true;
+
+    const clear = () => {
+      if (renderedLines > 0) {
+        // Move cursor up `renderedLines` then clear to end of screen.
+        stdout.write(`\x1b[${renderedLines}A\r\x1b[J`);
+      }
+    };
+    const render = () => {
+      clear();
+      const text = renderPicker(state, question, opts.header);
+      stdout.write(text + '\n');
+      renderedLines = text.split('\n').length;
+    };
+
+    const cleanup = () => {
+      process.stdin.removeListener('keypress', onKeypress);
+      // Restore cursor visibility. Leave raw mode TRUE — the REPL expects it
+      // on (Backspace + arrow keys + readline's editing all rely on raw mode)
+      // and a previous version that restored a captured `wasRaw` flipped raw
+      // mode back to false in terminals where readline's auto-init never
+      // fully engaged, which manifested as Backspace echoing `^?` after the
+      // picker exited. Picker is the one component that's GUARANTEED to know
+      // raw mode is needed, so it's the right place to assert the invariant.
+      stdout.write('\x1b[?25h');
+      try { (process.stdin as any).setRawMode?.(true); } catch { /* noop */ }
+      pickerActive = false;
+      // Don't auto-resume the parent rl — runAgentTurn paused it intentionally
+      // and will resume on its own schedule.
+    };
+
+    const onKeypress = (str: string | undefined, key: any) => {
+      const named = key?.name;
+      const isPrintable = typeof str === 'string'
+        && str.length === 1
+        && !key?.ctrl
+        && named !== 'return'
+        && named !== 'escape'
+        && named !== 'backspace'
+        && named !== 'tab';
+      const pk: PickerKey = {
+        name: named,
+        ctrl: !!key?.ctrl,
+        sequence: key?.sequence,
+        char: isPrintable ? str : undefined,
+      };
+      const nextState = reducePicker(state, pk);
+      if (nextState === state) return;
+      state = nextState;
+      render();
+      if (state.done) {
+        cleanup();
+        if (state.cancelled) {
+          reject(new CancelledChoiceError());
+        } else {
+          resolve(state.result!);
+        }
+      }
+    };
+
+    process.stdin.on('keypress', onKeypress);
+    render();
   });
 }
 

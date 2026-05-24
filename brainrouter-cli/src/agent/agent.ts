@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
-import { askYesNo } from '../cli/cliPrompt.js';
+import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
 import { appendTranscriptEntry } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
@@ -242,6 +242,42 @@ export const LOCAL_TOOLS = [
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
   createRouteAgentTool(),
+  {
+    name: 'ask_user_choice',
+    description:
+      'Pause the turn and ask the human to commit to ONE of 2–4 mutually exclusive approaches. ' +
+      'Renders an arrow-key picker (↑/↓ navigate, ENTER confirm; SPACE toggles in multiSelect mode) ' +
+      'with an always-on "Other" row that drops to a free-text prompt — the user is never trapped between bad options. ' +
+      'Returns { answer: <chosen label or free-text> } in single-select, or { answer: [labels/free-text…] } in multiSelect. ' +
+      'Use ONLY when there is genuine ambiguity that needs the user\'s judgment — NOT for trivial yes/no confirmations ' +
+      '(`askYesNo` is wired into approval gates already), NOT for things you can decide yourself with the available context, ' +
+      'and NOT as a substitute for thinking. ' +
+      'Errors in non-interactive runs (CI / piped / `brainrouter run`) and when the user cancels (Esc/q/Ctrl+C); ' +
+      'on either error, decide yourself and say which option you picked and why.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question to ask the user (complete sentence ending with `?`).' },
+        header: { type: 'string', description: 'Short chip-style label (≤12 chars) shown above the question, e.g. "Auth method" or "Storage".' },
+        options: {
+          type: 'array',
+          description: '2–4 mutually exclusive choices. Each option needs a short label and a one-line description.',
+          minItems: 2,
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Short display text (1–5 words).' },
+              description: { type: 'string', description: 'One-line explanation of what this option means or what will happen if chosen.' },
+            },
+            required: ['label', 'description'],
+          },
+        },
+        multiSelect: { type: 'boolean', description: 'When true, allow the user to pick multiple options (comma-separated input). Defaults to false.' },
+      },
+      required: ['question', 'header', 'options'],
+    },
+  },
   {
     name: 'update_plan',
     description: 'Create or update the durable CLI task plan. Use this for multi-step work and keep at most one item in_progress.',
@@ -512,6 +548,10 @@ export class Agent {
       'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'route_agent',
       'goal_complete', 'goal_blocked',
+      // ask_user_choice doesn't touch the workspace — it's an interaction
+      // primitive, so it stays available in every access mode (and is gated
+      // structurally by activeReadline / isTTY in the helper itself).
+      'ask_user_choice',
     ]);
     const writeAdds = new Set(['write_file', 'edit_file', 'apply_patch']);
     const shellAdds = new Set(['run_command']);
@@ -1179,6 +1219,48 @@ export class Agent {
           plan: args.plan,
         }, this.sessionKey);
         return formatPlan(state);
+      }
+      case 'ask_user_choice': {
+        const question = String(args.question ?? '').trim();
+        const header = String(args.header ?? '').trim();
+        const rawOptions: any[] = Array.isArray(args.options) ? args.options : [];
+        if (!question) throw new Error('ask_user_choice requires a non-empty `question`.');
+        if (!header) throw new Error('ask_user_choice requires a non-empty `header`.');
+        if (rawOptions.length < 2 || rawOptions.length > 4) {
+          throw new Error(`ask_user_choice requires 2–4 options; received ${rawOptions.length}.`);
+        }
+        const options = rawOptions.map((o, i) => {
+          const label = String(o?.label ?? '').trim();
+          const description = String(o?.description ?? '').trim();
+          if (!label) throw new Error(`ask_user_choice option ${i + 1} is missing "label".`);
+          if (!description) throw new Error(`ask_user_choice option ${i + 1} is missing "description".`);
+          return { label, description };
+        });
+        // Silent child agents have no parent stdin/REPL bridge, so the
+        // helper's TTY check would error anyway — but giving a clearer message
+        // up front saves the LLM an iteration.
+        if (this.silent) {
+          throw new NoTTYError(
+            'ask_user_choice is not available to silent child agents. Decide the answer yourself, ' +
+            'state which option you picked and why, and return that as your final answer to the parent.',
+          );
+        }
+        // Eager TTY check so we fail without disturbing the screen. askChoice
+        // also checks (defense-in-depth for direct callers), but doing it here
+        // means the LLM gets a clean error before the picker tries to render.
+        if (!getActiveReadline() || !process.stdin.isTTY) {
+          throw new NoTTYError(
+            'ask_user_choice requires an interactive TTY. ' +
+            'Fall back to deciding yourself and state which option you picked and why.',
+          );
+        }
+        // header is rendered by the picker itself (chip line at the top of
+        // the frame), so we just thread it through opts.
+        const answer = await askChoice(question, options, {
+          multiSelect: !!args.multiSelect,
+          header,
+        });
+        return JSON.stringify({ answer });
       }
       case 'goal_complete': {
         const proof = String(args.proof ?? '').trim();
