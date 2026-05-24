@@ -156,6 +156,13 @@ export function ChatApp({
   const [spinnerLabel, setSpinnerLabel] = useState<string>('');
   const [accessMode, setAccessMode] = useState<'read' | 'write' | 'shell'>(initialAccessMode);
   const [footer, setFooter] = useState<FooterState>(initialFooter);
+  /**
+   * Slash palette cursor — lifted out of SlashPalettePanel so this
+   * component owns both the highlight + the keystroke handlers.
+   * (useInput at the panel level would race with TextInput for arrow
+   * keys; centralizing here makes the precedence explicit.)
+   */
+  const [paletteCursor, setPaletteCursor] = useState(0);
 
   const pushFns = useMemo<PushScrollback>(() => {
     const push = (entry: any) => {
@@ -206,8 +213,38 @@ export function ChatApp({
     return tail;
   }, [composerValue]);
 
+  // All matches for the current query, in filter rank order. Computed
+  // once per keystroke so the panel and the Enter/Tab handlers all
+  // share the same view of "what's highlighted".
+  const paletteMatches = useMemo(
+    () => (slashQuery !== null ? filterPaletteCommands(slashCommands, slashQuery) : []),
+    [slashCommands, slashQuery],
+  );
+
+  // Reset the cursor whenever the filter changes (matches array shrinks
+  // or shifts), and snap to 0 when the palette closes so a fresh `/`
+  // doesn't land on a stale row index.
+  useEffect(() => {
+    if (slashQuery === null) {
+      setPaletteCursor(0);
+      return;
+    }
+    setPaletteCursor((c) => (paletteMatches.length === 0 ? 0 : Math.min(c, paletteMatches.length - 1)));
+  }, [slashQuery, paletteMatches.length]);
+
   const onComposerSubmit = useCallback(async (text: string) => {
-    const trimmed = text.trim();
+    let trimmed = text.trim();
+    // Palette substitution: if the user pressed Enter while a slash
+    // palette match is highlighted AND the buffer is still in palette
+    // mode (just `/<query>`, no args yet), submit the highlighted
+    // command instead of the literal typed text. Matches the standalone
+    // SlashPalette in cli/ink/SlashPalette.tsx:onSubmit.
+    if (trimmed.startsWith('/') && !trimmed.includes(' ') && paletteMatches.length > 0) {
+      const picked = paletteMatches[paletteCursor] ?? paletteMatches[0];
+      if (picked.cmd !== trimmed) {
+        trimmed = picked.cmd;
+      }
+    }
     if (!trimmed) return;
     pushFns.user(trimmed);
     setComposerValue('');
@@ -221,13 +258,19 @@ export function ChatApp({
       setPhase('idle');
       setSpinnerLabel('');
     }
-  }, [onSubmit, pushFns]);
+  }, [onSubmit, pushFns, paletteMatches, paletteCursor]);
 
-  // Ctrl+D / Ctrl+C exit cleanly; Shift+Tab cycles the agent's access mode.
-  // ink's `useInput` only fires while the app is mounted AND focused, which is
-  // exactly when we want shift+tab to mean "cycle access". The orchestrator's
-  // onAccessModeCycle callback talks to the Agent and returns the new label so
-  // we can update the footer pill atomically.
+  // Ctrl+D / Ctrl+C exit; Shift+Tab cycles access mode; while the
+  // slash palette is open, arrow keys navigate it and Tab autocompletes
+  // the highlighted command into the composer.
+  //
+  // Why centralize here vs inside SlashPalettePanel: ink-text-input also
+  // uses `useInput` and consumes some key events. Up/down arrows are
+  // no-ops in a single-line text input so they don't conflict, but if
+  // we added the panel-level handler it would still receive the events
+  // even when the panel was unmounted (different mount-cycle bug).
+  // Centralizing keeps the precedence explicit and the handler scoped
+  // to ChatApp's lifetime.
   useInput((input, key) => {
     if (key.ctrl && (input === 'c' || input === 'd')) {
       exit();
@@ -238,6 +281,29 @@ export function ChatApp({
       if (next === 'read' || next === 'write' || next === 'shell') {
         setAccessMode(next);
         pushFns.notice(`Access mode → ${next}`);
+      }
+      return;
+    }
+    // Palette navigation — only when palette is open AND there's at
+    // least one match. We DON'T use `key.return` here because Enter is
+    // handled by TextInput's onSubmit (which calls onComposerSubmit
+    // above, which performs the highlight-substitution).
+    if (slashQuery !== null && paletteMatches.length > 0) {
+      if (key.upArrow) {
+        setPaletteCursor((c) => (c - 1 + paletteMatches.length) % paletteMatches.length);
+        return;
+      }
+      if (key.downArrow) {
+        setPaletteCursor((c) => (c + 1) % paletteMatches.length);
+        return;
+      }
+      if (key.tab && !key.shift) {
+        // Tab autocompletes the highlighted command into the composer
+        // (with a trailing space so the user can keep typing args).
+        const picked = paletteMatches[paletteCursor] ?? paletteMatches[0];
+        setComposerValue(picked.cmd + ' ');
+        setPaletteCursor(0);
+        return;
       }
     }
   });
@@ -277,9 +343,10 @@ export function ChatApp({
       {/* Slash palette — renders below composer when the user is typing `/`. */}
       {slashQuery !== null ? (
         <SlashPalettePanel
-          query={slashQuery}
-          commands={slashCommands}
+          matches={paletteMatches}
+          cursor={paletteCursor}
           accentColor={accentColor}
+          cols={cols}
         />
       ) : null}
 
@@ -378,8 +445,33 @@ function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentC
   }
 }
 
-function SlashPalettePanel({ query, commands, accentColor }: { query: string; commands: SlashCommandDef[]; accentColor: string }) {
-  const matches = useMemo(() => filterPaletteCommands(commands, query).slice(0, 6), [commands, query]);
+/**
+ * Slash command palette — scrollable, navigable, full-list view.
+ *
+ * Sized to a fixed `MAX_VISIBLE` window; when the match count exceeds
+ * the window, the viewport scrolls to keep the highlighted cursor in
+ * range. "↑ N more" / "↓ N more" hints render at the edges so the user
+ * knows there's more list to see.
+ *
+ * The command column has a fixed width so descriptions align across
+ * rows; descriptions use Ink's `wrap="truncate"` so a long line is
+ * cut with an ellipsis at the terminal edge instead of wrapping to
+ * the next row (which would break the per-row layout).
+ */
+const PALETTE_MAX_VISIBLE = 10;
+const PALETTE_CMD_COL_WIDTH = 24;
+
+function SlashPalettePanel({
+  matches,
+  cursor,
+  accentColor,
+  cols,
+}: {
+  matches: SlashCommandDef[];
+  cursor: number;
+  accentColor: string;
+  cols: number;
+}) {
   if (matches.length === 0) {
     return (
       <Box paddingX={1}>
@@ -387,19 +479,55 @@ function SlashPalettePanel({ query, commands, accentColor }: { query: string; co
       </Box>
     );
   }
+  // Compute a sliding viewport so the cursor stays comfortably inside.
+  // Prefer centering when possible; clamp at the ends so we never show
+  // an empty row at top or bottom.
+  const total = matches.length;
+  const safeCursor = Math.max(0, Math.min(cursor, total - 1));
+  const windowSize = Math.min(PALETTE_MAX_VISIBLE, total);
+  let viewportStart = safeCursor - Math.floor(windowSize / 2);
+  if (viewportStart < 0) viewportStart = 0;
+  if (viewportStart + windowSize > total) viewportStart = Math.max(0, total - windowSize);
+  const visible = matches.slice(viewportStart, viewportStart + windowSize);
+  const hiddenAbove = viewportStart;
+  const hiddenBelow = total - (viewportStart + windowSize);
+
+  // Description width budget: terminal cols minus the cmd column,
+  // cursor prefix (3 chars), and 2 padding chars. Floored at 12 so
+  // very narrow terminals still show *some* description.
+  const descBudget = Math.max(12, cols - PALETTE_CMD_COL_WIDTH - 5);
+
   return (
     <Box flexDirection="column" paddingX={1}>
-      {matches.map((cmd, i) => (
-        <Box key={cmd.cmd}>
-          <Text color={accentColor}>{i === 0 ? ' › ' : '   '}</Text>
-          <Box width={26}>
-            <Text bold={i === 0} color={i === 0 ? accentColor : undefined}>{cmd.cmd}</Text>
-          </Box>
-          <Text color="gray">{cmd.description}</Text>
+      {hiddenAbove > 0 ? (
+        <Box>
+          <Text color="gray" dimColor>{`   ↑ ${hiddenAbove} more above`}</Text>
         </Box>
-      ))}
+      ) : null}
+      {visible.map((cmd, i) => {
+        const actualIdx = viewportStart + i;
+        const isSelected = actualIdx === safeCursor;
+        return (
+          <Box key={cmd.cmd}>
+            <Text color={accentColor}>{isSelected ? ' › ' : '   '}</Text>
+            <Box width={PALETTE_CMD_COL_WIDTH}>
+              <Text bold={isSelected} color={isSelected ? accentColor : undefined} wrap="truncate">{cmd.cmd}</Text>
+            </Box>
+            <Box width={descBudget}>
+              <Text color="gray" wrap="truncate">{cmd.description}</Text>
+            </Box>
+          </Box>
+        );
+      })}
+      {hiddenBelow > 0 ? (
+        <Box>
+          <Text color="gray" dimColor>{`   ↓ ${hiddenBelow} more below`}</Text>
+        </Box>
+      ) : null}
       <Box marginTop={1}>
-        <Text color="gray" dimColor> ↵ submit  ·  type to filter  ·  esc / backspace past / to cancel</Text>
+        <Text color="gray" dimColor>
+          ↑/↓ navigate  ·  tab autocomplete  ·  ↵ submit  ·  type to filter  ·  esc / backspace past / to cancel
+        </Text>
       </Box>
     </Box>
   );
@@ -447,13 +575,13 @@ function FooterStatus({
           </>
         ) : null}
         {leftSegs.length > 0 ? (
-          <Text color="gray" dimColor>{'  ' + leftSegs.join(' · ')}</Text>
+          <Text color="gray" dimColor wrap="truncate">{'  ' + leftSegs.join(' · ')}</Text>
         ) : null}
         {phase === 'turn-running' ? (
-          <Text color="gray" dimColor>{'  · running'}</Text>
+          <Text color="gray" dimColor wrap="truncate">{'  · running'}</Text>
         ) : null}
         {leftSegs.length === 0 && phase === 'idle' ? (
-          <Text color="gray" dimColor>{'  ' + promptLabel}</Text>
+          <Text color="gray" dimColor wrap="truncate">{'  ' + promptLabel}</Text>
         ) : null}
       </Box>
       <Text color="gray" dimColor>? for shortcuts  ·  / for commands</Text>
