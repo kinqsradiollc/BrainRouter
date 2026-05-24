@@ -53,7 +53,7 @@ const SLASH_COMMANDS = [
   '/continue', '/auto-review', '/vim', '/statusline', '/quiet',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
-  '/tokens', '/watch', '/yolo', '/sandbox', '/kill',
+  '/tokens', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
@@ -898,7 +898,9 @@ const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Guardrails & Permissions',
     entries: [
       { cmd: '/permissions [read|write|shell]', desc: 'View or set agent access mode' },
-      { cmd: '/yolo [on|off]', desc: 'Auto-approve run_command' },
+      { cmd: '/mode [planning|fast]', desc: 'Session execution stance (planning asks, fast skips per-call y/N for safe commands)' },
+      { cmd: '/review-policy [request|proceed]', desc: 'How the agent treats multi-file approval gates' },
+      { cmd: '/yolo [on|off]', desc: 'Alias for `/mode fast` + `/review-policy proceed`' },
       { cmd: '/sandbox [status|add-read|add-write|remove|clear]', desc: 'Sandbox grants' },
       { cmd: '/hooks [list|add|remove|enable|disable]', desc: 'Lifecycle shell hooks' },
       { cmd: '/hookify [list|create|enable|disable|remove]', desc: 'Markdown rule guards' },
@@ -923,7 +925,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
       { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
-      { cmd: '/statusline <segments>', desc: 'Prompt (mode,branch,dirty,model,tokens,session,pr)' },
+      { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,branch,dirty,model,tokens,session,pr,workflow,goal,plan)' },
       { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
       { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
       { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },

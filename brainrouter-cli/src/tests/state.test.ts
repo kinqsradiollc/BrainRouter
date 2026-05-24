@@ -7,7 +7,7 @@ import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactTe
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../state/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../state/hooksStore.js';
-import { readPreferences, writePreferences } from '../state/preferencesStore.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../state/preferencesStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
@@ -193,6 +193,94 @@ test('preferencesStore: writePreferences merges new theme/personality fields', (
     assert.equal(prefs.personality, 'concise');
     // Old defaults still present
     assert.equal(prefs.statusline, 'mode');
+  });
+});
+
+test('preferencesStore: executionMode + reviewPolicy default to planning + request', () => {
+  withTempWorkspace((workspace) => {
+    const prefs = readPreferences(workspace);
+    assert.equal(prefs.executionMode, 'planning');
+    assert.equal(prefs.reviewPolicy, 'request');
+  });
+});
+
+test('preferencesStore: executionMode + reviewPolicy round-trip through write+read', () => {
+  withTempWorkspace((workspace) => {
+    writePreferences(workspace, { executionMode: 'fast', reviewPolicy: 'proceed' });
+    const after = readPreferences(workspace);
+    assert.equal(after.executionMode, 'fast');
+    assert.equal(after.reviewPolicy, 'proceed');
+    // Independent: flipping only one does not silently flip the other.
+    writePreferences(workspace, { executionMode: 'planning' });
+    const partial = readPreferences(workspace);
+    assert.equal(partial.executionMode, 'planning');
+    assert.equal(partial.reviewPolicy, 'proceed');
+  });
+});
+
+test('preferencesStore: applyYoloOn flips both new fields; applyYoloOff restores defaults', () => {
+  withTempWorkspace((workspace) => {
+    const on = applyYoloOn(workspace);
+    assert.equal(on.executionMode, 'fast');
+    assert.equal(on.reviewPolicy, 'proceed');
+    assert.equal(on.autoApproveShell, true, 'legacy mirror stays in sync during alias period');
+    // Read-back returns the same values (no migration drift).
+    const reread = readPreferences(workspace);
+    assert.equal(reread.executionMode, 'fast');
+    assert.equal(reread.reviewPolicy, 'proceed');
+    const off = applyYoloOff(workspace);
+    assert.equal(off.executionMode, 'planning');
+    assert.equal(off.reviewPolicy, 'request');
+    assert.equal(off.autoApproveShell, false);
+  });
+});
+
+test('preferencesStore: legacy autoApproveShell=true back-fills executionMode=fast + reviewPolicy=proceed', () => {
+  withTempWorkspace((workspace) => {
+    // Simulate an older install: only the legacy field is on disk, the new
+    // fields are entirely absent (not just `undefined` in the in-memory
+    // default).
+    fs.writeFileSync(
+      getCliStateFile(workspace, 'preferences.json'),
+      JSON.stringify({ autoApproveShell: true }),
+      'utf8',
+    );
+    const prefs = readPreferences(workspace);
+    assert.equal(prefs.executionMode, 'fast');
+    assert.equal(prefs.reviewPolicy, 'proceed');
+    // Legacy field is untouched on disk — other readers still see it.
+    const raw = JSON.parse(fs.readFileSync(getCliStateFile(workspace, 'preferences.json'), 'utf8'));
+    assert.equal(raw.autoApproveShell, true);
+  });
+});
+
+test('preferencesStore: legacy autoApproveShell=false reads back as defaults', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync(
+      getCliStateFile(workspace, 'preferences.json'),
+      JSON.stringify({ autoApproveShell: false }),
+      'utf8',
+    );
+    const prefs = readPreferences(workspace);
+    assert.equal(prefs.executionMode, 'planning');
+    assert.equal(prefs.reviewPolicy, 'request');
+  });
+});
+
+test('preferencesStore: explicit new fields override the legacy migration', () => {
+  withTempWorkspace((workspace) => {
+    // User had /yolo on (autoApproveShell:true) then toggled /mode planning
+    // explicitly. The new field must win — migration must not clobber it.
+    fs.writeFileSync(
+      getCliStateFile(workspace, 'preferences.json'),
+      JSON.stringify({ autoApproveShell: true, executionMode: 'planning' }),
+      'utf8',
+    );
+    const prefs = readPreferences(workspace);
+    assert.equal(prefs.executionMode, 'planning');
+    // reviewPolicy was unset on disk, so it falls back to default rather
+    // than being driven by the legacy flag (the user already migrated).
+    assert.equal(prefs.reviewPolicy, 'request');
   });
 });
 

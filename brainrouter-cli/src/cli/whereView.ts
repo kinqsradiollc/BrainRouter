@@ -5,6 +5,7 @@ import { readPlan, type PlanState } from '../state/taskStore.js';
 import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '../state/workflowArtifacts.js';
 import { listSessions, type ChildSessionRecord } from '../orchestration/orchestrator.js';
 import type { RecalledRecord } from '../memory/briefing.js';
+import { readPreferences, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
 import { BOX, type Theme } from './theme.js';
 
 /**
@@ -41,6 +42,8 @@ export interface WhereInputs {
   mcpTransport: string;
   mcpOnline: boolean;
   accessMode: string;
+  executionMode: ExecutionMode;
+  reviewPolicy: ReviewPolicy;
   workflowSlug?: string;
   workflowMeta?: WorkflowMeta;
   goal?: Goal;
@@ -69,6 +72,10 @@ function renderWorkspace(inputs: WhereInputs, theme: Theme): string[] {
     renderHeader('Workspace', theme),
     indent(theme.plain(`${base}  ${dim('(' + inputs.workspaceRoot + ')')}`)),
     indent(dim(`session ${inputs.sessionKey.slice(0, 8)}  ·  model ${inputs.model}  ·  mode ${inputs.accessMode}`)),
+    // /where is the "tell me everything" surface, so we show both new policy
+    // knobs regardless of whether they're at default — unlike the statusline,
+    // which hides defaults to keep the prompt quiet.
+    indent(dim(`exec    ${inputs.executionMode}  ·  review ${inputs.reviewPolicy}`)),
     indent(dim(`mcp     ${inputs.mcpProfile}  ·  ${inputs.mcpTransport}  ·  ${inputs.mcpOnline ? 'online' : 'offline'}`)),
   ];
 }
@@ -239,8 +246,11 @@ export function gatherWhereInputs(args: {
   const childSessions = (() => {
     try { return listSessions(args.workspaceRoot); } catch { return []; }
   })();
+  const prefs = readPreferences(args.workspaceRoot);
   return {
     ...args,
+    executionMode: prefs.executionMode,
+    reviewPolicy: prefs.reviewPolicy,
     workflowSlug,
     workflowMeta,
     goal,

@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import { formatBudget, readGoal } from '../state/goalStore.js';
 import { readPlan } from '../state/taskStore.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
+import { readPreferences } from '../state/preferencesStore.js';
 
 /**
  * Status-line segment renderers. Each segment is a pure-ish function from
@@ -15,19 +16,27 @@ import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
  *
  * Segments deliberately stay narrow:
  *   - `mode`     — access mode (read/write/shell)
+ *   - `exec`     — execution mode (fast); hidden when planning (the default)
  *   - `model`    — chat-LLM model name
  *   - `tokens`   — last turn's input/output tokens, only when calls > 0
  *   - `session`  — first ~22 chars of the sessionKey
  *   - `branch`   — git branch, only when in a git repo
  *   - `dirty`    — `*` when the working tree has uncommitted changes
  *   - `pr`       — github PR identifier (cached upstream of this helper)
- *   - `workflow` — current workflow slug if any (NEW)
- *   - `goal`     — goal status + budget usage if any (NEW)
- *   - `plan`     — completed/total plan items if a plan exists (NEW)
+ *   - `workflow` — current workflow slug if any
+ *   - `goal`     — goal status + budget usage if any
+ *   - `plan`     — completed/total plan items if a plan exists
+ *
+ * Note on segment naming: `mode` is the existing access-mode segment
+ * (read/write/shell), kept under that name so user preference files like
+ * `statusline: "mode,model"` keep working. The new execution-mode segment
+ * is `exec` (fast / hidden-when-planning) to avoid colliding with `mode`
+ * — `/mode` the command and `mode` the segment are deliberately decoupled.
  */
 
 export const SEGMENT_NAMES = [
   'mode',
+  'exec',
   'model',
   'tokens',
   'session',
@@ -65,6 +74,16 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
   switch (name) {
     case 'mode':
       return inputs.accessMode;
+    case 'exec': {
+      // Show `fast` only — `planning` is the default, and surfacing it would
+      // add chrome on every prompt for users who never touched /mode.
+      try {
+        const { executionMode } = readPreferences(inputs.workspaceRoot);
+        return executionMode === 'fast' ? 'fast' : undefined;
+      } catch {
+        return undefined;
+      }
+    }
     case 'model':
       return inputs.model;
     case 'tokens': {

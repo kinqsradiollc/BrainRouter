@@ -16,6 +16,17 @@ export interface SystemPromptContext {
    * here so the model asks questions instead of jumping to edits.
    */
   activeSkill?: string;
+  /**
+   * Execution-mode overlay set by `/mode`. Only `fast` produces an overlay
+   * — `planning` is the unchanged default behaviour and adding prose for it
+   * would just dilute the rest of the prompt.
+   */
+  executionMode?: 'planning' | 'fast';
+  /**
+   * Review-policy overlay set by `/review-policy`. Only `proceed` produces
+   * an overlay; `request` is the default behaviour.
+   */
+  reviewPolicy?: 'request' | 'proceed';
 }
 
 function personalityOverlay(style: SystemPromptContext['personality']): string {
@@ -44,6 +55,24 @@ function personalityOverlay(style: SystemPromptContext['personality']): string {
     default:
       return '';
   }
+}
+
+function policyOverlay(
+  executionMode: SystemPromptContext['executionMode'],
+  reviewPolicy: SystemPromptContext['reviewPolicy'],
+): string {
+  // Only emit the block when at least one knob is at its non-default value.
+  // The defaults (`planning` + `request`) match the rest of the prompt's
+  // tone, so adding prose for them would just dilute the directives above.
+  const lines: string[] = [];
+  if (executionMode === 'fast') {
+    lines.push('- Execution mode is `fast`: the user has opted out of the per-command y/N prompt for safe shell calls. Skip the "may I run this?" prose and just issue the tool call. The CLI still gates dangerous commands (rm -rf, sudo, force-push, …) — those will surface a y/N regardless of mode.');
+  }
+  if (reviewPolicy === 'proceed') {
+    lines.push('- Review policy is `proceed`: when a workflow plan or multi-file change is ready, apply it and report after. Do NOT pause to say "ready for your approval?" — the user has opted out of that gesture. `/approve` is still available to them as an explicit lever if they want one.');
+  }
+  if (lines.length === 0) return '';
+  return ['## Session policy overrides', ...lines].join('\n');
 }
 
 function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string {
@@ -208,6 +237,7 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     '- The CLI persists per-session state under .brainrouter/cli/sessions/<encodedKey>/ (transcript.jsonl, goal.json, tasks.json) for inspection and future orchestration.',
     '',
     personalityOverlay(context.personality),
+    policyOverlay(context.executionMode, context.reviewPolicy),
     clarifyOverlay(context.activeSkill),
   ].join('\n');
 }
