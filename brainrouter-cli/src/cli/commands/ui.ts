@@ -501,50 +501,6 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       renderHelp(args[0]?.toLowerCase());
       return true;
     }
-    case '/test-picker':
-    {
-      // Manual smoke-test for the ask_user_choice picker UX without going
-      // through the agent. Single-select by default; pass `multi` to
-      // exercise the checkbox path. The picker's "Other" row is always
-      // appended internally, so this also tests the free-text fallback.
-      const { askChoice, CancelledChoiceError, NoTTYError } = await import('../cliPrompt.js');
-      const multi = args[0]?.toLowerCase() === 'multi';
-      const options = [
-        { label: 'Apple', description: 'Red, crunchy, classic.' },
-        { label: 'Banana', description: 'Yellow, soft, potassium.' },
-        { label: 'Cherry', description: 'Small, tart, summer fruit.' },
-      ];
-      console.log(chalk.gray(
-        `\nDemo picker (${multi ? 'multi-select' : 'single-select'}). ` +
-        `Try: ↑/↓ to navigate, ${multi ? 'SPACE to toggle, ' : ''}ENTER to confirm, ` +
-        `q/Esc to cancel. Pick "Other" to type a free-form answer.\n`,
-      ));
-      try {
-        const result = await askChoice(
-          'Which fruit do you want?',
-          options,
-          { multiSelect: multi, header: 'Demo' },
-        );
-        console.log('\n' + chalk.green('✓ Picker returned: ') + JSON.stringify(result));
-        console.log(chalk.gray('  (this is exactly what the ask_user_choice tool would feed back to the agent)\n'));
-      } catch (err) {
-        if (err instanceof CancelledChoiceError) {
-          console.log('\n' + chalk.yellow('⚠ Picker cancelled by user (Esc/q/Ctrl+C).\n'));
-        } else if (err instanceof NoTTYError) {
-          console.log('\n' + chalk.red('✗ NoTTYError — stdin isn\'t an interactive TTY.\n'));
-        } else {
-          console.log('\n' + chalk.red(`✗ Picker errored: ${(err as Error).message}\n`));
-        }
-      } finally {
-        // The picker pauses the parent rl on entry and doesn't auto-resume
-        // (that's runAgentTurn's job for tool-driven invocations). For
-        // slash-command-driven invocations like this one, the input would
-        // otherwise stay paused after the picker exits and the user would
-        // think the REPL froze. Resume manually.
-        rl.resume();
-      }
-      return true;
-    }
   }
   return false;
 }
