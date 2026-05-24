@@ -19,6 +19,8 @@ import { listSessions } from '../orchestration/orchestrator.js';
 import { isPickerActive, setActiveReadline } from './cliPrompt.js';
 import { isInternalPickerActive } from './wizard/picker.js';
 import { createSlashSuggest, type SlashCommand } from './slashSuggest.js';
+import { runSlashPalette } from './ink/runSlashPalette.js';
+import type { SlashCommandDef } from './ink/SlashPalette.js';
 import { resolveTheme } from './theme.js';
 import { buildBannerInputs, renderBanner } from './banner.js';
 import { isKnownSegment, renderSegments } from './statusline.js';
@@ -282,23 +284,81 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   // the raw 0x7F itself; in cooked mode the terminal's line discipline
   // owns it and readline's internal buffer drifts out of sync). Leave the
   // default in place.
-  // 0.3.7 slash-suggest popup was readline-based and mangled output on
-  // every keystroke (each draw appended a fresh popup below the prompt
-  // instead of replacing the previous one — fundamentally fragile when
-  // readline owns the prompt line). Disabled here; a proper Ink-based
-  // slash menu lands with the full Ink REPL rewrite (0.3.8 roadmap
-  // item). Until then Tab completion via readline's completer is the
-  // discovery path (already wired below in createInterface().completer).
-  // The createSlashSuggest export is kept for future use.
+  // 0.3.7 — slash command palette on `/`. Mirrors claude-code's UX:
+  // typing `/` at an empty prompt opens an Ink-rendered command
+  // palette with filtered suggestions, arrow-key nav, Tab to
+  // autocomplete, Enter to submit. Esc / backspacing past the `/`
+  // returns to the normal readline prompt.
+  //
+  // Build the slash command catalog once — descriptions come from
+  // the existing HELP_CATEGORIES registry so we don't duplicate
+  // truth.
+  const slashCatalog: SlashCommandDef[] = SLASH_COMMANDS.map((cmd) => ({
+    cmd,
+    description: lookupSlashDescription(cmd),
+  }));
+  let slashPaletteOpen = false;
 
-  process.stdin.on('keypress', (_str, key) => {
+  const openSlashPalette = async () => {
+    if (slashPaletteOpen) return;
+    if (isPickerActive() || isInternalPickerActive()) return;
+    slashPaletteOpen = true;
+    rl.pause();
+    try {
+      const result = await runSlashPalette({
+        initialQuery: '/',
+        commands: slashCatalog,
+        accentColor: theme.primary(' ').match(/\x1b\[38;2;(\d+);(\d+);(\d+)m/)
+          ? '#CC9166'
+          : '#CC9166',
+      });
+      if (result.kind === 'submit') {
+        // Feed the chosen command back to readline so the existing
+        // line handler processes it as if the user typed + Enter.
+        // We can't use rl.write because we want the line handler
+        // semantics (not just insertion); emit('line', text) is the
+        // direct path.
+        rl.resume();
+        rl.emit('line', result.text);
+        return;
+      }
+    } catch (err) {
+      console.error(chalk.red(`\nSlash palette error: ${(err as Error)?.message ?? err}\n`));
+    } finally {
+      slashPaletteOpen = false;
+      rl.resume();
+      rl.prompt(true);
+    }
+  };
+
+  process.stdin.on('keypress', (str, key) => {
     // Any active picker (the LLM-tool ask_user_choice picker OR the
     // 0.3.7 internal wizard / /config / /login picker) owns stdin
     // while it's on screen; yield to it or shift+tab would cycle the
     // access mode mid-picker AND inject stdout noise into the picker
     // frame's redraw region.
-    if (isPickerActive() || isInternalPickerActive()) {
+    if (isPickerActive() || isInternalPickerActive() || slashPaletteOpen) {
       return;
+    }
+    // `/` at an empty prompt opens the slash command palette.
+    if (str === '/' && !key?.ctrl && !key?.meta) {
+      const line = (rl as any).line ?? '';
+      if (line.length === 0) {
+        // Don't echo the `/` to readline — the palette starts with
+        // it already in its buffer. We intercept here BEFORE readline
+        // sees it. (Note: readline still gets the keypress because we
+        // can't prevent that on Node's stdin; the palette opens
+        // synchronously after this handler and the `/` ends up in
+        // readline's buffer too. We clear readline's buffer right
+        // after to avoid the duplicate `/`.)
+        setImmediate(() => {
+          // Clear readline's line BEFORE opening the palette so we
+          // don't get `/` echoed under the palette frame.
+          try { (rl as any).line = ''; (rl as any).cursor = 0; } catch { /* ignore */ }
+          void openSlashPalette();
+        });
+        return;
+      }
     }
     if (key && key.name === 'tab' && key.shift) {
       const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
