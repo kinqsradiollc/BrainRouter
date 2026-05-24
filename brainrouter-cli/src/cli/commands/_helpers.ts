@@ -9,7 +9,7 @@
  */
 
 import chalk from 'chalk';
-import ora from 'ora';
+import { spinner } from '../spinner.js';
 import type { Agent } from '../../agent/agent.js';
 import type { McpClientWrapper } from '../../runtime/mcpClient.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
@@ -28,9 +28,9 @@ export async function printMemoryCards(
   args: Record<string, unknown>,
   heading: string,
 ): Promise<void> {
-  const spinner = ora(chalk.gray(`${toolName}…`)).start();
+  const s = spinner(chalk.gray(`${toolName}…`)).start();
   const res = await callMcpTool<any>(mcpClient, toolName, args);
-  spinner.stop();
+  s.stop();
   console.log();
   if (res.isError) {
     console.log(chalk.red(`${heading}: tool error — ${res.text || '(no message)'}`));
@@ -58,9 +58,9 @@ export async function printMcpCall(
   args: Record<string, unknown>,
   heading: string,
 ): Promise<void> {
-  const spinner = ora(chalk.gray(`${toolName}…`)).start();
+  const s = spinner(chalk.gray(`${toolName}…`)).start();
   const res = await callMcpTool(mcpClient, toolName, args);
-  spinner.stop();
+  s.stop();
   console.log(chalk.bold(`\n${heading}`));
   if (res.isError) {
     console.log(chalk.red(`  Tool error: ${res.text || '(no message)'}`));
@@ -148,7 +148,7 @@ export async function runSkillByName(
   orchestration: string | undefined,
   runTurn: (prompt: string) => void,
 ): Promise<void> {
-  const loader = ora(chalk.gray(`Loading skill: ${skillName}...`)).start();
+  const loader = spinner(chalk.gray(`Loading skill: ${skillName}...`)).start();
   let prompt: string;
   try {
     const skill = await resolveSkill(mcpClient, skillName, agent.workspaceRoot, 'full');

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import ora from 'ora';
+import { spinner as makeSpinner } from '../spinner.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { consolidateMemories } from '../../memory/consolidation.js';
@@ -211,7 +211,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         return true;
       }
       if (sub === 'consolidate') {
-        const spinner = ora(chalk.gray('Consolidating memories from MCP into filesystem artifacts...')).start();
+        const spinner = makeSpinner(chalk.gray('Consolidating memories from MCP into filesystem artifacts...')).start();
         try {
           const result = await consolidateMemories(mcpClient, agent.workspaceRoot, { sessionKey: agent.sessionKey });
           spinner.succeed(chalk.green(`Consolidated ${result.totalRecords} records.`));
