@@ -98,18 +98,37 @@ export function askChoice(
   options: ChoiceOption[],
   opts: { multiSelect?: boolean } = {},
 ): Promise<string | string[]> {
+  // Input-shape validation first — bad shape is a caller bug regardless of
+  // TTY availability, and surfacing it as "no TTY" would misdirect the agent
+  // toward "decide yourself" when the real fix is "re-emit the call with a
+  // valid options array".
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) {
+    const count = Array.isArray(options) ? options.length : 'invalid';
+    return Promise.reject(
+      new Error(`ask_user_choice requires 2–4 options; received ${count}.`),
+    );
+  }
+  // Reject duplicate labels (case-insensitive). Labels are the identifier the
+  // helper returns, so a collision makes the return value ambiguous: a user
+  // selecting by number gets `options[i].label`, but downstream branching
+  // can't tell which slot the answer came from. Catching it here is cheaper
+  // than letting the agent commit on a meaningless result.
+  const seen = new Set<string>();
+  for (const o of options) {
+    const key = (o?.label ?? '').toLowerCase();
+    if (seen.has(key)) {
+      return Promise.reject(
+        new Error(`ask_user_choice options must have unique labels; "${o.label}" appears more than once (case-insensitive).`),
+      );
+    }
+    seen.add(key);
+  }
   if (!activeReadline || !process.stdin.isTTY) {
     return Promise.reject(
       new NoTTYError(
         'ask_user_choice requires an interactive TTY (no readline interface is active or stdin is not a TTY). ' +
         'Fall back to deciding yourself based on the available context, and state which option you picked and why in your reply.',
       ),
-    );
-  }
-  if (!Array.isArray(options) || options.length < 2 || options.length > 4) {
-    const count = Array.isArray(options) ? options.length : 'invalid';
-    return Promise.reject(
-      new Error(`ask_user_choice requires 2–4 options; received ${count}.`),
     );
   }
   const rl = activeReadline;

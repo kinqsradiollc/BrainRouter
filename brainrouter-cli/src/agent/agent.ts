@@ -5,7 +5,8 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import type { McpClientWrapper } from '../runtime/mcpClient.js';
-import { askChoice, askYesNo, NoTTYError } from '../cli/cliPrompt.js';
+import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
+import { resolveTheme } from '../cli/theme.js';
 import type { LLMConfig } from '../config/config.js';
 import { appendTranscriptEntry } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
@@ -1242,10 +1243,21 @@ export class Agent {
             'state which option you picked and why, and return that as your final answer to the parent.',
           );
         }
+        // Pre-flight TTY check. askChoice does this too, but we need to fail
+        // BEFORE writing the [header] chip to stdout — otherwise non-interactive
+        // runs see an orphan header line above the NoTTYError.
+        if (!getActiveReadline() || !process.stdin.isTTY) {
+          throw new NoTTYError(
+            'ask_user_choice requires an interactive TTY. ' +
+            'Fall back to deciding yourself and state which option you picked and why.',
+          );
+        }
         // Print the chip-style header above the question so the rendering
         // mirrors AskUserQuestion's visual shape — a short tag tells the user
-        // at a glance what topic the prompt is about.
-        console.log(chalk.bold.cyan(`\n[${header}]`));
+        // at a glance what topic the prompt is about. Theme is resolved fresh
+        // so a `/theme` toggle between turns is honored.
+        const theme = resolveTheme(this.workspaceRoot);
+        console.log(theme.heading(`\n[${header}]`));
         const answer = await askChoice(question, options, { multiSelect: !!args.multiSelect });
         return JSON.stringify({ answer });
       }

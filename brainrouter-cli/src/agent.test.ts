@@ -2246,6 +2246,44 @@ test('askChoice: throws NoTTYError when stdin is not a TTY so the agent falls ba
   }
 });
 
+test('askChoice: multiSelect returns the picked labels and dedupes repeated tokens', async () => {
+  const { rl } = makeFakeReadline(['1, sve, 1']);
+  const result = await withFakeTTY(rl, () =>
+    askChoice(
+      'Pick any that apply:',
+      [
+        { label: 'React', description: 'a' },
+        { label: 'Svelte', description: 'b' },
+        { label: 'Vue', description: 'c' },
+      ],
+      { multiSelect: true },
+    ),
+  );
+  // Should be the unique set in input order: number "1" → React, prefix
+  // "sve" → Svelte, repeated "1" → deduped.
+  assert.deepEqual(result, ['React', 'Svelte']);
+});
+
+test('askChoice: rejects duplicate labels (case-insensitive) before reaching the prompt', async () => {
+  // No fake readline — duplicate-label validation should fire eagerly,
+  // before we'd ever ask the user anything.
+  setActiveReadline(undefined);
+  const prev = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+  try {
+    await assert.rejects(
+      () => askChoice('Pick:', [
+        { label: 'Apply', description: 'a' },
+        { label: 'apply', description: 'b' },
+      ]),
+      /unique labels|appears more than once/i,
+    );
+  } finally {
+    if (prev) Object.defineProperty(process.stdin, 'isTTY', prev);
+    else delete (process.stdin as any).isTTY;
+  }
+});
+
 test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () => {
   const tool = LOCAL_TOOLS.find((t) => t.name === 'ask_user_choice');
   assert.ok(tool, 'ask_user_choice should be registered in LOCAL_TOOLS');
