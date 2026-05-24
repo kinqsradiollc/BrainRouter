@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getCliStateDir, getCliStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from './cliState.js';
+import { getCurrentWorkflow, getWorkflowGoalFile } from './workflowArtifacts.js';
 
 /**
  * Persistent goal / continuation contract for the agent. A goal is not just
@@ -28,13 +29,20 @@ import { getCliStateDir, getCliStateFile, getSessionStateFile, readJsonFile, wri
  *                      "you ran out of room" from "user paused" from
  *                      "agent gave up."
  *
- * Storage (per-session bucket):
- *   ~/.brainrouter/workspaces/<encoded>/cli/sessions/<encodedKey>/goal.json
+ * Storage (priority chain — see `resolveGoalScope`):
+ *   1. Workflow bound: `<workspace>/.brainrouter/workflows/<slug>/goal.json`
+ *      (lives in the committable workflow folder so the goal travels with
+ *      the spec / tasks / walkthrough).
+ *   2. No workflow, session-scoped:
+ *      `~/.brainrouter/workspaces/<encoded>/cli/sessions/<encodedKey>/goal.json`
+ *   3. Back-compat (no workflow, no sessionKey):
+ *      `~/.brainrouter/workspaces/<encoded>/cli/goal.json`
  *
- * The legacy workspace-level path is only read when no sessionKey is
- * available. Session-scoped reads stay isolated and never fall back to a
- * prior session's goal. normalize() fills missing fields with defaults so
- * resumed sessions don't crash on first read.
+ * Session-scoped reads stay isolated (Item 1 invariant — never fall back to
+ * a prior session's goal). Workflow-bound reads stay isolated by workflow
+ * (Item 3 invariant — switching workflows swaps which goal you see).
+ * normalize() fills missing fields with defaults so resumed sessions don't
+ * crash on first read.
  */
 
 export type GoalStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'usage_limited';
@@ -157,27 +165,62 @@ function normalize(raw: Partial<Goal> | null | undefined): Goal | null {
   };
 }
 
-function resolveGoalFile(workspaceRoot: string, sessionKey?: string): string {
-  if (sessionKey) {
-    const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
-    if (fs.existsSync(sessionPath)) return sessionPath;
+/**
+ * Where the agent's goal lives RIGHT NOW. The priority chain — adapted from
+ * openSrc/agentmemory's fallback-provider walk (guard clauses that early-
+ * return per layer rather than a single flat loop) — is:
+ *
+ *   1. workflow scope — a workflow is bound via `current-workflow.json`
+ *      (the per-user CLI pointer). Goal lives at `<workflow>/goal.json`
+ *      next to spec.md / tasks.md / meta.json. Switching workflows carries
+ *      the goal with the folder.
+ *   2. session scope — no workflow bound but a sessionKey is supplied
+ *      (the post-Item-1 default). Goal lives at
+ *      `<cliStateDir>/sessions/<encodedKey>/goal.json` — strictly per
+ *      session, never falls back to a different session's file.
+ *   3. legacy scope — no workflow, no sessionKey. Used by the very-old
+ *      single-process call sites that haven't been migrated yet (and by
+ *      back-compat reads of pre-0.3.5 workspace-level goal.json files).
+ *
+ * Every read/write entrypoint routes through this single resolver so the
+ * priority chain has exactly one decision point. Callers don't decide where
+ * to look; they get a path + scope tag and act on it.
+ */
+export type GoalScope =
+  | { scope: 'workflow'; slug: string; path: string }
+  | { scope: 'session'; sessionKey: string; path: string }
+  | { scope: 'legacy'; path: string };
+
+export function resolveGoalScope(workspaceRoot: string, sessionKey?: string): GoalScope {
+  // Priority 1: workflow-bound. `getCurrentWorkflow` reads the per-user
+  // pointer file in CLI state (not the workspace tree), so two CLI processes
+  // on the same workspace can point at different workflows independently.
+  try {
+    const slug = getCurrentWorkflow(workspaceRoot);
+    if (slug) {
+      return { scope: 'workflow', slug, path: getWorkflowGoalFile(workspaceRoot, slug) };
+    }
+  } catch {
+    // Workspace-local mkdirs occasionally race on first launch; fall through
+    // to the safer session/legacy path rather than fail the read.
   }
-  return getCliStateFile(workspaceRoot, 'goal.json');
+  // Priority 2: session-scoped (the Item 1 fix — no cross-session leak).
+  if (sessionKey) {
+    return {
+      scope: 'session',
+      sessionKey,
+      path: getSessionStateFile(workspaceRoot, sessionKey, 'goal.json'),
+    };
+  }
+  // Priority 3: legacy workspace-level — back-compat for very old installs
+  // and the no-session-key code paths.
+  return { scope: 'legacy', path: getCliStateFile(workspaceRoot, 'goal.json') };
 }
 
 export function readGoal(workspaceRoot: string, sessionKey?: string): Goal | null {
-  if (sessionKey) {
-    const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
-    if (fs.existsSync(sessionPath)) {
-      return normalize(readJsonFile<Partial<Goal> | null>(sessionPath, null));
-    }
-    return null;
-  }
-  const legacyPath = getCliStateFile(workspaceRoot, 'goal.json');
-  if (fs.existsSync(legacyPath)) {
-    return normalize(readJsonFile<Partial<Goal> | null>(legacyPath, null));
-  }
-  return null;
+  const scope = resolveGoalScope(workspaceRoot, sessionKey);
+  if (!fs.existsSync(scope.path)) return null;
+  return normalize(readJsonFile<Partial<Goal> | null>(scope.path, null));
 }
 
 function archiveLegacyGoal(workspaceRoot: string): void {
@@ -226,7 +269,11 @@ export function setGoal(
       throw new GoalConflictError(existing);
     }
   }
-  if (sessionKey) {
+  const scope = resolveGoalScope(workspaceRoot, sessionKey);
+  // Archive any stale workspace-level goal.json the moment we write to a
+  // non-legacy scope (workflow OR session). This preserves the Item 1 fix:
+  // never leave the legacy file where a future session would re-pick it up.
+  if (scope.scope !== 'legacy') {
     archiveLegacyGoal(workspaceRoot);
   }
   const now = new Date().toISOString();
@@ -242,20 +289,19 @@ export function setGoal(
     startedAt: now,
     updatedAt: now,
   };
-  const filePath = sessionKey
-    ? getSessionStateFile(workspaceRoot, sessionKey, 'goal.json')
-    : getCliStateFile(workspaceRoot, 'goal.json');
-  writeJsonFile(filePath, goal);
+  writeJsonFile(scope.path, goal);
   return goal;
 }
 
 export function clearGoal(workspaceRoot: string, sessionKey?: string): void {
-  if (sessionKey) {
-    writeJsonFile(getSessionStateFile(workspaceRoot, sessionKey, 'goal.json'), null);
-  }
-  const legacy = getCliStateFile(workspaceRoot, 'goal.json');
-  if (fs.existsSync(legacy)) {
-    writeJsonFile(legacy, null);
+  const scope = resolveGoalScope(workspaceRoot, sessionKey);
+  writeJsonFile(scope.path, null);
+  // Also clear the legacy workspace file when we're operating on a higher-
+  // priority scope — leaving it behind would let a future no-sessionKey
+  // read resurface a stale goal.
+  if (scope.scope !== 'legacy') {
+    const legacy = getCliStateFile(workspaceRoot, 'goal.json');
+    if (fs.existsSync(legacy)) writeJsonFile(legacy, null);
   }
 }
 
@@ -271,7 +317,7 @@ function patchGoal(
     ...patch,
     updatedAt: new Date().toISOString(),
   };
-  writeJsonFile(resolveGoalFile(workspaceRoot, sessionKey), next);
+  writeJsonFile(resolveGoalScope(workspaceRoot, sessionKey).path, next);
   return next;
 }
 
