@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
-import ora from 'ora';
+import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
@@ -133,7 +133,7 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
     }
     case '/compact':
     {
-      const spinner = ora(chalk.gray('Summarizing conversation for compaction...')).start();
+      const spinner = makeSpinner(chalk.gray('Summarizing conversation for compaction...')).start();
       try {
         const result = await agent.compactHistory();
         if (!result) {
