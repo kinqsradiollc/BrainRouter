@@ -729,6 +729,49 @@ test('readWorkflowGoal: returns the workflow folder goal regardless of which wor
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: /workflow pause + /workflow resume <slug>
+// -----------------------------------------------------------------------
+
+test('per-workflow pause/resume: pausing a workflow-bound goal persists the paused status in the workflow folder', async () => {
+  // Subtask 5 — /workflow pause routes through pauseGoal with the per-
+  // workflow scope from Subtask 1. The status must live in the workflow's
+  // own goal.json (not the session bucket) so a different session on the
+  // same workspace sees the paused state too.
+  const { pauseGoal, readWorkflowGoal } = await import('../state/goalStore.js');
+  const { createWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:wf-pause';
+    const wf = createWorkflow(workspace, { title: 'auth overhaul', kind: 'feature-dev' });
+    setGoal(workspace, 'ship the auth overhaul', sk);
+    const paused = pauseGoal(workspace, sk)!;
+    assert.equal(paused.status, 'paused');
+    // The status survives in the workflow folder, not the session bucket.
+    assert.equal(readWorkflowGoal(workspace, wf.slug)?.status, 'paused');
+  });
+});
+
+test('per-workflow pause/resume: resuming a different workflow flips the pointer + goal status back to active', async () => {
+  const { pauseGoal, resumeGoal, readWorkflowGoal } = await import('../state/goalStore.js');
+  const { createWorkflow, getCurrentWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:wf-resume';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    pauseGoal(workspace, sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+    // Bound to B, A is paused. Mimic /workflow resume A: flip pointer + resume.
+    setCurrentWorkflow(workspace, a.slug);
+    const resumed = resumeGoal(workspace, sk)!;
+    assert.equal(resumed.status, 'active');
+    assert.equal(getCurrentWorkflow(workspace), a.slug);
+    // B's goal stayed active in B's folder; A's flipped back to active.
+    assert.equal(readWorkflowGoal(workspace, a.slug)?.status, 'active');
+    assert.equal(readWorkflowGoal(workspace, b.slug)?.status, 'active');
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {

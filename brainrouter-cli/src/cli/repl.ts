@@ -868,6 +868,8 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
       { cmd: '/workflows', desc: 'List durable workflow folders' },
       { cmd: '/workflow switch <slug>', desc: 'Refocus on an existing workflow (migrates any session goal into the target)' },
+      { cmd: '/workflow pause', desc: 'Pause the current workflow\'s goal' },
+      { cmd: '/workflow resume <slug>', desc: 'Switch to <slug> AND resume its goal in one shot' },
       { cmd: '/skill <name> [input]', desc: 'Run any catalogued skill' },
       { cmd: '/skills', desc: 'List installed BrainRouter skills' },
       { cmd: '/plan  /plan clear', desc: 'Show the durable CLI task plan; clear it (drops stale items)' },
