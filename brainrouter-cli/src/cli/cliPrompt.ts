@@ -383,14 +383,23 @@ function runPicker(
 
     const clear = () => {
       if (renderedLines > 0) {
-        // Move cursor up `renderedLines` then clear to end of screen.
-        stdout.write(`\x1b[${renderedLines}A\r\x1b[J`);
+        // `\x1b[<n>F` = cursor up n lines AND to col 1 (atomic). Then
+        // erase to end of screen. Earlier code used `\x1b[<n>A\r` after
+        // writing the frame with a trailing `\n`, which was off-by-one
+        // (the trailing newline moved the cursor below the frame, so
+        // `up n` landed inside the previous frame instead of at its
+        // top). The new shape writes NO trailing newline and counts
+        // visible lines exactly via the split below.
+        stdout.write(`\x1b[${renderedLines}F\x1b[J`);
       }
     };
     const render = () => {
       clear();
       const text = renderPicker(state, question, opts.header);
-      stdout.write(text + '\n');
+      stdout.write(text);
+      // Count actual lines we wrote — no trailing newline added, so
+      // the cursor sits at the END of the last frame line. The next
+      // `clear()` will move up to the START of the top frame line.
       renderedLines = text.split('\n').length;
     };
 

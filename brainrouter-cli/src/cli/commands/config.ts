@@ -1,6 +1,5 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { askChoice, CancelledChoiceError } from '../cliPrompt.js';
 import { getConfigPath, saveConfig } from '../../config/config.js';
 import {
   readPreferences,
@@ -13,59 +12,26 @@ import {
 } from '../../state/preferencesStore.js';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
 import { PROVIDER_CATALOG, findProvider, maskApiKey, validateApiKey } from '../wizard/providers.js';
+import { pickFromList, promptText, type PickerRow } from '../wizard/picker.js';
+import { buildTheme, type Theme } from '../theme.js';
 
 /**
- * `/config` slash command — 0.3.7 redesign.
+ * `/config` slash command — 0.3.7 redesign on the new atomic-frame picker
+ * (`../wizard/picker.ts`).
  *
- * Verb-overloaded, lifted from
- * `openSrc/DeepSeek-TUI/crates/tui/src/commands/config.rs:43`:
+ * Verb-overloaded (lifted from
+ * `openSrc/DeepSeek-TUI/crates/tui/src/commands/config.rs:43`):
  *
- *   - `/config` (bare) — open the **settings home panel** (picker over
- *     every CLI knob; selecting a row opens its sub-picker; Esc returns
- *     to the home; Esc on the home exits).
- *   - `/config <key>` — print the current value for `<key>`.
- *   - `/config <key> <value>` — set `<key>` to `<value>` and persist.
- *   - `/config raw` — print the scrubbed JSON config (the
- *     pre-0.3.7 bare-`/config` behaviour, preserved under a name so
- *     users who scripted around it still have a path).
+ *   - `/config`              — open the settings home panel
+ *   - `/config <key>`        — print the current value for <key>
+ *   - `/config <key> <val>`  — set <key> to <val> and persist
+ *   - `/config raw|json`     — print scrubbed JSON dump
  *
  * Persistence routes through `saveConfig` / `writePreferences` — never
- * touches JSON files directly so future schema changes stay
- * centralized.
+ * touches JSON files directly so future schema changes stay centralized.
  */
 
 // --- Public entrypoint -------------------------------------------------
-
-/**
- * Pure parser for `/config` arguments. Decoupled from the dispatcher so
- * the test suite can pin the routing table without driving the picker.
- *
- *   /config                  → { mode: 'home' }
- *   /config raw              → { mode: 'raw' }
- *   /config --raw            → { mode: 'raw' }
- *   /config json             → { mode: 'raw' }
- *   /config theme            → { mode: 'get',  key: 'theme' }
- *   /config theme dark       → { mode: 'set',  key: 'theme', value: 'dark' }
- *   /config statusline a,b,c → { mode: 'set',  key: 'statusline', value: 'a,b,c' }
- */
-export type ParsedConfigArgs =
-  | { mode: 'home' }
-  | { mode: 'raw' }
-  | { mode: 'get'; key: string }
-  | { mode: 'set'; key: string; value: string };
-
-export function parseConfigArgs(args: string[]): ParsedConfigArgs {
-  if (args.length === 0) return { mode: 'home' };
-  const first = args[0].toLowerCase();
-  if (first === 'raw' || first === '--raw' || first === 'json') return { mode: 'raw' };
-  if (args.length === 1) return { mode: 'get', key: first };
-  return { mode: 'set', key: first, value: args.slice(1).join(' ').trim() };
-}
-
-/** Exposed for tests — KEY_HANDLERS shape is otherwise an internal detail. */
-export function listKnownConfigKeys(): string[] {
-  return Object.keys(KEY_HANDLERS);
-}
 
 export async function tryHandleConfigCommand(ctx: CommandContext): Promise<boolean> {
   if (ctx.command !== '/config') return false;
@@ -86,56 +52,67 @@ export async function tryHandleConfigCommand(ctx: CommandContext): Promise<boole
   }
 }
 
-// --- Settings home panel -----------------------------------------------
+// --- Pure parser (exported for tests) ----------------------------------
 
-interface PanelRow {
-  key: string;
-  label: string;
-  current: () => string;
-  /** Returns true when the value changed (caller refreshes the panel). */
-  edit: (ctx: CommandContext) => Promise<boolean>;
+export type ParsedConfigArgs =
+  | { mode: 'home' }
+  | { mode: 'raw' }
+  | { mode: 'get'; key: string }
+  | { mode: 'set'; key: string; value: string };
+
+export function parseConfigArgs(args: string[]): ParsedConfigArgs {
+  if (args.length === 0) return { mode: 'home' };
+  const first = args[0].toLowerCase();
+  if (first === 'raw' || first === '--raw' || first === 'json') return { mode: 'raw' };
+  if (args.length === 1) return { mode: 'get', key: first };
+  return { mode: 'set', key: first, value: args.slice(1).join(' ').trim() };
 }
+
+export function listKnownConfigKeys(): string[] {
+  return Object.keys(KEY_HANDLERS);
+}
+
+// --- Settings home panel -----------------------------------------------
 
 async function runHomePanel(ctx: CommandContext): Promise<void> {
   const { agent } = ctx;
   let cursor = 0;
   while (true) {
+    const theme = buildTheme(readPreferences(agent.workspaceRoot).theme === 'mono' ? 'mono' : readPreferences(agent.workspaceRoot).theme === 'light' ? 'light' : 'dark');
     const rows = buildPanelRows(ctx);
-    const longest = rows.reduce((w, r) => Math.max(w, r.label.length), 0);
-    const choices = rows.map((row) => ({
-      label: row.label,
-      description: padRight(row.current(), 50, longest > 18 ? 28 : 32),
+    const pickerRows: PickerRow[] = rows.map((r) => ({
+      id: r.key,
+      label: r.label,
+      value: r.current(),
+      disabled: r.key === '__separator__',
     }));
-    let answer: string | string[];
+    const result = await pickFromList({
+      theme,
+      title: '⚙️  /config',
+      subtitle: `Workspace: ${agent.workspaceRoot}.  Edit a row, or pick "View raw config" to dump the scrubbed JSON.`,
+      rows: pickerRows,
+      initialCursor: cursor,
+      footer: '↑/↓ navigate  ·  ↵ edit row  ·  esc / q close',
+    });
+    if (result.kind !== 'pick') return;
+    const picked = rows.find((r) => r.key === result.id);
+    if (!picked) return;
+    cursor = rows.indexOf(picked);
+    if (picked.key === '__exit') return;
+    if (picked.key === '__raw') { printRawConfig(ctx); continue; }
     try {
-      answer = await askChoice(
-        `Edit which setting? (workspace: ${agent.workspaceRoot})`,
-        choices,
-        { header: '⚙️  /config', initialCursor: cursor },
-      );
-    } catch (err) {
-      if (err instanceof CancelledChoiceError) return;
-      throw err;
-    }
-    const pickedRow = rows.find((r) => r.label === answer);
-    if (!pickedRow) {
-      // "Other" or unknown — treat as exit.
-      return;
-    }
-    cursor = rows.indexOf(pickedRow);
-    if (pickedRow.key === '__exit') return;
-    if (pickedRow.key === '__raw') { printRawConfig(ctx); continue; }
-    try {
-      await pickedRow.edit(ctx);
+      await picked.edit(ctx);
     } catch (err: any) {
-      console.log(chalk.red(`\n  /config "${pickedRow.label}" failed: ${err?.message ?? err}\n`));
+      console.log(chalk.red(`\n  /config "${picked.label}" failed: ${err?.message ?? err}\n`));
     }
   }
 }
 
-function padRight(s: string, max: number, target = 32): string {
-  const clipped = s.length > max ? s.slice(0, max - 1) + '…' : s;
-  return clipped.length >= target ? clipped : clipped + ' '.repeat(target - clipped.length);
+interface PanelRow {
+  key: string;
+  label: string;
+  current: () => string;
+  edit: (ctx: CommandContext) => Promise<boolean>;
 }
 
 function buildPanelRows(ctx: CommandContext): PanelRow[] {
@@ -148,7 +125,7 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
       current: () => {
         const llm = config.llm;
         if (!llm) return '(not configured)';
-        return `${llm.model}  ·  ${shortenEndpoint(llm.endpoint)}  ·  ${maskApiKey(llm.apiKey)}`;
+        return `${llm.model} · ${shortenEndpoint(llm.endpoint)} · ${maskApiKey(llm.apiKey)}`;
       },
       edit: editLlm,
     },
@@ -159,338 +136,276 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
         const profile = config.activeServer || '(none)';
         const server = config.servers[profile];
         if (!server) return profile;
-        if (server.type === 'http') return `${profile}  ·  http  ·  ${server.url ?? ''}`;
-        return `${profile}  ·  stdio  ·  ${server.command ?? ''}`;
+        if (server.type === 'http') return `${profile} · http · ${server.url ?? ''}`;
+        return `${profile} · stdio · ${server.command ?? ''}`;
       },
       edit: editMcp,
     },
-    {
-      key: 'theme',
-      label: 'Theme',
-      current: () => prefs().theme,
-      edit: editTheme,
-    },
-    {
-      key: 'statusline',
-      label: 'Statusline',
-      current: () => prefs().statusline,
-      edit: editStatusline,
-    },
-    {
-      key: 'effort',
-      label: 'Reasoning effort',
-      current: () => `${resolveEffort(agent.workspaceRoot).effort}  (${resolveEffort(agent.workspaceRoot).source})`,
-      edit: editEffort,
-    },
-    {
-      key: 'mode',
-      label: 'Execution mode',
-      current: () => prefs().executionMode,
-      edit: editExecutionMode,
-    },
-    {
-      key: 'review-policy',
-      label: 'Review policy',
-      current: () => prefs().reviewPolicy,
-      edit: editReviewPolicy,
-    },
-    {
-      key: 'quiet',
-      label: 'Quiet mode',
-      current: () => (prefs().quiet ? 'on' : 'off'),
-      edit: toggleBool('quiet'),
-    },
-    {
-      key: 'personality',
-      label: 'Personality',
-      current: () => prefs().personality,
-      edit: editPersonality,
-    },
-    {
-      key: 'editor',
-      label: 'Editor mode',
-      current: () => prefs().editorMode,
-      edit: editEditorMode,
-    },
-    {
-      key: '__raw',
-      label: 'View raw config',
-      current: () => chalk.gray('dump scrubbed JSON'),
-      edit: async () => false,
-    },
-    {
-      key: '__exit',
-      label: 'Quit (Esc)',
-      current: () => '',
-      edit: async () => false,
-    },
+    { key: 'theme',         label: 'Theme',            current: () => prefs().theme,                 edit: editTheme },
+    { key: 'statusline',    label: 'Statusline',       current: () => prefs().statusline,            edit: editStatusline },
+    { key: 'effort',        label: 'Reasoning effort', current: () => `${resolveEffort(agent.workspaceRoot).effort} (${resolveEffort(agent.workspaceRoot).source})`, edit: editEffort },
+    { key: 'mode',          label: 'Execution mode',   current: () => prefs().executionMode,         edit: editExecutionMode },
+    { key: 'review-policy', label: 'Review policy',    current: () => prefs().reviewPolicy,          edit: editReviewPolicy },
+    { key: 'quiet',         label: 'Quiet mode',       current: () => prefs().quiet ? 'on' : 'off',  edit: toggleQuiet },
+    { key: 'personality',   label: 'Personality',      current: () => prefs().personality,           edit: editPersonality },
+    { key: 'editor',        label: 'Editor mode',      current: () => prefs().editorMode,            edit: editEditorMode },
+    { key: '__raw',         label: 'View raw config',  current: () => 'JSON dump',                   edit: async () => false },
+    { key: '__exit',        label: 'Quit (esc)',       current: () => '',                            edit: async () => false },
   ];
 }
 
 function shortenEndpoint(url?: string): string {
   if (!url) return 'default endpoint';
-  return url
-    .replace(/^https?:\/\//, '')
-    .replace(/\/v1.*$/, '')
-    .replace(/\/api\/v1.*$/, '');
+  return url.replace(/^https?:\/\//, '').replace(/\/v1.*$/, '').replace(/\/api\/v1.*$/, '');
 }
 
 // --- Per-row editors ---------------------------------------------------
 
+function themeFor(ctx: CommandContext): Theme {
+  const mode = readPreferences(ctx.agent.workspaceRoot).theme;
+  return buildTheme(mode === 'mono' ? 'mono' : mode === 'light' ? 'light' : 'dark');
+}
+
 async function editLlm(ctx: CommandContext): Promise<boolean> {
-  const rows = PROVIDER_CATALOG.map((p) => ({
-    label: p.label,
-    description: p.hint,
-  }));
-  try {
-    const pick = await askChoice('Which LLM provider?', rows, { header: 'Provider' });
-    const provider = PROVIDER_CATALOG.find((p) => p.label === pick);
-    if (!provider) return false;
-    const envValue = process.env[provider.envKey] ?? ctx.config.llm?.apiKey ?? '';
-    const keyAnswer = await askChoice(
-      `${provider.label} API key:`,
-      [{ label: 'Skip (local endpoint, no key)', description: 'Use a blank key — only for LM Studio / Ollama / custom local' }],
-      { header: 'API key', prefilledOther: envValue },
-    );
-    let key = typeof keyAnswer === 'string' ? keyAnswer.trim() : '';
-    if (key === 'Skip (local endpoint, no key)') key = '';
-    const verdict = validateApiKey(key, provider);
-    if (verdict.kind === 'reject') {
-      console.log(chalk.red(`  ✗  ${verdict.reason}\n`));
-      return false;
-    }
-    if (verdict.kind === 'accept' && verdict.warning) {
-      console.log(chalk.yellow(`  !  ${verdict.warning}\n`));
-    }
-    const modelAnswer = await askChoice(
-      `${provider.label} model:`,
-      provider.models.map((m) => ({ label: m, description: m === provider.defaultModel ? '(default)' : '' })),
-      { header: 'Model', initialCursor: Math.max(0, provider.models.indexOf(provider.defaultModel)) },
-    );
-    const model = typeof modelAnswer === 'string' ? modelAnswer.trim() || provider.defaultModel : provider.defaultModel;
-    ctx.config.llm = {
-      provider: 'openai',
-      apiKey: key,
-      model,
-      endpoint: provider.endpoint,
-    };
-    saveConfig(ctx.config);
-    ctx.agent.setModel(model);
-    console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model} · ${maskApiKey(key)}\n`));
-    console.log(chalk.gray('    Endpoint changes take effect on the next CLI restart.\n'));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const provResult = await pickFromList({
+    theme,
+    title: 'LLM provider',
+    subtitle: 'Pick a provider. The next step gathers the API key.',
+    rows: PROVIDER_CATALOG.map((p) => ({
+      id: p.id,
+      label: p.label,
+      value: p.local ? 'local · key optional' : 'cloud · needs key',
+      description: p.hint,
+    })),
+    initialCursor: 0,
+  });
+  if (provResult.kind !== 'pick') return false;
+  const provider = PROVIDER_CATALOG.find((p) => p.id === provResult.id);
+  if (!provider) return false;
+  const envValue = process.env[provider.envKey] ?? ctx.config.llm?.apiKey ?? '';
+  const keyResult = await promptText({
+    theme,
+    title: 'API key',
+    subtitle: envValue
+      ? `${provider.envKey} or current key pre-filled — press ENTER to accept, type to override.`
+      : provider.local ? `${provider.label} is local — blank key OK.` : `Paste your ${provider.label} key.`,
+    badge: provider.label,
+    prefilled: envValue,
+    placeholder: provider.local ? '(blank OK)' : 'paste API key',
+    validate: (raw) => {
+      const v = validateApiKey(raw, provider);
+      return v.kind === 'reject' ? v.reason : undefined;
+    },
+  });
+  if (keyResult.kind !== 'accept') return false;
+  const modelResult = await pickFromList({
+    theme,
+    title: 'Model',
+    subtitle: `Pick the chat model for ${provider.label}.`,
+    rows: provider.models.map((m) => ({ id: m, label: m, value: m === provider.defaultModel ? 'default' : '' })),
+    initialCursor: Math.max(0, provider.models.indexOf(provider.defaultModel)),
+    allowOther: true,
+    otherLabel: 'Other model',
+    otherDescription: 'Type any model name supported by this endpoint',
+  });
+  if (modelResult.kind === 'cancelled') return false;
+  const model = modelResult.kind === 'other' ? modelResult.text.trim() : modelResult.id;
+  ctx.config.llm = {
+    provider: 'openai',
+    apiKey: keyResult.text,
+    model: model || provider.defaultModel,
+    endpoint: provider.endpoint,
+  };
+  saveConfig(ctx.config);
+  ctx.agent.setModel(model || provider.defaultModel);
+  console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model || provider.defaultModel} · ${maskApiKey(keyResult.text)}`));
+  console.log(chalk.gray('    Endpoint changes take effect on the next CLI restart.\n'));
+  return true;
 }
 
 async function editMcp(ctx: CommandContext): Promise<boolean> {
-  try {
-    const pick = await askChoice(
-      'How should the CLI reach the BrainRouter MCP?',
-      [
-        { label: 'Local stdio', description: 'Spawn `brainrouter-mcp` on $PATH' },
-        { label: 'Local HTTP', description: 'http://localhost:3747/mcp' },
-        { label: 'Remote HTTP', description: 'Custom URL — pick "Other" for a different host' },
-      ],
-      { header: 'MCP' },
-    );
-    let url: string | undefined;
-    if (pick === 'Local stdio') {
-      ctx.config.servers['local-stdio'] = { type: 'stdio', command: 'brainrouter-mcp', args: [], identity: 'brainrouter' };
-      ctx.config.activeServer = 'local-stdio';
-    } else if (pick === 'Local HTTP') {
-      ctx.config.servers['local-http'] = { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' };
-      ctx.config.activeServer = 'local-http';
-    } else {
-      url = typeof pick === 'string' ? pick.trim() : '';
-      if (pick === 'Remote HTTP') {
-        const urlAnswer = await askChoice('Remote MCP URL:', [{ label: 'http://localhost:3747/mcp', description: 'default' }], { header: 'URL', prefilledOther: '' });
-        url = typeof urlAnswer === 'string' ? urlAnswer.trim() : '';
-      }
-      if (!url) return false;
-      ctx.config.servers['remote'] = { type: 'http', url, identity: 'brainrouter' };
-      ctx.config.activeServer = 'remote';
-    }
-    saveConfig(ctx.config);
-    console.log(chalk.green(`\n  ✓ MCP profile saved as active.\n`));
-    console.log(chalk.gray('    Run /mcp reconnect to pick up the change without restarting.\n'));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'MCP profile',
+    subtitle: 'Pick how the CLI reaches the BrainRouter MCP.',
+    rows: [
+      { id: 'local-stdio', label: 'Local stdio', value: 'brainrouter-mcp', description: 'No HTTP server needed' },
+      { id: 'local-http',  label: 'Local HTTP',  value: 'localhost:3747', description: 'Connect to a local brainrouter-mcp HTTP server' },
+      { id: 'remote-http', label: 'Remote HTTP', value: 'custom URL',     description: 'Connect to a hosted MCP server (URL + optional key)' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  if (result.id === 'local-stdio') {
+    ctx.config.servers['local-stdio'] = { type: 'stdio', command: 'brainrouter-mcp', args: [], identity: 'brainrouter' };
+    ctx.config.activeServer = 'local-stdio';
+  } else if (result.id === 'local-http') {
+    ctx.config.servers['local-http'] = { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' };
+    ctx.config.activeServer = 'local-http';
+  } else {
+    const urlResult = await promptText({
+      theme,
+      title: 'Remote MCP URL',
+      subtitle: 'Paste the full URL (e.g. https://brainrouter.example.com/mcp).',
+      badge: 'MCP',
+      prefilled: '',
+      placeholder: 'https://...',
+      validate: (raw) => {
+        const v = raw.trim();
+        if (!v) return 'URL required';
+        try { new URL(v); } catch { return 'not a valid URL'; }
+        return undefined;
+      },
+    });
+    if (urlResult.kind !== 'accept') return false;
+    ctx.config.servers['remote'] = { type: 'http', url: urlResult.text.trim(), identity: 'brainrouter' };
+    ctx.config.activeServer = 'remote';
   }
+  saveConfig(ctx.config);
+  console.log(chalk.green(`\n  ✓ MCP profile saved as active.`));
+  console.log(chalk.gray('    Run /mcp reconnect to pick up the change without restarting.\n'));
+  return true;
 }
 
 async function editTheme(ctx: CommandContext): Promise<boolean> {
-  try {
-    const answer = await askChoice(
-      'Which theme?',
-      [
-        { label: 'dark', description: 'saturated accents on black' },
-        { label: 'light', description: 'darker accents for white terminals' },
-        { label: 'mono', description: 'no color' },
-        { label: 'auto', description: 'falls back to dark for now' },
-      ],
-      { header: 'Theme' },
-    );
-    if (typeof answer !== 'string') return false;
-    writePreferences(ctx.agent.workspaceRoot, { theme: answer as Preferences['theme'] });
-    console.log(chalk.green(`\n  ✓ Theme → ${answer}\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'Theme',
+    subtitle: 'Pick a color palette.',
+    rows: [
+      { id: 'dark',  label: 'Dark',  description: 'saturated accents on black' },
+      { id: 'light', label: 'Light', description: 'darker accents for white terminals' },
+      { id: 'mono',  label: 'Mono',  description: 'no color' },
+      { id: 'auto',  label: 'Auto',  description: 'falls back to dark for now' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  writePreferences(ctx.agent.workspaceRoot, { theme: result.id as Preferences['theme'] });
+  console.log(chalk.green(`\n  ✓ Theme → ${result.id}\n`));
+  return true;
 }
 
 async function editStatusline(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
   const current = readPreferences(ctx.agent.workspaceRoot).statusline;
-  try {
-    const answer = await askChoice(
-      'Statusline segments (comma-separated):',
-      [
-        { label: 'mode', description: 'just the access mode' },
-        { label: 'mode,branch,goal,model', description: 'compact dev' },
-        { label: 'mode,exec,effort,branch,workflow,goal,plan,model,session', description: 'verbose' },
-      ],
-      { header: 'Statusline', prefilledOther: current },
-    );
-    const raw = typeof answer === 'string' ? answer : current;
-    const requested = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    const unknown = requested.filter((s) => !isKnownSegment(s));
-    if (unknown.length > 0) {
-      console.log(chalk.red(`\n  Unknown segment(s): ${unknown.join(', ')}.  Valid: ${SEGMENT_NAMES.join(', ')}\n`));
-      return false;
-    }
-    writePreferences(ctx.agent.workspaceRoot, { statusline: requested.join(',') });
-    ctx.repl.refreshPromptForMode();
-    console.log(chalk.green(`\n  ✓ Statusline → ${requested.join(',')}\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const result = await promptText({
+    theme,
+    title: 'Statusline segments',
+    subtitle: `Comma-separated subset of: ${SEGMENT_NAMES.join(', ')}`,
+    prefilled: current,
+    placeholder: 'mode,branch,workflow,goal',
+    validate: (raw) => {
+      const segments = raw.split(',').map((s) => s.trim()).filter(Boolean);
+      const unknown = segments.filter((s) => !isKnownSegment(s));
+      if (unknown.length > 0) return `unknown segment(s): ${unknown.join(', ')}`;
+      return undefined;
+    },
+  });
+  if (result.kind !== 'accept') return false;
+  const segments = result.text.split(',').map((s) => s.trim()).filter(Boolean);
+  writePreferences(ctx.agent.workspaceRoot, { statusline: segments.join(',') });
+  ctx.repl.refreshPromptForMode();
+  console.log(chalk.green(`\n  ✓ Statusline → ${segments.join(',')}\n`));
+  return true;
 }
 
 async function editEffort(ctx: CommandContext): Promise<boolean> {
-  try {
-    const answer = await askChoice(
-      'Reasoning effort?',
-      [
-        { label: 'low', description: 'terse, one-paragraph answers' },
-        { label: 'medium', description: 'default · no overlay' },
-        { label: 'high', description: 'step-by-step audit before each tool call' },
-      ],
-      { header: 'Effort' },
-    );
-    if (typeof answer !== 'string') return false;
-    writePreferences(ctx.agent.workspaceRoot, { effort: answer as EffortLevel });
-    ctx.agent.refreshSystemPrompt();
-    console.log(chalk.green(`\n  ✓ Effort → ${answer}\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'Reasoning effort',
+    subtitle: 'How hard should the model think? Orthogonal to /mode.',
+    rows: [
+      { id: 'low',    label: 'Low',    description: 'terse, one-paragraph answers' },
+      { id: 'medium', label: 'Medium', value: 'default', description: 'no overlay, no provider reasoning slot' },
+      { id: 'high',   label: 'High',   description: 'step-by-step audit before each tool call' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  writePreferences(ctx.agent.workspaceRoot, { effort: result.id as EffortLevel });
+  ctx.agent.refreshSystemPrompt();
+  console.log(chalk.green(`\n  ✓ Effort → ${result.id}\n`));
+  return true;
 }
 
 async function editExecutionMode(ctx: CommandContext): Promise<boolean> {
-  try {
-    const answer = await askChoice(
-      'Execution mode?',
-      [
-        { label: 'planning', description: 'default · every run_command y/N' },
-        { label: 'fast', description: 'safe commands auto-run; dangerous still prompt' },
-      ],
-      { header: 'Mode' },
-    );
-    if (typeof answer !== 'string') return false;
-    writePreferences(ctx.agent.workspaceRoot, { executionMode: answer as ExecutionMode });
-    console.log(chalk.green(`\n  ✓ Execution mode → ${answer}\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'Execution mode',
+    rows: [
+      { id: 'planning', label: 'Planning', value: 'default', description: 'every run_command y/N' },
+      { id: 'fast',     label: 'Fast',     description: 'safe commands auto-run; dangerous still prompt' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  writePreferences(ctx.agent.workspaceRoot, { executionMode: result.id as ExecutionMode });
+  console.log(chalk.green(`\n  ✓ Execution mode → ${result.id}\n`));
+  return true;
 }
 
 async function editReviewPolicy(ctx: CommandContext): Promise<boolean> {
-  try {
-    const answer = await askChoice(
-      'Review policy?',
-      [
-        { label: 'request', description: 'default · prompt for /approve' },
-        { label: 'proceed', description: 'apply plan and report after' },
-      ],
-      { header: 'Review' },
-    );
-    if (typeof answer !== 'string') return false;
-    writePreferences(ctx.agent.workspaceRoot, { reviewPolicy: answer as ReviewPolicy });
-    console.log(chalk.green(`\n  ✓ Review policy → ${answer}\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'Review policy',
+    rows: [
+      { id: 'request', label: 'Request', value: 'default', description: 'prompt for /approve at multi-file gates' },
+      { id: 'proceed', label: 'Proceed', description: 'apply plan and report after' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  writePreferences(ctx.agent.workspaceRoot, { reviewPolicy: result.id as ReviewPolicy });
+  console.log(chalk.green(`\n  ✓ Review policy → ${result.id}\n`));
+  return true;
 }
 
 async function editPersonality(ctx: CommandContext): Promise<boolean> {
-  try {
-    const answer = await askChoice(
-      'Personality?',
-      [
-        { label: 'concise', description: 'short responses' },
-        { label: 'standard', description: 'default' },
-        { label: 'detailed', description: 'verbose explanations' },
-        { label: 'pair-programmer', description: 'think-out-loud' },
-      ],
-      { header: 'Personality' },
-    );
-    if (typeof answer !== 'string') return false;
-    writePreferences(ctx.agent.workspaceRoot, { personality: answer as Preferences['personality'] });
-    ctx.agent.refreshSystemPrompt();
-    console.log(chalk.green(`\n  ✓ Personality → ${answer}\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'Personality',
+    subtitle: 'Communication style for agent responses.',
+    rows: [
+      { id: 'concise',         label: 'Concise',         description: 'short responses' },
+      { id: 'standard',        label: 'Standard',        value: 'default' },
+      { id: 'detailed',        label: 'Detailed',        description: 'verbose explanations' },
+      { id: 'pair-programmer', label: 'Pair programmer', description: 'think-out-loud' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  writePreferences(ctx.agent.workspaceRoot, { personality: result.id as Preferences['personality'] });
+  ctx.agent.refreshSystemPrompt();
+  console.log(chalk.green(`\n  ✓ Personality → ${result.id}\n`));
+  return true;
 }
 
 async function editEditorMode(ctx: CommandContext): Promise<boolean> {
-  try {
-    const answer = await askChoice(
-      'Editor mode?',
-      [
-        { label: 'emacs', description: 'default readline' },
-        { label: 'vi', description: 'vi keybindings (terminal-dependent)' },
-      ],
-      { header: 'Editor' },
-    );
-    if (typeof answer !== 'string') return false;
-    writePreferences(ctx.agent.workspaceRoot, { editorMode: answer as Preferences['editorMode'] });
-    console.log(chalk.green(`\n  ✓ Editor mode → ${answer}. Restart the CLI to apply.\n`));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) return false;
-    throw err;
-  }
+  const theme = themeFor(ctx);
+  const result = await pickFromList({
+    theme,
+    title: 'Editor mode',
+    rows: [
+      { id: 'emacs', label: 'Emacs', value: 'default', description: 'standard readline keybindings' },
+      { id: 'vi',    label: 'Vi',    description: 'vi keybindings (terminal-dependent)' },
+    ],
+  });
+  if (result.kind !== 'pick') return false;
+  writePreferences(ctx.agent.workspaceRoot, { editorMode: result.id as Preferences['editorMode'] });
+  console.log(chalk.green(`\n  ✓ Editor mode → ${result.id}. Restart the CLI to apply.\n`));
+  return true;
 }
 
-function toggleBool(key: 'quiet'): (ctx: CommandContext) => Promise<boolean> {
-  return async (ctx) => {
-    const current = readPreferences(ctx.agent.workspaceRoot)[key];
-    const next = !current;
-    writePreferences(ctx.agent.workspaceRoot, { [key]: next } as any);
-    if (key === 'quiet') {
-      if (next) process.env.BRAINROUTER_QUIET = '1';
-      else delete process.env.BRAINROUTER_QUIET;
-    }
-    console.log(chalk.green(`\n  ✓ ${key} → ${next ? 'on' : 'off'}\n`));
-    return true;
-  };
+async function toggleQuiet(ctx: CommandContext): Promise<boolean> {
+  const current = readPreferences(ctx.agent.workspaceRoot).quiet;
+  const next = !current;
+  writePreferences(ctx.agent.workspaceRoot, { quiet: next });
+  if (next) process.env.BRAINROUTER_QUIET = '1';
+  else delete process.env.BRAINROUTER_QUIET;
+  console.log(chalk.green(`\n  ✓ Quiet mode → ${next ? 'on' : 'off'}\n`));
+  return true;
 }
 
 // --- get / set entrypoints ---------------------------------------------
@@ -634,7 +549,7 @@ function printKey(ctx: CommandContext, key: string): void {
   const handler = KEY_HANDLERS[key];
   if (!handler) {
     console.log(chalk.red(`\n  Unknown config key "${key}".`));
-    console.log(chalk.gray(`  Known keys: ${Object.keys(KEY_HANDLERS).join(', ')}.  Run /config (bare) for an interactive panel.\n`));
+    console.log(chalk.gray(`  Known keys: ${Object.keys(KEY_HANDLERS).join(', ')}.  Run /config (bare) for the interactive panel.\n`));
     return;
   }
   console.log(`\n  ${chalk.cyan(key)}: ${chalk.bold(handler.get(ctx))}\n`);

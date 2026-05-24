@@ -1,119 +1,109 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { askChoice, CancelledChoiceError } from '../cliPrompt.js';
 import { saveConfig, type ServerConfig } from '../../config/config.js';
 import { McpClientWrapper } from '../../runtime/mcpClient.js';
 import { maskApiKey } from '../wizard/providers.js';
+import { pickFromList, promptText } from '../wizard/picker.js';
+import { buildTheme, type Theme } from '../theme.js';
+import { readPreferences } from '../../state/preferencesStore.js';
 
 /**
- * `/login` slash command — 0.3.7.
+ * `/login` slash command — 0.3.7 redesign on the new internal picker.
  *
- * In-REPL alternative to `brainrouter login`. Opens a small modal that
- * picks a transport (stdio / local-http / remote-http), gathers the
- * fields via the picker's "Other" fallback, runs a single reachability
- * probe (5s timeout), and saves the profile.
+ * Opens a small modal that picks a transport (stdio / local-http /
+ * remote-http), gathers fields via the framed text prompt, runs a
+ * single 5s reachability probe, and saves the profile. Probe failure
+ * offers "save anyway / try a different transport / cancel".
  *
- * Why duplicate `brainrouter login`? The legacy subcommand is great
- * for a fresh install (no REPL yet), but once the user is inside the
- * REPL the workflow used to be "exit → run `brainrouter login` →
- * re-enter REPL → /mcp reconnect." Three context switches for what
- * should be one panel. The new slash command collapses the loop.
- *
- * `brainrouter login` (subcommand) stays for back-compat; users who
- * scripted it don't break.
+ * The legacy `brainrouter login` subcommand stays for users who
+ * scripted it.
  */
 export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolean> {
   if (ctx.command !== '/login') return false;
-  try {
-    const transport = await askChoice(
-      'Pick an MCP transport:',
-      [
-        { label: 'Local stdio', description: 'Spawn `brainrouter-mcp` on $PATH' },
-        { label: 'Local HTTP', description: 'http://localhost:3747/mcp' },
-        { label: 'Remote HTTP', description: 'Hosted BrainRouter URL (key optional)' },
+  const theme = buildTheme(readPreferences(ctx.agent.workspaceRoot).theme === 'mono' ? 'mono' : readPreferences(ctx.agent.workspaceRoot).theme === 'light' ? 'light' : 'dark');
+
+  while (true) {
+    const transport = await pickFromList({
+      theme,
+      title: '/login — MCP profile',
+      subtitle: 'Pick how this CLI reaches the BrainRouter MCP.',
+      rows: [
+        { id: 'local-stdio', label: 'Local stdio', value: 'brainrouter-mcp', description: 'No HTTP server needed' },
+        { id: 'local-http',  label: 'Local HTTP',  value: 'localhost:3747', description: 'Connect to a brainrouter-mcp HTTP server running locally' },
+        { id: 'remote-http', label: 'Remote HTTP', value: 'custom URL',     description: 'Hosted MCP server (URL + optional key)' },
       ],
-      { header: '/login' },
-    );
+    });
+    if (transport.kind !== 'pick') {
+      console.log(chalk.yellow('\n  /login cancelled.\n'));
+      return true;
+    }
 
     let serverConfig: ServerConfig | undefined;
     let profileName = '';
-    if (transport === 'Local stdio') {
+    if (transport.id === 'local-stdio') {
       serverConfig = { type: 'stdio', command: 'brainrouter-mcp', args: [], identity: 'brainrouter' };
       profileName = 'local-stdio';
-    } else if (transport === 'Local HTTP') {
+    } else if (transport.id === 'local-http') {
       serverConfig = { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' };
       profileName = 'local-http';
     } else {
-      // Remote HTTP — prompt for URL + optional API key. Empty key OK.
-      const urlAnswer = await askChoice(
-        'Remote BrainRouter MCP URL:',
-        [{ label: 'http://localhost:3747/mcp', description: 'default' }],
-        { header: 'URL', prefilledOther: '' },
-      );
-      const url = typeof urlAnswer === 'string' ? urlAnswer.trim() : '';
-      if (!url) {
-        console.log(chalk.yellow('\n  /login cancelled — no URL provided.\n'));
+      const urlResult = await promptText({
+        theme,
+        title: 'Remote MCP URL',
+        subtitle: 'Paste the full URL (e.g. https://brainrouter.example.com/mcp).',
+        prefilled: '',
+        placeholder: 'https://...',
+        validate: (raw) => {
+          const v = raw.trim();
+          if (!v) return 'URL required';
+          try { new URL(v); } catch { return 'not a valid URL'; }
+          return undefined;
+        },
+      });
+      if (urlResult.kind !== 'accept') {
+        console.log(chalk.yellow('\n  /login cancelled.\n'));
         return true;
       }
-      try { new URL(url); } catch {
-        console.log(chalk.red(`\n  ✗ "${url}" is not a valid URL.\n`));
-        return true;
-      }
-      const keyAnswer = await askChoice(
-        'API key (optional):',
-        [{ label: 'No key (open server)', description: 'Skip — only for unauthenticated MCP servers' }],
-        { header: 'API key', prefilledOther: '' },
-      );
-      const apiKey = typeof keyAnswer === 'string' && keyAnswer !== 'No key (open server)'
-        ? keyAnswer.trim()
-        : undefined;
+      const url = urlResult.text.trim();
+      const keyResult = await promptText({
+        theme,
+        title: 'API key (optional)',
+        subtitle: 'Press ENTER to skip — only some MCP servers require a key.',
+        prefilled: '',
+        placeholder: '(none)',
+      });
+      const apiKey = keyResult.kind === 'accept' ? keyResult.text.trim() : '';
       serverConfig = { type: 'http', url, apiKey: apiKey || undefined, identity: 'brainrouter' };
       profileName = 'remote';
     }
-    if (!serverConfig) return true;
 
-    // Probe.
     const probe = await probeMcpProfile(serverConfig, profileName);
     if (!probe.ok) {
-      try {
-        const choice = await askChoice(
-          `MCP probe failed: ${probe.error}. Save anyway?`,
-          [
-            { label: 'Save anyway', description: 'Persist the profile; run /mcp reconnect once the server is up' },
-            { label: 'Try a different transport', description: 'Re-open the picker' },
-            { label: 'Cancel', description: 'Discard — nothing written' },
-          ],
-          { header: 'Probe failed' },
-        );
-        if (choice === 'Try a different transport') return tryHandleLoginCommand(ctx);
-        if (choice !== 'Save anyway') {
-          console.log(chalk.yellow('\n  /login cancelled.\n'));
-          return true;
-        }
-      } catch (err) {
-        if (err instanceof CancelledChoiceError) {
-          console.log(chalk.yellow('\n  /login cancelled.\n'));
-          return true;
-        }
-        throw err;
+      const choice = await pickFromList({
+        theme,
+        title: 'MCP probe failed',
+        subtitle: probe.error,
+        rows: [
+          { id: 'save',  label: 'Save anyway',           description: 'Persist the profile; run /mcp reconnect once the server is up' },
+          { id: 'retry', label: 'Try a different transport', description: 'Re-open the picker' },
+          { id: 'cancel', label: 'Cancel',               description: 'Discard — nothing written' },
+        ],
+      });
+      if (choice.kind !== 'pick' || choice.id === 'cancel') {
+        console.log(chalk.yellow('\n  /login cancelled.\n'));
+        return true;
       }
+      if (choice.id === 'retry') continue;
     } else {
-      console.log(chalk.green(`\n  ✓ Probe succeeded (${probe.latencyMs}ms).\n`));
+      console.log(chalk.green(`\n  ✓ Probe succeeded (${probe.latencyMs}ms).`));
     }
 
     ctx.config.servers[profileName] = serverConfig;
     ctx.config.activeServer = profileName;
     saveConfig(ctx.config);
     const apiKeyDisplay = serverConfig.apiKey ? maskApiKey(serverConfig.apiKey) : '(no key)';
-    console.log(chalk.green(`  ✓ MCP profile "${profileName}" saved as active. ${apiKeyDisplay}\n`));
+    console.log(chalk.green(`  ✓ MCP profile "${profileName}" saved as active. ${apiKeyDisplay}`));
     console.log(chalk.gray('    Run /mcp reconnect to pick up the new transport without restarting.\n'));
-    return true;
-  } catch (err) {
-    if (err instanceof CancelledChoiceError) {
-      console.log(chalk.yellow('\n  /login cancelled.\n'));
-      return true;
-    }
-    console.log(chalk.red(`\n  /login failed: ${(err as Error)?.message ?? err}\n`));
     return true;
   }
 }
