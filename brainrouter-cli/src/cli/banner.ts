@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Config } from '../config/config.js';
 import type { Goal } from '../state/goalStore.js';
 import { formatBudget } from '../state/goalStore.js';
-import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
+import { getCurrentWorkflow, getLastUsedWorkflow } from '../state/workflowArtifacts.js';
 import { readGoal } from '../state/goalStore.js';
 import { BOX, type Theme } from './theme.js';
 
@@ -56,6 +56,15 @@ export interface BannerInputs {
   model: string;
   /** Slug + status of the currently-bound workflow, if any. */
   workflow?: { slug: string; status: string };
+  /**
+   * Slug of the last workflow that was active in this workspace, surfaced
+   * only when the current session has NO workflow bound. Rendered as a
+   * one-line hint so the user can `/workflow switch <slug>` to resume.
+   * Doesn't auto-bind anything — workflows are pure storage now (goals
+   * are session-scoped runtime state). Empty / matching the active
+   * workflow → no hint row.
+   */
+  lastUsedWorkflow?: string;
   /** Goal-store snapshot, if any. */
   goal?: Goal;
   /** Version override (test fixture). */
@@ -141,7 +150,14 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
   const brain = formatBrain(inputs.mcpIdentity, inputs.mcpOnline);
   if (brain) rows.push({ label: 'brain', value: brain });
   const wf = formatWorkflow(inputs.workflow);
-  if (wf) rows.push({ label: 'workflow', value: wf });
+  if (wf) {
+    rows.push({ label: 'workflow', value: wf });
+  } else if (inputs.lastUsedWorkflow) {
+    // Fresh session with no current workflow but a known last-used
+    // workflow in this workspace — offer the resume incantation without
+    // auto-binding. Quiet so the user notices but isn't pushed into it.
+    rows.push({ label: 'last on', value: `${inputs.lastUsedWorkflow}   /workflow switch ${inputs.lastUsedWorkflow}` });
+  }
   if (inputs.goal) rows.push({ label: 'goal', value: formatGoalSummary(inputs.goal) });
   rows.push({ label: 'session', value: inputs.sessionKey.slice(0, 8) });
   rows.push({ label: 'model', value: inputs.model });
@@ -194,6 +210,7 @@ export function buildBannerInputs(
   // the config field for callers that pass a thin stub.
   const mcpIdentity = mcpClient.getIdentity ? mcpClient.getIdentity() : (server?.identity ?? 'unknown');
   let workflow: { slug: string; status: string } | undefined;
+  let lastUsedWorkflow: string | undefined;
   try {
     // 9d-bugfix: read the session-scoped binding so a fresh CLI session
     // shows no workflow row even when another CLI in the same workspace
@@ -204,6 +221,13 @@ export function buildBannerInputs(
       // pointer file. Status would require parsing meta.json, which has its
       // own cost on a slow disk; "bound" is enough to communicate state.
       workflow = { slug, status: 'bound' };
+    } else {
+      // Fresh session in a workspace where a previous CLI was on
+      // workflow X — surface that as a hint so the user can rebind via
+      // `/workflow switch X` if they want continuity. Doesn't auto-bind
+      // (per the decoupling design — workflows are storage, goals are
+      // runtime, the two have orthogonal lifecycles).
+      try { lastUsedWorkflow = getLastUsedWorkflow(agent.workspaceRoot); } catch { /* ignore */ }
     }
   } catch { /* ignore — no workflow bound */ }
 
@@ -221,6 +245,7 @@ export function buildBannerInputs(
     sessionKey: agent.sessionKey,
     model: agent.getModel(),
     workflow,
+    lastUsedWorkflow,
     goal,
   };
 }

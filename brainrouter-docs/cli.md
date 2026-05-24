@@ -291,10 +291,9 @@ collect input without spawning a competing readline interface.
 
 Already wired into the existing approval gates: `run_command` before
 shell execution, `/goal <text>` when an in-progress goal would be
-overwritten, the workflow-clobber prompt in `/feature-dev` / `/spec`,
-the dangerous-file warning in `write_file`. **The agent does NOT call
-`askYesNo` directly** — it's owned by the CLI gates. Listed here
-because it's the structural model the picker below mirrors.
+overwritten, the dangerous-file warning in `write_file`. **The agent
+does NOT call `askYesNo` directly** — it's owned by the CLI gates.
+Listed here because it's the structural model the picker below mirrors.
 
 Non-TTY returns the supplied default (no prompt fires). The model
 sees the result through whatever tool was gated.
@@ -394,7 +393,7 @@ has drifted enough to warrant a second clarifying pass.
 
 | Tool / command | Who initiates | When |
 | --- | --- | --- |
-| `askYesNo` | CLI gates | Binary confirmation inside an existing flow (shell approval, workflow clobber). Agent never calls directly. |
+| `askYesNo` | CLI gates | Binary confirmation inside an existing flow (shell approval, `/goal` overwrite, dangerous-file warning). Agent never calls directly. |
 | `ask_user_choice` | Agent | Mid-task, when the agent hit a genuine fork with 2–4 mutually-exclusive reasonable approaches. |
 | `/grill-me` | User | Up-front, when the request is ambiguous on multiple axes (scope, format, dependencies) and you want a clarify pass before any edits. |
 
@@ -468,7 +467,10 @@ tall ones. `/help <category>` drills in.
 | `/review [target]` | Reviewer pass. |
 | `/implement-plan` | Execute the current `tasks.md`. |
 | `/approve` | Mark workflow complete; write `walkthrough.md`. |
-| `/workflows` | List workflows in `.brainrouter/cli/workflows/`. |
+| `/workflows` | List workflows in `.brainrouter/workflows/` with artifact markers. |
+| `/workflow switch <slug>` | Pure navigation — bind this session to a workflow folder so future artifact writes land there. Doesn't touch goal state (goals are session-scoped, workflows are storage). |
+| `/workflow pause` | Alias for `/goal pause` — pauses the session goal. |
+| `/workflow resume <slug>` | `/workflow switch <slug>` + `/goal resume` if the session has a paused goal. |
 | `/diff [--staged\|--all]` | Streaming `git diff --color=always`. |
 | `/commit` | Compose a commit (uses the agent to draft a message). |
 | `/loop <N> <command>` | Repeat a slash command N times (debug aid). |

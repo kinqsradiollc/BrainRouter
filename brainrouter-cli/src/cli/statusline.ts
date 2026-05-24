@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { formatBudget, readGoal, readWorkflowGoal } from '../state/goalStore.js';
+import { formatBudget, readGoal } from '../state/goalStore.js';
 import { readPlan } from '../state/taskStore.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
@@ -139,21 +139,15 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
     case 'pr':
       return inputs.prDetector?.() ?? undefined;
     case 'workflow': {
-      // Item 3 (0.3.6): when the bound workflow's goal is paused / blocked /
-      // usage_limited, annotate the slug so the prompt-line scans the
-      // halt-state without forcing the user to also enable the `goal`
-      // segment. Active goals + no goal both render as bare `wf:<slug>` to
-      // keep the common case quiet. 9d-bugfix: read the session-scoped
-      // binding so the statusline reflects THIS session.
+      // The workflow segment is a pure navigation indicator: "which
+      // workflow folder is this session writing artifacts to right now?"
+      // Post-goal/workflow-decoupling (0.3.6) it does NOT carry a goal
+      // status suffix — goals live at session scope (the `goal` segment),
+      // workflows live at folder scope. Two orthogonal concerns.
       try {
         const slug = getCurrentWorkflow(inputs.workspaceRoot, inputs.sessionKey);
         if (!slug) return undefined;
-        const goal = readWorkflowGoal(inputs.workspaceRoot, slug);
-        if (!goal || goal.status === 'active' || goal.status === 'complete') {
-          return `wf:${slug}`;
-        }
-        const tag = goal.status === 'usage_limited' ? 'limited' : goal.status;
-        return `wf:${slug} (${tag})`;
+        return `wf:${slug}`;
       } catch {
         return undefined;
       }

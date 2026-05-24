@@ -229,6 +229,51 @@ test('banner: workflow row appears when workflow is bound', () => {
   });
 });
 
+test('banner: "last on" hint appears when session unbound but workspace has a last-used workflow', () => {
+  // Post-decoupling, fresh CLI sessions don't auto-bind to whatever
+  // workflow the previous CLI was on. The banner surfaces the workspace-
+  // level "last used" hint as a one-line nudge instead — user can
+  // `/workflow switch <slug>` to resume continuity, or just ignore it.
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'p',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      sessionKey: 'fresh',
+      model: 'm',
+      // Note: workflow is NOT set (unbound), lastUsedWorkflow IS set.
+      lastUsedWorkflow: 'auth-refactor',
+    }, theme);
+    assert.match(banner, /last on/);
+    assert.match(banner, /auth-refactor/);
+    // The full "/workflow switch <slug>" hint may be clipped at the box
+    // width on narrow terminals — just assert the lead-in is there.
+    assert.match(banner, /\/workflow switch/);
+  });
+});
+
+test('banner: "last on" hint NOT shown when current workflow IS bound', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const banner = renderBanner({
+      workspaceRoot: workspace,
+      mcpProfile: 'p',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      sessionKey: 'bound',
+      model: 'm',
+      workflow: { slug: 'cli-shell-redesign', status: 'bound' },
+      // Both set — workflow wins, hint is suppressed.
+      lastUsedWorkflow: 'some-other-workflow',
+    }, theme);
+    assert.match(banner, /cli-shell-redesign/);
+    assert.doesNotMatch(banner, /last on/);
+    assert.doesNotMatch(banner, /some-other-workflow/);
+  });
+});
+
 test('banner: goal row appears when goal active and omits when absent', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
@@ -358,47 +403,39 @@ test('statusline: workflow segment undefined when no workflow bound', () => {
   });
 });
 
-test('statusline: workflow segment annotates the slug with the goal\'s halt state (Item 3)', async () => {
-  // Item 3 brief: the workflow segment should pick up paused / blocked /
-  // usage_limited as a parenthesized tag. Active and no-goal stay terse.
+test('statusline: workflow segment is pure navigation (no goal-status annotation, post-decoupling)', async () => {
+  // Pre-decoupling (Item 3) the workflow segment picked up paused /
+  // blocked / usage_limited as a parenthesized tag because workflows
+  // carried their own goals. Post-decoupling the workflow segment is
+  // purely "which folder is this session writing artifacts to" — goal
+  // status lives entirely in the separate `goal` segment.
   const { pauseGoal, blockGoal, usageLimitGoal } = await import('../state/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:wf-segment';
     createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev', sessionKey: sk });
+    const renderWf = () => renderSegment('workflow', {
+      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
+      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+    });
+
     // Pre-goal: bare slug.
-    let seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature');
-    // Active goal: still bare (common case stays quiet).
+    assert.equal(renderWf(), 'wf:flagged-feature');
+
+    // Active goal: still bare.
     setGoal(workspace, 'do the thing', sk);
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature');
-    // Paused.
+    assert.equal(renderWf(), 'wf:flagged-feature');
+
+    // Paused: STILL bare (workflow segment is navigation-only).
     pauseGoal(workspace, sk);
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature (paused)');
-    // Blocked.
+    assert.equal(renderWf(), 'wf:flagged-feature', 'workflow segment must NOT annotate goal halt-state post-decoupling');
+
+    // Blocked: same.
     blockGoal(workspace, sk, 'waiting on prod creds');
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature (blocked)');
-    // usage_limited → "limited" (matches the goal segment compression).
+    assert.equal(renderWf(), 'wf:flagged-feature');
+
+    // usage_limited: same.
     usageLimitGoal(workspace, sk, 'iteration cap reached');
-    seg = renderSegment('workflow', {
-      workspaceRoot: workspace, sessionKey: sk, accessMode: 'read', model: 'm',
-      lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
-    });
-    assert.equal(seg, 'wf:flagged-feature (limited)');
+    assert.equal(renderWf(), 'wf:flagged-feature');
   });
 });
 

@@ -19,9 +19,19 @@ import { getCliStateFile, getSessionStateFile, getWorkspaceLocalDir, isPathInsid
  * team shares them, and (b) the agent's `write_file` tool only accepts paths
  * relative to the workspace root. Personal CLI state (sessions, hooks,
  * memories, preferences) lives in `~/.brainrouter/workspaces/<encoded>/` and
- * never touches the project tree. The current-workflow pointer is still per-
- * user (it tracks which workflow YOU are focused on right now) so it lives
- * with the CLI state, not the workspace.
+ * never touches the project tree.
+ *
+ * **Workflows do NOT carry goal state.** Earlier 0.3.6 (Item 3) stored a
+ * `goal.json` inside each workflow folder so switching workflows would
+ * "carry the goal with it." That conflated two different concerns — a goal
+ * is **per-session runtime intent** (let the agent run autonomously until
+ * complete) while a workflow is **durable storage** (committed artifacts
+ * shared across users and CLIs). The conflation produced a cross-session
+ * goal leak (two CLIs in the same workspace bound to the same workflow
+ * shared a goal). The decoupling lives in goalStore.ts's `resolveGoalScope`
+ * — goals are always session-scoped, workflows are pure navigation. The
+ * per-session `workflow.json` pointer here is for "which folder am I
+ * writing artifacts to RIGHT NOW", not "which goal am I working on."
  */
 
 const WORKFLOWS_SUBDIR = 'workflows';
@@ -234,24 +244,6 @@ export function clearSessionWorkflow(workspaceRoot: string, sessionKey: string):
 }
 
 /**
- * Path to a workflow's bound `goal.json`. The goal lives ALONGSIDE
- * `meta.json` / `spec.md` inside the workflow folder so that switching
- * workflows carries the goal with it (Item 3 of the 0.3.6 cycle). When no
- * workflow is bound, callers fall back to the per-session goal path —
- * `resolveGoalScope` in goalStore.ts owns that fall-through.
- *
- * Pattern adapted from openSrc/bruno/packages/bruno-schema/src/collections/
- * — Bruno keeps the active-environment scalar inside the collection doc
- * rather than in a separate workspace-tree pointer, which avoids the stale-
- * pointer race we'd hit if `current-workflow.json` and `<workflow>/goal.json`
- * drifted. (The per-user current-workflow pointer is intentionally kept in
- * CLI state — it's per-user-per-machine, not part of the committed workflow.)
- */
-export function getWorkflowGoalFile(workspaceRoot: string, slug: string): string {
-  return path.join(getWorkflowDir(workspaceRoot, slug), 'goal.json');
-}
-
-/**
  * True iff a workflow folder with the given slug exists (and carries a
  * meta.json). Used by `/workflow switch <slug>` to surface "no such
  * workflow" without the side-effect mkdir that `getWorkflowDir` performs.
@@ -261,44 +253,6 @@ export function workflowExists(workspaceRoot: string, slug: string): boolean {
   const root = getWorkflowsRoot(workspaceRoot);
   const candidate = path.join(root, safeSlug, 'meta.json');
   return fs.existsSync(candidate);
-}
-
-/**
- * Lightweight conflict probe used by /feature-dev, /spec, /review BEFORE
- * they call createWorkflow. When the current pointer points at a DIFFERENT
- * workflow whose goal is `active`, returns the slug + a short summary so
- * the slash handler can askYesNo before clobbering it.
- *
- * Reads goal.json directly (not through goalStore.readWorkflowGoal) to
- * avoid a workflowArtifacts → goalStore import cycle. The fields we need
- * (status + text) are stable across the Goal schema's lifetime, so the
- * narrow shape on disk is fine here.
- */
-export interface CreateWorkflowConflict {
-  currentSlug: string;
-  currentGoalStatus: string;
-  currentGoalText: string;
-}
-
-export function detectCreateWorkflowConflict(
-  workspaceRoot: string,
-  newSlugOrTitle: string,
-  sessionKey?: string,
-): CreateWorkflowConflict | null {
-  // 9d-bugfix: scope the "current workflow" lookup to the calling
-  // session. A fresh CLI session that never bound a workflow has no
-  // conflict — only an already-bound session needs the prompt.
-  const currentSlug = getCurrentWorkflow(workspaceRoot, sessionKey);
-  if (!currentSlug) return null;
-  // Creating "the workflow you're already on" is a no-op for the pointer —
-  // no clobber to prompt about.
-  const newSlug = slugify(newSlugOrTitle);
-  if (currentSlug === newSlug) return null;
-  const goalPath = getWorkflowGoalFile(workspaceRoot, currentSlug);
-  if (!fs.existsSync(goalPath)) return null;
-  const raw = readJsonFile<{ text?: string; status?: string } | null>(goalPath, null);
-  if (!raw || !raw.text || raw.status !== 'active') return null;
-  return { currentSlug, currentGoalStatus: raw.status, currentGoalText: raw.text };
 }
 
 /**
