@@ -772,6 +772,48 @@ test('per-workflow pause/resume: resuming a different workflow flips the pointer
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: createWorkflow clobber prompt (detectCreateWorkflowConflict)
+// -----------------------------------------------------------------------
+
+test('detectCreateWorkflowConflict: returns null when no workflow is bound or the bound workflow has no active goal', async () => {
+  const { detectCreateWorkflowConflict, createWorkflow, setCurrentWorkflow } =
+    await import('../state/workflowArtifacts.js');
+  const { pauseGoal } = await import('../state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    // No workflow bound → safe.
+    assert.equal(detectCreateWorkflowConflict(workspace, 'new feature'), null);
+
+    const sk = 'brainrouter-cli:test:clobber-safe';
+    const wf = createWorkflow(workspace, { title: 'existing', kind: 'feature-dev' });
+    // Bound but no goal → safe.
+    assert.equal(detectCreateWorkflowConflict(workspace, 'new feature'), null);
+
+    // Bound with paused goal → safe (only ACTIVE goals trigger the prompt).
+    setGoal(workspace, 'existing work', sk);
+    pauseGoal(workspace, sk);
+    assert.equal(detectCreateWorkflowConflict(workspace, 'new feature'), null);
+
+    // Same-slug create → no pointer flip, no clobber.
+    const sameAsExisting = detectCreateWorkflowConflict(workspace, wf.slug);
+    assert.equal(sameAsExisting, null);
+  });
+});
+
+test('detectCreateWorkflowConflict: surfaces slug + status + text when the bound workflow has an active goal', async () => {
+  const { detectCreateWorkflowConflict, createWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:clobber-active';
+    const wf = createWorkflow(workspace, { title: 'auth overhaul', kind: 'feature-dev' });
+    setGoal(workspace, 'ship the auth overhaul', sk);
+    const conflict = detectCreateWorkflowConflict(workspace, 'cache prototype');
+    assert.ok(conflict, 'expected a conflict when active goal would be clobbered');
+    assert.equal(conflict!.currentSlug, wf.slug);
+    assert.equal(conflict!.currentGoalStatus, 'active');
+    assert.equal(conflict!.currentGoalText, 'ship the auth overhaul');
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {
