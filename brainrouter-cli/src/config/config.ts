@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -126,6 +126,10 @@ function resolveDefaultApiKey(config: Config): void {
     const dbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), '.brainrouter', 'memory.db');
     if (fs.existsSync(dbPath)) {
       try {
+        // Lazy-loaded so remote HTTP MCP users don't eat the ExperimentalWarning
+        // at module-load time — node:sqlite is only needed for the first-run
+        // bootstrap of a co-located stdio server.
+        const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
         const db = new DatabaseSync(dbPath);
         const row = db.prepare("SELECT api_key FROM users WHERE is_admin = 1 LIMIT 1").get() as { api_key: string } | undefined;
         if (row && row.api_key) {
