@@ -3,19 +3,60 @@
 Full reference: env vars, providers, transports, storage, sandboxing,
 backpressure, diagnostics.
 
+## Quick recap (where things live)
+
+| What | Where | Owns |
+| --- | --- | --- |
+| **MCP server env** | `~/.config/brainrouter/server.env` (global install) **or** `brainrouter/.env` (monorepo dev) | LLM credentials, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
+| **CLI chat-LLM credentials** | `~/.config/brainrouter/config.json` | Chat model, endpoint, API key — the canonical credential store since 0.3.4. The CLI no longer reads chat creds from `.env`. |
+| **CLI runtime knobs** | `brainrouter-cli/.env` | Tool-loop limits, sandbox flags, web search backend, trace log, workspace override, quiet/theme overrides. |
+| **MCP client transport** | `~/.config/brainrouter/config.json` (`servers` / `activeServer`) | Stdio vs HTTP MCP transport profile selection. |
+
+Templates: [`brainrouter/.env.example`](../brainrouter/.env.example) and
+[`brainrouter-cli/.env.example`](../brainrouter-cli/.env.example). Both
+are organized into numbered sections (5 in the MCP template, 6 in the
+CLI template) with all placeholder values blanked so the committed
+examples never look like real secrets.
+
+## MCP env-loader priority chain
+
+The MCP server resolves which `.env` to load in this order (**first hit
+wins**):
+
+1. **`$BRAINROUTER_ENV_FILE`** — explicit override. Useful for CI or
+   per-deployment env files.
+2. **`~/.config/brainrouter/server.env`** — canonical location for
+   globally-installed users (`npm i -g @kinqs/brainrouter-mcp-server`).
+3. **`./.env`** — current working directory. Preserves classic dotenv
+   behavior so monorepo dev (`cd brainrouter/ && npm run start:http`)
+   keeps loading `brainrouter/.env` exactly as before.
+
+The server prints `env: loaded N vars from <path>` to stderr at startup
+so you can confirm which file was picked.
+
+### First-time global install
+
+After `npm i -g @kinqs/brainrouter-mcp-server`, scaffold the canonical
+env file with:
+
+```bash
+brainrouter-mcp init
+```
+
+This copies the bundled `.env.example` to
+`~/.config/brainrouter/server.env` with mode `0600`. It refuses to
+overwrite an existing file. Edit the new file to set
+`BRAINROUTER_LLM_API_KEY` and any optional knobs.
+
 ## Two `.env` files, one per process
 
 The MCP server and the CLI agent are separate processes with separate
-concerns. They each get their own `.env`:
+concerns. They each get their own template:
 
 | File | Owns |
 | --- | --- |
-| **`brainrouter/.env`** | MCP server: shared LLM, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
-| **`brainrouter-cli/.env`** | CLI agent: chat LLM, tool loop limits, sandbox, web search backend, trace log, workspace override. |
-
-Templates: [`brainrouter/.env.example`](../brainrouter/.env.example) and
-[`brainrouter-cli/.env.example`](../brainrouter-cli/.env.example) — copy
-the ones you need to drop the `.example` suffix.
+| **`brainrouter/.env`** (or `~/.config/brainrouter/server.env`) | MCP server: LLM, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
+| **`brainrouter-cli/.env`** | CLI agent runtime: tool loop limits, sandbox, web search backend, trace log, workspace override, theme / quiet overrides. **Chat-LLM credentials live in `~/.config/brainrouter/config.json`, not here.** |
 
 ### Why two files?
 
@@ -30,9 +71,12 @@ the ones you need to drop the `.example` suffix.
   shouldn't pollute its env.
 
 The CLI used to load `brainrouter/.env` as a single source of truth;
-that's now legacy. The CLI auto-loads `brainrouter-cli/.env` first and
-falls back to `brainrouter/.env` only for the LLM credentials — so a
-single-file legacy setup keeps working until you migrate.
+that's now legacy. Since 0.3.4 the canonical chat-LLM credential store
+is **`~/.config/brainrouter/config.json`** (see [CLI chat-LLM config](#cli-chat-llm-config)
+below). The CLI auto-loads `brainrouter-cli/.env` for runtime knobs
+only and refuses to silently shadow `config.json` for credentials —
+this closes a precedence bug where a stale `brainrouter/.env` could
+override the on-disk config.
 
 ### Loading & propagation
 
@@ -403,6 +447,8 @@ These never propagate to the MCP child.
 | `BRAINROUTER_TRACE_LOG` | _(unset)_ | Path for OTEL-style JSONL turn traces. |
 | `BRAINROUTER_WEB_SEARCH_ENDPOINT` | _(falls back to DuckDuckGo)_ | Custom search backend. |
 | `BRAINROUTER_WORKSPACE` | _(auto-detected)_ | Override CLI workspace root. |
+| `BRAINROUTER_THEME` | `dark` | Banner / prompt / accent color scheme. `dark`, `light`, `mono`. `auto` falls through to `dark`. Workspace preferences can override. |
+| `BRAINROUTER_QUIET` | _(unset)_ | Set to `1` to suppress recall tables, briefing dumps, and tool-completion previews. Toggle in-session with `/quiet`. The `--quiet` flag sets this for the process. |
 
 ### Sandboxing — `brainrouter-cli/.env`
 
@@ -440,9 +486,45 @@ them; hook scripts read them.
 
 ---
 
+## CLI chat-LLM config
+
+Since 0.3.4 the canonical credential store for the CLI's **chat LLM**
+is `~/.config/brainrouter/config.json`. Same file as the MCP transport
+profile, with an additional `llm` block:
+
+```json
+{
+  "activeServer": "default",
+  "servers": { /* see below */ },
+  "llm": {
+    "provider": "openai",
+    "apiKey": "sk-...",
+    "model": "gpt-4o",
+    "endpoint": "https://api.openai.com/v1/chat/completions"
+  }
+}
+```
+
+`apiKey` is optional in the file — if blank, the CLI backfills from
+`BRAINROUTER_LLM_API_KEY` / `OPENAI_API_KEY` in the environment at load
+time. Endpoint and model fall back to OpenAI / `gpt-4o-mini` if not set.
+
+Why a JSON file instead of `.env` for credentials? Two reasons:
+
+- **No silent precedence bugs.** Pre-0.3.4 the CLI would happily read
+  chat-LLM credentials out of any `.env` it could find (`brainrouter-cli/.env`,
+  `brainrouter/.env`, cwd). That meant editing the dashboard's "rotate
+  API key" flow could leave a stale key in a `.env` that won
+  precedence anyway. Putting credentials in one well-known JSON file
+  removes the foot-gun.
+- **`.env` stays for runtime knobs.** Sandbox, timeouts, trace log,
+  web-search backend, theme, quiet — anything you'd genuinely want
+  per-shell — still belongs in `brainrouter-cli/.env`.
+
 ## MCP client config
 
-The CLI picks an MCP server from `~/.config/brainrouter/config.json`:
+The CLI picks an MCP server profile from the same
+`~/.config/brainrouter/config.json`:
 
 ```json
 {
@@ -466,6 +548,11 @@ The CLI picks an MCP server from `~/.config/brainrouter/config.json`:
 ```
 
 Switch with `/mcp use <name>` or edit `activeServer`. List with `/mcp`.
+
+When the active MCP server is unreachable the CLI degrades to **offline
+mode** (banner shows `⚠️  OFFLINE MODE` — memory recall, skills, and
+capture disabled; local tools still work). Pass `--strict-mcp` to opt
+back into the old fail-fast behavior.
 
 ### Stdio vs HTTP
 
@@ -491,7 +578,11 @@ Personal CLI state lives under `~/.brainrouter/`. Only committable
 workflow artifacts live inside the workspace.
 
 ```
-~/.brainrouter/                          ← user-global (override: BRAINROUTER_HOME)
+~/.config/brainrouter/                   ← user config (XDG-style)
+├── server.env                           # MCP env (priority 2 in the loader chain)
+└── config.json                          # CLI: chat-LLM creds + MCP transport profiles
+
+~/.brainrouter/                          ← user-global state (override: BRAINROUTER_HOME)
 ├── memory.db                            # MCP cognitive memory store
 ├── mcp-cache/<workspace-hash>/          # MCP-side per-workspace cache
 │   └── active_session.json
@@ -503,11 +594,13 @@ workflow artifacts live inside the workspace.
 └── workspaces/
     └── <basename>-<sha8>/               # one bucket per workspace
         ├── cli/
-        │   ├── preferences.json         # theme, statusline, vim, personality
+        │   ├── preferences.json         # theme, statusline, vim, personality, quiet
         │   ├── hooks.json               # shell lifecycle hooks
         │   ├── sessions.json            # child-agent orchestration index
         │   ├── feedback.jsonl
         │   ├── current-workflow.json
+        │   ├── .brainrouter.migrated/   # archives of legacy workspace-level files
+        │   │   └── legacy-goal-<ts>.json
         │   └── sessions/                # one folder per chat session
         │       └── <encodedKey>/
         │           ├── transcript.jsonl
@@ -540,6 +633,12 @@ workflow artifacts live inside the workspace.
 - **Auto-migration** — workspaces from pre-2026-05-21 builds keep their
   old `<workspace>/.brainrouter/` files; on first run the CLI copies them
   into the home bucket and drops a `.migrated-from-workspace` marker.
+- **Legacy goal archive** — pre-PR-#26 builds wrote a single
+  workspace-level `cli/goal.json` shared by every CLI in the workspace.
+  Since PR #26 each CLI process owns its own UUID `sessionKey` and
+  goals live under `sessions/<encodedKey>/goal.json`. If a legacy
+  `cli/goal.json` is detected on the first session-scoped goal write,
+  the CLI archives it under `cli/.brainrouter.migrated/legacy-goal-<ts>.json`.
 - **Why workflows stay in the workspace** — `spec.md` / `tasks.md` /
   `walkthrough.md` are team documentation, meant to be reviewed and
   committed alongside the code.
