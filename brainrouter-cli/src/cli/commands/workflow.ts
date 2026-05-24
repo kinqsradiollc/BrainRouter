@@ -14,7 +14,7 @@ import { marked } from 'marked';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, detectCreateWorkflowConflict, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, detectCreateWorkflowConflict, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
 import { applyMigrationResolution, clearGoal, completeGoal, editGoal, formatBudget, formatWorkflowGoalColumn, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, migrateSessionGoalToWorkflow, pauseGoal, planWorkflowSwitch, readGoal, readWorkflowGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, WorkflowConflictError, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
@@ -97,7 +97,7 @@ async function promptIfClobberingWorkflow(
  * Format: `Switched to workflow <slug> — goal: <status>, iteration N of cap`
  * — or `goal: —` when no goal is bound.
  */
-function printWorkflowSwitchConfirmation(slug: string, goal: import('../../state/goalStore.js').Goal | null): void {
+function printWorkflowSwitchConfirmation(slug: string, goal: Goal | null): void {
   if (!goal) {
     console.log(chalk.green(`\n✓ Switched to workflow "${slug}" — goal: —.\n`));
     return;
@@ -470,14 +470,21 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         return true;
       }
       if (sub === 'switch') {
-        const targetSlug = (args[1] ?? '').trim();
-        if (!targetSlug) {
+        const rawSlug = (args[1] ?? '').trim();
+        if (!rawSlug) {
           console.log(chalk.red('\nUsage: /workflow switch <slug>\n'));
           console.log(chalk.gray('  See /workflows for available slugs.\n'));
           return true;
         }
+        // Canonicalize at the entry point. Without this, a user typing
+        // `/workflow switch My Workflow` (or any title-cased / spaced
+        // variant) would have the raw string written verbatim into the
+        // pointer file by setCurrentWorkflow, breaking `w.slug ===
+        // currentSlug` matching everywhere downstream (the ★ marker
+        // on /workflows, the "already on it" no-op below, etc.).
+        const targetSlug = slugify(rawSlug);
         if (!workflowExists(agent.workspaceRoot, targetSlug)) {
-          console.log(chalk.red(`\nNo such workflow: "${targetSlug}".`));
+          console.log(chalk.red(`\nNo such workflow: "${rawSlug}".`));
           console.log(chalk.gray('  Use /workflows to see what exists, or /spec / /feature-dev to create a new one.\n'));
           return true;
         }
@@ -495,9 +502,13 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           // in its own folder.
           if (plan.needsMigration) {
             const outcome = migrateSessionGoalToWorkflow(agent.workspaceRoot, agent.sessionKey, targetSlug);
-            if (outcome.conflict === 'target-has-active-goal') {
+            if (outcome.conflict === 'target-has-open-goal') {
+              // Status-aware wording: the conflict fires for ANY non-
+              // complete target (active / paused / blocked / usage_limited),
+              // so say the actual status instead of always "active".
+              const targetStatus = outcome.target!.status.replace('_', ' ');
               console.log(chalk.yellow(
-                `\n⚠️  Target workflow "${targetSlug}" already has an active goal:`,
+                `\n⚠️  Target workflow "${targetSlug}" already has a ${targetStatus} goal:`,
               ));
               console.log(`     ${chalk.cyan(outcome.target!.text)}`);
               console.log(chalk.gray(`     Session-scoped goal: ${outcome.source!.text}`));
@@ -547,13 +558,15 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         return true;
       }
       if (sub === 'resume') {
-        const targetSlug = (args[1] ?? '').trim();
-        if (!targetSlug) {
+        const rawSlug = (args[1] ?? '').trim();
+        if (!rawSlug) {
           console.log(chalk.red('\nUsage: /workflow resume <slug>\n'));
           return true;
         }
+        // Canonicalize for the same reason as /workflow switch (see above).
+        const targetSlug = slugify(rawSlug);
         if (!workflowExists(agent.workspaceRoot, targetSlug)) {
-          console.log(chalk.red(`\nNo such workflow: "${targetSlug}".\n`));
+          console.log(chalk.red(`\nNo such workflow: "${rawSlug}".\n`));
           return true;
         }
         // /workflow resume <slug> is sugar for /workflow switch <slug> +
@@ -566,9 +579,13 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           const plan = planWorkflowSwitch(agent.workspaceRoot, agent.sessionKey, targetSlug);
           if (plan.needsMigration) {
             const outcome = migrateSessionGoalToWorkflow(agent.workspaceRoot, agent.sessionKey, targetSlug);
-            if (outcome.conflict === 'target-has-active-goal') {
+            if (outcome.conflict === 'target-has-open-goal') {
+              // Status-aware: report the actual halt status of the target,
+              // not just "active". The conflict fires for any non-complete
+              // goal, so the user sees paused/blocked/limited too.
+              const targetStatus = outcome.target!.status.replace('_', ' ');
               console.log(chalk.yellow(
-                `\n⚠️  Target workflow "${targetSlug}" already has an active goal — resume keeps it, archiving the session's.`,
+                `\n⚠️  Target workflow "${targetSlug}" already has a ${targetStatus} goal — resume keeps it, archiving the session's.`,
               ));
               applyMigrationResolution(agent.workspaceRoot, agent.sessionKey, targetSlug, 'keep-target');
             }

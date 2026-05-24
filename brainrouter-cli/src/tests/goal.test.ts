@@ -530,9 +530,59 @@ test('migrateSessionGoalToWorkflow: surfaces conflict when target already has an
 
     const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
     assert.equal(outcome.migrated, false);
-    assert.equal(outcome.conflict, 'target-has-active-goal');
+    assert.equal(outcome.conflict, 'target-has-open-goal');
     assert.equal(outcome.source?.text, 'session is exploring caching');
     assert.equal(outcome.target?.text, 'target keeps working on auth');
+  });
+});
+
+test('migrateSessionGoalToWorkflow: target-has-open-goal also fires when target goal is paused / blocked / usage_limited (not just active)', async () => {
+  // Copilot review pin: the conflict variant name was originally
+  // `target-has-active-goal` but the actual trigger is "any non-complete
+  // target." Lock in the broader semantics so a future rename or condition
+  // tightening doesn't quietly drop paused/blocked/limited targets to
+  // silent-overwrite.
+  const { migrateSessionGoalToWorkflow, pauseGoal, blockGoal, usageLimitGoal, completeGoal } =
+    await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:open-goal-variants';
+    // Helper: build a state where the session has a goal AND the target has
+    // a goal in `status`, then check that migration refuses. Clears any
+    // residual session/workflow goal between iterations so the next setGoal
+    // doesn't trip GoalConflictError on the previous run's leftovers.
+    function expectConflict(status: 'paused' | 'blocked' | 'usage_limited'): void {
+      const target = createWorkflow(workspace, { title: `target-${status}`, kind: 'spec' });
+      setGoal(workspace, `target goal in ${status}`, sk);
+      if (status === 'paused') pauseGoal(workspace, sk);
+      if (status === 'blocked') blockGoal(workspace, sk, 'stuck');
+      if (status === 'usage_limited') usageLimitGoal(workspace, sk, 'cap reached');
+      // Unbind so the next setGoal lands in the session bucket. Clear any
+      // residual session goal from a prior iteration before writing.
+      setCurrentWorkflow(workspace, '');
+      clearGoal(workspace, sk);
+      setGoal(workspace, `session goal vs ${status}`, sk);
+      setCurrentWorkflow(workspace, target.slug);
+      const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+      assert.equal(outcome.conflict, 'target-has-open-goal', `expected conflict for target.status=${status}`);
+      assert.equal(outcome.target?.status, status);
+    }
+    expectConflict('paused');
+    expectConflict('blocked');
+    expectConflict('usage_limited');
+
+    // Sanity check the inverse: a `complete` target is silently overwritten
+    // (no conflict). The work there is already done.
+    const completedTarget = createWorkflow(workspace, { title: 'finished', kind: 'spec' });
+    setGoal(workspace, 'done goal', sk);
+    completeGoal(workspace, sk, 'wrapped up');
+    setCurrentWorkflow(workspace, '');
+    clearGoal(workspace, sk);
+    setGoal(workspace, 'session goal vs complete', sk);
+    setCurrentWorkflow(workspace, completedTarget.slug);
+    const out = migrateSessionGoalToWorkflow(workspace, sk, completedTarget.slug);
+    assert.equal(out.conflict, undefined);
+    assert.equal(out.migrated, true);
   });
 });
 
@@ -549,7 +599,7 @@ test('applyMigrationResolution(keep-target): archives session goal into .brainro
     setCurrentWorkflow(workspace, target.slug);
 
     const conflict = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
-    assert.equal(conflict.conflict, 'target-has-active-goal');
+    assert.equal(conflict.conflict, 'target-has-open-goal');
 
     const resolved = applyMigrationResolution(workspace, sk, target.slug, 'keep-target');
     assert.equal(resolved.migrated, false);
