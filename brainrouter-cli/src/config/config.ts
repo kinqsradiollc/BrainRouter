@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createRequire } from 'node:module';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -50,8 +49,6 @@ export function loadConfig(): Config {
     }
   }
 
-  // Auto-resolve placeholder API keys if possible
-  resolveDefaultApiKey(config);
   // The default config writes `llm.apiKey: ''` so it never appears as a
   // secret in the committed file. Backfill from the standard env vars at
   // load time so every downstream consumer (callOpenAI, mcpClient env
@@ -115,31 +112,4 @@ function createDefaultConfig(): Config {
   return config;
 }
 
-function resolveDefaultApiKey(config: Config): void {
-  const defaultServer = config.servers.default;
-  if (
-    defaultServer &&
-    defaultServer.type === 'stdio' &&
-    defaultServer.env &&
-    defaultServer.env.BRAINROUTER_API_KEY === 'br_admin_key_placeholder'
-  ) {
-    const dbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), '.brainrouter', 'memory.db');
-    if (fs.existsSync(dbPath)) {
-      try {
-        // Lazy-loaded so remote HTTP MCP users don't eat the ExperimentalWarning
-        // at module-load time — node:sqlite is only needed for the first-run
-        // bootstrap of a co-located stdio server.
-        const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
-        const db = new DatabaseSync(dbPath);
-        const row = db.prepare("SELECT api_key FROM users WHERE is_admin = 1 LIMIT 1").get() as { api_key: string } | undefined;
-        if (row && row.api_key) {
-          defaultServer.env.BRAINROUTER_API_KEY = row.api_key;
-          saveConfig(config);
-        }
-      } catch (error) {
-        // ignore errors
-      }
-    }
-  }
-}
 
