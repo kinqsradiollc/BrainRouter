@@ -14,7 +14,7 @@ import { marked } from 'marked';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, detectCreateWorkflowConflict, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
 import { applyMigrationResolution, clearGoal, completeGoal, editGoal, formatBudget, formatWorkflowGoalColumn, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, migrateSessionGoalToWorkflow, pauseGoal, planWorkflowSwitch, readGoal, readWorkflowGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, WorkflowConflictError, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
@@ -53,6 +53,42 @@ export function shouldSkipGrillMe(
     slug,
     specPath: artifactRelativePath(workspaceRoot, slug, ARTIFACT.spec),
   };
+}
+
+/**
+ * Strip a `--force` token from a slash command's arg list, returning the
+ * flag's presence plus the rest. Used by /feature-dev / /spec / /review
+ * to gate Subtask 6's clobber prompt (mirrors /grill-me's --force parsing).
+ */
+function parseForceFlag(args: string[]): { force: boolean; rest: string[] } {
+  return { force: args.includes('--force'), rest: args.filter((a) => a !== '--force') };
+}
+
+/**
+ * Ask the user whether a /feature-dev / /spec / /review should be allowed
+ * to clobber the in-progress workflow's pointer. Returns true if it's safe
+ * to proceed with createWorkflow (no conflict, --force set, or user said
+ * yes). Returns false when the caller should abort (user said no).
+ *
+ * Mirrors GoalConflictError's UX shape — prints the slug + active goal
+ * text, then askYesNo "Replace as the active workflow?".
+ */
+async function promptIfClobberingWorkflow(
+  workspaceRoot: string,
+  newTitle: string,
+  force: boolean,
+): Promise<boolean> {
+  if (force) return true;
+  const conflict = detectCreateWorkflowConflict(workspaceRoot, newTitle);
+  if (!conflict) return true;
+  console.log(chalk.yellow(`\n⚠️  Workflow "${conflict.currentSlug}" is the current pointer and has an active goal:`));
+  console.log(`     ${chalk.cyan(conflict.currentGoalText)}`);
+  console.log(chalk.gray(`     Starting a new workflow will switch the pointer to it.`));
+  const confirmed = await askYesNo('Replace as the active workflow? (y/N) ', false);
+  if (!confirmed) {
+    console.log(chalk.gray(`\nKeeping "${conflict.currentSlug}" as the active workflow. Tip: /workflow switch ${conflict.currentSlug} (no-op) or /workflow pause to suspend it before starting the new one.\n`));
+  }
+  return confirmed;
 }
 
 /**
@@ -236,8 +272,10 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/feature-dev':
     {
-      const feature = args.join(' ').trim();
-      if (!feature) { console.log(chalk.red('\nUsage: /feature-dev <feature description>\n')); break; }
+      const parsed = parseForceFlag(args);
+      const feature = parsed.rest.join(' ').trim();
+      if (!feature) { console.log(chalk.red('\nUsage: /feature-dev [--force] <feature description>\n')); break; }
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force))) return true;
       const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'feature-dev' });
       const specPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.spec);
       const tasksPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.tasks);
@@ -314,8 +352,10 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/spec':
     {
-      const feature = args.join(' ').trim();
-      if (!feature) { console.log(chalk.red('\nUsage: /spec <feature title>\n')); break; }
+      const parsed = parseForceFlag(args);
+      const feature = parsed.rest.join(' ').trim();
+      if (!feature) { console.log(chalk.red('\nUsage: /spec [--force] <feature title>\n')); break; }
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force))) return true;
       const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'spec' });
       const specPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.spec);
       console.log(chalk.gray(`Workflow folder: ${path.dirname(specPath)}`));
@@ -337,8 +377,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/review':
     {
-      const scope = args.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
-      const meta = createWorkflow(agent.workspaceRoot, { title: `Review: ${scope}`, kind: 'review' });
+      const parsed = parseForceFlag(args);
+      const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
+      const reviewTitle = `Review: ${scope}`;
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, reviewTitle, parsed.force))) return true;
+      const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review' });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
       await runSkillCommand(agent, mcpClient, command, scope, [
