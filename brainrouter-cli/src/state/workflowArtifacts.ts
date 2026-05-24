@@ -141,6 +141,70 @@ export function getCurrentWorkflow(workspaceRoot: string): string | undefined {
 }
 
 /**
+ * Path to a workflow's bound `goal.json`. The goal lives ALONGSIDE
+ * `meta.json` / `spec.md` inside the workflow folder so that switching
+ * workflows carries the goal with it (Item 3 of the 0.3.6 cycle). When no
+ * workflow is bound, callers fall back to the per-session goal path —
+ * `resolveGoalScope` in goalStore.ts owns that fall-through.
+ *
+ * Pattern adapted from openSrc/bruno/packages/bruno-schema/src/collections/
+ * — Bruno keeps the active-environment scalar inside the collection doc
+ * rather than in a separate workspace-tree pointer, which avoids the stale-
+ * pointer race we'd hit if `current-workflow.json` and `<workflow>/goal.json`
+ * drifted. (The per-user current-workflow pointer is intentionally kept in
+ * CLI state — it's per-user-per-machine, not part of the committed workflow.)
+ */
+export function getWorkflowGoalFile(workspaceRoot: string, slug: string): string {
+  return path.join(getWorkflowDir(workspaceRoot, slug), 'goal.json');
+}
+
+/**
+ * True iff a workflow folder with the given slug exists (and carries a
+ * meta.json). Used by `/workflow switch <slug>` to surface "no such
+ * workflow" without the side-effect mkdir that `getWorkflowDir` performs.
+ */
+export function workflowExists(workspaceRoot: string, slug: string): boolean {
+  const safeSlug = slugify(slug);
+  const root = getWorkflowsRoot(workspaceRoot);
+  const candidate = path.join(root, safeSlug, 'meta.json');
+  return fs.existsSync(candidate);
+}
+
+/**
+ * Lightweight conflict probe used by /feature-dev, /spec, /review BEFORE
+ * they call createWorkflow. When the current pointer points at a DIFFERENT
+ * workflow whose goal is `active`, returns the slug + a short summary so
+ * the slash handler can askYesNo before clobbering it.
+ *
+ * Reads goal.json directly (not through goalStore.readWorkflowGoal) to
+ * avoid a workflowArtifacts → goalStore import cycle. The fields we need
+ * (status + text) are stable across the Goal schema's lifetime, so the
+ * narrow shape on disk is fine here.
+ */
+export interface CreateWorkflowConflict {
+  currentSlug: string;
+  currentGoalStatus: string;
+  currentGoalText: string;
+}
+
+export function detectCreateWorkflowConflict(
+  workspaceRoot: string,
+  newSlugOrTitle: string,
+): CreateWorkflowConflict | null {
+  const currentSlug = getCurrentWorkflow(workspaceRoot);
+  if (!currentSlug) return null;
+  // Creating "the workflow you're already on" is a no-op for the pointer —
+  // no clobber to prompt about.
+  const newSlug = slugify(newSlugOrTitle);
+  if (currentSlug === newSlug) return null;
+  const goalPath = getWorkflowGoalFile(workspaceRoot, currentSlug);
+  if (!fs.existsSync(goalPath)) return null;
+  const raw = readJsonFile<{ text?: string; status?: string } | null>(goalPath, null);
+  if (!raw || !raw.text || raw.status !== 'active') return null;
+  return { currentSlug, currentGoalStatus: raw.status, currentGoalText: raw.text };
+}
+
+/**
  * Path (relative to workspace root) the LLM should `write_file` to for a
  * given artifact. We return a workspace-relative path because that's the
  * unit `write_file` expects.

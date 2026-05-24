@@ -349,6 +349,521 @@ test('goalStore: session A goal does not leak into session B (regression for cro
   });
 });
 
+// -----------------------------------------------------------------------
+// Item 3: per-workflow goal binding + priority chain (workflow > session)
+// -----------------------------------------------------------------------
+
+test('resolveGoalScope: prefers workflow scope when a workflow is bound', async () => {
+  const { resolveGoalScope } = await import('../state/goalStore.js');
+  const { createWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:scope-workflow';
+    // No workflow yet → session scope.
+    const before = resolveGoalScope(workspace, sk);
+    assert.equal(before.scope, 'session');
+
+    // Bind a workflow → resolver should now return the workflow scope.
+    const meta = createWorkflow(workspace, { title: 'multi-workflow demo', kind: 'feature-dev' });
+    const after = resolveGoalScope(workspace, sk);
+    assert.equal(after.scope, 'workflow');
+    if (after.scope === 'workflow') {
+      assert.equal(after.slug, meta.slug);
+      assert.ok(after.path.includes(`workflows/${meta.slug}/goal.json`));
+    }
+  });
+});
+
+test('resolveGoalScope: falls back to session when no workflow bound, then legacy when no sessionKey', async () => {
+  const { resolveGoalScope } = await import('../state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:scope-session';
+    const sessionScope = resolveGoalScope(workspace, sk);
+    assert.equal(sessionScope.scope, 'session');
+    if (sessionScope.scope === 'session') {
+      assert.equal(sessionScope.sessionKey, sk);
+      assert.ok(sessionScope.path.includes(`/sessions/`));
+    }
+    const legacyScope = resolveGoalScope(workspace);
+    assert.equal(legacyScope.scope, 'legacy');
+    assert.ok(legacyScope.path.endsWith('goal.json'));
+  });
+});
+
+test('per-workflow goal binding: setGoal writes inside workflow folder; readGoal reads it back', async () => {
+  const { createWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:bind';
+    const meta = createWorkflow(workspace, { title: 'cache rewrite', kind: 'spec' });
+    setGoal(workspace, 'land the cache rewrite spec', sk);
+
+    // The file lives under the workflow folder, not the session bucket.
+    const goalPath = getWorkflowGoalFile(workspace, meta.slug);
+    assert.ok(fs.existsSync(goalPath), 'expected goal.json inside workflow folder');
+    const onDisk = JSON.parse(fs.readFileSync(goalPath, 'utf8'));
+    assert.equal(onDisk.text, 'land the cache rewrite spec');
+
+    // readGoal returns the same goal regardless of which (or no) sessionKey
+    // is passed, because the priority chain pins it to the workflow.
+    assert.equal(readGoal(workspace, sk)?.text, 'land the cache rewrite spec');
+    assert.equal(readGoal(workspace, 'totally:different:key')?.text, 'land the cache rewrite spec');
+  });
+});
+
+test('per-workflow goal binding: switching workflows changes which goal readGoal returns', async () => {
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:swap';
+    const a = createWorkflow(workspace, { title: 'workflow A', kind: 'feature-dev' });
+    setGoal(workspace, 'goal for A', sk);
+    assert.equal(readGoal(workspace, sk)?.text, 'goal for A');
+
+    const b = createWorkflow(workspace, { title: 'workflow B', kind: 'feature-dev' });
+    // createWorkflow flipped the current pointer to B; B has no goal yet.
+    assert.equal(readGoal(workspace, sk), null);
+
+    setGoal(workspace, 'goal for B', sk);
+    assert.equal(readGoal(workspace, sk)?.text, 'goal for B');
+
+    // Flip back — A's goal is intact, unaffected by B's goal write.
+    setCurrentWorkflow(workspace, a.slug);
+    assert.equal(readGoal(workspace, sk)?.text, 'goal for A');
+  });
+});
+
+test('per-workflow goal binding: clearGoal targets the bound workflow only, leaves other workflows alone', async () => {
+  const { createWorkflow, setCurrentWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:clear-bound';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+
+    // Clearing while B is bound only nulls B's goal.json. A is untouched.
+    clearGoal(workspace, sk);
+    assert.equal(readGoal(workspace, sk), null);
+
+    setCurrentWorkflow(workspace, a.slug);
+    assert.equal(readGoal(workspace, sk)?.text, 'A goal');
+    // B's file still exists but with null payload.
+    const bPath = getWorkflowGoalFile(workspace, b.slug);
+    if (fs.existsSync(bPath)) {
+      const raw = fs.readFileSync(bPath, 'utf8').trim();
+      // writeJsonFile(null) writes "null\n"; readGoal returns null either way.
+      assert.ok(raw === 'null' || raw === '');
+    }
+  });
+});
+
+test('Item 1 regression guard: with no workflow bound, session A goal still does not leak into session B', () => {
+  // The per-workflow refactor must NOT reintroduce the cross-session leak
+  // PR #26 fixed. When no workflow is bound, two sessions stay isolated.
+  withTempWorkspace((workspace) => {
+    const sessionA = 'brainrouter-cli:project:scope-A';
+    const sessionB = 'brainrouter-cli:project:scope-B';
+    setGoal(workspace, 'A is exploring auth', sessionA);
+    assert.equal(readGoal(workspace, sessionB), null);
+    assert.equal(readGoal(workspace, sessionA)?.text, 'A is exploring auth');
+  });
+});
+
+// -----------------------------------------------------------------------
+// Item 3: migration on first /workflow switch
+// -----------------------------------------------------------------------
+
+test('migrateSessionGoalToWorkflow: moves session goal into target folder; idempotent on re-run', async () => {
+  const { migrateSessionGoalToWorkflow } = await import('../state/goalStore.js');
+  const { getWorkflowDir, createWorkflow } = await import('../state/workflowArtifacts.js');
+  const { getSessionStateFile } = await import('../state/cliState.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:migrate-free';
+    // Set a session-scoped goal first (no workflow bound).
+    setGoal(workspace, 'land the migration test', sk);
+
+    // Create a target workflow but do NOT mark it current (so the resolver
+    // still resolves to session scope for setGoal above — the test would
+    // otherwise route into the workflow folder immediately). For this test,
+    // we set the goal first, then create the target.
+    const target = createWorkflow(workspace, { title: 'target work', kind: 'feature-dev' });
+    // createWorkflow flips the pointer to `target`; that's the realistic
+    // switch sequence. The session bucket still holds the goal at this point.
+
+    const sessionPath = getSessionStateFile(workspace, sk, 'goal.json');
+    assert.ok(fs.existsSync(sessionPath), 'session goal should exist pre-migration');
+
+    const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(outcome.migrated, true);
+    assert.equal(outcome.conflict, undefined);
+
+    // Target now has the goal; session bucket is cleared.
+    const targetGoal = JSON.parse(
+      fs.readFileSync(path.join(getWorkflowDir(workspace, target.slug), 'goal.json'), 'utf8'),
+    );
+    assert.equal(targetGoal.text, 'land the migration test');
+    const sessionRaw = fs.readFileSync(sessionPath, 'utf8').trim();
+    assert.ok(sessionRaw === 'null' || sessionRaw === '');
+
+    // Second invocation is a no-op — session bucket is empty.
+    const again = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(again.migrated, false);
+  });
+});
+
+test('migrateSessionGoalToWorkflow: surfaces conflict when target already has an active goal', async () => {
+  const { migrateSessionGoalToWorkflow } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:migrate-conflict';
+    // Workflow target with its own goal.
+    const target = createWorkflow(workspace, { title: 'busy workflow', kind: 'spec' });
+    setGoal(workspace, 'target keeps working on auth', sk);
+
+    // Flip back to no-workflow scope and set a session goal.
+    setCurrentWorkflow(workspace, ''); // empty slug → effectively no workflow bound for the resolver
+    // (Note: getCurrentWorkflow returns '' which is falsy, so the resolver falls to session.)
+    setGoal(workspace, 'session is exploring caching', sk);
+
+    // Flip the pointer back to the target — that's what /workflow switch
+    // would do BEFORE running migration. The session bucket still has its
+    // goal at this point (workflow scope didn't write it).
+    setCurrentWorkflow(workspace, target.slug);
+
+    const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(outcome.migrated, false);
+    assert.equal(outcome.conflict, 'target-has-open-goal');
+    assert.equal(outcome.source?.text, 'session is exploring caching');
+    assert.equal(outcome.target?.text, 'target keeps working on auth');
+  });
+});
+
+test('migrateSessionGoalToWorkflow: target-has-open-goal also fires when target goal is paused / blocked / usage_limited (not just active)', async () => {
+  // Copilot review pin: the conflict variant name was originally
+  // `target-has-active-goal` but the actual trigger is "any non-complete
+  // target." Lock in the broader semantics so a future rename or condition
+  // tightening doesn't quietly drop paused/blocked/limited targets to
+  // silent-overwrite.
+  const { migrateSessionGoalToWorkflow, pauseGoal, blockGoal, usageLimitGoal, completeGoal } =
+    await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:open-goal-variants';
+    // Helper: build a state where the session has a goal AND the target has
+    // a goal in `status`, then check that migration refuses. Clears any
+    // residual session/workflow goal between iterations so the next setGoal
+    // doesn't trip GoalConflictError on the previous run's leftovers.
+    function expectConflict(status: 'paused' | 'blocked' | 'usage_limited'): void {
+      const target = createWorkflow(workspace, { title: `target-${status}`, kind: 'spec' });
+      setGoal(workspace, `target goal in ${status}`, sk);
+      if (status === 'paused') pauseGoal(workspace, sk);
+      if (status === 'blocked') blockGoal(workspace, sk, 'stuck');
+      if (status === 'usage_limited') usageLimitGoal(workspace, sk, 'cap reached');
+      // Unbind so the next setGoal lands in the session bucket. Clear any
+      // residual session goal from a prior iteration before writing.
+      setCurrentWorkflow(workspace, '');
+      clearGoal(workspace, sk);
+      setGoal(workspace, `session goal vs ${status}`, sk);
+      setCurrentWorkflow(workspace, target.slug);
+      const outcome = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+      assert.equal(outcome.conflict, 'target-has-open-goal', `expected conflict for target.status=${status}`);
+      assert.equal(outcome.target?.status, status);
+    }
+    expectConflict('paused');
+    expectConflict('blocked');
+    expectConflict('usage_limited');
+
+    // Sanity check the inverse: a `complete` target is silently overwritten
+    // (no conflict). The work there is already done.
+    const completedTarget = createWorkflow(workspace, { title: 'finished', kind: 'spec' });
+    setGoal(workspace, 'done goal', sk);
+    completeGoal(workspace, sk, 'wrapped up');
+    setCurrentWorkflow(workspace, '');
+    clearGoal(workspace, sk);
+    setGoal(workspace, 'session goal vs complete', sk);
+    setCurrentWorkflow(workspace, completedTarget.slug);
+    const out = migrateSessionGoalToWorkflow(workspace, sk, completedTarget.slug);
+    assert.equal(out.conflict, undefined);
+    assert.equal(out.migrated, true);
+  });
+});
+
+test('applyMigrationResolution(keep-target): archives session goal into .brainrouter.migrated/, clears session bucket', async () => {
+  const { migrateSessionGoalToWorkflow, applyMigrationResolution } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  const { getCliStateDir, getSessionStateFile } = await import('../state/cliState.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:keep-target';
+    const target = createWorkflow(workspace, { title: 'target', kind: 'feature-dev' });
+    setGoal(workspace, 'target goal', sk);
+    setCurrentWorkflow(workspace, '');
+    setGoal(workspace, 'session goal', sk);
+    setCurrentWorkflow(workspace, target.slug);
+
+    const conflict = migrateSessionGoalToWorkflow(workspace, sk, target.slug);
+    assert.equal(conflict.conflict, 'target-has-open-goal');
+
+    const resolved = applyMigrationResolution(workspace, sk, target.slug, 'keep-target');
+    assert.equal(resolved.migrated, false);
+    assert.ok(resolved.archivedPath, 'expected an archive path for the rejected session goal');
+    assert.ok(resolved.archivedPath!.includes('.brainrouter.migrated'));
+
+    // Target's goal stayed.
+    const onTarget = JSON.parse(fs.readFileSync(getWorkflowGoalFile(workspace, target.slug), 'utf8'));
+    assert.equal(onTarget.text, 'target goal');
+    // Session bucket is cleared.
+    const sessionRaw = fs.readFileSync(getSessionStateFile(workspace, sk, 'goal.json'), 'utf8').trim();
+    assert.ok(sessionRaw === 'null' || sessionRaw === '');
+    // Archive lives in CLI state dir, not the workspace tree (Item 1 invariant).
+    assert.ok(resolved.archivedPath!.startsWith(getCliStateDir(workspace)));
+    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
+  });
+});
+
+test('applyMigrationResolution(import-session): archives target goal, moves session goal into target folder', async () => {
+  const { migrateSessionGoalToWorkflow, applyMigrationResolution } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow, getWorkflowGoalFile } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:import-session';
+    const target = createWorkflow(workspace, { title: 'target', kind: 'feature-dev' });
+    setGoal(workspace, 'target goal', sk);
+    setCurrentWorkflow(workspace, '');
+    setGoal(workspace, 'session goal', sk);
+    setCurrentWorkflow(workspace, target.slug);
+
+    migrateSessionGoalToWorkflow(workspace, sk, target.slug); // surfaces conflict
+    const resolved = applyMigrationResolution(workspace, sk, target.slug, 'import-session');
+    assert.equal(resolved.migrated, true);
+    assert.ok(resolved.archivedPath, 'target goal should be archived when overwritten');
+
+    const onTarget = JSON.parse(fs.readFileSync(getWorkflowGoalFile(workspace, target.slug), 'utf8'));
+    assert.equal(onTarget.text, 'session goal');
+    // Verify the archived target payload is recoverable.
+    const archived = JSON.parse(fs.readFileSync(resolved.archivedPath!, 'utf8'));
+    assert.equal(archived.text, 'target goal');
+  });
+});
+
+// -----------------------------------------------------------------------
+// Item 3: /workflow switch <slug> — WorkflowConflictError + plan helper
+// -----------------------------------------------------------------------
+
+test('planWorkflowSwitch: session → workflow flag is set when session has a goal', async () => {
+  const { planWorkflowSwitch } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-session';
+    // Create a target workflow but unbind so subsequent setGoal lands in session bucket.
+    const target = createWorkflow(workspace, { title: 'target', kind: 'feature-dev' });
+    setCurrentWorkflow(workspace, '');
+    setGoal(workspace, 'session work', sk);
+
+    const plan = planWorkflowSwitch(workspace, sk, target.slug);
+    assert.equal(plan.fromScope.scope, 'session');
+    assert.equal(plan.needsMigration, true);
+    assert.equal(plan.sourceGoal?.text, 'session work');
+    assert.equal(plan.targetGoal, null);
+  });
+});
+
+test('planWorkflowSwitch: workflow → workflow flip with both active goals throws WorkflowConflictError', async () => {
+  const { planWorkflowSwitch, WorkflowConflictError } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-conflict';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A is active', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B is active', sk);
+    // Both A and B have active goals. Currently bound to B. Asking to switch
+    // back to A must refuse with WorkflowConflictError.
+    setCurrentWorkflow(workspace, b.slug);
+    assert.throws(
+      () => planWorkflowSwitch(workspace, sk, a.slug),
+      (err: unknown) =>
+        err instanceof WorkflowConflictError &&
+        (err as any).sourceSlug === b.slug &&
+        (err as any).targetSlug === a.slug,
+    );
+  });
+});
+
+test('planWorkflowSwitch: workflow → workflow flip is allowed when source goal is paused', async () => {
+  const { planWorkflowSwitch, pauseGoal } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-paused';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A is paused', sk);
+    pauseGoal(workspace, sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B is active', sk);
+
+    // Bound to B; A is paused → no conflict, just a normal switch.
+    setCurrentWorkflow(workspace, b.slug);
+    const plan = planWorkflowSwitch(workspace, sk, a.slug);
+    assert.equal(plan.fromScope.scope, 'workflow');
+    assert.equal(plan.needsMigration, false);
+    assert.equal(plan.targetGoal?.status, 'paused');
+  });
+});
+
+test('WorkflowConflictError carries both slugs + goals and a clear remediation in the message', async () => {
+  const { planWorkflowSwitch, WorkflowConflictError } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:plan-err-msg';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+    setCurrentWorkflow(workspace, b.slug);
+    try {
+      planWorkflowSwitch(workspace, sk, a.slug);
+      assert.fail('expected WorkflowConflictError');
+    } catch (err) {
+      assert.ok(err instanceof WorkflowConflictError);
+      assert.equal((err as InstanceType<typeof WorkflowConflictError>).sourceSlug, b.slug);
+      assert.equal((err as InstanceType<typeof WorkflowConflictError>).targetSlug, a.slug);
+      assert.match((err as Error).message, /Pause one first/);
+      assert.match((err as Error).message, /\/goal pause/);
+    }
+  });
+});
+
+// -----------------------------------------------------------------------
+// Item 3: /workflows column upgrade — formatWorkflowGoalColumn + read
+// -----------------------------------------------------------------------
+
+test('formatWorkflowGoalColumn: renders each status compactly + uses formatBudget for the cap', async () => {
+  const { formatWorkflowGoalColumn, DEFAULT_GOAL_BUDGET } = await import('../state/goalStore.js');
+  // No goal → em-dash.
+  assert.equal(formatWorkflowGoalColumn(null), 'goal:—');
+  // Active with explicit budget.
+  const active: any = {
+    text: 't', setAt: '', status: 'active', startedAt: '', updatedAt: '',
+    budget: { maxIterations: 10, iterationsUsed: 3 },
+  };
+  assert.equal(formatWorkflowGoalColumn(active), 'goal:active 3/10');
+  // Active with the default (unlimited) budget renders the budget word, not 1000000.
+  const unlimited: any = {
+    ...active,
+    budget: { maxIterations: DEFAULT_GOAL_BUDGET, iterationsUsed: 7 },
+  };
+  assert.equal(formatWorkflowGoalColumn(unlimited), 'goal:active 7/unlimited');
+  // Non-active statuses are terse — no iteration ratio.
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'paused' }), 'goal:paused');
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'complete' }), 'goal:complete');
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'blocked' }), 'goal:blocked');
+  // usage_limited compresses to `limited` (mirrors statusline.ts).
+  assert.equal(formatWorkflowGoalColumn({ ...active, status: 'usage_limited' }), 'goal:limited');
+});
+
+test('readWorkflowGoal: returns the workflow folder goal regardless of which workflow is currently bound', async () => {
+  const { readWorkflowGoal } = await import('../state/goalStore.js');
+  const { createWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:read-foreign';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+
+    // Currently bound to B — readWorkflowGoal(A) must still read A's goal,
+    // not B's, and not require flipping the pointer.
+    setCurrentWorkflow(workspace, b.slug);
+    assert.equal(readWorkflowGoal(workspace, a.slug)?.text, 'A goal');
+    assert.equal(readWorkflowGoal(workspace, b.slug)?.text, 'B goal');
+    // A workflow with no goal returns null.
+    const c = createWorkflow(workspace, { title: 'C (no goal)', kind: 'spec' });
+    setCurrentWorkflow(workspace, b.slug); // unbind C (createWorkflow flipped to C)
+    assert.equal(readWorkflowGoal(workspace, c.slug), null);
+  });
+});
+
+// -----------------------------------------------------------------------
+// Item 3: /workflow pause + /workflow resume <slug>
+// -----------------------------------------------------------------------
+
+test('per-workflow pause/resume: pausing a workflow-bound goal persists the paused status in the workflow folder', async () => {
+  // Subtask 5 — /workflow pause routes through pauseGoal with the per-
+  // workflow scope from Subtask 1. The status must live in the workflow's
+  // own goal.json (not the session bucket) so a different session on the
+  // same workspace sees the paused state too.
+  const { pauseGoal, readWorkflowGoal } = await import('../state/goalStore.js');
+  const { createWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:wf-pause';
+    const wf = createWorkflow(workspace, { title: 'auth overhaul', kind: 'feature-dev' });
+    setGoal(workspace, 'ship the auth overhaul', sk);
+    const paused = pauseGoal(workspace, sk)!;
+    assert.equal(paused.status, 'paused');
+    // The status survives in the workflow folder, not the session bucket.
+    assert.equal(readWorkflowGoal(workspace, wf.slug)?.status, 'paused');
+  });
+});
+
+test('per-workflow pause/resume: resuming a different workflow flips the pointer + goal status back to active', async () => {
+  const { pauseGoal, resumeGoal, readWorkflowGoal } = await import('../state/goalStore.js');
+  const { createWorkflow, getCurrentWorkflow, setCurrentWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:wf-resume';
+    const a = createWorkflow(workspace, { title: 'A', kind: 'spec' });
+    setGoal(workspace, 'A goal', sk);
+    pauseGoal(workspace, sk);
+    const b = createWorkflow(workspace, { title: 'B', kind: 'spec' });
+    setGoal(workspace, 'B goal', sk);
+    // Bound to B, A is paused. Mimic /workflow resume A: flip pointer + resume.
+    setCurrentWorkflow(workspace, a.slug);
+    const resumed = resumeGoal(workspace, sk)!;
+    assert.equal(resumed.status, 'active');
+    assert.equal(getCurrentWorkflow(workspace), a.slug);
+    // B's goal stayed active in B's folder; A's flipped back to active.
+    assert.equal(readWorkflowGoal(workspace, a.slug)?.status, 'active');
+    assert.equal(readWorkflowGoal(workspace, b.slug)?.status, 'active');
+  });
+});
+
+// -----------------------------------------------------------------------
+// Item 3: createWorkflow clobber prompt (detectCreateWorkflowConflict)
+// -----------------------------------------------------------------------
+
+test('detectCreateWorkflowConflict: returns null when no workflow is bound or the bound workflow has no active goal', async () => {
+  const { detectCreateWorkflowConflict, createWorkflow, setCurrentWorkflow } =
+    await import('../state/workflowArtifacts.js');
+  const { pauseGoal } = await import('../state/goalStore.js');
+  withTempWorkspace((workspace) => {
+    // No workflow bound → safe.
+    assert.equal(detectCreateWorkflowConflict(workspace, 'new feature'), null);
+
+    const sk = 'brainrouter-cli:test:clobber-safe';
+    const wf = createWorkflow(workspace, { title: 'existing', kind: 'feature-dev' });
+    // Bound but no goal → safe.
+    assert.equal(detectCreateWorkflowConflict(workspace, 'new feature'), null);
+
+    // Bound with paused goal → safe (only ACTIVE goals trigger the prompt).
+    setGoal(workspace, 'existing work', sk);
+    pauseGoal(workspace, sk);
+    assert.equal(detectCreateWorkflowConflict(workspace, 'new feature'), null);
+
+    // Same-slug create → no pointer flip, no clobber.
+    const sameAsExisting = detectCreateWorkflowConflict(workspace, wf.slug);
+    assert.equal(sameAsExisting, null);
+  });
+});
+
+test('detectCreateWorkflowConflict: surfaces slug + status + text when the bound workflow has an active goal', async () => {
+  const { detectCreateWorkflowConflict, createWorkflow } = await import('../state/workflowArtifacts.js');
+  withTempWorkspace((workspace) => {
+    const sk = 'brainrouter-cli:test:clobber-active';
+    const wf = createWorkflow(workspace, { title: 'auth overhaul', kind: 'feature-dev' });
+    setGoal(workspace, 'ship the auth overhaul', sk);
+    const conflict = detectCreateWorkflowConflict(workspace, 'cache prototype');
+    assert.ok(conflict, 'expected a conflict when active goal would be clobbered');
+    assert.equal(conflict!.currentSlug, wf.slug);
+    assert.equal(conflict!.currentGoalStatus, 'active');
+    assert.equal(conflict!.currentGoalText, 'ship the auth overhaul');
+  });
+});
+
 test('Agent: two CLI instances in the same workspace get distinct sessionKeys and do not share goal state', () => {
   withTempWorkspace((workspace) => {
     const stubMcp: any = {
