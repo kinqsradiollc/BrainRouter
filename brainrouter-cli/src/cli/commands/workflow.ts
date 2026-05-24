@@ -15,7 +15,7 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
-import { applyMigrationResolution, clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, migrateSessionGoalToWorkflow, pauseGoal, planWorkflowSwitch, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, WorkflowConflictError, type Goal } from '../../state/goalStore.js';
+import { applyMigrationResolution, clearGoal, completeGoal, editGoal, formatBudget, formatWorkflowGoalColumn, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, migrateSessionGoalToWorkflow, pauseGoal, planWorkflowSwitch, readGoal, readWorkflowGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, WorkflowConflictError, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
@@ -501,13 +501,32 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       } else {
         const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
         for (const w of workflows) {
-          const marker = w.slug === currentSlug ? chalk.green(' ← current') : '';
+          // Subtask 4: current-pointer marker is now ★ (the spec's chosen
+          // glyph). Existing column structure on the first/second lines
+          // preserved so script readers don't break — the new goal column
+          // lands at the right of the artifact-markers line.
+          const marker = w.slug === currentSlug ? chalk.green(' ★') : '';
           console.log(`  ${chalk.cyan(w.slug)} [${chalk.gray(w.status)}] ${chalk.gray(w.kind)}${marker}`);
           console.log(`    ${w.title}`);
           const hasSpec = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.spec);
           const hasTasks = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.tasks);
           const hasWalk = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.walkthrough);
-          console.log(chalk.gray(`    spec.md:${hasSpec ? '✓' : '·'}  tasks.md:${hasTasks ? '✓' : '·'}  walkthrough.md:${hasWalk ? '✓' : '·'}`));
+          const goal = readWorkflowGoal(agent.workspaceRoot, w.slug);
+          const goalCol = formatWorkflowGoalColumn(goal);
+          // Color the goal column by status so a scan of the listing makes
+          // the active / paused / blocked split obvious. The whole column
+          // stays inside chalk.gray for the rest of the row so the goal
+          // accent contrasts.
+          const goalColColored = !goal ? chalk.gray(goalCol)
+            : goal.status === 'active' ? chalk.green(goalCol)
+            : goal.status === 'complete' ? chalk.cyan(goalCol)
+            : goal.status === 'blocked' ? chalk.red(goalCol)
+            : chalk.yellow(goalCol); // paused / usage_limited
+          console.log(
+            chalk.gray(
+              `    spec.md:${hasSpec ? '✓' : '·'}  tasks.md:${hasTasks ? '✓' : '·'}  walkthrough.md:${hasWalk ? '✓' : '·'}  `,
+            ) + goalColColored,
+          );
         }
       }
       console.log();

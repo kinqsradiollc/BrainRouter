@@ -223,6 +223,37 @@ export function readGoal(workspaceRoot: string, sessionKey?: string): Goal | nul
   return normalize(readJsonFile<Partial<Goal> | null>(scope.path, null));
 }
 
+/**
+ * Read a specific workflow's goal regardless of the current pointer. Used
+ * by `/workflows` to render the per-row goal column — the listing isn't
+ * about "what's bound right now," it's about "what does each workflow
+ * carry on disk."
+ */
+export function readWorkflowGoal(workspaceRoot: string, slug: string): Goal | null {
+  const goalPath = getWorkflowGoalFile(workspaceRoot, slug);
+  if (!fs.existsSync(goalPath)) return null;
+  return normalize(readJsonFile<Partial<Goal> | null>(goalPath, null));
+}
+
+/**
+ * One-column summary of a workflow's goal for the `/workflows` listing.
+ * Mirrors statusline.ts' compact format — `goal:active N/M`, `goal:paused`,
+ * `goal:limited` (the `usage_limited` status compressed to one word),
+ * `goal:complete`, `goal:blocked`, or `goal:—` for no goal at all.
+ *
+ * Returns plain strings (no chalk) so the caller can apply theme colors
+ * uniformly without the formatter caring about the color palette.
+ */
+export function formatWorkflowGoalColumn(goal: Goal | null): string {
+  if (!goal) return 'goal:—';
+  if (goal.status === 'active') {
+    const cap = formatBudget(goal.budget.maxIterations);
+    return `goal:active ${goal.budget.iterationsUsed}/${cap}`;
+  }
+  const label = goal.status === 'usage_limited' ? 'limited' : goal.status;
+  return `goal:${label}`;
+}
+
 function archiveLegacyGoal(workspaceRoot: string): void {
   const legacyPath = getCliStateFile(workspaceRoot, 'goal.json');
   if (!fs.existsSync(legacyPath)) return;
