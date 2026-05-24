@@ -658,14 +658,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         console.log(chalk.gray(`(goal continuation suppressed: last turn made no tool calls — anti-spin)\n`));
       }
       rl.resume();
-      // Force raw mode true after every resume. readline SHOULD restore it
-      // automatically when input.resume() is called, but in some terminal
-      // environments (tmux, certain VS Code / SSH setups) the auto-restore
-      // doesn't engage, and the symptom is Backspace echoing `^?` and arrow
-      // keys echoing `^[[A` at the prompt after a turn finishes.
-      if (process.stdin.isTTY) {
-        try { (process.stdin as any).setRawMode?.(true); } catch { /* noop */ }
-      }
+      // NOTE: do NOT call setRawMode(true) here. readline's rl.resume()
+      // already calls input._setRawMode(true) internally for terminal
+      // interfaces. A redundant external setRawMode(true) DOES re-engage
+      // raw mode (it's idempotent for the mode itself) BUT it also resets
+      // `this.readableFlowing = null` on the stream as a side effect
+      // (lib/tty.js). After that, the stream is in "auto" flowing state
+      // and keystrokes don't reach readline — user sees a live prompt
+      // they can't type into. Trust the internal call.
       refreshPromptForMode(); // pick up token-meter / branch updates
       rl.prompt();
       // Re-arm the idle hint after each completed turn — a user who walks
