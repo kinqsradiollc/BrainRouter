@@ -35,7 +35,15 @@ import { readPreferences, writePreferences } from './state/preferencesStore.js';
 import { resolveSandboxConfig } from './runtime/sandbox.js';
 import { startSpan, traceEnabled } from './runtime/tracing.js';
 import { clampPayload, extractMemories, renderMemoryCards } from './memory/formatters.js';
-import { askChoice, AmbiguousChoiceError, NoTTYError, setActiveReadline } from './cli/cliPrompt.js';
+import {
+  askChoice,
+  CancelledChoiceError,
+  initPickerState,
+  NoTTYError,
+  reducePicker,
+  renderPicker,
+  setActiveReadline,
+} from './cli/cliPrompt.js';
 
 // Construct an Agent without touching MCP or the LLM. We only exercise the
 // pure state-machine extensions added in Tier 1/2 (model, accessMode, history,
@@ -2131,95 +2139,167 @@ test('systemPrompt: personality overlay adjusts communication style', () => {
 });
 
 // --- askChoice / ask_user_choice -----------------------------------------
-// The Promise.resolve(body) shim around `body()` lets a synchronous body
-// still benefit from `.finally()` cleanup; a sync exception is rethrown
-// through the rejected Promise.
-function withFakeTTY<T>(rl: any, body: () => Promise<T> | T): Promise<T> {
-  const prev = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-  setActiveReadline(rl);
-  return Promise.resolve()
-    .then(() => body())
-    .finally(() => {
-      setActiveReadline(undefined);
-      if (prev) Object.defineProperty(process.stdin, 'isTTY', prev);
-      else delete (process.stdin as any).isTTY;
-    });
-}
+// The interactive picker is split into a pure reducer + renderer plus an
+// orchestrator that wires stdin keypress events into them. We test the
+// pure parts directly (no TTY mocking required) and rely on a single
+// integration test for the eager non-TTY guard in `askChoice`. The picker's
+// raw-mode rendering itself is too tied to terminal escape sequences to
+// be worth simulating in tests; trust the pure pieces + manual smoke.
 
-function makeFakeReadline(answers: string[]): { rl: any; prompts: string[] } {
-  let i = 0;
-  const prompts: string[] = [];
-  const rl: any = {
-    question(prompt: string, cb: (answer: string) => void) {
-      prompts.push(prompt);
-      const answer = answers[i++] ?? '';
-      setImmediate(() => cb(answer));
-    },
-    resume() {},
-    pause() {},
-  };
-  return { rl, prompts };
-}
+const SAMPLE_OPTIONS = [
+  { label: 'React', description: 'SPA with hooks' },
+  { label: 'Svelte', description: 'Compiled reactive components' },
+  { label: 'Vue', description: 'Template-driven SFCs' },
+];
 
-test('askChoice: returns chosen option by number', async () => {
-  const { rl, prompts } = makeFakeReadline(['2']);
-  const choice = await withFakeTTY(rl, () =>
-    askChoice('Which framework should we use?', [
-      { label: 'React', description: 'SPA with hooks' },
-      { label: 'Svelte', description: 'Compiled reactive components' },
-      { label: 'Vue', description: 'Template-driven SFCs' },
-    ]),
-  );
-  assert.equal(choice, 'Svelte');
-  // The rendered prompt should include numbered options so the user knows
-  // they can type a digit.
-  assert.match(prompts[0], /1\.\s+React/);
-  assert.match(prompts[0], /3\.\s+Vue/);
+test('initPickerState: appends a synthetic "Other" option at the end', () => {
+  const s = initPickerState(SAMPLE_OPTIONS, false);
+  assert.equal(s.options.length, 4, 'three options + Other');
+  assert.equal(s.options[3].label, 'Other');
+  assert.equal(s.cursor, 0);
+  assert.equal(s.done, false);
+  assert.equal(s.multiSelect, false);
 });
 
-test('askChoice: resolves partial label match case-insensitively', async () => {
-  const { rl } = makeFakeReadline(['sve']);
-  const choice = await withFakeTTY(rl, () =>
-    askChoice('Pick one:', [
-      { label: 'React', description: 'a' },
-      { label: 'Svelte', description: 'b' },
-      { label: 'Vue', description: 'c' },
-    ]),
-  );
-  assert.equal(choice, 'Svelte');
+test('reducePicker: down/up navigates and wraps around the option list', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  s = reducePicker(s, { name: 'down' });
+  assert.equal(s.cursor, 1);
+  s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'down' });
+  // Wraps back to 0 (4 options total including Other).
+  assert.equal(s.cursor, 0);
+  s = reducePicker(s, { name: 'up' });
+  assert.equal(s.cursor, 3, 'wrap upward to the last (Other) row');
 });
 
-test('askChoice: refuses ambiguous prefix instead of silently picking one', async () => {
-  const { rl } = makeFakeReadline(['ap']);
-  await assert.rejects(
-    () => withFakeTTY(rl, () =>
-      askChoice('Pick one:', [
-        { label: 'apply', description: 'execute the change' },
-        { label: 'approve', description: 'rubber-stamp without running' },
-      ]),
-    ),
-    (err: unknown) => {
-      assert.ok(err instanceof AmbiguousChoiceError);
-      assert.match((err as Error).message, /ambiguous/i);
-      assert.match((err as Error).message, /apply/);
-      assert.match((err as Error).message, /approve/);
-      return true;
-    },
-  );
+test('reducePicker: ENTER on a regular option finalizes with that label', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  s = reducePicker(s, { name: 'down' }); // Svelte
+  s = reducePicker(s, { name: 'return' });
+  assert.equal(s.done, true);
+  assert.equal(s.cancelled, false);
+  assert.equal(s.result, 'Svelte');
 });
 
-test('askChoice: rejects out-of-range option number with a clear error', async () => {
-  const { rl } = makeFakeReadline(['9']);
-  await assert.rejects(
-    () => withFakeTTY(rl, () =>
-      askChoice('Pick one:', [
-        { label: 'one', description: 'a' },
-        { label: 'two', description: 'b' },
-      ]),
-    ),
-    /out of range|1–2|1-2/i,
-  );
+test('reducePicker: ENTER on Other transitions to free-text phase, then ENTER on typed text finalizes', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  // Move cursor to Other (index 3).
+  for (let i = 0; i < 3; i++) s = reducePicker(s, { name: 'down' });
+  assert.equal(s.options[s.cursor].label, 'Other');
+  s = reducePicker(s, { name: 'return' });
+  assert.equal(s.awaitingOther, true);
+  assert.equal(s.done, false);
+  // Type "Qwik" character-by-character.
+  for (const ch of 'Qwik') s = reducePicker(s, { char: ch });
+  assert.equal(s.otherText, 'Qwik');
+  s = reducePicker(s, { name: 'return' });
+  assert.equal(s.done, true);
+  assert.equal(s.result, 'Qwik');
+});
+
+test('reducePicker: Backspace in Other phase erases the last char; Esc bails back to picker', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  for (let i = 0; i < 3; i++) s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'return' });
+  for (const ch of 'abc') s = reducePicker(s, { char: ch });
+  s = reducePicker(s, { name: 'backspace' });
+  assert.equal(s.otherText, 'ab');
+  s = reducePicker(s, { name: 'escape' });
+  assert.equal(s.awaitingOther, false, 'Esc returns to picker');
+  assert.equal(s.otherText, '', 'and clears the half-typed text');
+  assert.equal(s.done, false);
+});
+
+test('reducePicker: empty ENTER in Other phase is a no-op (forces a real answer)', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  for (let i = 0; i < 3; i++) s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'return' });
+  const before = s;
+  const after = reducePicker(s, { name: 'return' });
+  assert.equal(after, before, 'empty ENTER must not advance state');
+});
+
+test('reducePicker: SPACE toggles in multi-select; ENTER returns the array of picked labels in option order', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, true);
+  s = reducePicker(s, { name: 'space' }); // React on
+  s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'space' }); // Vue on
+  s = reducePicker(s, { name: 'space' }); // Vue off
+  s = reducePicker(s, { name: 'space' }); // Vue on again
+  s = reducePicker(s, { name: 'return' });
+  assert.equal(s.done, true);
+  // Ordered by option index — not selection order — so the agent always
+  // sees a stable shape.
+  assert.deepEqual(s.result, ['React', 'Vue']);
+});
+
+test('reducePicker: multi-select ENTER with no selection is a no-op (force the user to pick at least one)', () => {
+  const s0 = initPickerState(SAMPLE_OPTIONS, true);
+  const s1 = reducePicker(s0, { name: 'return' });
+  assert.equal(s1, s0, 'empty multi-select ENTER must not advance state');
+});
+
+test('reducePicker: multi-select with Other ticked drops to free text, then ENTER finalizes with the typed string replacing "Other"', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, true);
+  s = reducePicker(s, { name: 'space' }); // React on
+  // Move to Other and toggle on.
+  for (let i = 0; i < 3; i++) s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'space' });
+  s = reducePicker(s, { name: 'return' });
+  assert.equal(s.awaitingOther, true);
+  for (const ch of 'Qwik') s = reducePicker(s, { char: ch });
+  s = reducePicker(s, { name: 'return' });
+  assert.equal(s.done, true);
+  // React was selected (label preserved); Other was selected and replaced
+  // with the typed string.
+  assert.deepEqual(s.result, ['React', 'Qwik']);
+});
+
+test('reducePicker: q and Ctrl+C both cancel and surface as cancelled (not done with a result)', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  s = reducePicker(s, { name: 'q' });
+  assert.equal(s.done, true);
+  assert.equal(s.cancelled, true);
+  assert.equal(s.result, null);
+
+  let s2 = initPickerState(SAMPLE_OPTIONS, true);
+  s2 = reducePicker(s2, { ctrl: true, name: 'c' });
+  assert.equal(s2.done, true);
+  assert.equal(s2.cancelled, true);
+});
+
+test('renderPicker: highlights the cursor row with ▶ and shows checkbox glyphs in multi-select', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, true);
+  s = reducePicker(s, { name: 'space' }); // tick React
+  s = reducePicker(s, { name: 'down' });  // cursor on Svelte
+  const out = renderPicker(s, 'Pick frameworks:', 'Stack');
+  assert.match(out, /^\[Stack\]/m, 'header chip rendered at top');
+  assert.match(out, /Pick frameworks:/);
+  // Cursor sits on Svelte (row 2); React (row 1) is ticked but not pointed.
+  assert.match(out, /☑ React/);
+  assert.match(out, /▶\s+☐ Svelte/);
+  assert.match(out, /Other.*free-form/i, 'Other row is rendered');
+  assert.match(out, /SPACE toggle/i, 'multi-select footer hint');
+});
+
+test('renderPicker: single-select footer hides SPACE-toggle hint', () => {
+  const s = initPickerState(SAMPLE_OPTIONS, false);
+  const out = renderPicker(s, 'Pick one:');
+  assert.doesNotMatch(out, /SPACE/i);
+  assert.match(out, /ENTER confirm/);
+});
+
+test('renderPicker: free-text phase shows the typed buffer with a cursor marker', () => {
+  let s = initPickerState(SAMPLE_OPTIONS, false);
+  for (let i = 0; i < 3; i++) s = reducePicker(s, { name: 'down' });
+  s = reducePicker(s, { name: 'return' }); // enter awaitingOther
+  for (const ch of 'hi') s = reducePicker(s, { char: ch });
+  const out = renderPicker(s, 'Pick:');
+  assert.match(out, /\[Other\]/);
+  assert.match(out, /^> hi_/m, 'typed buffer is echoed with a cursor');
 });
 
 test('askChoice: throws NoTTYError when stdin is not a TTY so the agent falls back instead of guessing for the user', async () => {
@@ -2234,8 +2314,6 @@ test('askChoice: throws NoTTYError when stdin is not a TTY so the agent falls ba
       ]),
       (err: unknown) => {
         assert.ok(err instanceof NoTTYError);
-        // The message must hint at the fallback path so the agent's tool-call
-        // error feedback gives the LLM a useful next step.
         assert.match((err as Error).message, /TTY|interactive|fall back/i);
         return true;
       },
@@ -2246,42 +2324,46 @@ test('askChoice: throws NoTTYError when stdin is not a TTY so the agent falls ba
   }
 });
 
-test('askChoice: multiSelect returns the picked labels and dedupes repeated tokens', async () => {
-  const { rl } = makeFakeReadline(['1, sve, 1']);
-  const result = await withFakeTTY(rl, () =>
-    askChoice(
-      'Pick any that apply:',
-      [
-        { label: 'React', description: 'a' },
-        { label: 'Svelte', description: 'b' },
-        { label: 'Vue', description: 'c' },
-      ],
-      { multiSelect: true },
-    ),
+test('askChoice: rejects 2–4 length violations before touching the screen', async () => {
+  await assert.rejects(
+    () => askChoice('Pick:', [{ label: 'only', description: 'one' }]),
+    /2–4 options/,
   );
-  // Should be the unique set in input order: number "1" → React, prefix
-  // "sve" → Svelte, repeated "1" → deduped.
-  assert.deepEqual(result, ['React', 'Svelte']);
+  await assert.rejects(
+    () => askChoice('Pick:', new Array(5).fill(null).map((_, i) => ({ label: `o${i}`, description: 'x' }))),
+    /2–4 options/,
+  );
 });
 
 test('askChoice: rejects duplicate labels (case-insensitive) before reaching the prompt', async () => {
-  // No fake readline — duplicate-label validation should fire eagerly,
-  // before we'd ever ask the user anything.
+  // No active readline / TTY needed — input-shape validation fires first.
   setActiveReadline(undefined);
-  const prev = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
-  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-  try {
-    await assert.rejects(
-      () => askChoice('Pick:', [
-        { label: 'Apply', description: 'a' },
-        { label: 'apply', description: 'b' },
-      ]),
-      /unique labels|appears more than once/i,
-    );
-  } finally {
-    if (prev) Object.defineProperty(process.stdin, 'isTTY', prev);
-    else delete (process.stdin as any).isTTY;
-  }
+  await assert.rejects(
+    () => askChoice('Pick:', [
+      { label: 'Apply', description: 'a' },
+      { label: 'apply', description: 'b' },
+    ]),
+    /unique labels|appears more than once/i,
+  );
+});
+
+test('askChoice: rejects "Other" as a user-supplied label because it collides with the always-on free-text row', async () => {
+  setActiveReadline(undefined);
+  await assert.rejects(
+    () => askChoice('Pick:', [
+      { label: 'Approve', description: 'a' },
+      { label: 'Other', description: 'something else' },
+    ]),
+    /reserved|Other/i,
+  );
+});
+
+// CancelledChoiceError is exported for downstream callers / tool wrappers to
+// branch on; this is a sanity-check that the export survives refactors.
+test('CancelledChoiceError carries a recognizable name + default message', () => {
+  const err = new CancelledChoiceError();
+  assert.equal(err.name, 'CancelledChoiceError');
+  assert.match(err.message, /cancelled/i);
 });
 
 test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () => {
