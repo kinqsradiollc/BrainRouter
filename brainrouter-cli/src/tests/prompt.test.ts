@@ -162,6 +162,27 @@ test('systemPrompt: personality overlay adjusts communication style', () => {
   assert.doesNotMatch(standard, /Communication style:/);
 });
 
+test('systemPrompt: documents the reasoning-step offload rule (0.3.6 item 2c)', () => {
+  // The CLI steers the agent to emit a structured `kind:"reasoning"` step
+  // via memory_working_offload after every non-trivial tool batch — that
+  // is what populates the "why trail" in working memory and what the
+  // briefing surfaces back on the next turn. The rule lives in the system
+  // prompt, so a silent prompt refactor would erase the discipline. Pin
+  // the wording loosely enough to allow rewording, tightly enough that
+  // the kind value + the >=3-call / >2KB triggers + the "Why:" title
+  // convention can't drift apart from the canvas/briefing code.
+  const prompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:reasoning',
+  });
+  assert.match(prompt, /memory_working_offload/);
+  assert.match(prompt, /kind:\s*"reasoning"/);
+  assert.match(prompt, /Why:/);
+  assert.match(prompt, /(≥\s*3|3 or more)/);
+  assert.match(prompt, /2\s*KB|2KB/i);
+});
+
 test('systemPrompt: activeSkill="grill-me" appends a CLARIFY-mode block; other activeSkills do not', () => {
   const grill = buildSystemPrompt({
     workspaceRoot: '/tmp/ws',

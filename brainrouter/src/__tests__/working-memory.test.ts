@@ -226,4 +226,80 @@ describe("short-term working memory tools", () => {
     expect(existsSync(join(resolve("abc123abc123"), ".brainrouter"))).toBe(false);
     rmSync(result.state.workDir, { recursive: true, force: true });
   });
+
+  it("round-trips kind:\"reasoning\" through offload → context", async () => {
+    // 0.3.6 item 2c: agents now offload a structured "Why: …" step after
+    // every non-trivial tool batch. The kind field is free-form on the
+    // schema, so a regression that silently dropped or overwrote the value
+    // (e.g. always-default to "tool_output") would erase the entire
+    // audit-trail surface. Pin the round-trip explicitly.
+    const workspacePath = mkdtempSync(join(tmpdir(), "brainrouter-working-reasoning-"));
+    const userId = "user-1";
+    const sessionKey = "reasoning-session";
+
+    const offload = parseToolJson(await handleMemoryWorkingTool("memory_working_offload", {
+      workspacePath,
+      userId,
+      sessionKey,
+      payload: "Decided to refactor canvas.ts because rendering by kind was missing.",
+      title: "Why: refactor canvas for kind-aware rendering",
+      summary: "Picked the dashed-border style for reasoning nodes.",
+      kind: "reasoning",
+    }));
+
+    expect(offload.state.injectedState.currentNode.kind).toBe("reasoning");
+
+    const context = parseToolJson(await handleMemoryWorkingTool("memory_working_context", {
+      workspacePath,
+      userId,
+      sessionKey,
+    }));
+
+    expect(context.steps).toHaveLength(1);
+    expect(context.steps[0].kind).toBe("reasoning");
+    expect(context.state.injectedState.recentSteps[0].kind).toBe("reasoning");
+  });
+
+  it("renders reasoning-kind nodes with a distinct Mermaid style in the canvas", async () => {
+    // The canvas needs to visually separate reasoning ("why") nodes from
+    // tool_output ("what came back") and compressed_summary ("the older
+    // history got rolled up") nodes, so a human inspecting `canvas.mmd`
+    // can see the decision trail at a glance. Pin the style emission so a
+    // future refactor of canvas.ts can't silently flatten all kinds back
+    // to a single shape.
+    const workspacePath = mkdtempSync(join(tmpdir(), "brainrouter-working-canvas-kind-"));
+    const userId = "user-1";
+    const sessionKey = "canvas-kind-session";
+
+    const tool = parseToolJson(await handleMemoryWorkingTool("memory_working_offload", {
+      workspacePath,
+      userId,
+      sessionKey,
+      payload: "tool output payload",
+      title: "Tool result",
+      summary: "Read repo files",
+      kind: "tool_output",
+    }));
+    const reason = parseToolJson(await handleMemoryWorkingTool("memory_working_offload", {
+      workspacePath,
+      userId,
+      sessionKey,
+      payload: "Chose dashed-border style because reasoning is conceptually different from tool output.",
+      title: "Why: dashed style for reasoning",
+      summary: "Visual separation of why vs. what.",
+      kind: "reasoning",
+    }));
+
+    const context = parseToolJson(await handleMemoryWorkingTool("memory_working_context", {
+      workspacePath,
+      userId,
+      sessionKey,
+    }));
+
+    // Reasoning node must carry a distinct stroke-dasharray style line.
+    // Tool-output node must NOT carry that same dashed style — otherwise
+    // the "distinct" claim is meaningless.
+    expect(context.canvas).toMatch(new RegExp(`style ${reason.nodeId} [^\\n]*stroke-dasharray`));
+    expect(context.canvas).not.toMatch(new RegExp(`style ${tool.nodeId} [^\\n]*stroke-dasharray`));
+  });
 });

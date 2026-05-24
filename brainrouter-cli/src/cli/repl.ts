@@ -2,7 +2,7 @@ import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import ora from 'ora';
+import { spinner } from './spinner.js';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { marked } from 'marked';
@@ -385,7 +385,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
    * clobbering whatever the user is mid-typing. Used by child-agent callbacks
    * that fire AFTER the parent's runTurn returned — the agent's tool events
    * keep streaming for a while because children run detached, and naive
-   * console.log + spinner.start() would steal the input row.
+   * console.log + turnSpinner.start() would steal the input row.
    */
   const safePrintAbovePrompt = (msg: string): void => {
     if (!process.stdout.isTTY) {
@@ -416,7 +416,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       console.log(chalk.gray(`📎  Attached ${mentions.length} file${mentions.length === 1 ? '' : 's'}: ${mentions.map((m) => m.token).join(', ')}`));
     }
     const startedAt = Date.now();
-    const spinner = ora(chalk.gray('Agent starting...')).start();
+    const turnSpinner = spinner(chalk.gray('Agent starting...')).start();
     // Once the parent's runTurn returns, child agents may still emit tool
     // events asynchronously. After this flag flips, we MUST NOT touch the
     // spinner (which is already .succeeded) — restarting it would steal the
@@ -427,7 +427,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
       const u = agent.lastTurnUsage;
       const tokens = u.calls > 0 ? `  ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓` : '';
-      spinner.text = chalk.gray(`${status}  ${elapsed}s${tokens}`);
+      turnSpinner.text = chalk.gray(`${status}  ${elapsed}s${tokens}`);
     };
     try {
       const answer = await agent.runTurn(expanded, {
@@ -458,7 +458,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
             line = chalk.gray('🛞  Calling tool: ') + chalk.cyan(name) + chalk.gray(`(${JSON.stringify(args).slice(0, 240)})`);
           }
           if (parentDone) { safePrintAbovePrompt(line); return; }
-          spinner.stop();
+          turnSpinner.stop();
           console.log(line);
         },
         onToolEnd: (name, result) => {
@@ -466,7 +466,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           // prose answer or downstream tool calls speak for themselves.
           if (isQuiet() && result.success) {
             tickStatus('Thinking');
-            spinner.start();
+            turnSpinner.start();
             return;
           }
           const line = result.success
@@ -486,14 +486,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           if (parentDone) { safePrintAbovePrompt(composed); return; }
           console.log(composed);
           tickStatus('Thinking');
-          spinner.start();
+          turnSpinner.start();
         },
         onPlanUpdate: (items, explanation) => {
           if (parentDone) {
             safePrintAbovePrompt(chalk.gray(`📋  Plan updated (${items.length} item${items.length === 1 ? '' : 's'})`));
             return;
           }
-          spinner.stop();
+          turnSpinner.stop();
           console.log(chalk.gray('📋  Plan updated:'));
           if (explanation) console.log(chalk.gray(`    ${explanation}`));
           for (const item of items) {
@@ -504,7 +504,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
             console.log(`    ${mark} ${text}`);
           }
           tickStatus('Thinking');
-          spinner.start();
+          turnSpinner.start();
         },
         onChildComplete: (event) => {
           const head = event.status === 'completed'
@@ -515,10 +515,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
             : event.error ? chalk.yellow(` — ${event.error}`) : '';
           const line = head + tail;
           if (parentDone) { safePrintAbovePrompt(line); return; }
-          spinner.stop();
+          turnSpinner.stop();
           console.log(line);
           tickStatus('Thinking');
-          spinner.start();
+          turnSpinner.start();
         },
         onMemoryEvent: (event) => {
           // Quiet mode: silence briefing/capture/citation chatter. Keep
@@ -568,10 +568,10 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
           }
           if (!line) return;
           if (parentDone) { safePrintAbovePrompt(line); return; }
-          spinner.stop();
+          turnSpinner.stop();
           console.log(line);
           tickStatus('Thinking');
-          spinner.start();
+          turnSpinner.start();
         },
       });
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
@@ -580,7 +580,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         ? chalk.gray(` · ${u.promptTokens.toLocaleString()} in / ${u.completionTokens.toLocaleString()} out across ${u.calls} call${u.calls === 1 ? '' : 's'}`)
         : '';
       parentDone = true;
-      spinner.succeed(chalk.green(`Done!${chalk.gray(` ${elapsed}s`)}${tokenSummary}`));
+      turnSpinner.succeed(chalk.green(`Done!${chalk.gray(` ${elapsed}s`)}${tokenSummary}`));
       const prefsForRender = readPreferences(agent.workspaceRoot);
       const rendered = prefsForRender.rawScrollback ? answer : marked.parse(answer);
       console.log('\n' + rendered + '\n');
@@ -591,7 +591,7 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       }
     } catch (err: any) {
       parentDone = true;
-      spinner.fail(chalk.red('Execution failed'));
+      turnSpinner.fail(chalk.red('Execution failed'));
       console.error(chalk.red(`\nError: ${err.message}\n`));
     } finally {
       isProcessing = false;

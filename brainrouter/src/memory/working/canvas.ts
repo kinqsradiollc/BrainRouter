@@ -31,6 +31,18 @@ export function buildAnnotatedCanvas(steps: WorkingStep[], activeNodeId?: string
     lines.push(`  ${steps[index - 1].nodeId} --> ${steps[index].nodeId}`);
   }
 
+  // Reasoning steps ("Why: …" decisions emitted via memory_working_offload
+  // with kind:"reasoning") get a dashed border so the audit trail is
+  // visually separable from tool_output and compressed_summary nodes when
+  // a human (or the dashboard) inspects canvas.mmd. Emitted before the
+  // active-node fill so the active highlight overrides the dashed style
+  // when the same node happens to be both.
+  for (const step of steps) {
+    if (step.kind === "reasoning") {
+      lines.push(`  style ${step.nodeId} stroke-dasharray:4 4,stroke:#9f7aea,stroke-width:2px`);
+    }
+  }
+
   if (activeNodeId && steps.some((step) => step.nodeId === activeNodeId)) {
     lines.push(`  style ${activeNodeId} fill:#2b6cb0,stroke:#3182ce,stroke-width:2px,color:#fff`);
   }
