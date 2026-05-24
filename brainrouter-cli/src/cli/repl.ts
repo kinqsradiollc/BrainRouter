@@ -58,6 +58,7 @@ const SLASH_COMMANDS = [
   '/theme', '/title', '/personality', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
+  '/test-picker',
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
@@ -85,6 +86,13 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
+    // Explicit `terminal: true` instead of relying on the auto-detect from
+    // `input.isTTY`. The auto-detect returns `undefined` in some shells /
+    // terminal multiplexers (tmux on certain platforms, VS Code's integrated
+    // terminal with specific settings, ssh -t pipelines), and a falsy value
+    // means readline falls back to a non-TTY interface — no keypress events,
+    // no raw mode, Backspace echoes as `^?` instead of erasing.
+    terminal: true,
     // Initial prompt uses the resolved theme's primary accent so light/mono
     // users get a readable prompt even on the first draw. refreshPromptForMode
     // re-renders immediately after wiring up the access-mode accent, so this
@@ -106,6 +114,20 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
       return [[], line];
     },
   });
+
+  // Belt-and-suspenders: force-engage raw-mode keypress handling on stdin.
+  // readline.createInterface does this internally for a TTY input, but its
+  // auto-init is unreliable across the terminal zoo (tmux, screen, VS Code
+  // integrated terminal, certain SSH setups) — when it doesn't engage, the
+  // symptom is Backspace echoing `^?` and arrow keys echoing `^[[A` instead
+  // of doing what they're supposed to do. Calling these here is a no-op when
+  // readline already did them, and a fix in the cases where it didn't.
+  if (process.stdin.isTTY) {
+    try {
+      readline.emitKeypressEvents(process.stdin);
+      (process.stdin as any).setRawMode?.(true);
+    } catch { /* not a real TTY after all */ }
+  }
 
   // GitHub PR detection cache. `gh pr view` takes ~300ms and prompts often
   // refresh many times per turn; cache the result for 30s. Returns either
