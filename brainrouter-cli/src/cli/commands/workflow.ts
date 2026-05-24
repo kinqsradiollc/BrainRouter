@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
-import ora from 'ora';
+import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
@@ -62,7 +62,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
   switch (command) {
     case '/skills':
     {
-      const spinner = ora(chalk.gray('Fetching skills...')).start();
+      const spinner = makeSpinner(chalk.gray('Fetching skills...')).start();
       try {
         const res = await callMcpTool<any[]>(mcpClient, 'list_skills', { scope: 'all' });
         spinner.stop();
@@ -93,7 +93,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         console.log(`  ${chalk.cyan(tool.name)} - ${tool.description}`);
       }
 
-      const spinner = ora(chalk.gray('Fetching MCP tools...')).start();
+      const spinner = makeSpinner(chalk.gray('Fetching MCP tools...')).start();
       try {
         const res = await mcpClient.listTools();
         spinner.stop();
@@ -190,7 +190,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       // nothing to commit. The actual commit work goes through ctx.repl.runAgentTurn
       // so it inherits the normal pipeline: isProcessing locking, goal
       // continuation, /raw honoring, contradiction surfacing, token summary.
-      const spinner = ora(chalk.gray('Checking git status...')).start();
+      const spinner = makeSpinner(chalk.gray('Checking git status...')).start();
       let statusOut = '';
       let diffOut = '';
       try {

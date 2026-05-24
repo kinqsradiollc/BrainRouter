@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
-import ora from 'ora';
+import { spinner as makeSpinner } from '../spinner.js';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
@@ -46,7 +46,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         }
       }
 
-      const spinner = ora(chalk.gray('Querying diagnostics & testing latency...')).start();
+      const spinner = makeSpinner(chalk.gray('Querying diagnostics & testing latency...')).start();
       try {
         const start = Date.now();
         const testRes = await mcpClient.callTool('list_skills', { scope: 'local' });
@@ -123,7 +123,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(`  Endpoint: ${chalk.blue(server.url)}`);
       }
 
-      const spinner = ora(chalk.gray('Checking MCP tool surface...')).start();
+      const spinner = makeSpinner(chalk.gray('Checking MCP tool surface...')).start();
       try {
         const startedAt = Date.now();
         const res = await mcpClient.listTools();
@@ -220,7 +220,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       } else if (server?.type === 'stdio') {
         console.log(`  Cmd:     ${chalk.blue(server.command)} ${server.args?.join(' ') || ''}`);
       }
-      const spinner = ora(chalk.gray('Fetching MCP tool surface...')).start();
+      const spinner = makeSpinner(chalk.gray('Fetching MCP tool surface...')).start();
       try {
         const res = await mcpClient.listTools();
         const tools = res.tools || [];
