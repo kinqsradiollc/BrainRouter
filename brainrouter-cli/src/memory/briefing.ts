@@ -62,6 +62,16 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   for (const r of results) {
     if (!r.text) continue;
     sourcesQueried.push(r.source);
+    if (r.source === 'memory_working_context') {
+      const workingSection = renderWorkingMemorySection(r.text);
+      if (workingSection) {
+        sections.push(workingSection);
+        continue;
+      }
+      // Fall through to the opaque-dump branch when the payload didn't
+      // match the expected shape — that path runs redactText and keeps
+      // the secrets test honest.
+    }
     if (r.records && r.records.length > 0) {
       // Render structured cards instead of dumping the raw JSON. The previous
       // form emitted ~2-4KB of `recallExplanation`/`sparkedNodes`/etc. per
@@ -189,6 +199,72 @@ function prettyLabel(toolName: string): string {
     case 'memory_task_state': return 'Open task / handover state';
     default: return toolName;
   }
+}
+
+interface WorkingStepShape {
+  nodeId?: string;
+  title?: string;
+  summary?: string;
+  kind?: string;
+}
+
+/**
+ * 0.3.6 item 2c — structurally surface working-memory steps in the
+ * briefing. Two slices:
+ *   - the recentSteps tail the MCP already injected (last 5–10 steps,
+ *     regardless of kind), which gives the model the latest tool
+ *     outputs in order; and
+ *   - up to 3 most-recent reasoning-kind steps from the full step log,
+ *     which keeps the "why" trail visible even after a chatty tool
+ *     burst has pushed reasoning off the tail.
+ *
+ * Returns null when the payload doesn't look like a working-context
+ * JSON blob — caller falls back to the opaque-dump branch so secrets
+ * still get redacted on unstructured text.
+ */
+function renderWorkingMemorySection(text: string): string | null {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const recentSteps: WorkingStepShape[] = Array.isArray(parsed?.state?.injectedState?.recentSteps)
+    ? parsed.state.injectedState.recentSteps
+    : [];
+  const allSteps: WorkingStepShape[] = Array.isArray(parsed?.steps) ? parsed.steps : recentSteps;
+  if (recentSteps.length === 0 && allSteps.length === 0) return null;
+
+  const renderStep = (step: WorkingStepShape): string => {
+    const kind = step.kind ? `[${step.kind}] ` : '';
+    const title = (step.title ?? '').replace(/\s+/g, ' ').trim() || '(no title)';
+    const summary = (step.summary ?? '').replace(/\s+/g, ' ').trim();
+    const preview = summary.length > 200 ? summary.slice(0, 199) + '…' : summary;
+    return `- ${kind}${title}${preview ? ` — ${preview}` : ''}`;
+  };
+
+  const lines: string[] = [`### ${prettyLabel('memory_working_context')}`];
+  if (recentSteps.length > 0) {
+    lines.push('Recent steps:');
+    for (const step of recentSteps) lines.push(renderStep(step));
+  }
+
+  // Surface up to 3 most-recent reasoning-kind steps that the recentSteps
+  // tail didn't already include. Cap on purpose — without it a turn that
+  // offloaded reasoning every batch would stuff the briefing with its own
+  // past commentary.
+  const recentNodeIds = new Set(recentSteps.map((s) => s.nodeId).filter(Boolean));
+  const reasoningTail = allSteps
+    .filter((s) => s.kind === 'reasoning' && (!s.nodeId || !recentNodeIds.has(s.nodeId)))
+    .slice(-3);
+  if (reasoningTail.length > 0) {
+    lines.push('', 'Recent reasoning (why-trail):');
+    for (const step of reasoningTail) lines.push(renderStep(step));
+  }
+
+  return redactText(lines.join('\n'));
 }
 
 function dedupe<T>(items: T[]): T[] {
