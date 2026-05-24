@@ -2386,6 +2386,83 @@ test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () 
   assert.ok((tool!.inputSchema as any).required.includes('options'));
 });
 
+// --- /grill-me clarifying-questions slash command ------------------------
+// `/grill-me` doesn't render its own picker — it just primes the model to
+// emit `ask_user_choice` calls instead of jumping to implementation tools.
+// We test the two parts independently: the system-prompt overlay (pure)
+// and the skip-if-plan-exists guard (filesystem-driven, no MCP needed).
+
+test('systemPrompt: activeSkill="grill-me" appends a CLARIFY-mode block; other activeSkills do not', () => {
+  const grill = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+    activeSkill: 'grill-me',
+  });
+  assert.match(grill, /CLARIFY mode/i, 'CLARIFY header should be present');
+  assert.match(grill, /Do NOT make file edits/i, 'must forbid edits this turn');
+  assert.match(grill, /ask_user_choice/, 'should steer toward the picker tool');
+  assert.match(grill, /2.{0,3}5 questions/i, 'must ask 2–5 questions');
+
+  // Baseline (no activeSkill) and other skills must NOT carry the overlay,
+  // otherwise plain `/spec` runs would suddenly refuse to edit files.
+  const baseline = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+  });
+  assert.doesNotMatch(baseline, /CLARIFY mode/i);
+
+  const specMode = buildSystemPrompt({
+    workspaceRoot: '/tmp/ws',
+    launchCwd: '/tmp/ws',
+    sessionKey: 'sess:test',
+    activeSkill: 'spec-driven-skill',
+  });
+  assert.doesNotMatch(specMode, /CLARIFY mode/i);
+});
+
+test('grill-me skip guard: fires when the current workflow has a spec.md', async () => {
+  const { shouldSkipGrillMe } = await import('./cli/commands/workflow.js');
+  withTempWorkspace((workspace) => {
+    const meta = createWorkflow(workspace, { title: 'auth rewrite', kind: 'spec' });
+    const specAbs = path.join(getWorkflowDir(workspace, meta.slug), ARTIFACT.spec);
+    fs.writeFileSync(specAbs, '# Spec\nWhatever.\n');
+
+    const decision = shouldSkipGrillMe(workspace, false);
+    assert.equal(decision.skip, true, 'must skip when spec.md is present');
+    assert.equal(decision.slug, meta.slug);
+    assert.ok(decision.specPath, 'must surface the spec path for the user message');
+    assert.match(decision.specPath!, /spec\.md$/);
+  });
+});
+
+test('grill-me skip guard: stays quiet when no workflow is bound or spec.md is absent', async () => {
+  const { shouldSkipGrillMe } = await import('./cli/commands/workflow.js');
+  withTempWorkspace((workspace) => {
+    // No workflow bound yet → proceed.
+    assert.equal(shouldSkipGrillMe(workspace, false).skip, false);
+
+    // Workflow created but spec.md not yet written → proceed (the grill is
+    // exactly the right move at this point — clarify before writing the spec).
+    createWorkflow(workspace, { title: 'fresh idea', kind: 'feature-dev' });
+    assert.equal(shouldSkipGrillMe(workspace, false).skip, false);
+  });
+});
+
+test('grill-me skip guard: --force bypasses even when a spec.md is present', async () => {
+  const { shouldSkipGrillMe } = await import('./cli/commands/workflow.js');
+  withTempWorkspace((workspace) => {
+    const meta = createWorkflow(workspace, { title: 'follow-up', kind: 'spec' });
+    fs.writeFileSync(path.join(getWorkflowDir(workspace, meta.slug), ARTIFACT.spec), '# Spec\n');
+
+    // Without --force we'd skip; with --force the user is explicitly asking
+    // for a second clarifying pass, so the guard must yield.
+    assert.equal(shouldSkipGrillMe(workspace, false).skip, true);
+    assert.equal(shouldSkipGrillMe(workspace, true).skip, false);
+  });
+});
+
 async function withTempWorkspaceAsync<T>(fn: (workspace: string) => Promise<T>): Promise<T> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-test-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-home-'));
