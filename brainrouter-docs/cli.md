@@ -26,6 +26,113 @@ at an HTTP server. See [configuration.md → MCP client config](configuration.md
 
 ---
 
+## First-run wizard (0.3.7+)
+
+If you launch `brainrouter` without a config (or after deleting
+`~/.config/brainrouter/.onboarded`), the CLI drops you straight into
+an in-terminal setup wizard — no separate `brainrouter login` /
+`brainrouter config` subcommand needed.
+
+The wizard walks 6 decision steps inside a single readline session:
+
+```
+welcome → theme → provider → API key → model → MCP → AGENT.md → done
+```
+
+- **theme** — `dark` / `light` / `mono`; the picker live-previews the
+  prompt accent on cursor moves so you see the change before you
+  commit.
+- **provider** — `OpenAI / DeepSeek / OpenRouter / Anthropic (via
+  gateway) / Gemini / LM Studio / Ollama`, plus an "Other" row that
+  drops to free-text for any OpenAI-compatible endpoint. The picker
+  pre-detects which row is most likely to "just work" from your
+  shell's env vars (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
+  `OPENROUTER_API_KEY`, `GEMINI_API_KEY`).
+- **API key** — pre-filled from the relevant env var when present;
+  press ENTER to accept, or edit in place. Validation is
+  **warn-not-block**: unfamiliar prefixes save with a non-blocking
+  advisory rather than being rejected, because every vendor invents
+  new key shapes.
+- **model** — curated per-provider short-list plus "Other" for a
+  free-text override.
+- **MCP** — `Local stdio` (spawn `brainrouter-mcp`) / `Local HTTP`
+  (`http://localhost:3747/mcp`) / `Remote HTTP` (custom URL) /
+  `Skip` (no MCP — local tools only). The wizard runs a single
+  5-second reachability probe; failure offers "save anyway / try a
+  different transport / skip" instead of bricking the run.
+- **AGENT.md** — opt-in toggle to scaffold `AGENT.md` in your
+  workspace root. Pre-checks for an existing `AGENT.md` /
+  `CLAUDE.md` and defaults the toggle to "skip" when one is present.
+
+`q` at any picker aborts cleanly — **nothing is written to disk
+until the Done step commits**, so a half-finished wizard leaves no
+partial state. Re-run any time with `/init`.
+
+Writes land in two files:
+
+- **`~/.config/brainrouter/config.json`** — LLM provider, model,
+  endpoint, API key, MCP profiles, active profile.
+- **`<workspace>/.brainrouter/cli/preferences.json`** — theme.
+
+A marker file at **`~/.config/brainrouter/.onboarded`** tells the
+CLI not to auto-trigger the wizard again. Delete it to force the
+wizard on the next launch.
+
+### `/init` from inside the REPL
+
+Same wizard, same steps, but reuses the REPL's existing readline so
+you don't have to exit first. Useful when you want to swap provider
+mid-session or re-pick the MCP transport.
+
+### `/config` settings home panel (0.3.7+)
+
+Bare `/config` opens an arrow-key panel over every CLI knob with the
+current value shown on the right:
+
+```
+⚙️  /config
+  ▶ LLM provider       openai · gpt-4o-mini · ········cd34
+    MCP profile        local-http · http · http://localhost:3747/mcp
+    Theme              dark
+    Statusline         mode,branch,workflow,goal
+    Reasoning effort   medium (default)
+    Execution mode     planning
+    Review policy      request
+    Quiet mode         off
+    Personality        standard
+    Editor mode        emacs
+    View raw config
+    Quit (Esc)
+```
+
+Selecting a row opens its sub-picker (provider picker, theme
+picker, etc.). Esc backs out one level. The "View raw config" row
+prints the scrubbed JSON dump (the pre-0.3.7 `/config` behaviour).
+
+`/config` is also **verb-overloaded** so you can skip the panel for
+one-shot tweaks:
+
+- `/config theme` — print the current value.
+- `/config theme dark` — set and persist.
+- `/config statusline mode,branch,workflow,goal` — set the
+  statusline layout.
+- `/config raw` — dump the scrubbed JSON.
+
+Valid keys: `theme`, `statusline`, `effort`, `mode`,
+`review-policy`, `quiet`, `personality`, `editor`, `model`,
+`provider`. Unknown keys point you back at the bare picker.
+
+### `/login` — in-REPL MCP profile editor (0.3.7+)
+
+The slash-command twin of `brainrouter login`. Picks a transport
+(stdio / local-http / remote-http), prompts for the URL + optional
+API key, runs the 5s reachability probe, and saves the profile.
+Failure offers the same "save anyway / try another transport /
+cancel" fallback as the wizard. The `brainrouter login`
+sub-command still works for users who scripted it.
+
+---
+
 ## Startup banner & shell chrome
 
 The CLI opens with a boxed banner that summarizes the runtime in one block:

@@ -50,13 +50,17 @@ $EDITOR ~/.config/brainrouter/server.env        # fill in LLM key + embeddings
 # 3. Start the MCP server in one terminal:
 brainrouter-mcp --http --port 3747
 
-# 4. Configure the CLI's chat LLM + point at the server (one-time):
-brainrouter config                              # interactive: LLM provider/model/key
-brainrouter login                               # interactive: MCP URL + API key
-
-# 5. Run the CLI in another terminal:
+# 4. Run the CLI. The first launch drops you into the in-terminal wizard
+#    (theme → provider → API key → model → MCP → AGENT.md) — no separate
+#    `brainrouter config` / `brainrouter login` step needed since 0.3.7.
 brainrouter
 ```
+
+> **Re-run the wizard any time with `/init` inside the REPL.** Tweak
+> individual knobs with `/config` (bare opens an arrow-key panel;
+> `/config theme dark` for one-shot sets). MCP profile edits live
+> behind `/login`. The legacy `brainrouter config` / `brainrouter
+> login` subcommands still work for users who scripted them.
 
 **Sudo caveat for step 1.** Whether you need `sudo` depends on how Node
 is installed: Homebrew / nvm / asdf → no sudo (user-writable prefix);
@@ -118,12 +122,25 @@ memory engine, skill pre-warming, server auth.
 #### 2. CLI agent — `~/.config/brainrouter/config.json`
 
 The CLI's chat LLM and MCP connection are stored in `config.json`, not `.env`.
-Set them up once with the interactive commands:
+**Since 0.3.7 the in-terminal wizard handles the whole setup** the first time
+you run `brainrouter` — no separate `brainrouter login` / `brainrouter config`
+step needed. The wizard pre-detects API keys from your shell env
+(`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, …), runs a
+5-second reachability probe on the MCP transport you pick, and writes the
+final config in one transaction.
 
-```bash
-brainrouter login    # connect to a hosted/local MCP server (HTTP/SSE)
-brainrouter config   # set chat LLM provider, model, API key, endpoint
+Inside the REPL afterwards:
+
+```text
+/init                              # re-run the wizard
+/config                            # bare → arrow-key settings panel
+/config theme dark                 # one-shot set
+/config statusline mode,branch,workflow,goal
+/login                             # MCP profile editor (transport → fields → probe → save)
 ```
+
+The legacy `brainrouter login` / `brainrouter config` subcommands still
+work for users who scripted them.
 
 Tool-runtime knobs that don't fit `config.json` (sandbox, trace log, web-search
 backend, tool-loop limits) live in `brainrouter-cli/.env` — see
@@ -153,7 +170,7 @@ the CLI exit instead of degrading.
 
 **Stdio mode.** If you'd rather run the MCP as a spawned child of the CLI
 (instead of a separate HTTP service), point your active server profile at the
-`default` stdio profile via `brainrouter config` → "Set Active Server Profile".
+local stdio profile via `/login` (recommended) or `/config` → "MCP profile".
 You don't need to run `start:http` in that case — the CLI spawns the server
 on demand.
 

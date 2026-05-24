@@ -60,11 +60,12 @@ import url from 'node:url';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig } from './config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { Agent } from './agent/agent.js';
 import { startREPL } from './cli/repl.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
+import { runWizard, isOnboarded } from './cli/wizard/runner.js';
 
 /**
  * Load `.env` files into the CLI's `process.env`.
@@ -250,12 +251,36 @@ program
     // the launch CWD + detection reason on demand. Keeping a duplicate
     // stale-chrome line above the banner undermines the banner-first design.
 
+    // 0.3.7 — first-run auto-trigger. When no config exists OR the
+    // onboarded marker is missing, drop the user straight into the
+    // wizard before constructing the Agent / MCP client. This replaces
+    // the pre-0.3.7 "Error: No BrainRouter config found ... run
+    // `brainrouter login`" exit-with-error path. The wizard owns its
+    // own readline for the wizard's lifetime; when it returns we
+    // continue into the REPL with the freshly-saved config.
+    if (!fs.existsSync(getConfigPath()) || !isOnboarded()) {
+      try {
+        const wizardResult = await runWizard({
+          ownsReadline: true,
+          workspaceRoot: workspace.workspaceRoot,
+        });
+        if (wizardResult.state.aborted) {
+          console.error(chalk.gray('Wizard aborted before saving — exiting. Run `brainrouter` again any time to retry.'));
+          process.exit(0);
+        }
+      } catch (err: any) {
+        console.error(chalk.red(`Wizard failed: ${err?.message ?? err}`));
+        process.exit(1);
+      }
+    }
+
     const config = loadConfig();
     const profileName = options.profile || config.activeServer;
     const configuredServer = config.servers[profileName];
 
     if (!configuredServer) {
       console.error(chalk.red(`Error: Profile "${profileName}" not found in config.`));
+      console.error(chalk.gray('Run `/login` inside the REPL or `brainrouter login` to add a profile.'));
       process.exit(1);
     }
 

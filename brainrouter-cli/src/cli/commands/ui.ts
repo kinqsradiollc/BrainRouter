@@ -13,9 +13,12 @@ import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, resolveEffort, writePreferences, type EffortLevel } from '../../state/preferencesStore.js';
 import { readPlan } from '../../state/taskStore.js';
+// initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
+// legacy /config + /init switch cases here are gone — the dispatcher
+// in repl.ts routes them to the new handlers first. getConfigPath
+// stays in scope because /doctor still surfaces the path.
 import { getConfigPath } from '../../config/config.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
-import { initAgentMd } from '../../prompt/initAgentMd.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
 
@@ -83,27 +86,10 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       console.log();
       return true;
     }
-    case '/config':
-    {
-      console.log(chalk.bold('\n⚙️  Active Configuration:'));
-      console.log(`  File Path: ${chalk.blue(getConfigPath())}\n`);
-      
-      // Print config without API keys
-      const scrubbedConfig = JSON.parse(JSON.stringify(config));
-      if (scrubbedConfig.llm?.apiKey) {
-        scrubbedConfig.llm.apiKey = 'br_••••••••••••••••';
-      }
-      for (const s of Object.values(scrubbedConfig.servers)) {
-        const srv = s as any;
-        if (srv.apiKey) srv.apiKey = 'br_••••••••••••••••';
-        if (srv.env?.BRAINROUTER_API_KEY) {
-          srv.env.BRAINROUTER_API_KEY = 'br_••••••••••••••••';
-        }
-      }
-      console.log(chalk.gray(JSON.stringify(scrubbedConfig, null, 2)));
-      console.log();
-      return true;
-    }
+    // /config now lives in commands/config.ts (0.3.7 settings home panel
+    // + verb-overloaded get/set). The dispatcher in repl.ts routes it
+    // before this case, so leaving anything here is dead — removed.
+    // Use `/config raw` if you want the old scrubbed-JSON dump.
     case '/doctor':
     {
       console.log(chalk.bold('\nBrainRouter Doctor:'));
@@ -184,18 +170,9 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       console.log();
       return true;
     }
-    case '/init':
-    {
-      const result = initAgentMd(agent.workspaceRoot);
-      if (result.status === 'created') {
-        console.log(chalk.green(`\n✓ Created ${result.path}`));
-        console.log(chalk.gray('Edit it to describe your project, conventions, and boundaries — any AGENT.md-aware coding agent will read it.\n'));
-      } else {
-        console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
-        console.log(chalk.gray('Open it and edit by hand if you want to refresh it.\n'));
-      }
-      return true;
-    }
+    // /init is now the onboarding-wizard entrypoint (commands/init.ts).
+    // The AGENT.md-only path lives behind `/init agentmd` for back-compat.
+    // Routed before this case in repl.ts; no fall-through handler needed.
     case '/model':
     {
       const newModel = args[0];

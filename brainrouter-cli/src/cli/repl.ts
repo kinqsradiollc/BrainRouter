@@ -31,6 +31,9 @@ import { tryHandleOrchestrationCommand } from './commands/orchestration.js';
 import { tryHandleSessionCommand } from './commands/session.js';
 import { tryHandleGuardCommand } from './commands/guard.js';
 import { tryHandleMcpCommand } from './commands/mcp.js';
+import { tryHandleInitCommand } from './commands/init.js';
+import { tryHandleConfigCommand } from './commands/config.js';
+import { tryHandleLoginCommand } from './commands/login.js';
 
 const execPromise = promisify(exec);
 
@@ -49,7 +52,7 @@ const SLASH_COMMANDS = [
   '/roles', '/agents', '/agent', '/spawn', '/wait',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
-  '/init', '/sessions', '/resume', '/model', '/mcp',
+  '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop',
   '/continue', '/auto-review', '/vim', '/statusline', '/quiet',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
@@ -765,7 +768,8 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
       { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
       { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
-      { cmd: '/config', desc: 'View active configuration profile' },
+      { cmd: '/config [key] [value]', desc: 'Settings panel; `/config theme dark` to set; `/config raw` for JSON dump' },
+      { cmd: '/login', desc: 'In-REPL MCP profile editor (transport → fields → probe → save)' },
       { cmd: '/clear', desc: 'Clear chat history for the active session' },
       { cmd: '/compact', desc: 'LLM-driven compaction of the active session' },
       { cmd: '/new [label]', desc: 'Start a new chat with a fresh session key' },
@@ -774,7 +778,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/resume <id>', desc: 'Resume a previous session by sessionKey' },
       { cmd: '/sessions', desc: 'List persisted sessions for this workspace' },
       { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
-      { cmd: '/init', desc: 'Create AGENT.md in the workspace' },
+      { cmd: '/init', desc: 'Re-run the onboarding wizard (Theme → Provider → API key → Model → MCP → AGENT.md)' },
       { cmd: '/exit  /quit', desc: 'Close MCP connection and exit' },
     ],
   },
@@ -954,6 +958,12 @@ async function handleSlashCommand(
   // from the giant switch below. Long-term goal: shrink the switch to
   // nothing so this dispatch is the only entrypoint.
   const cmdCtx = { command, args, agent, mcpClient, config, rl, repl: ctx };
+  // 0.3.7 wizard / config / login dispatchers run first so they shadow
+  // the legacy /init + /config handlers in ui.ts (which still ship
+  // their old behaviour as fallbacks but are now superseded).
+  if (await tryHandleInitCommand(cmdCtx)) return;
+  if (await tryHandleConfigCommand(cmdCtx)) return;
+  if (await tryHandleLoginCommand(cmdCtx)) return;
   if (await tryHandleMemoryCommand(cmdCtx)) return;
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;

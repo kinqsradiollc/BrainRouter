@@ -3,6 +3,41 @@
 Full reference: env vars, providers, transports, storage, sandboxing,
 backpressure, diagnostics.
 
+> **0.3.7 — the recommended path is the in-terminal wizard, not
+> hand-editing JSON or env files.** This page leads with the wizard
+> + slash-command flow; the env-var matrices stay below because some
+> users (CI, multi-tenant deploys, advanced split-provider setups)
+> genuinely need them.
+
+## Quick start — interactive (recommended)
+
+The first time you run `brainrouter`, a wizard walks you through
+theme → provider → API key → model → MCP → AGENT.md in 6 picker
+screens. No JSON editing, no separate `brainrouter login` /
+`brainrouter config` subcommand sequence. Full breakdown in
+[cli.md → First-run wizard](cli.md#first-run-wizard-037).
+
+Once you're past the wizard, every knob has an in-REPL surface:
+
+| Want to change… | Run this inside the REPL |
+| --- | --- |
+| LLM provider, model, endpoint, key | `/config` (bare) → "LLM provider", or `/config provider openrouter` / `/config model gpt-5` |
+| MCP transport / URL | `/login` (new in 0.3.7), or `/config` (bare) → "MCP profile" |
+| Theme | `/config theme dark` or bare picker via `/config` |
+| Statusline segments | `/config statusline mode,branch,workflow,goal` |
+| Reasoning depth | `/config effort high` (or `/effort high`) |
+| Execution mode | `/config mode fast` (or `/mode fast`) |
+| Review policy | `/config review-policy proceed` (or `/review-policy proceed`) |
+| Quiet mode | `/config quiet on` (or `/quiet on`) |
+| Personality | `/config personality concise` |
+| Editor mode | `/config editor vi` |
+| Re-run the full wizard | `/init` |
+
+Everything below this section is for users who **need** to drop
+under the wizard — CI environments without a TTY, custom env-file
+deployments, or split-provider setups that the picker doesn't
+cover.
+
 ## Quick recap (where things live)
 
 | What | Where | Owns |

@@ -8,6 +8,107 @@ The full per-version history lives in [`brainrouter-changelog/`](brainrouter-cha
 
 ---
 
+## [0.3.7] - Unreleased
+
+In-terminal configuration wizard + redesigned `/config` settings panel.
+The CLI now feels like Claude Code / Codex / Grok-CLI / DeepSeek-TUI for
+first-run onboarding — picker-driven, no JSON editing, no separate
+`brainrouter login` / `brainrouter config` subcommand dance.
+
+### Features
+
+- **First-run wizard inside the REPL.** Launching `brainrouter` against
+  a fresh `$HOME` (no `~/.config/brainrouter/config.json` or no
+  `.onboarded` marker) drops the user into a 6-step picker flow
+  (`Welcome → Theme → Provider → API key → Model → MCP → AGENT.md →
+  Done`) instead of exiting with the pre-0.3.7 "No BrainRouter config
+  found — run `brainrouter login`" error. Theme step live-previews the
+  prompt accent on cursor moves. Provider step pre-detects which row
+  is most likely to "just work" from shell env (`OPENAI_API_KEY`,
+  `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`). API-key
+  step pre-fills from the env var and uses a `validateApiKey` tier
+  (`Accept{warning?}` / `Reject(reason)`) — unknown prefixes save with
+  a non-blocking advisory rather than being rejected, because every
+  vendor invents new key shapes. MCP step probes the user's pick (5s
+  timeout) and offers "save anyway / try a different transport / skip"
+  on failure. Aborting at any step (`q` / Ctrl+C) writes nothing —
+  the draft is held in memory until the Done step commits.
+  Implementation: [`brainrouter-cli/src/cli/wizard/`](brainrouter-cli/src/cli/wizard/).
+  Patterns lifted from
+  `openSrc/codex/codex-rs/tui/src/onboarding/onboarding_screen.rs`
+  (Step state machine + ApiKeyInputState),
+  `openSrc/DeepSeek-TUI/crates/tui/src/tui/onboarding/mod.rs`
+  (onboarded marker + validation tier),
+  `openSrc/grok-cli/src/ui/app.tsx:644` (render-time modal IS the
+  onboarding).
+- **`/init`** is now the wizard re-entry point. Same steps, same
+  picker, but reuses the REPL's existing readline so users don't have
+  to exit. Old "just scaffold AGENT.md" behaviour is preserved
+  behind `/init agentmd` for back-compat.
+- **`/config` settings home panel.** Bare `/config` opens an arrow-key
+  picker over every CLI knob (LLM provider, MCP profile, theme,
+  statusline, effort, mode, review policy, quiet, personality, editor)
+  with the current value shown on the right. Selecting a row opens
+  its sub-picker; Esc backs out. The pre-0.3.7 scrubbed-JSON dump
+  lives under `/config raw`.
+- **`/config` is verb-overloaded.** `/config theme` prints the
+  current value; `/config theme dark` sets and persists.
+  Known keys: `theme`, `statusline`, `effort`, `mode`,
+  `review-policy`, `quiet`, `personality`, `editor`, `model`,
+  `provider`. Unknown keys point at the bare picker.
+- **`/login` slash command.** In-REPL alternative to `brainrouter
+  login` — transport picker (stdio / local-http / remote-http) →
+  field entry → 5s reachability probe → save. Failure offers the
+  same "save anyway / try a different transport / cancel" fallback
+  as the wizard. The legacy `brainrouter login` subcommand still
+  works for users who scripted it.
+
+### Improvements
+
+- **Picker primitive extensions** (`brainrouter-cli/src/cli/cliPrompt.ts`).
+  `askChoice` gains `onCursorChange(index)` (live-preview hook for
+  theme picker; lifted from `openSrc/codex/codex-rs/tui/src/bottom_pane/list_selection_view.rs`),
+  `prefilledOther` (drops the picker straight into the free-text
+  "Other" mode with an env-derived default — ENTER accepts, edit
+  overrides), and `initialCursor` (lets the settings panel re-open on
+  the row the user just left). All three are additive — existing
+  callers continue working with `undefined`.
+- **`maskApiKey` helper** keeps the last 4 chars visible everywhere
+  the key is rendered (`/config` panel, wizard Done summary, future
+  `/where` workspace block).
+
+### Docs
+
+- **`brainrouter-docs/cli.md`** gains a new "First-run wizard (0.3.7+)"
+  section + `/config` panel docs + `/login` row in the UI table.
+- **`brainrouter-docs/configuration.md`** leads with a new
+  "Quick start — interactive (recommended)" section. The env-var
+  matrices stay below for CI / multi-tenant / split-provider users
+  who genuinely need them.
+- **`SETUP.md`** §2A collapses the `brainrouter login` + `brainrouter
+  config` block to "run `brainrouter`; the wizard takes over."
+- **`README.md`** First-time setup mentions `/init` + `/config` as
+  the primary in-session knobs; legacy subcommands kept as a
+  back-compat footnote.
+- **`docs/specs/0.3.7-terminal-ui-redesign.md`** — full spec for the
+  redesign (objective, non-goals, slash surface, wizard state
+  machine, settings panel layout, persistence contract, DoD).
+- **`brainrouter-roadmap/0.3.7.md`** — Item 6 added as the cycle
+  headline. Items 1–5 (quick wins) follow.
+
+### Tests
+
+- **26 new tests** across `wizard.test.ts` + `config-command.test.ts`
+  covering: `STEP_ORDER` invariants, `reduceWizard` advance / back /
+  abort / warn / commit transitions, provider catalog shape, env-based
+  provider detection precedence, API-key validation tier (accept /
+  reject / warn-not-block), masking, picker `prefilledOther` +
+  `initialCursor` semantics, and `/config` argument-parsing routing
+  (home / raw / get / set / trimmed values). Full suite: brainrouter
+  262/262 + brainrouter-cli 238/238 = 500 green.
+
+---
+
 ## [0.3.6] - Unreleased
 
 Smarter memory recall, friendlier dashboard, more reliable agent loop.
