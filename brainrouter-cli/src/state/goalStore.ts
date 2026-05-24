@@ -305,10 +305,15 @@ function archiveGoalPayload(
  * is cleared. `conflict` means the helper REFUSED to move because both sides
  * have non-complete goals — the caller must prompt the user and call
  * `applyMigrationResolution` with their choice.
+ *
+ * The conflict variant is named `'target-has-open-goal'` because the
+ * trigger is "target goal exists AND is not complete" — any open status
+ * (active / paused / blocked / usage_limited) counts. Only `complete`
+ * targets are silently overwritten because the work is already finished.
  */
 export interface GoalMigrationOutcome {
   migrated: boolean;
-  conflict?: 'target-has-active-goal';
+  conflict?: 'target-has-open-goal';
   /** Session-side goal that was the source (when present). */
   source?: Goal;
   /** Target-workflow goal already on disk (when present). */
@@ -383,8 +388,10 @@ export function planWorkflowSwitch(
  * Migrate the session-scoped goal (if any) into the target workflow's
  * `goal.json` when `/workflow switch <slug>` fires. Idempotent — running
  * it twice with no session goal left is a no-op. Refuses to clobber a
- * non-complete target goal; surfaces `conflict: 'target-has-active-goal'`
- * so the caller can `askYesNo` and route through `applyMigrationResolution`.
+ * non-complete target goal; surfaces `conflict: 'target-has-open-goal'`
+ * (any status other than `complete` counts as "open" — see the
+ * GoalMigrationOutcome doc) so the caller can `askYesNo` and route
+ * through `applyMigrationResolution`.
  *
  * Why session→workflow only (not workflow→workflow)? Two workflows that
  * each carry their own goal are independent threads of work. Flipping the
@@ -413,7 +420,7 @@ export function migrateSessionGoalToWorkflow(
   if (targetGoal && targetGoal.status !== 'complete') {
     return {
       migrated: false,
-      conflict: 'target-has-active-goal',
+      conflict: 'target-has-open-goal',
       source: sessionGoal,
       target: targetGoal,
     };
