@@ -177,8 +177,8 @@ working memory, persona, hooks, and the user/admin console.
 - **[PRESENTATION.md](PRESENTATION.md)** — slide-deck overview.
 - **[brainrouter-docs/](brainrouter-docs/)** — deep dives (math, env vars, CLI internals).
 - **[AGENT.md](AGENT.md)** — guidance for AI coding agents working in this repo.
-- **[ROADMAP.md](ROADMAP.md)** — what's next.
-- **[CHANGELOG.md](CHANGELOG.md)** — release notes.
+- **[ROADMAP.md](ROADMAP.md)** — what's next (overview + per-release index pointing into [`brainrouter-roadmap/`](brainrouter-roadmap/)).
+- **[CHANGELOG.md](CHANGELOG.md)** — release notes (in-flight + most-recent inline; full history per-version in [`brainrouter-changelog/`](brainrouter-changelog/)).
 
 ## License
 
