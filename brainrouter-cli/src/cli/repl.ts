@@ -58,7 +58,6 @@ const SLASH_COMMANDS = [
   '/theme', '/title', '/personality', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
-  '/test-picker',
 ] as const;
 
 export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Config, workspace?: WorkspaceInfo) {
@@ -659,6 +658,14 @@ export function startREPL(agent: Agent, mcpClient: McpClientWrapper, config: Con
         console.log(chalk.gray(`(goal continuation suppressed: last turn made no tool calls — anti-spin)\n`));
       }
       rl.resume();
+      // Force raw mode true after every resume. readline SHOULD restore it
+      // automatically when input.resume() is called, but in some terminal
+      // environments (tmux, certain VS Code / SSH setups) the auto-restore
+      // doesn't engage, and the symptom is Backspace echoing `^?` and arrow
+      // keys echoing `^[[A` at the prompt after a turn finishes.
+      if (process.stdin.isTTY) {
+        try { (process.stdin as any).setRawMode?.(true); } catch { /* noop */ }
+      }
       refreshPromptForMode(); // pick up token-meter / branch updates
       rl.prompt();
       // Re-arm the idle hint after each completed turn — a user who walks
