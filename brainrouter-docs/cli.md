@@ -135,6 +135,82 @@ privilege-escalation path where a read-mode parent spawned a shell-mode
 child. Dangerous commands in silent children are always denied because
 there's nobody to answer the y/N.
 
+### Reasoning depth — `/effort`
+
+`/effort low|medium|high` is a session-wide knob for "how hard should
+the model think." It's **orthogonal to `/mode`** — fast-execute +
+deep-thinking is a legitimate combo.
+
+| Level | System-prompt overlay | Provider `reasoning_effort` |
+| --- | --- | --- |
+| `low` | "Be terse. Skip ceremony. One-paragraph answers when the question fits in one paragraph." | `low` |
+| `medium` (default) | _no overlay — current behaviour_ | _omitted_ |
+| `high` | "Reason step-by-step before acting. Audit your evidence against the goal before each tool call." | `high` |
+
+`medium` is the default and emits no overlay — upgrades are silent for
+users who never touch the command. Bare `/effort` prints the current
+level + source (`(env)` / `(preference)` / `(default)`) + a description
+of each level + the list of provider/model combos the level forwards
+to.
+
+**Env override.** `BRAINROUTER_EFFORT=low|medium|high` beats the
+persisted preference for the lifetime of the process. Matches the
+precedence pattern from `BRAINROUTER_THEME` and `BRAINROUTER_QUIET`:
+**env > preference > default**. Garbled values fall through to the
+preference rather than crash. When env is shadowing a saved
+preference, the in-session `/effort` write surfaces a yellow warning:
+"preference saved but BRAINROUTER_EFFORT is still active this process —
+env wins."
+
+**Provider forwarding.** When the model name matches a known
+reasoning-model family, the level is forwarded as `reasoning_effort` in
+the `/v1/chat/completions` body (field name borrowed verbatim from
+OpenAI's [`ReasoningEffort`](https://platform.openai.com/docs/api-reference/chat/create#chat_create-reasoning_effort)
+enum, so cross-vendor familiarity beats inventing our own names).
+Detection keys on the **model name**, not the endpoint hostname, so it
+works uniformly across:
+
+- **OpenAI** — `gpt-5*`, `o1`, `o3`, `o4`, dated variants
+- **OpenAI open-weights** — `gpt-oss-20b`, `gpt-oss-120b` (via
+  LM Studio 0.3.29+, llama.cpp, Ollama, …)
+- **DeepSeek** — `deepseek-r1`, `deepseek-r2`, `deepseek-v3.1+`,
+  `deepseek-v4`
+- **Alibaba** — `qwen3*` reasoning variants
+- **Mistral** — `magistral-small`, `magistral-medium`
+- **Microsoft & others** — any model whose name contains `reasoning` or
+  `thinking` (e.g. `phi-4-reasoning-plus`, `qwen3-30b-a3b-thinking`)
+
+Vendor prefixes (`openai/gpt-oss-20b`) and tag suffixes
+(`deepseek-r1:14b`) are normalised before matching. Non-reasoning
+models (`gpt-4o-mini`, `qwen2.5-coder`, …) skip the field on every
+server — sending it would be a no-op at best.
+
+Anthropic native (`claude-*` on `/v1/messages`) is **not** covered —
+it uses `thinking: { type: 'enabled', budget_tokens }`, a different
+field shape on a different endpoint. Reaching it needs a separate
+provider adapter (tracked for 0.4.x).
+
+**Surfacing.**
+
+- **Statusline** — opt-in `effort` segment shows `low` / `high`; hidden
+  on `medium` (mirroring the `exec` segment from `/mode`). Add it with
+  `/statusline mode,effort,…`.
+- **`/where`** — Workspace block folds the level into the policy line:
+  `exec X · review Y · effort Z`. Shown regardless of default. An
+  `(env)` tag appears next to the level when the env var shadowed the
+  preference.
+
+Re-resolved at every loop iteration so an in-session `/effort` flip
+applies to the next request without restart.
+
+Implementation: preference + resolver in
+[`brainrouter-cli/src/state/preferencesStore.ts`](../brainrouter-cli/src/state/preferencesStore.ts);
+overlay in
+[`brainrouter-cli/src/prompt/systemPrompt.ts`](../brainrouter-cli/src/prompt/systemPrompt.ts);
+provider forwarding heuristic
+(`supportsReasoningEffortField`) in
+[`brainrouter-cli/src/agent/agent.ts`](../brainrouter-cli/src/agent/agent.ts).
+
 ---
 
 ## Local tools
@@ -435,10 +511,11 @@ tall ones. `/help <category>` drills in.
 | `/theme [auto\|light\|dark\|mono]` | Set color theme. |
 | `/title <text>` | Set a custom terminal title. |
 | `/personality [concise\|standard\|detailed\|pair-programmer]` | Communication overlay. |
+| `/effort [low\|medium\|high]` | Reasoning depth: `low` = terse / `medium` = default / `high` = step-by-step. Forwards as `reasoning_effort` to providers that accept it. See [Reasoning depth — `/effort`](#reasoning-depth--effort). Env override: `BRAINROUTER_EFFORT`. |
 | `/raw [on\|off]` | Toggle raw scrollback (skip markdown rendering). |
 | `/vim` | Toggle vim keybindings for the REPL prompt. |
 | `/keymap` | Show current keybinding overlay. |
-| `/statusline mode,branch,pr,tokens,time,goal,plan,workflow` | Comma-separated statusline segments. See [Statusline](#statusline). |
+| `/statusline mode,exec,effort,branch,pr,tokens,session,goal,plan,workflow` | Comma-separated statusline segments. See [Statusline](#statusline). |
 | `/mention` | Print the @file mention syntax help. |
 | `/ide` | Detect / set IDE integration (VS Code, JetBrains). |
 | `/apps`, `/plugins`, `/experimental` | Toggle gated feature surfaces. |
