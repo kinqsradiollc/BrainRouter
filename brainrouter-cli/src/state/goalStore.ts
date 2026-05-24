@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getCliStateDir, getCliStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from './cliState.js';
+import { getCurrentWorkflow, getWorkflowGoalFile } from './workflowArtifacts.js';
 
 /**
  * Persistent goal / continuation contract for the agent. A goal is not just
@@ -28,13 +29,20 @@ import { getCliStateDir, getCliStateFile, getSessionStateFile, readJsonFile, wri
  *                      "you ran out of room" from "user paused" from
  *                      "agent gave up."
  *
- * Storage (per-session bucket):
- *   ~/.brainrouter/workspaces/<encoded>/cli/sessions/<encodedKey>/goal.json
+ * Storage (priority chain — see `resolveGoalScope`):
+ *   1. Workflow bound: `<workspace>/.brainrouter/workflows/<slug>/goal.json`
+ *      (lives in the committable workflow folder so the goal travels with
+ *      the spec / tasks / walkthrough).
+ *   2. No workflow, session-scoped:
+ *      `~/.brainrouter/workspaces/<encoded>/cli/sessions/<encodedKey>/goal.json`
+ *   3. Back-compat (no workflow, no sessionKey):
+ *      `~/.brainrouter/workspaces/<encoded>/cli/goal.json`
  *
- * The legacy workspace-level path is only read when no sessionKey is
- * available. Session-scoped reads stay isolated and never fall back to a
- * prior session's goal. normalize() fills missing fields with defaults so
- * resumed sessions don't crash on first read.
+ * Session-scoped reads stay isolated (Item 1 invariant — never fall back to
+ * a prior session's goal). Workflow-bound reads stay isolated by workflow
+ * (Item 3 invariant — switching workflows swaps which goal you see).
+ * normalize() fills missing fields with defaults so resumed sessions don't
+ * crash on first read.
  */
 
 export type GoalStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'usage_limited';
@@ -157,27 +165,93 @@ function normalize(raw: Partial<Goal> | null | undefined): Goal | null {
   };
 }
 
-function resolveGoalFile(workspaceRoot: string, sessionKey?: string): string {
-  if (sessionKey) {
-    const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
-    if (fs.existsSync(sessionPath)) return sessionPath;
+/**
+ * Where the agent's goal lives RIGHT NOW. The priority chain — adapted from
+ * openSrc/agentmemory's fallback-provider walk (guard clauses that early-
+ * return per layer rather than a single flat loop) — is:
+ *
+ *   1. workflow scope — a workflow is bound via `current-workflow.json`
+ *      (the per-user CLI pointer). Goal lives at `<workflow>/goal.json`
+ *      next to spec.md / tasks.md / meta.json. Switching workflows carries
+ *      the goal with the folder.
+ *   2. session scope — no workflow bound but a sessionKey is supplied
+ *      (the post-Item-1 default). Goal lives at
+ *      `<cliStateDir>/sessions/<encodedKey>/goal.json` — strictly per
+ *      session, never falls back to a different session's file.
+ *   3. legacy scope — no workflow, no sessionKey. Used by the very-old
+ *      single-process call sites that haven't been migrated yet (and by
+ *      back-compat reads of pre-0.3.5 workspace-level goal.json files).
+ *
+ * Every read/write entrypoint routes through this single resolver so the
+ * priority chain has exactly one decision point. Callers don't decide where
+ * to look; they get a path + scope tag and act on it.
+ */
+export type GoalScope =
+  | { scope: 'workflow'; slug: string; path: string }
+  | { scope: 'session'; sessionKey: string; path: string }
+  | { scope: 'legacy'; path: string };
+
+export function resolveGoalScope(workspaceRoot: string, sessionKey?: string): GoalScope {
+  // Priority 1: workflow-bound. `getCurrentWorkflow` reads the per-user
+  // pointer file in CLI state (not the workspace tree), so two CLI processes
+  // on the same workspace can point at different workflows independently.
+  try {
+    const slug = getCurrentWorkflow(workspaceRoot);
+    if (slug) {
+      return { scope: 'workflow', slug, path: getWorkflowGoalFile(workspaceRoot, slug) };
+    }
+  } catch {
+    // Workspace-local mkdirs occasionally race on first launch; fall through
+    // to the safer session/legacy path rather than fail the read.
   }
-  return getCliStateFile(workspaceRoot, 'goal.json');
+  // Priority 2: session-scoped (the Item 1 fix — no cross-session leak).
+  if (sessionKey) {
+    return {
+      scope: 'session',
+      sessionKey,
+      path: getSessionStateFile(workspaceRoot, sessionKey, 'goal.json'),
+    };
+  }
+  // Priority 3: legacy workspace-level — back-compat for very old installs
+  // and the no-session-key code paths.
+  return { scope: 'legacy', path: getCliStateFile(workspaceRoot, 'goal.json') };
 }
 
 export function readGoal(workspaceRoot: string, sessionKey?: string): Goal | null {
-  if (sessionKey) {
-    const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
-    if (fs.existsSync(sessionPath)) {
-      return normalize(readJsonFile<Partial<Goal> | null>(sessionPath, null));
-    }
-    return null;
+  const scope = resolveGoalScope(workspaceRoot, sessionKey);
+  if (!fs.existsSync(scope.path)) return null;
+  return normalize(readJsonFile<Partial<Goal> | null>(scope.path, null));
+}
+
+/**
+ * Read a specific workflow's goal regardless of the current pointer. Used
+ * by `/workflows` to render the per-row goal column — the listing isn't
+ * about "what's bound right now," it's about "what does each workflow
+ * carry on disk."
+ */
+export function readWorkflowGoal(workspaceRoot: string, slug: string): Goal | null {
+  const goalPath = getWorkflowGoalFile(workspaceRoot, slug);
+  if (!fs.existsSync(goalPath)) return null;
+  return normalize(readJsonFile<Partial<Goal> | null>(goalPath, null));
+}
+
+/**
+ * One-column summary of a workflow's goal for the `/workflows` listing.
+ * Mirrors statusline.ts' compact format — `goal:active N/M`, `goal:paused`,
+ * `goal:limited` (the `usage_limited` status compressed to one word),
+ * `goal:complete`, `goal:blocked`, or `goal:—` for no goal at all.
+ *
+ * Returns plain strings (no chalk) so the caller can apply theme colors
+ * uniformly without the formatter caring about the color palette.
+ */
+export function formatWorkflowGoalColumn(goal: Goal | null): string {
+  if (!goal) return 'goal:—';
+  if (goal.status === 'active') {
+    const cap = formatBudget(goal.budget.maxIterations);
+    return `goal:active ${goal.budget.iterationsUsed}/${cap}`;
   }
-  const legacyPath = getCliStateFile(workspaceRoot, 'goal.json');
-  if (fs.existsSync(legacyPath)) {
-    return normalize(readJsonFile<Partial<Goal> | null>(legacyPath, null));
-  }
-  return null;
+  const label = goal.status === 'usage_limited' ? 'limited' : goal.status;
+  return `goal:${label}`;
 }
 
 function archiveLegacyGoal(workspaceRoot: string): void {
@@ -196,6 +270,212 @@ function archiveLegacyGoal(workspaceRoot: string): void {
   }
 
   fs.renameSync(legacyPath, archivePath);
+}
+
+/**
+ * Archive a goal payload under `<cliStateDir>/.brainrouter.migrated/`. The
+ * archive lives in the per-user CLI state tree, NOT inside the project
+ * workspace — same invariant as Item 1's legacy-goal archive. We never
+ * write `.migrated/` siblings into a workflow folder because those are
+ * committable artifacts and `git status` shouldn't show migration debris.
+ */
+function archiveGoalPayload(
+  workspaceRoot: string,
+  prefix: string,
+  qualifier: string,
+  goal: Goal,
+): string {
+  const archiveDir = path.join(getCliStateDir(workspaceRoot), '.brainrouter.migrated');
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safe = qualifier.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60);
+  let archivePath = path.join(archiveDir, `${prefix}-${safe}-${stamp}.json`);
+  let suffix = 1;
+  while (fs.existsSync(archivePath)) {
+    archivePath = path.join(archiveDir, `${prefix}-${safe}-${stamp}-${suffix}.json`);
+    suffix += 1;
+  }
+  fs.writeFileSync(archivePath, JSON.stringify(goal, null, 2), 'utf8');
+  return archivePath;
+}
+
+/**
+ * Outcome of a session→workflow goal migration. `migrated: true` means the
+ * session goal has been moved into the workflow folder and the session file
+ * is cleared. `conflict` means the helper REFUSED to move because both sides
+ * have non-complete goals — the caller must prompt the user and call
+ * `applyMigrationResolution` with their choice.
+ *
+ * The conflict variant is named `'target-has-open-goal'` because the
+ * trigger is "target goal exists AND is not complete" — any open status
+ * (active / paused / blocked / usage_limited) counts. Only `complete`
+ * targets are silently overwritten because the work is already finished.
+ */
+export interface GoalMigrationOutcome {
+  migrated: boolean;
+  conflict?: 'target-has-open-goal';
+  /** Session-side goal that was the source (when present). */
+  source?: Goal;
+  /** Target-workflow goal already on disk (when present). */
+  target?: Goal;
+  /** Path of any archive written (loser of a conflict + winner-archived-too if forced). */
+  archivedPath?: string;
+}
+
+export type GoalMigrationResolution = 'keep-target' | 'import-session';
+
+/**
+ * Refusal when `/workflow switch <slug>` would orphan an active goal. Two
+ * active workflows pointing at independent threads of work shouldn't be
+ * silently flipped between — the user must pause/complete one explicitly.
+ * Mirrors `GoalConflictError`'s shape so the catch path in the slash
+ * handler can take a parallel branch (print + exit cleanly, no rethrow).
+ */
+export class WorkflowConflictError extends Error {
+  constructor(
+    public readonly sourceSlug: string,
+    public readonly sourceGoal: Goal,
+    public readonly targetSlug: string,
+    public readonly targetGoal: Goal,
+  ) {
+    super(
+      `Source workflow "${sourceSlug}" has an active goal AND target workflow "${targetSlug}" has an active goal. ` +
+      `Pause one first (/goal pause) before switching, or mark one /goal complete.`,
+    );
+    this.name = 'WorkflowConflictError';
+  }
+}
+
+/**
+ * Preview a `/workflow switch <slug>` without mutating anything. Returns
+ * the source scope, the target's existing goal (if any), and whether the
+ * caller will need to migrate a session goal into the target folder. Throws
+ * `WorkflowConflictError` when BOTH the source and target are active
+ * workflows with active goals.
+ */
+export function planWorkflowSwitch(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetSlug: string,
+): { fromScope: GoalScope; sourceGoal: Goal | null; targetGoal: Goal | null; needsMigration: boolean } {
+  const fromScope = resolveGoalScope(workspaceRoot, sessionKey);
+  const targetPath = getWorkflowGoalFile(workspaceRoot, targetSlug);
+  const targetGoal = normalize(
+    fs.existsSync(targetPath) ? readJsonFile<Partial<Goal> | null>(targetPath, null) : null,
+  );
+  const sourceGoal = normalize(
+    fs.existsSync(fromScope.path) ? readJsonFile<Partial<Goal> | null>(fromScope.path, null) : null,
+  );
+
+  if (
+    fromScope.scope === 'workflow' &&
+    fromScope.slug !== targetSlug &&
+    sourceGoal?.status === 'active' &&
+    targetGoal?.status === 'active'
+  ) {
+    throw new WorkflowConflictError(fromScope.slug, sourceGoal, targetSlug, targetGoal);
+  }
+
+  // Migration is needed only when the source is the SESSION bucket (not a
+  // sibling workflow, not legacy) AND the session bucket has a goal worth
+  // moving. workflow→workflow flips never trigger migration: each workflow
+  // keeps its own goal exactly where it lives.
+  const needsMigration = fromScope.scope === 'session' && !!sourceGoal;
+  return { fromScope, sourceGoal, targetGoal, needsMigration };
+}
+
+/**
+ * Migrate the session-scoped goal (if any) into the target workflow's
+ * `goal.json` when `/workflow switch <slug>` fires. Idempotent — running
+ * it twice with no session goal left is a no-op. Refuses to clobber a
+ * non-complete target goal; surfaces `conflict: 'target-has-open-goal'`
+ * (any status other than `complete` counts as "open" — see the
+ * GoalMigrationOutcome doc) so the caller can `askYesNo` and route
+ * through `applyMigrationResolution`.
+ *
+ * Why session→workflow only (not workflow→workflow)? Two workflows that
+ * each carry their own goal are independent threads of work. Flipping the
+ * pointer between them must not merge them — that's the Item 3 spec's
+ * `WorkflowConflictError` job (Subtask 3). This helper is specifically for
+ * "I was working in session-scope, now I'm binding a workflow."
+ */
+export function migrateSessionGoalToWorkflow(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetSlug: string,
+): GoalMigrationOutcome {
+  const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
+  const sessionRaw = fs.existsSync(sessionPath)
+    ? readJsonFile<Partial<Goal> | null>(sessionPath, null)
+    : null;
+  const sessionGoal = normalize(sessionRaw);
+  if (!sessionGoal) return { migrated: false };
+
+  const targetPath = getWorkflowGoalFile(workspaceRoot, targetSlug);
+  const targetRaw = fs.existsSync(targetPath)
+    ? readJsonFile<Partial<Goal> | null>(targetPath, null)
+    : null;
+  const targetGoal = normalize(targetRaw);
+
+  if (targetGoal && targetGoal.status !== 'complete') {
+    return {
+      migrated: false,
+      conflict: 'target-has-open-goal',
+      source: sessionGoal,
+      target: targetGoal,
+    };
+  }
+
+  // Free path: no contender at the target (or its goal is complete).
+  writeJsonFile(targetPath, sessionGoal);
+  writeJsonFile(sessionPath, null);
+  return { migrated: true, source: sessionGoal };
+}
+
+/**
+ * Resolve a deferred migration after the user chooses between keeping the
+ * target's goal or importing the session's. ALWAYS archives the losing side
+ * to `<cliStateDir>/.brainrouter.migrated/` so nothing is silently lost.
+ */
+export function applyMigrationResolution(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetSlug: string,
+  resolution: GoalMigrationResolution,
+): GoalMigrationOutcome {
+  const sessionPath = getSessionStateFile(workspaceRoot, sessionKey, 'goal.json');
+  const targetPath = getWorkflowGoalFile(workspaceRoot, targetSlug);
+  const sessionGoal = normalize(
+    fs.existsSync(sessionPath) ? readJsonFile<Partial<Goal> | null>(sessionPath, null) : null,
+  );
+  const targetGoal = normalize(
+    fs.existsSync(targetPath) ? readJsonFile<Partial<Goal> | null>(targetPath, null) : null,
+  );
+
+  if (resolution === 'keep-target') {
+    // Target wins. Archive the (losing) session goal so the user can
+    // recover it if they regret the choice, then clear the session file
+    // so the next switch is idempotent.
+    if (sessionGoal) {
+      const archivedPath = archiveGoalPayload(workspaceRoot, 'session-goal', sessionKey, sessionGoal);
+      writeJsonFile(sessionPath, null);
+      return { migrated: false, source: sessionGoal, target: targetGoal ?? undefined, archivedPath };
+    }
+    return { migrated: false, target: targetGoal ?? undefined };
+  }
+  // 'import-session' — session wins. Archive target's goal (the loser) then
+  // overwrite. If the source somehow disappeared between conflict surfacing
+  // and resolution, do nothing rather than blow away the target silently.
+  if (!sessionGoal) {
+    return { migrated: false, target: targetGoal ?? undefined };
+  }
+  let archivedPath: string | undefined;
+  if (targetGoal) {
+    archivedPath = archiveGoalPayload(workspaceRoot, 'workflow-goal', targetSlug, targetGoal);
+  }
+  writeJsonFile(targetPath, sessionGoal);
+  writeJsonFile(sessionPath, null);
+  return { migrated: true, source: sessionGoal, target: targetGoal ?? undefined, archivedPath };
 }
 
 /**
@@ -226,7 +506,11 @@ export function setGoal(
       throw new GoalConflictError(existing);
     }
   }
-  if (sessionKey) {
+  const scope = resolveGoalScope(workspaceRoot, sessionKey);
+  // Archive any stale workspace-level goal.json the moment we write to a
+  // non-legacy scope (workflow OR session). This preserves the Item 1 fix:
+  // never leave the legacy file where a future session would re-pick it up.
+  if (scope.scope !== 'legacy') {
     archiveLegacyGoal(workspaceRoot);
   }
   const now = new Date().toISOString();
@@ -242,20 +526,19 @@ export function setGoal(
     startedAt: now,
     updatedAt: now,
   };
-  const filePath = sessionKey
-    ? getSessionStateFile(workspaceRoot, sessionKey, 'goal.json')
-    : getCliStateFile(workspaceRoot, 'goal.json');
-  writeJsonFile(filePath, goal);
+  writeJsonFile(scope.path, goal);
   return goal;
 }
 
 export function clearGoal(workspaceRoot: string, sessionKey?: string): void {
-  if (sessionKey) {
-    writeJsonFile(getSessionStateFile(workspaceRoot, sessionKey, 'goal.json'), null);
-  }
-  const legacy = getCliStateFile(workspaceRoot, 'goal.json');
-  if (fs.existsSync(legacy)) {
-    writeJsonFile(legacy, null);
+  const scope = resolveGoalScope(workspaceRoot, sessionKey);
+  writeJsonFile(scope.path, null);
+  // Also clear the legacy workspace file when we're operating on a higher-
+  // priority scope — leaving it behind would let a future no-sessionKey
+  // read resurface a stale goal.
+  if (scope.scope !== 'legacy') {
+    const legacy = getCliStateFile(workspaceRoot, 'goal.json');
+    if (fs.existsSync(legacy)) writeJsonFile(legacy, null);
   }
 }
 
@@ -271,7 +554,7 @@ function patchGoal(
     ...patch,
     updatedAt: new Date().toISOString(),
   };
-  writeJsonFile(resolveGoalFile(workspaceRoot, sessionKey), next);
+  writeJsonFile(resolveGoalScope(workspaceRoot, sessionKey).path, next);
   return next;
 }
 

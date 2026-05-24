@@ -14,8 +14,8 @@ import { marked } from 'marked';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, updateWorkflowStatus } from '../../state/workflowArtifacts.js';
-import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget } from '../../state/goalStore.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, detectCreateWorkflowConflict, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
+import { applyMigrationResolution, clearGoal, completeGoal, editGoal, formatBudget, formatWorkflowGoalColumn, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, migrateSessionGoalToWorkflow, pauseGoal, planWorkflowSwitch, readGoal, readWorkflowGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, WorkflowConflictError, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
@@ -53,6 +53,61 @@ export function shouldSkipGrillMe(
     slug,
     specPath: artifactRelativePath(workspaceRoot, slug, ARTIFACT.spec),
   };
+}
+
+/**
+ * Strip a `--force` token from a slash command's arg list, returning the
+ * flag's presence plus the rest. Used by /feature-dev / /spec / /review
+ * to gate Subtask 6's clobber prompt (mirrors /grill-me's --force parsing).
+ */
+function parseForceFlag(args: string[]): { force: boolean; rest: string[] } {
+  return { force: args.includes('--force'), rest: args.filter((a) => a !== '--force') };
+}
+
+/**
+ * Ask the user whether a /feature-dev / /spec / /review should be allowed
+ * to clobber the in-progress workflow's pointer. Returns true if it's safe
+ * to proceed with createWorkflow (no conflict, --force set, or user said
+ * yes). Returns false when the caller should abort (user said no).
+ *
+ * Mirrors GoalConflictError's UX shape — prints the slug + active goal
+ * text, then askYesNo "Replace as the active workflow?".
+ */
+async function promptIfClobberingWorkflow(
+  workspaceRoot: string,
+  newTitle: string,
+  force: boolean,
+): Promise<boolean> {
+  if (force) return true;
+  const conflict = detectCreateWorkflowConflict(workspaceRoot, newTitle);
+  if (!conflict) return true;
+  console.log(chalk.yellow(`\n⚠️  Workflow "${conflict.currentSlug}" is the current pointer and has an active goal:`));
+  console.log(`     ${chalk.cyan(conflict.currentGoalText)}`);
+  console.log(chalk.gray(`     Starting a new workflow will switch the pointer to it.`));
+  const confirmed = await askYesNo('Replace as the active workflow? (y/N) ', false);
+  if (!confirmed) {
+    console.log(chalk.gray(`\nKeeping "${conflict.currentSlug}" as the active workflow. Tip: /workflow switch ${conflict.currentSlug} (no-op) or /workflow pause to suspend it before starting the new one.\n`));
+  }
+  return confirmed;
+}
+
+/**
+ * Print the one-line confirmation banner after a successful `/workflow
+ * switch <slug>` (or a no-op switch onto the already-current workflow).
+ * Format: `Switched to workflow <slug> — goal: <status>, iteration N of cap`
+ * — or `goal: —` when no goal is bound.
+ */
+function printWorkflowSwitchConfirmation(slug: string, goal: Goal | null): void {
+  if (!goal) {
+    console.log(chalk.green(`\n✓ Switched to workflow "${slug}" — goal: —.\n`));
+    return;
+  }
+  const statusLabel = goal.status.replace('_', ' ');
+  const iter = goal.budget.iterationsUsed;
+  const cap = formatBudget(goal.budget.maxIterations);
+  console.log(chalk.green(
+    `\n✓ Switched to workflow "${slug}" — goal: ${statusLabel}, iteration ${iter} of ${cap}.\n`,
+  ));
 }
 
 export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boolean> {
@@ -217,8 +272,10 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/feature-dev':
     {
-      const feature = args.join(' ').trim();
-      if (!feature) { console.log(chalk.red('\nUsage: /feature-dev <feature description>\n')); break; }
+      const parsed = parseForceFlag(args);
+      const feature = parsed.rest.join(' ').trim();
+      if (!feature) { console.log(chalk.red('\nUsage: /feature-dev [--force] <feature description>\n')); break; }
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force))) return true;
       const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'feature-dev' });
       const specPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.spec);
       const tasksPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.tasks);
@@ -295,8 +352,10 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/spec':
     {
-      const feature = args.join(' ').trim();
-      if (!feature) { console.log(chalk.red('\nUsage: /spec <feature title>\n')); break; }
+      const parsed = parseForceFlag(args);
+      const feature = parsed.rest.join(' ').trim();
+      if (!feature) { console.log(chalk.red('\nUsage: /spec [--force] <feature title>\n')); break; }
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, feature, parsed.force))) return true;
       const meta = createWorkflow(agent.workspaceRoot, { title: feature, kind: 'spec' });
       const specPath = artifactRelativePath(agent.workspaceRoot, meta.slug, ARTIFACT.spec);
       console.log(chalk.gray(`Workflow folder: ${path.dirname(specPath)}`));
@@ -318,8 +377,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/review':
     {
-      const scope = args.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
-      const meta = createWorkflow(agent.workspaceRoot, { title: `Review: ${scope}`, kind: 'review' });
+      const parsed = parseForceFlag(args);
+      const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
+      const reviewTitle = `Review: ${scope}`;
+      if (!(await promptIfClobberingWorkflow(agent.workspaceRoot, reviewTitle, parsed.force))) return true;
+      const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review' });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
       await runSkillCommand(agent, mcpClient, command, scope, [
@@ -397,6 +459,163 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       );
       return true;
     }
+    case '/workflow':
+    {
+      // Subcommands: switch <slug> | pause | resume <slug>
+      // The plural `/workflows` (next case) is the list command. Singular
+      // `/workflow` carries actions on the current pointer / a named slug.
+      const sub = (args[0] ?? '').toLowerCase();
+      if (!sub) {
+        console.log(chalk.red('\nUsage: /workflow switch <slug> | pause | resume <slug>\n'));
+        return true;
+      }
+      if (sub === 'switch') {
+        const rawSlug = (args[1] ?? '').trim();
+        if (!rawSlug) {
+          console.log(chalk.red('\nUsage: /workflow switch <slug>\n'));
+          console.log(chalk.gray('  See /workflows for available slugs.\n'));
+          return true;
+        }
+        // Canonicalize at the entry point. Without this, a user typing
+        // `/workflow switch My Workflow` (or any title-cased / spaced
+        // variant) would have the raw string written verbatim into the
+        // pointer file by setCurrentWorkflow, breaking `w.slug ===
+        // currentSlug` matching everywhere downstream (the ★ marker
+        // on /workflows, the "already on it" no-op below, etc.).
+        const targetSlug = slugify(rawSlug);
+        if (!workflowExists(agent.workspaceRoot, targetSlug)) {
+          console.log(chalk.red(`\nNo such workflow: "${rawSlug}".`));
+          console.log(chalk.gray('  Use /workflows to see what exists, or /spec / /feature-dev to create a new one.\n'));
+          return true;
+        }
+        if (getCurrentWorkflow(agent.workspaceRoot) === targetSlug) {
+          // Already on it — print the same banner as if we'd switched so
+          // the user gets a consistent confirmation instead of "no-op".
+          const g = readGoal(agent.workspaceRoot, agent.sessionKey);
+          printWorkflowSwitchConfirmation(targetSlug, g);
+          return true;
+        }
+        try {
+          const plan = planWorkflowSwitch(agent.workspaceRoot, agent.sessionKey, targetSlug);
+          // Session → workflow migration path (Subtask 2). Workflow-to-
+          // workflow flips never run migration — each workflow's goal stays
+          // in its own folder.
+          if (plan.needsMigration) {
+            const outcome = migrateSessionGoalToWorkflow(agent.workspaceRoot, agent.sessionKey, targetSlug);
+            if (outcome.conflict === 'target-has-open-goal') {
+              // Status-aware wording: the conflict fires for ANY non-
+              // complete target (active / paused / blocked / usage_limited),
+              // so say the actual status instead of always "active".
+              const targetStatus = outcome.target!.status.replace('_', ' ');
+              console.log(chalk.yellow(
+                `\n⚠️  Target workflow "${targetSlug}" already has a ${targetStatus} goal:`,
+              ));
+              console.log(`     ${chalk.cyan(outcome.target!.text)}`);
+              console.log(chalk.gray(`     Session-scoped goal: ${outcome.source!.text}`));
+              const importIt = await askYesNo(
+                `Import session's goal into "${targetSlug}" (overwrites the target's)? (y/N — picks "keep target") `,
+                false,
+              );
+              applyMigrationResolution(
+                agent.workspaceRoot,
+                agent.sessionKey,
+                targetSlug,
+                importIt ? 'import-session' : 'keep-target',
+              );
+              if (!importIt) {
+                console.log(chalk.gray('  Session goal archived under .brainrouter.migrated/ — target kept its goal.'));
+              }
+            }
+          }
+          setCurrentWorkflow(agent.workspaceRoot, targetSlug);
+          agent.refreshSystemPrompt();
+          const next = readGoal(agent.workspaceRoot, agent.sessionKey);
+          printWorkflowSwitchConfirmation(targetSlug, next);
+        } catch (err: any) {
+          if (err instanceof WorkflowConflictError) {
+            console.log(chalk.red(`\n⚠️  ${err.message}\n`));
+          } else {
+            console.log(chalk.red(`\n✗ ${err?.message ?? err}\n`));
+          }
+        }
+        return true;
+      }
+      if (sub === 'pause') {
+        const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
+        if (!currentSlug) {
+          console.log(chalk.yellow('\nNo current workflow to pause. Use /workflow switch <slug> first.\n'));
+          return true;
+        }
+        const g = pauseGoal(agent.workspaceRoot, agent.sessionKey);
+        if (!g) {
+          console.log(chalk.yellow(`\nWorkflow "${currentSlug}" has no goal to pause.\n`));
+          return true;
+        }
+        agent.refreshSystemPrompt();
+        const titlePreview = g.text.length > 60 ? g.text.slice(0, 60) + '…' : g.text;
+        console.log(chalk.yellow(`\n⏸  Paused workflow "${currentSlug}" (goal: ${titlePreview}).`));
+        console.log(chalk.gray(`    /workflow resume ${currentSlug}  to come back here.\n`));
+        return true;
+      }
+      if (sub === 'resume') {
+        const rawSlug = (args[1] ?? '').trim();
+        if (!rawSlug) {
+          console.log(chalk.red('\nUsage: /workflow resume <slug>\n'));
+          return true;
+        }
+        // Canonicalize for the same reason as /workflow switch (see above).
+        const targetSlug = slugify(rawSlug);
+        if (!workflowExists(agent.workspaceRoot, targetSlug)) {
+          console.log(chalk.red(`\nNo such workflow: "${rawSlug}".\n`));
+          return true;
+        }
+        // /workflow resume <slug> is sugar for /workflow switch <slug> +
+        // /goal resume. Re-uses the planning + migration steps so the same
+        // conflict handling applies. The keep-target default (no askYesNo
+        // here — resume is meant to be a single-shot recovery action) keeps
+        // resume terse; if the user wants the import branch they can run
+        // /workflow switch <slug> manually.
+        try {
+          const plan = planWorkflowSwitch(agent.workspaceRoot, agent.sessionKey, targetSlug);
+          if (plan.needsMigration) {
+            const outcome = migrateSessionGoalToWorkflow(agent.workspaceRoot, agent.sessionKey, targetSlug);
+            if (outcome.conflict === 'target-has-open-goal') {
+              // Status-aware: report the actual halt status of the target,
+              // not just "active". The conflict fires for any non-complete
+              // goal, so the user sees paused/blocked/limited too.
+              const targetStatus = outcome.target!.status.replace('_', ' ');
+              console.log(chalk.yellow(
+                `\n⚠️  Target workflow "${targetSlug}" already has a ${targetStatus} goal — resume keeps it, archiving the session's.`,
+              ));
+              applyMigrationResolution(agent.workspaceRoot, agent.sessionKey, targetSlug, 'keep-target');
+            }
+          }
+          setCurrentWorkflow(agent.workspaceRoot, targetSlug);
+          const resumed = resumeGoal(agent.workspaceRoot, agent.sessionKey);
+          agent.removeTaggedSystemMessage('goal-budget-steering');
+          agent.refreshSystemPrompt();
+          if (!resumed) {
+            console.log(chalk.green(`\n▶  Switched to workflow "${targetSlug}" — no goal to resume.\n`));
+            return true;
+          }
+          console.log(chalk.green(
+            `\n▶  Resumed workflow "${targetSlug}" (${resumed.budget.iterationsUsed}/${formatBudget(resumed.budget.maxIterations)} used). Firing next iteration…\n`,
+          ));
+          ctx.repl.runAgentTurn(buildGoalKickoffPrompt(resumed, 'resume'));
+          return true;
+        } catch (err: any) {
+          if (err instanceof WorkflowConflictError) {
+            console.log(chalk.red(`\n⚠️  ${err.message}\n`));
+          } else {
+            console.log(chalk.red(`\n✗ ${err?.message ?? err}\n`));
+          }
+          return true;
+        }
+      }
+      console.log(chalk.red(`\nUnknown /workflow subcommand: "${sub}".`));
+      console.log(chalk.gray('  Subcommands: switch <slug> | pause | resume <slug>\n'));
+      return true;
+    }
     case '/workflows':
     {
       const workflows = listWorkflows(agent.workspaceRoot);
@@ -406,13 +625,32 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       } else {
         const currentSlug = getCurrentWorkflow(agent.workspaceRoot);
         for (const w of workflows) {
-          const marker = w.slug === currentSlug ? chalk.green(' ← current') : '';
+          // Subtask 4: current-pointer marker is now ★ (the spec's chosen
+          // glyph). Existing column structure on the first/second lines
+          // preserved so script readers don't break — the new goal column
+          // lands at the right of the artifact-markers line.
+          const marker = w.slug === currentSlug ? chalk.green(' ★') : '';
           console.log(`  ${chalk.cyan(w.slug)} [${chalk.gray(w.status)}] ${chalk.gray(w.kind)}${marker}`);
           console.log(`    ${w.title}`);
           const hasSpec = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.spec);
           const hasTasks = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.tasks);
           const hasWalk = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.walkthrough);
-          console.log(chalk.gray(`    spec.md:${hasSpec ? '✓' : '·'}  tasks.md:${hasTasks ? '✓' : '·'}  walkthrough.md:${hasWalk ? '✓' : '·'}`));
+          const goal = readWorkflowGoal(agent.workspaceRoot, w.slug);
+          const goalCol = formatWorkflowGoalColumn(goal);
+          // Color the goal column by status so a scan of the listing makes
+          // the active / paused / blocked split obvious. The whole column
+          // stays inside chalk.gray for the rest of the row so the goal
+          // accent contrasts.
+          const goalColColored = !goal ? chalk.gray(goalCol)
+            : goal.status === 'active' ? chalk.green(goalCol)
+            : goal.status === 'complete' ? chalk.cyan(goalCol)
+            : goal.status === 'blocked' ? chalk.red(goalCol)
+            : chalk.yellow(goalCol); // paused / usage_limited
+          console.log(
+            chalk.gray(
+              `    spec.md:${hasSpec ? '✓' : '·'}  tasks.md:${hasTasks ? '✓' : '·'}  walkthrough.md:${hasWalk ? '✓' : '·'}  `,
+            ) + goalColColored,
+          );
         }
       }
       console.log();
