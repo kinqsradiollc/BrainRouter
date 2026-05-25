@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, saveConfig } from '../../config/config.js';
+import { getConfigPath, saveConfig, type ServerConfig } from '../../config/config.js';
 import {
   readPreferences,
   writePreferences,
@@ -107,7 +107,10 @@ async function runHomePanel(ctx: CommandContext): Promise<void> {
     if (!picked) return;
     cursor = rows.indexOf(picked);
     if (picked.key === '__exit') return;
-    if (picked.key === '__raw') { printRawConfig(ctx); continue; }
+    if (picked.key === '__raw') {
+      await showRawConfigPanel(ctx, theme);
+      continue;
+    }
     try {
       await picked.edit(ctx);
     } catch (err: any) {
@@ -139,13 +142,16 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
     },
     {
       key: 'mcp',
-      label: 'MCP profile',
+      label: 'MCP servers',
       current: () => {
-        const profile = config.activeServer || '(none)';
-        const server = config.servers[profile];
-        if (!server) return profile;
-        if (server.type === 'http') return `${profile} · http · ${server.url ?? ''}`;
-        return `${profile} · stdio · ${server.command ?? ''}`;
+        const profiles = Object.keys(config.servers);
+        if (profiles.length === 0) return '(none configured)';
+        const active = config.activeServer && config.servers[config.activeServer] ? config.activeServer : profiles[0];
+        const others = profiles.filter((p) => p !== active);
+        const head = `★ ${active}`;
+        if (others.length === 0) return head;
+        const tail = others.length <= 2 ? others.join(', ') : `${others.slice(0, 2).join(', ')}, +${others.length - 2}`;
+        return `${head} + ${tail}`;
       },
       edit: editMcp,
     },
@@ -235,39 +241,157 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
   return true;
 }
 
+/**
+ * `/config` → MCP row. 0.3.7 multi-MCP redesign — now a profile
+ * MANAGER instead of a single-transport picker.
+ *
+ * Top-level panel lists every entry in `config.servers` (each
+ * connects concurrently on boot via the pool) plus rows for adding
+ * a new profile, choosing which one is highlighted in the banner,
+ * and exiting. Picking an existing profile opens a sub-panel
+ * (edit URL/command, update API key, probe, remove). Adding a new
+ * profile runs a 4-step flow (name → transport → fields → API key)
+ * and auto-connects via the running pool when possible — no CLI
+ * restart needed.
+ *
+ * Pattern lifted from Claude Code's `/mcp` interactive menu (see
+ * `openSrc/claude-code/CHANGELOG.md` line 2525): one screen lists all
+ * servers, each row drills into per-server actions.
+ */
 async function editMcp(ctx: CommandContext): Promise<boolean> {
-  const theme = themeFor(ctx);
-  const result = await pickFromList({
+  while (true) {
+    const theme = themeFor(ctx);
+    const profileIds = Object.keys(ctx.config.servers);
+    const ROW_ADD = '__add__';
+    const ROW_ACTIVE = '__active__';
+    const ROW_DONE = '__done__';
+    const rows: PickerRow[] = [
+      ...profileIds.map((id) => {
+        const s = ctx.config.servers[id];
+        const isActive = id === ctx.config.activeServer;
+        const transportLabel = s.type === 'http' ? `http · ${s.url ?? ''}` : `stdio · ${s.command ?? ''}`;
+        const tags: string[] = [];
+        if (s.identity === 'brainrouter') tags.push('brainrouter');
+        if (s.apiKey) tags.push(`key ${maskApiKey(s.apiKey)}`);
+        return {
+          id,
+          label: `${isActive ? '★ ' : '  '}${id}`,
+          value: transportLabel + (tags.length ? `  ·  ${tags.join(' · ')}` : ''),
+          description: isActive
+            ? 'highlighted in banner; every server in this list is connected on boot'
+            : undefined,
+        };
+      }),
+      { id: ROW_ADD,    label: '+ Add new MCP server', value: '', description: 'Register another MCP (third-party tool, additional brain instance, etc.)' },
+      ...(profileIds.length > 0
+        ? [{ id: ROW_ACTIVE, label: 'Set highlighted server', value: ctx.config.activeServer || '(none)', description: 'Banner highlight + single-server fallback for --profile' }]
+        : []),
+      { id: ROW_DONE,   label: 'Done',                 value: '', description: 'Close this panel' },
+    ];
+    const result = await pickFromList({
+      theme,
+      title: 'MCP servers',
+      subtitle: `${profileIds.length} configured · all connect concurrently on boot. ★ = highlighted in the banner.`,
+      rows,
+    });
+    if (result.kind !== 'pick' || result.id === ROW_DONE) return true;
+    if (result.id === ROW_ADD) {
+      const addedId = await addMcpProfile(ctx, theme);
+      if (addedId) {
+        // First-added profile auto-becomes the highlighted one if
+        // nothing was selected before — avoids a confused banner.
+        if (!ctx.config.activeServer || !ctx.config.servers[ctx.config.activeServer]) {
+          ctx.config.activeServer = addedId;
+        }
+        saveConfig(ctx.config);
+        await tryConnectInPool(ctx, addedId);
+      }
+      continue;
+    }
+    if (result.id === ROW_ACTIVE) {
+      await setActiveProfile(ctx, theme, profileIds);
+      continue;
+    }
+    // Picked an existing profile id.
+    await editExistingMcpProfile(ctx, theme, result.id);
+  }
+}
+
+/**
+ * Walk a user through adding a new MCP profile:
+ *   1. Name (validated unique, [a-z0-9_-])
+ *   2. Identity hint (BrainRouter vs third-party — drives the
+ *      BRAINROUTER_API_KEY env pre-fill on the key step)
+ *   3. Transport (stdio / local-http / remote-http)
+ *   4. Fields (command for stdio, URL for http)
+ *   5. API key (env pre-fill for BrainRouter; blank OK for any
+ *      unauthenticated transport)
+ * Returns the new profile id on success, undefined on cancel.
+ */
+async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<string | undefined> {
+  const nameRes = await promptText({
     theme,
-    title: 'MCP profile',
-    subtitle: 'Pick how the CLI reaches the BrainRouter MCP.',
+    title: 'New MCP server — name',
+    subtitle: 'Short identifier. Used in tool prefixes: mcp__<name>__<tool>.',
+    badge: 'MCP',
+    placeholder: 'github, filesystem, my-brain, …',
+    validate: (raw) => {
+      const v = raw.trim();
+      if (!v) return 'name required';
+      if (!/^[a-z0-9][a-z0-9_-]*$/i.test(v)) return 'use letters, digits, underscore, or dash (must start with letter or digit)';
+      if (ctx.config.servers[v]) return `"${v}" already exists — edit it from the list instead`;
+      return undefined;
+    },
+  });
+  if (nameRes.kind !== 'accept') return undefined;
+  const name = nameRes.text.trim();
+
+  const identityRes = await pickFromList({
+    theme,
+    title: `Identity for "${name}"`,
+    subtitle: 'Brainrouter MCPs get BRAINROUTER_API_KEY pre-fill on the key step. Third-party MCPs do not.',
     rows: [
-      { id: 'local-stdio', label: 'Local stdio', value: 'brainrouter-mcp', description: 'No HTTP server needed' },
-      { id: 'local-http',  label: 'Local HTTP',  value: 'localhost:3747', description: 'Connect to a local brainrouter-mcp HTTP server (with API key)' },
-      { id: 'remote-http', label: 'Remote HTTP', value: 'custom URL',     description: 'Connect to a hosted MCP server (URL + API key)' },
+      { id: 'third-party', label: 'Third-party MCP', value: 'default', description: 'GitHub, filesystem, browser tools, anything not BrainRouter' },
+      { id: 'brainrouter', label: 'BrainRouter MCP', value: 'memory + skills', description: 'Another BrainRouter brain (multi-instance setup)' },
     ],
   });
-  if (result.kind !== 'pick') return false;
-  if (result.id === 'local-stdio') {
-    ctx.config.servers['local-stdio'] = { type: 'stdio', command: 'brainrouter-mcp', args: [], identity: 'brainrouter' };
-    ctx.config.activeServer = 'local-stdio';
-  } else if (result.id === 'local-http') {
-    const apiKey = await promptBrainrouterApiKey(theme, 'local', ctx.config.servers['local-http']?.apiKey);
-    if (apiKey === undefined) return false; // user escaped
-    ctx.config.servers['local-http'] = {
-      type: 'http',
-      url: 'http://localhost:3747/mcp',
-      apiKey: apiKey || undefined,
-      identity: 'brainrouter',
-    };
-    ctx.config.activeServer = 'local-http';
-  } else {
-    const urlResult = await promptText({
+  if (identityRes.kind !== 'pick') return undefined;
+  const identity = identityRes.id as 'brainrouter' | 'third-party';
+
+  const transportRes = await pickFromList({
+    theme,
+    title: 'Transport',
+    subtitle: `How does the CLI reach "${name}"?`,
+    rows: [
+      { id: 'stdio',       label: 'Stdio',       value: 'spawn a child process', description: 'Run a local command; communicate over stdin/stdout' },
+      { id: 'local-http',  label: 'Local HTTP',  value: 'localhost',             description: 'Connect to a server already running on localhost' },
+      { id: 'remote-http', label: 'Remote HTTP', value: 'custom URL',            description: 'Connect to a hosted MCP server (URL + API key)' },
+    ],
+  });
+  if (transportRes.kind !== 'pick') return undefined;
+
+  let server: ServerConfig | undefined;
+  if (transportRes.id === 'stdio') {
+    const cmdRes = await promptText({
       theme,
-      title: 'Remote MCP URL',
-      subtitle: 'Paste the full URL (e.g. https://brainrouter.example.com/mcp).',
+      title: 'Command',
+      subtitle: 'Executable + args (space-separated). Example: npx @modelcontextprotocol/server-filesystem /tmp',
       badge: 'MCP',
-      prefilled: ctx.config.servers['remote']?.url ?? '',
+      prefilled: identity === 'brainrouter' ? 'brainrouter-mcp' : '',
+      placeholder: 'command [args...]',
+      validate: (raw) => raw.trim() ? undefined : 'command required',
+    });
+    if (cmdRes.kind !== 'accept') return undefined;
+    const parts = cmdRes.text.trim().split(/\s+/);
+    server = { type: 'stdio', command: parts[0], args: parts.slice(1), identity };
+  } else {
+    const isLocal = transportRes.id === 'local-http';
+    const urlRes = await promptText({
+      theme,
+      title: 'URL',
+      subtitle: isLocal ? 'Local MCP endpoint URL (e.g. http://localhost:3747/mcp).' : 'Full URL to the hosted MCP (https://…/mcp).',
+      badge: 'MCP',
+      prefilled: isLocal ? 'http://localhost:3747/mcp' : '',
       placeholder: 'https://...',
       validate: (raw) => {
         const v = raw.trim();
@@ -276,21 +400,228 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
         return undefined;
       },
     });
-    if (urlResult.kind !== 'accept') return false;
-    const apiKey = await promptBrainrouterApiKey(theme, 'remote', ctx.config.servers['remote']?.apiKey);
-    if (apiKey === undefined) return false;
-    ctx.config.servers['remote'] = {
+    if (urlRes.kind !== 'accept') return undefined;
+    // BrainRouter MCPs go through the shared `promptBrainrouterApiKey`
+    // helper (BRAINROUTER_API_KEY env pre-fill + brainrouter-shaped
+    // subtitle). Third-party MCPs get a generic "bearer token" prompt
+    // so we don't suggest a wrong env var name.
+    let apiKey: string | undefined;
+    if (identity === 'brainrouter') {
+      apiKey = await promptBrainrouterApiKey(theme, isLocal ? 'local' : 'remote', undefined);
+      if (apiKey === undefined) return undefined;
+    } else {
+      const keyRes = await promptText({
+        theme,
+        title: 'API key / bearer token',
+        subtitle: `Authorization header for "${name}". Leave blank if the server is unauthenticated.`,
+        badge: 'MCP',
+        prefilled: '',
+        placeholder: '(blank OK)',
+      });
+      if (keyRes.kind !== 'accept') return undefined;
+      apiKey = keyRes.text.trim();
+    }
+    server = {
       type: 'http',
-      url: urlResult.text.trim(),
+      url: urlRes.text.trim(),
       apiKey: apiKey || undefined,
-      identity: 'brainrouter',
+      identity,
     };
-    ctx.config.activeServer = 'remote';
   }
+  ctx.config.servers[name] = server;
+  console.log(chalk.green(`\n  ✓ "${name}" added.`));
+  return name;
+}
+
+/**
+ * Per-profile sub-panel: edit URL/command, update API key, probe,
+ * remove. Re-enters on every action so the user can chain edits
+ * before exiting back to the profile list.
+ */
+async function editExistingMcpProfile(ctx: CommandContext, theme: Theme, id: string): Promise<void> {
+  while (true) {
+    const server = ctx.config.servers[id];
+    if (!server) return; // got removed mid-loop
+    const summary = server.type === 'http'
+      ? `http · ${server.url ?? ''}${server.apiKey ? ` · key ${maskApiKey(server.apiKey)}` : ''}`
+      : `stdio · ${server.command ?? ''} ${(server.args ?? []).join(' ')}`;
+    const result = await pickFromList({
+      theme,
+      title: `MCP profile · ${id}`,
+      subtitle: `${summary}  ·  identity: ${server.identity ?? 'unknown'}`,
+      rows: [
+        ...(server.type === 'http'
+          ? [{ id: 'url',     label: 'Edit URL',     value: server.url ?? '',  description: 'Change the HTTP endpoint' } as PickerRow]
+          : [{ id: 'command', label: 'Edit command', value: `${server.command ?? ''} ${(server.args ?? []).join(' ')}`.trim(), description: 'Change the stdio command + args' } as PickerRow]),
+        { id: 'apikey',  label: 'Update API key', value: server.apiKey ? maskApiKey(server.apiKey) : '(none)', description: 'Bearer token / Authorization header' },
+        { id: 'probe',   label: 'Probe connection', value: '', description: 'Test reachability (5s timeout)' },
+        { id: 'remove',  label: 'Remove this profile', value: '', description: 'Drops it from config and disconnects from the pool' },
+        { id: 'back',    label: 'Back', value: '', description: 'Return to the profile list' },
+      ],
+    });
+    if (result.kind !== 'pick' || result.id === 'back') return;
+
+    if (result.id === 'url') {
+      const r = await promptText({
+        theme, title: 'URL', badge: 'MCP', prefilled: server.url ?? '', placeholder: 'https://...',
+        validate: (raw) => {
+          if (!raw.trim()) return 'URL required';
+          try { new URL(raw.trim()); } catch { return 'not a valid URL'; }
+          return undefined;
+        },
+      });
+      if (r.kind === 'accept') {
+        ctx.config.servers[id] = { ...server, type: 'http', url: r.text.trim() };
+        saveConfig(ctx.config);
+        // Reconnect the pool so the new URL takes effect immediately.
+        await tryReconnectInPool(ctx, id);
+        console.log(chalk.green(`  ✓ URL updated → ${r.text.trim()}\n`));
+      }
+      continue;
+    }
+    if (result.id === 'command') {
+      const r = await promptText({
+        theme, title: 'Command + args', badge: 'MCP',
+        prefilled: `${server.command ?? ''} ${(server.args ?? []).join(' ')}`.trim(),
+        placeholder: 'command [args...]',
+        validate: (raw) => raw.trim() ? undefined : 'command required',
+      });
+      if (r.kind === 'accept') {
+        const parts = r.text.trim().split(/\s+/);
+        ctx.config.servers[id] = { ...server, type: 'stdio', command: parts[0], args: parts.slice(1) };
+        saveConfig(ctx.config);
+        await tryReconnectInPool(ctx, id);
+        console.log(chalk.green(`  ✓ Command updated.\n`));
+      }
+      continue;
+    }
+    if (result.id === 'apikey') {
+      let apiKey: string | undefined;
+      if (server.identity === 'brainrouter') {
+        const isLocal = server.type === 'http' && (server.url ?? '').includes('localhost');
+        apiKey = await promptBrainrouterApiKey(theme, isLocal ? 'local' : 'remote', server.apiKey);
+        if (apiKey === undefined) continue;
+      } else {
+        const r = await promptText({
+          theme, title: 'API key', badge: 'MCP',
+          prefilled: server.apiKey ?? '',
+          placeholder: '(blank OK)',
+          subtitle: `Bearer token for "${id}". Leave blank if the server doesn't require auth.`,
+        });
+        if (r.kind !== 'accept') continue;
+        apiKey = r.text.trim();
+      }
+      ctx.config.servers[id] = { ...server, apiKey: apiKey || undefined };
+      saveConfig(ctx.config);
+      await tryReconnectInPool(ctx, id);
+      console.log(chalk.green(`  ✓ API key updated.\n`));
+      continue;
+    }
+    if (result.id === 'probe') {
+      console.log(chalk.gray(`  Probing "${id}"…`));
+      try {
+        await (ctx.mcpClient as any).reconnectOne?.(id);
+        const status = (ctx.mcpClient as any).getStatus?.(id);
+        if (status?.status === 'connected') {
+          console.log(chalk.green(`  ✓ "${id}" reachable (${status.toolCount ?? 0} tools).\n`));
+        } else {
+          console.log(chalk.red(`  ✗ "${id}" failed — ${status?.error ?? 'unknown'}\n`));
+        }
+      } catch (err: any) {
+        console.log(chalk.red(`  ✗ probe failed: ${err?.message ?? err}\n`));
+      }
+      continue;
+    }
+    if (result.id === 'remove') {
+      const confirm = await pickFromList({
+        theme,
+        title: `Remove "${id}"?`,
+        subtitle: 'This deletes the profile from config.json and disconnects it from the pool.',
+        rows: [
+          { id: 'cancel', label: 'Cancel', value: 'default', description: 'Keep the profile' },
+          { id: 'remove', label: 'Remove', value: '', description: 'Delete + disconnect' },
+        ],
+      });
+      if (confirm.kind === 'pick' && confirm.id === 'remove') {
+        try { await (ctx.mcpClient as any).disconnectOne?.(id); } catch { /* idempotent */ }
+        delete ctx.config.servers[id];
+        if (ctx.config.activeServer === id) {
+          // Pick the next surviving profile as the new highlight, or
+          // clear it if none remain.
+          const remaining = Object.keys(ctx.config.servers);
+          ctx.config.activeServer = remaining[0] ?? '';
+        }
+        saveConfig(ctx.config);
+        console.log(chalk.yellow(`  ✓ Removed "${id}".\n`));
+        return;
+      }
+      continue;
+    }
+  }
+}
+
+/**
+ * Highlighted-server picker. The "active" profile is now just a
+ * banner-highlight and the fallback for `--profile`; all configured
+ * servers connect on boot regardless.
+ */
+async function setActiveProfile(ctx: CommandContext, theme: Theme, profileIds: string[]): Promise<void> {
+  if (profileIds.length === 0) {
+    console.log(chalk.yellow('\n  No profiles to choose from. Add one first.\n'));
+    return;
+  }
+  const result = await pickFromList({
+    theme,
+    title: 'Highlighted MCP server',
+    subtitle: 'Shows in the banner and is the default when --profile is omitted in non-interactive runs.',
+    rows: profileIds.map((id) => {
+      const s = ctx.config.servers[id];
+      const transport = s.type === 'http' ? `http · ${s.url ?? ''}` : `stdio · ${s.command ?? ''}`;
+      return {
+        id,
+        label: id,
+        value: transport,
+        description: id === ctx.config.activeServer ? '(current)' : undefined,
+      };
+    }),
+    initialCursor: Math.max(0, profileIds.indexOf(ctx.config.activeServer)),
+  });
+  if (result.kind !== 'pick') return;
+  ctx.config.activeServer = result.id;
   saveConfig(ctx.config);
-  console.log(chalk.green(`\n  ✓ MCP profile saved as active.`));
-  console.log(chalk.gray('    Run /mcp reconnect to pick up the change without restarting.\n'));
-  return true;
+  console.log(chalk.green(`\n  ✓ Highlighted server → ${result.id}\n`));
+}
+
+/**
+ * Best-effort live update: try to bring the new profile online in
+ * the running pool without restart. The Pool's API surface lets us
+ * call connectOne directly. Falls through silently if the runtime
+ * `mcpClient` isn't actually a Pool (probe sites, etc.).
+ */
+async function tryConnectInPool(ctx: CommandContext, id: string): Promise<void> {
+  const pool: any = ctx.mcpClient;
+  if (typeof pool?.connectOne !== 'function') return;
+  const cfg = ctx.config.servers[id];
+  if (!cfg) return;
+  try {
+    await pool.connectOne(id, cfg, ctx.config.llm, 5_000);
+    const status = pool.getStatus?.(id);
+    if (status?.status === 'connected') {
+      console.log(chalk.gray(`    → connected (${status.toolCount ?? 0} tools)`));
+    } else if (status?.status === 'failed') {
+      console.log(chalk.yellow(`    → saved but offline (${status.error ?? 'unknown'}). Try /mcp reconnect ${id} once the server is up.`));
+    }
+  } catch (err: any) {
+    console.log(chalk.yellow(`    → connect attempt failed: ${err?.message ?? err}`));
+  }
+}
+
+async function tryReconnectInPool(ctx: CommandContext, id: string): Promise<void> {
+  const pool: any = ctx.mcpClient;
+  if (typeof pool?.reconnectOne !== 'function') return;
+  try {
+    await pool.reconnectOne(id);
+  } catch { /* user can /mcp reconnect manually */ }
 }
 
 /**
@@ -470,18 +801,44 @@ async function toggleQuiet(ctx: CommandContext): Promise<boolean> {
 
 // --- get / set entrypoints ---------------------------------------------
 
+async function showRawConfigPanel(ctx: CommandContext, theme: Theme): Promise<void> {
+  const lines = buildRawConfigLines(ctx);
+  await pickFromList({
+    theme,
+    title: '⚙️  Raw config',
+    subtitle: `Scrubbed JSON from ${getConfigPath()}`,
+    rows: [
+      { id: 'back', label: 'Back to /config', description: 'Return to the settings panel' },
+    ],
+    footer: '↵ back  ·  esc / q back',
+    onCursorChange: () => lines,
+  });
+}
+
 function printRawConfig(ctx: CommandContext): void {
   console.log(chalk.bold('\n⚙️  Active Configuration:'));
   console.log(`  File Path: ${chalk.blue(getConfigPath())}\n`);
-  const scrubbed = JSON.parse(JSON.stringify(ctx.config));
+  console.log(chalk.gray(buildScrubbedConfigJson(ctx.config)));
+  console.log();
+}
+
+export function buildScrubbedConfigJson(config: CommandContext['config']): string {
+  const scrubbed = JSON.parse(JSON.stringify(config));
+  scrubSecrets(scrubbed);
+  return JSON.stringify(scrubbed, null, 2);
+}
+
+function buildRawConfigLines(ctx: CommandContext): string[] {
+  return buildScrubbedConfigJson(ctx.config).split('\n');
+}
+
+function scrubSecrets(scrubbed: any): void {
   if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = maskApiKey(scrubbed.llm.apiKey);
   for (const s of Object.values(scrubbed.servers ?? {})) {
     const srv = s as any;
     if (srv.apiKey) srv.apiKey = maskApiKey(srv.apiKey);
     if (srv.env?.BRAINROUTER_API_KEY) srv.env.BRAINROUTER_API_KEY = maskApiKey(srv.env.BRAINROUTER_API_KEY);
   }
-  console.log(chalk.gray(JSON.stringify(scrubbed, null, 2)));
-  console.log();
 }
 
 type SetResult = { ok: true; message: string } | { ok: false; reason: string };

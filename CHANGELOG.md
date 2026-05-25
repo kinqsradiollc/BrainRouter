@@ -60,6 +60,17 @@ foundations.
   [`runtime/mcpPool.ts`](brainrouter-cli/src/runtime/mcpPool.ts);
   facade matches the legacy `McpClientWrapper` API so existing
   call-sites are near-no-op type swaps.
+- **`/config` MCP editor is now a multi-profile manager.** The MCP
+  row in the `/config` panel previously opened a single transport
+  picker that overwrote the one BrainRouter profile. Rebuilt as a
+  profile MANAGER: the top-level panel lists every server in the
+  config, plus "+ Add new MCP server" and "Set highlighted server"
+  rows. Picking an existing server opens per-profile actions (edit
+  URL/command, update API key, probe, remove). Adding a new server
+  runs a 4-step flow (name → identity → transport → fields → API
+  key) and auto-connects it to the running pool — no CLI restart
+  required. Identity tag drives whether the key step uses the
+  BrainRouter env-var pre-fill or a generic bearer-token prompt.
 
 ### Changed
 

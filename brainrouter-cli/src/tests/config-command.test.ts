@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildScrubbedConfigJson,
   listKnownConfigKeys,
   parseConfigArgs,
 } from '../cli/commands/config.js';
@@ -41,4 +42,32 @@ test('listKnownConfigKeys exposes the keys /config can get/set directly', () => 
   for (const required of ['theme', 'statusline', 'effort', 'mode', 'review-policy', 'quiet', 'personality', 'editor', 'model', 'provider']) {
     assert.ok(keys.includes(required), `/config should support ${required}`);
   }
+});
+
+test('buildScrubbedConfigJson masks LLM and MCP API keys', () => {
+  const out = buildScrubbedConfigJson({
+    activeServer: 'remote',
+    llm: {
+      provider: 'openai',
+      endpoint: 'https://api.openai.com/v1',
+      model: 'gpt-5',
+      apiKey: 'sk-test-1234567890',
+    },
+    servers: {
+      remote: {
+        type: 'http',
+        url: 'https://brainrouter.example/mcp',
+        apiKey: 'brainrouter_remote_abcdef123456',
+        env: {
+          BRAINROUTER_API_KEY: 'brainrouter_env_abcdef123456',
+        },
+      },
+    },
+  } as any);
+
+  assert.doesNotMatch(out, /sk-test-1234567890/);
+  assert.doesNotMatch(out, /brainrouter_remote_abcdef123456/);
+  assert.doesNotMatch(out, /brainrouter_env_abcdef123456/);
+  assert.match(out, /7890/);
+  assert.match(out, /3456/);
 });
