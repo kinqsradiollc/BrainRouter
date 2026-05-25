@@ -27,6 +27,7 @@ import { setActiveReadline } from '../cliPrompt.js';
 import { ChatApp, type ChatController, type PushScrollback } from './ChatApp.js';
 import type { SlashCommandDef } from './SlashPalette.js';
 import { handleSlashCommand, lookupSlashDescription, SLASH_COMMANDS } from '../repl.js';
+import { formatToolCall } from './toolFormat.js';
 
 /**
  * Mount the full Ink-based chat REPL and run it until the user exits.
@@ -266,26 +267,26 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       agent.lastGoalTransition === undefined;
 
     if (goalAfter && goalAfter.status === 'complete') {
-      controller?.push.notice(`🎯 Goal achieved — ${goalAfter.blockedReason ?? 'evidence on record.'}`);
+      controller?.push.notice(`🎯 Goal achieved — ${goalAfter.blockedReason ?? 'evidence on record.'}`, 'info');
     } else if (goalAfter && goalAfter.status === 'blocked') {
-      controller?.push.notice(`🚧 Goal blocked: ${goalAfter.blockedReason ?? '(no reason)'}`);
-      controller?.push.notice(`Resolve the blocker, then /goal resume to continue.`);
+      controller?.push.notice(`🚧 Goal blocked: ${goalAfter.blockedReason ?? '(no reason)'}`, 'warn');
+      controller?.push.notice(`Resolve the blocker, then /goal resume to continue.`, 'info');
     } else if (goalAfter && goalAfter.status === 'usage_limited') {
-      controller?.push.notice(`⏸ Goal hit usage limit: ${goalAfter.blockedReason ?? 'budget exhausted'}.`);
-      controller?.push.notice(`Raise the cap with /goal budget <n> or /goal tokens <n>, then /goal resume.`);
+      controller?.push.notice(`⏸ Goal hit usage limit: ${goalAfter.blockedReason ?? 'budget exhausted'}.`, 'warn');
+      controller?.push.notice(`Raise the cap with /goal budget <n> or /goal tokens <n>, then /goal resume.`, 'info');
     } else if (goalAfter && goalAfter.status === 'active' && !goalHasBudgetLeft(goalAfter)) {
       const reason = `Iteration budget exhausted (${goalAfter.budget.iterationsUsed}/${formatBudget(goalAfter.budget.maxIterations)}).`;
       const limited = usageLimitGoal(agent.workspaceRoot, agent.sessionKey, reason);
-      controller?.push.notice(`⏸ ${reason} Extend with /goal budget <n> and /goal resume, mark /goal complete, or /goal clear.`);
+      controller?.push.notice(`⏸ ${reason} Extend with /goal budget <n> and /goal resume, mark /goal complete, or /goal clear.`, 'warn');
       if (limited) goalAfter = limited;
     } else if (goalAfter && goalAfter.status === 'active' && agent.lastTurnToolCalls === 0) {
-      controller?.push.notice(`(goal continuation suppressed: last turn made no tool calls — anti-spin)`);
+      controller?.push.notice(`(goal continuation suppressed: last turn made no tool calls — anti-spin)`, 'info');
     }
 
     if (shouldContinue && goalAfter) {
       pendingContinuation = true;
       const next = goalAfter.budget.iterationsUsed + 1;
-      controller?.push.notice(`(goal continuation queued — iteration ${next}/${formatBudget(goalAfter.budget.maxIterations)}; type anything to cancel)`);
+      controller?.push.notice(`(goal continuation queued — iteration ${next}/${formatBudget(goalAfter.budget.maxIterations)}; type anything to cancel)`, 'info');
       const followUp = buildGoalContinuationPrompt(goalAfter, afterPrompt, afterAnswer);
       setImmediate(() => {
         if (!pendingContinuation || isProcessing) return;
@@ -326,48 +327,62 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       controller!.push.setStatus(`${status}  ${elapsed}s${tokens}`);
     };
 
+    // Per-tool start time + args — agent.runTurn fires onToolStart with
+    // full args but onToolEnd only sees name + result, so we stash the
+    // args here so the end-of-call scrollback row can render the
+    // formatted call (`Read(src/foo.ts)`) instead of just the bare name.
+    // The map key is the tool name; we treat parallel same-name calls
+    // as overlapping which is fine for the duration display (the older
+    // start time wins, slightly under-counting concurrent invocations).
+    const toolStartTimes = new Map<string, number>();
+    const toolArgsSnapshot = new Map<string, Record<string, any>>();
     try {
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
         onToolStart: (name, args) => {
-          if (isQuiet()) return;
-          let line: string;
-          if (name === 'spawn_agent') {
-            const role = String((args as any)?.role ?? 'agent');
-            const label = (args as any)?.label ? ` [${(args as any).label}]` : '';
-            const task = String((args as any)?.prompt ?? '').replace(/\s+/g, ' ').trim();
-            const preview = task.length > 100 ? task.slice(0, 99) + '…' : task;
-            line = `🤖 Spawning agent: ${role}${label} — ${preview}`;
-          } else if (name === 'spawn_agents') {
-            const agents = Array.isArray((args as any)?.agents) ? (args as any).agents : [];
-            const summary = agents.map((a: any) => String(a?.role ?? 'agent')).join(', ');
-            line = `🤖 Spawning ${agents.length} agent${agents.length === 1 ? '' : 's'} in parallel: ${summary}`;
-          } else {
-            line = `${name}(${JSON.stringify(args).slice(0, 240)})`;
+          // Surface the in-flight tool via the spinner status line — the
+          // scrollback entry is pushed at onToolEnd so each tool call is
+          // a single block (header + result), not two rows.
+          toolStartTimes.set(name, Date.now());
+          toolArgsSnapshot.set(name, args ?? {});
+          if (!isQuiet()) {
+            controller!.push.setStatus(formatToolCall(name, args));
           }
-          controller!.push.tool(line, true);
         },
         onToolEnd: (name, result) => {
+          // Quiet mode hides successes (the prose response covers them).
           if (isQuiet() && result.success) {
             tickStatus('Thinking');
             return;
           }
-          controller!.push.tool(name, result.success, !isQuiet() ? result.preview : undefined);
+          const startedAt = toolStartTimes.get(name);
+          const args = toolArgsSnapshot.get(name);
+          toolStartTimes.delete(name);
+          toolArgsSnapshot.delete(name);
+          const durationMs = startedAt ? Date.now() - startedAt : undefined;
+          const header = formatToolCall(name, args);
+          controller!.push.tool(header, result.success, {
+            preview: !isQuiet() ? result.preview : undefined,
+            durationMs,
+          });
           tickStatus('Thinking');
         },
         onPlanUpdate: (items, explanation) => {
-          if (explanation) controller!.push.memory('info', explanation);
-          controller!.push.plan(items);
+          // Explanation rides on the plan entry itself (renders as a dim-italic
+          // line above the checklist) rather than as a separate memory event,
+          // so the explanation visually anchors to the plan it describes.
+          controller!.push.plan(items, explanation);
           tickStatus('Thinking');
         },
         onChildComplete: (event) => {
-          const head = event.status === 'completed'
+          const ok = event.status === 'completed';
+          const head = ok
             ? `🏁 Agent ${event.childId} (${event.role}) completed`
             : `💥 Agent ${event.childId} (${event.role}) failed`;
-          const tail = event.status === 'completed' && event.preview
+          const tail = ok && event.preview
             ? ` — ${event.preview}`
             : event.error ? ` — ${event.error}` : '';
-          controller!.push.notice(head + tail);
+          controller!.push.notice(head + tail, ok ? 'info' : 'error');
           tickStatus('Thinking');
         },
         onMemoryEvent: (event) => {
@@ -430,7 +445,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       scheduleGoalContinuation(rawInput, answer);
     } catch (err: any) {
       parentDone = true;
-      controller.push.notice(`✗ Execution failed: ${err?.message ?? err}`);
+      controller.push.notice(`✗ Execution failed: ${err?.message ?? err}`, 'error');
     } finally {
       isProcessing = false;
       controller.push.setPhase('idle');

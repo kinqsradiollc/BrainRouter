@@ -5,6 +5,7 @@ import Spinner from 'ink-spinner';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
+import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -110,20 +111,38 @@ export type ScrollbackEntry =
   | { id: number; kind: 'raw'; text: string }
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
-  | { id: number; kind: 'tool'; name: string; ok: boolean; preview?: string }
+  /**
+   * Tool call result row — claude-code style:
+   *   ⏺ Read(src/foo.ts)            (green ⏺ when ok, red when failed)
+   *     ⎿ <preview line 1>          (if preview present, with ⎿ connector)
+   *       <preview line 2>           (continuation lines plain indent)
+   *       (+N more lines hidden)     (truncation hint)
+   * `header` is the formatToolCall'd string. `kind` of preview rendering
+   * is derived: if the preview looks like a diff, lines colored +green/-red.
+   */
+  | { id: number; kind: 'tool'; header: string; ok: boolean; durationMs?: number; preview?: string }
   | { id: number; kind: 'memory'; level: 'info' | 'warn'; text: string }
-  | { id: number; kind: 'plan'; items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[] }
-  | { id: number; kind: 'notice'; text: string };
+  /** Plan rendering: optional `explanation` renders above the checklist as a dim line. */
+  | { id: number; kind: 'plan'; items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[]; explanation?: string }
+  /** Notice severity:  info → gray dim · warn → yellow · error → red bold. */
+  | { id: number; kind: 'notice'; text: string; level?: 'info' | 'warn' | 'error' };
 
 export interface PushScrollback {
   raw(text: string): void;
   user(text: string): void;
   /** `raw: true` skips marked-terminal rendering (use when caller already pre-rendered or user wants raw scrollback). */
   assistant(text: string, meta?: { raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }): void;
-  tool(name: string, ok: boolean, preview?: string): void;
+  /**
+   * `header` is the formatted call (e.g. `Read(src/foo.ts)` from
+   * `formatToolCall` in toolFormat.ts), NOT the raw tool name. Pass the
+   * full result preview unmodified — the renderer applies diff coloring
+   * + truncation hints.
+   */
+  tool(header: string, ok: boolean, opts?: { preview?: string; durationMs?: number }): void;
   memory(level: 'info' | 'warn', text: string): void;
-  plan(items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[]): void;
-  notice(text: string): void;
+  plan(items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[], explanation?: string): void;
+  /** Severity defaults to 'info' when omitted (back-compat). */
+  notice(text: string, level?: 'info' | 'warn' | 'error'): void;
   /** Update the live spinner label (e.g. "Thinking  5s  1.2k↑ 0.4k↓"). */
   setStatus(label: string): void;
   /** Show / hide the spinner without pushing a scrollback entry. */
@@ -157,6 +176,12 @@ export function ChatApp({
   const [accessMode, setAccessMode] = useState<'read' | 'write' | 'shell'>(initialAccessMode);
   const [footer, setFooter] = useState<FooterState>(initialFooter);
   /**
+   * Per-turn elapsed time, ticked once a second while phase === 'turn-running'.
+   * Drives the amber spinner-color transition at 10s — claude-code's
+   * "Claude is still working" cue (CHANGELOG v2.1.130 entry 154).
+   */
+  const [turnElapsedMs, setTurnElapsedMs] = useState(0);
+  /**
    * Slash palette cursor — lifted out of SlashPalettePanel so this
    * component owns both the highlight + the keystroke handlers.
    * (useInput at the panel level would race with TextInput for arrow
@@ -175,14 +200,31 @@ export function ChatApp({
       raw: (text) => push({ kind: 'raw', text }),
       user: (text) => push({ kind: 'user', text }),
       assistant: (text, meta) => push({ kind: 'assistant', text, ...meta }),
-      tool: (name, ok, preview) => push({ kind: 'tool', name, ok, preview }),
+      tool: (header, ok, opts) => push({ kind: 'tool', header, ok, ...opts }),
       memory: (level, text) => push({ kind: 'memory', level, text }),
-      plan: (items) => push({ kind: 'plan', items }),
-      notice: (text) => push({ kind: 'notice', text }),
+      plan: (items, explanation) => push({ kind: 'plan', items, explanation }),
+      notice: (text, level) => push({ kind: 'notice', text, level: level ?? 'info' }),
       setStatus: (label) => setSpinnerLabel(label),
       setPhase: (p) => setPhase(p),
     };
   }, []);
+
+  // Tick the per-turn elapsed time while a turn is running. Resets to 0
+  // on each phase change. Spinner color blends from green → amber when
+  // this crosses 10s, matching claude-code's "still working" cue
+  // (CHANGELOG v2.1.130 entry 154).
+  useEffect(() => {
+    if (phase !== 'turn-running') {
+      setTurnElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setTurnElapsedMs(0);
+    const interval = setInterval(() => {
+      setTurnElapsedMs(Date.now() - startedAt);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [phase]);
 
   // Imperative controller — exposed once on mount via onReady so the
   // orchestrator can push from outside the React tree (child agent
@@ -317,10 +359,14 @@ export function ChatApp({
         {(entry) => <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} />}
       </Static>
 
-      {/* Active turn spinner — shown ONLY while a turn is running, not promoted. */}
+      {/* Active turn spinner. Warms to amber after 10s ("still working"
+          cue lifted from claude-code v2.1.130). Label is the runChat
+          adapter's status text — typically the formatted active tool. */}
       {phase === 'turn-running' ? (
         <Box>
-          <Text color="green">{React.createElement(Spinner as any, { type: 'dots' })}</Text>
+          <Text color={turnElapsedMs >= 10_000 ? 'yellow' : 'green'}>
+            {React.createElement(Spinner as any, { type: 'dots' })}
+          </Text>
           <Text color="gray">  {spinnerLabel}</Text>
         </Box>
       ) : null}
@@ -364,6 +410,17 @@ export function ChatApp({
 
 // --- Sub-components ---------------------------------------------------
 
+/**
+ * Per-entry renderer — every scrollback kind has its own claude-code-style
+ * layout. Glyph conventions:
+ *
+ *   ⏺  assistant turn (first line) — green dot
+ *   ❯  user prompt (left margin)   — accent (orange)
+ *   ⏺  tool call header            — green dot when ok, red when failed
+ *   ⎿  tool result connector       — first line of preview
+ *   ✓ / ✗  status mark             — final status line of tool block
+ *   ↳  plan / memory dim-italic explanation
+ */
 function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
   switch (entry.kind) {
     case 'raw':
@@ -399,27 +456,56 @@ function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentC
       );
     }
     case 'tool': {
-      const glyph = entry.ok ? '✓' : '✗';
-      const color = entry.ok ? 'green' : 'red';
+      // Claude-code layout:
+      //   ⏺ Read(src/foo.ts)
+      //     ⎿ <line 1 of preview>
+      //       <line 2 of preview>
+      //       (+N more lines hidden)
+      // The header DOT is green on success and red on failure so the user
+      // can scan a long turn at a glance. Duration appended in dim if set.
+      const dotColor = entry.ok ? 'green' : 'red';
+      const previewLines = entry.preview ? splitForPreview(entry.preview) : null;
+      const isDiff = entry.preview ? looksLikeDiff(entry.preview) : false;
       return (
-        <Box flexDirection="column">
+        <Box flexDirection="column" marginTop={1}>
           <Box>
-            <Text color={color}>{'  ⎿ '}</Text>
-            <Text color={color}>{glyph}</Text>
-            <Text>{' '}{entry.name}</Text>
+            <Text color={dotColor}>⏺ </Text>
+            <Text wrap="truncate">{entry.header}</Text>
+            {entry.durationMs !== undefined ? (
+              <Text color="gray" dimColor>{`  · ${formatDuration(entry.durationMs)}`}</Text>
+            ) : null}
+            {!entry.ok ? (
+              <Text color="red" dimColor>{'  · failed'}</Text>
+            ) : null}
           </Box>
-          {entry.preview ? (
-            <Box paddingLeft={5}>
-              <Text color="gray" dimColor>{entry.preview}</Text>
+          {previewLines ? previewLines.visible.map((line, i) => (
+            <ToolPreviewLine
+              key={i}
+              line={line}
+              isFirst={i === 0}
+              isDiff={isDiff}
+            />
+          )) : null}
+          {previewLines && previewLines.hidden > 0 ? (
+            <Box>
+              <Text color="gray" dimColor>{`    (+${previewLines.hidden} more line${previewLines.hidden === 1 ? '' : 's'} hidden)`}</Text>
             </Box>
           ) : null}
         </Box>
       );
     }
     case 'memory':
+      // Memory pipeline events — briefing / capture / citation / contradiction.
+      // Warnings (contradictions, extraction failures) stand out; info events
+      // stay dim so the chat doesn't drown in capture chatter.
       return (
         <Box>
-          <Text color={entry.level === 'warn' ? 'yellow' : 'gray'} dimColor={entry.level === 'info'}>
+          <Text
+            color={entry.level === 'warn' ? 'yellow' : 'gray'}
+            bold={entry.level === 'warn'}
+            dimColor={entry.level === 'info'}
+            wrap="truncate"
+          >
             {entry.level === 'warn' ? '⚠ ' : '· '}{entry.text}
           </Text>
         </Box>
@@ -427,22 +513,93 @@ function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentC
     case 'plan':
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="gray">📋 Plan</Text>
+          <Text color="gray" bold>📋 Plan</Text>
+          {entry.explanation ? (
+            <Box marginBottom={1}>
+              <Text color="gray" dimColor italic>   ↳ {entry.explanation}</Text>
+            </Box>
+          ) : null}
           {entry.items.map((item, i) => {
             const mark = item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '⏳' : '☐';
             const color = item.status === 'completed' ? 'green' : item.status === 'in_progress' ? 'yellow' : 'gray';
+            // Multi-line steps indent under the first line so the checkbox
+            // anchor stays visually attached to the whole step.
+            const stepLines = String(item.step).split('\n');
             return (
-              <Box key={i}>
-                <Text color={color}>  {mark} </Text>
-                <Text color={item.status === 'completed' ? 'gray' : undefined}>{item.step}</Text>
+              <Box key={i} flexDirection="column">
+                <Box>
+                  <Text color={color}>  {mark} </Text>
+                  <Text color={item.status === 'completed' ? 'gray' : undefined}>{stepLines[0]}</Text>
+                </Box>
+                {stepLines.slice(1).map((line, j) => (
+                  <Box key={j}>
+                    <Text>{'      '}</Text>
+                    <Text color={item.status === 'completed' ? 'gray' : undefined} dimColor>{line}</Text>
+                  </Box>
+                ))}
               </Box>
             );
           })}
         </Box>
       );
-    case 'notice':
-      return <Text color="yellow">{entry.text}</Text>;
+    case 'notice': {
+      // info  → gray dim
+      // warn  → yellow
+      // error → red bold
+      const level = entry.level ?? 'info';
+      const color = level === 'error' ? 'red' : level === 'warn' ? 'yellow' : 'gray';
+      return (
+        <Box>
+          <Text color={color} bold={level === 'error'} dimColor={level === 'info'} wrap="truncate">
+            {entry.text}
+          </Text>
+        </Box>
+      );
+    }
   }
+}
+
+/**
+ * Render one line of a tool-result preview. Diff lines get red/green
+ * coloring (see classifyDiffLine). The first line of the preview is
+ * prefixed with `⎿` connector under the tool header; continuation lines
+ * just indent to align with the connector body.
+ */
+function ToolPreviewLine({ line, isFirst, isDiff }: { line: string; isFirst: boolean; isDiff: boolean }) {
+  const indent = isFirst ? '    ⎿ ' : '      ';
+  let textColor: string | undefined = 'gray';
+  let dim = true;
+  if (isDiff) {
+    const kind = classifyDiffLine(line);
+    if (kind === 'add') { textColor = 'green'; dim = false; }
+    else if (kind === 'del') { textColor = 'red'; dim = false; }
+    else if (kind === 'hunk') { textColor = 'cyan'; dim = true; }
+  }
+  return (
+    <Box>
+      <Text color="gray" dimColor>{indent}</Text>
+      <Text color={textColor} dimColor={dim} wrap="truncate">{line}</Text>
+    </Box>
+  );
+}
+
+const TOOL_PREVIEW_MAX_LINES = 8;
+
+/** Split preview into the visible head + the count of hidden tail lines. */
+function splitForPreview(preview: string): { visible: string[]; hidden: number } {
+  const lines = preview.split('\n');
+  if (lines.length <= TOOL_PREVIEW_MAX_LINES) return { visible: lines, hidden: 0 };
+  return { visible: lines.slice(0, TOOL_PREVIEW_MAX_LINES), hidden: lines.length - TOOL_PREVIEW_MAX_LINES };
+}
+
+/** Human-readable duration: 950ms, 1.2s, 12s, 1m 23s. */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
 }
 
 /**
@@ -553,8 +710,14 @@ function FooterStatus({
   // See cli/repl.ts:refreshPromptForMode for the rationale.
   const pillBg = accessMode === 'shell' ? 'red' : accessMode === 'write' ? accentColor : 'green';
   const pillFg = 'black';
-  // Effort pill — only shown when set. Same visual language as the access pill.
-  const effortBg = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
+  // Effort glyphs — claude-code v2.1.147 convention:
+  //   low    → ○ (open circle, light)
+  //   medium → ◐ (half circle)
+  //   high   → ● (filled circle, heavy)
+  // Rendered inline next to the pill, not as a separate boxed pill, so
+  // the footer stays compact on narrow terminals.
+  const effortGlyph = footer.effort === 'high' ? '●' : footer.effort === 'medium' ? '◐' : footer.effort === 'low' ? '○' : '';
+  const effortColor = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
 
   // Left side: model · session · branch.  Right side: ? for shortcuts.
   // Spreads out so the footer feels like claude-code's bottom bar.
@@ -568,10 +731,11 @@ function FooterStatus({
     <Box justifyContent="space-between" paddingX={1}>
       <Box>
         <Text backgroundColor={pillBg} color={pillFg}>{` ◉ ${accessMode} `}</Text>
-        {footer.effort ? (
+        {effortGlyph ? (
           <>
             <Text> </Text>
-            <Text backgroundColor={effortBg} color={pillFg}>{` ${footer.effort} `}</Text>
+            <Text color={effortColor}>{effortGlyph}</Text>
+            <Text color="gray" dimColor>{` ${footer.effort}`}</Text>
           </>
         ) : null}
         {leftSegs.length > 0 ? (
@@ -580,7 +744,7 @@ function FooterStatus({
         {phase === 'turn-running' ? (
           <Text color="gray" dimColor wrap="truncate">{'  · running'}</Text>
         ) : null}
-        {leftSegs.length === 0 && phase === 'idle' ? (
+        {leftSegs.length === 0 && phase === 'idle' && !footer.effort ? (
           <Text color="gray" dimColor wrap="truncate">{'  ' + promptLabel}</Text>
         ) : null}
       </Box>
