@@ -33,7 +33,7 @@ If you launch `brainrouter` without a config (or after deleting
 an in-terminal setup wizard — no separate `brainrouter login` /
 `brainrouter config` subcommand needed.
 
-The wizard walks 6 decision steps inside a single readline session:
+The wizard walks 6 decision steps inside the Ink terminal UI:
 
 ```
 welcome → theme → provider → API key → model → MCP → AGENT.md → done

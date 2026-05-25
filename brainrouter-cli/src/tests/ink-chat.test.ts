@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { captureConsoleOutput } from '../cli/ink/consoleCapture.js';
 import { filterPaletteCommands } from '../cli/ink/ChatApp.js';
 
 // --- Pure helpers from the Ink chat REPL ---------------------------------
@@ -62,4 +63,29 @@ test('filterPaletteCommands: stable secondary sort by original index for same-sc
   const out = filterPaletteCommands(subset, 'c');
   assert.equal(out[0].cmd, '/config');
   assert.equal(out[1].cmd, '/clear');
+});
+
+test('captureConsoleOutput: captures legacy slash-command console output and restores console', async () => {
+  const originalLog = console.log;
+  const captured = await captureConsoleOutput(async () => {
+    console.log('Local Workspace Tools:');
+    console.warn('  Warning: %s', 'offline');
+    return 42;
+  });
+
+  assert.equal(captured.result, 42);
+  assert.equal(captured.output, 'Local Workspace Tools:\n  Warning: offline\n');
+  assert.equal(console.log, originalLog);
+});
+
+test('captureConsoleOutput: restores console when wrapped command throws', async () => {
+  const originalError = console.error;
+  await assert.rejects(
+    () => captureConsoleOutput(() => {
+      console.error('before failure');
+      throw new Error('boom');
+    }),
+    /boom/,
+  );
+  assert.equal(console.error, originalError);
 });

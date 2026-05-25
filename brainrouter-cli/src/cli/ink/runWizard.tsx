@@ -114,7 +114,10 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
       config.servers[profileName] = serverConfig;
       config.activeServer = profileName;
     }
-  } else if (draft.mcp?.kind === 'skip' && !config.activeServer) {
+  } else if (draft.mcp?.kind === 'skip') {
+    // Skip means skip — clear any previously-active profile so the CLI doesn't
+    // silently re-spawn an MCP child from a stale config. The user can re-add
+    // a profile via `/login` later.
     config.activeServer = '';
   }
   saveConfig(config);

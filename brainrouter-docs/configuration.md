@@ -43,15 +43,11 @@ cover.
 | What | Where | Owns |
 | --- | --- | --- |
 | **MCP server env** | `~/.config/brainrouter/server.env` (global install) **or** `brainrouter/.env` (monorepo dev) | LLM credentials, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
-| **CLI chat-LLM credentials** | `~/.config/brainrouter/config.json` | Chat model, endpoint, API key — the canonical credential store since 0.3.4. The CLI no longer reads chat creds from `.env`. |
-| **CLI runtime knobs** | `brainrouter-cli/.env` | Tool-loop limits, sandbox flags, web search backend, trace log, workspace override, quiet/theme overrides. |
+| **CLI credentials + transport** | `~/.config/brainrouter/config.json` | Chat model, endpoint, API key, MCP server profiles, active profile — the CLI's single source of truth since 0.3.7. |
+| **CLI runtime knobs** | Shell env (`export BRAINROUTER_*=…`) | Tool-loop limits, sandbox flags, web search backend, trace log, workspace override, quiet/theme overrides. The CLI no longer reads any `.env` file. |
 | **MCP client transport** | `~/.config/brainrouter/config.json` (`servers` / `activeServer`) | Stdio vs HTTP MCP transport profile selection. |
 
-Templates: [`brainrouter/.env.example`](../brainrouter/.env.example) and
-[`brainrouter-cli/.env.example`](../brainrouter-cli/.env.example). Both
-are organized into numbered sections (5 in the MCP template, 6 in the
-CLI template) with all placeholder values blanked so the committed
-examples never look like real secrets.
+The MCP server ships a template at [`brainrouter/.env.example`](../brainrouter/.env.example) — copy it to `~/.config/brainrouter/server.env` via `brainrouter-mcp init`. The CLI has no `.env` template; use the wizard or `/config` instead.
 
 ## MCP env-loader priority chain
 
@@ -83,68 +79,51 @@ This copies the bundled `.env.example` to
 overwrite an existing file. Edit the new file to set
 `BRAINROUTER_LLM_API_KEY` and any optional knobs.
 
-## Two `.env` files, one per process
+## Two processes, one env boundary
 
 The MCP server and the CLI agent are separate processes with separate
-concerns. They each get their own template:
+concerns and a strict env boundary since 0.3.7:
 
-| File | Owns |
+| Process | Config source |
 | --- | --- |
-| **`brainrouter/.env`** (or `~/.config/brainrouter/server.env`) | MCP server: LLM, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
-| **`brainrouter-cli/.env`** | CLI agent runtime: tool loop limits, sandbox, web search backend, trace log, workspace override, theme / quiet overrides. **Chat-LLM credentials live in `~/.config/brainrouter/config.json`, not here.** |
+| **MCP server** | `brainrouter/.env` (monorepo dev) or `~/.config/brainrouter/server.env` (global install) — LLM credentials, retrieval pipeline, memory engine, auth, JWT, admin seed. |
+| **CLI agent** | `~/.config/brainrouter/config.json` (chat-LLM creds, endpoint, model, MCP transport profile) + shell env (`BRAINROUTER_*` vars) for runtime knobs. The CLI reads **no `.env` file at all**. |
 
-### Why two files?
+Why the hard split?
 
 - The MCP's cognitive extractor and the CLI's chat agent can run on
-  different models (cheap local model for extraction, smart cloud model
-  for chat). Each side picks its own `BRAINROUTER_LLM_*`.
-- Concurrency caps default differently per process
-  (`BRAINROUTER_LLM_MAX_CONCURRENT` is 2 in MCP, 4 in CLI). If both
-  processes read the same file, one always loses.
-- CLI-only knobs (`BRAINROUTER_SANDBOX`, `BRAINROUTER_AUTO_COMPACT_TOKENS`,
-  `BRAINROUTER_MAX_TOOL_LOOPS`, etc.) have no meaning in the MCP and
-  shouldn't pollute its env.
-
-The CLI used to load `brainrouter/.env` as a single source of truth;
-that's now legacy. Since 0.3.4 the canonical chat-LLM credential store
-is **`~/.config/brainrouter/config.json`** (see [CLI chat-LLM config](#cli-chat-llm-config)
-below). The CLI auto-loads `brainrouter-cli/.env` for runtime knobs
-only and refuses to silently shadow `config.json` for credentials —
-this closes a precedence bug where a stale `brainrouter/.env` could
-override the on-disk config.
+  different models. Each side picks its own credentials.
+- CLI-only knobs (`BRAINROUTER_SANDBOX`, `BRAINROUTER_MAX_TOOL_LOOPS`,
+  `BRAINROUTER_TRACE_LOG`, …) have no meaning in the MCP server.
+- A shared `.env` created silent precedence bugs where stale env vars
+  could shadow the on-disk `config.json`.
 
 ### Loading & propagation
 
-- **MCP server**: `import "dotenv/config"` at startup. The CLI hints the
-  spawned MCP child's cwd at `brainrouter/`, so `brainrouter/.env` is
-  picked up automatically.
-- **CLI agent**: explicit loader reads `brainrouter-cli/.env` first, then
-  `brainrouter/.env` as a credentials fallback.
+- **MCP server**: `import "dotenv/config"` at startup, resolving against
+  `~/.config/brainrouter/server.env` (priority 2) or `brainrouter/.env`
+  (priority 3 — cwd). See [MCP env-loader priority chain](#mcp-env-loader-priority-chain).
+- **CLI agent**: reads `~/.config/brainrouter/config.json` for
+  credentials + transport. Runtime knobs come from shell env only.
 - **Shell env always wins**: anything already in `process.env` (exported
-  in your shell, set via Docker `-e`, etc.) beats both files.
-- **CLI → MCP child propagation** filters out CLI-only and
-  process-specific vars (`BRAINROUTER_SANDBOX*`, `BRAINROUTER_MAX_TOOL_LOOPS`,
-  `BRAINROUTER_LLM_MAX_CONCURRENT`, `BRAINROUTER_TRACE_LOG`, …) so they
-  don't leak into the MCP child.
+  in your shell, set via Docker `-e`, etc.) beats the config file.
+- **CLI → MCP child propagation** (stdio mode only) passes the CLI's
+  resolved LLM credentials so the server's cognitive extractor can share
+  them. CLI-only and process-specific vars are filtered out.
 
 ## Quick start (minimal)
 
 ```env
-# brainrouter/.env
+# ~/.config/brainrouter/server.env  (MCP server)
 BRAINROUTER_LLM_API_KEY=sk-...
 ```
 
-That's the minimum. Defaults: OpenAI `https://api.openai.com/v1/chat/completions`
-with `gpt-4o-mini`, no embeddings, no reranker, memory store at
-`~/.brainrouter/memory.db`.
+That's the minimum for the server. Defaults: OpenAI
+`https://api.openai.com/v1/chat/completions` with `gpt-4o-mini`, no
+embeddings, no reranker, memory store at `~/.brainrouter/memory.db`.
 
-For independent control of the CLI's chat LLM (recommended):
-
-```env
-# brainrouter-cli/.env
-BRAINROUTER_LLM_API_KEY=sk-...
-BRAINROUTER_LLM_MODEL=gpt-4o
-```
+For the CLI, run `brainrouter` and complete the wizard — it writes
+`~/.config/brainrouter/config.json` with your provider, key, and model.
 
 ---
 
@@ -469,9 +448,9 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_SKILL_PREWARM_THRESHOLD` | `0.3` | Threshold for context injection. |
 | `BRAINROUTER_SKILL_MIN_TURN_DECAY` | `0.05` | Minimum heat decay per turn. |
 
-### CLI runtime — `brainrouter-cli/.env`
+### CLI runtime — shell env
 
-These never propagate to the MCP child.
+Set these in your shell profile (`export BRAINROUTER_*=…`) or pass them inline (`BRAINROUTER_QUIET=1 brainrouter`). The CLI reads no `.env` file; these never propagate to the MCP child.
 
 | Var | Default | Purpose |
 | --- | --- | --- |
@@ -488,7 +467,7 @@ These never propagate to the MCP child.
 | `BRAINROUTER_RECALL_MODE` | `gated` | Memory-recall gating set in 0.3.6 item 9b. `gated` (default) fires the briefing only on turn 1, post-compaction, or when the user message names ≥2 entity-shaped tokens. `always` preserves pre-0.3.6 every-turn behaviour. `off` skips recall entirely. Garbled values fall through to `gated`. See [cli.md → Recall gating](cli.md#recall-gating-brainrouter_recall_mode). |
 | `BRAINROUTER_OFFLINE_LOCAL_RECALL` | _(unset)_ | _Planned for 0.3.7 — item 10d._ When the BrainRouter MCP is offline, setting this to `1` will fall back to a compressed view of the last few transcript entries as the briefing. Not active yet; reserved here so callers can pin behaviour now. |
 
-### Sandboxing — `brainrouter-cli/.env`
+### Sandboxing — shell env
 
 | Var | Default | Purpose |
 | --- | --- | --- |
@@ -555,9 +534,11 @@ Why a JSON file instead of `.env` for credentials? Two reasons:
   API key" flow could leave a stale key in a `.env` that won
   precedence anyway. Putting credentials in one well-known JSON file
   removes the foot-gun.
-- **`.env` stays for runtime knobs.** Sandbox, timeouts, trace log,
+- **Shell env for runtime knobs.** Sandbox flags, timeouts, trace log,
   web-search backend, theme, quiet — anything you'd genuinely want
-  per-shell — still belongs in `brainrouter-cli/.env`.
+  per-shell — belongs in your shell profile (`export BRAINROUTER_*=…`)
+  or an inline env prefix. The CLI no longer reads any `.env` file at
+  all (as of 0.3.7).
 
 ## MCP client config
 

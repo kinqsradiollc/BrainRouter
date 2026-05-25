@@ -111,6 +111,21 @@ separate `brainrouter login` / `brainrouter config` subcommand dance.
   because Ink only force-clears on some resize paths, and full-frame
   panels leave residue otherwise.
 
+### Breaking / cleanup
+
+- **CLI reads no `.env` file (0.3.7).** `brainrouter-cli/.env` and
+  the old `brainrouter/.env` fallback allowlist are gone from the CLI
+  startup path. The sole source of truth for CLI credentials and LLM
+  config is `~/.config/brainrouter/config.json` (use the wizard or
+  `/config`). Runtime knobs (`BRAINROUTER_QUIET`, `BRAINROUTER_THEME`,
+  `BRAINROUTER_TRACE_LOG`, etc.) are still read from shell env — set
+  them via `export` or an inline prefix.
+  `brainrouter-cli/.env.example` removed.
+- **Ink chat REPL is unconditionally the default.** The
+  `BRAINROUTER_INK_REPL=1` env flag is no longer needed or consulted.
+  The old readline-based `startREPL` function (~800 lines) was deleted
+  from `repl.ts`; only shared slash-command exports remain.
+
 ### Improvements
 
 - **Picker primitive extensions** (`brainrouter-cli/src/cli/cliPrompt.ts`).
@@ -124,6 +139,15 @@ separate `brainrouter login` / `brainrouter config` subcommand dance.
 - **`maskApiKey` helper** keeps the last 4 chars visible everywhere
   the key is rendered (`/config` panel, wizard Done summary, future
   `/where` workspace block).
+- **MCP child stderr piped.** `StdioClientTransport` now receives
+  `stderr: 'pipe'` so the MCP server's startup logs (`[BrainRouter]
+  FATAL`, SQLite warnings, env-load banners) no longer leak into the
+  CLI terminal above the Ink banner.
+- **Wizard Skip clears stale `activeServer`.** The `kind === 'skip'`
+  branch in both `wizard/runner.ts` and `ink/runWizard.tsx` dropped a
+  `&& !config.activeServer` guard that prevented Skip from overwriting
+  a pre-existing profile — causing the CLI to silently re-spawn the
+  MCP child. Skip now always writes `activeServer: ''`.
 
 ### Docs
 

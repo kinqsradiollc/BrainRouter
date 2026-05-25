@@ -150,18 +150,11 @@ export class McpClientWrapper {
       if (llmConfig?.model && !mergedEnv.BRAINROUTER_LLM_MODEL) {
         mergedEnv.BRAINROUTER_LLM_MODEL = llmConfig.model;
       }
-      // Loud diagnostic: if NO LLM key reached the child, server-side
-      // memory extraction is dead — every sensory capture will pile up
-      // un-extracted. Print a yellow banner so the user knows BEFORE they
-      // see "0 records" in every briefing.
-      if (!mergedEnv.BRAINROUTER_LLM_API_KEY) {
-        console.warn(
-          '\n⚠️  No LLM API key reached the MCP child. Sensory turns will be ' +
-          'captured but cognitive extraction (the thing that makes them ' +
-          'searchable) will fail silently. Set OPENAI_API_KEY or ' +
-          'BRAINROUTER_LLM_API_KEY before starting brainrouter.\n',
-        );
-      }
+      // (Previously: a loud console.warn here if no LLM API key reached the
+      // MCP child. That message landed above the Ink banner and looked like a
+      // CLI error even though it was a server-side concern. Server-side
+      // extraction failures should surface through MCP's own status channel —
+      // not by the CLI second-guessing what the server needs.)
 
       // Spawn the MCP child with cwd set to the MCP package directory if we
       // can find it from the first arg (typically
@@ -195,6 +188,14 @@ export class McpClientWrapper {
         args: serverConfig.args ?? [],
         env: mergedEnv,
         cwd: childCwd,
+        // The MCP child is a separate process with its own concerns (its own
+        // dotenv, its own auth failures, its own platform warnings). Inheriting
+        // its stderr meant every `[BrainRouter] FATAL …`, every dotenv banner,
+        // every SQLite ExperimentalWarning leaked above our Ink chat banner
+        // and looked like the CLI was crashing. Pipe it so the SDK owns the
+        // stream; the CLI can surface a single graceful "MCP unreachable" line
+        // through its own offline-mode flow instead.
+        stderr: 'pipe',
       });
 
       await this.client.connect(this.transport);

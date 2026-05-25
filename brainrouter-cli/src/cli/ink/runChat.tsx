@@ -28,16 +28,17 @@ import type { SlashCommandDef } from './SlashPalette.js';
 import { handleSlashCommand, lookupSlashDescription, SLASH_COMMANDS } from '../repl.js';
 import { formatToolCall } from './toolFormat.js';
 import { setAmbientChat } from './ambientChat.js';
+import { captureConsoleOutput } from './consoleCapture.js';
 import { renderWithResizeClear } from './renderWithResizeClear.js';
 
 /**
  * Mount the full Ink-based chat REPL and run it until the user exits.
  *
- * Replaces the readline-based `startREPL` body when
- * `BRAINROUTER_INK_REPL=1` is set. The Ink REPL owns stdin for the
- * entire CLI lifetime — no handoff back to readline — so unlike
- * `runWizard` / `runPicker` we don't call `resetStdinForReadline`
- * after unmount; the process exits the moment Ink does.
+ * The CLI's only chat surface as of 0.3.7 — the old readline-based REPL
+ * was removed in favour of this single Ink tree. The Ink REPL owns stdin
+ * for the entire CLI lifetime — no handoff back to readline — so unlike
+ * `runWizard` / `runPicker` we don't call `resetStdinForReadline` after
+ * unmount; the process exits the moment Ink does.
  *
  * Orchestration:
  *   1. Build the banner, slash catalog, and theme.
@@ -570,12 +571,18 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   async function dispatchSlash(command: string, args: string[], rl: any): Promise<void> {
     if (!controller) return;
     try {
-      await handleSlashCommand(command, args, agent, mcpClient, config, rl as readline.Interface, {
-        refreshPromptForMode: refreshFooter,
-        isProcessing: () => isProcessing,
-        runAgentTurn: (prompt: string) => { void runChatTurn(prompt); },
-        runAgentTurnAsync: (prompt: string) => runChatTurn(prompt),
-      });
+      const captured = await captureConsoleOutput(() =>
+        handleSlashCommand(command, args, agent, mcpClient, config, rl as readline.Interface, {
+          refreshPromptForMode: refreshFooter,
+          isProcessing: () => isProcessing,
+          runAgentTurn: (prompt: string) => { void runChatTurn(prompt); },
+          runAgentTurnAsync: (prompt: string) => runChatTurn(prompt),
+        }),
+      );
+      const output = captured.output.trimEnd();
+      if (output) {
+        controller.push.raw(output);
+      }
     } catch (err: any) {
       controller.push.notice(`Slash command "${command}" failed: ${err?.message ?? err}`, 'error');
     } finally {
