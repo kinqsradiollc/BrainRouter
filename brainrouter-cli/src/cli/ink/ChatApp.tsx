@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Static, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
 import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 import { renderMarkdown } from './markdownRender.js';
+import { useTerminalSize } from './useTerminalSize.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -166,8 +167,11 @@ export function ChatApp({
   initialFooter = {},
 }: ChatAppProps) {
   const { exit } = useApp();
-  const { stdout } = useStdout();
-  const cols = stdout?.columns ?? 80;
+  // useTerminalSize subscribes to stdout 'resize' so dividers, footer,
+  // and slash palette automatically reflow when the user resizes the
+  // window. Reading stdout.columns directly didn't pick up every
+  // resize cleanly — see useTerminalSize.ts for the rationale.
+  const { columns: cols } = useTerminalSize();
 
   const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(initialBanner, initialOfflineWarning, initialHint));
   const nextIdRef = useRef(scrollback.length);
@@ -404,6 +408,7 @@ export function ChatApp({
         accentColor={accentColor}
         accessMode={accessMode}
         footer={footer}
+        cols={cols}
       />
     </Box>
   );
@@ -671,10 +676,16 @@ function SlashPalettePanel({
   const hiddenAbove = viewportStart;
   const hiddenBelow = total - (viewportStart + windowSize);
 
-  // Description width budget: terminal cols minus the cmd column,
-  // cursor prefix (3 chars), and 2 padding chars. Floored at 12 so
-  // very narrow terminals still show *some* description.
-  const descBudget = Math.max(12, cols - PALETTE_CMD_COL_WIDTH - 5);
+  // Progressive collapse for narrow terminals:
+  //   - Below 50 cols: drop the description column entirely; the cmd
+  //     column expands to fill the remaining width.
+  //   - At normal widths: fixed 24-col cmd column, description takes
+  //     the rest with `wrap="truncate"`.
+  const showDescription = cols >= 50;
+  const cmdColWidth = showDescription
+    ? PALETTE_CMD_COL_WIDTH
+    : Math.max(12, cols - 6);
+  const descBudget = showDescription ? Math.max(12, cols - cmdColWidth - 5) : 0;
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -689,12 +700,14 @@ function SlashPalettePanel({
         return (
           <Box key={cmd.cmd}>
             <Text color={accentColor}>{isSelected ? ' › ' : '   '}</Text>
-            <Box width={PALETTE_CMD_COL_WIDTH}>
+            <Box width={cmdColWidth}>
               <Text bold={isSelected} color={isSelected ? accentColor : undefined} wrap="truncate">{cmd.cmd}</Text>
             </Box>
-            <Box width={descBudget}>
-              <Text color="gray" wrap="truncate">{cmd.description}</Text>
-            </Box>
+            {showDescription ? (
+              <Box width={descBudget}>
+                <Text color="gray" wrap="truncate">{cmd.description}</Text>
+              </Box>
+            ) : null}
           </Box>
         );
       })}
@@ -704,8 +717,12 @@ function SlashPalettePanel({
         </Box>
       ) : null}
       <Box marginTop={1}>
-        <Text color="gray" dimColor>
-          ↑/↓ navigate  ·  tab autocomplete  ·  ↵ submit  ·  type to filter  ·  esc / backspace past / to cancel
+        <Text color="gray" dimColor wrap="truncate">
+          {cols >= 90
+            ? '↑/↓ navigate  ·  tab autocomplete  ·  ↵ submit  ·  type to filter  ·  esc / backspace past / to cancel'
+            : cols >= 60
+              ? '↑/↓  ·  tab autocomplete  ·  ↵ submit  ·  esc to cancel'
+              : '↑/↓  ·  tab  ·  ↵  ·  esc'}
         </Text>
       </Box>
     </Box>
@@ -718,12 +735,15 @@ function FooterStatus({
   accentColor,
   accessMode,
   footer,
+  cols,
 }: {
   promptLabel: string;
   phase: 'idle' | 'turn-running';
   accentColor: string;
   accessMode: 'read' | 'write' | 'shell';
   footer: FooterState;
+  /** Live terminal width, drives progressive collapse on narrow terminals. */
+  cols: number;
 }) {
   // Pill background mirrors the readline REPL's mode-to-token mapping:
   //   read  → green   (safe)
@@ -749,28 +769,41 @@ function FooterStatus({
   if (footer.branch) leftSegs.push(footer.branch);
   if (footer.rightExtra) leftSegs.push(footer.rightExtra);
 
+  // Progressive collapse — borrowed from codex's footer.rs:58–86 pattern.
+  // Below 80 cols, drop the auxiliary left segments (model · session ·
+  // branch). Below 60 cols, drop the right-side hint. Below 40 cols,
+  // even the effort glyph collapses to just the access pill — that's
+  // the smallest viable status row.
+  const showLeftSegs = cols >= 80 && leftSegs.length > 0;
+  const showEffortLabel = cols >= 50;
+  const showEffortGlyph = !!effortGlyph && cols >= 40;
+  const showRightHint = cols >= 60;
+  const showPromptLabel = !showLeftSegs && phase === 'idle' && !footer.effort && cols >= 40;
+
   return (
     <Box justifyContent="space-between" paddingX={1}>
       <Box>
         <Text backgroundColor={pillBg} color={pillFg}>{` ◉ ${accessMode} `}</Text>
-        {effortGlyph ? (
+        {showEffortGlyph ? (
           <>
             <Text> </Text>
             <Text color={effortColor}>{effortGlyph}</Text>
-            <Text color="gray" dimColor>{` ${footer.effort}`}</Text>
+            {showEffortLabel ? <Text color="gray" dimColor>{` ${footer.effort}`}</Text> : null}
           </>
         ) : null}
-        {leftSegs.length > 0 ? (
+        {showLeftSegs ? (
           <Text color="gray" dimColor wrap="truncate">{'  ' + leftSegs.join(' · ')}</Text>
         ) : null}
-        {phase === 'turn-running' ? (
+        {phase === 'turn-running' && cols >= 50 ? (
           <Text color="gray" dimColor wrap="truncate">{'  · running'}</Text>
         ) : null}
-        {leftSegs.length === 0 && phase === 'idle' && !footer.effort ? (
+        {showPromptLabel ? (
           <Text color="gray" dimColor wrap="truncate">{'  ' + promptLabel}</Text>
         ) : null}
       </Box>
-      <Text color="gray" dimColor>? for shortcuts  ·  / for commands</Text>
+      {showRightHint ? (
+        <Text color="gray" dimColor>{cols >= 80 ? '? for shortcuts  ·  / for commands' : '?  ·  /'}</Text>
+      ) : null}
     </Box>
   );
 }

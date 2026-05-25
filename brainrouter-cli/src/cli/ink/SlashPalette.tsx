@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
+import { useTerminalSize } from './useTerminalSize.js';
 
 /**
  * Claude-code-style slash command palette.
@@ -218,11 +219,13 @@ function SlashRow({ cmd, selected, accentColor }: { cmd: SlashCommandDef; select
 }
 
 function Divider({ color }: { color: string }) {
-  // Full-width horizontal rule — matches claude-code's chrome.
-  const cols = process.stdout.columns ?? 80;
+  // Full-width horizontal rule — matches claude-code's chrome. Uses
+  // useTerminalSize so the divider auto-reflows on terminal resize
+  // instead of being frozen at its initial width.
+  const { columns } = useTerminalSize();
   return (
     <Box>
-      <Text color={color} dimColor>{'─'.repeat(Math.max(20, cols - 1))}</Text>
+      <Text color={color} dimColor>{'─'.repeat(Math.max(20, columns - 1))}</Text>
     </Box>
   );
 }
