@@ -10,13 +10,13 @@ context for each release.
 
 | Order | Version | State | Main question |
 |---:|---|---|---|
-| 1 | **[0.3.7](0.3.7.md)** | In-flight | How do we finish the Ink/config CLI shell? |
+| 1 | **[0.3.7](0.3.7.md)** | Shipped | How do we finish the Ink/config CLI shell? |
 | 2 | **[0.3.8](0.3.8.md)** | Planned | How do we stop child-agent waiting/stuck behavior? |
 | 3 | **[0.4.0](0.4.0.md)** | Designed | How do multiple CLIs share one memory plane? |
 | 4 | **[0.4.x](0.4.x.md)** | Planned | How do we harden orchestration and brain agents? |
 | 5 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI and marketplace? |
 
-Latest shipped: **[0.3.6](0.3.6.md)** on 2026-05-25.
+Latest shipped: **[0.3.7](0.3.7.md)** on 2026-05-26.
 
 ---
 

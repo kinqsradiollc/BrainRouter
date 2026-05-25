@@ -403,7 +403,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   if (!prompt.trim()) throw new Error('spawn_agent requires a non-empty prompt.');
 
   // P1.2 — spawn hierarchy checks.
-  const maxDepth = parseInt(process.env.BRAINROUTER_MAX_SPAWN_DEPTH ?? '3', 10);
+  const rawMaxDepth = parseInt(process.env.BRAINROUTER_MAX_SPAWN_DEPTH ?? '3', 10);
+  const maxDepth = Number.isFinite(rawMaxDepth) && rawMaxDepth > 0 ? rawMaxDepth : 3;
   const currentDepth = ctx.depth ?? 0;
   const parentTier = ctx.parentTier;
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
+import type { McpClient } from '../runtime/mcpUtils.js';
 import { skillSearchRoots } from './skillCatalog.js';
 
 export interface SkillResolution {
@@ -44,7 +44,7 @@ export const SLASH_TO_SKILL: Record<string, string> = {
  * local filesystem scan of `skills/` for when the MCP tool is unavailable.
  */
 export async function resolveSkill(
-  mcpClient: McpClientWrapper,
+  mcpClient: McpClient,
   name: string,
   workspaceRoot: string,
   section: RunSkillOptions['section'] = 'full',

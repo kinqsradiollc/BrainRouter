@@ -13,7 +13,7 @@ live in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
-| **0.3.7** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
+| **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
 | **0.3.6** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.6.md`](brainrouter-changelog/0.3.6.md) |
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
@@ -23,7 +23,7 @@ should get a changelog entry only when implementation starts.
 
 ---
 
-## [0.3.7] - 2026-05-25
+## [0.3.7] - 2026-05-26
 
 Terminal UI redesign, in-terminal configuration, full Ink chat REPL, and multi-agent registry foundations.
 

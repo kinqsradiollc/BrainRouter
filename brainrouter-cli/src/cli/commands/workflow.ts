@@ -114,7 +114,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
               const suffix = verbose && skill.description ? ` - ${skill.description}` : '';
               console.log(`  • ${chalk.cyan(`${category}${skill.name}`)} (${chalk.gray(skill.scope ?? 'unknown')})${suffix}`);
             }
-            if (mcpSkills && filesystemSkills.length > mcpSkills.length) {
+            if (mcpSkills && skillsList.length > mcpSkills.length) {
               console.log(chalk.gray(`  Showing ${skillsList.length} skills (${mcpSkills.length} from MCP, ${skillsList.length - mcpSkills.length} filled from local files).`));
             } else if (!mcpSkills && filesystemSkills.length > 0) {
               console.log(chalk.gray('  MCP list unavailable; showing local filesystem skills.'));

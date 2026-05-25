@@ -92,11 +92,20 @@ export function formatToolCall(name: string, args: Record<string, any> | undefin
 }
 
 /**
- * Strip the `mcp__<server>__` namespace prefix from MCP tool names.
- * `mcp__brainrouter__memory_search` → `memory_search`.
+ * Strip the `mcp__<server>__` or `mcp_<server>_` namespace prefix from MCP tool
+ * names. Server ids may contain underscores (e.g. `my_server`), so the
+ * double-underscore form uses a lazy match. Both prefix conventions are in use
+ * across the multi-MCP codepaths until naming is unified.
+ *   `mcp__brainrouter__memory_search` → `memory_search`
+ *   `mcp__my_server__memory_search`    → `memory_search`
+ *   `mcp_brainrouter_memory_search`    → `memory_search`
  */
 export function stripMcpPrefix(name: string): string {
-  return name.replace(/^mcp__[^_]+__/, '');
+  const dbl = name.match(/^mcp__.+?__(.+)$/);
+  if (dbl) return dbl[1];
+  const sgl = name.match(/^mcp_[^_]+_(.+)$/);
+  if (sgl) return sgl[1];
+  return name;
 }
 
 /**
