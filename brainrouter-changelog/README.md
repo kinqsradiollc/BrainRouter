@@ -13,7 +13,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
-| **[0.3.7](0.3.7.md)** | Unreleased | In-flight | Ink chat REPL, wizard, `/config`, `/login`, CLI/server env separation |
+| **[0.3.7](0.3.7.md)** | 2026-05-25 | Shipped | Ink chat REPL, wizard, `/config`, `/login`, CLI/server env separation |
 | **[0.3.6](0.3.6.md)** | 2026-05-25 | Shipped | Context budget, MCP identity/offline UX, multi-MCP foundation, multi-workflow |
 | [0.3.5](0.3.5.md) | 2026-05-22 | Shipped | Global-install UX fix |
 | [0.3.4](0.3.4.md) | 2026-05-22 | Shipped | First public npm release |
