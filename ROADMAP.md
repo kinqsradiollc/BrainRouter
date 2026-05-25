@@ -1,17 +1,11 @@
 # BrainRouter Roadmap
 
-Active released version: **0.3.5** — global-install UX fix
+Active released version: **0.3.6** — multi-workflow concurrency, new session knobs (`/effort` · `/mode` · `/review-policy` · `/grill-me` · `ask_user_choice`), 70%-trimmed system prompt + gated recall, MCP identity + offline UX
 ([`@kinqs/brainrouter-cli` on npm](https://www.npmjs.com/package/@kinqs/brainrouter-cli)).
 See [`CHANGELOG.md`](CHANGELOG.md).
 
-In-flight: **0.3.6** — relevance judge, goal-loop hardening, dashboard
-markdown/Mermaid/KaTeX, `.env` template reorg, LLM pipeline robustness
-fixes, multi-workflow concurrency (PR #38). Late-cycle additions
-(planned): **context budget** (system-prompt trim + recall gating),
-**MCP identity + offline UX** (distinguish the BrainRouter cloud brain
-from third-party MCPs, graceful degradation when offline), and a
-**multi-MCP foundation** (scope-limited; full federation deferred to
-0.4.0). See [`brainrouter-roadmap/0.3.6.md`](brainrouter-roadmap/0.3.6.md).
+In-flight: **0.3.7** — Terminal UI redesign + in-terminal config wizard + full Ink chat REPL.
+See [`brainrouter-roadmap/0.3.7.md`](brainrouter-roadmap/0.3.7.md).
 Live progress checklist in [`Tasks.md`](Tasks.md).
 
 Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance,
@@ -28,8 +22,8 @@ detail.
 
 | Release | Theme | Status |
 |---|---|---|
-| **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge + context budget | _In-flight_ — 11 items, 8 shipped (Items 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 via PRs #26 + #27 + #38 + #30 + #32 + #31 + #35 + #36); late-cycle Items 9 (context budget), 10 (MCP identity + offline UX), and 11 (multi-MCP foundation) are the remaining workstreams |
-| [0.3.7](brainrouter-roadmap/0.3.7.md) | Quick wins post-0.3.6 | Planned — cron `/schedule`, `/release-notes`, hooks JSON doc, "Strict Tool-Call Recovery" (deer-flow), per-vendor MCP install snippets (semble) |
+| **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge + context budget | _Shipped — 2026-05-25_ — all 11 items merged via PRs #26 + #27 + #38 + #30 + #32 + #31 + #35 + #36 + #39 (items 9 + 10 + 11 bundled) |
+| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | **Terminal UI redesign + in-terminal config wizard + full Ink chat REPL** | _In-flight_ — Item 6 shipped on `feat/cli-tui-redesign-and-config-wizard` (wizard + `/config` + `/login` + the chat REPL itself diff through one Ink tree); Items 1–5 (cron `/schedule`, `/release-notes`, hooks doc, deer-flow Strict Tool-Call Recovery, per-vendor MCP install snippets) carried forward |
 | [0.4.0](brainrouter-roadmap/0.4.0.md) | **Federation — many agents, one memory** | Designed — 5 stages + memory-quality augmentations from deer-flow / semble |
 | [0.4.x](brainrouter-roadmap/0.4.x.md) | Post-federation polish | Planned — dynamic subagents, worktree isolation, `/rewind`, `/context per-skill`, benchmark harness, progressive skill loading, code-aware chunking |
 | [0.5.0](brainrouter-roadmap/0.5.0.md) | TUI cycle + plugin marketplace | Sketched — fullscreen renderer, plugin marketplace, gateway shape |
@@ -40,6 +34,7 @@ detail.
 
 Full per-version notes in [`brainrouter-changelog/`](brainrouter-changelog/).
 
+- **0.3.6** — multi-workflow concurrency; `/effort` + `/mode` + `/review-policy` + `/grill-me` + `ask_user_choice`; system-prompt trim (~70% cut) + gated recall; MCP identity + offline UX; multi-MCP foundation; spinner/stdin freeze fix.
 - **0.3.5** — global-install UX (`brainrouter-mcp init`, env-loader priority chain).
 - **0.3.4** — first public npm release; four `@kinqs/` packages.
 - **0.3.3** — `/goal` state machine; `usage_limited` status; token budget; wrap-up steering.
