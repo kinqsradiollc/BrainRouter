@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-mcp-server",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "BrainRouter MCP server — the cognitive memory engine. Exposes recall, capture, focus scenes, persona, contradictions, skills, and graph queries as MCP tools for any MCP-speaking agent.",
   "type": "module",
   "main": "dist/index.js",
@@ -45,7 +45,7 @@
     "gray-matter": "^4.0.3",
     "sqlite-vec": "^0.1.9",
     "zod": "^3.22.4",
-    "@kinqs/brainrouter-types": "^0.3.5"
+    "@kinqs/brainrouter-types": "^0.3.6"
   },
   "engines": {
     "node": ">=22.0.0"
