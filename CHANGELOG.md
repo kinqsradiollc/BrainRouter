@@ -13,7 +13,7 @@ live in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
-| **0.3.7** | Unreleased / in-flight | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
+| **0.3.7** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
 | **0.3.6** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.6.md`](brainrouter-changelog/0.3.6.md) |
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
@@ -23,113 +23,31 @@ should get a changelog entry only when implementation starts.
 
 ---
 
-## [0.3.7] - Unreleased
+## [0.3.7] - 2026-05-25
 
-**Theme:** terminal UI redesign, in-terminal configuration, full Ink
-chat REPL, CLI/server environment separation, and multi-agent registry
-foundations.
+Terminal UI redesign, in-terminal configuration, full Ink chat REPL, and multi-agent registry foundations.
 
-### Added
-
-- First-run wizard inside the REPL:
-  `Welcome -> Theme -> Provider -> API key -> Model -> MCP -> AGENT.md -> Done`.
-- `/init` wizard re-entry point; `/init agentmd` preserves the old
-  AGENT.md-only behavior.
-- `/config` settings home panel plus scriptable
-  `/config <key>` and `/config <key> <value>` forms.
-- `/login` slash command for MCP profile editing inside the REPL.
-- Full Ink chat REPL for banner, composer, scrollback, tool events,
-  slash palette, footer, and progress/status rows.
-- Inline slash command palette with fuzzy ranking and keyboard
-  navigation.
-- In-chat overlay slot for `/config`, `/login`, and `/init` picker
-  flows.
-- `/model` no-arg quick-swap picker backed by the active endpoint's
-  `/v1/models` response.
-- **Multi-MCP support.** The CLI now connects to every configured MCP
-  server concurrently on boot (Claude Code style), instead of only the
-  single `activeServer` profile. Tools across all servers are merged
-  into one inventory with `mcp__<serverId>__<toolName>` prefixing for
-  disambiguation; raw tool names route to the unique provider as a
-  back-compat alias, with collision detection emitting a helpful
-  prefix hint. New `/mcp connect <name>`, `/mcp disconnect <name>`,
-  and `/mcp reconnect [name]` commands; `/mcp list` now shows
-  per-server status and tool count; `/mcp tools [server]` filters by
-  serverId. Offline servers degrade gracefully — one server failing
-  does not cascade. New `McpClientPool` in
-  [`runtime/mcpPool.ts`](brainrouter-cli/src/runtime/mcpPool.ts);
-  facade matches the legacy `McpClientWrapper` API so existing
-  call-sites are near-no-op type swaps.
-- **`/config` MCP editor is now a multi-profile manager.** The MCP
-  row in the `/config` panel previously opened a single transport
-  picker that overwrote the one BrainRouter profile. Rebuilt as a
-  profile MANAGER: the top-level panel lists every server in the
-  config, plus "+ Add new MCP server" and "Set highlighted server"
-  rows. Picking an existing server opens per-profile actions (edit
-  URL/command, update API key, probe, remove). Adding a new server
-  runs a 4-step flow (name → identity → transport → fields → API
-  key) and auto-connects it to the running pool — no CLI restart
-  required. Identity tag drives whether the key step uses the
-  BrainRouter env-var pre-fill or a generic bearer-token prompt.
-
-### Changed
-
-- Ink chat REPL is now the default. The old readline turn loop was
-  removed from runtime use.
-- CLI credentials now come from `~/.config/brainrouter/config.json`.
-  The CLI no longer reads `brainrouter-cli/.env` or `brainrouter/.env`
-  for LLM credentials.
-- MCP child stderr is piped so server logs do not render above the Ink
-  UI.
-- Wizard Skip now clears stale `activeServer` instead of silently
-  reconnecting to an old MCP profile.
-- Documentation now leads with the interactive wizard and in-REPL
-  config flow.
-
-### Fixed
-
-- `/config provider <id>` prompts for the new provider's API key instead
-  of silently reusing the previous provider's key.
-- Config env fallback now covers all catalogued providers.
-- `/login` can update LLM credentials after MCP profile setup.
-- HTTP MCP setup now prompts for and stores the BrainRouter API key for
-  both local and remote HTTP transports.
-- Picker/overlay raw-mode conflicts that caused `/config` to hang inside
-  chat were resolved by rendering overlays inside the single Ink tree.
-
-### Tests
-
-- Added broad test coverage for wizard reducers, config command parsing,
-  Ink chat rendering, markdown rendering, tool formatting, slash
-  suggestions, picker behavior, and model API helpers.
-- Last recorded suite status in the detailed notes: BrainRouter 262/262
-  and BrainRouter CLI 319/319 green; TypeScript clean.
+- **Full Ink chat REPL.** Every surface — banner, composer, scrollback, tool events, slash palette, footer — renders through a single Ink tree. Inline slash palette with fuzzy ranking and keyboard navigation; `/config` / `/login` / `/init` render as overlays inside the chat, eliminating raw-mode conflicts.
+- **First-run wizard** auto-triggers on first launch: `Welcome → Theme → Provider → API key → Model → MCP → AGENT.md → Done`. Re-enterable via `/init`; `/init agentmd` for legacy AGENT.md-only scaffold.
+- **`/config` settings panel + multi-profile MCP manager.** Arrow-key settings home; `/config <key>` / `/config <key> <value>` scriptable forms. MCP row rebuilt as a full profile manager (list, add, edit, probe, remove) with hot-connect — no CLI restart needed.
+- **`/login`** in-REPL MCP profile editor; **`/model`** live model picker from the active endpoint's `/v1/models`.
+- **Multi-MCP pool.** Connects to all configured servers concurrently on boot; tools merged into one inventory with `mcp__<serverId>__<tool>` prefixing. `/mcp connect|disconnect|reconnect` commands; one server failure does not cascade.
+- **Identity-based MCP tool prefix.** Servers with `identity: "brainrouter"` expose tools as `mcp__brainrouter__<tool>` regardless of their config key — skills targeting the canonical prefix survive profile renames.
+- **Data-driven agent registry.** Built-in agents (`explorer`, `architect`, `reviewer`, `worker`, `verifier`) are JSON files under `brainrouter-cli/agents/`. Three-tier merge: built-in → user-global → workspace, workspace wins. `spawn_agent` gains `agentId`; `/agents defs` lists all definitions.
+- **Spawn tier hierarchy + depth caps.** `tier` field (`reasoning` | `worker`) on each definition; depth capped at 3 (`BRAINROUTER_MAX_SPAWN_DEPTH`). `worker` agents cannot delegate; `reasoning` agents can only spawn `worker` children.
+- **CLI/server env separation.** CLI reads credentials only from `~/.config/brainrouter/config.json`; package `.env` files no longer read. MCP child stderr piped — server logs no longer bleed into the Ink UI.
 
 ---
 
 ## [0.3.6] - 2026-05-25
 
-**Theme:** smarter recall, friendlier CLI, more reliable agent loop.
+Smarter recall, friendlier CLI, more reliable agent loop.
 
-### Added
-
-- Multi-workflow concurrency via `/workflow switch <slug>` and
-  `/workflows`.
-- Session knobs: `/effort`, `/mode`, `/review-policy`, `/grill-me`,
-  and `ask_user_choice`.
-- MCP identity detection, brain-offline UX, and multi-MCP dispatcher:
-  `/mcp list`, `/mcp reconnect`, `/mcp tools`.
-
-### Changed
-
-- System prompt reduced by roughly 70%.
-- Recall briefing gated to turn 1, post-compaction, or entity-rich
-  prompts.
-- Goal text deduplicated to a single per-turn anchor.
-
-### Fixed
-
-- REPL stdin no longer freezes after spinner-based slash commands.
+- **Multi-workflow concurrency.** `/workflow switch <slug>` flips between workflows in the same workspace; `/workflows` lists them with artifact markers.
+- **New session knobs.** `/effort low|medium|high`, `/mode planning|fast`, `/review-policy request|proceed`, `/grill-me <task>`, and `ask_user_choice` mid-turn arrow-key picker.
+- **Context budget — 70% lighter system prompt + gated recall.** Static prompt cut from ~4,750 → ~1,400 tokens; briefing fires only on turn 1, post-compaction, or entity-rich prompts. Goal text deduplicated to a single per-turn anchor.
+- **MCP identity + offline UX + multi-MCP foundation.** BrainRouter MCP auto-detected; offline swaps system prompt to a `⚠️ OFFLINE` block. New `/mcp list` / `/mcp reconnect` / `/mcp tools` dispatcher.
+- **REPL stdin no longer freezes** after spinner-based slash commands.
 
 ---
 

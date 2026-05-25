@@ -627,6 +627,7 @@ tall ones. `/help <category>` drills in.
 | --- | --- |
 | `/roles` | List available agent roles. |
 | `/agents [--json]` | List active children. |
+| `/agents defs` | List all loaded agent definitions with tier and source. |
 | `/agent <id>` | Inspect one child. |
 | `/spawn <role> <prompt>` | Spawn a child. |
 | `/wait [id\|all] [--timeout=ms]` | Drain children. |
@@ -669,10 +670,10 @@ tall ones. `/help <category>` drills in.
 | `/quiet [on\|off]` | Toggle quiet output (recall tables, briefing dumps, tool-completion previews suppressed). Persists in workspace preferences. |
 | `/status` | One-line status: model / mode / branch / token meter / goal. |
 | `/workspace` | Show / change workspace root. |
-| `/config` | Show resolved config. |
-| `/init` | Generate an `AGENT.md` for this workspace. |
-| `/model [name]` | Show / switch chat model at runtime. |
-| `/mcp [list\|reconnect\|tools]` | Manage MCP connections. `list` (default) shows every configured profile with identity tag (`brainrouter` / `third-party` / `unknown`), transport, online/offline/idle, and the URL or stdio command; `★` marks the active profile. `reconnect` closes the active wrapper and reconnects against the same profile (re-probes tools so identity refreshes). `tools` renders the namespace-grouped tool surface for the active MCP. See [MCP profiles, identity, and offline mode](#mcp-profiles-identity-and-offline-mode). |
+| `/config` | Settings home panel (0.3.7+). Bare opens an arrow-key picker over every CLI knob, including a multi-profile MCP editor; `/config <key>` shows; `/config <key> <value>` sets; `/config raw` dumps the scrubbed JSON. |
+| `/init` | Re-run the onboarding wizard. `/init agentmd` keeps the old AGENT.md-only scaffold. |
+| `/model [name]` | No-arg opens an Ink picker populated by the active endpoint's `/v1/models` (5s timeout; static catalog fallback). With `<name>` it switches directly and persists to `config.llm.model` — no restart. |
+| `/mcp [list\|connect\|disconnect\|reconnect\|tools]` | Manage MCP connections. `list` shows every configured profile with identity tag, transport, status, and tool count; `★` marks the active brain. `connect <name>` brings a new profile into the running pool; `disconnect <name>` tears one down; `reconnect [name]` re-probes (bare reconnects the active brain). `tools [server]` renders the namespace-grouped tool surface, optionally filtered by `serverId`. See [MCP profiles, identity, and offline mode](#mcp-profiles-identity-and-offline-mode). |
 | `/copy` | Copy the last assistant message to clipboard. |
 | `/theme [auto\|light\|dark\|mono]` | Set color theme. |
 | `/title <text>` | Set a custom terminal title. |
@@ -826,13 +827,47 @@ prompt on the very next turn without restart. `/mcp reconnect` is the
 manual recovery path; the CLI does not auto-reconnect with backoff (yet
 — tracked for 0.3.7).
 
+### Multi-MCP pool (0.3.7+)
+
+The CLI connects to **every** configured MCP server concurrently on
+boot, Claude Code style — not only the `activeServer` profile.
+`McpClientPool` ([`runtime/mcpPool.ts`](../brainrouter-cli/src/runtime/mcpPool.ts))
+merges tools from all reachable servers into one inventory and degrades
+gracefully when one is offline. The legacy `McpClientWrapper` API is
+preserved as a facade so existing call sites work unchanged.
+
+**Tool name prefixing.** Every tool surfaces to the LLM as
+`mcp__<prefixId>__<toolName>`. The prefix ID is computed per server:
+
+- **Servers with `identity: "brainrouter"` always get the canonical
+  prefix `brainrouter`** — regardless of the JSON key in
+  `~/.config/brainrouter/config.json`. So `local-http`, `local-http2`,
+  `staging-mcp`, etc. all expose memory tools as
+  `mcp__brainrouter__memory_recall`, `mcp__brainrouter__list_skills`,
+  and so on. Skills and system prompts that hardcode the
+  `brainrouter` prefix keep working across rename / multi-environment
+  setups.
+- **Third-party servers** keep their config key as the prefix
+  (`mcp__Github__list_issues`, `mcp__local-grep__search`).
+
+Raw unprefixed names (`memory_recall`) still route correctly when a
+single server provides the tool; collisions emit a structured error
+naming the conflicting prefixes.
+
+Only ONE BrainRouter-identity profile is active at a time (the brain
+plane is single-tenant by design). Third-party MCPs are additive. The
+selector lives in `selectMcpServerIds`
+([`runtime/mcpPool.ts`](../brainrouter-cli/src/runtime/mcpPool.ts)).
+
 ### `/mcp` commands
 
 | Subcommand | Purpose |
 | --- | --- |
-| `/mcp list` (bare `/mcp` aliases to this) | List every configured profile with identity tag, transport, online/offline/idle, and target URL or stdio command. ★ marks the active profile. |
-| `/mcp reconnect` | Close the active wrapper and reconnect against the same profile. Re-probes tools so identity refreshes (relevant if the user just installed a new MCP exposing `memory_recall`). |
-| `/mcp tools` | Render the namespace-grouped tool surface for the active MCP (preserves pre-0.3.6 bare-`/mcp` behaviour under a subcommand). |
+| `/mcp list` (bare `/mcp` aliases to this) | List every configured profile with identity tag, transport, status, tool count, and target URL or stdio command. ★ marks the active brain. |
+| `/mcp connect <name>` | Bring a configured but currently-offline profile into the running pool. Idempotent — re-runs the connect handshake without restarting the CLI. |
+| `/mcp disconnect <name>` | Tear down a single profile. Tools from that server disappear from the next turn's inventory. |
+| `/mcp reconnect [name]` | Close + reconnect. Bare reconnects the active brain (re-probes tools so identity refreshes after a server-side install). With `<name>`, reconnects a specific profile. |
+| `/mcp tools [server]` | Render the namespace-grouped tool surface across all connected MCPs. Pass a `serverId` to filter to one profile. |
 
 ### Local-only fallback (`BRAINROUTER_OFFLINE_LOCAL_RECALL`)
 
@@ -1021,6 +1056,62 @@ brainrouter agents --json
 ```
 
 Lists active children from outside the REPL. Handy for tmux status bars.
+
+### Custom agents (0.3.7+)
+
+Agent definitions are loaded from three tiers in precedence order:
+
+| Tier | Path | Notes |
+| --- | --- | --- |
+| workspace | `<workspace>/.brainrouter/agents/<id>.json` | highest priority |
+| user-global | `~/.config/brainrouter/agents/<id>.json` | |
+| built-in | bundled with the npm package | lowest priority |
+
+A workspace definition with the same `id` as a built-in shadows the built-in for that workspace. Different ids coexist.
+
+#### Definition schema
+
+```json
+{
+  "id": "my-researcher",
+  "displayName": "Researcher",
+  "whenToUse": "Deep literature / code survey; reports a curated summary.",
+  "prompt": "## Role: Researcher\n...",
+  "tier": "reasoning",
+  "defaultAccess": "read",
+  "model": null,
+  "effort": null,
+  "toolScope": { "local": ["*"], "mcp": ["memory_*"] },
+  "disallowedTools": [],
+  "maxIterations": 40,
+  "timeoutMs": 180000,
+  "maxResultChars": 12000,
+  "subagents": [],
+  "delegateName": "delegate_my_researcher",
+  "outputContract": null
+}
+```
+
+Spawn with `agentId` instead of (or alongside) `role`:
+
+```ts
+spawn_agent({ agentId: "my-researcher", prompt: "Survey the auth layer." })
+```
+
+`/agents defs` lists all loaded definitions with tier and source path.
+
+#### Spawn tier hierarchy (0.3.7+)
+
+Each definition has a `tier` field that enforces delegation rules:
+
+| Tier | Can spawn | Notes |
+| --- | --- | --- |
+| `chat` | `reasoning`, `worker` | interactive REPL parent |
+| `reasoning` | `worker` only | explorer / architect / reviewer |
+| `worker` | nothing | leaf agents; must return to parent |
+
+A worker trying to spawn raises a structured tool error. Set
+`BRAINROUTER_MAX_SPAWN_DEPTH` (default `3`) to adjust the nesting cap.
 
 ---
 

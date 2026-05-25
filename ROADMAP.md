@@ -11,8 +11,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| Latest shipped | **0.3.6** | Shipped — 2026-05-25 | [`CHANGELOG.md`](CHANGELOG.md#036---2026-05-25) |
-| Current release | **0.3.7** | In-flight | [`brainrouter-roadmap/0.3.7.md`](brainrouter-roadmap/0.3.7.md) |
+| Latest shipped | **0.3.7** | Shipped — 2026-05-25 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-25) |
+| Current release | **0.3.8** | Planned | [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) |
 | Next patch | **0.3.8** | Planned | [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) |
 | Next major | **0.4.0** | Designed | [`brainrouter-roadmap/0.4.0.md`](brainrouter-roadmap/0.4.0.md) |
 
@@ -23,7 +23,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | Release | Theme | Status |
 |---|---|---|
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
-| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | In-flight |
+| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-25 |
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Planned |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Federation: many agents, one memory; CLI multi-agent Phase 2 | Designed |
 | **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 3-6, brain-side multi-agent roadmap | Planned |
@@ -63,15 +63,21 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 
 - Ownership contracts, tool budgeting, supervisor gates, review fan-out,
   worker threads, packs, and transcript debugger.
-- Brain-side job queue, brain-agent registry, token-aware capture, source
-  chunks, vault mirror, memory tree, blackboard commit pipeline, and
-  engineering sync providers.
+- **Brain-side (MCP server):** job queue + brain-agent registry (0.4.1);
+  token-aware capture (TokenJuice) + source chunks + vault mirror (0.4.2);
+  memory tree + blackboard commit pipeline (0.4.3).
+- Individual brain tasks: `BRAIN-P1-TN` through `BRAIN-P5-TN` in
+  [`FULL_TASKS.MD`](FULL_TASKS.MD) §5.6, §6.6–6.7, §7.1–7.2.
+- Full spec: [`FEATURE_OPENHUMAN_BRAINROUTER.md`](FEATURE_OPENHUMAN_BRAINROUTER.md).
 
 ### 0.5.0 — Power User Surface
 
 - Fullscreen `/focus` TUI.
 - Plugin marketplace and trust/signature model.
 - Cross-harness handoff UX on top of federation.
+- **Brain-side Phase 6:** engineering sync providers (Git, GitHub, local docs,
+  terminal logs) and proactive situation reports. Tasks: `BRAIN-P6-TN` in
+  [`FULL_TASKS.MD`](FULL_TASKS.MD) §8.3.
 
 ---
 
