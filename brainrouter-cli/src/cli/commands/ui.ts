@@ -24,6 +24,7 @@ import { completeWorkspacePath, renderHelp } from '../repl.js';
 import { PROVIDER_CATALOG, findProvider } from '../wizard/providers.js';
 import { selectModel } from '../wizard/modelsApi.js';
 import { buildTheme } from '../theme.js';
+import { listFilesystemSkills } from '../../prompt/skillCatalog.js';
 
 
 export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> {
@@ -438,11 +439,22 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.gray('  Drop a folder under skills/<category>/<name>/SKILL.md to register one.\n'));
         return true;
       }
-      for (const root of roots) {
-        const entries = fs.readdirSync(root, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          console.log(chalk.cyan(`  ${path.relative(agent.workspaceRoot, path.join(root, entry.name))}`));
+      const skills = listFilesystemSkills(agent.workspaceRoot);
+      if (skills.length > 0) {
+        console.log(chalk.gray('  Skills'));
+        for (const skill of skills) {
+          const category = skill.category ? `${skill.category}/` : '';
+          console.log(`  • ${chalk.cyan(`${category}${skill.name}`)} (${chalk.gray(skill.scope ?? 'filesystem')})`);
+        }
+      }
+      if (fs.existsSync(pluginsRoot)) {
+        const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
+        const pluginDirs = entries.filter((entry) => entry.isDirectory());
+        if (pluginDirs.length > 0) {
+          console.log(chalk.gray('  Plugin folders'));
+          for (const entry of pluginDirs) {
+            console.log(`  • ${chalk.cyan(path.relative(agent.workspaceRoot, path.join(pluginsRoot, entry.name)))}`);
+          }
         }
       }
       console.log();
@@ -518,23 +530,19 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     case '/where':
     {
       const { gatherWhereInputs, renderWhere } = await import('../whereView.js');
+      const { resolveDisplayedMcpState } = await import('../banner.js');
       const { resolveTheme } = await import('../theme.js');
       const theme = resolveTheme(agent.workspaceRoot);
-      const profileName = config.activeServer;
-      const server = config.servers[profileName];
+      const displayedMcp = resolveDisplayedMcpState(config, mcpClient as any);
       const briefing = agent.getLastBriefing();
       const inputs = gatherWhereInputs({
         workspaceRoot: agent.workspaceRoot,
         sessionKey: agent.sessionKey,
         model: agent.getModel(),
-        mcpProfile: profileName,
-        mcpTransport: server?.type ?? 'unknown',
-        mcpOnline: mcpClient.isConnected(),
-        // 10c: identity flows from the live wrapper; falls back to the
-        // config field when present, otherwise 'unknown'.
-        mcpIdentity: typeof (mcpClient as any).getIdentity === 'function'
-          ? (mcpClient as any).getIdentity()
-          : (server?.identity ?? 'unknown'),
+        mcpProfile: displayedMcp.profile,
+        mcpTransport: displayedMcp.transport,
+        mcpOnline: displayedMcp.online,
+        mcpIdentity: displayedMcp.identity,
         accessMode: agent.getAccessMode(),
         recalledRecords: agent.getRecalledRecords(),
         briefingSources: briefing.sources,

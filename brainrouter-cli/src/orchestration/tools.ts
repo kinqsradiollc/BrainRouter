@@ -15,6 +15,7 @@ import {
   type ChildSessionRecord,
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { readTranscriptEntries } from '../state/sessionStore.js';
 import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
@@ -40,6 +41,10 @@ export interface OrchestrationContext {
   parentSpanId?: string;
   /** Parent agent_id so children can be grouped via attribute even without trace links. */
   parentAgentId?: string;
+  /** Parent agent tier — used for hierarchy checks (worker cannot spawn; reasoning can only spawn workers). */
+  parentTier?: Tier;
+  /** Current spawn-chain depth (0 = direct child of chat root). */
+  depth?: number;
   mcpClient: McpClientWrapper;
   llmConfig: LLMConfig;
   launchCwd: string;
@@ -157,11 +162,12 @@ export function trackedPromiseFor(id: string): Promise<void> | undefined {
 export function createSpawnAgentTool() {
   return {
     name: 'spawn_agent',
-    description: 'Spawn a child agent with a specific role (explorer, architect, reviewer, worker, verifier) and a bounded prompt. Returns the child agent id immediately; the child runs in the background.',
+    description: 'Spawn a child agent and a bounded prompt. Returns the child agent id immediately; the child runs in the background. Specify the agent via `role` (legacy: explorer/architect/reviewer/worker/verifier) or `agentId` (registry id, e.g. a custom workspace definition).',
     inputSchema: {
       type: 'object',
       properties: {
-        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier.' },
+        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier. Prefer agentId for custom definitions.' },
+        agentId: { type: 'string', description: 'Registry id of the agent definition. Takes precedence over role when both are provided.' },
         prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
         label: { type: 'string', description: 'Optional short label for the child run.' },
         access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
@@ -173,7 +179,7 @@ export function createSpawnAgentTool() {
           description: 'Optional BrainRouter memory record IDs that the parent already recalled. The child agent is told to build on these instead of re-discovering them.',
         },
       },
-      required: ['role', 'prompt'],
+      required: ['prompt'],
     },
   };
 }
@@ -369,9 +375,47 @@ function explainRoute(task: string, role: string): string {
 }
 
 async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string> {
-  const role = resolveRole(String(args.role));
+  // Resolve agent definition via agentId (registry) or role (legacy).
+  let role: ReturnType<typeof resolveRole>;
+  let childTier: Tier | undefined;
+
+  if (typeof args.agentId === 'string' && args.agentId.trim()) {
+    const loaded = findById(args.agentId.trim(), ctx.workspaceRoot);
+    if (!loaded) {
+      const known = listAll(ctx.workspaceRoot).map((l) => l.def.id).join(', ');
+      throw new Error(`Unknown agentId "${args.agentId}". Known agents: ${known}.`);
+    }
+    role = {
+      name: loaded.def.id,
+      description: loaded.def.whenToUse,
+      defaultAccess: loaded.def.defaultAccess,
+      promptOverlay: loaded.def.prompt,
+    };
+    childTier = loaded.def.tier;
+  } else {
+    const roleName = String(args.role ?? '');
+    if (!roleName.trim()) throw new Error('spawn_agent requires either "agentId" or "role".');
+    role = resolveRole(roleName);
+    childTier = findById(role.name, ctx.workspaceRoot)?.def.tier;
+  }
+
   const prompt = String(args.prompt ?? '');
   if (!prompt.trim()) throw new Error('spawn_agent requires a non-empty prompt.');
+
+  // P1.2 — spawn hierarchy checks.
+  const maxDepth = parseInt(process.env.BRAINROUTER_MAX_SPAWN_DEPTH ?? '3', 10);
+  const currentDepth = ctx.depth ?? 0;
+  const parentTier = ctx.parentTier;
+
+  if (parentTier === 'worker') {
+    throw new Error('Tier "worker" cannot delegate — ask the parent agent to spawn instead.');
+  }
+  if (parentTier === 'reasoning' && childTier && (childTier === 'chat' || childTier === 'reasoning')) {
+    throw new Error(`Tier "reasoning" cannot spawn a "${childTier}" agent — only "worker" children are allowed.`);
+  }
+  if (currentDepth >= maxDepth) {
+    throw new Error(`Spawn depth cap reached (${currentDepth}/${maxDepth}). Reduce agent nesting or raise BRAINROUTER_MAX_SPAWN_DEPTH.`);
+  }
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
   const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
@@ -381,6 +425,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     parentSessionKey: ctx.parentSessionKey,
     access,
     label: typeof args.label === 'string' ? args.label : undefined,
+    tier: childTier,
+    depth: currentDepth + 1,
   });
 
   const childKey = childSessionKey(ctx.parentSessionKey, record.id);
@@ -420,6 +466,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     // dispatching spawn_agent tool span instead of starting a fresh tree.
     parentTraceId: ctx.parentTraceId,
     parentSpanId: ctx.parentSpanId,
+    // Propagate tier and depth so grandchildren can enforce hierarchy caps.
+    tier: childTier,
+    agentDepth: currentDepth + 1,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 

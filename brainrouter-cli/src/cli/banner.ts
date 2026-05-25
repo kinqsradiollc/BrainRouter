@@ -12,7 +12,7 @@ import { BOX, type Theme } from './theme.js';
  * (chalk title + workspace line + connecting-to line) with a single visually
  * scannable block:
  *
- *   ╭─ 🧠 BrainRouter CLI 0.3.5 ──────────────────────────────╮
+ *   ╭─ 🧠 BrainRouter CLI 0.3.7 ──────────────────────────────╮
  *   │ workspace  BrainRouter  ·  c5b8c12d                     │
  *   │ mcp        local-http  ·  http  ·  online               │
  *   │ workflow   cli-shell-redesign  (in-progress)            │
@@ -30,7 +30,7 @@ import { BOX, type Theme } from './theme.js';
  * it once. Pure-function so tests can assert against the rendered output.
  */
 
-const VERSION = '0.3.6';
+const VERSION = '0.3.7';
 const TITLE = '🧠 BrainRouter CLI';
 // Width floor for the BOXED banner. Below this we fall through to the
 // `renderPlainBanner` plaintext format. Was 56 — that caused the box to
@@ -83,6 +83,13 @@ export interface BannerInputs {
 interface Row {
   label: string;
   value: string;
+}
+
+export interface DisplayedMcpState {
+  profile: string;
+  transport: string;
+  online: boolean;
+  identity: 'brainrouter' | 'third-party' | 'unknown';
 }
 
 function shortHash(absPath: string): string {
@@ -232,14 +239,14 @@ function renderPlainBanner(titleText: string, rows: Row[], theme: Theme): string
 export function buildBannerInputs(
   config: Config,
   agent: { sessionKey: string; workspaceRoot: string; getModel: () => string },
-  mcpClient: { isConnected: () => boolean; getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown' },
+  mcpClient: {
+    isConnected: () => boolean;
+    getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown';
+    getStatus?: (serverId: string) => { status: string; identity: 'brainrouter' | 'third-party' | 'unknown' } | undefined;
+    getActiveBrainrouterServerId?: () => string | undefined;
+  },
 ): BannerInputs {
-  const profile = config.activeServer;
-  const server = config.servers[profile];
-  const transport = server?.type ?? 'unknown';
-  // 10c: identity comes from the live wrapper when present; fall back to
-  // the config field for callers that pass a thin stub.
-  const mcpIdentity = mcpClient.getIdentity ? mcpClient.getIdentity() : (server?.identity ?? 'unknown');
+  const displayedMcp = resolveDisplayedMcpState(config, mcpClient);
   let workflow: { slug: string; status: string } | undefined;
   let lastUsedWorkflow: string | undefined;
   try {
@@ -269,14 +276,35 @@ export function buildBannerInputs(
 
   return {
     workspaceRoot: agent.workspaceRoot,
-    mcpProfile: profile,
-    mcpTransport: transport,
-    mcpOnline: mcpClient.isConnected(),
-    mcpIdentity,
+    mcpProfile: displayedMcp.profile,
+    mcpTransport: displayedMcp.transport,
+    mcpOnline: displayedMcp.online,
+    mcpIdentity: displayedMcp.identity,
     sessionKey: agent.sessionKey,
     model: agent.getModel(),
     workflow,
     lastUsedWorkflow,
     goal,
+  };
+}
+
+export function resolveDisplayedMcpState(
+  config: Config,
+  mcpClient: {
+    isConnected: () => boolean;
+    getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown';
+    getStatus?: (serverId: string) => { status: string; identity: 'brainrouter' | 'third-party' | 'unknown' } | undefined;
+    getActiveBrainrouterServerId?: () => string | undefined;
+  },
+): DisplayedMcpState {
+  const liveBrain = mcpClient.getActiveBrainrouterServerId?.();
+  const profile = liveBrain || config.activeServer;
+  const server = config.servers[profile];
+  const status = profile ? mcpClient.getStatus?.(profile) : undefined;
+  return {
+    profile,
+    transport: server?.type ?? 'unknown',
+    online: status ? status.status === 'connected' : mcpClient.isConnected(),
+    identity: status?.identity ?? server?.identity ?? mcpClient.getIdentity?.() ?? 'unknown',
   };
 }

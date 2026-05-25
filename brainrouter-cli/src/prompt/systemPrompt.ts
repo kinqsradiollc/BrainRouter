@@ -125,7 +125,7 @@ function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string
  */
 function isBrainOnline(connectedTools: string[] | undefined): boolean {
   if (!connectedTools) return true;
-  return connectedTools.includes('memory_recall');
+  return connectedTools.some((tool) => tool === 'memory_recall' || tool.endsWith('__memory_recall'));
 }
 
 function brainOfflineNotice(): string {

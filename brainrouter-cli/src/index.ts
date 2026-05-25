@@ -88,7 +88,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
-import { McpClientPool } from './runtime/mcpPool.js';
+import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
 import type { ServerConfig } from './config/config.js';
 import { Agent } from './agent/agent.js';
 import { runChat } from './cli/ink/runChat.js';
@@ -109,7 +109,7 @@ const program = new Command();
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.5');
+  .version('0.3.7');
 
 // Chat Command (default)
 program
@@ -161,13 +161,13 @@ program
 
     const config = loadConfig();
 
-    // 0.3.7 — multi-MCP support. Pre-0.3.7 we picked a single
-    // `activeServer` profile and ignored the rest. Now every entry in
-    // `config.servers` is attempted concurrently (Claude Code style);
-    // `activeServer` survives only as the "name the banner highlights"
-    // when more than one is connected. `--profile <name>` still wins —
-    // it scopes the pool to just that one server for users who want
-    // single-server mode.
+    // 0.3.7 — multi-MCP support. Third-party MCPs are additive and all
+    // connect concurrently. BrainRouter MCPs are different: users may store
+    // several BrainRouter profiles (local/staging/remote/self-hosted), but
+    // only one brain should be active at a time. `activeServer` selects that
+    // BrainRouter profile when it points at one; otherwise we use the first
+    // configured BrainRouter profile. `--profile <name>` still scopes the run
+    // to exactly one server for explicit single-server mode.
     const requestedProfile = options.profile as string | undefined;
     const allServerIds = Object.keys(config.servers);
     if (allServerIds.length === 0) {
@@ -180,7 +180,7 @@ program
       console.error(chalk.gray(`Available profiles: ${allServerIds.join(', ')}.`));
       process.exit(1);
     }
-    const targetIds = requestedProfile ? [requestedProfile] : allServerIds;
+    const targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
 
     // Pre-process each target's serverConfig to thread workspaceRoot
     // into the stdio `--root` arg shape the MCP server expects.
@@ -292,9 +292,9 @@ program
     applyWorkspaceRoot(workspace.workspaceRoot);
 
     const config = loadConfig();
-    // Multi-MCP: like `chat`, connect everyone in `config.servers`
-    // concurrently. `--profile <name>` scopes to one. Falls back to
-    // all configured profiles otherwise.
+    // Multi-MCP: like `chat`, connect third-party servers concurrently but
+    // only one BrainRouter MCP profile at a time. `--profile <name>` scopes
+    // to exactly one.
     const requestedProfile = options.profile as string | undefined;
     const allServerIds = Object.keys(config.servers);
     if (allServerIds.length === 0) {
@@ -305,7 +305,7 @@ program
       console.error(`Error: Profile "${requestedProfile}" not found.`);
       process.exit(1);
     }
-    const targetIds = requestedProfile ? [requestedProfile] : allServerIds;
+    const targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
     const targetServers: Record<string, ServerConfig> = {};
     for (const id of targetIds) {
       const cloned = { ...config.servers[id] };

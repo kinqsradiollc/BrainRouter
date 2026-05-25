@@ -43,6 +43,58 @@ import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
 
+function parseJsonObject(text: string): any | undefined {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectChildIds(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return [];
+  const ids: string[] = [];
+  const maybeRecord = value as Record<string, unknown>;
+  if (typeof maybeRecord.id === 'string') ids.push(maybeRecord.id);
+  if (Array.isArray(maybeRecord.agents)) {
+    for (const entry of maybeRecord.agents) {
+      if (entry && typeof entry === 'object' && typeof (entry as Record<string, unknown>).id === 'string') {
+        ids.push((entry as Record<string, unknown>).id as string);
+      }
+    }
+  }
+  return [...new Set(ids)];
+}
+
+function trackChildObservation(
+  toolName: string,
+  args: any,
+  resultText: string,
+  spawned: Set<string>,
+  waited: Set<string>,
+): void {
+  if (toolName === 'spawn_agent' || toolName === 'spawn_agents') {
+    const ids = collectChildIds(parseJsonObject(resultText));
+    for (const id of ids) {
+      spawned.add(id);
+      if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
+    }
+    return;
+  }
+
+  if (toolName === 'wait_agent') {
+    const id = typeof args?.id === 'string' ? args.id : undefined;
+    if (id) waited.add(id);
+    return;
+  }
+
+  if (toolName === 'wait_agents') {
+    const ids = Array.isArray(args?.ids) ? args.ids.filter((id: unknown): id is string => typeof id === 'string') : [];
+    for (const id of ids) waited.add(id);
+  }
+}
+
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
   onToolStart: (name: string, args: Record<string, any>) => void;
@@ -126,6 +178,10 @@ export interface AgentOptions {
    */
   parentTraceId?: string;
   parentSpanId?: string;
+  /** Agent tier — propagated from the definition so hierarchy checks work in grandchildren. */
+  tier?: 'chat' | 'reasoning' | 'worker';
+  /** Nesting depth in the spawn chain; 0 = direct child of the chat root (default). */
+  agentDepth?: number;
 }
 
 export const LOCAL_TOOLS = [
@@ -537,6 +593,10 @@ export class Agent {
   public readonly agentId: string = `agent-${Math.random().toString(36).slice(2, 8)}`;
   /** agent_id of the parent (set by spawn_agent for children). */
   private parentAgentId?: string;
+  /** Agent tier — forwarded to OrchestrationContext so grandchildren can inherit hierarchy checks. */
+  public readonly tier?: 'chat' | 'reasoning' | 'worker';
+  /** Spawn-chain depth (0 = direct chat-root child). Forwarded to hierarchy checks. */
+  public readonly agentDepth: number;
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -561,6 +621,8 @@ export class Agent {
     this.systemPromptOverride = options.systemPromptOverride;
     this.parentTraceId = options.parentTraceId;
     this.parentSpanId = options.parentSpanId;
+    this.tier = options.tier;
+    this.agentDepth = options.agentDepth ?? 0;
   }
 
   /** Expose for orchestration so spawn_agent can record the parent linkage. */
@@ -570,6 +632,48 @@ export class Agent {
   /** Internal — used by spawn_agent to record which parent dispatched us. */
   public setParentAgentId(id: string | undefined): void {
     this.parentAgentId = id;
+  }
+
+  private isModelVisibleMcpTool(tool: any): boolean {
+    const hiddenBrainrouterTools = new Set([
+      'memory_capture_turn',
+      'memory_mark_cited',
+      'memory_resolve_session',
+      'memory_register_skill_hints',
+      'memory_hook_register',
+      'memory_hook_status',
+    ]);
+    const name = String(tool?.name ?? '');
+    const rawName = String(tool?.__rawName ?? this.rawMcpToolName(name));
+    if (!hiddenBrainrouterTools.has(rawName)) return true;
+
+    const serverId = typeof tool?.__serverId === 'string'
+      ? tool.__serverId
+      : this.serverIdFromMcpToolName(name);
+    const status = serverId && typeof (this.mcpClient as any).getStatus === 'function'
+      ? (this.mcpClient as any).getStatus(serverId)
+      : undefined;
+    // Hide only BrainRouter auto-pipeline/admin tools. Third-party MCP tools
+    // with coincidentally similar names stay visible.
+    return status?.identity !== 'brainrouter';
+  }
+
+  private rawMcpToolName(name: string): string {
+    const serverId = this.serverIdFromMcpToolName(name);
+    return serverId ? name.slice(`mcp__${serverId}__`.length) : name;
+  }
+
+  private serverIdFromMcpToolName(name: string): string | undefined {
+    if (!name.startsWith('mcp__')) return undefined;
+    const rest = name.slice('mcp__'.length);
+    if (typeof (this.mcpClient as any).getServerIds === 'function') {
+      const ids = (this.mcpClient as any).getServerIds() as string[];
+      for (const id of ids.sort((a, b) => b.length - a.length)) {
+        if (rest.startsWith(`${id}__`)) return id;
+      }
+    }
+    const idx = rest.indexOf('__');
+    return idx >= 0 ? rest.slice(0, idx) : undefined;
   }
 
   private allowedToolsForAccess(): Set<string> {
@@ -629,7 +733,9 @@ export class Agent {
     // whenever the inventory shape changed (online → offline or vice
     // versa) so the next LLM call sees the correct system message.
     const prevTools = this.lastKnownMcpTools?.map((t) => t.name).sort().join(',');
-    this.lastKnownMcpTools = mcpTools.map((t: any) => ({ name: t.name }));
+    this.lastKnownMcpTools = mcpTools.map((t: any) => ({
+      name: String(t?.__rawName ?? this.rawMcpToolName(String(t?.name ?? ''))),
+    }));
     const newTools = this.lastKnownMcpTools.map((t) => t.name).sort().join(',');
     if (prevTools !== newTools && this.chatHistory.length > 0 && this.chatHistory[0].role === 'system') {
       this.chatHistory[0] = this.createSystemMessage();
@@ -637,20 +743,11 @@ export class Agent {
 
     const allowed = this.allowedToolsForAccess();
     const filteredLocalTools = LOCAL_TOOLS.filter(t => allowed.has(t.name));
-    // Hide MCP tools we already call automatically. Small models otherwise
-    // try to invoke them with the wrong arguments (most commonly
-    // memory_capture_turn — "Required, Required" comes from missing
-    // sessionKey + messages). These tools are still callable; the CLI just
-    // doesn't tell the LLM about them since the auto-pipeline owns them.
-    const HIDDEN_FROM_LLM = new Set([
-      'memory_capture_turn',  // called automatically post-turn
-      'memory_mark_cited',    // called automatically with real citation IDs
-      'memory_resolve_session', // called automatically at bootstrap
-      'memory_register_skill_hints', // boot-time, not turn-level
-      'memory_hook_register', // managed via /hooks
-      'memory_hook_status',
-    ]);
-    const visibleMcpTools = mcpTools.filter((t: any) => !HIDDEN_FROM_LLM.has(t.name));
+    // Multi-MCP parity: expose every connected third-party MCP tool and the
+    // model-safe BrainRouter MCP tools in one turn, using the pool's
+    // `mcp__<serverId>__<tool>` namespaces. BrainRouter's auto-pipeline/admin
+    // tools stay hidden because the CLI owns those flows.
+    const visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
     const allTools = [...filteredLocalTools, ...visibleMcpTools];
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools and ${mcpTools.length} MCP tools.`);
 
@@ -742,6 +839,9 @@ export class Agent {
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
     const REPEAT_GUARD_LIMIT = 3;
+    const spawnedChildIdsThisTurn = new Set<string>();
+    const waitedChildIdsThisTurn = new Set<string>();
+    let spawnWaitGuardInjected = false;
 
     while (loopCount < maxLoops) {
       loopCount++;
@@ -772,6 +872,21 @@ export class Agent {
       this.recordTranscript(assistantMsg);
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
+        const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
+        if (unobservedChildIds.length > 0 && !spawnWaitGuardInjected) {
+          spawnWaitGuardInjected = true;
+          const waitTool = unobservedChildIds.length === 1 ? 'wait_agent' : 'wait_agents';
+          const correction = [
+            `You spawned ${unobservedChildIds.length} child agent${unobservedChildIds.length === 1 ? '' : 's'} in this turn but have not waited for their outputs yet.`,
+            `Call \`${waitTool}\` now for: ${unobservedChildIds.join(', ')}.`,
+            'Do not tell the user you are waiting in prose; use the tool call, then synthesize the returned child output.',
+          ].join(' ');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Waiting required for ${unobservedChildIds.length} child agent${unobservedChildIds.length === 1 ? '' : 's'}...`);
+          continue;
+        }
         finalAnswer = response.content;
         exitedCleanly = true;
         break;
@@ -891,6 +1006,8 @@ export class Agent {
               parentTraceId: turnSpan.traceId,
               parentSpanId: turnSpan.spanId,
               parentAgentId: this.agentId,
+              parentTier: this.tier,
+              depth: this.agentDepth,
               mcpClient: this.mcpClient,
               llmConfig: this.llmConfig,
               launchCwd: this.launchCwd,
@@ -905,6 +1022,7 @@ export class Agent {
               },
             });
             summary = getToolSummary(name, args, resultText);
+            trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
@@ -1244,7 +1362,7 @@ export class Agent {
         try {
           const res = await fetch(url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.5)'
+              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.7)'
             }
           });
           if (!res.ok) {
@@ -1877,7 +1995,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
 
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.5' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.7' } });
     if (!res.ok) {
       return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
     }

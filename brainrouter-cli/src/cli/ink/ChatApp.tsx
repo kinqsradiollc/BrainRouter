@@ -103,6 +103,8 @@ export interface FooterState {
 export interface ChatController {
   /** Push entries from outside the React tree (e.g. after the parent turn ended). */
   push: PushScrollback;
+  /** Replace the startup banner row without clearing the chat scrollback. */
+  replaceBanner: (text: string) => void;
   /** Update the footer status row (model, session, access mode, effort, etc.). */
   setFooter: (patch: Partial<FooterState & { accessMode: 'read' | 'write' | 'shell' }>) => void;
   /** Programmatically inject text into the composer (e.g. workflow.ts loop tick). */
@@ -123,7 +125,7 @@ export interface ChatController {
 }
 
 export type ScrollbackEntry =
-  | { id: number; kind: 'raw'; text: string }
+  | { id: number; kind: 'raw'; text: string; noWrap?: boolean }
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
   /**
@@ -143,7 +145,7 @@ export type ScrollbackEntry =
   | { id: number; kind: 'notice'; text: string; level?: 'info' | 'warn' | 'error' };
 
 export interface PushScrollback {
-  raw(text: string): void;
+  raw(text: string, opts?: { noWrap?: boolean }): void;
   user(text: string): void;
   /** `raw: true` skips marked-terminal rendering (use when caller already pre-rendered or user wants raw scrollback). */
   assistant(text: string, meta?: { raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }): void;
@@ -228,7 +230,7 @@ export function ChatApp({
       });
     };
     return {
-      raw: (text) => push({ kind: 'raw', text }),
+      raw: (text, opts) => push({ kind: 'raw', text, noWrap: opts?.noWrap }),
       user: (text) => push({ kind: 'user', text }),
       assistant: (text, meta) => push({ kind: 'assistant', text, ...meta }),
       tool: (header, ok, opts) => push({ kind: 'tool', header, ok, ...opts }),
@@ -265,6 +267,13 @@ export function ChatApp({
     if (!onReady) return;
     onReady({
       push: pushFns,
+      replaceBanner: (text) => {
+        setScrollback((rows) => {
+          const idx = rows.findIndex((entry) => entry.kind === 'raw');
+          if (idx < 0) return [{ id: ++nextIdRef.current, kind: 'raw', text, noWrap: true }, ...rows];
+          return rows.map((entry, i) => i === idx ? { ...entry, text } : entry);
+        });
+      },
       setFooter: (patch) => {
         if (patch.accessMode) setAccessMode(patch.accessMode);
         setFooter((prev) => ({ ...prev, ...patch }));
@@ -495,11 +504,7 @@ export function ChatApp({
 function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
   switch (entry.kind) {
     case 'raw':
-      // Raw entries are already terminal-rendered blocks (startup
-      // banner, offline warning, hints). Letting them wrap at the
-      // terminal layer breaks Ink's frame-height accounting during
-      // resize, leaving split banner fragments in scrollback.
-      return <Text wrap="truncate">{entry.text}</Text>;
+      return <Text wrap={entry.noWrap ? 'truncate' : 'wrap'}>{entry.text}</Text>;
     case 'user':
       // Flex layout: ❯ on the left, prompt body in an inner column that
       // takes the remaining width. Continuation lines (when the user
@@ -890,9 +895,9 @@ function FooterStatus({
 function seedScrollback(banner: string, offline: string | undefined, hint: string): ScrollbackEntry[] {
   let id = 0;
   const next = (): number => ++id;
-  const out: ScrollbackEntry[] = [{ id: next(), kind: 'raw', text: banner }];
-  if (offline) out.push({ id: next(), kind: 'raw', text: offline });
-  out.push({ id: next(), kind: 'raw', text: hint });
+  const out: ScrollbackEntry[] = [{ id: next(), kind: 'raw', text: banner, noWrap: true }];
+  if (offline) out.push({ id: next(), kind: 'raw', text: offline, noWrap: true });
+  out.push({ id: next(), kind: 'raw', text: hint, noWrap: true });
   return out;
 }
 

@@ -245,10 +245,10 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
  * `/config` → MCP row. 0.3.7 multi-MCP redesign — now a profile
  * MANAGER instead of a single-transport picker.
  *
- * Top-level panel lists every entry in `config.servers` (each
- * connects concurrently on boot via the pool) plus rows for adding
- * a new profile, choosing which one is highlighted in the banner,
- * and exiting. Picking an existing profile opens a sub-panel
+ * Top-level panel lists every entry in `config.servers` (third-party MCPs
+ * connect concurrently; only one BrainRouter MCP is active at a time) plus
+ * rows for adding a new profile, choosing which one is highlighted in the
+ * banner, and exiting. Picking an existing profile opens a sub-panel
  * (edit URL/command, update API key, probe, remove). Adding a new
  * profile runs a 4-step flow (name → transport → fields → API key)
  * and auto-connects via the running pool when possible — no CLI
@@ -278,7 +278,7 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
           label: `${isActive ? '★ ' : '  '}${id}`,
           value: transportLabel + (tags.length ? `  ·  ${tags.join(' · ')}` : ''),
           description: isActive
-            ? 'highlighted in banner; every server in this list is connected on boot'
+            ? 'highlighted in banner; selects active BrainRouter when this profile is BrainRouter'
             : undefined,
         };
       }),
@@ -291,7 +291,7 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
     const result = await pickFromList({
       theme,
       title: 'MCP servers',
-      subtitle: `${profileIds.length} configured · all connect concurrently on boot. ★ = highlighted in the banner.`,
+      subtitle: `${profileIds.length} configured · third-party MCPs connect together; only one BrainRouter MCP is active. ★ = highlighted.`,
       rows,
     });
     if (result.kind !== 'pick' || result.id === ROW_DONE) return true;

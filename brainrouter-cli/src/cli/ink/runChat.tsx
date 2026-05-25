@@ -125,7 +125,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     if (!controller) return;
     const prefs = readPreferences(agent.workspaceRoot);
     const requested = prefs.statusline.split(',').map((s) => s.trim()).filter(Boolean);
-    const segments = requested.filter(isKnownSegment);
+    const segments = requested.filter(isKnownSegment).filter((segment) => segment !== 'effort');
     const rendered = renderSegments(segments, {
       workspaceRoot: agent.workspaceRoot,
       sessionKey: agent.sessionKey,
@@ -574,6 +574,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       const captured = await captureConsoleOutput(() =>
         handleSlashCommand(command, args, agent, mcpClient, config, rl as readline.Interface, {
           refreshPromptForMode: refreshFooter,
+          replaceBanner: (text: string) => controller?.replaceBanner(text),
           isProcessing: () => isProcessing,
           runAgentTurn: (prompt: string) => { void runChatTurn(prompt); },
           runAgentTurnAsync: (prompt: string) => runChatTurn(prompt),

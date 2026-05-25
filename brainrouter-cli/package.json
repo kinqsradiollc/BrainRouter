@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-cli",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Memory-native terminal coding agent. Talks to the BrainRouter MCP cognitive engine for recall, skills, capture, persona, focus scenes, and contradiction tracking.",
   "type": "module",
   "main": "dist/index.js",
@@ -8,6 +8,7 @@
     "brainrouter": "bin/cli.cjs"
   },
   "files": [
+    "agents",
     "bin",
     "dist",
     "README.md",

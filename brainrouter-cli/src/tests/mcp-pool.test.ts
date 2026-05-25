@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpClientPool } from '../runtime/mcpPool.js';
+import { McpClientPool, selectMcpServerIds } from '../runtime/mcpPool.js';
 
 // These tests exercise the Pool's public API in isolation — connection
 // state, name routing, collision detection, status surfaces — without
@@ -59,7 +59,30 @@ test('McpClientPool: single connected server — name + identity flow through', 
   assert.equal(statuses[0].toolCount, 2);
 });
 
-test('McpClientPool: listTools prefixes every tool with mcp__<serverId>__', async () => {
+test('McpClientPool: refreshToolIndex updates status identity after tool-signature detection', async () => {
+  const pool = new McpClientPool();
+  const fakeWrapper: any = {
+    isConnected: () => true,
+    getIdentity: () => 'brainrouter',
+    getServerName: () => 'ambiguousBrain',
+    listTools: async () => ({ tools: [{ name: 'memory_recall' }, { name: 'list_skills' }] }),
+    callTool: async () => ({ isError: false, content: [] }),
+    close: async () => {},
+  };
+  (pool as any)['clients'].set('ambiguousBrain', fakeWrapper);
+  (pool as any)['statuses'].set('ambiguousBrain', {
+    serverId: 'ambiguousBrain',
+    identity: 'unknown',
+    status: 'connected',
+  });
+
+  await refreshIndex(pool);
+
+  assert.equal(pool.getStatus('ambiguousBrain')?.identity, 'brainrouter');
+  assert.equal(pool.getStatus('ambiguousBrain')?.toolCount, 2);
+});
+
+test('McpClientPool: listTools prefixes every tool with mcp_<serverId>_', async () => {
   const pool = new McpClientPool();
   seedFakeServer(pool, 'brainrouter', 'brainrouter', [{ name: 'memory_recall' }]);
   seedFakeServer(pool, 'github', 'third-party', [{ name: 'create_issue' }, { name: 'list_repos' }]);
@@ -67,9 +90,9 @@ test('McpClientPool: listTools prefixes every tool with mcp__<serverId>__', asyn
   const { tools } = await pool.listTools();
   const names = tools.map((t: any) => t.name).sort();
   assert.deepEqual(names, [
-    'mcp__brainrouter__memory_recall',
-    'mcp__github__create_issue',
-    'mcp__github__list_repos',
+    'mcp_brainrouter_memory_recall',
+    'mcp_github_create_issue',
+    'mcp_github_list_repos',
   ]);
 });
 
@@ -78,7 +101,7 @@ test('McpClientPool: callTool with prefixed form routes to the right server', as
   seedFakeServer(pool, 'brainrouter', 'brainrouter', [{ name: 'memory_recall' }]);
   seedFakeServer(pool, 'github', 'third-party', [{ name: 'create_issue' }]);
   await refreshIndex(pool);
-  const res = await pool.callTool('mcp__github__create_issue', { title: 'bug' });
+  const res = await pool.callTool('mcp_github_create_issue', { title: 'bug' });
   assert.equal(res.content?.[0]?.text, 'github::create_issue');
 });
 
@@ -91,6 +114,17 @@ test('McpClientPool: callTool accepts raw name when unique (back-compat)', async
   assert.equal(res.content?.[0]?.text, 'brainrouter::memory_recall');
 });
 
+test('McpClientPool: raw BrainRouter-owned tool calls prefer the active BrainRouter server on collision', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'brainrouter', 'brainrouter', [{ name: 'list_skills' }]);
+  seedFakeServer(pool, 'third_party', 'third-party', [{ name: 'list_skills' }]);
+  await refreshIndex(pool);
+
+  const res = await pool.callTool('list_skills', { scope: 'all' });
+
+  assert.equal(res.content?.[0]?.text, 'brainrouter::list_skills');
+});
+
 test('McpClientPool: callTool reports ambiguous-name collision with hint to prefix', async () => {
   const pool = new McpClientPool();
   // Two servers expose the same unprefixed `search` tool name.
@@ -101,7 +135,7 @@ test('McpClientPool: callTool reports ambiguous-name collision with hint to pref
   assert.equal(res.isError, true);
   const text = res.content?.[0]?.text ?? '';
   assert.match(text, /Ambiguous tool name "search"/);
-  assert.match(text, /mcp__first__search|mcp__second__search/);
+  assert.match(text, /mcp_first_search|mcp_second_search/);
 });
 
 test('McpClientPool: callTool reports unknown-tool with actionable message', async () => {
@@ -144,6 +178,43 @@ test('McpClientPool: resolveToolCall handles tool names containing underscores',
   const pool = new McpClientPool();
   seedFakeServer(pool, 'github', 'third-party', [{ name: 'list_open_pull_requests' }]);
   await refreshIndex(pool);
-  const res = await pool.callTool('mcp__github__list_open_pull_requests', {});
+  const res = await pool.callTool('mcp_github_list_open_pull_requests', {});
   assert.equal(res.content?.[0]?.text, 'github::list_open_pull_requests');
+});
+
+test('selectMcpServerIds: connects all third-party MCPs but only the active BrainRouter MCP', () => {
+  const servers: any = {
+    localBrain: { type: 'stdio', command: 'brainrouter-mcp' },
+    github: { type: 'http', url: 'https://github.example/mcp', identity: 'third-party' },
+    remoteBrain: { type: 'http', url: 'https://api.brainrouter.cloud/mcp' },
+    linear: { type: 'http', url: 'https://linear.example/mcp', identity: 'third-party' },
+  };
+
+  assert.deepEqual(
+    selectMcpServerIds(servers, 'remoteBrain').sort(),
+    ['github', 'linear', 'remoteBrain'].sort(),
+  );
+});
+
+test('selectMcpServerIds: --profile scopes to exactly that profile', () => {
+  const servers: any = {
+    localBrain: { type: 'stdio', command: 'brainrouter-mcp' },
+    remoteBrain: { type: 'http', url: 'https://api.brainrouter.cloud/mcp' },
+    github: { type: 'http', url: 'https://github.example/mcp', identity: 'third-party' },
+  };
+
+  assert.deepEqual(selectMcpServerIds(servers, 'remoteBrain', 'localBrain'), ['localBrain']);
+});
+
+test('selectMcpServerIds: falls back to the first BrainRouter profile when active is third-party', () => {
+  const servers: any = {
+    localBrain: { type: 'stdio', command: 'brainrouter-mcp' },
+    remoteBrain: { type: 'http', url: 'https://api.brainrouter.cloud/mcp' },
+    github: { type: 'http', url: 'https://github.example/mcp', identity: 'third-party' },
+  };
+
+  assert.deepEqual(
+    selectMcpServerIds(servers, 'github').sort(),
+    ['github', 'localBrain'].sort(),
+  );
 });

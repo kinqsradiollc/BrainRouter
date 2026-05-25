@@ -1,4 +1,4 @@
-import { McpClientWrapper } from './mcpClient.js';
+import { McpClientWrapper, resolveIdentityFromConfig } from './mcpClient.js';
 import type { LLMConfig, ServerConfig } from '../config/config.js';
 
 /**
@@ -15,7 +15,7 @@ import type { LLMConfig, ServerConfig } from '../config/config.js';
  *
  *   - All configured servers attempt connection concurrently on boot,
  *     each with a 5s timeout. Offline ones do NOT block others.
- *   - Tools surface to the agent with `mcp__<serverId>__<toolName>`
+ *   - Tools surface to the agent with `mcp_<serverId>_<toolName>`
  *     prefix (Claude Code style).
  *   - `callTool` accepts BOTH the prefixed form (the canonical name
  *     the LLM sees in the tool inventory) AND the raw form (back-compat
@@ -42,6 +42,54 @@ export type McpServerStatus = {
   error?: string;
 };
 
+/**
+ * Choose which configured MCP profiles should connect for a normal CLI run.
+ *
+ * BrainRouter profiles are special: users may store several BrainRouter MCPs
+ * (local, staging, remote, self-hosted), but only one should be active at a
+ * time because the BrainRouter MCP is the memory/brain plane. Third-party MCPs
+ * are additive tools, so they all connect concurrently.
+ *
+ * `requestedProfile` is the explicit escape hatch (`--profile <name>`): it
+ * scopes the run to exactly that profile, matching the existing single-server
+ * mode.
+ */
+export function selectMcpServerIds(
+  servers: Record<string, ServerConfig>,
+  activeServer?: string,
+  requestedProfile?: string,
+): string[] {
+  const ids = Object.keys(servers);
+  if (requestedProfile) return servers[requestedProfile] ? [requestedProfile] : [];
+
+  const brainrouterIds = ids.filter((id) =>
+    resolveIdentityFromConfig(servers[id], id) === 'brainrouter',
+  );
+  const activeBrainrouter = activeServer && brainrouterIds.includes(activeServer)
+    ? activeServer
+    : brainrouterIds[0];
+
+  return ids.filter((id) => {
+    const identity = resolveIdentityFromConfig(servers[id], id);
+    return identity !== 'brainrouter' || id === activeBrainrouter;
+  });
+}
+
+function isBrainrouterOwnedTool(name: string): boolean {
+  return name.startsWith('memory_') ||
+    [
+      'list_skills',
+      'get_skill',
+      'search_skills',
+      'create_skill',
+      'update_skill',
+      'get_persona',
+      'get_reference',
+      'list_template_docs',
+      'get_template_doc',
+    ].includes(name);
+}
+
 export class McpClientPool {
   /** serverId → connected wrapper. */
   private clients = new Map<string, McpClientWrapper>();
@@ -53,12 +101,26 @@ export class McpClientPool {
    * via the prefixed form).
    */
   private toolToServer = new Map<string, string>();
-  /** Prefixed form (`mcp__server__tool`) → `{serverId, tool}` for fast dispatch. */
+  /** Prefixed form (`mcp_<serverId>_<tool>`) → `{serverId, tool}` for fast dispatch. */
   private prefixedToServer = new Map<string, { serverId: string; tool: string }>();
   /** LLM config from the last connectAll — needed for reconnect calls. */
   private currentLlmConfig?: LLMConfig;
   /** Raw server configs from the last connectAll — needed for /mcp reconnect <id>. */
   private serverConfigs = new Map<string, ServerConfig>();
+  /** serverId → prefix used in tool names. Brainrouter servers get "brainrouter"; others keep their config key. */
+  private prefixIds = new Map<string, string>();
+  /** Reverse: prefixId → serverId (needed to dispatch `mcp_brainrouter_X` back to the real key). */
+  private prefixToServerId = new Map<string, string>();
+
+  private getPrefixId(serverId: string): string {
+    return this.prefixIds.get(serverId) ?? serverId;
+  }
+
+  private assignPrefixId(serverId: string, wrapper: McpClientWrapper): void {
+    const id = wrapper.getIdentity() === 'brainrouter' ? 'brainrouter' : serverId;
+    this.prefixIds.set(serverId, id);
+    this.prefixToServerId.set(id, serverId);
+  }
 
   /**
    * Connect to every entry in `servers` concurrently. Each connect
@@ -111,6 +173,7 @@ export class McpClientPool {
         ),
       ]);
       this.clients.set(serverId, wrapper);
+      this.assignPrefixId(serverId, wrapper);
       this.statuses.set(serverId, {
         serverId,
         identity: wrapper.getIdentity(),
@@ -135,6 +198,9 @@ export class McpClientPool {
       try { await wrapper.close(); } catch { /* ignore */ }
     }
     this.clients.delete(serverId);
+    const oldPid = this.prefixIds.get(serverId);
+    if (oldPid) this.prefixToServerId.delete(oldPid);
+    this.prefixIds.delete(serverId);
     const prev = this.statuses.get(serverId);
     this.statuses.set(serverId, {
       serverId,
@@ -169,10 +235,14 @@ export class McpClientPool {
         const res = await wrapper.listTools();
         const tools = (res as any).tools ?? [];
         const status = this.statuses.get(serverId);
-        if (status) status.toolCount = tools.length;
+        if (status) {
+          status.toolCount = tools.length;
+          status.identity = wrapper.getIdentity();
+        }
         for (const tool of tools) {
           const rawName = tool.name;
-          const prefixed = `mcp__${serverId}__${rawName}`;
+          const pid = this.getPrefixId(serverId);
+          const prefixed = `mcp_${pid}_${rawName}`;
           this.prefixedToServer.set(prefixed, { serverId, tool: rawName });
           const existing = this.toolToServer.get(rawName);
           if (existing && existing !== serverId) {
@@ -193,7 +263,7 @@ export class McpClientPool {
 
   /**
    * Concatenated tool list across every connected server, with names
-   * prefixed `mcp__<serverId>__<toolName>` (Claude Code style). The
+   * prefixed `mcp_<serverId>_<toolName>` (Claude Code style). The
    * agent calls this once per turn and hands it to the LLM.
    */
   async listTools(): Promise<{ tools: any[] }> {
@@ -203,13 +273,15 @@ export class McpClientPool {
       try {
         const res = await wrapper.listTools();
         const tools = (res as any).tools ?? [];
+        const status = this.statuses.get(serverId);
+        if (status) {
+          status.identity = wrapper.getIdentity();
+        }
+        const pid = this.getPrefixId(serverId);
         for (const tool of tools) {
           all.push({
             ...tool,
-            name: `mcp__${serverId}__${tool.name}`,
-            // Stash origin metadata so the dispatch path can recover it
-            // without re-parsing. Not part of the JSON-Schema the LLM
-            // sees — the underscored fields are stripped on serialize.
+            name: `mcp_${pid}_${tool.name}`,
             __serverId: serverId,
             __rawName: tool.name,
           });
@@ -224,7 +296,7 @@ export class McpClientPool {
   /**
    * Route a tool call to the right server. Accepts both name forms:
    *
-   *   - `mcp__<serverId>__<tool>` — the canonical form the LLM sees
+   *   - `mcp_<serverId>_<tool>` — the canonical form the LLM sees
    *     in the inventory. Stripped + dispatched directly.
    *   - `<tool>` raw form — back-compat for prompts/skills that
    *     hardcode `memory_recall`-style names. Routed to the unique
@@ -237,15 +309,17 @@ export class McpClientPool {
       // Distinguish the two failure modes — gives the LLM (and humans
       // tailing logs) actionable feedback.
       if (this.toolToServer.get(name) === '__COLLISION__') {
-        const servers = [...this.clients.keys()].filter((id) => {
-          const w = this.clients.get(id);
-          return w && w.isConnected() && this.prefixedToServer.has(`mcp__${id}__${name}`);
-        });
+        const prefixes = [...this.clients.keys()]
+          .filter((id) => {
+            const w = this.clients.get(id);
+            return w && w.isConnected() && this.prefixedToServer.has(`mcp_${this.getPrefixId(id)}_${name}`);
+          })
+          .map((id) => this.getPrefixId(id));
         return {
           isError: true,
           content: [{
             type: 'text',
-            text: `Ambiguous tool name "${name}" — exposed by ${servers.length} MCP servers: ${servers.join(', ')}. Use the prefixed form, e.g. mcp__${servers[0]}__${name}.`,
+            text: `Ambiguous tool name "${name}" — exposed by ${prefixes.length} MCP servers: ${prefixes.join(', ')}. Use the prefixed form, e.g. mcp_${prefixes[0]}_${name}.`,
           }],
         };
       }
@@ -270,21 +344,36 @@ export class McpClientPool {
   /** Internal — map a name (prefixed OR raw) to a concrete server + tool. */
   private resolveToolCall(name: string): { serverId: string; tool: string } | undefined {
     // Fast path: exact prefixed form match in the index.
-    if (name.startsWith('mcp__')) {
+    if (name.startsWith('mcp_')) {
       const direct = this.prefixedToServer.get(name);
       if (direct) return direct;
-      // Lenient parse for `mcp__<serverId>__<tool>` when the tool
-      // name itself contains `__` (the fast-path missed because
-      // `prefixedToServer` keys aren't normalised). Walk known
-      // serverIds and find the longest matching prefix.
-      const rest = name.slice('mcp__'.length);
+      // Lenient parse: walk prefix IDs first (covers "brainrouter"
+      // alias), then raw server IDs as fallback.
+      const rest = name.slice('mcp_'.length);
+      for (const [pid, realId] of this.prefixToServerId) {
+        const prefix = `${pid}_`;
+        if (rest.startsWith(prefix)) {
+          return { serverId: realId, tool: rest.slice(prefix.length) };
+        }
+      }
       for (const serverId of this.clients.keys()) {
-        const prefix = `${serverId}__`;
+        const prefix = `${serverId}_`;
         if (rest.startsWith(prefix)) {
           return { serverId, tool: rest.slice(prefix.length) };
         }
       }
       return undefined;
+    }
+    if (isBrainrouterOwnedTool(name)) {
+      for (const [serverId, wrapper] of this.clients) {
+        if (
+          wrapper.isConnected() &&
+          wrapper.getIdentity() === 'brainrouter' &&
+          this.prefixedToServer.has(`mcp_${serverId}_${name}`)
+        ) {
+          return { serverId, tool: name };
+        }
+      }
     }
     // Raw-name fallback.
     const owner = this.toolToServer.get(name);
@@ -354,6 +443,14 @@ export class McpClientPool {
     return undefined;
   }
 
+  /** Server id for the currently connected BrainRouter MCP, if one is active. */
+  getActiveBrainrouterServerId(): string | undefined {
+    for (const [serverId, wrapper] of this.clients) {
+      if (wrapper.isConnected() && wrapper.getIdentity() === 'brainrouter') return serverId;
+    }
+    return undefined;
+  }
+
   /** Status snapshot for every server the pool has tried to connect to. */
   getStatuses(): McpServerStatus[] {
     return [...this.statuses.values()];
@@ -377,6 +474,8 @@ export class McpClientPool {
     this.clients.clear();
     this.toolToServer.clear();
     this.prefixedToServer.clear();
+    this.prefixIds.clear();
+    this.prefixToServerId.clear();
     // Keep `statuses` so a `getStatuses()` after close still shows what was there.
   }
 }
