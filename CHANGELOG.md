@@ -148,6 +148,44 @@ separate `brainrouter login` / `brainrouter config` subcommand dance.
   `&& !config.activeServer` guard that prevented Skip from overwriting
   a pre-existing profile — causing the CLI to silently re-spawn the
   MCP child. Skip now always writes `activeServer: ''`.
+- **`/model` quick-swap picker.** No-arg `/model` now opens an Ink
+  picker populated by the active endpoint's `/v1/models` response
+  (live list with a 5s timeout; provider's curated static catalog as
+  the offline fallback). Cursor defaults to the current model;
+  selection persists via `agent.setModel` + `saveConfig` with no
+  restart. Cross-provider picks (e.g. selecting `anthropic/*` while
+  configured for OpenAI direct) emit a warning instead of silently
+  404ing on the next turn. `/model <name>` keeps the script-friendly
+  direct-switch path. Implementation:
+  [`cli/wizard/modelsApi.ts → selectModel`](brainrouter-cli/src/cli/wizard/modelsApi.ts) +
+  [`cli/commands/ui.ts → /model`](brainrouter-cli/src/cli/commands/ui.ts).
+  The onboarding wizard's Model step now consumes the same helper —
+  one code path, two consumers.
+
+### Bug fixes (API key plumbing)
+
+- **`/config provider <id>` no longer silently reuses the old API
+  key.** Pre-0.3.7 the setter hardcoded `apiKey: ctx.config.llm?.apiKey
+  ?? ''` when changing provider, so a user with OpenAI saved who ran
+  `/config provider deepseek` ended up with an OpenAI key pointed at
+  the DeepSeek endpoint — 401 on every turn with no clear message.
+  Now the setter re-prompts for the new provider's API key
+  (pre-filling from the provider's envKey when set), validates via the
+  same `validateApiKey` tier the wizard uses, and rejects blanks for
+  cloud providers.
+- **`loadConfig` env fallback covers all catalogued providers.** The
+  pre-0.3.7 backfill only checked `OPENAI_API_KEY` /
+  `BRAINROUTER_LLM_API_KEY`. Now `backfillApiKeyFromEnv(endpoint)`
+  matches the saved endpoint against `PROVIDER_CATALOG` and tries
+  the provider's `envKey` first (`DEEPSEEK_API_KEY`,
+  `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`,
+  `LMSTUDIO_API_KEY`, `OLLAMA_API_KEY`) before the generic vars.
+- **`/login` offers an LLM credential step.** Pre-0.3.7 `/login` only
+  handled MCP transport; users had to bounce out to `/config` /
+  `/init` for the LLM key. Now after the MCP profile saves, `/login`
+  prompts "Update LLM credentials?" with the current state shown —
+  Skip keeps existing, Update re-enters the `editLlm` flow (provider
+  → API key → model).
 
 ### Docs
 

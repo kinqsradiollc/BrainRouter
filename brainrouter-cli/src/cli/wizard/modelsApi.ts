@@ -1,3 +1,5 @@
+import { runPicker, type PickerRow } from '../ink/runPicker.js';
+import type { Theme } from '../theme.js';
 import type { ProviderEntry } from './providers.js';
 
 /**
@@ -86,4 +88,135 @@ export function deriveModelsUrl(chatEndpoint: string): string {
 
 function dedupeAndSort(ids: string[]): string[] {
   return Array.from(new Set(ids)).sort((a, b) => a.localeCompare(b));
+}
+
+// ---------------------------------------------------------------------------
+// Reusable model picker
+// ---------------------------------------------------------------------------
+
+/**
+ * Open the model picker — live `/v1/models` fetch with the provider's
+ * static catalog as the offline fallback. Returns the selected model id,
+ * or `undefined` when the user cancels.
+ *
+ * Used by both the onboarding wizard's Model step
+ * (`cli/wizard/runner.ts → runModelStep`) and the in-REPL `/model`
+ * quick-swap command (`cli/commands/ui.ts → /model`). Keeping a single
+ * implementation means a future enrichment (recently-used badge,
+ * cost-per-token hint, model-size group headers) lights up everywhere
+ * at once.
+ *
+ * `currentModel` (when supplied) defaults the picker cursor onto the
+ * currently active row — important for `/model` where the user almost
+ * always wants to confirm what's currently selected before changing.
+ */
+export interface SelectModelOptions {
+  theme: Theme;
+  provider: ProviderEntry;
+  apiKey: string;
+  /** Override the provider's default chat endpoint (custom-endpoint flow). */
+  endpointOverride?: string;
+  /** Active model id — cursor opens on this row when present. */
+  currentModel?: string;
+  /** Picker title (default: "Model"). */
+  title?: string;
+  /** Optional badge rendered next to the title. */
+  badge?: string;
+  /** Erase the picker frame after a selection (true for wizard, false for in-REPL). */
+  eraseOnClose?: boolean;
+}
+
+export interface SelectModelResult {
+  model: string;
+  /** Where the picker got its list from — surfaces in the success message. */
+  source: 'live' | 'static' | 'fallback';
+  /** Number of models the live call returned (0 when source !== 'live'). */
+  liveCount: number;
+  /** Live-call error message when source !== 'live' (omitted on live success). */
+  liveError?: string;
+}
+
+export async function selectModel(opts: SelectModelOptions): Promise<SelectModelResult | undefined> {
+  const { provider, apiKey, endpointOverride, currentModel, theme } = opts;
+  let modelsList: string[] = provider.models;
+  let source: SelectModelResult['source'] = 'static';
+  let liveCount = 0;
+  let liveError: string | undefined;
+  let subtitleHint = `Pick the chat model for ${provider.label}.`;
+
+  // Live fetch is gated on either having a key (cloud) or running local.
+  // Skipping the fetch entirely when neither is true avoids a guaranteed
+  // 401 / network error on the loading frame.
+  if (apiKey.trim().length > 0 || provider.local) {
+    const fetched = await fetchOpenAiCompatibleModels(provider, apiKey, endpointOverride);
+    if (fetched.ok) {
+      const live = fetched.models;
+      // Default model floats to the top so "(default)" stays in the
+      // natural-first position the user expects. Then the currently-
+      // active model floats next (cursor lands here below).
+      const reordered = floatToTop(live, [provider.defaultModel]);
+      modelsList = reordered;
+      source = 'live';
+      liveCount = live.length;
+      subtitleHint = `Pick a model — ${live.length} returned by ${provider.label}'s /v1/models endpoint. Use "Other" to type any name.`;
+    } else {
+      source = 'fallback';
+      liveError = fetched.error;
+      subtitleHint = `Pick a model. (Live list unavailable — ${fetched.error}. Showing curated short-list.) Use "Other" to type any name.`;
+    }
+  }
+
+  const finalList = modelsList.length > 0 ? modelsList : [provider.defaultModel];
+  const rows: PickerRow[] = finalList.map((m) => ({
+    id: m,
+    label: m,
+    value:
+      m === currentModel ? 'current' :
+      m === provider.defaultModel ? 'default' : '',
+  }));
+
+  // Cursor priority: currently-active model > provider default > top.
+  let initialCursor = 0;
+  if (currentModel) {
+    const idx = finalList.indexOf(currentModel);
+    if (idx >= 0) initialCursor = idx;
+  }
+  if (initialCursor === 0 && !currentModel) {
+    const idx = finalList.indexOf(provider.defaultModel);
+    if (idx >= 0) initialCursor = idx;
+  }
+
+  const result = await runPicker({
+    theme,
+    title: opts.title ?? 'Model',
+    subtitle: subtitleHint,
+    badge: opts.badge,
+    rows,
+    initialCursor,
+    allowOther: true,
+    otherLabel: 'Other model',
+    otherDescription: 'Type any model name supported by this endpoint',
+    eraseOnClose: opts.eraseOnClose ?? false,
+  });
+  if (result.kind === 'cancelled') return undefined;
+  const model = (result.kind === 'other' ? result.text.trim() : result.id) || provider.defaultModel;
+  return { model, source, liveCount, liveError };
+}
+
+function floatToTop(list: string[], priority: string[]): string[] {
+  const seen = new Set<string>();
+  const front: string[] = [];
+  for (const p of priority) {
+    if (list.includes(p) && !seen.has(p)) {
+      front.push(p);
+      seen.add(p);
+    }
+  }
+  for (const m of list) {
+    if (!seen.has(m)) {
+      front.push(m);
+      seen.add(m);
+    }
+  }
+  return front;
 }

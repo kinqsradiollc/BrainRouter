@@ -174,7 +174,10 @@ function themeFor(ctx: CommandContext): Theme {
   return buildTheme(mode === 'mono' ? 'mono' : mode === 'light' ? 'light' : 'dark');
 }
 
-async function editLlm(ctx: CommandContext): Promise<boolean> {
+// Exported so `/login` can re-enter the LLM editor as a follow-on step
+// after the MCP transport block. Same flow as the `/config` panel's
+// "LLM" row — provider picker → API key prompt → model picker → save.
+export async function editLlm(ctx: CommandContext): Promise<boolean> {
   const theme = themeFor(ctx);
   const provResult = await pickFromList({
     theme,
@@ -432,9 +435,11 @@ function printRawConfig(ctx: CommandContext): void {
   console.log();
 }
 
+type SetResult = { ok: true; message: string } | { ok: false; reason: string };
+
 interface ConfigKeyHandler {
   get: (ctx: CommandContext) => string;
-  set?: (ctx: CommandContext, value: string) => { ok: true; message: string } | { ok: false; reason: string };
+  set?: (ctx: CommandContext, value: string) => SetResult | Promise<SetResult>;
 }
 
 const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
@@ -538,17 +543,61 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
       const match = PROVIDER_CATALOG.find((p) => p.endpoint === llm.endpoint);
       return match?.id ?? 'custom';
     },
-    set: (ctx, value) => {
+    // Async so we can re-prompt for the API key when the provider
+    // changes. Pre-0.3.7 this setter silently reused the OLD provider's
+    // apiKey, which left users with (e.g.) OpenAI keys pointed at the
+    // DeepSeek endpoint — 401 on every turn with no clear message.
+    set: async (ctx, value) => {
       const provider = findProvider(value.trim().toLowerCase());
       if (!provider) return { ok: false, reason: `unknown provider id "${value}" — open /config (bare) and pick interactively` };
+      const previousProviderId = (ctx.config.llm?.endpoint
+        ? PROVIDER_CATALOG.find((p) => p.endpoint === ctx.config.llm!.endpoint)?.id
+        : undefined);
+      const sameProvider = previousProviderId === provider.id;
+
+      // Reusing the existing key is correct when the provider isn't
+      // actually changing (idempotent set). Re-prompt on any real
+      // provider change — pre-fill from the new provider's envKey or
+      // (last resort) the previously-stored key if the user wants to
+      // paste a same-vendor variant.
+      let apiKey = ctx.config.llm?.apiKey ?? '';
+      if (!sameProvider) {
+        const theme = themeFor(ctx);
+        const envValue = process.env[provider.envKey] ?? '';
+        const keyResult = await promptText({
+          theme,
+          title: `API key for ${provider.label}`,
+          subtitle: envValue
+            ? `${provider.envKey} is set — press ENTER to accept, type to override.`
+            : provider.local
+              ? `${provider.label} is local — blank key OK.`
+              : `${provider.label} requires an API key. Paste it now or press Esc to cancel.`,
+          badge: provider.label,
+          prefilled: envValue,
+          placeholder: provider.local ? '(blank OK)' : 'paste API key',
+          validate: (raw) => {
+            const v = validateApiKey(raw, provider);
+            return v.kind === 'reject' ? v.reason : undefined;
+          },
+        });
+        if (keyResult.kind !== 'accept') {
+          return { ok: false, reason: 'cancelled — provider unchanged' };
+        }
+        apiKey = keyResult.text;
+      }
+
       ctx.config.llm = {
         provider: 'openai',
-        apiKey: ctx.config.llm?.apiKey ?? '',
+        apiKey,
         model: provider.defaultModel,
         endpoint: provider.endpoint,
       };
       saveConfig(ctx.config);
-      return { ok: true, message: `provider → ${provider.label} (model defaulted to ${provider.defaultModel})` };
+      ctx.agent.setModel(provider.defaultModel);
+      const tail = sameProvider
+        ? '(provider unchanged — reused existing key + reset model to default)'
+        : `(model defaulted to ${provider.defaultModel} · key ${maskApiKey(apiKey)})`;
+      return { ok: true, message: `provider → ${provider.label} ${tail}` };
     },
   },
 };
@@ -570,7 +619,7 @@ async function setKey(ctx: CommandContext, key: string, value: string): Promise<
     console.log(chalk.gray(`  Run /config (bare) and pick "${key}" interactively, or pick one of: ${Object.keys(KEY_HANDLERS).join(', ')}.\n`));
     return;
   }
-  const result = handler.set(ctx, value);
+  const result = await handler.set(ctx, value);
   if (!result.ok) {
     console.log(chalk.red(`\n  ✗ ${result.reason}\n`));
     return;

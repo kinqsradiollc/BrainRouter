@@ -10,6 +10,7 @@ const pickFromList = runPicker;
 const promptText = runTextField;
 import { buildTheme, type Theme } from '../theme.js';
 import { readPreferences } from '../../state/preferencesStore.js';
+import { editLlm } from './config.js';
 
 /**
  * `/login` slash command — 0.3.7 redesign on the new internal picker.
@@ -108,6 +109,37 @@ export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolea
     const apiKeyDisplay = serverConfig.apiKey ? maskApiKey(serverConfig.apiKey) : '(no key)';
     console.log(chalk.green(`  ✓ MCP profile "${profileName}" saved as active. ${apiKeyDisplay}`));
     console.log(chalk.gray('    Run /mcp reconnect to pick up the new transport without restarting.\n'));
+
+    // 0.3.7 — follow-on LLM credential step. Pre-0.3.7 `/login`
+    // *only* handled the MCP profile; users who wanted to refresh
+    // their LLM API key in the same flow had to bounce out to
+    // `/config` or `/init`. Now we offer it inline.
+    //
+    // Always offer (per user direction); default-No when LLM
+    // creds are already populated, default-Yes when missing.
+    const hasLlm = Boolean(ctx.config.llm?.apiKey?.trim()) && Boolean(ctx.config.llm?.endpoint);
+    const promptSubtitle = hasLlm
+      ? `Current: ${ctx.config.llm?.model ?? '(unset)'} @ ${ctx.config.llm?.endpoint ?? '(no endpoint)'} · key ${maskApiKey(ctx.config.llm?.apiKey ?? '')}`
+      : 'No LLM credentials saved yet — set them now so the next turn works.';
+    const llmChoice = await pickFromList({
+      theme,
+      title: 'Update LLM credentials?',
+      subtitle: promptSubtitle,
+      rows: hasLlm ? [
+        { id: 'skip',   label: 'Skip — keep current LLM config', description: 'Press ENTER to exit /login' },
+        { id: 'update', label: 'Update LLM',                     description: 'Switch provider / paste a new key / change model' },
+      ] : [
+        { id: 'update', label: 'Set LLM now',                    description: 'Provider → API key → Model' },
+        { id: 'skip',   label: 'Skip — set up later via /config', description: 'Exit /login without LLM config' },
+      ],
+      initialCursor: 0,
+    });
+    if (llmChoice.kind === 'pick' && llmChoice.id === 'update') {
+      const ok = await editLlm(ctx);
+      if (!ok) {
+        console.log(chalk.yellow('  /login — LLM step cancelled; MCP profile saved.\n'));
+      }
+    }
     return true;
   }
 }

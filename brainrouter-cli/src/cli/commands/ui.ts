@@ -17,10 +17,13 @@ import { readPlan } from '../../state/taskStore.js';
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
-import { getConfigPath } from '../../config/config.js';
+import { getConfigPath, saveConfig } from '../../config/config.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
+import { PROVIDER_CATALOG, findProvider } from '../wizard/providers.js';
+import { selectModel } from '../wizard/modelsApi.js';
+import { buildTheme } from '../theme.js';
 
 
 export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> {
@@ -176,14 +179,67 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     case '/model':
     {
       const newModel = args[0];
-      if (!newModel) {
-        console.log(chalk.bold(`\nCurrent model: ${chalk.cyan(agent.getModel())}`));
-        console.log(chalk.gray('Switch with: /model <model-name> (e.g. /model gpt-4o-mini, /model gpt-5, /model qwen2.5-coder)\n'));
+      const previous = agent.getModel();
+      // Direct-switch form `/model <name>` stays for scripts and muscle
+      // memory. No-arg opens the picker (0.3.7).
+      if (newModel) {
+        agent.setModel(newModel);
+        if (config.llm) {
+          config.llm.model = newModel;
+          saveConfig(config);
+        }
+        console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
         return true;
       }
-      const previous = agent.getModel();
-      agent.setModel(newModel);
-      console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
+      // No-arg → open the picker. Resolves provider by matching the
+      // saved endpoint against PROVIDER_CATALOG; falls back to the
+      // OpenAI entry when nothing matches (the agent loop also
+      // defaults to OpenAI-compatible shapes).
+      const themeMode = readPreferences(agent.workspaceRoot).theme;
+      const theme = buildTheme(themeMode === 'mono' ? 'mono' : themeMode === 'light' ? 'light' : 'dark');
+      const llm = config.llm;
+      const provider =
+        (llm?.endpoint && PROVIDER_CATALOG.find((p) => p.endpoint.replace(/\/$/, '') === (llm.endpoint ?? '').replace(/\/$/, ''))) ||
+        findProvider('openai')!;
+      const result = await selectModel({
+        theme,
+        provider,
+        apiKey: llm?.apiKey ?? '',
+        endpointOverride: llm?.endpoint,
+        currentModel: previous,
+        title: '/model — quick-swap',
+        badge: provider.label,
+      });
+      if (!result) {
+        console.log(chalk.yellow('\n  /model cancelled.\n'));
+        return true;
+      }
+      if (result.model === previous) {
+        console.log(chalk.gray(`\n  Model unchanged (${previous}).\n`));
+        return true;
+      }
+      // Cross-provider sanity check — if the picked model looks like
+      // a different vendor's namespace (anthropic/*, google/*, etc.)
+      // and the active provider isn't a multi-vendor gateway, warn so
+      // the user doesn't hit a confusing 404 on the next turn.
+      if (looksLikeForeignModel(result.model, provider)) {
+        console.log(chalk.yellow(
+          `\n  ⚠ "${result.model}" looks like a different provider's namespace. ` +
+          `Active endpoint: ${provider.label}.` +
+          `\n    Run /config provider <id> to switch endpoints, or /model again to pick a native model.\n`
+        ));
+      }
+      agent.setModel(result.model);
+      if (config.llm) {
+        config.llm.model = result.model;
+        saveConfig(config);
+      }
+      const sourceTag =
+        result.source === 'live' ? `live · ${result.liveCount} models` :
+        result.source === 'fallback' ? `offline · static catalog (${result.liveError ?? 'unknown'})` :
+        'static catalog';
+      console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(result.model)}`));
+      console.log(chalk.gray(`  Source: ${sourceTag}\n`));
       return true;
     }
     // /mcp moved to its own command file (commands/mcp.ts) as part of 0.3.6
@@ -492,4 +548,28 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
   }
   return false;
+}
+
+/**
+ * Heuristic — does the picked model id look like it belongs to a
+ * different vendor than the active provider's endpoint? Catches the
+ * common foot-gun of picking `anthropic/claude-*` while pointed at
+ * OpenAI direct, where the request 404s at the endpoint and the user
+ * has no obvious "you needed to switch endpoints" signal.
+ *
+ * Returns false for gateway providers (OpenRouter, "anthropic-via-gateway")
+ * since multi-vendor namespaces are expected there.
+ */
+function looksLikeForeignModel(model: string, provider: { id: string }): boolean {
+  // Gateways are vendor-agnostic by design.
+  if (provider.id === 'openrouter' || provider.id === 'anthropic-via-gateway') return false;
+  const FOREIGN_PREFIXES: Record<string, string[]> = {
+    openai:    ['anthropic/', 'google/', 'meta/', 'mistralai/', 'qwen/', 'deepseek/'],
+    deepseek:  ['anthropic/', 'google/', 'openai/', 'meta/', 'mistralai/'],
+    gemini:    ['anthropic/', 'openai/', 'meta/', 'mistralai/', 'deepseek/'],
+    lmstudio:  [],
+    ollama:    [],
+  };
+  const list = FOREIGN_PREFIXES[provider.id] ?? [];
+  return list.some((prefix) => model.startsWith(prefix));
 }
