@@ -6,10 +6,14 @@ export interface ResizeClearInkInstance {
   cleanupResizeClear: () => void;
 }
 
+const ERASE_SCROLLBACK = '\x1b[3J';
+
 /**
  * Ink only force-clears on selected resize paths. BrainRouter's Ink
  * panels redraw full frames, so every terminal resize must clear the
  * previous frame first or old banners/prompts can remain in scrollback.
+ * We also clear the terminal scrollback buffer so stale resize frames
+ * cannot be reached by scrolling up after the layout settles.
  */
 export function renderWithResizeClear(
   node: ReactNode,
@@ -19,6 +23,9 @@ export function renderWithResizeClear(
   const stdout = resolveStdout(options);
   const clearBeforeResize = () => {
     instance.clear();
+    if (stdout.isTTY) {
+      stdout.write(ERASE_SCROLLBACK);
+    }
   };
   stdout.prependListener('resize', clearBeforeResize);
   return {
