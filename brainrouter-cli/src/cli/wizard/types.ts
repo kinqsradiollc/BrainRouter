@@ -53,7 +53,7 @@ export const STEP_ORDER: readonly Step[] = [
  */
 export type McpPick =
   | { kind: 'local-stdio' }
-  | { kind: 'local-http' }
+  | { kind: 'local-http'; apiKey?: string }
   | { kind: 'remote-http'; url: string; apiKey?: string }
   | { kind: 'skip' };
 

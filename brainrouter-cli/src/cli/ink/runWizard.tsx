@@ -135,7 +135,7 @@ function mcpPickToServerConfig(pick: McpPick) {
     return { type: 'stdio' as const, command: 'brainrouter-mcp', args: [], identity: 'brainrouter' as const };
   }
   if (pick.kind === 'local-http') {
-    return { type: 'http' as const, url: 'http://localhost:3747/mcp', identity: 'brainrouter' as const };
+    return { type: 'http' as const, url: 'http://localhost:3747/mcp', apiKey: pick.apiKey, identity: 'brainrouter' as const };
   }
   if (pick.kind === 'remote-http') {
     return { type: 'http' as const, url: pick.url, apiKey: pick.apiKey, identity: 'brainrouter' as const };

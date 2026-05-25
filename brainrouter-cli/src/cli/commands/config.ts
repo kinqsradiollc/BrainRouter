@@ -243,8 +243,8 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
     subtitle: 'Pick how the CLI reaches the BrainRouter MCP.',
     rows: [
       { id: 'local-stdio', label: 'Local stdio', value: 'brainrouter-mcp', description: 'No HTTP server needed' },
-      { id: 'local-http',  label: 'Local HTTP',  value: 'localhost:3747', description: 'Connect to a local brainrouter-mcp HTTP server' },
-      { id: 'remote-http', label: 'Remote HTTP', value: 'custom URL',     description: 'Connect to a hosted MCP server (URL + optional key)' },
+      { id: 'local-http',  label: 'Local HTTP',  value: 'localhost:3747', description: 'Connect to a local brainrouter-mcp HTTP server (with API key)' },
+      { id: 'remote-http', label: 'Remote HTTP', value: 'custom URL',     description: 'Connect to a hosted MCP server (URL + API key)' },
     ],
   });
   if (result.kind !== 'pick') return false;
@@ -252,7 +252,14 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
     ctx.config.servers['local-stdio'] = { type: 'stdio', command: 'brainrouter-mcp', args: [], identity: 'brainrouter' };
     ctx.config.activeServer = 'local-stdio';
   } else if (result.id === 'local-http') {
-    ctx.config.servers['local-http'] = { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' };
+    const apiKey = await promptBrainrouterApiKey(theme, 'local', ctx.config.servers['local-http']?.apiKey);
+    if (apiKey === undefined) return false; // user escaped
+    ctx.config.servers['local-http'] = {
+      type: 'http',
+      url: 'http://localhost:3747/mcp',
+      apiKey: apiKey || undefined,
+      identity: 'brainrouter',
+    };
     ctx.config.activeServer = 'local-http';
   } else {
     const urlResult = await promptText({
@@ -260,7 +267,7 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
       title: 'Remote MCP URL',
       subtitle: 'Paste the full URL (e.g. https://brainrouter.example.com/mcp).',
       badge: 'MCP',
-      prefilled: '',
+      prefilled: ctx.config.servers['remote']?.url ?? '',
       placeholder: 'https://...',
       validate: (raw) => {
         const v = raw.trim();
@@ -270,13 +277,55 @@ async function editMcp(ctx: CommandContext): Promise<boolean> {
       },
     });
     if (urlResult.kind !== 'accept') return false;
-    ctx.config.servers['remote'] = { type: 'http', url: urlResult.text.trim(), identity: 'brainrouter' };
+    const apiKey = await promptBrainrouterApiKey(theme, 'remote', ctx.config.servers['remote']?.apiKey);
+    if (apiKey === undefined) return false;
+    ctx.config.servers['remote'] = {
+      type: 'http',
+      url: urlResult.text.trim(),
+      apiKey: apiKey || undefined,
+      identity: 'brainrouter',
+    };
     ctx.config.activeServer = 'remote';
   }
   saveConfig(ctx.config);
   console.log(chalk.green(`\n  ✓ MCP profile saved as active.`));
   console.log(chalk.gray('    Run /mcp reconnect to pick up the change without restarting.\n'));
   return true;
+}
+
+/**
+ * Shared prompt for the BrainRouter MCP HTTP API key (the
+ * `BRAINROUTER_API_KEY` bearer token). Pre-fills from the env var if
+ * set, then from the previously-saved key, then blank. Returns:
+ *   - the trimmed key string (possibly empty when user chose "no key")
+ *   - undefined when the user pressed Esc
+ *
+ * Exported so `/login` and any future MCP-setup surfaces share one
+ * prompt copy — same subtitle text, same env-var pre-fill, same
+ * "blank OK" semantics.
+ */
+export async function promptBrainrouterApiKey(
+  theme: Theme,
+  kind: 'local' | 'remote',
+  existing?: string,
+): Promise<string | undefined> {
+  const envValue = process.env.BRAINROUTER_API_KEY ?? '';
+  const prefilled = envValue || existing || '';
+  const subtitle = envValue
+    ? 'BRAINROUTER_API_KEY is set — press ENTER to accept, type to override, or blank for an unauthenticated server.'
+    : kind === 'local'
+      ? 'Optional — leave blank if your local brainrouter-mcp HTTP server runs without auth. Required when BRAINROUTER_API_KEY is set on the server side.'
+      : 'Optional — leave blank if the hosted MCP doesn\'t require auth. Use the key issued by the BrainRouter dashboard (Users → Profile).';
+  const result = await promptText({
+    theme,
+    title: 'BrainRouter API key',
+    subtitle,
+    badge: 'MCP',
+    prefilled,
+    placeholder: '(blank OK)',
+  });
+  if (result.kind !== 'accept') return undefined;
+  return result.text.trim();
 }
 
 async function editTheme(ctx: CommandContext): Promise<boolean> {

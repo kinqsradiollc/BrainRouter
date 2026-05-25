@@ -333,6 +333,31 @@ async function runMcpStep(state: WizardState, theme: Theme): Promise<WizardState
     final = { kind: 'remote-http', url: urlResult.text.trim() };
   }
 
+  // 0.3.7 — collect the BrainRouter MCP API key for any HTTP transport
+  // (local OR remote). Pre-fill from BRAINROUTER_API_KEY env. Blank
+  // submission is OK — servers without auth accept empty bearers.
+  if (final.kind === 'local-http' || final.kind === 'remote-http') {
+    const envValue = process.env.BRAINROUTER_API_KEY ?? '';
+    const keyResult = await promptText({
+      theme,
+      title: 'BrainRouter API key',
+      subtitle: envValue
+        ? 'BRAINROUTER_API_KEY is set — press ENTER to accept, type to override, or blank if the server is unauthenticated.'
+        : final.kind === 'local-http'
+          ? 'Optional — leave blank if your local brainrouter-mcp HTTP server runs without auth.'
+          : 'Optional — leave blank if the hosted MCP doesn\'t require auth. Use the key issued by the BrainRouter dashboard.',
+      badge: 'MCP',
+      prefilled: envValue,
+      placeholder: '(blank OK)',
+      eraseOnClose: true,
+    });
+    if (keyResult.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
+    const apiKey = keyResult.text.trim() || undefined;
+    final = final.kind === 'local-http'
+      ? { kind: 'local-http', apiKey }
+      : { kind: 'remote-http', url: final.url, apiKey };
+  }
+
   const probe = await probeMcp(final, state.draft);
   if (probe.warning) {
     const next = reduceWizard(state, { kind: 'warn', message: probe.warning });
@@ -370,7 +395,7 @@ function mcpPickToServerConfig(pick: McpPick) {
     return { type: 'stdio' as const, command: 'brainrouter-mcp', args: [], identity: 'brainrouter' as const };
   }
   if (pick.kind === 'local-http') {
-    return { type: 'http' as const, url: 'http://localhost:3747/mcp', identity: 'brainrouter' as const };
+    return { type: 'http' as const, url: 'http://localhost:3747/mcp', apiKey: pick.apiKey, identity: 'brainrouter' as const };
   }
   if (pick.kind === 'remote-http') {
     return { type: 'http' as const, url: pick.url, apiKey: pick.apiKey, identity: 'brainrouter' as const };

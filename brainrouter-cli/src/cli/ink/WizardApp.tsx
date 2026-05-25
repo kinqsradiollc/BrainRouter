@@ -361,9 +361,27 @@ function McpStep({ accent, draft, onAccept, onAbort }: {
   onAccept: (pick: McpPick, warning?: string) => void;
   onAbort: () => void;
 }) {
-  const [stage, setStage] = useState<'pick' | 'remote-url' | 'probing'>('pick');
+  // Stages:
+  //   pick       — top-level transport picker
+  //   remote-url — text field for the remote http URL
+  //   mcp-apikey — BrainRouter API key prompt (for local-http + remote-http)
+  //   probing    — spinner while the probe is in flight
+  const [stage, setStage] = useState<'pick' | 'remote-url' | 'mcp-apikey' | 'probing'>('pick');
   const [pendingPick, setPendingPick] = useState<McpPick | undefined>(undefined);
   const [probeMsg, setProbeMsg] = useState<string>('');
+
+  // 0.3.7 — kick the probe once we have the final pick (with apiKey
+  // already set). Shared between the post-url and post-key transitions
+  // so we don't have two copies of the same Promise+setStage dance.
+  function startProbe(pick: McpPick) {
+    setPendingPick(pick);
+    setStage('probing');
+    setProbeMsg('contacting server (5s timeout)');
+    (async () => {
+      const probe = await probeMcp(pick, draft, (m) => setProbeMsg(m));
+      onAccept(pick, probe.warning);
+    })();
+  }
 
   if (stage === 'probing' && pendingPick) {
     return (
@@ -393,14 +411,48 @@ function McpStep({ accent, draft, onAccept, onAbort }: {
         }}
         onResolve={(r) => {
           if (r.kind !== 'accept') return setStage('pick');
-          const pick: McpPick = { kind: 'remote-http', url: r.text.trim() };
-          setPendingPick(pick);
-          setStage('probing');
-          setProbeMsg('contacting server (5s timeout)');
-          (async () => {
-            const probe = await probeMcp(pick, draft, (m) => setProbeMsg(m));
-            onAccept(pick, probe.warning);
-          })();
+          // Carry the URL into the api-key stage; the BrainRouter MCP
+          // server's HTTP transport requires a Bearer token whenever
+          // auth is enabled, so we always offer the input (blank OK
+          // for servers without auth).
+          setPendingPick({ kind: 'remote-http', url: r.text.trim() });
+          setStage('mcp-apikey');
+        }}
+      />
+    );
+  }
+
+  if (stage === 'mcp-apikey' && pendingPick) {
+    // 0.3.7 — added so users can input the BRAINROUTER_API_KEY during
+    // onboarding. Pre-fills from the env var; blank submission is
+    // valid (local servers without auth, dev mode).
+    const envValue = process.env.BRAINROUTER_API_KEY ?? '';
+    const isLocal = pendingPick.kind === 'local-http';
+    return (
+      <TextField
+        title='BrainRouter API key'
+        subtitle={
+          envValue
+            ? `BRAINROUTER_API_KEY is set — press ENTER to accept, type to override, or leave blank if the server is unauthenticated.`
+            : isLocal
+              ? `Optional — leave blank if your local brainrouter-mcp HTTP server runs without auth. Required when BRAINROUTER_API_KEY is set on the server side.`
+              : `Optional — leave blank if the hosted MCP doesn't require auth. Use the key issued by the BrainRouter dashboard (Users → Profile).`
+        }
+        badge={progressBadge('mcp')}
+        prefilled={envValue}
+        placeholder='(blank OK)'
+        accentColor={accent}
+        onResolve={(r) => {
+          // Esc cancels the whole step back to the picker so the user
+          // can choose a different transport.
+          if (r.kind !== 'accept') return setStage('pick');
+          const apiKey = r.text.trim() || undefined;
+          const next: McpPick = pendingPick.kind === 'local-http'
+            ? { kind: 'local-http', apiKey }
+            : pendingPick.kind === 'remote-http'
+              ? { kind: 'remote-http', url: pendingPick.url, apiKey }
+              : pendingPick;
+          startProbe(next);
         }}
       />
     );
@@ -410,7 +462,7 @@ function McpStep({ accent, draft, onAccept, onAbort }: {
   const rows: Row[] = [
     { id: 'local-stdio',  label: 'Local stdio',  value: 'spawn brainrouter-mcp', description: 'No HTTP server needed — the CLI spawns the MCP child', pick: { kind: 'local-stdio' } },
     { id: 'local-http',   label: 'Local HTTP',   value: 'http://localhost:3747', description: 'Connect to a brainrouter-mcp HTTP server running locally', pick: { kind: 'local-http' } },
-    { id: 'remote-http',  label: 'Remote HTTP',  value: 'custom URL',            description: 'Connect to a hosted BrainRouter MCP (URL + optional key)', pick: { kind: 'remote-http', url: '' } },
+    { id: 'remote-http',  label: 'Remote HTTP',  value: 'custom URL',            description: 'Connect to a hosted BrainRouter MCP (URL + API key)', pick: { kind: 'remote-http', url: '' } },
     { id: 'skip',         label: 'Skip',         value: 'no MCP',                description: 'Local tools only · no recall, skills, or capture', pick: { kind: 'skip' } },
   ];
   return (
@@ -427,20 +479,23 @@ function McpStep({ accent, draft, onAccept, onAbort }: {
         const picked = rows.find((row) => row.id === r.id)?.pick;
         if (!picked) return;
         if (picked.kind === 'remote-http') {
+          // URL first → then api-key stage → then probe.
           setStage('remote-url');
+          return;
+        }
+        if (picked.kind === 'local-http') {
+          // Skip the URL prompt (fixed at http://localhost:3747/mcp)
+          // and go straight to the api-key stage.
+          setPendingPick(picked);
+          setStage('mcp-apikey');
           return;
         }
         if (picked.kind === 'skip') {
           onAccept(picked);
           return;
         }
-        setPendingPick(picked);
-        setStage('probing');
-        setProbeMsg('contacting server (5s timeout)');
-        (async () => {
-          const probe = await probeMcp(picked, draft, (m) => setProbeMsg(m));
-          onAccept(picked, probe.warning);
-        })();
+        // local-stdio — no api key needed (process-local auth).
+        startProbe(picked);
       }}
     />
   );
@@ -483,7 +538,7 @@ function mcpPickToServerConfig(pick: McpPick) {
     return { type: 'stdio' as const, command: 'brainrouter-mcp', args: [], identity: 'brainrouter' as const };
   }
   if (pick.kind === 'local-http') {
-    return { type: 'http' as const, url: 'http://localhost:3747/mcp', identity: 'brainrouter' as const };
+    return { type: 'http' as const, url: 'http://localhost:3747/mcp', apiKey: pick.apiKey, identity: 'brainrouter' as const };
   }
   if (pick.kind === 'remote-http') {
     return { type: 'http' as const, url: pick.url, apiKey: pick.apiKey, identity: 'brainrouter' as const };
@@ -572,7 +627,15 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 function formatMcpSummary(pick?: McpPick): string {
   if (!pick) return '(unset)';
   if (pick.kind === 'local-stdio') return 'local stdio (brainrouter-mcp)';
-  if (pick.kind === 'local-http') return 'local http (http://localhost:3747/mcp)';
-  if (pick.kind === 'remote-http') return `remote · ${pick.url}`;
+  if (pick.kind === 'local-http') {
+    return pick.apiKey
+      ? `local http (http://localhost:3747/mcp) · key ${maskApiKey(pick.apiKey)}`
+      : 'local http (http://localhost:3747/mcp) · no key';
+  }
+  if (pick.kind === 'remote-http') {
+    return pick.apiKey
+      ? `remote · ${pick.url} · key ${maskApiKey(pick.apiKey)}`
+      : `remote · ${pick.url} · no key`;
+  }
   return 'skipped (offline-only)';
 }

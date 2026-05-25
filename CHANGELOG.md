@@ -186,6 +186,20 @@ separate `brainrouter login` / `brainrouter config` subcommand dance.
   prompts "Update LLM credentials?" with the current state shown —
   Skip keeps existing, Update re-enters the `editLlm` flow (provider
   → API key → model).
+- **BrainRouter MCP API key input.** The wizard, `/login`, and
+  `/config` MCP editor all silently skipped collecting the
+  `BRAINROUTER_API_KEY` for HTTP transports (`local-http` had no
+  prompt at all; `remote-http` had it only in `/login`, and even
+  there `BRAINROUTER_API_KEY` wasn't pre-filled). Both transports
+  now prompt via a shared `promptBrainrouterApiKey` helper —
+  pre-filled from the env var, then from the existing saved key,
+  blank-OK for unauthenticated servers. `McpPick.local-http`
+  gained an `apiKey` field; `mcpPickToServerConfig` (in both the
+  Ink and legacy wizard runners) and the Done-step summary now
+  carry it through. Without these the runtime
+  ([`mcpClient.ts:211`](brainrouter-cli/src/runtime/mcpClient.ts))
+  could never send `Authorization: Bearer <key>` because the field
+  was unreachable from the UI.
 
 ### Docs
 

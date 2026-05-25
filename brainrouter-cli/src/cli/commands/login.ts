@@ -10,7 +10,7 @@ const pickFromList = runPicker;
 const promptText = runTextField;
 import { buildTheme, type Theme } from '../theme.js';
 import { readPreferences } from '../../state/preferencesStore.js';
-import { editLlm } from './config.js';
+import { editLlm, promptBrainrouterApiKey } from './config.js';
 
 /**
  * `/login` slash command — 0.3.7 redesign on the new internal picker.
@@ -49,14 +49,28 @@ export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolea
       serverConfig = { type: 'stdio', command: 'brainrouter-mcp', args: [], identity: 'brainrouter' };
       profileName = 'local-stdio';
     } else if (transport.id === 'local-http') {
-      serverConfig = { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' };
+      // 0.3.7 — collect the BrainRouter API key even for local-http.
+      // brainrouter-mcp HTTP servers can require auth (BRAINROUTER_API_KEY
+      // set in their server.env). Pre-fill from the env var; blank is OK
+      // for unauthenticated dev servers.
+      const apiKey = await promptBrainrouterApiKey(theme, 'local', ctx.config.servers['local-http']?.apiKey);
+      if (apiKey === undefined) {
+        console.log(chalk.yellow('\n  /login cancelled.\n'));
+        return true;
+      }
+      serverConfig = {
+        type: 'http',
+        url: 'http://localhost:3747/mcp',
+        apiKey: apiKey || undefined,
+        identity: 'brainrouter',
+      };
       profileName = 'local-http';
     } else {
       const urlResult = await promptText({
         theme,
         title: 'Remote MCP URL',
         subtitle: 'Paste the full URL (e.g. https://brainrouter.example.com/mcp).',
-        prefilled: '',
+        prefilled: ctx.config.servers['remote']?.url ?? '',
         placeholder: 'https://...',
         validate: (raw) => {
           const v = raw.trim();
@@ -70,14 +84,11 @@ export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolea
         return true;
       }
       const url = urlResult.text.trim();
-      const keyResult = await promptText({
-        theme,
-        title: 'API key (optional)',
-        subtitle: 'Press ENTER to skip — only some MCP servers require a key.',
-        prefilled: '',
-        placeholder: '(none)',
-      });
-      const apiKey = keyResult.kind === 'accept' ? keyResult.text.trim() : '';
+      const apiKey = await promptBrainrouterApiKey(theme, 'remote', ctx.config.servers['remote']?.apiKey);
+      if (apiKey === undefined) {
+        console.log(chalk.yellow('\n  /login cancelled.\n'));
+        return true;
+      }
       serverConfig = { type: 'http', url, apiKey: apiKey || undefined, identity: 'brainrouter' };
       profileName = 'remote';
     }
