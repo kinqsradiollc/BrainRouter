@@ -2,10 +2,9 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
-import { marked } from 'marked';
-import { markedTerminal } from 'marked-terminal';
 import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
 import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
+import { renderMarkdown } from './markdownRender.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -43,7 +42,9 @@ import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
  *   - palette: 'closed' | 'open' — visible when value starts with `/`
  */
 
-marked.use(markedTerminal({ showSectionPrefix: false }) as any);
+// marked + marked-terminal are configured in ./markdownRender.ts so the
+// Ink path has its own knob set (no internal wrapping, stronger heading
+// hierarchy, fence unwrapping, ANSI re-scoping). Don't reconfigure here.
 
 // --- Public props ------------------------------------------------------
 
@@ -426,32 +427,53 @@ function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentC
     case 'raw':
       return <Text>{entry.text}</Text>;
     case 'user':
+      // Flex layout: ❯ on the left, prompt body in an inner column that
+      // takes the remaining width. Continuation lines (when the user
+      // pastes a multi-line prompt) align under the body column, not
+      // under the caret.
       return (
         <Box marginTop={1}>
           <Text color={accentColor}>❯ </Text>
-          <Text>{entry.text}</Text>
+          <Box flexDirection="column" flexGrow={1}>
+            <Text>{entry.text}</Text>
+          </Box>
         </Box>
       );
     case 'assistant': {
-      // Render the assistant body via marked-terminal so markdown is
-      // formatted, then prefix the first line with ⏺ and indent the rest.
-      // `raw: true` skips marked — the caller already rendered (avoids
-      // double-rendering when runChat pre-marks) or the user has the
-      // rawScrollback preference enabled.
-      const rendered = typeof entry.text === 'string' ? entry.text : String(entry.text);
-      const lines = (entry.raw ? rendered : markedSafe(rendered)).trimEnd().split('\n');
+      // Pass the WHOLE rendered markdown to a single <Text> instead of
+      // splitting on \n and re-rendering each line. The old line-split
+      // approach broke ANSI styling that spans newlines — e.g. a
+      // multi-line blockquote whose `gray italic` open code sat on line
+      // 1 but whose close code sat on line 3 lost its style on lines
+      // 2-3. `renderMarkdown` re-scopes the styling per line so the
+      // single <Text> reads cleanly.
+      //
+      // The `⏺` lives in its own Text to the left of the body. The body
+      // Box has flexGrow=1 so it takes the remaining terminal width and
+      // Ink's wrap-ansi handles reflow inside it. Continuation lines
+      // (both from wrap and from explicit \n in the rendered output)
+      // align under the body column.
+      //
+      // `entry.raw === true` (user's rawScrollback preference) skips
+      // marked entirely — useful when the user wants to see the LLM's
+      // literal markdown source.
+      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text)).trimEnd();
       const meta = entry.durationMs !== undefined
         ? `  ${Math.floor(entry.durationMs / 1000)}s${entry.tokensIn !== undefined ? ` · ${entry.tokensIn.toLocaleString()} in / ${entry.tokensOut?.toLocaleString() ?? 0} out` : ''}`
         : '';
       return (
         <Box flexDirection="column" marginTop={1}>
-          {lines.map((line, i) => (
-            <Box key={i}>
-              {i === 0 ? <Text color="green">⏺ </Text> : <Text>{'  '}</Text>}
-              <Text>{line}</Text>
+          <Box>
+            <Text color="green">⏺ </Text>
+            <Box flexDirection="column" flexGrow={1}>
+              <Text>{rendered}</Text>
             </Box>
-          ))}
-          {meta ? <Text color="gray" dimColor>{meta}</Text> : null}
+          </Box>
+          {meta ? (
+            <Box paddingLeft={2}>
+              <Text color="gray" dimColor>{meta}</Text>
+            </Box>
+          ) : null}
         </Box>
       );
     }
@@ -762,14 +784,6 @@ function seedScrollback(banner: string, offline: string | undefined, hint: strin
   if (offline) out.push({ id: next(), kind: 'raw', text: offline });
   out.push({ id: next(), kind: 'raw', text: hint });
   return out;
-}
-
-function markedSafe(text: string): string {
-  try {
-    return String(marked.parse(text));
-  } catch {
-    return text;
-  }
 }
 
 export function filterPaletteCommands(commands: SlashCommandDef[], query: string): SlashCommandDef[] {
