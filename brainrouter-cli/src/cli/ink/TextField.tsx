@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { Frame } from './Frame.js';
 
@@ -42,12 +42,22 @@ function themeToAccent(mode?: string): string | undefined {
 }
 
 export function TextField(props: TextFieldProps) {
+  const { exit } = useApp();
   const [value, setValue] = useState(props.prefilled ?? '');
   const [error, setError] = useState<string | undefined>(undefined);
 
+  // Bridge: pair onResolve with exit() so `instance.waitUntilExit()`
+  // in runTextField actually resolves. Without this the form visibly
+  // accepts the input but the caller's promise hangs — same bug class
+  // as Picker.tsx had. WizardApp.tsx is the working reference.
+  const finish = (result: TextFieldResult) => {
+    props.onResolve(result);
+    exit();
+  };
+
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === 'c')) {
-      props.onResolve({ kind: 'cancelled' });
+      finish({ kind: 'cancelled' });
     }
   });
 
@@ -59,7 +69,7 @@ export function TextField(props: TextFieldProps) {
         return;
       }
     }
-    props.onResolve({ kind: 'accept', text: next });
+    finish({ kind: 'accept', text: next });
   };
 
   const onChange = (next: string) => {

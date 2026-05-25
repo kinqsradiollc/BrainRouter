@@ -32,8 +32,17 @@ import { BOX, type Theme } from './theme.js';
 
 const VERSION = '0.3.6';
 const TITLE = '🧠 BrainRouter CLI';
-const MIN_WIDTH = 56;
+// Width floor for the BOXED banner. Below this we fall through to the
+// `renderPlainBanner` plaintext format. Was 56 — that caused the box to
+// overflow on terminals narrower than 58 cols (each row wrapped to
+// multiple terminal rows with broken border alignment). 38 fits a
+// 40-col terminal (the smallest realistic phone / split-pane width).
+const MIN_BOX_WIDTH = 38;
 const MAX_WIDTH = 100;
+// Below this width we skip the box entirely and render the rows as
+// "label: value" lines. The boxed format with horizontal borders +
+// title is meaningless when each border row wraps.
+const PLAIN_TEXT_THRESHOLD = 38;
 
 export interface BannerInputs {
   workspaceRoot: string;
@@ -171,8 +180,16 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
     titleText.length + 4,
   );
   const targetCols = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : MAX_WIDTH;
+
+  // Below the plaintext threshold the boxed layout is hostile (each
+  // border row wraps and looks chaotic). Fall back to a label:value
+  // text dump that the terminal can wrap naturally.
+  if (targetCols < PLAIN_TEXT_THRESHOLD) {
+    return renderPlainBanner(titleText, rows, theme);
+  }
+
   // Reserve 2 columns for the side borders.
-  const innerWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.min(naturalInner, targetCols - 2)));
+  const innerWidth = Math.max(MIN_BOX_WIDTH, Math.min(MAX_WIDTH, Math.min(naturalInner, targetCols - 2)));
 
   const top = (() => {
     // ╭─ <title> ──╮  — title sits inline at the top border.
@@ -190,6 +207,20 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
 
   const bottom = theme.primary(BOX.bottomLeft + BOX.horizontal.repeat(innerWidth) + BOX.bottomRight);
   return [top, ...bodyLines, bottom].join('\n');
+}
+
+/**
+ * Compact label:value text banner — used on terminals narrower than
+ * PLAIN_TEXT_THRESHOLD cols where the boxed layout's border rows
+ * would wrap and look broken. Same information, no chrome.
+ */
+function renderPlainBanner(titleText: string, rows: Row[], theme: Theme): string {
+  const labelWidth = rows.reduce((w, r) => Math.max(w, r.label.length), 0);
+  const headerLine = theme.primary(titleText);
+  const bodyLines = rows.map(
+    (row) => theme.muted(padRight(row.label, labelWidth) + '  ') + theme.plain(row.value),
+  );
+  return [headerLine, ...bodyLines].join('\n');
 }
 
 /**

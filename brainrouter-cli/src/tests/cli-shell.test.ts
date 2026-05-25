@@ -144,6 +144,35 @@ test('banner: offline mode reflected in mcp row', () => {
   });
 });
 
+test('banner: falls back to plain-text format on terminals under 38 cols', () => {
+  // Simulate a narrow phone-style terminal so the boxed render-path's
+  // borders would wrap and look broken. The fallback drops the box.
+  const originalColumns = process.stdout.columns;
+  try {
+    Object.defineProperty(process.stdout, 'columns', { value: 30, configurable: true });
+    withTempWorkspace((workspace) => {
+      const theme = buildTheme('mono');
+      const banner = renderBanner({
+        workspaceRoot: workspace,
+        mcpProfile: 'local-http',
+        mcpTransport: 'http',
+        mcpOnline: true,
+        sessionKey: 'abc12345',
+        model: 'gpt-4o-mini',
+      }, theme);
+      // Plain-text format has no box-drawing characters.
+      assert.doesNotMatch(banner, /[╭╮╰╯│]/);
+      // But the row data is still present.
+      assert.match(banner, /BrainRouter CLI/);
+      assert.match(banner, /workspace/);
+      assert.match(banner, /local-http/);
+      assert.match(banner, /gpt-4o-mini/);
+    });
+  } finally {
+    Object.defineProperty(process.stdout, 'columns', { value: originalColumns, configurable: true });
+  }
+});
+
 test('banner: brain row renders for BrainRouter MCP with online/offline state (10c)', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');

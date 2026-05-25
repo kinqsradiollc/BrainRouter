@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { Frame } from './Frame.js';
 
@@ -86,6 +86,7 @@ export function Picker(props: PickerProps) {
     ];
   }, [props.rows, props.allowOther, props.otherLabel, props.otherDescription]);
 
+  const { exit } = useApp();
   const [cursor, setCursor] = useState(() =>
     Math.max(0, Math.min(props.initialCursor ?? 0, augmentedRows.length - 1)),
   );
@@ -94,6 +95,17 @@ export function Picker(props: PickerProps) {
   );
   const [otherText, setOtherText] = useState(props.prefilledOther ?? '');
   const [preview, setPreview] = useState<string[] | undefined>(undefined);
+
+  // Bridge: call onResolve AND tell Ink to unmount.
+  // Without the explicit exit, `instance.waitUntilExit()` in
+  // `runPicker.tsx` never resolves — the picker visibly accepts the
+  // selection but the caller's promise hangs forever, which is exactly
+  // the "/config doesn't respond to enter / esc" symptom users hit.
+  // WizardApp.tsx has the same pattern (see its useEffect + exit() call).
+  const finish = (result: PickerResult) => {
+    props.onResolve(result);
+    exit();
+  };
 
   // Recompute preview when cursor moves OR on first mount.
   //
@@ -133,7 +145,7 @@ export function Picker(props: PickerProps) {
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
-      props.onResolve({ kind: 'cancelled' });
+      finish({ kind: 'cancelled' });
       return;
     }
     if (phase === 'other') {
@@ -159,11 +171,11 @@ export function Picker(props: PickerProps) {
         setPhase('other');
         return;
       }
-      props.onResolve({ kind: 'pick', id: row.id });
+      finish({ kind: 'pick', id: row.id });
       return;
     }
     if (key.escape || input === 'q') {
-      props.onResolve({ kind: 'cancelled' });
+      finish({ kind: 'cancelled' });
       return;
     }
   });
@@ -189,7 +201,7 @@ export function Picker(props: PickerProps) {
               onSubmit={(value) => {
                 const trimmed = value.trim();
                 if (!trimmed) return;
-                props.onResolve({ kind: 'other', text: trimmed });
+                finish({ kind: 'other', text: trimmed });
               }}
             />
           </Box>
