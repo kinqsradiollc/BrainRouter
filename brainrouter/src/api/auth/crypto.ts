@@ -41,9 +41,14 @@ export function verifyJwt(token: string, secret: string): Record<string, unknown
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [header, claims, signature] = parts;
-  const expected = createHmac("sha256", secret).update(`${header}.${claims}`).digest();
-  const actual = Buffer.from(signature, "base64url");
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+  // Compare in base64url string space so single-character changes to padding
+  // bits (e.g. "A" → "B" at the last position of a 32-byte HMAC) are caught.
+  // Raw-byte comparison misses these because base64url decoding ignores the
+  // bottom 2 bits of the final character.
+  const expected = createHmac("sha256", secret).update(`${header}.${claims}`).digest("base64url");
+  const expBuf = Buffer.from(expected);
+  const actBuf = Buffer.from(signature);
+  if (expBuf.length !== actBuf.length || !timingSafeEqual(expBuf, actBuf)) return null;
 
   try {
     const payload = JSON.parse(base64UrlDecode(claims).toString("utf8")) as Record<string, unknown>;
