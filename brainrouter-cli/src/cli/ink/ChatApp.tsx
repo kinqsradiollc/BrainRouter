@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Box, Static, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
@@ -26,10 +26,12 @@ import { useTerminalSize } from './useTerminalSize.js';
  *   │  model · session · ◉ effort                ? for shortcuts   │  ← footer
  *   └──────────────────────────────────────────────────────────────┘
  *
- * Scrollback rendering uses Ink's `<Static>` so finished entries
- * (banner, completed turns, completed slash command output) are
- * promoted out of the redraw region into terminal scrollback. This
- * is the same pattern claude-code uses.
+ * Scrollback stays in Ink's normal render tree. It is tempting to use
+ * `<Static>` for finished entries, but a chat shell has a permanently
+ * live composer below it; on terminal resize, the Static/dynamic split
+ * can leave old composer frames behind because the resize clear only
+ * applies to Ink's live region. Keeping the full frame diffable makes
+ * resize redraw exactly one prompt block.
  *
  * Slash palette is a child component: when the input buffer becomes
  * `/`, the palette renders BELOW the composer with the filtered
@@ -105,6 +107,17 @@ export interface ChatController {
   setFooter: (patch: Partial<FooterState & { accessMode: 'read' | 'write' | 'shell' }>) => void;
   /** Programmatically inject text into the composer (e.g. workflow.ts loop tick). */
   setComposer: (text: string) => void;
+  /**
+   * Render `node` as an overlay above the chat composer. The composer
+   * hides while the overlay is active so the overlay's own useInput
+   * handlers own keystrokes. Used by `runPicker` / `runTextField` to
+   * show /config, /login, /init pickers WITHOUT mounting a second Ink
+   * instance (which would race the chat for stdin and terminal state).
+   * Promise resolves when `clearOverlay()` is called.
+   */
+  showOverlay: (node: React.ReactElement) => Promise<void>;
+  /** Remove whatever overlay is currently shown; safe to call when none is set. */
+  clearOverlay: () => void;
   /** Exit the chat app gracefully. */
   exit: () => void;
 }
@@ -167,10 +180,14 @@ export function ChatApp({
   initialFooter = {},
 }: ChatAppProps) {
   const { exit } = useApp();
-  // useTerminalSize subscribes to stdout 'resize' so dividers, footer,
-  // and slash palette automatically reflow when the user resizes the
-  // window. Reading stdout.columns directly didn't pick up every
-  // resize cleanly — see useTerminalSize.ts for the rationale.
+  // useTerminalSize subscribes to stdout 'resize' and pushes the new
+  // width into React state, forcing a re-render. Reading
+  // useStdout().stdout.columns inline LOOKS like it would work (it's a
+  // live getter and Ink claims to re-render on resize), but in practice
+  // the dividers + footer + slash palette were left at the OLD width
+  // until the next unrelated state change — which is what causes the
+  // duplicated/growing dash residue when dragging the window. See
+  // useTerminalSize.ts for the full rationale.
   const { columns: cols } = useTerminalSize();
 
   const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(initialBanner, initialOfflineWarning, initialHint));
@@ -186,6 +203,15 @@ export function ChatApp({
    * "Claude is still working" cue (CHANGELOG v2.1.130 entry 154).
    */
   const [turnElapsedMs, setTurnElapsedMs] = useState(0);
+  /**
+   * Overlay slot — when set, hides the composer + palette and renders
+   * the overlay node instead. Set via controller.showOverlay; cleared
+   * via controller.clearOverlay. Used by runPicker/runTextField so
+   * /config /login /init render inside the chat Ink (not as a second
+   * Ink mount that would fight for stdin).
+   */
+  const [overlay, setOverlay] = useState<React.ReactElement | null>(null);
+  const overlayResolveRef = useRef<(() => void) | null>(null);
   /**
    * Slash palette cursor — lifted out of SlashPalettePanel so this
    * component owns both the highlight + the keystroke handlers.
@@ -244,6 +270,19 @@ export function ChatApp({
         setFooter((prev) => ({ ...prev, ...patch }));
       },
       setComposer: (text) => setComposerValue(text),
+      showOverlay: (node) => new Promise<void>((resolve) => {
+        // Save the resolver; clearOverlay() will fire it. Setting the
+        // overlay React state hides the composer next render so the
+        // overlay's own useInput hooks own keystrokes uncontested.
+        overlayResolveRef.current = resolve;
+        setOverlay(node);
+      }),
+      clearOverlay: () => {
+        setOverlay(null);
+        const r = overlayResolveRef.current;
+        overlayResolveRef.current = null;
+        if (r) r();
+      },
       exit,
     });
     // Run exactly once — the controller's identity is stable across renders.
@@ -311,14 +350,13 @@ export function ChatApp({
   // slash palette is open, arrow keys navigate it and Tab autocompletes
   // the highlighted command into the composer.
   //
-  // Why centralize here vs inside SlashPalettePanel: ink-text-input also
-  // uses `useInput` and consumes some key events. Up/down arrows are
-  // no-ops in a single-line text input so they don't conflict, but if
-  // we added the panel-level handler it would still receive the events
-  // even when the panel was unmounted (different mount-cycle bug).
-  // Centralizing keeps the precedence explicit and the handler scoped
-  // to ChatApp's lifetime.
+  // CRITICAL: when an overlay is active (e.g. /config picker), this
+  // handler returns immediately so the overlay's useInput owns every
+  // keystroke uncontested. Without this, Ctrl+C / Shift+Tab would
+  // still fire from chat-level and cause double-handling — the kind
+  // of bug that makes "/config exits to bash" symptoms.
   useInput((input, key) => {
+    if (overlay !== null) return;
     if (key.ctrl && (input === 'c' || input === 'd')) {
       exit();
       return;
@@ -355,61 +393,88 @@ export function ChatApp({
     }
   });
 
-  const divider = '─'.repeat(Math.max(20, cols - 1));
-
   return (
     <Box flexDirection="column">
-      {/* Scrollback (promoted out of the redraw region per render). */}
-      <Static items={scrollback}>
-        {(entry) => <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} />}
-      </Static>
-
-      {/* Active turn spinner. Warms to amber after 10s ("still working"
-          cue lifted from claude-code v2.1.130). Label is the runChat
-          adapter's status text — typically the formatted active tool. */}
-      {phase === 'turn-running' ? (
-        <Box>
-          <Text color={turnElapsedMs >= 10_000 ? 'yellow' : 'green'}>
-            {React.createElement(Spinner as any, { type: 'dots' })}
-          </Text>
-          <Text color="gray">  {spinnerLabel}</Text>
-        </Box>
-      ) : null}
-
-      {/* Composer + slash palette stack. */}
+      {/* Scrollback is part of the diffed frame so terminal resize can
+          clear and redraw the scrollback + composer as one coherent
+          layout. Splitting it into <Static> caused duplicate composer
+          blocks to accumulate while dragging the window. */}
       <Box flexDirection="column">
-        <Text color={accentColor} dimColor>{divider}</Text>
-        <Box>
-          <Text color={accentColor}>{' ❯ '}</Text>
-          <TextInput
-            value={composerValue}
-            onChange={setComposerValue}
-            onSubmit={onComposerSubmit}
-            placeholder={phase === 'turn-running' ? '' : 'type a prompt or / for commands'}
-          />
-        </Box>
-        <Text color={accentColor} dimColor>{divider}</Text>
+        {scrollback.map((entry) => (
+          <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} />
+        ))}
       </Box>
 
-      {/* Slash palette — renders below composer when the user is typing `/`. */}
-      {slashQuery !== null ? (
-        <SlashPalettePanel
-          matches={paletteMatches}
-          cursor={paletteCursor}
-          accentColor={accentColor}
-          cols={cols}
-        />
-      ) : null}
+      {/* Overlay (e.g. /config picker) — when active, it OWNS the
+          dynamic region: spinner, composer, palette all hide so the
+          overlay's own useInput owns keystrokes uncontested. */}
+      {overlay !== null ? (
+        <>
+          {overlay}
+          <FooterStatus
+            promptLabel={promptLabel}
+            phase={phase}
+            accentColor={accentColor}
+            accessMode={accessMode}
+            footer={footer}
+            cols={cols}
+          />
+        </>
+      ) : (
+        <>
+          {/* Active turn spinner. Warms to amber after 10s ("still working"
+              cue lifted from claude-code v2.1.130). Label is the runChat
+              adapter's status text — typically the formatted active tool.
+              wrap="truncate" on the label so a long tool call header
+              (Bash(...long command...)) doesn't wrap and leave residue. */}
+          {phase === 'turn-running' ? (
+            <Box>
+              <Text color={turnElapsedMs >= 10_000 ? 'yellow' : 'green'}>
+                {React.createElement(Spinner as any, { type: 'dots' })}
+              </Text>
+              <Text color="gray" wrap="truncate">  {spinnerLabel}</Text>
+            </Box>
+          ) : null}
 
-      {/* Footer status line. */}
-      <FooterStatus
-        promptLabel={promptLabel}
-        phase={phase}
-        accentColor={accentColor}
-        accessMode={accessMode}
-        footer={footer}
-        cols={cols}
-      />
+          {/* Composer with top + bottom dividers, EXACTLY cols-2 chars wide
+              so they never visually wrap in the current terminal (which
+              would leave residue on resize). Reading `cols` inline ensures
+              the divider length tracks the current width. */}
+          <Box flexDirection="column">
+            <Text color={accentColor} dimColor>{'─'.repeat(Math.max(10, cols - 2))}</Text>
+            <Box>
+              <Text color={accentColor}>{' ❯ '}</Text>
+              <TextInput
+                value={composerValue}
+                onChange={setComposerValue}
+                onSubmit={onComposerSubmit}
+                placeholder={phase === 'turn-running' ? '' : 'type a prompt or / for commands'}
+              />
+            </Box>
+            <Text color={accentColor} dimColor>{'─'.repeat(Math.max(10, cols - 2))}</Text>
+          </Box>
+
+          {/* Slash palette — renders below composer when the user is typing `/`. */}
+          {slashQuery !== null ? (
+            <SlashPalettePanel
+              matches={paletteMatches}
+              cursor={paletteCursor}
+              accentColor={accentColor}
+              cols={cols}
+            />
+          ) : null}
+
+          {/* Footer status line. */}
+          <FooterStatus
+            promptLabel={promptLabel}
+            phase={phase}
+            accentColor={accentColor}
+            accessMode={accessMode}
+            footer={footer}
+            cols={cols}
+          />
+        </>
+      )}
     </Box>
   );
 }
@@ -430,7 +495,11 @@ export function ChatApp({
 function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
   switch (entry.kind) {
     case 'raw':
-      return <Text>{entry.text}</Text>;
+      // Raw entries are already terminal-rendered blocks (startup
+      // banner, offline warning, hints). Letting them wrap at the
+      // terminal layer breaks Ink's frame-height accounting during
+      // resize, leaving split banner fragments in scrollback.
+      return <Text wrap="truncate">{entry.text}</Text>;
     case 'user':
       // Flex layout: ❯ on the left, prompt body in an inner column that
       // takes the remaining width. Continuation lines (when the user
@@ -778,31 +847,39 @@ function FooterStatus({
   const showEffortLabel = cols >= 50;
   const showEffortGlyph = !!effortGlyph && cols >= 40;
   const showRightHint = cols >= 60;
-  const showPromptLabel = !showLeftSegs && phase === 'idle' && !footer.effort && cols >= 40;
+  const rightText = showRightHint
+    ? (cols >= 80 ? '? for shortcuts  ·  / for commands' : '?  ·  /')
+    : '';
 
+  // Render the WHOLE footer as a single Text with nested Text children
+  // for the colored pill and glyphs. wrap="truncate" on the outer Text
+  // ensures it NEVER visually wraps (which is what causes Ink's diff
+  // to leave residue on resize — each wrap-overflow row that Ink
+  // thinks is 1 logical row but is 2+ visual rows accumulates as
+  // duplicated composer/footer blocks on every resize).
+  //
+  // Ink supports nested Text — children inherit parent props (like
+  // wrap) but their own color/backgroundColor/bold etc. apply locally.
   return (
     <Box justifyContent="space-between" paddingX={1}>
-      <Box>
+      <Text wrap="truncate">
         <Text backgroundColor={pillBg} color={pillFg}>{` ◉ ${accessMode} `}</Text>
         {showEffortGlyph ? (
-          <>
-            <Text> </Text>
+          <Text>
+            {'  '}
             <Text color={effortColor}>{effortGlyph}</Text>
             {showEffortLabel ? <Text color="gray" dimColor>{` ${footer.effort}`}</Text> : null}
-          </>
+          </Text>
         ) : null}
         {showLeftSegs ? (
-          <Text color="gray" dimColor wrap="truncate">{'  ' + leftSegs.join(' · ')}</Text>
+          <Text color="gray" dimColor>{'  ' + leftSegs.join(' · ')}</Text>
         ) : null}
         {phase === 'turn-running' && cols >= 50 ? (
-          <Text color="gray" dimColor wrap="truncate">{'  · running'}</Text>
+          <Text color="gray" dimColor>{'  · running'}</Text>
         ) : null}
-        {showPromptLabel ? (
-          <Text color="gray" dimColor wrap="truncate">{'  ' + promptLabel}</Text>
-        ) : null}
-      </Box>
+      </Text>
       {showRightHint ? (
-        <Text color="gray" dimColor>{cols >= 80 ? '? for shortcuts  ·  / for commands' : '?  ·  /'}</Text>
+        <Text color="gray" dimColor wrap="truncate">{rightText}</Text>
       ) : null}
     </Box>
   );

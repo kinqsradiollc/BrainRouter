@@ -6,14 +6,20 @@ offline UX, multi-MCP foundation, goal/workflow decoupling
 See [`CHANGELOG.md`](CHANGELOG.md).
 
 In-flight: **0.3.7** — Terminal UI redesign + in-terminal config
-wizard. First-run users get a `Welcome → Theme → Provider → ApiKey →
-Model → MCP → AgentMd → Done` wizard inside the REPL instead of the
-old "exit, run `brainrouter login`, exit, run `brainrouter config`,
-exit" dance. A new `/config` panel surfaces every CLI knob through a
-single arrow-key picker. `/login` opens the MCP profile editor in-REPL.
+wizard **+ full Ink chat REPL**. First-run users get a
+`Welcome → Theme → Provider → ApiKey → Model → MCP → AgentMd → Done`
+wizard inside the REPL instead of the old "exit, run `brainrouter
+login`, exit, run `brainrouter config`, exit" dance. A new `/config`
+panel surfaces every CLI knob through a single arrow-key picker.
+`/login` opens the MCP profile editor in-REPL. The everyday turn loop
+itself was the last surface still on readline; it now renders through
+the same Ink tree (banner, composer, scrollback, tool events, slash
+palette, footer) with claude-code-style `⏺/⎿/◉` chrome and
+progressive collapse on resize. That last piece was originally a
+0.3.8 target; pulled forward to avoid shipping a split aesthetic.
 Quick-win parity items (cron `/schedule`, `/release-notes`, hooks
 JSON doc, deer-flow Strict Tool-Call Recovery, per-vendor MCP install
-snippets) follow. Full detail in
+snippets) carry into 0.3.8. Full detail in
 [`brainrouter-roadmap/0.3.7.md`](brainrouter-roadmap/0.3.7.md) and
 spec in [`docs/specs/0.3.7-terminal-ui-redesign.md`](docs/specs/0.3.7-terminal-ui-redesign.md).
 Live progress checklist in [`Tasks.md`](Tasks.md).
@@ -33,7 +39,7 @@ detail.
 | Release | Theme | Status |
 |---|---|---|
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge + context budget | _Shipped_ via PR #39 — all 11 items merged; 10d (local-only transcript fallback) deferred to 0.3.7 |
-| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | **Terminal UI redesign + in-terminal config wizard** + quick-win parity items | _In-flight_ — Item 6 (TUI parity + `/init` wizard + `/config` panel + `/login`) is the cycle headline; Items 1–5 (cron `/schedule`, `/release-notes`, hooks doc, deer-flow Strict Tool-Call Recovery, per-vendor MCP install snippets) follow |
+| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | **Terminal UI redesign + in-terminal config wizard + full Ink chat REPL** | _In-flight_ — Item 6 shipped + scope expanded (wizard + `/config` + `/login` + the chat REPL itself now diff through one Ink tree); Items 1–5 (cron `/schedule`, `/release-notes`, hooks doc, deer-flow Strict Tool-Call Recovery, per-vendor MCP install snippets) cut and carried into 0.3.8 |
 | [0.4.0](brainrouter-roadmap/0.4.0.md) | **Federation — many agents, one memory** | Designed — 5 stages + memory-quality augmentations from deer-flow / semble |
 | [0.4.x](brainrouter-roadmap/0.4.x.md) | Post-federation polish | Planned — dynamic subagents, worktree isolation, `/rewind`, `/context per-skill`, benchmark harness, progressive skill loading, code-aware chunking |
 | [0.5.0](brainrouter-roadmap/0.5.0.md) | TUI cycle + plugin marketplace | Sketched — fullscreen renderer, plugin marketplace, gateway shape |

@@ -1,7 +1,7 @@
 import React from 'react';
-import { render } from 'ink';
 import { SlashPalette, type SlashCommandDef, type SlashPaletteResult } from './SlashPalette.js';
 import { resetStdinForReadline, snapshotStdinListeners } from './stdinHandoff.js';
+import { renderWithResizeClear } from './renderWithResizeClear.js';
 
 /**
  * Mount the slash palette Ink app and await the user's selection.
@@ -34,7 +34,7 @@ export async function runSlashPalette(opts: RunSlashPaletteOptions): Promise<Sla
   const snap = snapshotStdinListeners(['keypress', 'data']);
   return new Promise<SlashPaletteResult>((resolve) => {
     let captured: SlashPaletteResult | undefined;
-    const instance = render(
+    const { instance, cleanupResizeClear } = renderWithResizeClear(
       <SlashPalette
         initialQuery={opts.initialQuery}
         commands={opts.commands}
@@ -49,10 +49,12 @@ export async function runSlashPalette(opts: RunSlashPaletteOptions): Promise<Sla
       { exitOnCtrlC: false },
     );
     instance.waitUntilExit().then(() => {
+      cleanupResizeClear();
       snap.restore();
       resetStdinForReadline();
       resolve(captured ?? { kind: 'cancelled' });
     }).catch(() => {
+      cleanupResizeClear();
       snap.restore();
       resetStdinForReadline();
       resolve(captured ?? { kind: 'cancelled' });

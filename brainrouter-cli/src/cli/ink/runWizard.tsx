@@ -1,5 +1,4 @@
 import React from 'react';
-import { render } from 'ink';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -11,6 +10,7 @@ import { loadOrInitConfig, saveConfig, type Config } from '../../config/config.j
 import { initAgentMd } from '../../prompt/initAgentMd.js';
 import { NoTTYError } from '../cliPrompt.js';
 import { resetStdinForReadline } from './stdinHandoff.js';
+import { renderWithResizeClear } from './renderWithResizeClear.js';
 
 const ONBOARDED_MARKER = path.join(os.homedir(), '.config', 'brainrouter', '.onboarded');
 
@@ -55,7 +55,7 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
 
   const finalState = await new Promise<WizardState>((resolve) => {
     let captured: WizardState | undefined;
-    const instance = render(
+    const { instance, cleanupResizeClear } = renderWithResizeClear(
       <WizardApp workspaceRoot={opts.workspaceRoot} onFinish={(s) => {
         // Capture but DON'T resolve yet — we want to wait for Ink's
         // own unmount to complete (next tick) before handing stdin
@@ -73,6 +73,7 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
       },
     );
     instance.waitUntilExit().then(() => {
+      cleanupResizeClear();
       // Hand stdin back to the caller in a state where readline (or
       // anything else) can take it. Ink leaves stdin unref'd, in raw
       // mode false, with its 'readable' listener removed; without
@@ -82,6 +83,7 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
       resetStdinForReadline();
       resolve(captured ?? { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] } as WizardState);
     }).catch(() => {
+      cleanupResizeClear();
       resetStdinForReadline();
       resolve(captured ?? { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] } as WizardState);
     });

@@ -177,6 +177,45 @@ in priority order: explicit `ServerConfig.identity` > name prefix
   TTY, the CLI prints a one-time tip pointing at `?` / `/help` / `/where`.
 - **`?` keystroke** — a bare `?` on its own line opens `/help`.
 
+### Chat chrome (0.3.7+)
+
+The chat REPL renders through one Ink tree — banner, composer,
+scrollback, slash palette, and footer all diff together so terminal
+resize redraws the whole frame cleanly. Glyph cheatsheet:
+
+```
+⏺  assistant turn (green) / tool call header (green=ok, red=failed)
+⎿  tool result preview connector (first line; continuation lines
+   plain-indent to align under the connector body)
+❯  user prompt + composer caret
+◉  access mode pill (green=read, accent=write, red=shell)
+●/◐/○  effort glyph (high/medium/low)
+↳  dim italic explanation under a plan checklist
+```
+
+Composer is framed by two horizontal rules; the footer status line
+underneath shows `◉ access  ● effort  model · session · branch`
+on the left and `? for shortcuts  ·  / for commands` on the right.
+Both rows collapse progressively on narrow terminals (80 → 60 → 50 →
+40 cols, then floor of just the access pill).
+
+Typing `/` opens an inline slash command palette below the composer:
+arrow-keys navigate, Tab autocompletes the highlighted row into the
+buffer, Enter submits, Esc or backspace past `/` cancels. The palette
+filters as you type (`startsWith` → `contains` → description match).
+
+`/config`, `/login`, and `/init` render as overlays INSIDE the chat
+tree — there's no second Ink mount fighting for stdin. The overlay
+hides the composer while it owns keystrokes; closing it restores the
+composer in place.
+
+Spinner color warms from green to amber after 10s on a single turn
+(claude-code's "still working" cue). Markdown in assistant prose is
+rendered through marked + marked-terminal with code-fence unwrap and
+per-line ANSI re-scope so multi-line blockquotes / lists keep their
+styling across newlines. Set `/raw on` to bypass markdown rendering
+and see the model's literal source.
+
 ### Statusline
 
 `/statusline <segments>` configures a comma-separated subset of:

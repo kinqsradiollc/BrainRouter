@@ -2,7 +2,6 @@ import React from 'react';
 import readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
-import { render } from 'ink';
 import chalk from 'chalk';
 import type { Agent } from '../../agent/agent.js';
 import type { McpClientWrapper } from '../../runtime/mcpClient.js';
@@ -28,6 +27,8 @@ import { ChatApp, type ChatController, type PushScrollback } from './ChatApp.js'
 import type { SlashCommandDef } from './SlashPalette.js';
 import { handleSlashCommand, lookupSlashDescription, SLASH_COMMANDS } from '../repl.js';
 import { formatToolCall } from './toolFormat.js';
+import { setAmbientChat } from './ambientChat.js';
+import { renderWithResizeClear } from './renderWithResizeClear.js';
 
 /**
  * Mount the full Ink-based chat REPL and run it until the user exits.
@@ -462,7 +463,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // commands that still write via chalk + console.log have their
   // output promoted ABOVE Ink's redraw region instead of clobbering it.
   return new Promise<void>((resolve) => {
-    const instance = render(
+    const { instance, cleanupResizeClear } = renderWithResizeClear(
       <ChatApp
         initialBanner={'\n' + banner}
         initialOfflineWarning={offlineWarning}
@@ -481,6 +482,14 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // readline" while the Ink REPL owns stdin. Without this, every
           // mid-turn yes/no prompt returns its default silently.
           setActiveReadline(shim as unknown as readline.Interface);
+          // Publish the controller so runPicker / runTextField route their
+          // UI through the chat's overlay slot instead of mounting a
+          // second Ink instance (which would race for stdin + terminal
+          // state). See ambientChat.ts for the rationale.
+          setAmbientChat({
+            showOverlay: ctrl.showOverlay,
+            clearOverlay: ctrl.clearOverlay,
+          });
           refreshFooter();
           armIdleHint();
         }}
@@ -539,6 +548,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     instance.waitUntilExit().then(async () => {
       exited = true;
       setActiveReadline(undefined);
+      setAmbientChat(undefined);
+      cleanupResizeClear();
       clearIdleHint();
       try { await mcpClient.close(); } catch { /* already closed */ }
       // Goodbye line is intentionally printed AFTER Ink unmounts so it
@@ -548,6 +559,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }).catch(async () => {
       exited = true;
       setActiveReadline(undefined);
+      setAmbientChat(undefined);
+      cleanupResizeClear();
       clearIdleHint();
       try { await mcpClient.close(); } catch { /* already closed */ }
       resolve();
@@ -564,7 +577,13 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
         runAgentTurnAsync: (prompt: string) => runChatTurn(prompt),
       });
     } catch (err: any) {
-      controller.push.notice(`Slash command "${command}" failed: ${err?.message ?? err}`);
+      controller.push.notice(`Slash command "${command}" failed: ${err?.message ?? err}`, 'error');
+    } finally {
+      // Pull any preferences / model / branch / effort changes the
+      // command made (e.g. /effort, /model, /theme, /statusline) so
+      // the footer reflects them immediately rather than waiting for
+      // the next chat turn to refresh.
+      refreshFooter();
     }
   }
 }

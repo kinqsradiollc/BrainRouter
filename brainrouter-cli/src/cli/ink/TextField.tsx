@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { Frame } from './Frame.js';
 
@@ -42,17 +42,15 @@ function themeToAccent(mode?: string): string | undefined {
 }
 
 export function TextField(props: TextFieldProps) {
-  const { exit } = useApp();
   const [value, setValue] = useState(props.prefilled ?? '');
   const [error, setError] = useState<string | undefined>(undefined);
 
-  // Bridge: pair onResolve with exit() so `instance.waitUntilExit()`
-  // in runTextField actually resolves. Without this the form visibly
-  // accepts the input but the caller's promise hangs — same bug class
-  // as Picker.tsx had. WizardApp.tsx is the working reference.
+  // Exit-agnostic: just resolves. The caller (runTextField for the
+  // standalone mount, or the chat overlay slot when invoked from inside
+  // the Ink chat REPL) decides what to do. See Picker.tsx comment for
+  // why a built-in `useApp().exit()` here would break the overlay path.
   const finish = (result: TextFieldResult) => {
     props.onResolve(result);
-    exit();
   };
 
   useInput((input, key) => {

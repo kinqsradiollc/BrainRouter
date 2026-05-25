@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { Frame } from './Frame.js';
 
@@ -86,7 +86,6 @@ export function Picker(props: PickerProps) {
     ];
   }, [props.rows, props.allowOther, props.otherLabel, props.otherDescription]);
 
-  const { exit } = useApp();
   const [cursor, setCursor] = useState(() =>
     Math.max(0, Math.min(props.initialCursor ?? 0, augmentedRows.length - 1)),
   );
@@ -96,15 +95,15 @@ export function Picker(props: PickerProps) {
   const [otherText, setOtherText] = useState(props.prefilledOther ?? '');
   const [preview, setPreview] = useState<string[] | undefined>(undefined);
 
-  // Bridge: call onResolve AND tell Ink to unmount.
-  // Without the explicit exit, `instance.waitUntilExit()` in
-  // `runPicker.tsx` never resolves — the picker visibly accepts the
-  // selection but the caller's promise hangs forever, which is exactly
-  // the "/config doesn't respond to enter / esc" symptom users hit.
-  // WizardApp.tsx has the same pattern (see its useEffect + exit() call).
+  // Picker is intentionally "exit-agnostic" — it just calls
+  // `props.onResolve(result)` and trusts the caller (runPicker or the
+  // chat overlay slot) to decide whether to unmount Ink. This matters
+  // because when Picker renders as an overlay INSIDE the chat Ink, an
+  // internal `useApp().exit()` would unmount the WHOLE chat instead of
+  // just hiding the picker. runPicker.tsx wraps Picker in a small
+  // `ExitWrapper` for the standalone mount that owns the exit.
   const finish = (result: PickerResult) => {
     props.onResolve(result);
-    exit();
   };
 
   // Recompute preview when cursor moves OR on first mount.

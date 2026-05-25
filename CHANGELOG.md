@@ -10,10 +10,14 @@ The full per-version history lives in [`brainrouter-changelog/`](brainrouter-cha
 
 ## [0.3.7] - Unreleased
 
-In-terminal configuration wizard + redesigned `/config` settings panel.
-The CLI now feels like Claude Code / Codex / Grok-CLI / DeepSeek-TUI for
-first-run onboarding — picker-driven, no JSON editing, no separate
-`brainrouter login` / `brainrouter config` subcommand dance.
+In-terminal configuration wizard, redesigned `/config` settings panel,
+**and the full Ink chat REPL** — every surface (banner, composer,
+scrollback, tool events, slash palette, footer) now diffs through one
+Ink tree instead of the readline + ANSI loop. The CLI feels like
+Claude Code / Codex / Grok-CLI / DeepSeek-TUI across the board:
+picker-driven first-run, claude-code-style `⏺/⎿/◉` glyphs throughout
+the turn loop, progressive collapse on resize, no JSON editing, no
+separate `brainrouter login` / `brainrouter config` subcommand dance.
 
 ### Features
 
@@ -62,6 +66,50 @@ first-run onboarding — picker-driven, no JSON editing, no separate
   same "save anyway / try a different transport / cancel" fallback
   as the wizard. The legacy `brainrouter login` subcommand still
   works for users who scripted it.
+- **Full Ink chat REPL** (originally a 0.3.8 target, pulled forward
+  to close the split-aesthetic gap left by the wizard rebuild).
+  Banner, composer, scrollback, tool events, slash palette, and
+  footer status all render through one diffed Ink tree in
+  [`cli/ink/ChatApp.tsx`](brainrouter-cli/src/cli/ink/ChatApp.tsx)
+  +
+  [`runChat.tsx`](brainrouter-cli/src/cli/ink/runChat.tsx).
+  Scrollback uses claude-code-style glyphs (`⏺` turn / tool header
+  in green/red, `⎿` preview connector, `◉ access` pill colored by
+  mode, `●/◐/○` effort glyphs). The spinner warms from green to
+  amber after 10s on a single turn (claude-code's "still working"
+  cue from v2.1.130). Markdown rendering rebuilt as a single
+  `<Text>` per turn so multi-line blockquotes / lists keep their
+  styling across newlines
+  ([`markdownRender.ts`](brainrouter-cli/src/cli/ink/markdownRender.ts)).
+  Tool-call previews get diff-aware coloring
+  ([`toolFormat.ts`](brainrouter-cli/src/cli/ink/toolFormat.ts)).
+- **Inline slash command palette.** Typing `/` opens a scrollable,
+  navigable list below the composer (10 rows visible, viewport
+  follows cursor, `↑ N more`/`↓ N more` hints at edges, fuzzy
+  ranking startsWith → contains → description-match). Tab
+  autocompletes the highlighted command; Enter submits; Esc /
+  backspace past `/` cancels. Implementation: panel mode in
+  [`cli/ink/ChatApp.tsx`](brainrouter-cli/src/cli/ink/ChatApp.tsx)
+  (no second Ink mount; lives inside the chat tree).
+- **In-chat overlay for `/config`, `/login`, `/init`.** Slash
+  commands that need their own picker render INSIDE the chat Ink
+  via a `ChatController.showOverlay` slot
+  ([`ambientChat.ts`](brainrouter-cli/src/cli/ink/ambientChat.ts)).
+  Mounting a second Ink instance on `process.stdin` made both
+  instances grab raw mode and split keystrokes unpredictably —
+  the bug behind `/config` hanging inside the chat. The overlay
+  path is the structural fix; the standalone path (for the legacy
+  readline REPL) still works via the same `runPicker` helper.
+- **Progressive collapse on resize** (footer / palette / hint row
+  shed segments at width breakpoints — 80 → 60 → 50 → 40 cols →
+  floor of just the `◉ access` pill). Dividers + footer + palette
+  reflow via a dedicated `useTerminalSize` hook that subscribes to
+  `stdout.on('resize')` and force-renders. Every Ink mount also
+  goes through
+  [`renderWithResizeClear`](brainrouter-cli/src/cli/ink/renderWithResizeClear.ts)
+  which clears the screen before Ink's own resize redraw — needed
+  because Ink only force-clears on some resize paths, and full-frame
+  panels leave residue otherwise.
 
 ### Improvements
 
@@ -98,14 +146,20 @@ first-run onboarding — picker-driven, no JSON editing, no separate
 
 ### Tests
 
-- **26 new tests** across `wizard.test.ts` + `config-command.test.ts`
-  covering: `STEP_ORDER` invariants, `reduceWizard` advance / back /
-  abort / warn / commit transitions, provider catalog shape, env-based
-  provider detection precedence, API-key validation tier (accept /
-  reject / warn-not-block), masking, picker `prefilledOther` +
-  `initialCursor` semantics, and `/config` argument-parsing routing
-  (home / raw / get / set / trimmed values). Full suite: brainrouter
-  262/262 + brainrouter-cli 238/238 = 500 green.
+- **80+ new tests** across `wizard.test.ts`, `config-command.test.ts`,
+  `ink-chat.test.ts`, `markdown-render.test.ts`, `tool-format.test.ts`,
+  `slash-suggest.test.ts`, `picker.test.ts`, `models-api.test.ts`.
+  Coverage at a glance: `STEP_ORDER` invariants, `reduceWizard`
+  advance / back / abort / warn / commit transitions; provider catalog
+  shape, env-based provider detection precedence; API-key validation
+  tier (accept / reject / warn-not-block) + masking; picker
+  `prefilledOther` + `initialCursor` semantics; `/config`
+  argument-parsing routing (home / raw / get / set / trimmed values);
+  scrollback entry shapes; markdown fence unwrap + per-line ANSI
+  re-scope; diff classification (add / del / hunk); `formatToolCall`
+  shapes (Read / Bash / Edit / Write / mcp_ namespaced); slash palette
+  filter ranking. Full suite: brainrouter 262/262 + brainrouter-cli
+  319/319 = 581 green. `npx tsc --noEmit` clean across both packages.
 
 ---
 
