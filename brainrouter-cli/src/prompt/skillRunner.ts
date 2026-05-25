@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 
 const requireFromHere = createRequire(import.meta.url);
 

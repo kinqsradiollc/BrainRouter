@@ -11,7 +11,7 @@
 import chalk from 'chalk';
 import { spinner } from '../spinner.js';
 import type { Agent } from '../../agent/agent.js';
-import type { McpClientWrapper } from '../../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { clampPayload, extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../../prompt/skillRunner.js';

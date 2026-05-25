@@ -1,5 +1,10 @@
 import { Agent } from '../agent/agent.js';
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
+// 0.3.7 — Multi-MCP support. The orchestrator forwards the parent's
+// pool to spawned children so a child can call tools across every
+// configured MCP server, not just the one the parent happened to be
+// connected to. The Pool's facade matches the single-Wrapper API so
+// this is a near-no-op type swap.
+import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
 import {
   createSession,

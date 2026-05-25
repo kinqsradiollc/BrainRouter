@@ -4,7 +4,11 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
+// 0.3.7 — Agent now talks to a Pool of MCP servers. The Pool's public
+// surface matches McpClientWrapper's (listTools / callTool / isConnected /
+// getIdentity / getServerName / close), so existing call sites stay
+// unchanged. Single-server setups become a degenerate pool of one.
+import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
 import { appendTranscriptEntry } from '../state/sessionStore.js';

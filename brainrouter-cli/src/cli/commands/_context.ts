@@ -14,7 +14,7 @@
 
 import type readline from 'node:readline';
 import type { Agent } from '../../agent/agent.js';
-import type { McpClientWrapper } from '../../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
 import type { Config } from '../../config/config.js';
 
 /**

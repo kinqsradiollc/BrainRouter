@@ -88,6 +88,8 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
+import { McpClientPool } from './runtime/mcpPool.js';
+import type { ServerConfig } from './config/config.js';
 import { Agent } from './agent/agent.js';
 import { runChat } from './cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
@@ -158,25 +160,43 @@ program
     }
 
     const config = loadConfig();
-    const profileName = options.profile || config.activeServer;
-    const configuredServer = config.servers[profileName];
 
-    if (!configuredServer) {
-      console.error(chalk.red(`Error: Profile "${profileName}" not found in config.`));
+    // 0.3.7 — multi-MCP support. Pre-0.3.7 we picked a single
+    // `activeServer` profile and ignored the rest. Now every entry in
+    // `config.servers` is attempted concurrently (Claude Code style);
+    // `activeServer` survives only as the "name the banner highlights"
+    // when more than one is connected. `--profile <name>` still wins —
+    // it scopes the pool to just that one server for users who want
+    // single-server mode.
+    const requestedProfile = options.profile as string | undefined;
+    const allServerIds = Object.keys(config.servers);
+    if (allServerIds.length === 0) {
+      console.error(chalk.red('Error: No MCP server profiles in config.'));
       console.error(chalk.gray('Run `/login` inside the REPL or `brainrouter login` to add a profile.'));
       process.exit(1);
     }
-
-    const serverConfig = { ...configuredServer };
-
-    if (serverConfig.type === 'stdio') {
-      const args = serverConfig.args ?? [];
-      const rootIndex = args.indexOf('--root');
-      serverConfig.args = rootIndex >= 0
-        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-        : [...args, '--root', workspace.workspaceRoot];
+    if (requestedProfile && !config.servers[requestedProfile]) {
+      console.error(chalk.red(`Error: Profile "${requestedProfile}" not found in config.`));
+      console.error(chalk.gray(`Available profiles: ${allServerIds.join(', ')}.`));
+      process.exit(1);
     }
-    config.servers[profileName] = serverConfig;
+    const targetIds = requestedProfile ? [requestedProfile] : allServerIds;
+
+    // Pre-process each target's serverConfig to thread workspaceRoot
+    // into the stdio `--root` arg shape the MCP server expects.
+    const targetServers: Record<string, ServerConfig> = {};
+    for (const id of targetIds) {
+      const cloned = { ...config.servers[id] };
+      if (cloned.type === 'stdio') {
+        const args = cloned.args ?? [];
+        const rootIndex = args.indexOf('--root');
+        cloned.args = rootIndex >= 0
+          ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
+          : [...args, '--root', workspace.workspaceRoot];
+      }
+      targetServers[id] = cloned;
+      config.servers[id] = cloned;
+    }
 
     const llm = config.llm || {
       provider: 'openai',
@@ -188,30 +208,27 @@ program
       llm.model = options.model;
     }
 
-    const mcpClient = new McpClientWrapper();
-    // "Connecting..." / "Successfully connected!" status lines intentionally
-    // dropped — they printed for the ~1-2s of connect AND scrolled the
-    // banner up. On success the banner's `mcp ... online` row IS the
-    // success signal; on failure the catch-block error + the post-banner
-    // OFFLINE MODE warning in the chat banner together cover both diagnosis
-    // and remediation.
-    try {
-      await mcpClient.connect(serverConfig, llm, profileName);
-    } catch (err: any) {
-      // Degraded "offline mode": the MCP server is the cognitive memory layer
-      // (recall, skills, capture, citations) — losing it is painful but not
-      // fatal. Local tools (read_file, write_file, list_dir, grep_search,
-      // run_command, spawn_agent) still work, and the agent's runTurn already
-      // try/catches every MCP call. Keep the REPL up so the user can edit
-      // code, drive shell commands, and recover when the server comes back.
-      // Pass --strict-mcp to flip back to hard-fail (useful in CI).
-      console.error(chalk.red(`Failed to connect to MCP server: ${err.message}`));
+    // Connect everyone concurrently — offline servers don't block.
+    // "Connecting..." status lines intentionally dropped (see prior
+    // comment); the banner's per-server row is the success signal.
+    const mcpClient = new McpClientPool();
+    const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    const failures = statuses.filter((s) => s.status === 'failed');
+    if (failures.length === statuses.length) {
+      // Every server failed — equivalent to the pre-0.3.7 "MCP
+      // unreachable" path; same --strict-mcp semantics apply.
+      const summary = failures.map((s) => `${s.serverId}: ${s.error ?? 'unknown error'}`).join('\n  ');
+      console.error(chalk.red(`Failed to connect to any MCP server:\n  ${summary}`));
       if (options.strictMcp) {
         console.error(chalk.gray('--strict-mcp set; exiting.'));
         process.exit(1);
       }
-      // The banner-adjacent OFFLINE MODE warning in the chat REPL covers the
-      // remediation hint. No second warning here.
+      // Falls through to offline-mode REPL — banner shows the warning.
+    } else if (failures.length > 0) {
+      // Partial failure — surface the failing server names without
+      // exiting; user can /mcp reconnect <id> later.
+      const failed = failures.map((s) => s.serverId).join(', ');
+      console.error(chalk.yellow(`⚠ ${failures.length} of ${statuses.length} MCP servers offline: ${failed}. Other servers connected; use /mcp to inspect.`));
     }
 
     const agent = new Agent(mcpClient, llm, {
@@ -275,34 +292,53 @@ program
     applyWorkspaceRoot(workspace.workspaceRoot);
 
     const config = loadConfig();
-    const profileName = options.profile || config.activeServer;
-    const serverConfig = { ...config.servers[profileName] };
-    if (!serverConfig) {
-      console.error(`Error: Profile "${profileName}" not found.`);
+    // Multi-MCP: like `chat`, connect everyone in `config.servers`
+    // concurrently. `--profile <name>` scopes to one. Falls back to
+    // all configured profiles otherwise.
+    const requestedProfile = options.profile as string | undefined;
+    const allServerIds = Object.keys(config.servers);
+    if (allServerIds.length === 0) {
+      console.error('Error: No MCP server profiles in config.');
       process.exit(1);
     }
-    if (serverConfig.type === 'stdio') {
-      const args = serverConfig.args ?? [];
-      const rootIndex = args.indexOf('--root');
-      serverConfig.args = rootIndex >= 0
-        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-        : [...args, '--root', workspace.workspaceRoot];
+    if (requestedProfile && !config.servers[requestedProfile]) {
+      console.error(`Error: Profile "${requestedProfile}" not found.`);
+      process.exit(1);
+    }
+    const targetIds = requestedProfile ? [requestedProfile] : allServerIds;
+    const targetServers: Record<string, ServerConfig> = {};
+    for (const id of targetIds) {
+      const cloned = { ...config.servers[id] };
+      if (cloned.type === 'stdio') {
+        const args = cloned.args ?? [];
+        const rootIndex = args.indexOf('--root');
+        cloned.args = rootIndex >= 0
+          ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
+          : [...args, '--root', workspace.workspaceRoot];
+      }
+      targetServers[id] = cloned;
     }
 
     const llm = config.llm ?? { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
     if (options.model) llm.model = options.model;
 
-    const mcpClient = new McpClientWrapper();
-    try {
-      await mcpClient.connect(serverConfig, llm, profileName);
-    } catch (err: any) {
-      console.error(`MCP connect failed: ${err.message}`);
+    const mcpClient = new McpClientPool();
+    const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    const allFailed = statuses.length > 0 && statuses.every((s) => s.status === 'failed');
+    if (allFailed) {
+      const summary = statuses.map((s) => `${s.serverId}: ${s.error ?? 'unknown'}`).join('; ');
+      console.error(`MCP connect failed (all servers): ${summary}`);
       if (options.strictMcp) process.exit(1);
       // Offline mode for one-shot: same rationale as the chat command — local
       // tools still work, MCP-backed calls return error envelopes the agent
       // already tolerates. Useful when piping a quick "read this file and
       // summarize" while the MCP server is down. CI can pass --strict-mcp.
       console.error('Continuing in offline mode (no memory recall / skills). Pass --strict-mcp to exit instead.');
+    } else {
+      const failed = statuses.filter((s) => s.status === 'failed');
+      if (failed.length > 0) {
+        process.stderr.write(`[mcp] ${failed.length} of ${statuses.length} servers offline: ${failed.map((f) => f.serverId).join(', ')}\n`);
+      }
     }
 
     const agent = new Agent(mcpClient, llm, {

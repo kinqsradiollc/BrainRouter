@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import type { Agent } from '../agent/agent.js';
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import type { Config } from '../config/config.js';
 import type { ReplContext } from './commands/_context.js';
 // Category dispatch — extracted slash-command handlers. Each module exports

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import type { Agent } from '../../agent/agent.js';
-import type { McpClientWrapper } from '../../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
 import type { Config } from '../../config/config.js';
 import type { WorkspaceInfo } from '../../config/workspace.js';
 import { resolveTheme } from '../theme.js';

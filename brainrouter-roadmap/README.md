@@ -1,62 +1,46 @@
-# BrainRouter Roadmap
+# BrainRouter Roadmap Index
 
-Active released version: **0.3.5** — global-install UX fix
-([`@kinqs/brainrouter-cli` on npm](https://www.npmjs.com/package/@kinqs/brainrouter-cli)).
-
-In-flight: **0.3.6** — relevance judge, goal-loop hardening, dashboard
-markdown/Mermaid/KaTeX, `.env` template reorg, LLM pipeline robustness
-fixes, multi-workflow concurrency (PR #38), plus late-cycle context-budget
-work: system-prompt trim (~70%), recall gating via
-`BRAINROUTER_RECALL_MODE`, goal-prompt dedup, MCP identity tagging +
-brain-offline UX, and a scope-limited multi-MCP foundation
-(`/mcp list` / `/mcp reconnect` / `/mcp tools`). Full detail in
-[`0.3.6.md`](0.3.6.md). Live progress checklist in
-[`Tasks.md`](../Tasks.md).
-
-Next major target: **0.4.0 — Federation** (multi-CLI, multi-instance, shared
-memory). Design in [`0.4.0.md`](0.4.0.md).
+Detailed release plans live here. The root [`ROADMAP.md`](../ROADMAP.md)
+is the short executive view; this folder holds the implementation
+context for each release.
 
 ---
 
-## Per-release roadmaps
+## Current Flow
 
-| Release | Theme | Status |
-|---|---|---|
-| **[0.3.6](0.3.6.md)** | CLI UX tranche + multi-workflow + relevance judge + context budget | _In-flight_ — 11 items, 11 shipped (Items 1+2+3+4+5+6+7+8 via PRs #26 + #27 + #38 + #30 + #32 + #31 + #35 + #36; late-cycle Items 9 (context budget — system-prompt trim, recall gating, goal dedup), 10 (MCP identity + offline UX, 10d deferred to 0.3.7), and 11 (multi-MCP foundation) shipped in the context-budget branch). |
-| [0.3.7](0.3.7.md) | Quick wins post-0.3.6 | Planned — cron `/schedule`, `/release-notes`, hooks JSON doc, "Strict Tool-Call Recovery" pattern (deer-flow), per-vendor MCP install snippets (semble) |
-| [0.4.0](0.4.0.md) | **Federation — many agents, one memory** | Designed — 5 stages + memory-quality augmentations from deer-flow / semble |
-| [0.4.x](0.4.x.md) | Post-federation polish | Planned — dynamic subagents, worktree isolation, `/rewind`, `/context per-skill`, benchmark harness, progressive skill loading, code-aware chunking |
-| [0.5.0](0.5.0.md) | TUI cycle + plugin marketplace | Sketched — fullscreen renderer, plugin marketplace, gateway shape |
-| [Intentionally excluded](intentionally-excluded.md) | Out of scope | Voice mode, claude.ai Remote Control, IM gateways |
+| Order | Version | State | Main question |
+|---:|---|---|---|
+| 1 | **[0.3.7](0.3.7.md)** | In-flight | How do we finish the Ink/config CLI shell? |
+| 2 | **[0.3.8](0.3.8.md)** | Planned | How do we stop child-agent waiting/stuck behavior? |
+| 3 | **[0.4.0](0.4.0.md)** | Designed | How do multiple CLIs share one memory plane? |
+| 4 | **[0.4.x](0.4.x.md)** | Planned | How do we harden orchestration and brain agents? |
+| 5 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI and marketplace? |
 
-## Cross-cutting reference material
+Latest shipped: **[0.3.6](0.3.6.md)** on 2026-05-25.
 
-- **[`CHANGELOG.md`](../CHANGELOG.md)** + [`brainrouter-changelog/`](../brainrouter-changelog/) — what shipped, per version.
-- **[`openSrc/REFERENCES.md`](../openSrc/REFERENCES.md)** — peer-CLI projects we read for ideas (Claude Code, Codex, Antigravity, deer-flow, semble, etc.). Cited liberally in 0.3.7+ files.
+---
 
-## Recently completed (shipped versions, headline summary)
+## Roadmap Files
 
-See [`brainrouter-changelog/`](../brainrouter-changelog/) for the full per-version notes. Headlines:
+| File | Scope |
+|---|---|
+| [`0.3.6.md`](0.3.6.md) | Shipped 0.3.6 cycle reference |
+| [`0.3.7.md`](0.3.7.md) | Terminal UI redesign, wizard, `/config`, `/login`, Ink chat REPL |
+| [`0.3.8.md`](0.3.8.md) | CLI delegation reliability, child-drain guardrail, quick wins |
+| [`0.4.0.md`](0.4.0.md) | Federation MVP plus CLI multi-agent Phase 2 |
+| [`0.4.x.md`](0.4.x.md) | Post-federation CLI orchestration and MCP brain-agent roadmap |
+| [`0.5.0.md`](0.5.0.md) | Fullscreen TUI, plugin marketplace, cross-harness handoff |
+| [`intentionally-excluded.md`](intentionally-excluded.md) | Explicitly out-of-scope ideas |
 
-- **0.3.5** — global-install UX (`brainrouter-mcp init`, env-loader priority chain).
-- **0.3.4** — first public npm release; four `@kinqs/` packages.
-- **0.3.3** — `/goal` state machine; `usage_limited` status; token budget; wrap-up steering.
-- **0.3.2** — OTEL trace nesting; headless-mode slash-command rejection; GitHub-PR statusline segment.
-- **0.3.1** — reliability hardening: silent memory failure fixed, MCP timeouts, auto-compaction, fuzzy tool-name matching.
-- **0.3.0** — Terminal Agent CLI; multi-agent orchestration (`spawn_agent` × 5 roles); memory engine; hookify rules.
-- **0.2.0** — dashboard polish: Admin Users console; Memories Hub; Contradiction resolution UI.
+---
 
-## Up Next (post-0.5.0 wishlist)
+## Companion Docs
 
-These aren't yet sized into a specific release; they're the macro themes we expect to need.
-
-- **Docker image for the MCP server** — one-command `docker run` deploy so users don't manage Node/SQLite/embedding-dimension drift themselves.
-- **Dashboard memory explorer** — surface FTS/vector ranking signals + `memory_explain_recall` inline so users can audit *why* a record surfaced.
-- **Dashboard parity with CLI** — match goal lifecycle, hookify rules, and multi-agent orchestration in [`brainrouter-dashboard/`](../brainrouter-dashboard/).
-- **Provider matrix** — verified configs for OpenAI, Anthropic, Gemini, OpenRouter, and local backends (LM Studio, Ollama).
-- **`@kinqs/brainrouter-sdk` 1.0** — lock the public surface so external integrators can build against it without expecting renames.
-
-## Current status & verification
-
-- **Manual verification** — run late-phase integration scenarios against a live MCP HTTP server and dev server.
-- **Security check** — evaluate migrating the custom IP-based rate limiter in `brainrouter/src/index.ts` to `express-rate-limit` for production-grade deployments.
+| File | Purpose |
+|---|---|
+| [`../FULL_TASKS.MD`](../FULL_TASKS.MD) | Master implementation queue |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | Current shipped/in-flight changelog |
+| [`../brainrouter-changelog/README.md`](../brainrouter-changelog/README.md) | Per-version shipped history |
+| [`../FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md`](../FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md) | CLI multi-agent architecture |
+| [`../FEATURE_OPENHUMAN_BRAINROUTER.md`](../FEATURE_OPENHUMAN_BRAINROUTER.md) | MCP brain-agent architecture |
+| [`../openSrc/REFERENCES.md`](../openSrc/REFERENCES.md) | Vendored reference-project router |
