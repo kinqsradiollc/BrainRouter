@@ -47,19 +47,6 @@ export interface LLMConfig {
   maxTokens?: number;
   /** Anthropic `metadata.user_id` for per-user attribution (optional). */
   metadataUserId?: string;
-  /**
-   * Anthropic-only request shaping. Persisted in config.json so settings
-   * made via /config survive restarts. Env vars (BRAINROUTER_ANTHROPIC_*)
-   * still win when set so users can override per-shell without touching
-   * config.
-   */
-  anthropic?: {
-    cache?: boolean;
-    cacheTtl?: '5m' | '1h';
-    cacheTools?: boolean;
-    /** Comma-separated anthropic-beta header value. */
-    beta?: string;
-  };
 }
 
 export interface Config {

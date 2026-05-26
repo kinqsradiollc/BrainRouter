@@ -110,6 +110,18 @@ test('findProvider returns the entry for known ids and undefined for unknown', (
   assert.equal(findProvider('not-a-real-provider'), undefined);
 });
 
+test('PROVIDER_CATALOG exposes native Anthropic so the wizard can pick the /v1/messages adapter', () => {
+  const entry = findProvider('anthropic');
+  assert.ok(entry, 'anthropic provider entry must exist');
+  assert.equal(entry!.envKey, 'ANTHROPIC_API_KEY');
+  assert.equal(entry!.endpoint, 'https://api.anthropic.com/v1');
+  assert.equal(entry!.provider, 'anthropic', 'must dispatch through the anthropic adapter, not openai');
+  // Distinct from the OpenRouter-routed entry which keeps the openai dispatch.
+  const gateway = findProvider('anthropic-via-gateway');
+  assert.ok(gateway, 'anthropic-via-gateway must still exist');
+  assert.notEqual(gateway!.endpoint, entry!.endpoint);
+});
+
 test('detectProviderFromEnv picks the first catalog entry whose envKey is set', () => {
   // PROVIDER_CATALOG order = precedence. OpenAI is first; deepseek is next.
   // When only DEEPSEEK_API_KEY is set, deepseek wins.

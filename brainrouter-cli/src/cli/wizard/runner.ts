@@ -370,7 +370,7 @@ async function probeMcp(pick: McpPick, draft: WizardDraft): Promise<{ ok: boolea
   if (pick.kind === 'skip') return { ok: true };
   const wrapper = new McpClientWrapper();
   const llmConfig = draft.provider && draft.model
-    ? { provider: 'openai' as const, apiKey: draft.apiKey ?? '', model: draft.model, endpoint: draft.customEndpoint ?? draft.provider.endpoint }
+    ? { provider: draft.provider.provider ?? 'openai', apiKey: draft.apiKey ?? '', model: draft.model, endpoint: draft.customEndpoint ?? draft.provider.endpoint }
     : undefined;
   const serverConfig = mcpPickToServerConfig(pick);
   if (!serverConfig) return { ok: false, warning: 'Could not build MCP server config for this pick.' };
@@ -442,7 +442,7 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
   const config = loadOrInitConfig();
   if (draft.provider) {
     config.llm = {
-      provider: 'openai',
+      provider: draft.provider.provider ?? 'openai',
       apiKey: draft.apiKey ?? '',
       model: draft.model ?? draft.provider.defaultModel,
       endpoint: draft.customEndpoint ?? draft.provider.endpoint,
