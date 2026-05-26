@@ -13,12 +13,27 @@ live in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.3.10** | In progress | [`brainrouter-changelog/0.3.10.md`](brainrouter-changelog/0.3.10.md) |
+| **0.3.9** | In progress | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
 | **0.3.6** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.6.md`](brainrouter-changelog/0.3.6.md) |
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
 this changelog.
+
+---
+
+## [0.3.10] - Unreleased
+
+Native Anthropic Messages API parity. Closes the gaps left by 0.3.8's
+minimum-viable adapter so the CLI fully supports the official Claude
+API surface short of SSE streaming.
+
+- **Request side:** sampling params (`temperature`/`top_p`/`top_k`/`stop_sequences`) + `metadata.user_id` forwarded, multimodal user content blocks (image/document/text) passed through verbatim, 1h cache TTL exposed (auto-adds `extended-cache-ttl-2025-04-11` beta), cache breakpoint on the last tool definition (`BRAINROUTER_ANTHROPIC_CACHE_TOOLS=1`), pluggable `anthropic-beta` header via `BRAINROUTER_ANTHROPIC_BETA`.
+- **Response side:** `stop_reason` surfaced so truncation/`refusal`/`pause_turn` are distinguishable; `rawAssistantBlocks` returned for `thinking`-with-`signature` + `redacted_thinking` round-trip (required by the API for multi-turn extended thinking with tool_use); `cache_read_input_tokens` / `cache_creation_input_tokens` flow through `usage`; typed `AnthropicApiError` with `status`, `errorType`, and `retryAfterMs` parsed from the `retry-after` header for 429/529 backoff.
+
+Out of scope: SSE streaming (`stream: true`) — requires agent-loop refactor; built-in server tools (web_search/code_execution/computer_use) — usable today via the pluggable beta header.
 
 ---
 

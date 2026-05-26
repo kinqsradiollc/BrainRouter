@@ -13,6 +13,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.3.10](0.3.10.md)** | Unreleased | In progress | Native Anthropic Messages API parity — sampling/multimodal/cache-TTL/beta header/`stop_reason`/thinking-signature round-trip/`retry-after` |
+| **[0.3.9](0.3.9.md)** | Unreleased | In progress | Adaptive memory briefing triggers, source-aware briefing, TokenJuice-lite compaction, `/briefing` inspector, read-only source manifest spike, memory policy guardrails |
 | **[0.3.8](0.3.8.md)** | 2026-05-26 | Shipped | CLI delegation reliability, parallel-safe reads, cron `/schedule`, `/release-notes`, hooks docs, strict tool-call recovery, per-vendor MCP install snippets, native Anthropic adapter, briefing prefix fix, Ink question overlays |
 | **[0.3.7](0.3.7.md)** | 2026-05-26 | Shipped | Ink chat REPL, wizard, `/config`, `/login`, CLI/server env separation |
 | **[0.3.6](0.3.6.md)** | 2026-05-25 | Shipped | Context budget, MCP identity/offline UX, multi-MCP foundation, multi-workflow |
