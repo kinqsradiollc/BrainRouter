@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildMemoryBriefing, selectCitedRecordIds } from '../memory/briefing.js';
+import { decideMemoryBriefing } from '../memory/briefingTriggers.js';
 import { hasMcpTool } from '../runtime/mcpUtils.js';
 import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
 import { expandMentions } from '../memory/mentions.js';
@@ -288,6 +289,59 @@ test('buildMemoryBriefing extracts records from the canonical recalledCognitiveM
   assert.deepEqual(briefing.recalledRecordIds.sort(), ['mem_only_1', 'mem_only_2']);
 });
 
+test('decideMemoryBriefing: continuation and file prompts fire, social replies skip', () => {
+  const base = {
+    recallMode: 'gated' as const,
+    recallHasFiredThisSession: true,
+    postCompaction: false,
+    hasActiveGoal: false,
+    turnsSinceLastFullBriefing: 1,
+  };
+  assert.equal(decideMemoryBriefing({ ...base, prompt: 'continue from the previous issue' }).action, 'fire');
+  assert.equal(decideMemoryBriefing({ ...base, prompt: 'check brainrouter-cli/src/agent/agent.ts again' }).action, 'fire');
+  assert.equal(decideMemoryBriefing({ ...base, prompt: 'thanks' }).action, 'skip');
+});
+
+test('buildMemoryBriefing routes optional source-aware tools when cues are present', async () => {
+  const calls: Array<{ name: string; args: any }> = [];
+  const stubClient: any = {
+    callTool: async (name: string, args: any) => {
+      calls.push({ name, args });
+      if (name === 'memory_recall') {
+        return { content: [{ text: JSON.stringify({ recalledCognitiveMemories: [] }) }] };
+      }
+      if (name === 'memory_file_history') {
+        return { content: [{ text: JSON.stringify([{ record_id: 'file_1', type: 'fix_summary', content: 'Touched this file before.' }]) }] };
+      }
+      if (name === 'memory_failed_attempts') {
+        return { content: [{ text: JSON.stringify([{ record_id: 'fail_1', type: 'failed_attempt', content: 'Bad retry path.' }]) }] };
+      }
+      if (name === 'memory_explain_recall') {
+        return { content: [{ text: 'explain output' }] };
+      }
+      return { isError: true };
+    },
+  };
+  const briefing = await buildMemoryBriefing({
+    mcpClient: stubClient,
+    mcpTools: [
+      { name: 'memory_recall' },
+      { name: 'memory_file_history' },
+      { name: 'memory_failed_attempts' },
+      { name: 'memory_explain_recall' },
+    ],
+    sessionKey: 'session:routing',
+    workspaceRoot: '/tmp/example',
+    query: 'fix the regression in src/foo.ts',
+  });
+
+  assert.ok(calls.some((c) => c.name === 'memory_file_history' && c.args.filePath === 'src/foo.ts'));
+  assert.ok(calls.some((c) => c.name === 'memory_failed_attempts'));
+  assert.ok(calls.some((c) => c.name === 'memory_explain_recall'));
+  assert.deepEqual(briefing.recalledRecordIds.sort(), ['fail_1', 'file_1']);
+  assert.ok(briefing.sourcesPlanned.includes('memory_file_history'));
+});
+
 test('selectCitedRecordIds picks records whose ID or distinctive snippet appears in the final answer', () => {
   const recalled = [
     { recordId: 'rec_a', content: 'BrainRouter uses sqlite for memory storage and runs hybrid recall.' },
@@ -465,5 +519,21 @@ test('memoryConsolidation: writes per-type files and MEMORY.md index', async () 
     assert.match(fs.readFileSync(path.join(dir, 'reference.md'), 'utf8'), /Linear project INGEST/);
     assert.match(fs.readFileSync(path.join(dir, 'raw_memories.md'), 'utf8'), /raw_memories\.md/);
     assert.match(fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8'), /5 consolidated memory records/);
+  });
+});
+
+test('sourceManifest: scans supported files without entering ignored directories', async () => {
+  const { scanWorkspaceSources } = await import('../memory/sourceManifest.js');
+  await withTempWorkspaceAsync(async (workspace) => {
+    fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(workspace, 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'src', 'index.ts'), 'export const value = 1;\n');
+    fs.writeFileSync(path.join(workspace, 'README.md'), '# Demo\n');
+    fs.writeFileSync(path.join(workspace, 'node_modules', 'pkg', 'ignored.ts'), 'ignore me\n');
+    const manifest = scanWorkspaceSources(workspace, { limit: 20 });
+    const paths = manifest.entries.map((e) => e.path).sort();
+    assert.deepEqual(paths, ['README.md', 'src/index.ts']);
+    assert.ok(manifest.entries.every((e) => e.hash.length === 16));
+    assert.ok(manifest.skipped.directories >= 1);
   });
 });

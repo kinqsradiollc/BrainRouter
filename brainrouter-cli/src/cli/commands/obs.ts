@@ -114,6 +114,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       //     session.promptTokens. We report them so the user can see how
       //     much of the prompt budget memory is consuming.
       const offloadSavedTokens = Math.round(metrics.offloadCharsAvoided / 4);
+      const compactionSavedTokens = Math.round((metrics.compactedToolCharsAvoided ?? 0) / 4);
       const totalSpent = session.promptTokens + session.completionTokens + childPrompt + childCompletion;
 
       console.log(chalk.bold('\nToken usage — this session'));
@@ -131,6 +132,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.bold('\nMemory'));
       console.log(`  Briefing tokens injected: ${chalk.gray(metrics.briefingTokensInjected.toLocaleString())}  ${chalk.gray(`(${metrics.recallRecordsConsulted} records consulted — already included in parent ↑)`)}`);
       console.log(`  Child output offloaded:   ${chalk.gray(metrics.offloadCharsAvoided.toLocaleString())} chars  ${chalk.gray(`(≈${offloadSavedTokens.toLocaleString()} parent tokens not spent)`)}`);
+      console.log(`  Tool output compacted:    ${chalk.gray((metrics.compactedToolCharsAvoided ?? 0).toLocaleString())} chars  ${chalk.gray(`(≈${compactionSavedTokens.toLocaleString()} parent tokens not spent)`)}`);
 
       if (offloadSavedTokens > 0 && totalSpent > 0) {
         const ratio = offloadSavedTokens / totalSpent;

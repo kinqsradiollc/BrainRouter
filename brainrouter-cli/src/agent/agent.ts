@@ -11,7 +11,7 @@ import chalk from 'chalk';
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
-import { appendTranscriptEntry } from '../state/sessionStore.js';
+import { appendTranscriptEntry, redactText } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -31,7 +31,13 @@ import {
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
-import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import { buildDefaultSourcePlan, buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import {
+  countEntityTokens as countEntityTokensFromText,
+  decideMemoryBriefing,
+  resolveRecallMode as resolveRecallModeFromEnv,
+  type BriefingDecision,
+} from '../memory/briefingTriggers.js';
 import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
@@ -43,6 +49,7 @@ import { shouldUseAnthropicNative, callAnthropic } from '../runtime/anthropicAda
 import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
+import { compactToolOutput } from '../prompt/toolCompaction.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 import {
@@ -203,6 +210,20 @@ export type MemoryEvent =
   | { kind: 'citation'; recordIds: string[] }
   | { kind: 'contradiction'; warning: string }
   | { kind: 'skipped'; reason: string };
+
+export interface LastBriefingDetails {
+  decision: BriefingDecision['action'] | 'none';
+  reasons: string[];
+  sources: string[];
+  sourcesPlanned: string[];
+  skippedSources: Array<{ source: string; reason: string }>;
+  sourceStats: Array<{ source: string; chars: number; records: number }>;
+  recordIds: string[];
+  recordCount: number;
+  tokensInjected: number;
+  tokensSaved: number;
+  warnings: string[];
+}
 
 export interface ChatCompletionPayload {
   model: string;
@@ -608,6 +629,19 @@ export class Agent {
   private recalledRecordIds: string[] = [];
   private recalledRecords: RecalledRecord[] = [];
   private lastBriefingSources: string[] = [];
+  private lastBriefingDetails: LastBriefingDetails = {
+    decision: 'none',
+    reasons: [],
+    sources: [],
+    sourcesPlanned: [],
+    skippedSources: [],
+    sourceStats: [],
+    recordIds: [],
+    recordCount: 0,
+    tokensInjected: 0,
+    tokensSaved: 0,
+    warnings: [],
+  };
   /**
    * 10b: latest MCP tool inventory captured by `listTools()` calls. Used by
    * `createSystemMessage` to decide whether the BrainRouter memory section
@@ -630,6 +664,8 @@ export class Agent {
    */
   private recallHasFiredThisSession = false;
   private recallNextTurnIsPostCompaction = false;
+  private turnsSinceLastFullBriefing = 0;
+  private recentToolFailure?: string;
   private roleOverlay?: string;
   private accessMode: AccessMode;
   private silent: boolean;
@@ -1183,6 +1219,9 @@ export class Agent {
             summary = message;
           }
         }
+        if (isError) {
+          this.recentToolFailure = `${name}: ${summary || resultText.slice(0, 160)}`;
+        }
 
         const finalSummary = hookifyWarnings.length > 0 ? `${summary} | ${hookifyWarnings.join(' | ')}` : summary;
         // Inspection tools (list_dir, grep_search, glob_files) commonly fail to
@@ -1210,11 +1249,16 @@ export class Agent {
         // verbatim every subsequent turn, which blew the context window in
         // long sessions. Clamp at ~8 KB per result for the LLM-visible copy
         // while keeping the full text on disk via recordTranscript.
+        const compaction = compactToolOutput({ toolName: name, args, output: resultText });
+        if (compaction.omittedChars > 0) {
+          this.memoryMetrics.compactedToolCharsAvoided += compaction.omittedChars;
+        }
+        const llmVisibleResult = compaction.inlineText;
         const MAX_TOOL_RESULT_CHARS = Number(process.env.BRAINROUTER_MAX_TOOL_RESULT_CHARS) || 8000;
-        const clampedContent = resultText.length > MAX_TOOL_RESULT_CHARS
-          ? resultText.slice(0, MAX_TOOL_RESULT_CHARS) +
-            `\n…[truncated ${resultText.length - MAX_TOOL_RESULT_CHARS} chars — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
-          : resultText;
+        const clampedContent = llmVisibleResult.length > MAX_TOOL_RESULT_CHARS
+          ? llmVisibleResult.slice(0, MAX_TOOL_RESULT_CHARS) +
+            `\n…[truncated ${llmVisibleResult.length - MAX_TOOL_RESULT_CHARS} chars after ${compaction.ruleId} compaction — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
+          : llmVisibleResult;
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
@@ -1791,6 +1835,8 @@ export class Agent {
    *    files or re-explaining via prompts.
    *  - offloadCharsAvoided:     chars of child-agent output that were pushed
    *    to working memory instead of pasted back into parent context.
+   *  - compactedToolCharsAvoided: chars omitted from model-visible tool
+   *    results after semantic compaction. Raw outputs remain in transcripts.
    *  - recallRecordsConsulted:  count of memory record references the
    *    briefing put in front of the model this session.
    */
@@ -1798,6 +1844,7 @@ export class Agent {
     briefingTokensInjected: 0,
     offloadCharsAvoided: 0,
     recallRecordsConsulted: 0,
+    compactedToolCharsAvoided: 0,
   };
 
   /** Last assistant message of the most recent turn — used by `/copy`. */
@@ -1867,10 +1914,13 @@ export class Agent {
       briefingTokensInjected: 0,
       offloadCharsAvoided: 0,
       recallRecordsConsulted: 0,
+      compactedToolCharsAvoided: 0,
     };
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;
+    this.turnsSinceLastFullBriefing = 0;
+    this.recentToolFailure = undefined;
   }
 
   /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
@@ -1966,10 +2016,27 @@ export class Agent {
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {
-    if (!this.enableRecall) {
+    const resetBriefing = (details: Partial<LastBriefingDetails>) => {
       this.recalledRecords = [];
       this.recalledRecordIds = [];
       this.lastBriefingSources = [];
+      this.lastBriefingDetails = {
+        decision: details.decision ?? 'none',
+        reasons: details.reasons ?? [],
+        sources: [],
+        sourcesPlanned: details.sourcesPlanned ?? [],
+        skippedSources: details.skippedSources ?? [],
+        sourceStats: [],
+        recordIds: [],
+        recordCount: 0,
+        tokensInjected: 0,
+        tokensSaved: details.tokensSaved ?? 0,
+        warnings: details.warnings ?? [],
+      };
+    };
+
+    if (!this.enableRecall) {
+      resetBriefing({ decision: 'skip', reasons: [this.silent ? 'silent agent (child)' : 'recall disabled'] });
       callbacks.onMemoryEvent?.({ kind: 'skipped', reason: this.silent ? 'silent agent (child)' : 'recall disabled' });
       return;
     }
@@ -1986,21 +2053,27 @@ export class Agent {
     //     something specific that memory might have history on
     // The env knob `BRAINROUTER_RECALL_MODE=always|gated|off` lets users
     // preserve pre-9b behaviour or kill recall entirely for benchmarking.
-    const recallMode = resolveRecallMode();
+    const recallMode = resolveRecallModeFromEnv();
     if (recallMode === 'off') {
-      this.recalledRecords = [];
-      this.recalledRecordIds = [];
-      this.lastBriefingSources = [];
+      resetBriefing({ decision: 'skip', reasons: ['recallMode=off'] });
       callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'recallMode=off' });
       return;
     }
 
+    const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
+    const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
+    const decision = decideMemoryBriefing({
+      prompt,
+      recallMode,
+      recallHasFiredThisSession: this.recallHasFiredThisSession,
+      postCompaction: this.recallNextTurnIsPostCompaction,
+      hasActiveGoal,
+      recentToolFailure: this.recentToolFailure,
+      turnsSinceLastFullBriefing: this.turnsSinceLastFullBriefing,
+    });
+
     if (recallMode === 'gated') {
-      const isFirstTurn = !this.recallHasFiredThisSession;
-      const justCompacted = this.recallNextTurnIsPostCompaction;
-      const entityHits = countEntityTokens(prompt);
-      const hasEntityCue = entityHits >= 2;
-      if (!isFirstTurn && !justCompacted && !hasEntityCue) {
+      if (decision.action !== 'fire') {
         // Skip the full briefing — emit a lightweight system-reminder so
         // the model knows it can pull memory itself if it needs to. The
         // reminder is tagged so the next turn replaces it cleanly.
@@ -2008,13 +2081,17 @@ export class Agent {
           'memory-hint',
           [
             '## Memory available (gated mode)',
-            'BrainRouter memory is available this turn but the auto-briefing was skipped (no first-turn / post-compaction / entity-cue trigger). Call `memory_recall` / `memory_search` / `memory_file_history` yourself if you need history on a specific entity, file, or decision.',
+            `Auto-briefing decision: ${decision.action}. Reasons: ${decision.reasons.join(', ')}.`,
+            'Call `memory_recall` / `memory_search` / `memory_file_history` yourself if you need history on a specific entity, file, or decision.',
           ].join('\n'),
         );
-        this.recalledRecords = [];
-        this.recalledRecordIds = [];
-        this.lastBriefingSources = [];
-        callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'gated (no trigger)' });
+        this.turnsSinceLastFullBriefing += 1;
+        resetBriefing({
+          decision: decision.action,
+          reasons: decision.reasons,
+          sourcesPlanned: buildDefaultSourcePlan(prompt, hasActiveGoal).includeRecall ? ['memory_recall'] : [],
+        });
+        callbacks.onMemoryEvent?.({ kind: 'skipped', reason: decision.reasons.join(', ') || 'gated (no trigger)' });
         return;
       }
       // Reset the post-compaction flag now that we're firing because of it.
@@ -2029,8 +2106,7 @@ export class Agent {
     // "what we're doing now" context twice. The anchor is set immediately
     // before this call in `runTurn` (around line 680), so reading the goal
     // here resolves to the same record the anchor used.
-    const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
-    const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
+    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal);
     const briefing = await buildMemoryBriefing({
       mcpClient: this.mcpClient,
       mcpTools,
@@ -2039,21 +2115,40 @@ export class Agent {
       query: prompt,
       activeSkill: this.activeSkill,
       hasActiveGoal,
+      maxCharsPerSource: decision.budget.maxCharsPerSource,
+      sourcePlan,
     });
 
     this.recalledRecords = briefing.recalledRecords;
     this.recalledRecordIds = briefing.recalledRecordIds;
     this.lastBriefingSources = briefing.sourcesQueried;
     this.recallHasFiredThisSession = true;
+    this.turnsSinceLastFullBriefing = 0;
+    this.recentToolFailure = undefined;
     // Drop any prior lightweight hint now that the full briefing is live.
     this.removeTaggedSystemMessage('memory-hint');
+
+    const tokensInjected = briefing.block ? Agent.estimateTokens(briefing.block) : 0;
+    this.lastBriefingDetails = {
+      decision: 'fire',
+      reasons: decision.reasons,
+      sources: briefing.sourcesQueried,
+      sourcesPlanned: briefing.sourcesPlanned,
+      skippedSources: briefing.skippedSources,
+      sourceStats: briefing.sourceStats,
+      recordIds: briefing.recalledRecordIds,
+      recordCount: briefing.recalledRecordIds.length,
+      tokensInjected,
+      tokensSaved: this.memoryMetrics.compactedToolCharsAvoided,
+      warnings: briefing.warnings,
+    };
 
     if (briefing.block) {
       this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
       callbacks.onStatusUpdate(
         `Memory briefing loaded: ${briefing.sourcesQueried.join(', ')} (${briefing.recalledRecordIds.length} records).`,
       );
-      this.memoryMetrics.briefingTokensInjected += Agent.estimateTokens(briefing.block);
+      this.memoryMetrics.briefingTokensInjected += tokensInjected;
       this.memoryMetrics.recallRecordsConsulted += briefing.recalledRecordIds.length;
     }
     callbacks.onMemoryEvent?.({
@@ -2064,8 +2159,17 @@ export class Agent {
   }
 
   /** Inspectable summary of the most recent memory briefing. Used by the `/briefing` slash command. */
-  public getLastBriefing(): { sources: string[]; recordIds: string[] } {
-    return { sources: [...this.lastBriefingSources], recordIds: [...this.recalledRecordIds] };
+  public getLastBriefing(): LastBriefingDetails {
+    return {
+      ...this.lastBriefingDetails,
+      sources: [...this.lastBriefingDetails.sources],
+      sourcesPlanned: [...this.lastBriefingDetails.sourcesPlanned],
+      skippedSources: [...this.lastBriefingDetails.skippedSources],
+      sourceStats: [...this.lastBriefingDetails.sourceStats],
+      recordIds: [...this.lastBriefingDetails.recordIds],
+      reasons: [...this.lastBriefingDetails.reasons],
+      warnings: [...this.lastBriefingDetails.warnings],
+    };
   }
 
   /**
@@ -2123,8 +2227,8 @@ export class Agent {
         sessionKey: this.sessionKey,
         activeSkill: this.activeSkill,
         messages: [
-          { role: 'user', content: prompt, timestamp },
-          { role: 'assistant', content: finalAnswer, timestamp: Date.now() },
+          { role: 'user', content: redactText(prompt), timestamp },
+          { role: 'assistant', content: redactText(finalAnswer), timestamp: Date.now() },
         ],
       });
       // Parse the structured result so the REPL can tell "wrote 2 sensory + 0
@@ -2607,9 +2711,7 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  * `export BRAINROUTER_RECALL_MODE=always` mid-session via a /run command.
  */
 export function resolveRecallMode(): 'always' | 'gated' | 'off' {
-  const raw = (process.env.BRAINROUTER_RECALL_MODE ?? '').toLowerCase().trim();
-  if (raw === 'always' || raw === 'gated' || raw === 'off') return raw;
-  return 'gated';
+  return resolveRecallModeFromEnv();
 }
 
 /**
@@ -2622,25 +2724,7 @@ export function resolveRecallMode(): 'always' | 'gated' | 'off' {
  * false negatives waste an ask. Tunable threshold via the caller.
  */
 export function countEntityTokens(text: string): number {
-  if (!text) return 0;
-  let count = 0;
-  // File paths and identifiers (`/` or `\`).
-  const pathMatches = text.match(/[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,8}(?![A-Za-z])|(?:[\w-]+\/){1,}[\w.-]+/g);
-  if (pathMatches) count += pathMatches.length;
-  // Identifier-shaped tokens longer than 4 chars (camelCase, snake_case, PascalCase).
-  const identMatches = text.match(/\b(?:[a-z]+[A-Z][A-Za-z0-9]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+|[a-z]+_[a-z][\w]+)\b/g);
-  if (identMatches) count += identMatches.length;
-  // Proper nouns (capitalized, not at sentence start, ≥3 chars). We split on
-  // sentence boundaries first so the first word of each sentence is skipped.
-  const sentences = text.split(/[.!?]\s+/);
-  for (const s of sentences) {
-    const words = s.split(/\s+/);
-    for (let i = 1; i < words.length; i++) {
-      const w = words[i].replace(/[^A-Za-z]/g, '');
-      if (w.length >= 3 && /^[A-Z][a-z]+$/.test(w)) count++;
-    }
-  }
-  return count;
+  return countEntityTokensFromText(text);
 }
 
 export function supportsReasoningEffortField(config: LLMConfig): boolean {
