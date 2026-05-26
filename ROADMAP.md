@@ -12,7 +12,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | Track | Version | State | Read next |
 |---|---|---|---|
 | Latest shipped | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
-| Current release | **0.3.9** | Planned | [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) |
+| Current release | **0.3.9** | In progress | [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) |
 | Previous | **0.3.7** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-26) |
 
 ---
@@ -24,7 +24,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
 | **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
-| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing, source awareness, and CLI context parity | Planned |
+| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing, source awareness, and CLI context parity | In progress |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Federation: many agents, one memory; CLI multi-agent Phase 2 | Designed |
 | **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 3-6, brain-side multi-agent roadmap | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |

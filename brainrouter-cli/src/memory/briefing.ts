@@ -1,6 +1,7 @@
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { redactText } from '../state/sessionStore.js';
 import { callMcpTool, hasMcpTool } from '../runtime/mcpUtils.js';
+import { extractFilePathHints, looksLikeDebugOrRetry } from './briefingTriggers.js';
 
 export interface BriefingInputs {
   mcpClient: McpClientWrapper;
@@ -11,6 +12,7 @@ export interface BriefingInputs {
   activeSkill?: string;
   /** Cap on injected briefing content per source — guards against runaway payloads eating the context window. */
   maxCharsPerSource?: number;
+  sourcePlan?: BriefingSourcePlan;
   /**
    * Set by the caller when a `goal-anchor` system message is already
    * carrying the current objective. The briefing skips `memory_task_state`
@@ -39,6 +41,22 @@ export interface BriefingResult {
   recalledRecords: RecalledRecord[];
   /** Names of MCP tools we actually consulted (for telemetry / /briefing). */
   sourcesQueried: string[];
+  /** Names of sources the router planned before availability checks. */
+  sourcesPlanned: string[];
+  /** Sources skipped because the MCP tool was absent or a required cue was missing. */
+  skippedSources: Array<{ source: string; reason: string }>;
+  /** Source-level stats for the `/briefing` inspector. */
+  sourceStats: Array<{ source: string; chars: number; records: number }>;
+  warnings: string[];
+}
+
+export interface BriefingSourcePlan {
+  includeRecall: boolean;
+  includeWorkingContext: boolean;
+  includeTaskState: boolean;
+  includeExplainRecall: boolean;
+  fileHistoryPaths: string[];
+  includeFailedAttempts: boolean;
 }
 
 /**
@@ -51,17 +69,46 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   const { mcpClient, mcpTools, sessionKey, workspaceRoot, query, activeSkill } = inputs;
   const maxChars = inputs.maxCharsPerSource ?? 4000;
   const toolNames = new Set(mcpTools.map((t) => t.name));
+  const sourcePlan = inputs.sourcePlan ?? buildDefaultSourcePlan(query, inputs.hasActiveGoal);
+  const sourcesPlanned = describeSourcePlan(sourcePlan);
+  const skippedSources: Array<{ source: string; reason: string }> = [];
+  const warnings: string[] = [];
 
   const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[] }>> = [];
 
-  if (hasMcpTool(toolNames, 'memory_recall')) {
+  if (sourcePlan.includeRecall && hasMcpTool(toolNames, 'memory_recall')) {
     tasks.push(callSafe('memory_recall', { sessionKey, query, activeSkill }, mcpClient, maxChars, extractRecords));
+  } else if (sourcePlan.includeRecall) {
+    skippedSources.push({ source: 'memory_recall', reason: 'tool unavailable' });
   }
-  if (hasMcpTool(toolNames, 'memory_working_context')) {
+  if (sourcePlan.includeWorkingContext && hasMcpTool(toolNames, 'memory_working_context')) {
     tasks.push(callSafe('memory_working_context', { sessionKey, workspacePath: workspaceRoot }, mcpClient, maxChars));
+  } else if (sourcePlan.includeWorkingContext) {
+    skippedSources.push({ source: 'memory_working_context', reason: 'tool unavailable' });
   }
-  if (hasMcpTool(toolNames, 'memory_task_state') && !inputs.hasActiveGoal) {
+  if (sourcePlan.includeTaskState && hasMcpTool(toolNames, 'memory_task_state') && !inputs.hasActiveGoal) {
     tasks.push(callSafe('memory_task_state', { query }, mcpClient, maxChars));
+  } else if (sourcePlan.includeTaskState && inputs.hasActiveGoal) {
+    skippedSources.push({ source: 'memory_task_state', reason: 'active goal-anchor owns task state' });
+  } else if (sourcePlan.includeTaskState) {
+    skippedSources.push({ source: 'memory_task_state', reason: 'tool unavailable' });
+  }
+  if (sourcePlan.includeExplainRecall && hasMcpTool(toolNames, 'memory_explain_recall')) {
+    tasks.push(callSafe('memory_explain_recall', { sessionKey, query, activeSkill }, mcpClient, maxChars));
+  } else if (sourcePlan.includeExplainRecall) {
+    skippedSources.push({ source: 'memory_explain_recall', reason: 'tool unavailable' });
+  }
+  if (sourcePlan.includeFailedAttempts && hasMcpTool(toolNames, 'memory_failed_attempts')) {
+    tasks.push(callSafe('memory_failed_attempts', { query, limit: 5 }, mcpClient, maxChars, extractRecords));
+  } else if (sourcePlan.includeFailedAttempts) {
+    skippedSources.push({ source: 'memory_failed_attempts', reason: 'tool unavailable' });
+  }
+  if (sourcePlan.fileHistoryPaths.length > 0 && hasMcpTool(toolNames, 'memory_file_history')) {
+    for (const filePath of sourcePlan.fileHistoryPaths.slice(0, 3)) {
+      tasks.push(callSafe('memory_file_history', { filePath, limit: 5 }, mcpClient, maxChars, extractRecords));
+    }
+  } else if (sourcePlan.fileHistoryPaths.length > 0) {
+    skippedSources.push({ source: 'memory_file_history', reason: 'tool unavailable' });
   }
 
   const results = await Promise.all(tasks);
@@ -69,9 +116,11 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   const sections: string[] = [];
   const sourcesQueried: string[] = [];
   const recalledRecords: RecalledRecord[] = [];
+  const sourceStats: Array<{ source: string; chars: number; records: number }> = [];
   for (const r of results) {
     if (!r.text) continue;
     sourcesQueried.push(r.source);
+    sourceStats.push({ source: r.source, chars: r.text.length, records: r.records?.length ?? 0 });
     if (r.source === 'memory_working_context') {
       const workingSection = renderWorkingMemorySection(r.text);
       if (workingSection) {
@@ -109,12 +158,15 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
       ) {
         continue;
       }
+      if (/stale|superseded|archived|needs_verification/i.test(trimmed)) {
+        warnings.push(`${r.source} may contain stale or low-confidence records`);
+      }
       sections.push(`### ${prettyLabel(r.source)}\n${redactText(trimmed.slice(0, 1500))}`);
     }
   }
 
   if (sections.length === 0) {
-    return { block: '', recalledRecordIds: [], recalledRecords: [], sourcesQueried };
+    return { block: '', recalledRecordIds: [], recalledRecords: [], sourcesQueried, sourcesPlanned, skippedSources, sourceStats, warnings };
   }
 
   const block = [
@@ -128,7 +180,31 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   ].join('\n');
 
   const recalledRecordIds = dedupe(recalledRecords.map((r) => r.recordId));
-  return { block, recalledRecordIds, recalledRecords, sourcesQueried };
+  return { block, recalledRecordIds, recalledRecords, sourcesQueried, sourcesPlanned, skippedSources, sourceStats, warnings };
+}
+
+export function buildDefaultSourcePlan(query: string, hasActiveGoal?: boolean): BriefingSourcePlan {
+  const fileHistoryPaths = extractFilePathHints(query);
+  const debugCue = looksLikeDebugOrRetry(query);
+  return {
+    includeRecall: true,
+    includeWorkingContext: true,
+    includeTaskState: !hasActiveGoal,
+    includeExplainRecall: debugCue || fileHistoryPaths.length > 0,
+    fileHistoryPaths,
+    includeFailedAttempts: debugCue,
+  };
+}
+
+function describeSourcePlan(plan: BriefingSourcePlan): string[] {
+  const sources: string[] = [];
+  if (plan.includeRecall) sources.push('memory_recall');
+  if (plan.includeWorkingContext) sources.push('memory_working_context');
+  if (plan.includeTaskState) sources.push('memory_task_state');
+  if (plan.includeExplainRecall) sources.push('memory_explain_recall');
+  if (plan.includeFailedAttempts) sources.push('memory_failed_attempts');
+  if (plan.fileHistoryPaths.length > 0) sources.push('memory_file_history');
+  return sources;
 }
 
 /**
@@ -187,15 +263,22 @@ async function callSafe(
 function extractRecords(parsed: any): RecalledRecord[] {
   if (!parsed) return [];
   const records =
+    (Array.isArray(parsed) ? parsed : undefined) ??
     parsed.recalledCognitiveMemories ??
     parsed.recalledCognitiveRecords ??
     parsed.records ??
+    parsed.hits ??
     [];
   if (!Array.isArray(records)) return [];
   return records
-    .filter((r: any) => r && (typeof r.recordId === 'string' || typeof r.recordId === 'number'))
+    .filter((r: any) => r && (
+      typeof r.recordId === 'string' ||
+      typeof r.recordId === 'number' ||
+      typeof r.record_id === 'string' ||
+      typeof r.id === 'string'
+    ))
     .map((r: any) => ({
-      recordId: String(r.recordId),
+      recordId: String(r.recordId ?? r.record_id ?? r.id),
       content: typeof r.content === 'string' ? r.content : undefined,
       type: typeof r.type === 'string' ? r.type : undefined,
       priority: typeof r.priority === 'number' ? r.priority : undefined,
@@ -207,6 +290,9 @@ function prettyLabel(toolName: string): string {
     case 'memory_recall': return 'Recalled cognitive memories';
     case 'memory_working_context': return 'Working memory canvas';
     case 'memory_task_state': return 'Open task / handover state';
+    case 'memory_explain_recall': return 'Recall explanation';
+    case 'memory_failed_attempts': return 'Prior failed attempts';
+    case 'memory_file_history': return 'File history';
     default: return toolName;
   }
 }

@@ -9,6 +9,7 @@ import {
   classifyDiffLine,
   looksLikeDiff,
 } from '../cli/ink/toolFormat.js';
+import { compactToolOutput } from '../prompt/toolCompaction.js';
 
 // --- stripMcpPrefix ---------------------------------------------------
 
@@ -197,4 +198,31 @@ test('looksLikeDiff: true when there are 2+ +/- gutter lines without an @@', () 
 test('looksLikeDiff: false for plain prose', () => {
   assert.equal(looksLikeDiff('hello\nworld\nfoo bar'), false);
   assert.equal(looksLikeDiff(''), false);
+});
+
+test('compactToolOutput: keeps failing command signal and reports avoided chars', () => {
+  const output = [
+    'Running tests...',
+    'Progress 10%',
+    ...Array.from({ length: 220 }, (_, i) => `Progress ${i}%`),
+    'src/foo.ts:12:5 error TS2322: Type string is not assignable to number',
+    'FAILED tests/foo.test.ts',
+  ].join('\n');
+  const compacted = compactToolOutput({
+    toolName: 'run_command',
+    args: { command: 'npm test' },
+    output,
+  });
+  assert.equal(compacted.ruleId, 'command-signal-lines');
+  assert.ok(compacted.omittedChars > 0);
+  assert.match(compacted.inlineText, /src\/foo\.ts/);
+  assert.match(compacted.inlineText, /FAILED tests\/foo\.test\.ts/);
+});
+
+test('compactToolOutput: passthrough for small useful output', () => {
+  const output = 'short useful output';
+  const compacted = compactToolOutput({ toolName: 'read_file', output });
+  assert.equal(compacted.ruleId, 'passthrough');
+  assert.equal(compacted.inlineText, output);
+  assert.equal(compacted.omittedChars, 0);
 });

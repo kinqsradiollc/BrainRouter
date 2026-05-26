@@ -13,12 +13,27 @@ live in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.3.9** | In progress | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
 | **0.3.6** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.6.md`](brainrouter-changelog/0.3.6.md) |
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
 this changelog.
+
+---
+
+## [0.3.9] - Unreleased
+
+CLI memory briefing quality release before 0.4.0.
+
+- **Adaptive briefing triggers.** Gated recall now reasons over first turn, post-compaction, continuation, memory/history, file path, debug/retry, recent tool failure, active-goal periodic refresh, and child-agent synthesis cues instead of only first-turn/post-compaction/entity-token checks.
+- **Source-aware briefing.** Auto-briefing can route across recall, working memory, task state, recall explanations, file history, and failed attempts, while degrading cleanly when optional MCP tools are absent.
+- **TokenJuice-lite compaction.** Large JSON and command/tool outputs are compacted before entering model-visible context; full raw outputs remain in transcripts.
+- **Inspectable memory decisions.** `/briefing` now shows decision, reasons, planned/queried sources, skipped sources, source stats, record IDs, warnings, injected tokens, and compacted chars avoided.
+- **Read-only source manifest spike.** `/memories sources [limit]` scans local code/docs into a bounded ephemeral manifest without schema writes, chunk tables, or vault mirroring.
+- **Memory capture redaction.** CLI turn capture redacts obvious secrets before sending user/assistant text to the memory capture tool.
+- **Briefing benchmark coverage.** Local tests cover trigger cases and compaction savings without network or live MCP dependencies.
 
 ---
 
