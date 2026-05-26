@@ -33,6 +33,8 @@
  *     → 'MemorySearch("auth")'
  *   formatToolCall('spawn_agent', { role: 'researcher', prompt: '...' })
  *     → 'Spawn(researcher, "...")'
+ *   formatToolCall('task_agent', { role: 'reviewer', prompt: '...' })
+ *     → 'Task(reviewer, "...")'
  */
 export function formatToolCall(name: string, args: Record<string, any> | undefined): string {
   const safeArgs = args ?? {};
@@ -68,6 +70,18 @@ export function formatToolCall(name: string, args: Record<string, any> | undefin
       const label = safeArgs.label ? ` [${safeArgs.label}]` : '';
       const task = truncateOneLine(safeArgs.prompt ?? '', 50);
       return `Spawn(${role}${label}, "${task}")`;
+    }
+    case 'task_agent': {
+      const role = String(safeArgs.role ?? safeArgs.agentId ?? 'agent');
+      const label = safeArgs.label ? ` [${safeArgs.label}]` : '';
+      const task = truncateOneLine(safeArgs.prompt ?? '', 50);
+      return `Task(${role}${label}, "${task}")`;
+    }
+    case 'delegate_agent': {
+      const role = String(safeArgs.role ?? safeArgs.agentId ?? 'agent');
+      const label = safeArgs.label ? ` [${safeArgs.label}]` : '';
+      const task = truncateOneLine(safeArgs.prompt ?? '', 50);
+      return `Delegate(${role}${label}, "${task}")`;
     }
     case 'spawn_agents': {
       const agents = Array.isArray(safeArgs.agents) ? safeArgs.agents : [];

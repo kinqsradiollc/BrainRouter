@@ -116,6 +116,17 @@ test('formatToolCall: spawn_agent shows role + truncated prompt', () => {
   );
 });
 
+test('formatToolCall: task_agent and delegate_agent show foreground/background intent', () => {
+  assert.equal(
+    formatToolCall('task_agent', { role: 'reviewer', prompt: 'review current diff' }),
+    'Task(reviewer, "review current diff")',
+  );
+  assert.equal(
+    formatToolCall('delegate_agent', { agentId: 'custom-researcher', label: 'docs', prompt: 'map CLI docs' }),
+    'Delegate(custom-researcher [docs], "map CLI docs")',
+  );
+});
+
 test('formatToolCall: spawn_agents summarizes count + roles', () => {
   assert.equal(
     formatToolCall('spawn_agents', { agents: [{ role: 'r1' }, { role: 'r2' }, { role: 'r3' }] }),

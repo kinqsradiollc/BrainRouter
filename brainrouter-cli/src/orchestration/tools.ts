@@ -111,7 +111,17 @@ export function extractChildPreview(output: string, maxChars: number): string {
   return output.slice(0, head) + '\n…\n' + output.slice(-tail);
 }
 
+// Default wait/timeout for foreground delegation. Mirrors wait_agent's
+// historical 120 s default so task_agent and spawn_agent({ wait: true })
+// behave identically when no explicit timeoutMs is passed. Only used inside
+// handleTaskAgent (call-time); kept out of the schema-creator bodies to
+// avoid the ESM circular-import TDZ between tools.ts and agent.ts (agent.ts
+// constructs the LOCAL_TOOLS array eagerly at module load).
+const DEFAULT_TASK_AGENT_TIMEOUT_MS = 120_000;
+
 const ORCHESTRATION_TOOL_NAMES = new Set([
+  'task_agent',
+  'delegate_agent',
   'spawn_agent',
   'spawn_agents',
   'list_agents',
@@ -177,6 +187,58 @@ export function createSpawnAgentTool() {
           type: 'array',
           items: { type: 'string' },
           description: 'Optional BrainRouter memory record IDs that the parent already recalled. The child agent is told to build on these instead of re-discovering them.',
+        },
+      },
+      required: ['prompt'],
+    },
+  };
+}
+
+export function createTaskAgentTool() {
+  return {
+    name: 'task_agent',
+    description:
+      'Run one foreground child agent for a bounded task and wait for its result. ' +
+      'Returns the completed child output, failure, or an explicit timeout envelope. Prefer this over spawn_agent({ wait: true }) for foreground delegation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier. Prefer agentId for custom definitions.' },
+        agentId: { type: 'string', description: 'Registry id of the agent definition. Takes precedence over role when both are provided.' },
+        prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
+        label: { type: 'string', description: 'Optional short label for the child run.' },
+        access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
+        timeoutMs: { type: 'integer', description: 'Optional timeout in milliseconds. Default 120000.' },
+        seedRecordIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional BrainRouter memory record IDs that the parent already recalled.',
+        },
+      },
+      required: ['prompt'],
+    },
+  };
+}
+
+export function createDelegateAgentTool() {
+  return {
+    name: 'delegate_agent',
+    description:
+      'Start one background child agent and keep working in the parent turn. ' +
+      'Non-blocking — there is no `timeoutMs`; the child runs until it finishes or is cancelled. ' +
+      'Returns a running child id plus a reminder to continue useful work; call wait_agent later when the result is needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier. Prefer agentId for custom definitions.' },
+        agentId: { type: 'string', description: 'Registry id of the agent definition. Takes precedence over role when both are provided.' },
+        prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
+        label: { type: 'string', description: 'Optional short label for the child run.' },
+        access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
+        seedRecordIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional BrainRouter memory record IDs that the parent already recalled.',
         },
       },
       required: ['prompt'],
@@ -301,6 +363,10 @@ export async function executeOrchestrationTool(
   ctx: OrchestrationContext,
 ): Promise<string> {
   switch (name) {
+    case 'task_agent':
+      return await handleTaskAgent(args, ctx);
+    case 'delegate_agent':
+      return await handleDelegateAgent(args, ctx);
     case 'spawn_agent':
       return await handleSpawn(args, ctx);
     case 'spawn_agents':
@@ -320,6 +386,30 @@ export async function executeOrchestrationTool(
     default:
       throw new Error(`Unknown orchestration tool: ${name}`);
   }
+}
+
+async function handleTaskAgent(args: any, ctx: OrchestrationContext): Promise<string> {
+  return await handleSpawn({ ...args, wait: true, timeoutMs: args?.timeoutMs ?? DEFAULT_TASK_AGENT_TIMEOUT_MS }, ctx);
+}
+
+async function handleDelegateAgent(args: any, ctx: OrchestrationContext): Promise<string> {
+  const spawned = await handleSpawn({ ...args, wait: false }, ctx);
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    const value = JSON.parse(spawned);
+    if (value && typeof value === 'object' && !Array.isArray(value)) parsed = value;
+  } catch {
+    // not JSON; fall through to verbatim propagation
+  }
+  // If handleSpawn returned an error string or a non-object payload (no id to
+  // attach next-step semantics to), propagate it verbatim — wrapping it in
+  // { raw, nextAction } would hide the failure from the model and prevent the
+  // child-drain guardrail from finding a child id to wait on.
+  if (!parsed || typeof parsed.id !== 'string') return spawned;
+  return JSON.stringify({
+    ...parsed,
+    nextAction: 'continue working in the parent turn; call wait_agent when this child output is needed',
+  }, null, 2);
 }
 
 async function handleSpawnBatch(args: any, ctx: OrchestrationContext): Promise<string> {
@@ -594,10 +684,14 @@ async function handleWait(args: any, ctx: OrchestrationContext): Promise<string>
   const promise = runningPromises.get(id);
   if (promise) {
     let timedOut = false;
+    let timeout: NodeJS.Timeout | undefined;
     await Promise.race([
       promise,
-      new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, timeoutMs)),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
+      }),
     ]);
+    if (timeout) clearTimeout(timeout);
     if (timedOut) {
       const record = getSession(ctx.workspaceRoot, id);
       return JSON.stringify({
