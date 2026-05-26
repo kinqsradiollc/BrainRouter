@@ -26,6 +26,7 @@ import { setActiveReadline } from '../cliPrompt.js';
 import { ChatApp, type ChatController, type PushScrollback } from './ChatApp.js';
 import type { SlashCommandDef } from './SlashPalette.js';
 import { handleSlashCommand, lookupSlashDescription, SLASH_COMMANDS } from '../repl.js';
+import { startScheduleTicker, type ScheduleTickerHandle } from '../../runtime/scheduleTicker.js';
 import { formatToolCall } from './toolFormat.js';
 import { setAmbientChat } from './ambientChat.js';
 import { captureConsoleOutput } from './consoleCapture.js';
@@ -522,6 +523,38 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }
   };
 
+  // Background `/schedule` ticker. Single in-process timer; fires due
+  // cron/one-shot jobs by re-injecting their slash command through the
+  // same dispatcher the user uses. Filtered by sessionKey so a tick
+  // only fires jobs owned by THIS REPL — schedules registered in a
+  // different session sit idle until that session is open. Stops in
+  // the `waitUntilExit` handlers below so /exit and ^C clean up.
+  let scheduleTicker: ScheduleTickerHandle | null = null;
+  const startTicker = () => {
+    if (scheduleTicker) return;
+    scheduleTicker = startScheduleTicker({
+      workspaceRoot: agent.workspaceRoot,
+      sessionKey: agent.sessionKey,
+      fire: (command, sched) => {
+        if (!controller) return;
+        if (isProcessing) {
+          // Catch-up rule: only fire ONCE per missed window. The ticker
+          // has already advanced nextRun past `now`, so silently
+          // dropping a busy-session fire is correct — it won't refire
+          // for the same minute.
+          controller.push.notice(`(schedule ${sched.id} fired while a turn was in flight — skipped)`, 'warn');
+          return;
+        }
+        const parts = command.trim().split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+        const args = parts.slice(1);
+        controller.push.notice(`⏰ Schedule ${sched.id} → ${command}`, 'info');
+        void dispatchSlash(cmd, args, shim);
+      },
+      onError: (msg) => controller?.push.notice(`[schedule] ${msg}`, 'warn'),
+    });
+  };
+
   // Mount Ink. We DON'T set `patchConsole: false` — Ink's default
   // (patchConsole enabled) is exactly what we want: legacy slash
   // commands that still write via chalk + console.log have their
@@ -556,6 +589,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           });
           refreshFooter();
           armIdleHint();
+          startTicker();
         }}
         onAccessModeCycle={() => {
           const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
@@ -615,6 +649,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       setAmbientChat(undefined);
       cleanupResizeClear();
       clearIdleHint();
+      try { scheduleTicker?.stop(); } catch { /* noop */ }
+      scheduleTicker = null;
       try { await mcpClient.close(); } catch { /* already closed */ }
       // Goodbye line is intentionally printed AFTER Ink unmounts so it
       // doesn't get caught inside the redraw region.
@@ -626,6 +662,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       setAmbientChat(undefined);
       cleanupResizeClear();
       clearIdleHint();
+      try { scheduleTicker?.stop(); } catch { /* noop */ }
+      scheduleTicker = null;
       try { await mcpClient.close(); } catch { /* already closed */ }
       resolve();
     });
