@@ -16,6 +16,8 @@ import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/sy
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
 import {
+  createTaskAgentTool,
+  createDelegateAgentTool,
   createSpawnAgentTool,
   createSpawnAgentsTool,
   createListAgentsTool,
@@ -77,11 +79,22 @@ function trackChildObservation(
   spawned: Set<string>,
   waited: Set<string>,
 ): void {
-  if (toolName === 'spawn_agent' || toolName === 'spawn_agents') {
+  if (
+    toolName === 'spawn_agent' ||
+    toolName === 'spawn_agents' ||
+    toolName === 'task_agent' ||
+    toolName === 'delegate_agent'
+  ) {
     const ids = collectChildIds(parseJsonObject(resultText));
     for (const id of ids) {
       spawned.add(id);
-      if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
+      // task_agent always blocks internally (wraps spawn with wait: true);
+      // spawn_agent({ wait: true }) is the legacy form. Both count as
+      // already-observed, so the child-drain guardrail doesn't double-wait.
+      // delegate_agent is fire-and-forget — must remain unwaited so the
+      // guardrail can force a wait_agents call before the parent answers.
+      if (toolName === 'task_agent') waited.add(id);
+      else if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
     }
     return;
   }
@@ -335,6 +348,8 @@ export const LOCAL_TOOLS = [
       required: ['patch']
     }
   },
+  createTaskAgentTool(),
+  createDelegateAgentTool(),
   createSpawnAgentTool(),
   createSpawnAgentsTool(),
   createListAgentsTool(),
@@ -716,7 +731,7 @@ export class Agent {
     // a goal cleanly (goal_complete / goal_blocked) or observe state.
     const readOnly = new Set([
       'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
-      'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
+      'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'route_agent',
       'goal_complete', 'goal_blocked',
       // ask_user_choice doesn't touch the workspace — it's an interaction
