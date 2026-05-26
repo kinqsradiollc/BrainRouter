@@ -58,6 +58,7 @@ import {
   parseArgumentsOrError,
   synthesizeOrphanResults,
   suggestSimilarToolName,
+  looksLikeStalledPreamble,
 } from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
@@ -158,6 +159,41 @@ function formatChildDrainTimeoutAnswer(timeouts: Array<{ id: string; role?: stri
   return lines.join('\n');
 }
 
+function summarizeWaitedChildOutputs(resultText: string): string | undefined {
+  const parsed = parseJsonObject(resultText);
+  if (!parsed) return undefined;
+  const agents = Array.isArray(parsed.agents) ? parsed.agents : [parsed];
+  const sections: string[] = [];
+  for (const entry of agents) {
+    if (!entry || typeof entry !== 'object') continue;
+    const child = entry as Record<string, unknown>;
+    const id = typeof child.id === 'string' ? child.id : undefined;
+    const status = typeof child.status === 'string' ? child.status : undefined;
+    const role = typeof child.role === 'string' ? child.role : undefined;
+    const output = typeof child.finalOutput === 'string'
+      ? child.finalOutput
+      : (typeof child.error === 'string' ? `ERROR: ${child.error}` : undefined);
+    if (!id || !output) continue;
+    sections.push([
+      `Child ${id}${role ? ` (${role})` : ''} ${status ? `[${status}]` : ''}`,
+      output,
+    ].join('\n'));
+  }
+  if (sections.length === 0) return undefined;
+  const body = sections.join('\n\n---\n\n');
+  const maxChars = Number(process.env.BRAINROUTER_CHILD_RESULT_SYSTEM_CHARS) || 12_000;
+  const clamped = body.length > maxChars
+    ? `${body.slice(0, maxChars)}\n...[truncated ${body.length - maxChars} chars; use read_agent_transcript or /agent show <id> for full output]`
+    : body;
+  return [
+    '<system-reminder id="child-results">',
+    'Recently waited child-agent outputs are available below. Synthesize these results directly; do not ignore them or continue as if the children are still running.',
+    '',
+    clamped,
+    '</system-reminder>',
+  ].join('\n');
+}
+
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
   onToolStart: (name: string, args: Record<string, any>) => void;
@@ -191,6 +227,35 @@ export interface RunTurnCallbacks {
    * though those MCP calls are hidden from the LLM's tool stream.
    */
   onMemoryEvent?: (event: MemoryEvent) => void;
+  /**
+   * TIER A streaming hooks — when any of these are provided, the agent
+   * switches to a streaming LLM call (SSE) so the UI sees text appear
+   * character-by-character (grok-cli parity). When omitted (silent /
+   * child agents / tests), the original non-streaming path is used.
+   * Firing order per assistant turn:
+   *   onAssistantTurnStart → onAssistantDelta* (and/or onReasoningDelta*)
+   *   → onAssistantTurnEnd(finalText)
+   * onReasoningDelta carries chain-of-thought / reasoning_content chunks
+   * — UI should render in dim italic and truncate per its own policy.
+   */
+  onAssistantTurnStart?: () => void;
+  onAssistantDelta?: (chunk: string) => void;
+  onAssistantTurnEnd?: (fullText: string) => void;
+  onReasoningDelta?: (chunk: string) => void;
+  /**
+   * Fired right after a compaction collapses chat history. The UI uses
+   * this to render a visible "📦 Compacted N → summary" scrollback row
+   * so users see why context appears to reset mid-conversation.
+   */
+  onCompactionEvent?: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
+  /**
+   * Side-question: when set, the agent registers an `ask_user` tool. When
+   * the model invokes it mid-turn, the agent calls this callback and
+   * awaits the user's answer (resolved by the UI overlay) before
+   * returning the answer as the tool result. Silent / child agents leave
+   * this unset so the tool is not exposed.
+   */
+  onSideQuestion?: (question: string, choices?: string[]) => Promise<string>;
 }
 
 export type MemoryEvent =
@@ -471,7 +536,7 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `openSrc/`, `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -847,7 +912,17 @@ export class Agent {
     }
 
     const allowed = this.allowedToolsForAccess();
-    const filteredLocalTools = LOCAL_TOOLS.filter(t => allowed.has(t.name));
+    // OpenCode parity: collapse the orchestration surface the LLM sees onto
+    // task_agent (foreground) + delegate_agent (background). spawn_agent /
+    // spawn_agents stay registered and executable (workflow.ts slash commands
+    // still call them, and `executeOrchestrationTool` dispatches them) but
+    // we don't advertise them to the model — that's what made the model
+    // pick four overlapping tools at random instead of consistently using
+    // task_agent the way OpenCode users see Task get picked.
+    const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
+    const filteredLocalTools = LOCAL_TOOLS.filter(
+      (t) => allowed.has(t.name) && !MODEL_HIDDEN_TOOLS.has(t.name),
+    );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
@@ -868,7 +943,15 @@ export class Agent {
       if (estimated > autoCompactThreshold && this.chatHistory.length > 6) {
         callbacks.onStatusUpdate(`Auto-compacting history (~${estimated} tokens > ${autoCompactThreshold})...`);
         try {
-          await this.compactHistory();
+          const beforeLen = this.chatHistory.length;
+          const r = await this.compactHistory();
+          if (r && callbacks.onCompactionEvent) {
+            callbacks.onCompactionEvent({
+              droppedMessages: Math.max(0, beforeLen - this.chatHistory.length),
+              keptMessages: this.chatHistory.length,
+              summary: r.summary,
+            });
+          }
         } catch {
           // If compaction fails (no LLM, network), continue without it — better
           // a big payload than a hard turn failure.
@@ -935,6 +1018,12 @@ export class Agent {
     // overridable via BRAINROUTER_MAX_TOOL_LOOPS for very heavy workflows.
     const maxLoops = Math.max(5, Number(process.env.BRAINROUTER_MAX_TOOL_LOOPS) || 60);
     let finalAnswer = '';
+    // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
+    // branch below. Bounded so a model that ONLY emits preambles can't keep
+    // the loop alive forever. Two extra iterations is enough for the model to
+    // either deliver the answer or admit it can't.
+    let preambleGuardFired = 0;
+    const PREAMBLE_GUARD_MAX = 2;
     // Tracks whether we exited the loop because the LLM stopped requesting
     // tools (clean break) vs because we hit maxLoops. Critical: an empty
     // `finalAnswer === ''` from a clean break is NOT a loop-limit timeout.
@@ -944,6 +1033,12 @@ export class Agent {
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
     const REPEAT_GUARD_LIMIT = 3;
+    // OpenCode calls this class of failure a "doom loop": the same tool
+    // pattern repeats even if the arguments keep changing. Keep BrainRouter's
+    // threshold higher than OpenCode's identical-input approval guard so
+    // normal multi-file exploration still works, but stop 20+ Read(...) spins.
+    const recentToolSequences: string[] = [];
+    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, Number(process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT) || 8);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
     const buildOrchestrationContext = (): OrchestrationContext => ({
@@ -978,21 +1073,88 @@ export class Agent {
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
       let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-      try {
+      const invokeLlm = async () => {
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed.
         const effort = resolveEffort(this.workspaceRoot).effort;
         if (shouldUseAnthropicNative(this.llmConfig)) {
-          response = await callAnthropic(this.llmConfig, this.chatHistory, allTools, {
+          return await callAnthropic(this.llmConfig, this.chatHistory, allTools, {
             effort,
             onThinking: (text) => callbacks.onStatusUpdate(`Thinking: ${text.slice(0, 200)}`),
           });
-        } else {
-          response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
         }
+        // TIER A: stream when the UI is listening for deltas, AND the
+        // user hasn't disabled it. Streaming opts in only when a delta
+        // callback is supplied — silent mode / children / tests stay on
+        // the non-streaming path so their behavior is unchanged.
+        const streamRequested = Boolean(
+          callbacks.onAssistantDelta || callbacks.onReasoningDelta,
+        ) && process.env.BRAINROUTER_DISABLE_STREAM !== '1';
+        if (streamRequested) {
+          try {
+            let started = false;
+            const final = await callOpenAIStream(
+              this.llmConfig,
+              this.chatHistory,
+              allTools,
+              { effort },
+              {
+                onTextDelta: (text) => {
+                  if (!started) {
+                    started = true;
+                    callbacks.onAssistantTurnStart?.();
+                  }
+                  callbacks.onAssistantDelta?.(text);
+                },
+                onReasoningDelta: (text) => {
+                  callbacks.onReasoningDelta?.(text);
+                },
+              },
+            );
+            if (started) callbacks.onAssistantTurnEnd?.(final.content);
+            return { content: final.content, toolCalls: final.toolCalls, usage: final.usage };
+          } catch (streamErr: any) {
+            // Streaming failed (provider doesn't support SSE, malformed
+            // chunks, network blip). Fall back transparently to the
+            // non-streaming path so the turn still completes — log via
+            // status so the user can see why their text wasn't live.
+            callbacks.onStatusUpdate(`Streaming failed (${String(streamErr?.message ?? streamErr).slice(0, 120)}) — falling back to non-streaming.`);
+          }
+        }
+        return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+      };
+      try {
+        response = await invokeLlm();
       } catch (err: any) {
-        throw new Error(`LLM Execution failed: ${err.message}`);
+        // Layered LLM recovery — adapted from claude-code's queryLoop in
+        // openSrc/claude-code-openSource/src/query.ts. We detect context-
+        // window-exceeded errors (the single failure mode where a fresh
+        // request is guaranteed to fail the same way) and trigger a
+        // reactive compaction before retrying ONCE. Other errors propagate
+        // unchanged — bare rethrow preserves the prior surface for
+        // network/auth/rate-limit failures the user wants to see.
+        const message = String(err?.message ?? err);
+        const looksContextOverflow = /context length|context window|maximum context|too many tokens|reduce the length|prompt is too long|413|tokens? exceed/i.test(message);
+        if (looksContextOverflow && !this.silent && this.chatHistory.length > 6) {
+          callbacks.onStatusUpdate(`Context overflow detected — reactive compaction before retry...`);
+          try {
+            const beforeLen = this.chatHistory.length;
+            const r = await this.compactHistory();
+            if (r && callbacks.onCompactionEvent) {
+              callbacks.onCompactionEvent({
+                droppedMessages: Math.max(0, beforeLen - this.chatHistory.length),
+                keptMessages: this.chatHistory.length,
+                summary: r.summary,
+              });
+            }
+            response = await invokeLlm();
+          } catch (retryErr: any) {
+            throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
+          }
+        } else {
+          throw new Error(`LLM Execution failed: ${message}`);
+        }
       }
       if (response.usage) {
         this.lastTurnUsage.promptTokens += response.usage.prompt_tokens ?? 0;
@@ -1062,11 +1224,62 @@ export class Agent {
             `Child wait result:\n${waitResultText}`,
             'Now synthesize the child output for the user. Do not say you are waiting unless the wait result timed out.',
           ].join('\n\n');
+          const childResultSystem = summarizeWaitedChildOutputs(waitResultText);
+          if (childResultSystem) {
+            const systemMsg = { role: 'system', content: childResultSystem };
+            this.chatHistory.push(systemMsg);
+            this.recordTranscript(systemMsg);
+          }
           const guardMsg = { role: 'user', content: correction };
           this.chatHistory.push(guardMsg);
           this.recordTranscript(guardMsg);
           continue;
         }
+
+        // Stalled-preamble guardrail: when the model emits a short preamble
+        // like "I'll start by exploring…" / "Let me check…" but ATTACHES NO
+        // tool_calls in the same response, the loop would otherwise break
+        // with that preamble as the final answer — leaving the user staring
+        // at an announcement of work the model never did. This is the most
+        // common Gemma 2B / free-tier OS-model failure mode after we started
+        // teaching them OpenCode's "send a preamble before tool batches"
+        // pattern.
+        //
+        // Fire only when:
+        //   1. The turn already had ≥1 real tool call (so we know the model
+        //      engaged — this isn't a fresh "I don't have enough info" reply)
+        //   2. `looksLikeStalledPreamble(content)` matches the start-of-text
+        //      preamble regexes in toolCallRecovery.ts
+        //   3. We haven't already injected the guardrail too many times this
+        //      turn (PREAMBLE_GUARD_MAX = 2)
+        //
+        // Inject a corrective user message and continue one more iteration.
+        // The model either delivers the substantive answer or, on the next
+        // pass, writes a real reply that escapes the preamble heuristic.
+        if (
+          preambleGuardFired < PREAMBLE_GUARD_MAX &&
+          this.lastTurnToolCalls > 0 &&
+          looksLikeStalledPreamble(response.content)
+        ) {
+          preambleGuardFired += 1;
+          const preview = response.content.trim().slice(0, 140);
+          const correction = [
+            'Runtime preamble guardrail tripped.',
+            `Your last assistant message was a preamble ("${preview}${response.content.trim().length > 140 ? '…' : ''}") but ended with NO tool_calls. The user is still waiting for the actual answer — they cannot see your intent, only your tool_calls and final prose.`,
+            '',
+            'Do ONE of these now, in THIS response:',
+            '1. **Execute the next tool batch you announced** — emit structured tool_calls for the reads/grep/spawn you said you were about to do. The preamble alone does not count.',
+            '2. **Write the substantive answer the user originally asked for** — the actual analysis, findings, code references, or conclusions. Not another preamble.',
+            '',
+            'Do NOT write "I\'ll start by…", "Let me…", or any other preamble again. Either call tools or deliver the answer.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Recovery: preamble-without-action (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing continuation`);
+          continue;
+        }
+
         finalAnswer = response.content;
         exitedCleanly = true;
         break;
@@ -1090,12 +1303,44 @@ export class Agent {
       const normalizedNames = toolCalls.map((tc: any) =>
         normalizeToolName(tc.function.name, candidates),
       );
+      const sequenceSignature = JSON.stringify(normalizedNames);
+      const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
+      recentToolSequences.push(sequenceSignature);
+      if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
+      if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT) {
+        const sequenceLabel = normalizedNames.join(' → ');
+        const resultText = [
+          `Repeat-loop guard tripped: the same tool sequence (${sequenceLabel}) has repeated ${previousSequenceRepeats + 1} times in this turn.`,
+          'The arguments changed, but the action pattern is stalled.',
+          'Stop calling the same tool pattern. Use the evidence already gathered, switch strategy, spawn a bounded child, or report what remains unknown.',
+        ].join(' ');
+        const processed = toolCalls.map((tc: any, idx: number) => ({
+          toolMsg: {
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: normalizedNames[idx],
+            content: resultText,
+            isError: true,
+          },
+          fullResultText: resultText,
+        }));
+        for (const name of normalizedNames) {
+          callbacks.onToolStart(name, {});
+          callbacks.onToolEnd(name, { success: false, summary: `repeat sequence guard tripped (${previousSequenceRepeats + 1}× ${sequenceLabel})`, preview: resultText });
+          traceEvent('brainrouter.tool', { tool: name, ok: false, local: LOCAL_TOOLS.some(lt => lt.name === name), session_key: this.sessionKey, guard: 'repeat_sequence' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+        }
+        for (const entry of processed) {
+          this.chatHistory.push(entry.toolMsg);
+          this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
+        }
+        continue;
+      }
       const parallelEnabled = parallelExecutionEnabled();
       const safeFlags: boolean[] = toolCalls.map(
         (_tc: any, idx: number) => parallelEnabled && isParallelSafe(normalizedNames[idx]),
       );
 
-      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string }> => {
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
         // 0.3.8-I4: Use the strict-recovery helper so a malformed-arguments
         // tool_call surfaces as a structured tool_result (with the raw
@@ -1230,7 +1475,17 @@ export class Agent {
         // "I have listed the directory" instead of echoing the contents. Compute
         // a short preview from the raw result so the REPL can show the user
         // SOMETHING even when the model declines to.
-        const preview = !isError ? getToolPreview(name, args, resultText) : undefined;
+        //
+        // For ERROR cases, surface the failure text as the preview too —
+        // previously `preview: undefined` meant the user just saw
+        // `Read(.) · 0ms` with no indication WHY the tool failed (e.g. "EISDIR:
+        // illegal operation on a directory"). Truncate to 400 chars so a
+        // stack trace doesn't blow up the scrollback.
+        const preview = !isError
+          ? getToolPreview(name, args, resultText)
+          : (resultText
+              ? `${resultText.length > 400 ? resultText.slice(0, 400) + '…' : resultText}`
+              : (summary || undefined));
         callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview });
         traceEvent('brainrouter.tool', {
           tool: name,
@@ -1267,12 +1522,16 @@ export class Agent {
           content: clampedContent,
           isError
         };
+        const childResultSystem = (name === 'wait_agent' || name === 'wait_agents')
+          ? summarizeWaitedChildOutputs(resultText)
+          : undefined;
+        const systemMsg = childResultSystem ? { role: 'system', content: childResultSystem } : undefined;
         // Return; the caller pushes to chatHistory in original call order
         // (NOT settle order) and records the FULL untruncated result for
         // /transcript. Doing the push here would let parallel batches land
         // in finish order, which the LLM's next turn would see as a
         // non-deterministic trace.
-        return { toolMsg, fullResultText: resultText };
+        return { toolMsg, fullResultText: resultText, systemMsg };
       };
 
       // Partition the tool_calls into runs of consecutive parallel-safe
@@ -1281,7 +1540,7 @@ export class Agent {
       // serial runs (and unknown-tool fallbacks) execute one-by-one. The
       // result array is indexed by original call position so the
       // chatHistory push at the end is deterministic.
-      const processed: Array<{ toolMsg: any; fullResultText: string } | undefined> =
+      const processed: Array<{ toolMsg: any; fullResultText: string; systemMsg?: any } | undefined> =
         new Array(toolCalls.length);
 
       const runSafeBatch = async (startIdx: number, endIdx: number): Promise<void> => {
@@ -1329,12 +1588,20 @@ export class Agent {
         }
       }
 
+      const postToolSystemMessages: any[] = [];
       for (const entry of processed) {
         if (!entry) continue;
         this.chatHistory.push(entry.toolMsg);
         // Record the FULL untruncated result so /transcript shows everything,
         // even when the LLM-facing copy was clamped.
         this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
+        if (entry.systemMsg) {
+          postToolSystemMessages.push(entry.systemMsg);
+        }
+      }
+      for (const systemMsg of postToolSystemMessages) {
+        this.chatHistory.push(systemMsg);
+        this.recordTranscript(systemMsg);
       }
 
       // 0.3.8-I4: orphan safety net. Even after dedupe + the per-call
@@ -1787,6 +2054,25 @@ export class Agent {
     return this.llmConfig.model;
   }
 
+  /**
+   * Runtime LLM config swap — `/config` calls this after persisting
+   * provider / apiKey / endpoint changes so the LIVE agent picks up the
+   * new values without a CLI restart. Pre-0.3.10 only `setModel` existed,
+   * so changing the API key or endpoint via /config updated the on-disk
+   * config but the running agent kept using the stale values from
+   * construction time — users had to restart the CLI for changes to
+   * take effect.
+   *
+   * Merges with the current llmConfig so callers can pass partial
+   * updates (e.g. just the endpoint).
+   */
+  public setLLMConfig(next: Partial<LLMConfig>): void {
+    this.llmConfig = { ...this.llmConfig, ...next };
+  }
+  public getLLMConfig(): LLMConfig {
+    return this.llmConfig;
+  }
+
   /** Runtime access-mode cycle for `/permissions` and Shift+Tab plan-mode toggle. */
   public getAccessMode(): AccessMode {
     return this.accessMode;
@@ -2002,6 +2288,11 @@ export class Agent {
       reviewPolicy: prefs.reviewPolicy,
       effort: resolveEffort(this.workspaceRoot).effort,
       connectedMcpTools,
+      // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
+      // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)
+      // pick up an aggressive Beast-mode reinforcement block; strong
+      // families (claude-*, gpt-4/5, o-series, gemini-2.5) get no overlay.
+      model: this.llmConfig.model,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
@@ -2948,5 +3239,162 @@ export async function callOpenAI(
     content: choice.message.content ?? '',
     toolCalls: choice.message.tool_calls,
     usage: data.usage,
+  };
+}
+
+/**
+ * Streaming variant of `callOpenAI`. Returns the same shape after the
+ * stream completes, but invokes `handlers.onTextDelta` / `onReasoningDelta`
+ * as SSE frames arrive so the UI can paint live.
+ *
+ * Supports OpenAI-flavored SSE: lines starting with `data: ` followed by
+ * either `[DONE]` or a JSON frame `{ choices: [{ delta: {...} }], ... }`.
+ * Tool-call deltas accumulate by `index` (the standard OpenAI shape) so
+ * we end with a fully-assembled `tool_calls` array compatible with the
+ * existing non-streaming code path.
+ *
+ * Falls back to throwing on non-SSE bodies — callers must wrap in
+ * try/catch and retry with the non-streaming `callOpenAI` if needed.
+ */
+export async function callOpenAIStream(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+  handlers: {
+    onTextDelta?: (text: string) => void;
+    onReasoningDelta?: (text: string) => void;
+  } = {},
+) {
+  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
+  const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
+  if (!apiKey && !isLocal) {
+    throw new Error('LLM API key is required for OpenAI provider.');
+  }
+  if (!apiKey && isLocal) {
+    apiKey = 'sk-local-placeholder';
+  }
+
+  const body: any = buildChatCompletionPayload(config, messages, tools, options);
+  body.stream = true;
+  body.stream_options = { include_usage: true };
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+  };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const timeoutMs = Number(process.env.BRAINROUTER_LLM_TIMEOUT_MS || 120000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const release = await acquireLLMSlot();
+  let res: Response;
+  try {
+    res = await fetch(`${endpoint}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    release();
+    clearTimeout(timeout);
+    if (err?.name === 'AbortError') {
+      throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
+    }
+    throw err;
+  }
+
+  if (!res.ok || !res.body) {
+    release();
+    clearTimeout(timeout);
+    const errText = res.body ? await res.text() : '';
+    throw new Error(`OpenAI API error (stream): ${res.status} ${res.statusText} - ${errText}`);
+  }
+
+  // Accumulators that match the non-streaming response shape.
+  let content = '';
+  let reasoning = '';
+  const toolCallsByIndex = new Map<number, { id?: string; type?: string; function: { name: string; arguments: string } }>();
+  let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+
+  const reader = (res.body as any).getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by blank lines (`\n\n`). Some servers
+      // (LM Studio in particular) emit `\r\n\r\n` — normalize.
+      let sepIdx: number;
+      while ((sepIdx = buffer.search(/\r?\n\r?\n/)) !== -1) {
+        const frame = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx).replace(/^\r?\n\r?\n/, '');
+        for (const rawLine of frame.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let frameJson: any;
+          try { frameJson = JSON.parse(payload); } catch { continue; }
+          if (frameJson?.usage) {
+            usage = {
+              prompt_tokens: frameJson.usage.prompt_tokens,
+              completion_tokens: frameJson.usage.completion_tokens,
+            };
+          }
+          const choice = frameJson?.choices?.[0];
+          if (!choice) continue;
+          const delta = choice.delta ?? {};
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
+            content += delta.content;
+            handlers.onTextDelta?.(delta.content);
+          }
+          // Reasoning frames (xAI/OpenRouter use `reasoning`, others use `reasoning_content`)
+          const r = (typeof delta.reasoning === 'string' ? delta.reasoning : undefined)
+            ?? (typeof delta.reasoning_content === 'string' ? delta.reasoning_content : undefined);
+          if (r && r.length > 0) {
+            reasoning += r;
+            handlers.onReasoningDelta?.(r);
+          }
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const idx = typeof tc.index === 'number' ? tc.index : 0;
+              const acc = toolCallsByIndex.get(idx) ?? { function: { name: '', arguments: '' } };
+              if (tc.id) acc.id = tc.id;
+              if (tc.type) acc.type = tc.type;
+              // Concatenate (some providers fragment the name across frames;
+              // the OpenAI-standard "name only in first frame" still works
+              // because subsequent frames omit the field).
+              if (tc.function?.name) acc.function.name += tc.function.name;
+              if (typeof tc.function?.arguments === 'string') acc.function.arguments += tc.function.arguments;
+              toolCallsByIndex.set(idx, acc);
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    release();
+    clearTimeout(timeout);
+  }
+
+  const toolCalls = [...toolCallsByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
+    .filter((tc) => tc.function.name); // drop incomplete entries
+
+  return {
+    content,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+    reasoning: reasoning || undefined,
   };
 }

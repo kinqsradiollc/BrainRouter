@@ -1,6 +1,7 @@
 import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/cognitive-extraction.js";
 import { getMemoryTypeConfig } from "../memory-type-config.js";
 import type { SensoryRecord, CognitiveRecord, LLMRunner, MemorySourceKind, MemoryType, MemoryVerificationStatus } from "@kinqs/brainrouter-types";
+import { isExternalTimeoutError } from "../llm-response.js";
 import crypto from "node:crypto";
 
 const ALLOWED_MEMORY_TYPES = new Set<MemoryType>([
@@ -98,8 +99,31 @@ export async function extractCognitiveMemories(params: {
       // extraction silently; sensory records are still persisted by the caller.
       return { success: false, extractedCount: 0, records: [], sceneNames: [], errorMessage: "LLM not configured; cognitive extraction skipped." };
     }
-    console.error("[BrainRouter] LLM extraction failed:", err);
+    if (isExternalTimeoutError(err)) {
+      console.warn(`[BrainRouter] LLM extraction timed out; sensory records remain queued for the extraction sweeper. ${errorMessage}`);
+    } else {
+      console.error("[BrainRouter] LLM extraction failed:", err);
+    }
     return { success: false, extractedCount: 0, records: [], sceneNames: [], errorMessage };
+  }
+
+  if (!rawResult.trim()) {
+    return {
+      success: false,
+      extractedCount: 0,
+      records: [],
+      sceneNames: [],
+      errorMessage: "LLM extraction returned an empty response.",
+    };
+  }
+  if (!/\[[\s\S]*\]/.test(rawResult)) {
+    return {
+      success: false,
+      extractedCount: 0,
+      records: [],
+      sceneNames: [],
+      errorMessage: `LLM extraction returned non-JSON output: ${rawResult.slice(0, 200)}`,
+    };
   }
 
   const parsedScenes = parseExtractionResult(rawResult);
@@ -226,11 +250,77 @@ function parseExtractionResult(raw: string): ParsedScene[] {
 function parseJsonWithEscapeRepair(raw: string): unknown {
   try {
     return JSON.parse(raw);
-  } catch (err) {
-    if (!(err instanceof SyntaxError)) throw err;
-    const repaired = raw.replace(/\\(?!["\\\/])/g, "\\\\");
-    return JSON.parse(repaired);
+  } catch {
+    try {
+      return JSON.parse(stripTrailingCommas(raw));
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+      const escaped = escapeAmbiguousBackslashesInJsonStrings(raw);
+      try {
+        return JSON.parse(stripTrailingCommas(escaped));
+      } catch {
+        return JSON.parse(escapeAmbiguousBackslashesInJsonStrings(stripTrailingCommas(escaped)));
+      }
+    }
   }
+}
+
+function escapeAmbiguousBackslashesInJsonStrings(input: string): string {
+  let out = "";
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (!inString) {
+      out += ch;
+      if (ch === '"') inString = true;
+      continue;
+    }
+
+    if (escape) {
+      out += ['"', "\\", "/"].includes(ch) ? ch : `\\${ch}`;
+      escape = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      out += "\\";
+      escape = true;
+      continue;
+    }
+
+    out += ch;
+    if (ch === '"') inString = false;
+  }
+
+  return out;
+}
+
+// Strip trailing commas before `]` or `}` while respecting string literals.
+// LLMs often emit `["a", "b",]` which JSON.parse rejects.
+function stripTrailingCommas(input: string): string {
+  let out = "";
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (inString) {
+      out += ch;
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; out += ch; continue; }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < input.length && /\s/.test(input[j])) j++;
+      if (input[j] === "]" || input[j] === "}") continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 function parseMemoryType(value: unknown): MemoryType {

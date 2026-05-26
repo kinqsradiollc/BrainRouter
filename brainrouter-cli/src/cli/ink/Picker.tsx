@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { Frame } from './Frame.js';
+import { useTerminalSize } from './useTerminalSize.js';
 
 /**
  * Arrow-key picker built on Ink.
@@ -67,6 +68,20 @@ export type PickerResult =
   | { kind: 'cancelled' };
 
 const OTHER_ID = '__other__';
+const PAGE_STEP = 5;
+
+/**
+ * Pick how many rows we can render at once given the terminal height.
+ * Reserve ~8 rows for frame chrome (title, subtitle, footer, borders,
+ * overflow indicators, preview block). Floor at 5 so a tiny window
+ * still shows enough context to navigate.
+ */
+function pickMaxVisible(terminalRows: number, withDescriptions: boolean): number {
+  const reserved = 8;
+  const perRow = withDescriptions ? 2 : 1;
+  const usable = Math.max(0, terminalRows - reserved);
+  return Math.max(5, Math.floor(usable / perRow));
+}
 
 function themeToAccent(mode?: string): string | undefined {
   if (mode === 'light') return '#A24E1F';
@@ -167,6 +182,22 @@ export function Picker(props: PickerProps) {
       setCursor((c) => (c + 1) % augmentedRows.length);
       return;
     }
+    if (key.pageUp) {
+      setCursor((c) => Math.max(0, c - PAGE_STEP));
+      return;
+    }
+    if (key.pageDown) {
+      setCursor((c) => Math.min(augmentedRows.length - 1, c + PAGE_STEP));
+      return;
+    }
+    if (input === 'g') {
+      setCursor(0);
+      return;
+    }
+    if (input === 'G') {
+      setCursor(augmentedRows.length - 1);
+      return;
+    }
     if (key.return) {
       const row = augmentedRows[cursor];
       if (props.multiSelect) {
@@ -202,17 +233,23 @@ export function Picker(props: PickerProps) {
     }
   });
 
+  const accent = props.accentColor ?? themeToAccent(props.theme?.mode) ?? '#CC9166';
+  const { rows: termRows } = useTerminalSize();
+  const hasDescriptions = augmentedRows.some((r) => !!r.description);
+  const maxVisible = pickMaxVisible(termRows, hasDescriptions);
+  const overflow = augmentedRows.length > maxVisible;
   const footer = props.footer ?? (phase === 'other'
     ? '↵ accept  ·  esc back  ·  ⌫ erase'
     : props.multiSelect
       ? '↑/↓ navigate  ·  space toggle  ·  ↵ confirm  ·  esc / q cancel'
-      : '↑/↓ navigate  ·  ↵ confirm  ·  esc / q cancel');
-  const accent = props.accentColor ?? themeToAccent(props.theme?.mode) ?? '#CC9166';
+      : overflow
+        ? '↑/↓ navigate  ·  PgUp/PgDn jump  ·  g/G top/bottom  ·  ↵ confirm  ·  esc / q cancel'
+        : '↑/↓ navigate  ·  ↵ confirm  ·  esc / q cancel');
 
   return (
     <Frame title={props.title} subtitle={props.subtitle} badge={props.badge} footer={footer} accentColor={accent}>
       {phase === 'pick' ? (
-        <PickerRows rows={augmentedRows} cursor={cursor} accentColor={accent} multiSelect={!!props.multiSelect} selected={selected} />
+        <PickerRows rows={augmentedRows} cursor={cursor} accentColor={accent} multiSelect={!!props.multiSelect} selected={selected} maxVisible={maxVisible} />
       ) : (
         <Box flexDirection="column">
           <Text bold color={accent}>› Type your answer</Text>
@@ -249,12 +286,53 @@ export function Picker(props: PickerProps) {
   );
 }
 
-function PickerRows({ rows, cursor, accentColor, multiSelect, selected }: { rows: PickerRow[]; cursor: number; accentColor: string; multiSelect: boolean; selected: Set<string> }) {
+function PickerRows({ rows, cursor, accentColor, multiSelect, selected, maxVisible }: { rows: PickerRow[]; cursor: number; accentColor: string; multiSelect: boolean; selected: Set<string>; maxVisible: number }) {
+  // Windowed view: only render the slice around the cursor. Keep the
+  // cursor within the visible band — when it moves out, slide the
+  // window. Surface ▲/▼ overflow markers so users know more rows exist
+  // above / below the visible band.
+  const total = rows.length;
+  if (total <= maxVisible) {
+    return (
+      <Box flexDirection="column">
+        {rows.map((row, i) => (
+          <PickerRowView key={row.id} row={row} selected={i === cursor} accentColor={accentColor} multiSelect={multiSelect} checked={selected.has(row.id)} />
+        ))}
+      </Box>
+    );
+  }
+  // Clamp the window so the cursor sits roughly in the middle; bias
+  // toward the edges when near top/bottom so users see context lines
+  // ahead/behind rather than empty padding.
+  const half = Math.floor(maxVisible / 2);
+  let start = cursor - half;
+  if (start < 0) start = 0;
+  if (start + maxVisible > total) start = total - maxVisible;
+  const end = start + maxVisible;
+  const above = start;
+  const below = total - end;
+  const visible = rows.slice(start, end);
   return (
     <Box flexDirection="column">
-      {rows.map((row, i) => (
-        <PickerRowView key={row.id} row={row} selected={i === cursor} accentColor={accentColor} multiSelect={multiSelect} checked={selected.has(row.id)} />
-      ))}
+      {above > 0 ? (
+        <Text color="gray" dimColor>{`     ▲ ${above} more above`}</Text>
+      ) : null}
+      {visible.map((row, i) => {
+        const absoluteIdx = start + i;
+        return (
+          <PickerRowView
+            key={row.id}
+            row={row}
+            selected={absoluteIdx === cursor}
+            accentColor={accentColor}
+            multiSelect={multiSelect}
+            checked={selected.has(row.id)}
+          />
+        );
+      })}
+      {below > 0 ? (
+        <Text color="gray" dimColor>{`     ▼ ${below} more below`}</Text>
+      ) : null}
     </Box>
   );
 }

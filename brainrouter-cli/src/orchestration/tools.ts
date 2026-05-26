@@ -1,4 +1,6 @@
 import { Agent } from '../agent/agent.js';
+import fs from 'node:fs';
+import path from 'node:path';
 // 0.3.7 — Multi-MCP support. The orchestrator forwards the parent's
 // pool to spawned children so a child can call tools across every
 // configured MCP server, not just the one the parent happened to be
@@ -124,6 +126,7 @@ export function extractChildPreview(output: string, maxChars: number): string {
 // avoid the ESM circular-import TDZ between tools.ts and agent.ts (agent.ts
 // constructs the LOCAL_TOOLS array eagerly at module load).
 const DEFAULT_TASK_AGENT_TIMEOUT_MS = 120_000;
+const DEFAULT_CHILD_AGENT_TIMEOUT_MS = 10 * 60_000;
 
 const ORCHESTRATION_TOOL_NAMES = new Set([
   'task_agent',
@@ -175,6 +178,59 @@ export function trackedPromiseFor(id: string): Promise<void> | undefined {
   return runningPromises.get(id);
 }
 
+function isInside(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolveChildLaunchCwd(ctx: OrchestrationContext, rawWorkdir: unknown): string {
+  const parentCwd = (() => {
+    try {
+      const root = fs.realpathSync(ctx.workspaceRoot);
+      const real = fs.realpathSync(ctx.launchCwd);
+      return isInside(root, real) ? real : root;
+    } catch {
+      return ctx.workspaceRoot;
+    }
+  })();
+  if (typeof rawWorkdir !== 'string' || rawWorkdir.trim() === '') return parentCwd;
+
+  try {
+    const root = fs.realpathSync(ctx.workspaceRoot);
+    const requested = path.isAbsolute(rawWorkdir)
+      ? path.resolve(rawWorkdir)
+      : path.resolve(parentCwd, rawWorkdir);
+    if (!fs.existsSync(requested)) return parentCwd;
+    const realRequested = fs.realpathSync(requested);
+    if (!fs.statSync(realRequested).isDirectory()) return parentCwd;
+    if (!isInside(root, realRequested)) return parentCwd;
+    return realRequested;
+  } catch {
+    return parentCwd;
+  }
+}
+
+function childTimeoutMsFromArgs(args: any): number {
+  const raw = Number(args?.timeoutMs ?? process.env.BRAINROUTER_CHILD_AGENT_TIMEOUT_MS ?? DEFAULT_CHILD_AGENT_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_CHILD_AGENT_TIMEOUT_MS;
+}
+
+async function withChildDeadline<T>(promise: Promise<T>, timeoutMs: number, childId: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Child agent ${childId} exceeded wall-clock timeout (${timeoutMs}ms).`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export function createSpawnAgentTool() {
   return {
     name: 'spawn_agent',
@@ -188,7 +244,8 @@ export function createSpawnAgentTool() {
         label: { type: 'string', description: 'Optional short label for the child run.' },
         access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
         wait: { type: 'boolean', description: 'If true, block until the child completes and return its final output. Default: false.' },
-        timeoutMs: { type: 'integer', description: 'Optional timeout in milliseconds when wait=true. Default 120000.' },
+        timeoutMs: { type: 'integer', description: 'Optional child wall-clock timeout in milliseconds. Also bounds wait=true. Default 120000 when wait=true; otherwise 600000.' },
+        workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
         seedRecordIds: {
           type: 'array',
           items: { type: 'string' },
@@ -204,8 +261,23 @@ export function createTaskAgentTool() {
   return {
     name: 'task_agent',
     description:
-      'Run one foreground child agent for a bounded task and wait for its result. ' +
-      'Returns the completed child output, failure, or an explicit timeout envelope. Prefer this over spawn_agent({ wait: true }) for foreground delegation.',
+      'Launch a new agent to handle complex, multi-step tasks autonomously. Returns the completed child output (foreground, blocks).\n\n' +
+      'When using task_agent, specify a `role` to select which specialized agent type to use. Roles: explorer (read-only investigation), architect (design alternatives), reviewer (code review), worker (write access), verifier (tests/checks). Use `agentId` for custom workspace definitions.\n\n' +
+      'When NOT to use task_agent:\n' +
+      '- Specific file path → use read_file directly.\n' +
+      '- Named class/function ("class Foo") → use grep_search directly.\n' +
+      '- Code within 2-3 known files → use read_file.\n' +
+      '- Trivial one-shot questions answerable from one tool call.\n\n' +
+      'Usage notes:\n' +
+      '- Always include a short `label` (3-5 words) summarizing the task.\n' +
+      '- Launch multiple agents concurrently when possible — single assistant message with multiple task_agent tool_calls.\n' +
+      '- The agent\'s result is NOT visible to the user; after it returns, write a text summary so the user sees the findings.\n' +
+      '- Each invocation starts with fresh context — provide a complete task description (file paths, scope, what to return).\n' +
+      '- Tell the agent whether you expect code-writing or research-only — it is not aware of the user\'s intent.\n' +
+      '- If the user says run agents "in parallel", you MUST send one message with multiple task_agent tool_calls.\n' +
+      '- For background fire-and-forget when you have parent-side work to do, use delegate_agent instead and call wait_agent when the result is needed.\n\n' +
+      'Writing the prompt: brief the child like a smart colleague who just walked in. Explain what you\'re accomplishing and why, what you\'ve already learned or ruled out, enough context for judgment calls. Include file paths and line numbers. **Never delegate understanding** — don\'t write "based on your findings, fix the bug"; that pushes synthesis onto the child. Terse command-style prompts produce shallow generic work.\n\n' +
+      '**Trust but verify:** a child\'s returned summary describes what it INTENDED to do, not necessarily what it actually did. When a child writes or edits code, read the actual changes (git diff, read_file) before reporting work as done. Adapted from Claude Code\'s Agent-tool guidance.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -215,6 +287,7 @@ export function createTaskAgentTool() {
         label: { type: 'string', description: 'Optional short label for the child run.' },
         access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
         timeoutMs: { type: 'integer', description: 'Optional timeout in milliseconds. Default 120000.' },
+        workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
         seedRecordIds: {
           type: 'array',
           items: { type: 'string' },
@@ -232,7 +305,10 @@ export function createDelegateAgentTool() {
     description:
       'Start one background child agent and keep working in the parent turn. ' +
       'Non-blocking — there is no `timeoutMs`; the child runs until it finishes or is cancelled. ' +
-      'Returns a running child id plus a reminder to continue useful work; call wait_agent later when the result is needed.',
+      'Returns a running child id plus a reminder to continue useful work; call wait_agent later when the result is needed.\n\n' +
+      'When to choose delegate_agent over task_agent: when you have genuinely independent parent-side work to fill the time (read other files, write a different section, run a benchmark) while the child runs. If you would just sit idle waiting, use task_agent instead — it returns the result directly.\n\n' +
+      'Writing the prompt: same standard as task_agent — brief the child like a smart colleague who just walked in. Explain what you\'re accomplishing and why, what you\'ve already learned, enough context for judgment calls. Include file paths and line numbers. Never write "based on your findings, X" — write what to change, where. Terse prompts produce shallow work.\n\n' +
+      '**Trust but verify after wait_agent:** the child\'s returned summary describes intent, not necessarily what landed on disk. If the child wrote or edited code, read the actual changes (git diff / read_file) before reporting the work as done to the user.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -241,6 +317,7 @@ export function createDelegateAgentTool() {
         prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
         label: { type: 'string', description: 'Optional short label for the child run.' },
         access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
+        workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
         seedRecordIds: {
           type: 'array',
           items: { type: 'string' },
@@ -321,6 +398,7 @@ export function createSpawnAgentsTool() {
               prompt: { type: 'string', description: 'Bounded task prompt for this child.' },
               label: { type: 'string' },
               access: { type: 'string', enum: ['read', 'write', 'shell'] },
+              workdir: { type: 'string' },
               seedRecordIds: { type: 'array', items: { type: 'string' } },
             },
             required: ['prompt'],
@@ -516,6 +594,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
   const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
+  const childLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
+  const childTimeoutMs = childTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
     role: role.name,
     prompt,
@@ -532,7 +612,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     : [];
   const basePrompt = buildSystemPrompt({
     workspaceRoot: ctx.workspaceRoot,
-    launchCwd: ctx.launchCwd,
+    launchCwd: childLaunchCwd,
     sessionKey: childKey,
     instructionSummary: loadWorkspaceInstructionSummary(ctx.workspaceRoot),
   });
@@ -546,7 +626,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
 
   const childAgent = new Agent(ctx.mcpClient, ctx.llmConfig, {
     workspaceRoot: ctx.workspaceRoot,
-    launchCwd: ctx.launchCwd,
+    launchCwd: childLaunchCwd,
     sessionKey: childKey,
     // The role overlay is already embedded inside `systemPromptOverride` via
     // buildRolePrompt() above — passing it again as a separate field would
@@ -576,7 +656,10 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Track per-tool start times so the paired onChildToolEnd carries a
       // real duration — the REPL renders this on the child's end row.
       const childToolStarts = new Map<string, number>();
-      const output = await childAgent.runTurn(prompt, {
+      // Inspired by deer-flow's synthetic dangling-tool-call recovery:
+      // every child must resolve to an explicit result instead of leaving
+      // the session running forever when an LLM/MCP call hangs.
+      const output = await withChildDeadline(childAgent.runTurn(prompt, {
         onStatusUpdate: () => {},
         onToolStart: (tool, args) => {
           childToolStarts.set(tool, Date.now());
@@ -601,7 +684,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
             durationMs,
           });
         },
-      });
+      }), childTimeoutMs, record.id);
 
       // Working-memory offload: when a child returns a sizeable payload, push
       // the full body into the BrainRouter working canvas and keep only a
@@ -642,11 +725,32 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Tell the REPL the child finished — otherwise the user sees the child's
       // tool calls scroll by and then silence, with no signal that it's safe
       // to ask the parent agent to continue.
+      //
+      // Surface a SUBSTANTIAL preview instead of the previous 160-char
+      // slice that the user couldn't even read because the notice render
+      // truncated it to terminal width. Now:
+      //   - Short outputs (≤ AGENT_PREVIEW_MAX): show the FULL body so the
+      //     user sees findings + recommendations, not just the headline.
+      //   - Long outputs (> AGENT_PREVIEW_MAX): use the heading-aware
+      //     `extractChildPreview` to grab the Headline / TL;DR / Summary
+      //     section (role overlays nudge children to open with one).
+      // The REPL renders this in a multi-line `agent-result` scrollback
+      // block so the body wraps freely. Configurable via env var for power
+      // users who want to cap it tighter on small terminals.
+      const AGENT_PREVIEW_MAX = Math.max(
+        400,
+        Number(process.env.BRAINROUTER_AGENT_PREVIEW_CHARS) || 2500,
+      );
+      const previewBody = output
+        ? (output.length <= AGENT_PREVIEW_MAX
+            ? output
+            : extractChildPreview(output, AGENT_PREVIEW_MAX))
+        : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX);
       ctx.onChildComplete?.({
         childId: record.id,
         role: role.name,
         status: 'completed',
-        preview: (storedOutput ?? '').replace(/\s+/g, ' ').slice(0, 160),
+        preview: previewBody,
       });
 
       // Auto-review: when the user has /auto-review on and a worker just
@@ -670,10 +774,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       }
     } catch (err: any) {
       const message = err?.message ?? String(err);
+      const syntheticOutput = `ERROR: ${message}`;
       updateSession(ctx.workspaceRoot, record.id, {
         status: 'failed',
         completedAt: new Date().toISOString(),
         error: message,
+        finalOutput: syntheticOutput,
       });
       ctx.onChildComplete?.({
         childId: record.id,
@@ -688,9 +794,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   runningPromises.set(record.id, promise);
 
   if (args.wait) {
-    return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? 120000 }, ctx);
+    return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? childTimeoutMs }, ctx);
   }
-  return JSON.stringify({ id: record.id, role: role.name, access, status: 'running' }, null, 2);
+  return JSON.stringify({ id: record.id, role: role.name, access, status: 'running', workdir: childLaunchCwd, timeoutMs: childTimeoutMs }, null, 2);
 }
 
 function handleList(ctx: OrchestrationContext): string {

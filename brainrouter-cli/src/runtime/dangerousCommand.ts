@@ -56,6 +56,22 @@ const DANGEROUS_PATTERNS: RegExp[] = [
   /\bdocker\s+system\s+prune\b/,
   /\bdocker\s+(?:rm|rmi)\s+-f/,
   /\bkubectl\s+delete\b/,
+  // Hook-bypass / signing-bypass on git (claude-code calls these out
+  // explicitly — skipping pre-commit / pre-push hooks is the most common
+  // way agents "make a failing check go away" without fixing the root cause).
+  /\bgit\s+(?:commit|push|merge|rebase|cherry-pick|revert)\s+[^\n]*--no-verify\b/,
+  /\bgit\s+commit\s+[^\n]*--no-gpg-sign\b/,
+  // find / xargs deletion patterns — easy to typo into a workspace wipe
+  // (`find . -name '*' -delete` is technically valid and removes everything).
+  /\bfind\b[^|;&\n]*-delete\b/,
+  /\bfind\b[^|;&\n]*-exec\s+rm\b/,
+  /\|\s*xargs\b[^|;&\n]*\b(?:rm|unlink)\b/,
+  // Cloud-resource deletion — irreversible blast radius far exceeds local rm.
+  /\bterraform\s+destroy\b/,
+  /\baws\s+s3\s+rm\b[^\n]*--recursive\b/,
+  /\baws\s+(?:ec2|rds|s3api|iam)\s+delete-/,
+  /\bgcloud\s+[^\n]*\sdelete\b/,
+  /\baz\s+[^\n]*\sdelete\b/,
 ];
 
 /**

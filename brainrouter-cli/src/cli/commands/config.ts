@@ -265,7 +265,10 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
     endpoint,
   };
   saveConfig(ctx.config);
-  ctx.agent.setModel(model);
+  // setLLMConfig (not just setModel) so the live agent picks up the new
+  // apiKey + endpoint immediately. Pre-fix: only setModel was called and
+  // the running agent kept using the stale apiKey/endpoint until restart.
+  ctx.agent.setLLMConfig(ctx.config.llm);
   const endpointTail = endpoint !== provider.endpoint ? ` · ${shortenEndpoint(endpoint)}` : '';
   const sourceTail = modelResult.source === 'live'
     ? ` (from live /v1/models · ${modelResult.liveCount} returned)`
@@ -1061,7 +1064,10 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
         endpoint,
       };
       saveConfig(ctx.config);
-      ctx.agent.setModel(provider.defaultModel);
+      // Same fix as the apiKey path: propagate the FULL llm config to
+      // the live agent so endpoint + apiKey changes take effect without
+      // a CLI restart.
+      ctx.agent.setLLMConfig(ctx.config.llm);
       const endpointTail = endpoint !== provider.endpoint ? ` · endpoint ${endpoint}` : '';
       const tail = sameProvider
         ? `(provider unchanged — reused existing key + reset model to default${endpointTail})`
