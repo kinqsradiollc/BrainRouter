@@ -35,6 +35,13 @@ export interface ProviderEntry {
   models: string[];
   /** Default model selected by the wizard when none was previously set. */
   defaultModel: string;
+  /**
+   * Which adapter the agent dispatches through. Almost every provider
+   * speaks OpenAI's /v1/chat/completions, so `'openai'` is the default
+   * and most entries omit this. Only Anthropic's native /v1/messages
+   * adapter currently uses `'anthropic'` — see runtime/anthropicAdapter.ts.
+   */
+  provider?: 'openai' | 'anthropic';
 }
 
 export const PROVIDER_CATALOG: ProviderEntry[] = [
@@ -104,6 +111,27 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
       'anthropic/claude-haiku-4',
     ],
     defaultModel: 'anthropic/claude-sonnet-4.5',
+  },
+  {
+    // Anthropic's native /v1/messages adapter — driven by
+    // runtime/anthropicAdapter.ts (0.3.8-I6 + 0.3.10 parity work).
+    // Distinct from `anthropic-via-gateway` (OpenRouter) above: that
+    // entry stays on the OpenAI-compat /v1/chat/completions path.
+    id: 'anthropic',
+    label: 'Anthropic (Claude direct)',
+    hint: 'cloud · native /v1/messages · prompt caching · extended thinking',
+    endpoint: 'https://api.anthropic.com/v1',
+    envKey: 'ANTHROPIC_API_KEY',
+    local: false,
+    models: [
+      'claude-sonnet-4-5',
+      'claude-opus-4-1',
+      'claude-sonnet-4',
+      'claude-haiku-4-5',
+      'claude-opus-4',
+    ],
+    defaultModel: 'claude-sonnet-4-5',
+    provider: 'anthropic',
   },
   {
     id: 'gemini',

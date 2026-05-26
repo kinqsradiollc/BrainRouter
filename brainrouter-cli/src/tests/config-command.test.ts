@@ -42,13 +42,6 @@ test('listKnownConfigKeys exposes the keys /config can get/set directly', () => 
   for (const required of ['theme', 'statusline', 'effort', 'mode', 'review-policy', 'quiet', 'personality', 'editor', 'model', 'provider']) {
     assert.ok(keys.includes(required), `/config should support ${required}`);
   }
-  // 0.3.10 — Claude API surface must be reachable via /config <key> <val>.
-  for (const claude of [
-    'temperature', 'top-p', 'top-k', 'max-tokens', 'stop-sequences', 'metadata-user-id',
-    'anthropic-cache', 'anthropic-cache-ttl', 'anthropic-cache-tools', 'anthropic-beta',
-  ]) {
-    assert.ok(keys.includes(claude), `/config should expose ${claude}`);
-  }
 });
 
 test('buildScrubbedConfigJson masks LLM and MCP API keys', () => {

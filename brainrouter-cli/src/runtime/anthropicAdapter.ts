@@ -398,18 +398,11 @@ export async function callAnthropic(
     throw new Error('Anthropic API key is required (set ANTHROPIC_API_KEY or config.llm.apiKey).');
   }
 
-  // Precedence: explicit options arg > env var > persisted config.anthropic
-  const cfgA = config.anthropic ?? {};
-  const envCacheRaw = process.env.BRAINROUTER_ANTHROPIC_CACHE;
-  const cacheEnabled = envCacheRaw !== undefined ? envCacheRaw === '1' : (cfgA.cache ?? false);
+  const cacheEnabled = process.env.BRAINROUTER_ANTHROPIC_CACHE === '1';
   const envTtl = (process.env.BRAINROUTER_ANTHROPIC_CACHE_TTL ?? '').toLowerCase();
   const cacheTtl: '5m' | '1h' | undefined =
-    options.cacheTtl
-    ?? (envTtl === '1h' ? '1h' : envTtl === '5m' ? '5m' : undefined)
-    ?? cfgA.cacheTtl;
-  const envCacheTools = process.env.BRAINROUTER_ANTHROPIC_CACHE_TOOLS;
-  const cacheTools = options.cacheTools
-    ?? (envCacheTools !== undefined ? envCacheTools === '1' : cfgA.cacheTools);
+    options.cacheTtl ?? (envTtl === '1h' ? '1h' : envTtl === '5m' ? '5m' : undefined);
+  const cacheTools = options.cacheTools ?? (process.env.BRAINROUTER_ANTHROPIC_CACHE_TOOLS === '1');
   const body = buildAnthropicRequest(config, messages, tools, {
     ...options,
     cacheEnabled: options.cacheEnabled ?? cacheEnabled,
@@ -431,7 +424,7 @@ export async function callAnthropic(
   };
   // Comma-separated betas, e.g.
   //   BRAINROUTER_ANTHROPIC_BETA=extended-cache-ttl-2025-04-11,interleaved-thinking-2025-05-14
-  const betaEnv = (process.env.BRAINROUTER_ANTHROPIC_BETA ?? cfgA.beta ?? '').trim();
+  const betaEnv = (process.env.BRAINROUTER_ANTHROPIC_BETA ?? '').trim();
   const autoBetas: string[] = [];
   if ((options.cacheTtl ?? cacheTtl) === '1h') {
     autoBetas.push('extended-cache-ttl-2025-04-11');
