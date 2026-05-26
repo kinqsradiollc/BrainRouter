@@ -1,4 +1,4 @@
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { redactText } from '../state/sessionStore.js';
 import { callMcpTool } from '../runtime/mcpUtils.js';
 

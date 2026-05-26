@@ -68,10 +68,19 @@ $EDITOR ~/.config/brainrouter/server.env
 # At minimum set BRAINROUTER_LLM_API_KEY, BRAINROUTER_ADMIN_PASSWORD,
 # BRAINROUTER_JWT_SECRET. See the file for full inline docs.
 
-# 3. Configure the CLI's chat LLM and MCP connection (one-time, interactive).
-brainrouter config       # provider, model, endpoint, API key
-brainrouter login        # MCP URL (http://localhost:3747/mcp), API key
+# 3. Run the CLI. The first launch drops you into the in-terminal wizard
+#    (theme → provider → API key → model → MCP → AGENT.md) — no separate
+#    `brainrouter login` / `brainrouter config` step needed. Re-run the
+#    wizard any time with `/init`; tweak individual knobs with `/config`.
+brainrouter
 ```
+
+> **Legacy subcommands.** `brainrouter login` and `brainrouter config`
+> still work for users who scripted them, but the in-REPL wizard +
+> `/config` + `/login` slash commands are the recommended path since
+> 0.3.7. See
+> [`brainrouter-docs/cli.md#first-run-wizard-037`](brainrouter-docs/cli.md#first-run-wizard-037)
+> for the full breakdown.
 
 **Sudo for step 1?** Run `npm config get prefix`. If the path is under
 your home dir or `/opt/homebrew` → no sudo. If it's `/usr/local/...` →

@@ -3,12 +3,10 @@
  * Hand-tune imports if the compiler complains.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { spawn } from 'node:child_process';
 import chalk from 'chalk';
 import { childSessionKey } from '../../runtime/mcpUtils.js';
 import { listRoles } from '../../orchestration/roles.js';
+import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
@@ -33,6 +31,27 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     }
     case '/agents':
     {
+      if (args[0] === 'defs') {
+        const defs = listAgentDefs(agent.workspaceRoot);
+        console.log(chalk.bold('\nAgent Definitions:'));
+        const ID_W = Math.max(...defs.map((l) => l.def.id.length), 4) + 2;
+        const TIER_W = 12;
+        const SRC_W = 10;
+        console.log(
+          chalk.gray(
+            `  ${'ID'.padEnd(ID_W)}${'TIER'.padEnd(TIER_W)}${'SOURCE'.padEnd(SRC_W)}PATH`,
+          ),
+        );
+        for (const loaded of defs) {
+          const idStr = chalk.cyan(loaded.def.id.padEnd(ID_W));
+          const tierColor = loaded.def.tier === 'reasoning' ? chalk.blue : chalk.yellow;
+          const tierStr = tierColor(loaded.def.tier.padEnd(TIER_W));
+          const srcStr = chalk.gray(loaded.source.padEnd(SRC_W));
+          console.log(`  ${idStr}${tierStr}${srcStr}${chalk.gray(loaded.filePath)}`);
+        }
+        console.log();
+        return true;
+      }
       reconcileStale(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
       // `--json` for scripting. Emits a single JSON line on stdout so

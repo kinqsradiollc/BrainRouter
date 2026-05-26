@@ -1,9 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
-
-const requireFromHere = createRequire(import.meta.url);
+import type { McpClient } from '../runtime/mcpUtils.js';
+import { skillSearchRoots } from './skillCatalog.js';
 
 export interface SkillResolution {
   name: string;
@@ -40,15 +38,13 @@ export const SLASH_TO_SKILL: Record<string, string> = {
   '/test': 'testing-skill',
 };
 
-const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
-
 /**
  * Resolve a skill by name. Prefers the MCP server (so users get whatever the
  * server has loaded, including their own private skills), falls back to a
  * local filesystem scan of `skills/` for when the MCP tool is unavailable.
  */
 export async function resolveSkill(
-  mcpClient: McpClientWrapper,
+  mcpClient: McpClient,
   name: string,
   workspaceRoot: string,
   section: RunSkillOptions['section'] = 'full',
@@ -85,34 +81,7 @@ function readSkillFromFilesystem(workspaceRoot: string, name: string): string | 
   return undefined;
 }
 
-/**
- * Roots to search for SKILL.md when the MCP server is unavailable. Includes:
- *  - the user's workspace (so per-project skills win locally)
- *  - the installed @kinqs/brainrouter-mcp-server package directory (so the canonical
- *    BrainRouter catalogue is found even when MCP is down, because prepack
- *    bundles `skills/` into the published package)
- *  - the monorepo root (when running from source during development)
- */
-function skillSearchRoots(workspaceRoot: string): string[] {
-  const roots: string[] = [];
-  for (const sub of WORKSPACE_SKILL_ROOTS) {
-    roots.push(path.join(workspaceRoot, sub));
-  }
-  const mcpPkgDir = resolveInstalledMcpPackageDir();
-  if (mcpPkgDir) roots.push(path.join(mcpPkgDir, 'skills'));
-  return roots;
-}
-
-function resolveInstalledMcpPackageDir(): string | undefined {
-  try {
-    const pkgJsonPath = requireFromHere.resolve('@kinqs/brainrouter-mcp-server/package.json');
-    return path.dirname(pkgJsonPath);
-  } catch {
-    return undefined;
-  }
-}
-
-function findSkillDir(rootDir: string, skillName: string, depth = 3): string | undefined {
+function findSkillDir(rootDir: string, skillName: string, depth = 5): string | undefined {
   if (depth < 0) return undefined;
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(rootDir, { withFileTypes: true }); } catch { return undefined; }

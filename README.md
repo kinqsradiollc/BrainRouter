@@ -10,8 +10,6 @@ Captures dialogue, classifies it, decays unused facts over time, reinforces
 the ones the agent actually uses, and surfaces the right memories on the
 next prompt — so your agent stops re-learning the same things every session.
 
-## Star History
-
 <a href="https://www.star-history.com/?repos=kinqsradiollc%2FBrainRouter&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kinqsradiollc/BrainRouter&type=date&theme=dark&legend=top-left" />
@@ -22,153 +20,101 @@ next prompt — so your agent stops re-learning the same things every session.
 
 ## What you get
 
-- **MCP server (`brainrouter`)** — drop-in memory tools for any MCP-speaking client.
-- **Terminal CLI (`brainrouter-cli`)** — memory-native coding agent with
-  slash commands, hookify rules, multi-agent orchestration.
-- **Dashboard (`brainrouter-dashboard`)** — Next.js web UI for browsing
-  captured memories, focus scenes, contradictions, recall traces, working
-  memory, timelines, persona, skills, and a hosted chat.
+- **MCP server (`brainrouter-mcp`)** — drop-in memory tools for any MCP-speaking client.
+- **Terminal CLI (`brainrouter`)** — memory-native coding agent with slash commands, hookify rules, multi-agent orchestration.
+- **Dashboard (`brainrouter-dashboard`)** — Next.js web UI for browsing captured memories, focus scenes, contradictions, recall traces, working memory, timelines, persona, skills, and a hosted chat.
 
 ## Install
 
-Two paths — pick one. **Install from npm** is the fast path for trying the
-agent against a hosted MCP server. **Clone the repo** is needed if you want to
-run your own MCP server, hack on the engine, or use the dashboard.
+Two paths — **npm** is the fast path for trying the agent against a hosted MCP server. **Clone** is needed if you want to run your own MCP server, hack on the engine, or use the dashboard.
 
-### From npm (CLI + MCP server)
+**From npm:**
 
 ```bash
-# 1. Install both globally — the -g flag is critical (without it, the
-#    binaries land in ./node_modules/.bin and aren't on $PATH).
 npm install -g @kinqs/brainrouter-cli          # exposes `brainrouter`
 npm install -g @kinqs/brainrouter-mcp-server   # exposes `brainrouter-mcp`
-
-# 2. Scaffold the MCP server's config file (one-time).
-brainrouter-mcp init                            # creates ~/.config/brainrouter/server.env
-$EDITOR ~/.config/brainrouter/server.env        # fill in LLM key + embeddings
-
-# 3. Start the MCP server in one terminal:
-brainrouter-mcp --http --port 3747
-
-# 4. Configure the CLI's chat LLM + point at the server (one-time):
-brainrouter config                              # interactive: LLM provider/model/key
-brainrouter login                               # interactive: MCP URL + API key
-
-# 5. Run the CLI in another terminal:
-brainrouter
 ```
 
-**Sudo caveat for step 1.** Whether you need `sudo` depends on how Node
-is installed: Homebrew / nvm / asdf → no sudo (user-writable prefix);
-system Node on macOS/Linux → yes sudo. Check with `npm config get prefix`
-— if the path is under your home dir or `/opt/homebrew`, skip sudo.
-
-Published packages: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli)
-(CLI — installs the `brainrouter` binary),
-[`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server)
-(MCP server — installs the `brainrouter-mcp` binary), plus their dependencies
-[`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk)
-and [`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types).
-The dashboard and React hooks stay in the repo — they ship as a server, not a library.
-
-### From source (full monorepo)
+**From source:**
 
 ```bash
 git clone https://github.com/kinqsradiollc/BrainRouter.git
 cd BrainRouter
-npm install
-npm run build
+npm install && npm run build
 ```
 
-### Configure your models
+**Sudo caveat.** Whether you need `sudo` for global npm install depends on how Node is installed: Homebrew / nvm / asdf → no sudo; system Node on macOS/Linux → yes. Check with `npm config get prefix`.
 
-BrainRouter ships **two independent processes** with two separate configurations.
-The MCP server runs the cognitive engine (extraction, embeddings, optional
-reranker + relevance judge). The CLI runs the terminal agent you actually
-chat with. They can use the same model for both, or different ones —
-extraction wants something cheap, chat wants something smart.
+Published packages: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli), [`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server), plus shared [`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk) and [`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types). The dashboard stays in the repo — it ships as a server, not a library.
 
-#### 1. MCP server — `brainrouter/.env`
+## Configure
+
+BrainRouter has two independent processes with separate configs.
+
+**MCP server — `brainrouter/.env`**
 
 Copy `brainrouter/.env.example` to `brainrouter/.env` and fill in at minimum:
 
 ```bash
-# Cognitive extraction / synthesis LLM (any OpenAI-compatible endpoint:
-# OpenAI, OpenRouter, LM Studio, Ollama, vLLM…)
 BRAINROUTER_LLM_API_KEY=
 BRAINROUTER_LLM_ENDPOINT=https://api.openai.com/v1/chat/completions
 BRAINROUTER_LLM_MODEL=gpt-4o-mini
 
-# Embeddings — required for vector recall. Key falls back to BRAINROUTER_LLM_API_KEY.
 BRAINROUTER_EMBEDDING_ENDPOINT=https://api.openai.com/v1/embeddings
 BRAINROUTER_EMBEDDING_MODEL=text-embedding-3-small
 BRAINROUTER_EMBEDDING_DIMENSIONS=1536
 
-# Server auth — leave blank to seed on first boot. Generate a JWT secret with:
-#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 BRAINROUTER_ADMIN_PASSWORD=
 BRAINROUTER_JWT_SECRET=
 ```
 
-Optional advanced knobs are documented inline in
-[`brainrouter/.env.example`](brainrouter/.env.example), grouped into five
-numbered sections: LLM, retrieval pipeline (embeddings → reranker → judge),
-memory engine, skill pre-warming, server auth.
+Full knob reference (LLM, retrieval pipeline, memory engine, skill pre-warming, auth) is in [`brainrouter/.env.example`](brainrouter/.env.example).
 
-#### 2. CLI agent — `~/.config/brainrouter/config.json`
+**CLI agent — `~/.config/brainrouter/config.json`**
 
-The CLI's chat LLM and MCP connection are stored in `config.json`, not `.env`.
-Set them up once with the interactive commands:
+The first time you run `brainrouter`, the in-terminal setup wizard starts automatically:
 
-```bash
-brainrouter login    # connect to a hosted/local MCP server (HTTP/SSE)
-brainrouter config   # set chat LLM provider, model, API key, endpoint
+```
+Welcome → Theme → Provider → API key → Model → MCP → AGENT.md → Done
 ```
 
-Tool-runtime knobs that don't fit `config.json` (sandbox, trace log, web-search
-backend, tool-loop limits) live in `brainrouter-cli/.env` — see
-[`brainrouter-cli/.env.example`](brainrouter-cli/.env.example).
+It pre-detects API keys from your shell env (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, …), probes the MCP transport, and writes `config.json` in one transaction. Re-run it any time with `/init` inside the REPL.
 
-### Run
+Tweak individual settings in-REPL:
 
-The CLI's full power — memory recall, skills, capture, persona, focus scenes,
-contradiction tracking — comes from the MCP server. Start it first, then the
-CLI:
+```text
+/config                            # arrow-key settings panel
+/config theme dark                 # one-shot set
+/login                             # MCP profile editor
+```
+
+Tool-runtime knobs (sandbox, trace log, web-search backend, tool-loop limits) are set as shell environment variables — see [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) for the full list.
+
+## Run
 
 ```bash
-# Terminal A — MCP HTTP server on :3747 (cognitive memory engine)
+# Terminal A — MCP HTTP server on :3747
 cd brainrouter && npm run start:http
 
 # Terminal B — CLI agent
-npm run cli
+brainrouter
 ```
 
-Type `/help` in the REPL.
+Type `/help` in the REPL for 60+ slash commands.
 
-**Offline mode.** If the MCP server isn't reachable, the CLI still boots — but
-only local tools (file edits, shell, web fetch, spawn_agent) work. Memory
-recall, capture, and skills are disabled until the server is back. The startup
-banner shows `⚠️  OFFLINE MODE` when this happens. Pass `--strict-mcp` to make
-the CLI exit instead of degrading.
+**Offline mode** — if the MCP server isn't reachable, the CLI still boots with only local tools (file edits, shell, web fetch, `spawn_agent`). The banner shows `offline`. Pass `--strict-mcp` to exit instead of degrading.
 
-**Stdio mode.** If you'd rather run the MCP as a spawned child of the CLI
-(instead of a separate HTTP service), point your active server profile at the
-`default` stdio profile via `brainrouter config` → "Set Active Server Profile".
-You don't need to run `start:http` in that case — the CLI spawns the server
-on demand.
+**Stdio mode** — to run the MCP as a spawned child of the CLI instead of a separate HTTP service, use `/login` → pick the local stdio profile. No separate `start:http` needed.
 
-### Web dashboard (optional)
+## Web dashboard (optional)
 
-With the MCP HTTP server already running (Terminal A above), start the
-dashboard in a third terminal:
+With the MCP HTTP server running, start the dashboard in a third terminal:
 
 ```bash
 cd brainrouter-dashboard && npm install && npm run dev
 ```
 
-Open <http://localhost:3000>. The dashboard exposes the chat surface at
-`/chat` plus inspectors for memories, scenes, contradictions, recall traces,
-working memory, persona, hooks, and the user/admin console.
+Open <http://localhost:3000>. Exposes `/chat` plus inspectors for memories, scenes, contradictions, recall traces, working memory, persona, hooks, and the admin console.
 
 ## Docs
 
@@ -177,8 +123,8 @@ working memory, persona, hooks, and the user/admin console.
 - **[PRESENTATION.md](PRESENTATION.md)** — slide-deck overview.
 - **[brainrouter-docs/](brainrouter-docs/)** — deep dives (math, env vars, CLI internals).
 - **[AGENT.md](AGENT.md)** — guidance for AI coding agents working in this repo.
-- **[ROADMAP.md](ROADMAP.md)** — what's next (overview + per-release index pointing into [`brainrouter-roadmap/`](brainrouter-roadmap/)).
-- **[CHANGELOG.md](CHANGELOG.md)** — release notes (in-flight + most-recent inline; full history per-version in [`brainrouter-changelog/`](brainrouter-changelog/)).
+- **[ROADMAP.md](ROADMAP.md)** — what's next.
+- **[CHANGELOG.md](CHANGELOG.md)** — release notes.
 
 ## License
 

@@ -12,7 +12,7 @@ import { BOX, type Theme } from './theme.js';
  * (chalk title + workspace line + connecting-to line) with a single visually
  * scannable block:
  *
- *   ╭─ 🧠 BrainRouter CLI 0.3.5 ──────────────────────────────╮
+ *   ╭─ 🧠 BrainRouter CLI 0.3.7 ──────────────────────────────╮
  *   │ workspace  BrainRouter  ·  c5b8c12d                     │
  *   │ mcp        local-http  ·  http  ·  online               │
  *   │ workflow   cli-shell-redesign  (in-progress)            │
@@ -30,10 +30,19 @@ import { BOX, type Theme } from './theme.js';
  * it once. Pure-function so tests can assert against the rendered output.
  */
 
-const VERSION = '0.3.6';
+const VERSION = '0.3.7';
 const TITLE = '🧠 BrainRouter CLI';
-const MIN_WIDTH = 56;
+// Width floor for the BOXED banner. Below this we fall through to the
+// `renderPlainBanner` plaintext format. Was 56 — that caused the box to
+// overflow on terminals narrower than 58 cols (each row wrapped to
+// multiple terminal rows with broken border alignment). 38 fits a
+// 40-col terminal (the smallest realistic phone / split-pane width).
+const MIN_BOX_WIDTH = 38;
 const MAX_WIDTH = 100;
+// Below this width we skip the box entirely and render the rows as
+// "label: value" lines. The boxed format with horizontal borders +
+// title is meaningless when each border row wraps.
+const PLAIN_TEXT_THRESHOLD = 38;
 
 export interface BannerInputs {
   workspaceRoot: string;
@@ -74,6 +83,13 @@ export interface BannerInputs {
 interface Row {
   label: string;
   value: string;
+}
+
+export interface DisplayedMcpState {
+  profile: string;
+  transport: string;
+  online: boolean;
+  identity: 'brainrouter' | 'third-party' | 'unknown';
 }
 
 function shortHash(absPath: string): string {
@@ -171,8 +187,16 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
     titleText.length + 4,
   );
   const targetCols = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : MAX_WIDTH;
+
+  // Below the plaintext threshold the boxed layout is hostile (each
+  // border row wraps and looks chaotic). Fall back to a label:value
+  // text dump that the terminal can wrap naturally.
+  if (targetCols < PLAIN_TEXT_THRESHOLD) {
+    return renderPlainBanner(titleText, rows, theme);
+  }
+
   // Reserve 2 columns for the side borders.
-  const innerWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.min(naturalInner, targetCols - 2)));
+  const innerWidth = Math.max(MIN_BOX_WIDTH, Math.min(MAX_WIDTH, Math.min(naturalInner, targetCols - 2)));
 
   const top = (() => {
     // ╭─ <title> ──╮  — title sits inline at the top border.
@@ -193,6 +217,20 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
 }
 
 /**
+ * Compact label:value text banner — used on terminals narrower than
+ * PLAIN_TEXT_THRESHOLD cols where the boxed layout's border rows
+ * would wrap and look broken. Same information, no chrome.
+ */
+function renderPlainBanner(titleText: string, rows: Row[], theme: Theme): string {
+  const labelWidth = rows.reduce((w, r) => Math.max(w, r.label.length), 0);
+  const headerLine = theme.primary(titleText);
+  const bodyLines = rows.map(
+    (row) => theme.muted(padRight(row.label, labelWidth) + '  ') + theme.plain(row.value),
+  );
+  return [headerLine, ...bodyLines].join('\n');
+}
+
+/**
  * Convenience: assemble the inputs from live agent + config + workspace
  * state. Pure read; no side effects. Anything that throws while reading the
  * goal or current-workflow files is treated as "not set" so a half-set-up
@@ -201,14 +239,14 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
 export function buildBannerInputs(
   config: Config,
   agent: { sessionKey: string; workspaceRoot: string; getModel: () => string },
-  mcpClient: { isConnected: () => boolean; getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown' },
+  mcpClient: {
+    isConnected: () => boolean;
+    getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown';
+    getStatus?: (serverId: string) => { status: string; identity: 'brainrouter' | 'third-party' | 'unknown' } | undefined;
+    getActiveBrainrouterServerId?: () => string | undefined;
+  },
 ): BannerInputs {
-  const profile = config.activeServer;
-  const server = config.servers[profile];
-  const transport = server?.type ?? 'unknown';
-  // 10c: identity comes from the live wrapper when present; fall back to
-  // the config field for callers that pass a thin stub.
-  const mcpIdentity = mcpClient.getIdentity ? mcpClient.getIdentity() : (server?.identity ?? 'unknown');
+  const displayedMcp = resolveDisplayedMcpState(config, mcpClient);
   let workflow: { slug: string; status: string } | undefined;
   let lastUsedWorkflow: string | undefined;
   try {
@@ -238,14 +276,35 @@ export function buildBannerInputs(
 
   return {
     workspaceRoot: agent.workspaceRoot,
-    mcpProfile: profile,
-    mcpTransport: transport,
-    mcpOnline: mcpClient.isConnected(),
-    mcpIdentity,
+    mcpProfile: displayedMcp.profile,
+    mcpTransport: displayedMcp.transport,
+    mcpOnline: displayedMcp.online,
+    mcpIdentity: displayedMcp.identity,
     sessionKey: agent.sessionKey,
     model: agent.getModel(),
     workflow,
     lastUsedWorkflow,
     goal,
+  };
+}
+
+export function resolveDisplayedMcpState(
+  config: Config,
+  mcpClient: {
+    isConnected: () => boolean;
+    getIdentity?: () => 'brainrouter' | 'third-party' | 'unknown';
+    getStatus?: (serverId: string) => { status: string; identity: 'brainrouter' | 'third-party' | 'unknown' } | undefined;
+    getActiveBrainrouterServerId?: () => string | undefined;
+  },
+): DisplayedMcpState {
+  const liveBrain = mcpClient.getActiveBrainrouterServerId?.();
+  const profile = liveBrain || config.activeServer;
+  const server = config.servers[profile];
+  const status = profile ? mcpClient.getStatus?.(profile) : undefined;
+  return {
+    profile,
+    transport: server?.type ?? 'unknown',
+    online: status ? status.status === 'connected' : mcpClient.isConnected(),
+    identity: status?.identity ?? server?.identity ?? mcpClient.getIdentity?.() ?? 'unknown',
   };
 }

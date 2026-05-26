@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-types",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Shared TypeScript types for BrainRouter — used by the CLI, MCP server, and SDK.",
   "type": "module",
   "main": "dist/index.js",
