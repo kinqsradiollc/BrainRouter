@@ -38,6 +38,15 @@ export interface LLMConfig {
   apiKey: string;
   model: string;
   endpoint?: string;
+  /** Optional sampling overrides forwarded verbatim to the provider. */
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  stopSequences?: string[];
+  /** Provider-specific max output token cap. Adapter default applies when unset. */
+  maxTokens?: number;
+  /** Anthropic `metadata.user_id` for per-user attribution (optional). */
+  metadataUserId?: string;
 }
 
 export interface Config {

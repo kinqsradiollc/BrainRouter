@@ -179,3 +179,55 @@ test('parseAnthropicResponse: error envelope throws', () => {
     parseAnthropicResponse({ type: 'error', error: { message: 'overloaded' } }),
   /overloaded/);
 });
+
+test('buildAnthropicRequest: forwards sampling params + metadata.user_id when provided', () => {
+  const body = buildAnthropicRequest(baseConfig, [{ role: 'user', content: 'hi' }], [], {
+    temperature: 0.3,
+    topP: 0.8,
+    topK: 40,
+    stopSequences: ['\n\nHuman:', 'STOP', 'X', 'Y', 'TRUNCATED'],
+    metadataUserId: 'user-42',
+  });
+  assert.equal(body.temperature, 0.3);
+  assert.equal(body.top_p, 0.8);
+  assert.equal(body.top_k, 40);
+  // Anthropic caps stop_sequences at 4 — adapter slices for us.
+  assert.deepEqual(body.stop_sequences, ['\n\nHuman:', 'STOP', 'X', 'Y']);
+  assert.deepEqual(body.metadata, { user_id: 'user-42' });
+});
+
+test('buildAnthropicRequest: passes structured user content blocks (e.g. images) through verbatim', () => {
+  const imageBlock = {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KG...' },
+  };
+  const body = buildAnthropicRequest(baseConfig, [{
+    role: 'user',
+    content: [imageBlock, { type: 'text', text: 'what is this?' }],
+  }], []);
+  assert.equal(body.messages.length, 1);
+  assert.equal(body.messages[0].content.length, 2);
+  assert.equal(body.messages[0].content[0].type, 'image');
+  assert.equal(body.messages[0].content[1].type, 'text');
+});
+
+test('buildAnthropicRequest: cache TTL 1h marks breakpoints with ttl:"1h"', () => {
+  const body = buildAnthropicRequest(baseConfig, [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'hey' },
+  ], [], { cacheEnabled: true, cacheTtl: '1h' });
+  assert.deepEqual((body.system as any)[0].cache_control, { type: 'ephemeral', ttl: '1h' });
+  const lastMsg = body.messages[body.messages.length - 1];
+  const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+  assert.deepEqual(lastBlock.cache_control, { type: 'ephemeral', ttl: '1h' });
+});
+
+test('buildAnthropicRequest: cacheTools adds breakpoint to last tool definition', () => {
+  const body = buildAnthropicRequest(baseConfig, [{ role: 'user', content: 'hi' }], [
+    { name: 'a', description: '', inputSchema: { type: 'object' } },
+    { name: 'b', description: '', inputSchema: { type: 'object' } },
+  ], { cacheEnabled: true, cacheTools: true });
+  assert.equal(body.tools![0].cache_control, undefined);
+  assert.deepEqual(body.tools![1].cache_control, { type: 'ephemeral' });
+});
