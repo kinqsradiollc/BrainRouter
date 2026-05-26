@@ -60,7 +60,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log(chalk.bold.yellow('\n  Warnings'));
         for (const w of b.warnings) console.log(`    ${w}`);
       }
-      console.log(chalk.gray(`\n  Tokens injected: ${b.tokensInjected.toLocaleString()}  ·  compacted chars avoided: ${b.tokensSaved.toLocaleString()}`));
+      console.log(chalk.gray(`\n  Tokens injected: ${b.tokensInjected.toLocaleString()}  ·  compacted chars avoided: ${b.charsSaved.toLocaleString()}`));
       if (b.sources.length === 0 && b.decision !== 'none') console.log(chalk.gray('  Manual fallback: /recall <query> or /memory <query>'));
       if (b.decision === 'none') console.log(chalk.yellow('  No briefing has been built yet. Start a turn or use /recall.'));
       console.log();
