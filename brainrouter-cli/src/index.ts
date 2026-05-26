@@ -54,175 +54,62 @@ process.emitWarning = ((warning: string | Error, ...rest: any[]) => {
   return (originalEmitWarning as any)(warning, ...rest);
 }) as typeof process.emitWarning;
 
+/**
+ * Crash diagnostics — surface ANY exit reason so the user (or we) can
+ * see WHY the process died if the REPL ever silently quits. The
+ * symptom the user reported was "REPL prints banner, then bash prompt"
+ * with no error. If that happens again under any future regression,
+ * one of these handlers will catch it and print the cause.
+ *
+ * `BRAINROUTER_DEBUG_EXIT=1` (default off) enables verbose exit tracing
+ * including the beforeExit event so we can see whether the event loop
+ * drained (= stdin refcount issue) vs explicit process.exit (= bug).
+ */
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`\n[brainrouter] Uncaught exception killed the process:\n${err?.stack ?? err}\n`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason: any) => {
+  process.stderr.write(`\n[brainrouter] Unhandled promise rejection killed the process:\n${reason?.stack ?? reason}\n`);
+  process.exit(1);
+});
+if (process.env.BRAINROUTER_DEBUG_EXIT === '1') {
+  process.on('beforeExit', (code) => {
+    process.stderr.write(`[brainrouter:debug] beforeExit code=${code} (event loop drained — likely Ink stdin.unref leak)\n`);
+  });
+  process.on('exit', (code) => {
+    process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
+  });
+}
+
 import fs from 'node:fs';
-import path from 'node:path';
-import url from 'node:url';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig } from './config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
+import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
+import type { ServerConfig } from './config/config.js';
 import { Agent } from './agent/agent.js';
-import { startREPL } from './cli/repl.js';
+import { runChat } from './cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
+import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
 
-/**
- * Load `.env` files into the CLI's `process.env`.
- *
- * The CLI and the MCP server have separate concerns and now ship separate
- * config files:
- *
- *   - `brainrouter-cli/.env`  — CLI-only knobs (chat LLM, tool loop,
- *                                sandbox, web search, trace log).
- *   - `brainrouter/.env`      — MCP-only knobs (extraction LLM, embeddings,
- *                                reranker, memory engine, server auth).
- *
- * Loading order:
- *   1) `brainrouter-cli/.env` (PRIMARY for CLI process).
- *   2) `brainrouter/.env`     (FALLBACK — only for the LLM credentials, so
- *                              a user who set up only the MCP config still
- *                              gets a working CLI agent and vice versa).
- *
- * Shell env (anything already in `process.env`) wins over both — explicit
- * env > .env file, as is conventional.
- *
- * The MCP child uses `import "dotenv/config"` which resolves relative to
- * `process.cwd()`. The CLI sets the spawned child's cwd to the MCP package
- * directory (see runtime/mcpClient.ts), so `brainrouter/.env` is loaded by
- * the child directly — the CLI does NOT need to pre-load it for the MCP's
- * sake.
- */
-/**
- * Vars the CLI process consumes from a sibling `brainrouter/.env` fallback.
- *
- * LLM credentials are deliberately EXCLUDED — `~/.config/brainrouter/config.json`
- * is the canonical source for chat-LLM creds, endpoint, and model (set via
- * `brainrouter login` or `brainrouter config`). Pulling them from `.env` in
- * parallel created a silent precedence bug: env would shadow `config.json`
- * because `loadBrainrouterEnv()` runs at module-load time before
- * `loadConfig()`, and downstream callers like `mcpClient.connect()` check
- * `mergedEnv.BRAINROUTER_LLM_ENDPOINT` before falling back to `llmConfig`.
- *
- * The only var we still allow through the fallback is `BRAINROUTER_API_KEY`
- * — that's MCP-server auth (not LLM), and stdio mode propagates it from the
- * CLI's process.env into the spawned child. If your `config.json` server
- * profile already carries the API key in its `env` block, you don't need
- * this fallback either, and it can go away in a follow-up cleanup.
- *
- * Anything outside this set is a pure MCP-server knob (embedding endpoint,
- * JWT secret, extraction sweep config, prewarming, graph timeouts, admin
- * creds) that just pollutes the CLI's environment with no effect — the MCP
- * child loads `brainrouter/.env` directly via its own `dotenv/config`.
- */
-const CLI_FALLBACK_ALLOWLIST = new Set([
-  'BRAINROUTER_API_KEY',
-]);
-
-function loadEnvFile(file: string, allowlist?: Set<string>): number {
-  try {
-    const raw = fs.readFileSync(file, 'utf8');
-    let count = 0;
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eq = trimmed.indexOf('=');
-      if (eq <= 0) continue;
-      const key = trimmed.slice(0, eq).trim();
-      let value = trimmed.slice(eq + 1).trim();
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1);
-      }
-      // Allowlist gate: when loading the MCP fallback file, only adopt vars
-      // the CLI actually reads. Primary CLI .env loads pass no allowlist and
-      // accept everything (it's the CLI's own config).
-      if (allowlist && !allowlist.has(key)) continue;
-      if (key && !(key in process.env)) {
-        process.env[key] = value;
-        count++;
-      }
-    }
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
-function loadBrainrouterEnv(): { primary?: string; fallback?: string; count: number } {
-  const here = path.dirname(url.fileURLToPath(import.meta.url));
-  let count = 0;
-  let primary: string | undefined;
-  let fallback: string | undefined;
-
-  // PRIMARY: brainrouter-cli/.env (this package's own config).
-  // dist/index.js → ../.. = brainrouter-cli/, so .env sits next to package.json.
-  const cliCandidates = [
-    path.resolve(here, '..', '..', '.env'),                          // monorepo: brainrouter-cli/.env
-    path.resolve(here, '..', '..', '..', 'brainrouter-cli', '.env'), // installed/nested
-    path.resolve(process.cwd(), 'brainrouter-cli', '.env'),          // running from repo root
-  ];
-  for (const file of cliCandidates) {
-    if (fs.existsSync(file)) {
-      primary = file;
-      count += loadEnvFile(file);
-      break;
-    }
-  }
-
-  // FALLBACK: brainrouter/.env (MCP-side config). Only used to backstop the
-  // LLM credentials so a partial setup still works. The MCP child loads
-  // brainrouter/.env on its own anyway via cwd hint, so we don't need to
-  // import its server-only knobs (embedding endpoint, JWT secret, sweep
-  // intervals, prewarming) — those just clutter the CLI's process.env. The
-  // allowlist limits the fallback to vars the CLI actually reads.
-  //
-  // Only record the fallback in the result when it actually contributed at
-  // least one new var. If the primary file already set all the LLM creds,
-  // mentioning the fallback path in the startup banner is noise — the user
-  // already has the CLI fully configured locally and doesn't need to know
-  // a sibling .env was read but ignored.
-  const mcpCandidates = [
-    path.resolve(here, '..', '..', '..', 'brainrouter', '.env'),
-    path.resolve(process.cwd(), 'brainrouter', '.env'),
-  ];
-  for (const file of mcpCandidates) {
-    if (fs.existsSync(file)) {
-      const added = loadEnvFile(file, CLI_FALLBACK_ALLOWLIST);
-      if (added > 0) {
-        fallback = file;
-        count += added;
-      }
-      break;
-    }
-  }
-  return { primary, fallback, count };
-}
-
-const envLoadResult = loadBrainrouterEnv();
-if (envLoadResult.primary || envLoadResult.fallback) {
-  // Something contributed at least one var — show what loaded so the user can
-  // trace where runtime knobs (sandbox, timeouts, trace log, web search) are
-  // coming from. LLM creds intentionally do NOT flow through this path; they
-  // live in ~/.config/brainrouter/config.json.
-  const sources: string[] = [];
-  if (envLoadResult.primary) sources.push(envLoadResult.primary);
-  if (envLoadResult.fallback) sources.push(`${envLoadResult.fallback} (fallback)`);
-  const tag = envLoadResult.count > 0
-    ? chalk.gray(` (${envLoadResult.count} new var${envLoadResult.count === 1 ? '' : 's'})`)
-    : chalk.gray(' (all keys already set in shell)');
-  console.error(chalk.gray(`env: loaded ${sources.join(', ')}`) + tag);
-}
-// No banner when nothing loaded — that's the normal case for users who
-// configured the CLI via `brainrouter login` / `brainrouter config`. The old
-// "set BRAINROUTER_LLM_API_KEY in your shell" hint contradicted the
-// config.json-is-canonical design and confused users who already had a
-// fully populated config.
+// The CLI deliberately does NOT load any `.env` file. Source of truth for
+// runtime config is `~/.config/brainrouter/config.json` (LLM creds, MCP
+// server profiles, theme, etc.), set interactively via the wizard / `/login`
+// / `/config`. The MCP server is a separate concern and loads its own
+// `server.env` from its own working directory — that's the server's
+// business, not the CLI's. Shell env (real `process.env`) still flows
+// through normally for everything that reads it (e.g. `OPENAI_API_KEY`
+// fallback inside `callOpenAI`).
 
 const program = new Command();
 
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.5');
+  .version('0.3.7');
 
 // Chat Command (default)
 program
@@ -250,25 +137,66 @@ program
     // the launch CWD + detection reason on demand. Keeping a duplicate
     // stale-chrome line above the banner undermines the banner-first design.
 
-    const config = loadConfig();
-    const profileName = options.profile || config.activeServer;
-    const configuredServer = config.servers[profileName];
+    // 0.3.7 — first-run auto-trigger. When no config exists OR the
+    // onboarded marker is missing, drop the user straight into the
+    // wizard before constructing the Agent / MCP client. This replaces
+    // the pre-0.3.7 "Error: No BrainRouter config found ... run
+    // `brainrouter login`" exit-with-error path. The wizard owns its
+    // own readline for the wizard's lifetime; when it returns we
+    // continue into the REPL with the freshly-saved config.
+    if (!fs.existsSync(getConfigPath()) || !isOnboarded()) {
+      try {
+        const wizardResult = await runWizard({
+          workspaceRoot: workspace.workspaceRoot,
+        });
+        if (wizardResult.state.aborted) {
+          console.error(chalk.gray('Wizard aborted before saving — exiting. Run `brainrouter` again any time to retry.'));
+          process.exit(0);
+        }
+      } catch (err: any) {
+        console.error(chalk.red(`Wizard failed: ${err?.message ?? err}`));
+        process.exit(1);
+      }
+    }
 
-    if (!configuredServer) {
-      console.error(chalk.red(`Error: Profile "${profileName}" not found in config.`));
+    const config = loadConfig();
+
+    // 0.3.7 — multi-MCP support. Third-party MCPs are additive and all
+    // connect concurrently. BrainRouter MCPs are different: users may store
+    // several BrainRouter profiles (local/staging/remote/self-hosted), but
+    // only one brain should be active at a time. `activeServer` selects that
+    // BrainRouter profile when it points at one; otherwise we use the first
+    // configured BrainRouter profile. `--profile <name>` still scopes the run
+    // to exactly one server for explicit single-server mode.
+    const requestedProfile = options.profile as string | undefined;
+    const allServerIds = Object.keys(config.servers);
+    if (allServerIds.length === 0) {
+      console.error(chalk.red('Error: No MCP server profiles in config.'));
+      console.error(chalk.gray('Run `/login` inside the REPL or `brainrouter login` to add a profile.'));
       process.exit(1);
     }
-
-    const serverConfig = { ...configuredServer };
-
-    if (serverConfig.type === 'stdio') {
-      const args = serverConfig.args ?? [];
-      const rootIndex = args.indexOf('--root');
-      serverConfig.args = rootIndex >= 0
-        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-        : [...args, '--root', workspace.workspaceRoot];
+    if (requestedProfile && !config.servers[requestedProfile]) {
+      console.error(chalk.red(`Error: Profile "${requestedProfile}" not found in config.`));
+      console.error(chalk.gray(`Available profiles: ${allServerIds.join(', ')}.`));
+      process.exit(1);
     }
-    config.servers[profileName] = serverConfig;
+    const targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
+
+    // Pre-process each target's serverConfig to thread workspaceRoot
+    // into the stdio `--root` arg shape the MCP server expects.
+    const targetServers: Record<string, ServerConfig> = {};
+    for (const id of targetIds) {
+      const cloned = { ...config.servers[id] };
+      if (cloned.type === 'stdio') {
+        const args = cloned.args ?? [];
+        const rootIndex = args.indexOf('--root');
+        cloned.args = rootIndex >= 0
+          ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
+          : [...args, '--root', workspace.workspaceRoot];
+      }
+      targetServers[id] = cloned;
+      config.servers[id] = cloned;
+    }
 
     const llm = config.llm || {
       provider: 'openai',
@@ -280,37 +208,34 @@ program
       llm.model = options.model;
     }
 
-    const mcpClient = new McpClientWrapper();
-    // "Connecting..." / "Successfully connected!" status lines intentionally
-    // dropped — they printed for the ~1-2s of connect AND scrolled the
-    // banner up. On success the banner's `mcp ... online` row IS the
-    // success signal; on failure the catch-block error + the post-banner
-    // OFFLINE MODE warning in startREPL together cover both diagnosis and
-    // remediation.
-    try {
-      await mcpClient.connect(serverConfig, llm, profileName);
-    } catch (err: any) {
-      // Degraded "offline mode": the MCP server is the cognitive memory layer
-      // (recall, skills, capture, citations) — losing it is painful but not
-      // fatal. Local tools (read_file, write_file, list_dir, grep_search,
-      // run_command, spawn_agent) still work, and the agent's runTurn already
-      // try/catches every MCP call. Keep the REPL up so the user can edit
-      // code, drive shell commands, and recover when the server comes back.
-      // Pass --strict-mcp to flip back to hard-fail (useful in CI).
-      console.error(chalk.red(`Failed to connect to MCP server: ${err.message}`));
+    // Connect everyone concurrently — offline servers don't block.
+    // "Connecting..." status lines intentionally dropped (see prior
+    // comment); the banner's per-server row is the success signal.
+    const mcpClient = new McpClientPool();
+    const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    const failures = statuses.filter((s) => s.status === 'failed');
+    if (failures.length === statuses.length) {
+      // Every server failed — equivalent to the pre-0.3.7 "MCP
+      // unreachable" path; same --strict-mcp semantics apply.
+      const summary = failures.map((s) => `${s.serverId}: ${s.error ?? 'unknown error'}`).join('\n  ');
+      console.error(chalk.red(`Failed to connect to any MCP server:\n  ${summary}`));
       if (options.strictMcp) {
         console.error(chalk.gray('--strict-mcp set; exiting.'));
         process.exit(1);
       }
-      // The banner-adjacent OFFLINE MODE warning in startREPL covers the
-      // remediation hint. No second warning here.
+      // Falls through to offline-mode REPL — banner shows the warning.
+    } else if (failures.length > 0) {
+      // Partial failure — surface the failing server names without
+      // exiting; user can /mcp reconnect <id> later.
+      const failed = failures.map((s) => s.serverId).join(', ');
+      console.error(chalk.yellow(`⚠ ${failures.length} of ${statuses.length} MCP servers offline: ${failed}. Other servers connected; use /mcp to inspect.`));
     }
 
     const agent = new Agent(mcpClient, llm, {
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
     });
-    startREPL(agent, mcpClient, config, workspace);
+    await runChat({ agent, mcpClient, config, workspace });
   });
 
 // One-shot non-interactive run — pipe-friendly for scripting/CI.
@@ -367,34 +292,53 @@ program
     applyWorkspaceRoot(workspace.workspaceRoot);
 
     const config = loadConfig();
-    const profileName = options.profile || config.activeServer;
-    const serverConfig = { ...config.servers[profileName] };
-    if (!serverConfig) {
-      console.error(`Error: Profile "${profileName}" not found.`);
+    // Multi-MCP: like `chat`, connect third-party servers concurrently but
+    // only one BrainRouter MCP profile at a time. `--profile <name>` scopes
+    // to exactly one.
+    const requestedProfile = options.profile as string | undefined;
+    const allServerIds = Object.keys(config.servers);
+    if (allServerIds.length === 0) {
+      console.error('Error: No MCP server profiles in config.');
       process.exit(1);
     }
-    if (serverConfig.type === 'stdio') {
-      const args = serverConfig.args ?? [];
-      const rootIndex = args.indexOf('--root');
-      serverConfig.args = rootIndex >= 0
-        ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-        : [...args, '--root', workspace.workspaceRoot];
+    if (requestedProfile && !config.servers[requestedProfile]) {
+      console.error(`Error: Profile "${requestedProfile}" not found.`);
+      process.exit(1);
+    }
+    const targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
+    const targetServers: Record<string, ServerConfig> = {};
+    for (const id of targetIds) {
+      const cloned = { ...config.servers[id] };
+      if (cloned.type === 'stdio') {
+        const args = cloned.args ?? [];
+        const rootIndex = args.indexOf('--root');
+        cloned.args = rootIndex >= 0
+          ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
+          : [...args, '--root', workspace.workspaceRoot];
+      }
+      targetServers[id] = cloned;
     }
 
     const llm = config.llm ?? { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
     if (options.model) llm.model = options.model;
 
-    const mcpClient = new McpClientWrapper();
-    try {
-      await mcpClient.connect(serverConfig, llm, profileName);
-    } catch (err: any) {
-      console.error(`MCP connect failed: ${err.message}`);
+    const mcpClient = new McpClientPool();
+    const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    const allFailed = statuses.length > 0 && statuses.every((s) => s.status === 'failed');
+    if (allFailed) {
+      const summary = statuses.map((s) => `${s.serverId}: ${s.error ?? 'unknown'}`).join('; ');
+      console.error(`MCP connect failed (all servers): ${summary}`);
       if (options.strictMcp) process.exit(1);
       // Offline mode for one-shot: same rationale as the chat command — local
       // tools still work, MCP-backed calls return error envelopes the agent
       // already tolerates. Useful when piping a quick "read this file and
       // summarize" while the MCP server is down. CI can pass --strict-mcp.
       console.error('Continuing in offline mode (no memory recall / skills). Pass --strict-mcp to exit instead.');
+    } else {
+      const failed = statuses.filter((s) => s.status === 'failed');
+      if (failed.length > 0) {
+        process.stderr.write(`[mcp] ${failed.length} of ${statuses.length} servers offline: ${failed.map((f) => f.serverId).join(', ')}\n`);
+      }
     }
 
     const agent = new Agent(mcpClient, llm, {

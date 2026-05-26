@@ -75,6 +75,8 @@ openSrc/openhuman
 openSrc/semble
 openSrc/deer-flow
 openSrc/grok-cli
+openSrc/vibekit
+openSrc/AutoResearchClaw
 
 # Local agent reference doc for openSrc/ vendored projects — useful but
 # personal (machine-specific paths, evolving notes) so it stays out of git.
@@ -86,3 +88,14 @@ BRAINROUTER_TASKS.md
 BRAINROUTER_IMPLEMENTATION_PLAN.md
 SETUP.md
 Tasks.md
+
+# Local-only working files — never push these. They hold WIP feature
+# specs, master task queues, and handover notes that are useful across
+# sessions but personal to the engineer driving the work.
+FEATURE_*.md
+FEATURE_*.MD
+FULL_TASKS.md
+FULL_TASKS.MD
+HANDOFF_*.md
+IMPLEMENTATION_PLAN.md
+OPENHUMAN_BRAINROUTER.md

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildTheme, resolveTheme } from '../cli/theme.js';
-import { renderBanner } from '../cli/banner.js';
+import { renderBanner, resolveDisplayedMcpState } from '../cli/banner.js';
 import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '../cli/statusline.js';
 import { gatherWhereInputs, renderWhere } from '../cli/whereView.js';
 import { readPreferences, writePreferences } from '../state/preferencesStore.js';
@@ -144,6 +144,35 @@ test('banner: offline mode reflected in mcp row', () => {
   });
 });
 
+test('banner: falls back to plain-text format on terminals under 38 cols', () => {
+  // Simulate a narrow phone-style terminal so the boxed render-path's
+  // borders would wrap and look broken. The fallback drops the box.
+  const originalColumns = process.stdout.columns;
+  try {
+    Object.defineProperty(process.stdout, 'columns', { value: 30, configurable: true });
+    withTempWorkspace((workspace) => {
+      const theme = buildTheme('mono');
+      const banner = renderBanner({
+        workspaceRoot: workspace,
+        mcpProfile: 'local-http',
+        mcpTransport: 'http',
+        mcpOnline: true,
+        sessionKey: 'abc12345',
+        model: 'gpt-4o-mini',
+      }, theme);
+      // Plain-text format has no box-drawing characters.
+      assert.doesNotMatch(banner, /[╭╮╰╯│]/);
+      // But the row data is still present.
+      assert.match(banner, /BrainRouter CLI/);
+      assert.match(banner, /workspace/);
+      assert.match(banner, /local-http/);
+      assert.match(banner, /gpt-4o-mini/);
+    });
+  } finally {
+    Object.defineProperty(process.stdout, 'columns', { value: originalColumns, configurable: true });
+  }
+});
+
 test('banner: brain row renders for BrainRouter MCP with online/offline state (10c)', () => {
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
@@ -209,6 +238,32 @@ test('banner: brain row omitted when identity is unknown (10c)', () => {
     const lines = banner.split('\n');
     const brainRows = lines.filter((l) => /\bbrain\b/.test(l));
     assert.equal(brainRows.length, 0, 'unknown identity = wait for tool-signature detection, no brain row yet');
+  });
+});
+
+test('banner: displayed MCP prefers the live active BrainRouter server over stale config.activeServer', () => {
+  const displayed = resolveDisplayedMcpState(
+    {
+      activeServer: 'remote',
+      servers: {
+        remote: { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' },
+        'local-http': { type: 'http', url: 'http://localhost:3747/mcp', identity: 'brainrouter' },
+      },
+    },
+    {
+      isConnected: () => true,
+      getActiveBrainrouterServerId: () => 'local-http',
+      getStatus: (id: string) => id === 'local-http'
+        ? { status: 'connected', identity: 'brainrouter' }
+        : { status: 'offline', identity: 'brainrouter' },
+    },
+  );
+
+  assert.deepEqual(displayed, {
+    profile: 'local-http',
+    transport: 'http',
+    online: true,
+    identity: 'brainrouter',
   });
 });
 

@@ -124,18 +124,43 @@ export interface PickerKey {
   char?: string;
 }
 
+/**
+ * `prefilledOther` drops the picker straight into the free-text "Other"
+ * phase with the supplied string already in the buffer. Used by the
+ * 0.3.7 wizard / `/config` panel when a value can be derived from an
+ * env var — the user sees the env value and presses ENTER to accept or
+ * edits to override. Pass an empty string to keep today's behaviour.
+ *
+ * `initialCursor` lets a picker open with a non-zero highlight so the
+ * settings home panel can re-open on the row the user just edited
+ * without re-scrolling them to the top.
+ */
+export interface InitPickerStateOptions {
+  prefilledOther?: string;
+  initialCursor?: number;
+}
+
 export function initPickerState(
   options: ChoiceOption[],
   multiSelect: boolean,
+  init: InitPickerStateOptions = {},
 ): PickerState {
   const augmented = [...options, { label: OTHER_LABEL, description: OTHER_DESCRIPTION }];
+  const otherText = init.prefilledOther ?? '';
+  const awaitingOther = otherText.length > 0;
+  // When pre-filled "Other" is requested, position the cursor on the
+  // Other row so a subsequent Esc → re-render lands the user there
+  // (otherwise they'd snap back to row 0 with no explanation).
+  const cursor = awaitingOther
+    ? augmented.length - 1
+    : Math.max(0, Math.min(init.initialCursor ?? 0, augmented.length - 1));
   return {
     options: augmented,
-    cursor: 0,
+    cursor,
     multiSelect,
     selected: new Set<number>(),
-    awaitingOther: false,
-    otherText: '',
+    awaitingOther,
+    otherText,
     done: false,
     cancelled: false,
     result: null,
@@ -255,10 +280,36 @@ export function renderPicker(state: PickerState, question: string, header?: stri
  * User cancellation (Esc, q, Ctrl+C) throws `CancelledChoiceError` so the
  * tool wrapper can surface "user declined to commit" as a tool-call error.
  */
+/**
+ * 0.3.7 picker opts.
+ *
+ * `onCursorChange(index)` fires after every arrow-key move that actually
+ * moves the cursor (no-op keys, ENTER, SPACE don't fire it). The 0.3.7
+ * theme picker uses this to live-preview the selected theme by redrawing
+ * the banner accent before the user confirms — pattern lifted from
+ * `openSrc/codex/codex-rs/tui/src/bottom_pane/list_selection_view.rs` and
+ * `openSrc/codex/codex-rs/tui/src/theme_picker.rs`.
+ *
+ * `prefilledOther` opens the picker with the synthetic "Other" row
+ * already selected AND the free-text input pre-filled. Used when a value
+ * is derived from an env var so the user can press ENTER to accept or
+ * edit in-place. Pre-fill flips `awaitingOther` true on init.
+ *
+ * `initialCursor` lets the settings home panel re-open on the row the
+ * user just left, avoiding a snap-to-row-0 after every sub-picker.
+ */
+export interface AskChoiceOptions {
+  multiSelect?: boolean;
+  header?: string;
+  onCursorChange?: (cursor: number) => void;
+  prefilledOther?: string;
+  initialCursor?: number;
+}
+
 export function askChoice(
   question: string,
   options: ChoiceOption[],
-  opts: { multiSelect?: boolean; header?: string } = {},
+  opts: AskChoiceOptions = {},
 ): Promise<string | string[]> {
   // Input-shape validation first — bad shape is a caller bug regardless of
   // TTY availability, and surfacing it as "no TTY" would misdirect the agent
@@ -305,13 +356,17 @@ export function askChoice(
 function runPicker(
   question: string,
   options: ChoiceOption[],
-  opts: { multiSelect?: boolean; header?: string },
+  opts: AskChoiceOptions,
 ): Promise<string | string[]> {
   return new Promise((resolve, reject) => {
     const rl = activeReadline!;
     const stdout = process.stdout;
-    let state = initPickerState(options, !!opts.multiSelect);
-    let renderedLines = 0;
+    let state = initPickerState(options, !!opts.multiSelect, {
+      prefilledOther: opts.prefilledOther,
+      initialCursor: opts.initialCursor,
+    });
+    let renderedNewlines = 0;
+    let renderedAtLeastOnce = false;
 
     // Pause the parent rl so its `line` handler doesn't fire on our ENTER
     // press. We restore on cleanup.
@@ -328,16 +383,27 @@ function runPicker(
     pickerActive = true;
 
     const clear = () => {
-      if (renderedLines > 0) {
-        // Move cursor up `renderedLines` then clear to end of screen.
-        stdout.write(`\x1b[${renderedLines}A\r\x1b[J`);
+      if (renderedNewlines > 0) {
+        // `\x1b[<n>F` = cursor up n lines AND col 1 (atomic). For an
+        // M-line frame containing M-1 newlines, the cursor sits at
+        // the END of line M after the write (we don't write a
+        // trailing newline). Going up `renderedNewlines` (= M-1)
+        // lines lands EXACTLY at the start of line 1 — no off-by-one.
+        stdout.write(`\x1b[${renderedNewlines}F\x1b[J`);
+      } else if (renderedNewlines === 0 && renderedAtLeastOnce) {
+        // Single-line frame edge case: nothing to scroll up; just
+        // wipe the current line.
+        stdout.write('\r\x1b[K');
       }
     };
     const render = () => {
       clear();
       const text = renderPicker(state, question, opts.header);
-      stdout.write(text + '\n');
-      renderedLines = text.split('\n').length;
+      stdout.write(text);
+      // Track newlines (NOT lines). For "a\nb\nc" that's 2 — which
+      // is exactly the cursor-up count we need for the next clear().
+      renderedNewlines = (text.match(/\n/g) ?? []).length;
+      renderedAtLeastOnce = true;
     };
 
     const cleanup = () => {
@@ -371,9 +437,25 @@ function runPicker(
         sequence: key?.sequence,
         char: isPrintable ? str : undefined,
       };
+      const prevCursor = state.cursor;
+      const wasAwaitingOther = state.awaitingOther;
       const nextState = reducePicker(state, pk);
       if (nextState === state) return;
       state = nextState;
+      // Live-preview hook (0.3.7): fire on a genuine cursor move in the
+      // picker phase only. Don't fire while collecting free-text in the
+      // "Other" phase — that would spam the callback on every keystroke
+      // for no useful signal. Settling back into picker phase from Other
+      // (Esc) doesn't fire either (the cursor "stayed" on Other).
+      if (
+        opts.onCursorChange
+        && !state.done
+        && !state.awaitingOther
+        && !wasAwaitingOther
+        && state.cursor !== prevCursor
+      ) {
+        try { opts.onCursorChange(state.cursor); } catch { /* preview callbacks must never crash the picker */ }
+      }
       render();
       if (state.done) {
         cleanup();

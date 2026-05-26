@@ -125,7 +125,14 @@ function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string
  */
 function isBrainOnline(connectedTools: string[] | undefined): boolean {
   if (!connectedTools) return true;
-  return connectedTools.includes('memory_recall');
+  // Match bare `memory_recall`, double-underscore `mcp__<server>__memory_recall`,
+  // and single-underscore `mcp_<server>_memory_recall` (both prefix conventions
+  // are in use across the multi-MCP codepaths until naming is unified).
+  return connectedTools.some(
+    (tool) =>
+      tool === 'memory_recall' ||
+      (tool.startsWith('mcp_') && tool.endsWith('memory_recall')),
+  );
 }
 
 function brainOfflineNotice(): string {

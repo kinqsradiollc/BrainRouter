@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '../runtime/mcpUtils.js';
 import { createSession, getSession, listSessions, updateSession } from '../orchestration/orchestrator.js';
+import { normalizeSkillsList } from '../cli/commands/workflow.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('McpClientWrapper.isConnected is false before connect', async () => {
@@ -121,6 +122,18 @@ test('mcpUtils: callMcpTool normalizes success, error flag, and thrown errors', 
   const thrown = await callMcpTool(throwClient, 'whatever', {});
   assert.equal(thrown.isError, true);
   assert.equal(thrown.text, 'network gone');
+});
+
+test('normalizeSkillsList accepts array and wrapped skill-list payloads', () => {
+  assert.deepEqual(
+    normalizeSkillsList([{ name: 'adr-skill', scope: 'global', description: 'Records decisions' }]),
+    [{ name: 'adr-skill', scope: 'global', description: 'Records decisions' }],
+  );
+  assert.deepEqual(
+    normalizeSkillsList({ skills: [{ name: 'debugging-skill' }] }),
+    [{ name: 'debugging-skill' }],
+  );
+  assert.equal(normalizeSkillsList({ ok: true }), undefined);
 });
 
 test('mcpUtils: childSessionKey applies the canonical naming scheme', () => {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getCliStateFile, readJsonFile, writeJsonFile } from '../state/cliState.js';
 import { resolveRole, type AccessMode } from './roles.js';
+import type { Tier } from './agentRegistry.js';
 
 export type ChildStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stale' | 'closed';
 
@@ -18,6 +19,10 @@ export interface ChildSessionRecord {
   pid: number;
   finalOutput?: string;
   error?: string;
+  /** Agent tier from the definition (reasoning | worker). Undefined for legacy records. */
+  tier?: Tier;
+  /** Nesting depth in the spawn chain; 0 = direct child of the chat root. */
+  depth?: number;
   /** LLM usage attributable to this child (filled when the child completes). */
   usage?: { promptTokens: number; completionTokens: number; calls: number; turns: number };
 }
@@ -50,6 +55,8 @@ export function createSession(workspaceRoot: string, input: {
   parentSessionKey: string;
   access?: AccessMode;
   label?: string;
+  tier?: Tier;
+  depth?: number;
 }): ChildSessionRecord {
   const role = resolveRole(input.role);
   const now = new Date().toISOString();
@@ -64,6 +71,8 @@ export function createSession(workspaceRoot: string, input: {
     startedAt: now,
     updatedAt: now,
     pid: process.pid,
+    tier: input.tier,
+    depth: input.depth,
   };
   const data = readFile(workspaceRoot);
   data.sessions.push(record);

@@ -1,56 +1,74 @@
 /**
- * 0.3.6 item 11: `/mcp` slash-command surface. Scope-limited foundation —
- * the full multi-MCP federation (parallel cross-MCP tool calls, MCP
- * marketplace, capability tiers) is deferred to 0.4.0. What ships here:
+ * `/mcp` slash-command surface. 0.3.7 multi-MCP rewrite — third-party
+ * MCPs connect concurrently while BrainRouter MCP profiles are mutually
+ * exclusive so exactly one brain is active at a time.
  *
- *   /mcp           — show status of the active MCP (alias for /mcp list)
- *   /mcp list      — list every configured profile with identity + status
- *   /mcp reconnect — reconnect the currently-active profile
- *   /mcp tools     — list MCP tools grouped by namespace (pre-Item-11
- *                    `/mcp` no-arg behaviour, moved here verbatim)
+ *   /mcp                    — alias for /mcp list
+ *   /mcp list               — every configured profile + per-server status
+ *   /mcp tools [server]     — MCP tools grouped by `mcp__<server>__*`
+ *                             namespace; pass a server id to scope
+ *   /mcp connect <name>     — connect a configured server that's idle/offline
+ *   /mcp disconnect <name>  — close one server's transport (config preserved)
+ *   /mcp reconnect [name]   — reconnect ONE (when name given) or the selected pool
  *
- * The reconnect path leans on `mcpClient.close()` + `mcpClient.connect()`
- * with the same config the CLI launched against — no plumbing required
- * for the user beyond typing the command.
+ * Backwards-compat: `/mcp reconnect` with no arg reconnects the same
+ * selected set used at boot: all third-party MCPs plus the active
+ * BrainRouter MCP. Pass an explicit name to target one.
  */
 
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import type { CommandContext } from './_context.js';
+import { saveConfig } from '../../config/config.js';
+import { resolveIdentityFromConfig } from '../../runtime/mcpClient.js';
+import { selectMcpServerIds } from '../../runtime/mcpPool.js';
+import { buildBannerInputs, renderBanner } from '../banner.js';
+import { resolveTheme } from '../theme.js';
 
 export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, mcpClient, config } = ctx;
   if (command !== '/mcp') return false;
 
   const sub = (args[0] ?? 'list').toLowerCase();
+  const targetName = args[1]?.trim();
 
   if (sub === 'tools') {
-    // Pre-Item-11 `/mcp` no-arg behaviour: namespace-grouped tool listing.
-    // Kept verbatim under a subcommand so the muscle memory survives.
-    const profileName = config.activeServer;
-    const server = config.servers[profileName];
-    console.log(chalk.bold('\nMCP server'));
-    console.log(`  Profile: ${chalk.green(profileName)} (${chalk.cyan(server?.type ?? 'unknown')})`);
-    if (server?.type === 'http') {
-      console.log(`  URL:     ${chalk.blue(server.url ?? '')}`);
-    } else if (server?.type === 'stdio') {
-      console.log(`  Cmd:     ${chalk.blue(server.command ?? '')} ${server.args?.join(' ') || ''}`);
+    const onlyServer = targetName;
+    console.log(chalk.bold('\nMCP tools (pooled)'));
+    const statuses = mcpClient.getStatuses();
+    const connected = statuses.filter((s) => s.status === 'connected');
+    if (connected.length === 0) {
+      console.log(chalk.yellow('  No MCP servers connected. Try /mcp reconnect.\n'));
+      return true;
     }
-    const spinner = makeSpinner(chalk.gray('Fetching MCP tool surface...')).start();
+    const spinner = makeSpinner(chalk.gray('Fetching pooled tool surface...')).start();
     try {
       const res = await mcpClient.listTools();
-      const tools = res.tools || [];
-      spinner.succeed(chalk.green(`${tools.length} MCP tools available`));
-      const namespaces: Record<string, string[]> = {};
-      for (const t of tools) {
-        const parts = (t.name || '').split('_');
-        const ns = parts.length > 1 ? parts[0] : 'misc';
-        (namespaces[ns] ||= []).push(t.name);
+      const allTools = res.tools || [];
+      spinner.succeed(chalk.green(`${allTools.length} tools across ${connected.length} server${connected.length === 1 ? '' : 's'}`));
+      // Pool tools are exposed as `mcp__<serverId>__<rawTool>`. Group by serverId.
+      const byServer: Record<string, string[]> = {};
+      for (const t of allTools) {
+        const m = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(t.name);
+        const serverId = m?.[1] ?? '__unknown__';
+        const raw = m?.[2] ?? t.name;
+        if (onlyServer && serverId !== onlyServer) continue;
+        (byServer[serverId] ||= []).push(raw);
       }
-      for (const ns of Object.keys(namespaces).sort()) {
-        console.log(`\n  ${chalk.bold.cyan(ns)} (${namespaces[ns].length})`);
-        for (const name of namespaces[ns].sort()) {
-          console.log(`    ${chalk.gray('•')} ${name}`);
+      const serverIds = Object.keys(byServer).sort();
+      if (serverIds.length === 0) {
+        console.log(chalk.gray(`\n  No tools for server "${onlyServer}".\n`));
+        return true;
+      }
+      for (const section of groupServerIdsByEcosystem(serverIds, (id) => mcpClient.getStatus(id)?.identity ?? 'unknown')) {
+        console.log(`\n${section.title}`);
+        for (const id of section.ids) {
+          const ident = mcpClient.getStatus(id)?.identity ?? 'unknown';
+          const identTag = formatIdentityTag(ident);
+          console.log(`  ${chalk.bold.green(id)} ${identTag} (${byServer[id].length})`);
+          for (const name of byServer[id].sort()) {
+            console.log(`    ${chalk.gray('•')} ${name}  ${chalk.gray(`mcp__${id}__${name}`)}`);
+          }
         }
       }
     } catch (err: any) {
@@ -61,59 +79,213 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
   }
 
   if (sub === 'list') {
-    const activeName = config.activeServer;
     const profiles = Object.keys(config.servers ?? {});
     if (profiles.length === 0) {
-      console.log(chalk.yellow('\nNo MCP profiles configured. Run `brainrouter login` or `brainrouter config` to set one up.\n'));
+      console.log(chalk.yellow('\nNo MCP profiles configured. Run `/login` or `brainrouter config` to set one up.\n'));
       return true;
     }
-    console.log(chalk.bold('\nConfigured MCP profiles'));
-    for (const name of profiles) {
+    console.log(chalk.bold('\nMCP servers'));
+    const statuses = mcpClient.getStatuses();
+    const statusById = new Map(statuses.map((s) => [s.serverId, s]));
+    const activeName = config.activeServer;
+    for (const section of groupServerIdsByEcosystem(profiles, (name) => {
       const profile = config.servers[name];
-      const isActive = name === activeName;
-      // Identity: explicit config field > live wrapper > 'unknown'.
-      let identity: string = profile.identity ?? 'unknown';
-      if (isActive && typeof (mcpClient as any).getIdentity === 'function') {
-        identity = (mcpClient as any).getIdentity();
+      return statusById.get(name)?.identity ?? profile?.identity ?? 'unknown';
+    })) {
+      console.log(`\n${section.title}`);
+      for (const name of section.ids) {
+        const profile = config.servers[name];
+        const poolStatus = statusById.get(name);
+        // Identity: pool live > config metadata > 'unknown'.
+        const identity: string = poolStatus?.identity ?? profile.identity ?? 'unknown';
+        // Status: pool live > 'not in pool' (configured but never tried).
+        const liveStatus = poolStatus?.status;
+        const statusLabel =
+          liveStatus === 'connected' ? chalk.green('online') :
+          liveStatus === 'failed' ? chalk.red('failed') :
+          liveStatus === 'connecting' ? chalk.yellow('connecting') :
+          liveStatus === 'offline' ? chalk.gray('disconnected') :
+          chalk.gray('idle');
+        const idLabel = formatIdentityTag(identity);
+        const marker = name === activeName ? chalk.bold('★ ') : '  ';
+        const transport = profile.type;
+        const target = profile.type === 'http' ? profile.url ?? '<no url>' : profile.command ?? '<no command>';
+        const toolTag = poolStatus?.toolCount != null ? chalk.gray(`${poolStatus.toolCount} tools`) : '';
+        const errTag = liveStatus === 'failed' && poolStatus?.error ? chalk.red(` · ${poolStatus.error}`) : '';
+        console.log(`${marker}${chalk.bold(name)}  ${idLabel}  ${transport}  ${statusLabel}  ${chalk.gray(target)}  ${toolTag}${errTag}`);
       }
-      const onlineLabel = isActive
-        ? (mcpClient.isConnected() ? chalk.green('online') : chalk.red('offline'))
-        : chalk.gray('idle');
-      const idLabel = identity === 'brainrouter'
-        ? chalk.cyan('brainrouter')
-        : identity === 'third-party'
-          ? chalk.yellow('third-party')
-          : chalk.gray('unknown');
-      const marker = isActive ? chalk.bold('★ ') : '  ';
-      const transport = profile.type;
-      const target = profile.type === 'http' ? profile.url ?? '<no url>' : profile.command ?? '<no command>';
-      console.log(`${marker}${chalk.bold(name)}  ${idLabel}  ${transport}  ${onlineLabel}  ${chalk.gray(target)}`);
     }
-    console.log(chalk.gray('\n★ = active profile.  /mcp reconnect to refresh the active connection.\n'));
+    console.log(chalk.gray('\n★ = highlighted profile in the banner.'));
+    console.log(chalk.gray('  Multi-MCP: third-party MCPs connect together; only one BrainRouter MCP is active. Use /mcp connect|disconnect|reconnect <name> to manage.\n'));
     return true;
   }
 
   if (sub === 'reconnect') {
-    const activeName = config.activeServer;
-    const profile = config.servers?.[activeName];
-    if (!profile) {
-      console.log(chalk.red(`\nNo active MCP profile to reconnect (\`activeServer\` = ${JSON.stringify(activeName)}).\n`));
+    if (!targetName) {
+      // No name → reconnect every configured server in the pool.
+      const ids = selectMcpServerIds(config.servers ?? {}, config.activeServer);
+      if (ids.length === 0) {
+        console.log(chalk.red(`\nNo MCP profiles configured.\n`));
+        return true;
+      }
+      console.log(chalk.gray(`Reconnecting all servers (${ids.length})…`));
+      await Promise.allSettled(ids.map(async (id) => {
+        try {
+          await mcpClient.reconnectOne(id);
+          const s = mcpClient.getStatus(id);
+          if (s?.status === 'connected') {
+            console.log(chalk.green(`  ✓ ${id}`));
+          } else {
+            console.log(chalk.red(`  ✗ ${id} — ${s?.error ?? 'failed'}`));
+          }
+        } catch (err: any) {
+          console.log(chalk.red(`  ✗ ${id} — ${err?.message ?? err}`));
+        }
+      }));
+      console.log();
       return true;
     }
-    console.log(chalk.gray(`Reconnecting "${activeName}"…`));
+    if (!config.servers?.[targetName]) {
+      console.log(chalk.red(`\nNo profile named "${targetName}".\n`));
+      return true;
+    }
+    console.log(chalk.gray(`Reconnecting "${targetName}"…`));
     try {
-      try { await mcpClient.close(); } catch { /* idempotent */ }
-      await mcpClient.connect(profile, config.llm, activeName);
-      // Re-probe tools so identity tagging and the prompt's tool list refresh.
-      try { await mcpClient.listTools(); } catch { /* tool-list failure is non-fatal */ }
-      console.log(chalk.green(`✓ Reconnected to "${activeName}" (${profile.type}).\n`));
+      await disconnectOtherBrainrouterServers(ctx, targetName);
+      await mcpClient.reconnectOne(targetName);
+      const s = mcpClient.getStatus(targetName);
+      if (s?.status === 'connected') {
+        const activated = activateBrainrouterProfile(ctx, targetName);
+        console.log(chalk.green(`✓ Reconnected to "${targetName}".\n`));
+        if (activated) {
+          console.log(chalk.gray(`  Active BrainRouter profile saved as "${targetName}" for this and future sessions.\n`));
+          printRefreshedBanner(ctx);
+        }
+      } else {
+        console.log(chalk.red(`✗ "${targetName}" remained ${s?.status ?? 'offline'} — ${s?.error ?? 'unknown'}\n`));
+      }
     } catch (err: any) {
       console.log(chalk.red(`✗ Reconnect failed: ${err?.message ?? err}\n`));
-      console.log(chalk.gray('The CLI stays in offline mode. Check the MCP server, then try `/mcp reconnect` again.\n'));
     }
     return true;
   }
 
-  console.log(chalk.red(`\nUnknown /mcp subcommand "${sub}". Usage: /mcp list | /mcp reconnect | /mcp tools\n`));
+  if (sub === 'connect') {
+    if (!targetName) {
+      console.log(chalk.red('\nUsage: /mcp connect <name>\n'));
+      return true;
+    }
+    const profile = config.servers?.[targetName];
+    if (!profile) {
+      console.log(chalk.red(`\nNo profile named "${targetName}". Available: ${Object.keys(config.servers ?? {}).join(', ') || '(none)'}.\n`));
+      return true;
+    }
+    console.log(chalk.gray(`Connecting "${targetName}"…`));
+    try {
+      await disconnectOtherBrainrouterServers(ctx, targetName);
+      await mcpClient.connectOne(targetName, profile, config.llm, 5_000);
+      const s = mcpClient.getStatus(targetName);
+      if (s?.status === 'connected') {
+        const activated = activateBrainrouterProfile(ctx, targetName);
+        console.log(chalk.green(`✓ "${targetName}" online (${s.toolCount ?? 0} tools).\n`));
+        if (activated) {
+          console.log(chalk.gray(`  Active BrainRouter profile saved as "${targetName}" for this and future sessions.\n`));
+          printRefreshedBanner(ctx);
+        }
+      } else {
+        console.log(chalk.red(`✗ "${targetName}" failed — ${s?.error ?? 'unknown'}\n`));
+      }
+    } catch (err: any) {
+      console.log(chalk.red(`✗ Connect failed: ${err?.message ?? err}\n`));
+    }
+    return true;
+  }
+
+  if (sub === 'disconnect') {
+    if (!targetName) {
+      console.log(chalk.red('\nUsage: /mcp disconnect <name>\n'));
+      return true;
+    }
+    if (!mcpClient.getStatus(targetName)) {
+      console.log(chalk.yellow(`\n"${targetName}" is not in the pool.\n`));
+      return true;
+    }
+    try {
+      await mcpClient.disconnectOne(targetName);
+      console.log(chalk.green(`✓ "${targetName}" disconnected. Config preserved — /mcp connect ${targetName} to bring it back.\n`));
+    } catch (err: any) {
+      console.log(chalk.red(`✗ Disconnect failed: ${err?.message ?? err}\n`));
+    }
+    return true;
+  }
+
+  console.log(chalk.red(`\nUnknown /mcp subcommand "${sub}". Usage: /mcp list | /mcp tools [server] | /mcp connect <name> | /mcp disconnect <name> | /mcp reconnect [name]\n`));
   return true;
+}
+
+type McpIdentity = 'brainrouter' | 'third-party' | 'unknown' | string;
+
+function formatIdentityTag(identity: McpIdentity): string {
+  return identity === 'brainrouter' ? chalk.cyan('brainrouter') :
+    identity === 'third-party' ? chalk.yellow('third-party') :
+    chalk.gray('unknown');
+}
+
+function groupServerIdsByEcosystem(
+  ids: string[],
+  identityFor: (id: string) => McpIdentity,
+): Array<{ title: string; ids: string[] }> {
+  const brainrouter: string[] = [];
+  const other: string[] = [];
+  for (const id of ids.slice().sort()) {
+    if (identityFor(id) === 'brainrouter') brainrouter.push(id);
+    else other.push(id);
+  }
+  const sections: Array<{ title: string; ids: string[] }> = [];
+  if (brainrouter.length > 0) {
+    sections.push({ title: chalk.bold.cyan('BrainRouter MCP (Our Ecosystem)'), ids: brainrouter });
+  }
+  if (other.length > 0) {
+    sections.push({ title: chalk.bold.yellow('Third-party MCPs (Other)'), ids: other });
+  }
+  return sections;
+}
+
+async function disconnectOtherBrainrouterServers(ctx: CommandContext, targetName: string): Promise<void> {
+  const targetProfile = ctx.config.servers?.[targetName];
+  if (!targetProfile) return;
+  if (resolveIdentityFromConfig(targetProfile, targetName) !== 'brainrouter') return;
+
+  for (const [id, profile] of Object.entries(ctx.config.servers ?? {})) {
+    if (id === targetName) continue;
+    if (resolveIdentityFromConfig(profile, id) !== 'brainrouter') continue;
+    const status = ctx.mcpClient.getStatus(id);
+    if (status?.status === 'connected' || status?.status === 'connecting') {
+      await ctx.mcpClient.disconnectOne(id);
+    }
+  }
+}
+
+function activateBrainrouterProfile(ctx: CommandContext, targetName: string): boolean {
+  const status = ctx.mcpClient.getStatus(targetName);
+  const profile = ctx.config.servers?.[targetName];
+  const isBrainrouter =
+    status?.identity === 'brainrouter' ||
+    (profile ? resolveIdentityFromConfig(profile, targetName) === 'brainrouter' : false);
+  if (!isBrainrouter) return false;
+  ctx.config.activeServer = targetName;
+  saveConfig(ctx.config);
+  return true;
+}
+
+function printRefreshedBanner(ctx: CommandContext): void {
+  const theme = resolveTheme(ctx.agent.workspaceRoot);
+  const banner = renderBanner(buildBannerInputs(ctx.config, ctx.agent, ctx.mcpClient), theme);
+  if (ctx.repl.replaceBanner) {
+    ctx.repl.replaceBanner('\n' + banner);
+  } else {
+    console.log(chalk.gray('Updated active BrainRouter banner:'));
+    console.log(banner);
+    console.log();
+  }
 }

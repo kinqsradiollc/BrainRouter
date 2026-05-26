@@ -92,6 +92,18 @@ test('system prompt enforces memory-first workflow', () => {
   assert.match(prompt, /Never say "I do not have information/);
 });
 
+test('systemPrompt: prefixed BrainRouter MCP tools still count as brain online', () => {
+  const prompt = buildSystemPrompt({
+    workspaceRoot: '/tmp/x',
+    launchCwd: '/tmp/x',
+    sessionKey: 's',
+    connectedMcpTools: ['mcp__remote__memory_recall', 'mcp__github__create_issue'],
+  });
+
+  assert.match(prompt, /Memory-First Workflow/);
+  assert.doesNotMatch(prompt, /BrainRouter MCP is OFFLINE/);
+});
+
 test('SLASH_TO_SKILL maps the documented commands to skill names', () => {
   assert.equal(SLASH_TO_SKILL['/feature-dev'], 'agentic-engineering-workflow');
   assert.equal(SLASH_TO_SKILL['/review'], 'code-review-and-quality');

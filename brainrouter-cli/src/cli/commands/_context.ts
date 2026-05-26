@@ -14,7 +14,7 @@
 
 import type readline from 'node:readline';
 import type { Agent } from '../../agent/agent.js';
-import type { McpClientWrapper } from '../../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
 import type { Config } from '../../config/config.js';
 
 /**
@@ -26,6 +26,8 @@ import type { Config } from '../../config/config.js';
 export interface ReplContext {
   /** Refresh the readline prompt (color reflects access mode + status segments). */
   refreshPromptForMode: () => void;
+  /** Replace the startup banner in the active chat scrollback, if the UI supports it. */
+  replaceBanner?: (text: string) => void;
   /** True while the REPL is mid-turn; loop ticks should defer when set. */
   isProcessing: () => boolean;
   /** Programmatically run an agent turn (used by /continue and friends). */

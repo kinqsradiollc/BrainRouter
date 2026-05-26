@@ -34,7 +34,7 @@ Verify:
 
 ```bash
 which brainrouter-mcp
-brainrouter-mcp --version    # prints 0.3.5
+brainrouter-mcp --version    # prints 0.3.7
 ```
 
 ---

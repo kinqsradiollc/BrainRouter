@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent, buildChatCompletionPayload } from '../agent/agent.js';
+import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../state/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
@@ -330,6 +331,111 @@ test('runTurn empty LLM answer after a tool call returns a useful summary (not t
   });
 });
 
+test('runTurn forces wait_agents before final answer after spawn_agents', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    let parentCalls = 0;
+    const waitedIds: string[][] = [];
+
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
+
+      if (/child-one|child-two/.test(lastUser)) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: `child output for ${lastUser}` } }],
+          usage: { prompt_tokens: 20, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      parentCalls++;
+      if (parentCalls === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_spawn_all',
+                type: 'function',
+                function: {
+                  name: 'spawn_agents',
+                  arguments: JSON.stringify({
+                    agents: [
+                      { role: 'explorer', prompt: 'child-one' },
+                      { role: 'explorer', prompt: 'child-two' },
+                    ],
+                  }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (parentCalls === 2) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'I will now wait for them to complete.' } }],
+          usage: { prompt_tokens: 80, completion_tokens: 8 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (/have not waited for their outputs yet/.test(lastUser) && waitedIds.length === 0) {
+        const spawnResult = [...messages].reverse().find((m: any) => m.role === 'tool' && m.name === 'spawn_agents')?.content;
+        const parsed = JSON.parse(spawnResult);
+        const ids = parsed.agents.map((entry: any) => entry.id);
+        waitedIds.push(ids);
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_wait_all',
+                type: 'function',
+                function: {
+                  name: 'wait_agents',
+                  arguments: JSON.stringify({ ids, timeoutMs: 1000 }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Both child outputs were incorporated.' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 6 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const toolNames: string[] = [];
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('find me any vulnerabilities in the project', {
+        onStatusUpdate: () => {},
+        onToolStart: (name) => { toolNames.push(name); },
+        onToolEnd: () => {},
+      });
+
+      assert.deepEqual(toolNames.filter((name) => name === 'wait_agents'), ['wait_agents']);
+      assert.equal(waitedIds.length, 1);
+      assert.equal(waitedIds[0].length, 2);
+      assert.equal(answer, 'Both child outputs were incorporated.');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('runTurn: goal_complete is refused while the active plan has pending / in_progress items (plan honesty guard)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const sessionKey = 'fixed-test-session-key-for-deterministic-agent-state';
@@ -619,5 +725,102 @@ test('runTurn: when goal_complete fires with empty prose, the fallback surfaces 
       globalThis.fetch = originalFetch;
       clearGoal(workspace, sessionKey);
     }
+  });
+});
+
+// P1.2 — spawn hierarchy + depth cap tests.
+// These tests call executeOrchestrationTool directly and rely on the fact that
+// hierarchy checks throw before mcpClient / llmConfig are accessed.
+
+function makeStubOrchCtx(workspace: string, overrides: Record<string, unknown> = {}): Parameters<typeof executeOrchestrationTool>[2] {
+  return {
+    workspaceRoot: workspace,
+    parentSessionKey: 'session:test',
+    parentAccessMode: 'shell',
+    mcpClient: null as any,
+    llmConfig: null as any,
+    launchCwd: workspace,
+    ...overrides,
+  };
+}
+
+test('P1.2: worker tier cannot delegate', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const ctx = makeStubOrchCtx(workspace, { parentTier: 'worker' });
+    await assert.rejects(
+      () => executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'do something' }, ctx),
+      /worker.*cannot delegate/i,
+    );
+  });
+});
+
+test('P1.2: reasoning tier cannot spawn another reasoning agent', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const ctx = makeStubOrchCtx(workspace, { parentTier: 'reasoning' });
+    await assert.rejects(
+      () => executeOrchestrationTool('spawn_agent', { role: 'explorer', prompt: 'investigate' }, ctx),
+      /reasoning.*cannot spawn.*reasoning/i,
+    );
+  });
+});
+
+test('P1.2: reasoning tier can spawn a worker agent', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const ctx = makeStubOrchCtx(workspace, { parentTier: 'reasoning', depth: 1 });
+    // Should pass the tier check (proceeds to createSession, then fails on null mcpClient)
+    // We check it throws but NOT a hierarchy error.
+    try {
+      await executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'implement it' }, ctx);
+    } catch (err: any) {
+      assert.doesNotMatch(String(err.message), /cannot delegate|cannot spawn.*reasoning/i,
+        'hierarchy check must not fire for reasoning→worker');
+    }
+  });
+});
+
+test('P1.2: depth cap is enforced at default limit (3)', async () => {
+  const prev = process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+  try {
+    delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+    await withTempWorkspaceAsync(async (workspace) => {
+      const ctx = makeStubOrchCtx(workspace, { depth: 3 });
+      await assert.rejects(
+        () => executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'task' }, ctx),
+        /depth cap/i,
+      );
+    });
+  } finally {
+    if (prev === undefined) delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+    else process.env.BRAINROUTER_MAX_SPAWN_DEPTH = prev;
+  }
+});
+
+test('P1.2: depth cap is overridable via BRAINROUTER_MAX_SPAWN_DEPTH', async () => {
+  const prev = process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+  try {
+    process.env.BRAINROUTER_MAX_SPAWN_DEPTH = '5';
+    await withTempWorkspaceAsync(async (workspace) => {
+      const ctx = makeStubOrchCtx(workspace, { depth: 3 });
+      // Depth 3 < limit 5, so no cap error; expect a different failure (null mcpClient).
+      try {
+        await executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'task' }, ctx);
+      } catch (err: any) {
+        assert.doesNotMatch(String(err.message), /depth cap/i,
+          'depth cap must not fire when depth is below the custom limit');
+      }
+    });
+  } finally {
+    if (prev === undefined) delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+    else process.env.BRAINROUTER_MAX_SPAWN_DEPTH = prev;
+  }
+});
+
+test('P1.2: agentId unknown returns error listing known ids', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const ctx = makeStubOrchCtx(workspace);
+    await assert.rejects(
+      () => executeOrchestrationTool('spawn_agent', { agentId: 'no-such-agent', prompt: 'task' }, ctx),
+      /Unknown agentId.*Known agents/i,
+    );
   });
 });

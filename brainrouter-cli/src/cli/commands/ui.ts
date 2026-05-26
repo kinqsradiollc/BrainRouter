@@ -13,11 +13,18 @@ import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, resolveEffort, writePreferences, type EffortLevel } from '../../state/preferencesStore.js';
 import { readPlan } from '../../state/taskStore.js';
-import { getConfigPath } from '../../config/config.js';
+// initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
+// legacy /config + /init switch cases here are gone — the dispatcher
+// in repl.ts routes them to the new handlers first. getConfigPath
+// stays in scope because /doctor still surfaces the path.
+import { getConfigPath, saveConfig } from '../../config/config.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
-import { initAgentMd } from '../../prompt/initAgentMd.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
+import { PROVIDER_CATALOG, findProvider } from '../wizard/providers.js';
+import { selectModel } from '../wizard/modelsApi.js';
+import { buildTheme } from '../theme.js';
+import { listFilesystemSkills } from '../../prompt/skillCatalog.js';
 
 
 export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> {
@@ -83,27 +90,10 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       console.log();
       return true;
     }
-    case '/config':
-    {
-      console.log(chalk.bold('\n⚙️  Active Configuration:'));
-      console.log(`  File Path: ${chalk.blue(getConfigPath())}\n`);
-      
-      // Print config without API keys
-      const scrubbedConfig = JSON.parse(JSON.stringify(config));
-      if (scrubbedConfig.llm?.apiKey) {
-        scrubbedConfig.llm.apiKey = 'br_••••••••••••••••';
-      }
-      for (const s of Object.values(scrubbedConfig.servers)) {
-        const srv = s as any;
-        if (srv.apiKey) srv.apiKey = 'br_••••••••••••••••';
-        if (srv.env?.BRAINROUTER_API_KEY) {
-          srv.env.BRAINROUTER_API_KEY = 'br_••••••••••••••••';
-        }
-      }
-      console.log(chalk.gray(JSON.stringify(scrubbedConfig, null, 2)));
-      console.log();
-      return true;
-    }
+    // /config now lives in commands/config.ts (0.3.7 settings home panel
+    // + verb-overloaded get/set). The dispatcher in repl.ts routes it
+    // before this case, so leaving anything here is dead — removed.
+    // Use `/config raw` if you want the old scrubbed-JSON dump.
     case '/doctor':
     {
       console.log(chalk.bold('\nBrainRouter Doctor:'));
@@ -184,29 +174,73 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       console.log();
       return true;
     }
-    case '/init':
-    {
-      const result = initAgentMd(agent.workspaceRoot);
-      if (result.status === 'created') {
-        console.log(chalk.green(`\n✓ Created ${result.path}`));
-        console.log(chalk.gray('Edit it to describe your project, conventions, and boundaries — any AGENT.md-aware coding agent will read it.\n'));
-      } else {
-        console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
-        console.log(chalk.gray('Open it and edit by hand if you want to refresh it.\n'));
-      }
-      return true;
-    }
+    // /init is now the onboarding-wizard entrypoint (commands/init.ts).
+    // The AGENT.md-only path lives behind `/init agentmd` for back-compat.
+    // Routed before this case in repl.ts; no fall-through handler needed.
     case '/model':
     {
       const newModel = args[0];
-      if (!newModel) {
-        console.log(chalk.bold(`\nCurrent model: ${chalk.cyan(agent.getModel())}`));
-        console.log(chalk.gray('Switch with: /model <model-name> (e.g. /model gpt-4o-mini, /model gpt-5, /model qwen2.5-coder)\n'));
+      const previous = agent.getModel();
+      // Direct-switch form `/model <name>` stays for scripts and muscle
+      // memory. No-arg opens the picker (0.3.7).
+      if (newModel) {
+        agent.setModel(newModel);
+        if (config.llm) {
+          config.llm.model = newModel;
+          saveConfig(config);
+        }
+        console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
         return true;
       }
-      const previous = agent.getModel();
-      agent.setModel(newModel);
-      console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
+      // No-arg → open the picker. Resolves provider by matching the
+      // saved endpoint against PROVIDER_CATALOG; falls back to the
+      // OpenAI entry when nothing matches (the agent loop also
+      // defaults to OpenAI-compatible shapes).
+      const themeMode = readPreferences(agent.workspaceRoot).theme;
+      const theme = buildTheme(themeMode === 'mono' ? 'mono' : themeMode === 'light' ? 'light' : 'dark');
+      const llm = config.llm;
+      const provider =
+        (llm?.endpoint && PROVIDER_CATALOG.find((p) => p.endpoint.replace(/\/$/, '') === (llm.endpoint ?? '').replace(/\/$/, ''))) ||
+        findProvider('openai')!;
+      const result = await selectModel({
+        theme,
+        provider,
+        apiKey: llm?.apiKey ?? '',
+        endpointOverride: llm?.endpoint,
+        currentModel: previous,
+        title: '/model — quick-swap',
+        badge: provider.label,
+      });
+      if (!result) {
+        console.log(chalk.yellow('\n  /model cancelled.\n'));
+        return true;
+      }
+      if (result.model === previous) {
+        console.log(chalk.gray(`\n  Model unchanged (${previous}).\n`));
+        return true;
+      }
+      // Cross-provider sanity check — if the picked model looks like
+      // a different vendor's namespace (anthropic/*, google/*, etc.)
+      // and the active provider isn't a multi-vendor gateway, warn so
+      // the user doesn't hit a confusing 404 on the next turn.
+      if (looksLikeForeignModel(result.model, provider)) {
+        console.log(chalk.yellow(
+          `\n  ⚠ "${result.model}" looks like a different provider's namespace. ` +
+          `Active endpoint: ${provider.label}.` +
+          `\n    Run /config provider <id> to switch endpoints, or /model again to pick a native model.\n`
+        ));
+      }
+      agent.setModel(result.model);
+      if (config.llm) {
+        config.llm.model = result.model;
+        saveConfig(config);
+      }
+      const sourceTag =
+        result.source === 'live' ? `live · ${result.liveCount} models` :
+        result.source === 'fallback' ? `offline · static catalog (${result.liveError ?? 'unknown'})` :
+        'static catalog';
+      console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(result.model)}`));
+      console.log(chalk.gray(`  Source: ${sourceTag}\n`));
       return true;
     }
     // /mcp moved to its own command file (commands/mcp.ts) as part of 0.3.6
@@ -405,11 +439,22 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.gray('  Drop a folder under skills/<category>/<name>/SKILL.md to register one.\n'));
         return true;
       }
-      for (const root of roots) {
-        const entries = fs.readdirSync(root, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          console.log(chalk.cyan(`  ${path.relative(agent.workspaceRoot, path.join(root, entry.name))}`));
+      const skills = listFilesystemSkills(agent.workspaceRoot);
+      if (skills.length > 0) {
+        console.log(chalk.gray('  Skills'));
+        for (const skill of skills) {
+          const category = skill.category ? `${skill.category}/` : '';
+          console.log(`  • ${chalk.cyan(`${category}${skill.name}`)} (${chalk.gray(skill.scope ?? 'filesystem')})`);
+        }
+      }
+      if (fs.existsSync(pluginsRoot)) {
+        const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
+        const pluginDirs = entries.filter((entry) => entry.isDirectory());
+        if (pluginDirs.length > 0) {
+          console.log(chalk.gray('  Plugin folders'));
+          for (const entry of pluginDirs) {
+            console.log(`  • ${chalk.cyan(path.relative(agent.workspaceRoot, path.join(pluginsRoot, entry.name)))}`);
+          }
         }
       }
       console.log();
@@ -485,23 +530,19 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     case '/where':
     {
       const { gatherWhereInputs, renderWhere } = await import('../whereView.js');
+      const { resolveDisplayedMcpState } = await import('../banner.js');
       const { resolveTheme } = await import('../theme.js');
       const theme = resolveTheme(agent.workspaceRoot);
-      const profileName = config.activeServer;
-      const server = config.servers[profileName];
+      const displayedMcp = resolveDisplayedMcpState(config, mcpClient as any);
       const briefing = agent.getLastBriefing();
       const inputs = gatherWhereInputs({
         workspaceRoot: agent.workspaceRoot,
         sessionKey: agent.sessionKey,
         model: agent.getModel(),
-        mcpProfile: profileName,
-        mcpTransport: server?.type ?? 'unknown',
-        mcpOnline: mcpClient.isConnected(),
-        // 10c: identity flows from the live wrapper; falls back to the
-        // config field when present, otherwise 'unknown'.
-        mcpIdentity: typeof (mcpClient as any).getIdentity === 'function'
-          ? (mcpClient as any).getIdentity()
-          : (server?.identity ?? 'unknown'),
+        mcpProfile: displayedMcp.profile,
+        mcpTransport: displayedMcp.transport,
+        mcpOnline: displayedMcp.online,
+        mcpIdentity: displayedMcp.identity,
         accessMode: agent.getAccessMode(),
         recalledRecords: agent.getRecalledRecords(),
         briefingSources: briefing.sources,
@@ -515,4 +556,28 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
   }
   return false;
+}
+
+/**
+ * Heuristic — does the picked model id look like it belongs to a
+ * different vendor than the active provider's endpoint? Catches the
+ * common foot-gun of picking `anthropic/claude-*` while pointed at
+ * OpenAI direct, where the request 404s at the endpoint and the user
+ * has no obvious "you needed to switch endpoints" signal.
+ *
+ * Returns false for gateway providers (OpenRouter, "anthropic-via-gateway")
+ * since multi-vendor namespaces are expected there.
+ */
+function looksLikeForeignModel(model: string, provider: { id: string }): boolean {
+  // Gateways are vendor-agnostic by design.
+  if (provider.id === 'openrouter' || provider.id === 'anthropic-via-gateway') return false;
+  const FOREIGN_PREFIXES: Record<string, string[]> = {
+    openai:    ['anthropic/', 'google/', 'meta/', 'mistralai/', 'qwen/', 'deepseek/'],
+    deepseek:  ['anthropic/', 'google/', 'openai/', 'meta/', 'mistralai/'],
+    gemini:    ['anthropic/', 'openai/', 'meta/', 'mistralai/', 'deepseek/'],
+    lmstudio:  [],
+    ollama:    [],
+  };
+  const list = FOREIGN_PREFIXES[provider.id] ?? [];
+  return list.some((prefix) => model.startsWith(prefix));
 }

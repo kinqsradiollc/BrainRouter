@@ -1,4 +1,10 @@
+// 0.3.7 — accept either a single McpClientWrapper OR an McpClientPool.
+// The Pool's facade exposes the same callTool / isConnected /
+// listTools / close signatures, so callMcpTool routes correctly
+// whether the caller is single-server or multi-server.
 import type { McpClientWrapper } from './mcpClient.js';
+import type { McpClientPool } from './mcpPool.js';
+export type McpClient = McpClientWrapper | McpClientPool;
 
 /**
  * Centralized helpers for talking to the BrainRouter MCP server.
@@ -46,7 +52,7 @@ export interface McpCallResult<T = any> {
  * so callers can branch on a single shape instead of mixing try/catch with isError checks.
  */
 export async function callMcpTool<T = any>(
-  client: McpClientWrapper,
+  client: McpClient,
   name: string,
   args: Record<string, unknown>,
 ): Promise<McpCallResult<T>> {

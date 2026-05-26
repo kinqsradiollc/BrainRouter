@@ -86,12 +86,55 @@ export function loadConfig(): Config {
   // load time so every downstream consumer (callOpenAI, mcpClient env
   // propagation, the cognitive extractor LLM runner) sees a real value
   // instead of the empty string.
+  //
+  // 0.3.7 — provider-specific fallback. Pre-0.3.7 we only checked
+  // OPENAI_API_KEY / BRAINROUTER_LLM_API_KEY, which silently broke
+  // users with config.llm.endpoint pointing at DeepSeek / OpenRouter /
+  // Gemini / etc. who had the *correct* provider key in their shell
+  // (DEEPSEEK_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, …). Now we
+  // match the saved endpoint to a provider entry and try ITS envKey
+  // FIRST, then fall through to the generic vars.
   if (parsed.llm && !parsed.llm.apiKey.trim()) {
-    const envKey = process.env.OPENAI_API_KEY || process.env.BRAINROUTER_LLM_API_KEY;
-    if (envKey) parsed.llm.apiKey = envKey;
+    parsed.llm.apiKey = backfillApiKeyFromEnv(parsed.llm.endpoint) ?? '';
   }
 
   return parsed;
+}
+
+/**
+ * Pick the best API key from the environment for a given endpoint.
+ * Order: provider-specific envKey (matched against `PROVIDER_CATALOG`
+ * by endpoint), then `OPENAI_API_KEY` (most common default), then the
+ * generic `BRAINROUTER_LLM_API_KEY`. Returns undefined if nothing is
+ * set so the caller can choose how to surface that.
+ *
+ * Kept here (vs imported from `cli/wizard/providers.ts`) so non-CLI
+ * callers — the MCP child env propagation, future SDK clients — can
+ * use it without dragging in the wizard surface.
+ */
+export function backfillApiKeyFromEnv(endpoint: string | undefined): string | undefined {
+  // Provider-specific env vars in order of catalog precedence. Hardcoded
+  // here so this function stays free of the wizard import (which pulls
+  // in chalk, ink picker types, etc.). Keep in lockstep with
+  // `cli/wizard/providers.ts → PROVIDER_CATALOG`.
+  const PROVIDER_ENV_BY_ENDPOINT: Array<{ endpoint: string; envKey: string }> = [
+    { endpoint: 'https://api.openai.com/v1',                        envKey: 'OPENAI_API_KEY' },
+    { endpoint: 'https://api.deepseek.com/v1',                      envKey: 'DEEPSEEK_API_KEY' },
+    { endpoint: 'https://openrouter.ai/api/v1',                     envKey: 'OPENROUTER_API_KEY' },
+    { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY' },
+    { endpoint: 'https://api.anthropic.com/v1',                     envKey: 'ANTHROPIC_API_KEY' },
+    { endpoint: 'http://localhost:1234/v1',                         envKey: 'LMSTUDIO_API_KEY' },
+    { endpoint: 'http://localhost:11434/v1',                        envKey: 'OLLAMA_API_KEY' },
+  ];
+  if (endpoint) {
+    const trimmed = endpoint.replace(/\/$/, '');
+    const match = PROVIDER_ENV_BY_ENDPOINT.find((p) => p.endpoint === trimmed);
+    if (match) {
+      const value = process.env[match.envKey];
+      if (value && value.trim()) return value.trim();
+    }
+  }
+  return process.env.OPENAI_API_KEY?.trim() || process.env.BRAINROUTER_LLM_API_KEY?.trim() || undefined;
 }
 
 /**

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { McpClientWrapper } from '../runtime/mcpClient.js';
+import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { callMcpTool } from '../runtime/mcpUtils.js';
 import { getWorkspaceStateRoot } from '../state/cliState.js';
 

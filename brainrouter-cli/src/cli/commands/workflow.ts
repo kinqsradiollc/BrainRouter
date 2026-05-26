@@ -21,6 +21,7 @@ import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
+import { listFilesystemSkills, mergeSkillLists, type SkillListItem } from '../../prompt/skillCatalog.js';
 import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from './_helpers.js';
 
 // Promise-flavored exec for case bodies that shell out.
@@ -95,22 +96,35 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
   switch (command) {
     case '/skills':
     {
+      const verbose = args.includes('--verbose') || args.includes('-v');
       const spinner = makeSpinner(chalk.gray('Fetching skills...')).start();
       try {
-        const res = await callMcpTool<any[]>(mcpClient, 'list_skills', { scope: 'all' });
+        const res = await callMcpTool<any>(mcpClient, 'list_skills', { scope: 'all' });
         spinner.stop();
-        if (!res.isError && Array.isArray(res.parsed)) {
-          const skillsList = res.parsed;
-          console.log(chalk.bold('\n🧠 BrainRouter Skills:'));
+        const mcpSkills = !res.isError ? normalizeSkillsList(res.parsed) : undefined;
+        const filesystemSkills = listFilesystemSkills(agent.workspaceRoot);
+        const skillsList = mcpSkills
+          ? mergeSkillLists(mcpSkills, filesystemSkills)
+          : filesystemSkills;
+        if (skillsList) {
+          console.log(chalk.bold(`\n🧠 BrainRouter Skills (${skillsList.length}):`));
           if (skillsList.length > 0) {
             for (const skill of skillsList) {
-              console.log(`  • ${chalk.cyan(skill.name)} (${chalk.gray(skill.scope)}) - ${skill.description}`);
+              const category = skill.category ? `${skill.category}/` : '';
+              const suffix = verbose && skill.description ? ` - ${skill.description}` : '';
+              console.log(`  • ${chalk.cyan(`${category}${skill.name}`)} (${chalk.gray(skill.scope ?? 'unknown')})${suffix}`);
+            }
+            if (mcpSkills && skillsList.length > mcpSkills.length) {
+              console.log(chalk.gray(`  Showing ${skillsList.length} skills (${mcpSkills.length} from MCP, ${skillsList.length - mcpSkills.length} filled from local files).`));
+            } else if (!mcpSkills && filesystemSkills.length > 0) {
+              console.log(chalk.gray('  MCP list unavailable; showing local filesystem skills.'));
             }
           } else {
             console.log(chalk.yellow('  No skills found.'));
           }
         } else {
           console.log(chalk.red('\nFailed to parse skills list response.'));
+          if (res.text) console.log(chalk.gray(`  ${res.text.slice(0, 300)}`));
         }
       } catch (err: any) {
         spinner.fail(chalk.red('Failed to list skills.'));
@@ -121,9 +135,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/tools':
     {
-      console.log(chalk.bold('\nLocal Workspace Tools:'));
+      const verbose = args.includes('--verbose') || args.includes('-v');
+      console.log(chalk.bold(`\nLocal Workspace Tools (${LOCAL_TOOLS.length}):`));
       for (const tool of LOCAL_TOOLS) {
-        console.log(`  ${chalk.cyan(tool.name)} - ${tool.description}`);
+        const suffix = verbose ? ` - ${tool.description}` : '';
+        console.log(`  • ${chalk.cyan(tool.name)}${suffix}`);
       }
 
       const spinner = makeSpinner(chalk.gray('Fetching MCP tools...')).start();
@@ -131,14 +147,16 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         const res = await mcpClient.listTools();
         spinner.stop();
         const tools = res.tools || [];
-        console.log(chalk.bold('\nMCP Tools:'));
+        console.log(chalk.bold(`\nMCP Tools (${tools.length}):`));
         if (tools.length === 0) {
           console.log(chalk.yellow('  No MCP tools exposed by the active server.'));
         } else {
           for (const tool of tools) {
-            console.log(`  ${chalk.cyan(tool.name)} - ${tool.description || 'No description'}`);
+            const suffix = verbose ? ` - ${tool.description || 'No description'}` : '';
+            console.log(`  • ${chalk.cyan(tool.name)}${suffix}`);
           }
         }
+        if (!verbose) console.log(chalk.gray('  Use /tools --verbose to include descriptions.'));
       } catch (err: any) {
         spinner.fail(chalk.red('Failed to list MCP tools.'));
         console.warn(chalk.yellow(`  Warning: ${err.message}`));
@@ -955,4 +973,26 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
   }
   return false;
+}
+
+export function normalizeSkillsList(payload: any): SkillListItem[] | undefined {
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.skills)
+      ? payload.skills
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : Array.isArray(payload?.results)
+          ? payload.results
+          : undefined;
+  if (!Array.isArray(list)) return undefined;
+  return list
+    .filter((item: any) => item && typeof item === 'object' && typeof item.name === 'string')
+    .map((item: any) => {
+      const normalized: SkillListItem = { name: item.name };
+      if (typeof item.scope === 'string') normalized.scope = item.scope;
+      if (typeof item.category === 'string') normalized.category = item.category;
+      if (typeof item.description === 'string') normalized.description = item.description;
+      return normalized;
+    });
 }

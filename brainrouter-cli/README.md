@@ -6,8 +6,6 @@ recall, skills, and capture.
 
 Ships the `brainrouter` binary.
 
----
-
 ## Install
 
 ```bash
@@ -23,52 +21,44 @@ command not found`.
 
 | How Node is installed | Use `sudo`? |
 |---|---|
-| Homebrew (`brew install node`) | ❌ No — global prefix is user-writable |
-| nvm / asdf / fnm | ❌ No — same reason |
-| System Node on macOS / Linux | ✅ Yes — global prefix is `/usr/local/...` |
+| Homebrew (`brew install node`) | No — global prefix is user-writable |
+| nvm / asdf / fnm | No — same reason |
+| System Node on macOS / Linux | Yes — global prefix is `/usr/local/...` |
 
-Check yours:
-
-```bash
-npm config get prefix
-```
-
-If the path is under `/Users/...`, `/opt/homebrew/...`, or your home dir
-→ no sudo. If it's `/usr/local/...` → use sudo.
+Check yours: `npm config get prefix`. If the path is under `/Users/...`,
+`/opt/homebrew/...`, or your home dir — no sudo. If it's `/usr/local/...` — use sudo.
 
 Verify the install:
 
 ```bash
 which brainrouter           # prints the path to the binary
-brainrouter --version       # prints 0.3.5
+brainrouter --version       # prints 0.3.7
 ```
-
----
 
 ## Configure
 
-Two configuration surfaces, both one-time:
+Run `brainrouter` for the first time and the **setup wizard** starts
+automatically:
 
-### 1. The chat LLM and MCP server profile
-
-```bash
-brainrouter config          # interactive — set LLM provider, model, key, endpoint
-brainrouter login           # interactive — set MCP server URL + API key
+```
+Welcome → Theme → Provider → API key → Model → MCP → AGENT.md → Done
 ```
 
-Both write to `~/.config/brainrouter/config.json`.
+It writes everything to `~/.config/brainrouter/config.json` — no manual
+file editing needed.
+
+To re-run the wizard later: type `/init` inside the REPL.
+
+To change a single setting: use `/config <key> <value>` or the `/config`
+home panel. To re-configure the MCP server connection: use `/login`.
 
 For local-model setups (LM Studio / Ollama), point the LLM endpoint at
 `http://localhost:1234/v1/chat/completions` or `http://localhost:11434/v1/chat/completions`.
 
-### 2. (Optional) Runtime knobs — `~/.config/brainrouter/cli.env` or `./brainrouter-cli.env`
-
-Only needed if you want to tune sandbox, tool-loop limits, trace logging,
-or web-search backend. See the [`.env.example`](.env.example) bundled with
-this package for the full list. LLM credentials do **not** go here — they
-live in `config.json`.
-
----
+**Runtime knobs** (sandbox, trace log, web-search backend, tool-loop limits)
+are set as shell environment variables. See
+[`brainrouter-docs/configuration.md`](https://github.com/kinqsradiollc/BrainRouter/blob/main/brainrouter-docs/configuration.md)
+for the full list.
 
 ## Run
 
@@ -83,22 +73,15 @@ Inside the REPL, type `/help` for the full slash-command list (60+
 commands across session / memory / workflow / orchestration / observability
 surfaces).
 
-### Offline mode
-
-If the MCP server isn't reachable, the CLI still boots — but only local
-tools (file edits, shell, web fetch, `spawn_agent`) work. Memory recall,
-capture, and skills are disabled until the server is back. The startup
-banner shows `⚠️  OFFLINE MODE` when this happens. Pass `--strict-mcp` to
+**Offline mode** — if the MCP server isn't reachable, the CLI still boots
+with only local tools (file edits, shell, web fetch, `spawn_agent`). Memory
+recall, capture, and skills are disabled until the server is back. The
+startup banner shows `offline` when this happens. Pass `--strict-mcp` to
 make the CLI exit instead of degrading.
 
-### Stdio mode
-
-If you'd rather have the CLI spawn the MCP server as a child process
-instead of running it separately, use `brainrouter config` → "Set Active
-Server Profile" → `default` (the bundled stdio profile). You don't need
-to run anything else — the CLI manages the server's lifecycle.
-
----
+**Stdio mode** — to have the CLI spawn the MCP server as a child process
+instead of running it separately: open `/config`, go to MCP settings, and
+pick the bundled `stdio` profile. The CLI manages the server's lifecycle.
 
 ## Workspace detection
 
@@ -113,8 +96,6 @@ BRAINROUTER_WORKSPACE=/absolute/path/to/project brainrouter
 
 Inside the REPL, run `/workspace` to confirm the active root and session key.
 
----
-
 ## What you also probably want
 
 A BrainRouter MCP server for the cognitive memory. The CLI works without
@@ -127,9 +108,7 @@ $EDITOR ~/.config/brainrouter/server.env          # set BRAINROUTER_LLM_API_KEY,
 brainrouter-mcp --http --port 3747                # in a separate terminal
 ```
 
-Then `brainrouter login` and point at `http://localhost:3747/mcp`.
-
----
+Then run `/login` inside the REPL and point at `http://localhost:3747/mcp`.
 
 ## Docs
 
@@ -137,8 +116,6 @@ Then `brainrouter login` and point at `http://localhost:3747/mcp`.
 - **Memory engine deep-dive**: [BRAINROUTER.md](https://github.com/kinqsradiollc/BrainRouter/blob/main/BRAINROUTER.md)
 - **Maintainer runbook**: [SETUP.md](https://github.com/kinqsradiollc/BrainRouter/blob/main/SETUP.md)
 - **Bugs / requests**: <https://github.com/kinqsradiollc/BrainRouter/issues>
-
----
 
 ## License
 
