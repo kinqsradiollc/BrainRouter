@@ -105,6 +105,18 @@ test('McpClientPool: callTool with prefixed form routes to the right server', as
   assert.equal(res.content?.[0]?.text, 'github::create_issue');
 });
 
+test('McpClientPool: callTool back-compat — legacy double-underscore form is normalised and still routed (0.3.8-R5)', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'brainrouter', 'brainrouter', [{ name: 'memory_recall' }]);
+  seedFakeServer(pool, 'github', 'third-party', [{ name: 'create_issue' }]);
+  await refreshIndex(pool);
+  // Even though the canonical surface is single-underscore, callers that
+  // hardcoded the legacy `mcp__<server>__<tool>` form must still route
+  // correctly through the normalisation hop.
+  const res = await pool.callTool('mcp__github__create_issue', { title: 'bug' });
+  assert.equal(res.content?.[0]?.text, 'github::create_issue');
+});
+
 test('McpClientPool: callTool accepts raw name when unique (back-compat)', async () => {
   const pool = new McpClientPool();
   seedFakeServer(pool, 'brainrouter', 'brainrouter', [{ name: 'memory_recall' }]);

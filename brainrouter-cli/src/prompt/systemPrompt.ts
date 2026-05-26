@@ -125,9 +125,9 @@ function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string
  */
 function isBrainOnline(connectedTools: string[] | undefined): boolean {
   if (!connectedTools) return true;
-  // Match bare `memory_recall`, double-underscore `mcp__<server>__memory_recall`,
-  // and single-underscore `mcp_<server>_memory_recall` (both prefix conventions
-  // are in use across the multi-MCP codepaths until naming is unified).
+  // Match bare `memory_recall` and the canonical single-underscore prefixed
+  // form `mcp_<server>_memory_recall` (pool normalises any legacy
+  // double-underscore emissions at the boundary — 0.3.8-R5).
   return connectedTools.some(
     (tool) =>
       tool === 'memory_recall' ||

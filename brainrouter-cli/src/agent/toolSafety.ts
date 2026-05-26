@@ -42,11 +42,10 @@ const PARALLEL_SAFE_LOCAL_TOOLS = new Set<string>([
 
 /**
  * MCP read tools — bare tool names (without the `mcp_<server>_` prefix)
- * that BrainRouter knows to be read-only. The pool exposes both the
- * legacy double-underscore `mcp__<server>__<tool>` shape and the R5
- * single-underscore `mcp_<server>_<tool>` shape; isParallelSafe accepts
- * either. Survives identity / profile renames because the prefix is
- * matched structurally, not by literal string.
+ * that BrainRouter knows to be read-only. The pool normalises any legacy
+ * double-underscore emissions to the canonical single-underscore
+ * `mcp_<server>_<tool>` form at its boundary (0.3.8-R5), so the matcher
+ * here only deals with that one shape.
  */
 const PARALLEL_SAFE_MCP_READ_TOOLS = new Set<string>([
   'memory_recall',
@@ -61,9 +60,9 @@ const PARALLEL_SAFE_MCP_READ_TOOLS = new Set<string>([
 /**
  * True iff `toolName` is on the conservative parallel-safe whitelist.
  * Accepts both the bare local tool name (`read_file`) and the MCP-prefixed
- * forms (`mcp__brainrouter__memory_recall`, `mcp_brainrouter_memory_recall`).
- * Anything else — including any unknown tool name — returns false so the
- * caller falls back to safe serial execution.
+ * form (`mcp_brainrouter_memory_recall`). Anything else — including any
+ * unknown tool name — returns false so the caller falls back to safe
+ * serial execution.
  */
 export function isParallelSafe(toolName: string): boolean {
   if (!toolName) return false;
@@ -80,13 +79,8 @@ export function isMcpReadTool(toolName: string): boolean {
 }
 
 function stripMcpPrefix(name: string): string | undefined {
-  // Legacy double-underscore shape: mcp__<server>__<tool>.
-  if (name.startsWith('mcp__')) {
-    const idx = name.indexOf('__', 'mcp__'.length);
-    if (idx >= 0) return name.slice(idx + 2);
-  }
-  // R5 single-underscore shape: mcp_<server>_<tool>. Server names may
-  // contain underscores so we suffix-match against known bare tools
+  // Canonical single-underscore shape: mcp_<server>_<tool>. Server names
+  // may contain underscores so we suffix-match against known bare tools
   // instead of guessing where the server segment ends.
   if (name.startsWith('mcp_')) {
     for (const known of PARALLEL_SAFE_MCP_READ_TOOLS) {

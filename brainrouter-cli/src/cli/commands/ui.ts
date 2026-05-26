@@ -9,7 +9,7 @@ import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
-import { callMcpTool } from '../../runtime/mcpUtils.js';
+import { callMcpTool, hasMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, resolveEffort, writePreferences, type EffortLevel } from '../../state/preferencesStore.js';
 import { readPlan } from '../../state/taskStore.js';
@@ -123,7 +123,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         const toolNames = new Set((res.tools || []).map((tool: any) => tool.name));
         const memoryTools = ['memory_recall', 'memory_capture_turn', 'memory_working_offload'];
         for (const name of memoryTools) {
-          const hasTool = toolNames.has(name);
+          const hasTool = hasMcpTool(toolNames, name);
           console.log(`  ${name}: ${hasTool ? chalk.green('available') : chalk.yellow('not exposed')}`);
         }
       } catch (err: any) {

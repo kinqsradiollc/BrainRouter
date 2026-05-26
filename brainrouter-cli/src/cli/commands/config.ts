@@ -332,7 +332,7 @@ async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<string 
   const nameRes = await promptText({
     theme,
     title: 'New MCP server — name',
-    subtitle: 'Short identifier. Used in tool prefixes: mcp__<name>__<tool>.',
+    subtitle: 'Short identifier. Used in tool prefixes: mcp_<name>_<tool>.',
     badge: 'MCP',
     placeholder: 'github, filesystem, my-brain, …',
     validate: (raw) => {
