@@ -1120,13 +1120,11 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
   ]) {
     assert.equal(isParallelSafe(name), false, `${name} must stay serial`);
   }
-  // MCP read tools — both legacy double-underscore and R5 single-underscore.
-  assert.equal(isParallelSafe('mcp__brainrouter__memory_recall'), true);
+  // MCP read tools — canonical single-underscore form (R5).
   assert.equal(isParallelSafe('mcp_brainrouter_memory_recall'), true);
-  assert.equal(isParallelSafe('mcp__some_long_server_id__memory_search'), true);
   assert.equal(isParallelSafe('mcp_some_long_server_id_memory_search'), true);
   // MCP write/admin tools — not on the read whitelist.
-  assert.equal(isParallelSafe('mcp__brainrouter__memory_capture_turn'), false);
+  assert.equal(isParallelSafe('mcp_brainrouter_memory_capture_turn'), false);
   assert.equal(isParallelSafe('mcp_brainrouter_memory_mark_cited'), false);
   // Empty / unknown / random garbage — fail-safe false.
   assert.equal(isParallelSafe(''), false);

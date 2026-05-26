@@ -5,7 +5,7 @@
  *
  *   /mcp                    — alias for /mcp list
  *   /mcp list               — every configured profile + per-server status
- *   /mcp tools [server]     — MCP tools grouped by `mcp__<server>__*`
+ *   /mcp tools [server]     — MCP tools grouped by `mcp_<server>_*`
  *                             namespace; pass a server id to scope
  *   /mcp connect <name>     — connect a configured server that's idle/offline
  *   /mcp disconnect <name>  — close one server's transport (config preserved)
@@ -46,12 +46,24 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
       const res = await mcpClient.listTools();
       const allTools = res.tools || [];
       spinner.succeed(chalk.green(`${allTools.length} tools across ${connected.length} server${connected.length === 1 ? '' : 's'}`));
-      // Pool tools are exposed as `mcp__<serverId>__<rawTool>`. Group by serverId.
+      // Pool tools are exposed as `mcp_<serverId>_<rawTool>`. Group by serverId.
+      const knownIds = new Set(connected.map((s) => s.serverId));
       const byServer: Record<string, string[]> = {};
       for (const t of allTools) {
-        const m = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(t.name);
-        const serverId = m?.[1] ?? '__unknown__';
-        const raw = m?.[2] ?? t.name;
+        let serverId = '__unknown__';
+        let raw = t.name;
+        if (t.name.startsWith('mcp_')) {
+          const rest = t.name.slice('mcp_'.length);
+          // Server ids may contain underscores; match the longest known id.
+          const id = [...knownIds].sort((a, b) => b.length - a.length).find((k) => rest.startsWith(`${k}_`));
+          if (id) {
+            serverId = id;
+            raw = rest.slice(id.length + 1);
+          } else {
+            const idx = rest.indexOf('_');
+            if (idx > 0) { serverId = rest.slice(0, idx); raw = rest.slice(idx + 1); }
+          }
+        }
         if (onlyServer && serverId !== onlyServer) continue;
         (byServer[serverId] ||= []).push(raw);
       }
@@ -67,7 +79,7 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
           const identTag = formatIdentityTag(ident);
           console.log(`  ${chalk.bold.green(id)} ${identTag} (${byServer[id].length})`);
           for (const name of byServer[id].sort()) {
-            console.log(`    ${chalk.gray('•')} ${name}  ${chalk.gray(`mcp__${id}__${name}`)}`);
+            console.log(`    ${chalk.gray('•')} ${name}  ${chalk.gray(`mcp_${id}_${name}`)}`);
           }
         }
       }

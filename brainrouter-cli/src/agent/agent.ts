@@ -719,19 +719,21 @@ export class Agent {
 
   private rawMcpToolName(name: string): string {
     const serverId = this.serverIdFromMcpToolName(name);
-    return serverId ? name.slice(`mcp__${serverId}__`.length) : name;
+    return serverId ? name.slice(`mcp_${serverId}_`.length) : name;
   }
 
   private serverIdFromMcpToolName(name: string): string | undefined {
-    if (!name.startsWith('mcp__')) return undefined;
-    const rest = name.slice('mcp__'.length);
+    // Canonical single-underscore prefix: `mcp_<server>_<tool>`. The pool
+    // normalises to this shape at its boundary (0.3.8-R5).
+    if (!name.startsWith('mcp_')) return undefined;
+    const rest = name.slice('mcp_'.length);
     if (typeof (this.mcpClient as any).getServerIds === 'function') {
       const ids = (this.mcpClient as any).getServerIds() as string[];
       for (const id of ids.sort((a, b) => b.length - a.length)) {
-        if (rest.startsWith(`${id}__`)) return id;
+        if (rest.startsWith(`${id}_`)) return id;
       }
     }
-    const idx = rest.indexOf('__');
+    const idx = rest.indexOf('_');
     return idx >= 0 ? rest.slice(0, idx) : undefined;
   }
 
@@ -804,7 +806,7 @@ export class Agent {
     const filteredLocalTools = LOCAL_TOOLS.filter(t => allowed.has(t.name));
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
-    // `mcp__<serverId>__<tool>` namespaces. BrainRouter's auto-pipeline/admin
+    // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
     const visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
     const allTools = [...filteredLocalTools, ...visibleMcpTools];
