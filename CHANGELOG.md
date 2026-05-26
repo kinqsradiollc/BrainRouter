@@ -13,15 +13,41 @@ live in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
 | **0.3.6** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.6.md`](brainrouter-changelog/0.3.6.md) |
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
-this changelog. In particular, 0.3.8 is planned in
-[`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) and
-should get a changelog entry only when implementation starts.
+this changelog.
 
 ---
+
+## [0.3.8] - 2026-05-26
+
+CLI delegation reliability, parallel reads, native Anthropic adapter, and a tranche of quick wins carried from 0.3.7.
+
+- **Runtime child-drain guardrail.** Parent turn refuses to accept a no-tool answer while spawned children are pending/running; auto-calls `wait_agents` with a bounded timeout (`BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS`, default 30 s); timeout returns explicit child ids/statuses + `/continue` hint.
+- **`task_agent` / `delegate_agent` split.** Foreground `task_agent` blocks with a timeout envelope; background `delegate_agent` returns a running id with a "continue working" hint. System prompt steers: direct → direct tool → task → delegate. `spawn_agent({ wait: true })` backward-compatible.
+- **Child progress visibility in Ink.** Per-child tool rows (id, role, tool, duration, success/error, summary) plus a live "running children" status row while the parent waits.
+- **Safe parallel execution for read-only tools.** Independent reads run via `Promise.allSettled`; writes/shell/orchestration stay serial; tool_result order preserved; unknown tools fail safe to serial.
+- **Cron-style `/schedule`.** Standard 5-field cron alongside the existing `in 5m` / `at 14:30` one-shots. Persistent `.brainrouter/schedules.json`; in-process ticker with catch-up after sleep; `/schedule list|remove|enable|disable`.
+- **`/release-notes` in-CLI.** Render current or past version notes inside the Ink REPL; `/release-notes list` enumerates bundled versions. Build ships `changelog/*.md` with the npm package.
+- **Strict tool-call recovery.** Dedup duplicate tool_call ids; synthetic error tool_results on `JSON.parse` failures; orphan-result synthesis keeps OpenAI's strict pairing well-formed; unknown tool names return a "did you mean: <closest>" hint.
+- **Per-vendor MCP install snippets.** `/mcp install <vendor>` for Claude Desktop, Cursor, Windsurf, VS Code Continue, Zed — paste-ready JSON with the active profile's URL/API key substituted. `/mcp install list` enumerates vendors with OS-resolved paths.
+- **Native Anthropic `/v1/messages` adapter.** Talk Anthropic's native shape when the profile is Anthropic; `tool_use`/`tool_result` content blocks; system field extracted; opt-in prompt caching (`BRAINROUTER_ANTHROPIC_CACHE=1`); extended thinking on Claude 4-series Sonnet/Opus with `/effort high`. OpenAI path byte-identical for other providers.
+- **Hooks JSON authoring doc.** New `brainrouter-docs/hooks.md` covers `.brainrouter/hooks.json` + `.brainrouter/hookify/*.json` schemas with three worked examples and debugging tips.
+- **Ink question overlays.** `ask_user_choice` and `askYesNo` render through the active Ink chat overlay instead of the legacy raw stdout picker; single-select, multi-select, and `Other` fallback all supported.
+
+## Fixes
+
+- **Briefing now finds prefixed memory tools.** `🧠 Briefing: 0 records from (none)` no longer appears when the brain MCP exposes `mcp_brainrouter_memory_recall`. New `hasMcpTool` helper matches both bare and `mcp_<server>_<tool>` shapes.
+- **Single-underscore tool naming standardised.** `mcp_<server>_<tool>` is canonical everywhere; double-underscore `mcp__<server>__<tool>` deprecated and normalised at the pool boundary. CI grep guard prevents regressions.
+- **R1 guardrail recognises `task_agent` / `delegate_agent`.** Without this, `delegate_agent` silently bypassed the child-drain guardrail.
+- **`task_agent` / `delegate_agent` access-mode gating.** Added to the read-only allowed-tool set.
+- **`handleDelegateAgent` propagates errors verbatim** when there's no parseable child id, preserving both the failure message and the id the guardrail needs.
+- **`handleWait` no longer leaks setTimeout handles.**
+- **`parseInt` NaN guard for `BRAINROUTER_MAX_SPAWN_DEPTH`** — garbled env values fall back to the default (3) instead of disabling the cap.
+- **JWT base64url tampering detection** — `verifyJwt` compares signatures in base64url string space; previous raw-byte comparison missed single-character padding-bit changes.
 
 ## [0.3.7] - 2026-05-26
 

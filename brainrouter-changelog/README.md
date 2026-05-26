@@ -13,6 +13,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.3.8](0.3.8.md)** | In-flight | In-flight | CLI delegation reliability, Ink prompt overlay fixes |
 | **[0.3.7](0.3.7.md)** | 2026-05-26 | Shipped | Ink chat REPL, wizard, `/config`, `/login`, CLI/server env separation |
 | **[0.3.6](0.3.6.md)** | 2026-05-25 | Shipped | Context budget, MCP identity/offline UX, multi-MCP foundation, multi-workflow |
 | [0.3.5](0.3.5.md) | 2026-05-22 | Shipped | Global-install UX fix |
