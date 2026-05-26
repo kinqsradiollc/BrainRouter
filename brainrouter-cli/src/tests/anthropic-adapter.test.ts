@@ -231,3 +231,31 @@ test('buildAnthropicRequest: cacheTools adds breakpoint to last tool definition'
   assert.equal(body.tools![0].cache_control, undefined);
   assert.deepEqual(body.tools![1].cache_control, { type: 'ephemeral' });
 });
+
+test('parseAnthropicResponse: stop_reason and rawAssistantBlocks propagate (max_tokens, thinking-signature round-trip)', () => {
+  const blocks = [
+    { type: 'thinking', thinking: 'plan…', signature: 'sig-abc' },
+    { type: 'redacted_thinking', data: 'enc-blob' },
+    { type: 'text', text: 'partial' },
+  ];
+  const parsed = parseAnthropicResponse({
+    content: blocks,
+    stop_reason: 'max_tokens',
+    usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 7 },
+  });
+  assert.equal(parsed.stopReason, 'max_tokens');
+  assert.equal(parsed.thinking, 'plan…');
+  // Raw blocks preserve signature and redacted_thinking for echo-back on the next turn.
+  assert.deepEqual(parsed.rawAssistantBlocks, blocks);
+  assert.equal(parsed.usage?.cache_read_input_tokens, 7);
+});
+
+test('parseAnthropicResponse: refusal stop_reason surfaces without crashing', () => {
+  const parsed = parseAnthropicResponse({
+    content: [{ type: 'text', text: 'I cannot help with that.' }],
+    stop_reason: 'refusal',
+    usage: { input_tokens: 5, output_tokens: 8 },
+  });
+  assert.equal(parsed.stopReason, 'refusal');
+  assert.equal(parsed.content, 'I cannot help with that.');
+});
