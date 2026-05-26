@@ -20,6 +20,7 @@ import { tryHandleMcpCommand } from './commands/mcp.js';
 import { tryHandleInitCommand } from './commands/init.js';
 import { tryHandleConfigCommand } from './commands/config.js';
 import { tryHandleLoginCommand } from './commands/login.js';
+import { tryHandleScheduleCommand } from './commands/schedule.js';
 
 /**
  * All slash commands the REPL recognizes. Used for tab autocomplete and for
@@ -35,7 +36,7 @@ export const SLASH_COMMANDS = [
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
-  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop',
+  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
   '/continue', '/auto-review', '/vim', '/statusline', '/quiet',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
@@ -285,6 +286,7 @@ export async function handleSlashCommand(
   if (await tryHandleMemoryCommand(cmdCtx)) return;
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;
+  if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;
   if (await tryHandleOrchestrationCommand(cmdCtx)) return;
   if (await tryHandleSessionCommand(cmdCtx)) return;
