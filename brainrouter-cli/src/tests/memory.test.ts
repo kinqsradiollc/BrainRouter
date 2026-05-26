@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildMemoryBriefing, selectCitedRecordIds } from '../memory/briefing.js';
+import { hasMcpTool } from '../runtime/mcpUtils.js';
 import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
 import { expandMentions } from '../memory/mentions.js';
 import { initAgentMd } from '../prompt/initAgentMd.js';
@@ -53,6 +54,50 @@ test('buildMemoryBriefing merges parallel memory sources into one block with red
   assert.match(briefing.block, /sqlite/);
   assert.doesNotMatch(briefing.block, /sk-secretvalue123/);
   assert.match(briefing.block, /\[REDACTED\]/);
+});
+
+test('hasMcpTool: matches bare and single-underscore-prefixed names; ignores unrelated tools (0.3.8-R5)', () => {
+  const prefixed = new Set(['mcp_brainrouter_memory_recall', 'some_other_tool']);
+  assert.equal(hasMcpTool(prefixed, 'memory_recall'), true);
+  assert.equal(hasMcpTool(prefixed, 'memory_search'), false);
+  const bare = new Set(['memory_recall']);
+  assert.equal(hasMcpTool(bare, 'memory_recall'), true);
+  // Suffix-only matches must NOT trigger a false positive.
+  const tricky = new Set(['custom_memory_recall']);
+  assert.equal(hasMcpTool(tricky, 'memory_recall'), false);
+});
+
+test('buildMemoryBriefing discovers memory_recall when the pool exposes it under a single-underscore prefix (0.3.8-R5)', async () => {
+  // Regression for the "🧠 Briefing: 0 records from (none)" bug — discovery
+  // used `toolNames.has('memory_recall')` against `mcp_brainrouter_*`-shaped
+  // tool lists and always missed. The pool's callTool still resolves the
+  // bare name, so the recall task should both enqueue AND return records.
+  const stubClient: any = {
+    callTool: async (name: string) => {
+      if (name === 'memory_recall') {
+        return {
+          content: [{
+            text: JSON.stringify({
+              recalledCognitiveMemories: [
+                { recordId: 'rec_x', content: 'pool resolves bare names internally', type: 'codebase_fact' },
+              ],
+            }),
+          }],
+        };
+      }
+      return { isError: true };
+    },
+  };
+  const briefing = await buildMemoryBriefing({
+    mcpClient: stubClient,
+    mcpTools: [{ name: 'mcp_brainrouter_memory_recall' }],
+    sessionKey: 'session:r5',
+    workspaceRoot: '/tmp/example',
+    query: 'how does discovery work?',
+  });
+  assert.deepEqual(briefing.sourcesQueried, ['memory_recall']);
+  assert.deepEqual(briefing.recalledRecordIds, ['rec_x']);
+  assert.match(briefing.block, /pool resolves bare names internally/);
 });
 
 test('buildMemoryBriefing skips memory_task_state when a goal-anchor is active (9d)', async () => {

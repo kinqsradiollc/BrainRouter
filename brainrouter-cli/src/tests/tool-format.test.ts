@@ -12,9 +12,9 @@ import {
 
 // --- stripMcpPrefix ---------------------------------------------------
 
-test('stripMcpPrefix: strips mcp__<server>__ prefix', () => {
-  assert.equal(stripMcpPrefix('mcp__brainrouter__memory_search'), 'memory_search');
-  assert.equal(stripMcpPrefix('mcp__github__create_issue'), 'create_issue');
+test('stripMcpPrefix: strips canonical single-underscore mcp_<server>_ prefix', () => {
+  assert.equal(stripMcpPrefix('mcp_brainrouter_memory_search'), 'memory_search');
+  assert.equal(stripMcpPrefix('mcp_github_create_issue'), 'create_issue');
 });
 
 test('stripMcpPrefix: leaves non-MCP names alone', () => {
@@ -116,6 +116,17 @@ test('formatToolCall: spawn_agent shows role + truncated prompt', () => {
   );
 });
 
+test('formatToolCall: task_agent and delegate_agent show foreground/background intent', () => {
+  assert.equal(
+    formatToolCall('task_agent', { role: 'reviewer', prompt: 'review current diff' }),
+    'Task(reviewer, "review current diff")',
+  );
+  assert.equal(
+    formatToolCall('delegate_agent', { agentId: 'custom-researcher', label: 'docs', prompt: 'map CLI docs' }),
+    'Delegate(custom-researcher [docs], "map CLI docs")',
+  );
+});
+
 test('formatToolCall: spawn_agents summarizes count + roles', () => {
   assert.equal(
     formatToolCall('spawn_agents', { agents: [{ role: 'r1' }, { role: 'r2' }, { role: 'r3' }] }),
@@ -126,13 +137,13 @@ test('formatToolCall: spawn_agents summarizes count + roles', () => {
 
 // --- formatToolCall: MCP + unknown tools ------------------------------
 
-test('formatToolCall: MCP tools strip the mcp__<server>__ namespace prefix', () => {
+test('formatToolCall: MCP tools strip the mcp_<server>_ namespace prefix', () => {
   // Unknown / MCP tools take the generic fallback path: snake_case →
   // PascalCase + first-string-arg without quoting (matches Bash/Fetch
   // behavior — quoting is reserved for explicit query-shaped tools like
   // Grep / WebSearch).
   assert.equal(
-    formatToolCall('mcp__brainrouter__memory_search', { query: 'auth' }),
+    formatToolCall('mcp_brainrouter_memory_search', { query: 'auth' }),
     'MemorySearch(auth)',
   );
 });

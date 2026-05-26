@@ -125,9 +125,9 @@ function clarifyOverlay(activeSkill: SystemPromptContext['activeSkill']): string
  */
 function isBrainOnline(connectedTools: string[] | undefined): boolean {
   if (!connectedTools) return true;
-  // Match bare `memory_recall`, double-underscore `mcp__<server>__memory_recall`,
-  // and single-underscore `mcp_<server>_memory_recall` (both prefix conventions
-  // are in use across the multi-MCP codepaths until naming is unified).
+  // Match bare `memory_recall` and the canonical single-underscore prefixed
+  // form `mcp_<server>_memory_recall` (pool normalises any legacy
+  // double-underscore emissions at the boundary — 0.3.8-R5).
   return connectedTools.some(
     (tool) =>
       tool === 'memory_recall' ||
@@ -182,7 +182,8 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     brainOnline ? memoryFirstSection() : brainOfflineNotice(),
     '',
     '## Multi-agent orchestration',
-    '- Delegate parallel, bounded work via `spawn_agent` (one) or `spawn_agents` (batch). Roles: explorer (read-only investigation), architect (design alternatives), reviewer (code review), worker (write access), verifier (tests/checks). Omit `role` in `spawn_agents` to auto-route from the leading verb; use `route_agent` for a dry run.',
+    '- Delegation order: direct answer → direct tool → `task_agent` for needed child results → `delegate_agent` when you can keep working. `spawn_agent` / `spawn_agents` are low-level compatibility/batch tools.',
+    '- Roles: explorer, architect, reviewer, worker, verifier. Omit `role` in `spawn_agents` to auto-route from the leading verb; use `route_agent` for a dry run.',
     '- Fan-out triggers: phrasings like "everything", "all", "in 1 go", "in parallel", "thoroughly", "comprehensive", "across the codebase" → ALWAYS `spawn_agents` with ≥3 children. One tool call + "what next?" is NOT acceptable for those prompts.',
     '- Use `wait_agent` / `wait_agents` to drain before yielding. Synthesize child outputs in your own words — never claim work is done just because a child returned.',
     '',

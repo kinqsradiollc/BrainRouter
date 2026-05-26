@@ -1,6 +1,6 @@
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { redactText } from '../state/sessionStore.js';
-import { callMcpTool } from '../runtime/mcpUtils.js';
+import { callMcpTool, hasMcpTool } from '../runtime/mcpUtils.js';
 
 export interface BriefingInputs {
   mcpClient: McpClientWrapper;
@@ -54,13 +54,13 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
 
   const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[] }>> = [];
 
-  if (toolNames.has('memory_recall')) {
+  if (hasMcpTool(toolNames, 'memory_recall')) {
     tasks.push(callSafe('memory_recall', { sessionKey, query, activeSkill }, mcpClient, maxChars, extractRecords));
   }
-  if (toolNames.has('memory_working_context')) {
+  if (hasMcpTool(toolNames, 'memory_working_context')) {
     tasks.push(callSafe('memory_working_context', { sessionKey, workspacePath: workspaceRoot }, mcpClient, maxChars));
   }
-  if (toolNames.has('memory_task_state') && !inputs.hasActiveGoal) {
+  if (hasMcpTool(toolNames, 'memory_task_state') && !inputs.hasActiveGoal) {
     tasks.push(callSafe('memory_task_state', { query }, mcpClient, maxChars));
   }
 

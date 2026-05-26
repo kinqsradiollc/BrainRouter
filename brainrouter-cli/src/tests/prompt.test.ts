@@ -97,7 +97,7 @@ test('systemPrompt: prefixed BrainRouter MCP tools still count as brain online',
     workspaceRoot: '/tmp/x',
     launchCwd: '/tmp/x',
     sessionKey: 's',
-    connectedMcpTools: ['mcp__remote__memory_recall', 'mcp__github__create_issue'],
+    connectedMcpTools: ['mcp_remote_memory_recall', 'mcp_github_create_issue'],
   });
 
   assert.match(prompt, /Memory-First Workflow/);

@@ -12,7 +12,7 @@ import { BOX, type Theme } from './theme.js';
  * (chalk title + workspace line + connecting-to line) with a single visually
  * scannable block:
  *
- *   ╭─ 🧠 BrainRouter CLI 0.3.7 ──────────────────────────────╮
+ *   ╭─ 🧠 BrainRouter CLI 0.3.8 ──────────────────────────────╮
  *   │ workspace  BrainRouter  ·  c5b8c12d                     │
  *   │ mcp        local-http  ·  http  ·  online               │
  *   │ workflow   cli-shell-redesign  (in-progress)            │
@@ -30,7 +30,7 @@ import { BOX, type Theme } from './theme.js';
  * it once. Pure-function so tests can assert against the rendered output.
  */
 
-const VERSION = '0.3.7';
+const VERSION = '0.3.8';
 const TITLE = '🧠 BrainRouter CLI';
 // Width floor for the BOXED banner. Below this we fall through to the
 // `renderPlainBanner` plaintext format. Was 56 — that caused the box to

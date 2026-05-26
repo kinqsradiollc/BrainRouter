@@ -16,6 +16,8 @@ import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/sy
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
 import {
+  createTaskAgentTool,
+  createDelegateAgentTool,
   createSpawnAgentTool,
   createSpawnAgentsTool,
   createListAgentsTool,
@@ -26,7 +28,9 @@ import {
   createRouteAgentTool,
   executeOrchestrationTool,
   isOrchestrationToolName,
+  type OrchestrationContext,
 } from '../orchestration/tools.js';
+import { getSession } from '../orchestration/orchestrator.js';
 import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
@@ -35,13 +39,22 @@ import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
 import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
+import { shouldUseAnthropicNative, callAnthropic } from '../runtime/anthropicAdapter.js';
 import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
+import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
+import {
+  dedupeToolCalls,
+  parseArgumentsOrError,
+  synthesizeOrphanResults,
+  suggestSimilarToolName,
+} from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
+const DEFAULT_CHILD_DRAIN_TIMEOUT_MS = 30_000;
 
 function parseJsonObject(text: string): any | undefined {
   try {
@@ -74,11 +87,22 @@ function trackChildObservation(
   spawned: Set<string>,
   waited: Set<string>,
 ): void {
-  if (toolName === 'spawn_agent' || toolName === 'spawn_agents') {
+  if (
+    toolName === 'spawn_agent' ||
+    toolName === 'spawn_agents' ||
+    toolName === 'task_agent' ||
+    toolName === 'delegate_agent'
+  ) {
     const ids = collectChildIds(parseJsonObject(resultText));
     for (const id of ids) {
       spawned.add(id);
-      if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
+      // task_agent always blocks internally (wraps spawn with wait: true);
+      // spawn_agent({ wait: true }) is the legacy form. Both count as
+      // already-observed, so the child-drain guardrail doesn't double-wait.
+      // delegate_agent is fire-and-forget — must remain unwaited so the
+      // guardrail can force a wait_agents call before the parent answers.
+      if (toolName === 'task_agent') waited.add(id);
+      else if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
     }
     return;
   }
@@ -93,6 +117,37 @@ function trackChildObservation(
     const ids = Array.isArray(args?.ids) ? args.ids.filter((id: unknown): id is string => typeof id === 'string') : [];
     for (const id of ids) waited.add(id);
   }
+}
+
+function parseChildDrainTimeouts(resultText: string): Array<{ id: string; role?: string; status: string; childStatus?: string; summary?: string }> {
+  const parsed = parseJsonObject(resultText);
+  const agents: unknown[] = Array.isArray(parsed?.agents) ? parsed.agents : [];
+  return agents
+    .filter((entry: unknown): entry is Record<string, unknown> => {
+      return !!entry && typeof entry === 'object' && (entry as Record<string, unknown>).status === 'timeout';
+    })
+    .map((entry) => ({
+      id: typeof entry.id === 'string' ? entry.id : '(unknown)',
+      role: typeof entry.role === 'string' ? entry.role : undefined,
+      status: 'timeout',
+      childStatus: typeof entry.childStatus === 'string' ? entry.childStatus : undefined,
+      summary: typeof entry.summary === 'string' ? entry.summary : undefined,
+    }));
+}
+
+function formatChildDrainTimeoutAnswer(timeouts: Array<{ id: string; role?: string; childStatus?: string; summary?: string }>): string {
+  const lines = [
+    `Children still running after the bounded wait (${timeouts.length}):`,
+    ...timeouts.map((child) => {
+      const role = child.role ? ` role=${child.role}` : '';
+      const status = child.childStatus ? ` status=${child.childStatus}` : '';
+      const summary = child.summary ? ` — ${child.summary}` : '';
+      return `- ${child.id}${role}${status}${summary}`;
+    }),
+    '',
+    'Use `/continue` to drain the pending child output and synthesize the result when it is ready.',
+  ];
+  return lines.join('\n');
 }
 
 export interface RunTurnCallbacks {
@@ -112,6 +167,15 @@ export interface RunTurnCallbacks {
    * staring at silence after the tool stream stops.
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  /**
+   * Optional: paired live child tool events surfaced from spawn_agent
+   * children up to the parent REPL. Lets the UI render explicit
+   * "child began Read(...)" / "child finished — 1.2s" rows in scrollback
+   * so long child runs no longer look like the parent has paused
+   * (roadmap §3 child progress visibility).
+   */
+  onChildToolStart?: (event: { childId: string; role: string; tool: string; args: Record<string, any> }) => void;
+  onChildToolEnd?: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
   /**
    * Optional: invoked when the agent's automatic memory pipeline runs —
    * pre-turn briefing, post-turn capture, citation marking. Surfacing these
@@ -301,6 +365,8 @@ export const LOCAL_TOOLS = [
       required: ['patch']
     }
   },
+  createTaskAgentTool(),
+  createDelegateAgentTool(),
   createSpawnAgentTool(),
   createSpawnAgentsTool(),
   createListAgentsTool(),
@@ -660,19 +726,21 @@ export class Agent {
 
   private rawMcpToolName(name: string): string {
     const serverId = this.serverIdFromMcpToolName(name);
-    return serverId ? name.slice(`mcp__${serverId}__`.length) : name;
+    return serverId ? name.slice(`mcp_${serverId}_`.length) : name;
   }
 
   private serverIdFromMcpToolName(name: string): string | undefined {
-    if (!name.startsWith('mcp__')) return undefined;
-    const rest = name.slice('mcp__'.length);
+    // Canonical single-underscore prefix: `mcp_<server>_<tool>`. The pool
+    // normalises to this shape at its boundary (0.3.8-R5).
+    if (!name.startsWith('mcp_')) return undefined;
+    const rest = name.slice('mcp_'.length);
     if (typeof (this.mcpClient as any).getServerIds === 'function') {
       const ids = (this.mcpClient as any).getServerIds() as string[];
       for (const id of ids.sort((a, b) => b.length - a.length)) {
-        if (rest.startsWith(`${id}__`)) return id;
+        if (rest.startsWith(`${id}_`)) return id;
       }
     }
-    const idx = rest.indexOf('__');
+    const idx = rest.indexOf('_');
     return idx >= 0 ? rest.slice(0, idx) : undefined;
   }
 
@@ -682,7 +750,7 @@ export class Agent {
     // a goal cleanly (goal_complete / goal_blocked) or observe state.
     const readOnly = new Set([
       'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
-      'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
+      'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'route_agent',
       'goal_complete', 'goal_blocked',
       // ask_user_choice doesn't touch the workspace — it's an interaction
@@ -745,7 +813,7 @@ export class Agent {
     const filteredLocalTools = LOCAL_TOOLS.filter(t => allowed.has(t.name));
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
-    // `mcp__<serverId>__<tool>` namespaces. BrainRouter's auto-pipeline/admin
+    // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
     const visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
     const allTools = [...filteredLocalTools, ...visibleMcpTools];
@@ -841,7 +909,32 @@ export class Agent {
     const REPEAT_GUARD_LIMIT = 3;
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
-    let spawnWaitGuardInjected = false;
+    const buildOrchestrationContext = (): OrchestrationContext => ({
+      workspaceRoot: this.workspaceRoot,
+      parentSessionKey: this.sessionKey,
+      parentAccessMode: this.accessMode,
+      // Thread the parent's trace context so child agents nest their
+      // per-turn spans under THIS turn instead of starting a fresh
+      // trace tree. Lets observability backends reconstruct fan-out.
+      parentTraceId: turnSpan.traceId,
+      parentSpanId: turnSpan.spanId,
+      parentAgentId: this.agentId,
+      parentTier: this.tier,
+      depth: this.agentDepth,
+      mcpClient: this.mcpClient,
+      llmConfig: this.llmConfig,
+      launchCwd: this.launchCwd,
+      recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
+      onChildToolStart: (event) => {
+        callbacks.onChildToolStart?.(event);
+      },
+      onChildToolEnd: (event) => {
+        callbacks.onChildToolEnd?.(event);
+      },
+      onChildComplete: (event) => {
+        callbacks.onChildComplete?.(event);
+      },
+    });
 
     while (loopCount < maxLoops) {
       loopCount++;
@@ -853,7 +946,14 @@ export class Agent {
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed.
         const effort = resolveEffort(this.workspaceRoot).effort;
-        response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+        if (shouldUseAnthropicNative(this.llmConfig)) {
+          response = await callAnthropic(this.llmConfig, this.chatHistory, allTools, {
+            effort,
+            onThinking: (text) => callbacks.onStatusUpdate(`Thinking: ${text.slice(0, 200)}`),
+          });
+        } else {
+          response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+        }
       } catch (err: any) {
         throw new Error(`LLM Execution failed: ${err.message}`);
       }
@@ -863,6 +963,21 @@ export class Agent {
         this.lastTurnUsage.calls += 1;
       }
 
+      // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
+      // smaller / quantised) sometimes emit duplicate tool_call ids in a
+      // single response. If we let both through, OpenAI's next request 400s
+      // because one of the duplicates has no paired tool_result. Dedupe
+      // before pushing the assistant message — last occurrence wins (closest
+      // to the model's final intent).
+      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
+      //   middlewares/dangling_tool_call_middleware.py — same well-formed
+      //   history invariant, applied per-response instead of pre-request.
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        const deduped = dedupeToolCalls(response.toolCalls, (id) => {
+          callbacks.onStatusUpdate(`Recovery: dropped duplicate tool_call id "${id}" (last occurrence wins).`);
+        });
+        response.toolCalls = deduped;
+      }
       // Record Assistant message
       const assistantMsg: any = { role: 'assistant', content: response.content };
       if (response.toolCalls) {
@@ -873,18 +988,46 @@ export class Agent {
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
-        if (unobservedChildIds.length > 0 && !spawnWaitGuardInjected) {
-          spawnWaitGuardInjected = true;
-          const waitTool = unobservedChildIds.length === 1 ? 'wait_agent' : 'wait_agents';
+        if (unobservedChildIds.length > 0) {
+          const drainTimeoutMs = Math.max(1, Number(process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS) || DEFAULT_CHILD_DRAIN_TIMEOUT_MS);
+          const waitName = 'wait_agents';
+          const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };
+
+          callbacks.onStatusUpdate(`Auto-draining ${unobservedChildIds.length} spawned child agent${unobservedChildIds.length === 1 ? '' : 's'}...`);
+          callbacks.onToolStart(waitName, waitArgs);
+          this.lastTurnToolCalls += 1;
+
+          let waitResultText = '';
+          let waitFailed = false;
+          let waitSummary = '';
+          try {
+            waitResultText = await executeOrchestrationTool(waitName, waitArgs, buildOrchestrationContext());
+            waitSummary = getToolSummary(waitName, waitArgs, waitResultText);
+            trackChildObservation(waitName, waitArgs, waitResultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+          } catch (err: any) {
+            // Wait tool failure: surface the error text to the model so it can
+            // report failure rather than silently synthesizing stale output.
+            waitFailed = true;
+            waitResultText = `Tool execution failed: ${err?.message ?? String(err)}`;
+            waitSummary = err?.message ?? String(err);
+          }
+          callbacks.onToolEnd(waitName, { success: !waitFailed, summary: waitSummary, preview: !waitFailed ? getToolPreview(waitName, waitArgs, waitResultText) : undefined });
+
+          const timeouts = parseChildDrainTimeouts(waitResultText);
+          if (timeouts.length > 0) {
+            finalAnswer = formatChildDrainTimeoutAnswer(timeouts);
+            exitedCleanly = true;
+            break;
+          }
+
           const correction = [
-            `You spawned ${unobservedChildIds.length} child agent${unobservedChildIds.length === 1 ? '' : 's'} in this turn but have not waited for their outputs yet.`,
-            `Call \`${waitTool}\` now for: ${unobservedChildIds.join(', ')}.`,
-            'Do not tell the user you are waiting in prose; use the tool call, then synthesize the returned child output.',
-          ].join(' ');
+            `Runtime child-drain guardrail auto-called \`${waitName}\` because this turn spawned child agents and the model tried to answer without observing them.`,
+            `Child wait result:\n${waitResultText}`,
+            'Now synthesize the child output for the user. Do not say you are waiting unless the wait result timed out.',
+          ].join('\n\n');
           const guardMsg = { role: 'user', content: correction };
           this.chatHistory.push(guardMsg);
           this.recordTranscript(guardMsg);
-          callbacks.onStatusUpdate(`Waiting required for ${unobservedChildIds.length} child agent${unobservedChildIds.length === 1 ? '' : 's'}...`);
           continue;
         }
         finalAnswer = response.content;
@@ -892,31 +1035,37 @@ export class Agent {
         break;
       }
 
-      // Execute tool calls chosen by the LLM
-      for (const tc of response.toolCalls) {
+      // Execute tool calls chosen by the LLM.
+      //
+      // 0.3.8-R4 — Independent read-only tool calls (read_file, list_dir,
+      // grep_search, glob_files, fetch_url, web_search, MCP memory reads)
+      // are dispatched concurrently when emitted in the same assistant
+      // response; consecutive serial tools (writes, shell, orchestration,
+      // unknown names) execute one-by-one in their original position to
+      // preserve causality. Tool-result messages are still appended to
+      // chatHistory in the ORIGINAL call order so the model's next turn
+      // sees a deterministic trace even if a later read settled first.
+      const candidates = [
+        ...LOCAL_TOOLS.map((lt) => lt.name),
+        ...mcpTools.map((t: any) => t.name).filter((n: any) => typeof n === 'string'),
+      ];
+      const toolCalls: any[] = response.toolCalls ?? [];
+      const normalizedNames = toolCalls.map((tc: any) =>
+        normalizeToolName(tc.function.name, candidates),
+      );
+      const parallelEnabled = parallelExecutionEnabled();
+      const safeFlags: boolean[] = toolCalls.map(
+        (_tc: any, idx: number) => parallelEnabled && isParallelSafe(normalizedNames[idx]),
+      );
+
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string }> => {
         this.lastTurnToolCalls += 1;
-        // Normalize the tool name against both local and MCP candidates so
-        // common LLM hallucinations like `Read_File` / `read-file` resolve
-        // to `read_file` instead of falling through to `-32601 Unknown tool`.
-        const rawName = tc.function.name;
-        const candidates = [
-          ...LOCAL_TOOLS.map((lt) => lt.name),
-          ...mcpTools.map((t: any) => t.name).filter((n: any) => typeof n === 'string'),
-        ];
-        const name = normalizeToolName(rawName, candidates);
-        // Parse JSON args. If the LLM produced malformed JSON, surface that
-        // explicitly via the tool result so it can self-correct on the next
-        // turn — the old fallback silently set args={} and the LLM had no
-        // signal that anything was wrong.
-        let args: any = {};
-        let argParseError: string | undefined;
-        try {
-          args = typeof tc.function.arguments === 'string'
-            ? JSON.parse(tc.function.arguments)
-            : tc.function.arguments;
-        } catch (e: any) {
-          argParseError = `Tool argument JSON was malformed: ${e.message}. Re-issue the tool call with valid JSON arguments.`;
-        }
+        // 0.3.8-I4: Use the strict-recovery helper so a malformed-arguments
+        // tool_call surfaces as a structured tool_result (with the raw
+        // arguments echoed back) instead of throwing out of the loop.
+        const parsedArgs = parseArgumentsOrError(tc);
+        let args: any = parsedArgs.args;
+        const argParseError: string | undefined = parsedArgs.error;
 
         const isLocal = LOCAL_TOOLS.some(lt => lt.name === name);
         callbacks.onToolStart(name, args);
@@ -934,9 +1083,7 @@ export class Agent {
           callbacks.onToolEnd(name, { success: false, summary });
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'bad_args' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
-          this.chatHistory.push(toolMsg);
-          this.recordTranscript(toolMsg);
-          continue;
+          return { toolMsg, fullResultText: resultText };
         }
 
         // Repeat-loop guard: if the model has already issued this exact
@@ -955,9 +1102,7 @@ export class Agent {
           callbacks.onToolEnd(name, { success: false, summary });
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'repeat' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
-          this.chatHistory.push(toolMsg);
-          this.recordTranscript(toolMsg);
-          continue;
+          return { toolMsg, fullResultText: resultText };
         }
         recentToolSignatures.push(signature);
         // Keep the window small so the guard only blocks tight loops, not
@@ -996,31 +1141,7 @@ export class Agent {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
           if (isOrchestrationToolName(name)) {
-            resultText = await executeOrchestrationTool(name, args, {
-              workspaceRoot: this.workspaceRoot,
-              parentSessionKey: this.sessionKey,
-              parentAccessMode: this.accessMode,
-              // Thread the parent's trace context so child agents nest their
-              // per-turn spans under THIS turn instead of starting a fresh
-              // trace tree. Lets observability backends reconstruct fan-out.
-              parentTraceId: turnSpan.traceId,
-              parentSpanId: turnSpan.spanId,
-              parentAgentId: this.agentId,
-              parentTier: this.tier,
-              depth: this.agentDepth,
-              mcpClient: this.mcpClient,
-              llmConfig: this.llmConfig,
-              launchCwd: this.launchCwd,
-              recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
-              onChildToolEvent: (event) => {
-                // Surface to the REPL via the same onToolStart channel so the
-                // user sees child activity live, prefixed with the child id.
-                callbacks.onToolStart(`${event.role}:${event.childId} → ${event.tool}`, { ok: event.ok, summary: event.summary });
-              },
-              onChildComplete: (event) => {
-                callbacks.onChildComplete?.(event);
-              },
-            });
+            resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
             summary = getToolSummary(name, args, resultText);
             trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
           } else if (isLocal) {
@@ -1049,8 +1170,14 @@ export class Agent {
           // the next iteration self-corrects instead of retrying garbage.
           if (/-32601|Unknown tool|MethodNotFound/i.test(message)) {
             const hint = explainUnknownToolName(name);
-            resultText = `Tool "${name}" does not exist. ${hint}\nUnderlying error: ${message}`;
-            summary = `unknown tool — ${hint.slice(0, 120)}`;
+            // 0.3.8-I4: surface a "did you mean: X?" suggestion when the
+            // LLM-emitted name normalises to a real registered tool (case,
+            // separator, or alias mismatch). This is cheaper for the model
+            // to recover from than the generic skill-vs-tool explanation.
+            const didYouMean = suggestSimilarToolName(name, candidates, normalizeToolName);
+            const suggestionLine = didYouMean ? `did you mean: ${didYouMean}?\n` : '';
+            resultText = `Tool "${name}" does not exist. ${suggestionLine}${hint}\nUnderlying error: ${message}`;
+            summary = didYouMean ? `unknown tool — did you mean ${didYouMean}?` : `unknown tool — ${hint.slice(0, 120)}`;
           } else {
             resultText = `Tool execution failed: ${message}`;
             summary = message;
@@ -1095,10 +1222,93 @@ export class Agent {
           content: clampedContent,
           isError
         };
-        this.chatHistory.push(toolMsg);
+        // Return; the caller pushes to chatHistory in original call order
+        // (NOT settle order) and records the FULL untruncated result for
+        // /transcript. Doing the push here would let parallel batches land
+        // in finish order, which the LLM's next turn would see as a
+        // non-deterministic trace.
+        return { toolMsg, fullResultText: resultText };
+      };
+
+      // Partition the tool_calls into runs of consecutive parallel-safe
+      // calls separated by single serial calls. Each run preserves original
+      // position; safe runs of size ≥ 2 dispatch with Promise.allSettled,
+      // serial runs (and unknown-tool fallbacks) execute one-by-one. The
+      // result array is indexed by original call position so the
+      // chatHistory push at the end is deterministic.
+      const processed: Array<{ toolMsg: any; fullResultText: string } | undefined> =
+        new Array(toolCalls.length);
+
+      const runSafeBatch = async (startIdx: number, endIdx: number): Promise<void> => {
+        // [startIdx, endIdx) — at least 1 entry; size > 1 means concurrent.
+        // Calling `processOneToolCall` synchronously schedules every batch
+        // member's onToolStart + repeat-guard prep BEFORE any await yields,
+        // so the user sees N "in flight" tool rows immediately. Promise.
+        // allSettled then waits for all to settle; any rejection is
+        // translated into a "Tool execution failed" envelope so the LLM's
+        // next turn still sees a tool_result for every original tool_call_id.
+        const slice = toolCalls.slice(startIdx, endIdx);
+        const promises = slice.map((tc: any, j: number) =>
+          processOneToolCall(tc, normalizedNames[startIdx + j]),
+        );
+        const settled = await Promise.allSettled(promises);
+        for (let k = 0; k < settled.length; k++) {
+          const s = settled[k];
+          if (s.status === 'fulfilled') {
+            processed[startIdx + k] = s.value;
+          } else {
+            const tc = slice[k];
+            const name = normalizedNames[startIdx + k];
+            const message = s.reason?.message ?? String(s.reason);
+            const resultText = `Tool execution failed: ${message}`;
+            processed[startIdx + k] = {
+              toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError: true },
+              fullResultText: resultText,
+            };
+          }
+        }
+      };
+
+      let i = 0;
+      while (i < toolCalls.length) {
+        if (safeFlags[i]) {
+          let j = i + 1;
+          while (j < toolCalls.length && safeFlags[j]) j++;
+          await runSafeBatch(i, j);
+          i = j;
+        } else {
+          // Serial slot — run in isolation so any state mutation (write,
+          // spawn_agent, update_plan) completes before the next call starts.
+          processed[i] = await processOneToolCall(toolCalls[i], normalizedNames[i]);
+          i++;
+        }
+      }
+
+      for (const entry of processed) {
+        if (!entry) continue;
+        this.chatHistory.push(entry.toolMsg);
         // Record the FULL untruncated result so /transcript shows everything,
         // even when the LLM-facing copy was clamped.
-        this.recordTranscript({ ...toolMsg, content: resultText });
+        this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
+      }
+
+      // 0.3.8-I4: orphan safety net. Even after dedupe + the per-call
+      // recovery branches above, a tool_call without a paired tool_result
+      // would 400 the next OpenAI request. Synthesize ERROR envelopes for
+      // any unmatched id so strict tool_call ↔ tool_result pairing is
+      // preserved. Synthetic content is a plain `ERROR: …` string so the
+      // R1 child-drain guardrail's parseJsonObject(resultText) returns
+      // undefined and we don't accidentally claim a child was spawned.
+      // Synthetics do NOT bump lastTurnToolCalls — they aren't real
+      // dispatches, just a well-formed-history fix.
+      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
+      //   middlewares/dangling_tool_call_middleware.py.
+      const producedResults = processed.filter((p): p is NonNullable<typeof p> => !!p).map((p) => p.toolMsg);
+      const orphans = synthesizeOrphanResults(toolCalls, producedResults);
+      for (const synthetic of orphans) {
+        this.chatHistory.push(synthetic);
+        this.recordTranscript(synthetic);
+        callbacks.onStatusUpdate(`Recovery: synthesized placeholder for orphan tool_call ${synthetic.tool_call_id}.`);
       }
     }
 
@@ -1362,7 +1572,7 @@ export class Agent {
         try {
           const res = await fetch(url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.7)'
+              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.8)'
             }
           });
           if (!res.ok) {
@@ -1995,7 +2205,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
 
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.7' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.8' } });
     if (!res.ok) {
       return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
     }
