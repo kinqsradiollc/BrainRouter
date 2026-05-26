@@ -824,3 +824,325 @@ test('P1.2: agentId unknown returns error listing known ids', async () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0.3.8-R4 — Safe parallel execution of independent read-only tool calls.
+//
+// The runtime now dispatches consecutive parallel-safe tool calls (read_file,
+// list_dir, grep_search, glob_files, fetch_url, web_search, MCP memory reads)
+// concurrently when the LLM emits them in a single assistant response. Writes,
+// shell commands, orchestration tools, and any unknown tool name stay serial.
+// Tool-result messages are still appended to chatHistory in the ORIGINAL call
+// order so the model's next turn sees a deterministic trace.
+// ---------------------------------------------------------------------------
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, rejects writers/orchestration/unknowns', async () => {
+  const { isParallelSafe } = await import('../agent/toolSafety.js');
+  // Bare read-only locals — safe.
+  for (const name of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search']) {
+    assert.equal(isParallelSafe(name), true, `${name} must be parallel-safe`);
+  }
+  // Writers / shell / orchestration / interactive — never safe.
+  for (const name of [
+    'write_file', 'edit_file', 'apply_patch', 'run_command',
+    'spawn_agent', 'spawn_agents', 'task_agent', 'delegate_agent',
+    'wait_agent', 'wait_agents', 'close_agent', 'route_agent',
+    'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice',
+    'list_agents', 'read_agent_transcript',
+  ]) {
+    assert.equal(isParallelSafe(name), false, `${name} must stay serial`);
+  }
+  // MCP read tools — both legacy double-underscore and R5 single-underscore.
+  assert.equal(isParallelSafe('mcp__brainrouter__memory_recall'), true);
+  assert.equal(isParallelSafe('mcp_brainrouter_memory_recall'), true);
+  assert.equal(isParallelSafe('mcp__some_long_server_id__memory_search'), true);
+  assert.equal(isParallelSafe('mcp_some_long_server_id_memory_search'), true);
+  // MCP write/admin tools — not on the read whitelist.
+  assert.equal(isParallelSafe('mcp__brainrouter__memory_capture_turn'), false);
+  assert.equal(isParallelSafe('mcp_brainrouter_memory_mark_cited'), false);
+  // Empty / unknown / random garbage — fail-safe false.
+  assert.equal(isParallelSafe(''), false);
+  assert.equal(isParallelSafe('not_a_tool_we_know_about'), false);
+});
+
+test('toolSafety.parallelExecutionEnabled honors BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS kill switch', async () => {
+  const { parallelExecutionEnabled } = await import('../agent/toolSafety.js');
+  const prev = process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
+  try {
+    delete process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
+    assert.equal(parallelExecutionEnabled(), true, 'default ON');
+    for (const off of ['false', '0', 'off', 'no', 'FALSE']) {
+      process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = off;
+      assert.equal(parallelExecutionEnabled(), false, `${off} disables`);
+    }
+    process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = 'true';
+    assert.equal(parallelExecutionEnabled(), true);
+  } finally {
+    if (prev === undefined) delete process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
+    else process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = prev;
+  }
+});
+
+// Helper: build a stubbed LLM `fetch` that replays a scripted sequence of
+// assistant responses. Each entry in `responses` is what the next chat
+// completion should return (content + optional tool_calls). After the
+// scripted entries are exhausted, returns a clean prose completion so the
+// agent exits the runTurn loop.
+function stubLlm(responses: Array<{ content: string; tool_calls?: any[] }>): () => void {
+  const originalFetch = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = (async () => {
+    const r = responses[call] ?? { content: 'done.' };
+    call++;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: r.content, tool_calls: r.tool_calls } }],
+      usage: { prompt_tokens: 50, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+  return () => { globalThis.fetch = originalFetch; };
+}
+
+function makeStubMcp(): any {
+  return {
+    listTools: async () => ({ tools: [] }),
+    callTool: async () => ({ content: [{ text: '{}' }] }),
+    close: async () => {},
+  };
+}
+
+test('R4: three read_file calls in one response run concurrently — total elapsed < sum of latencies', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    // Three files we'll read; the slow-read is enforced by monkey-patching
+    // fs.readFileSync? No — readFileSync is sync, can't yield. Instead we
+    // wrap executeLocalTool by making read_file await a sleep via the
+    // tool path that DOES go through await: we use small files but inject
+    // an artificial delay via a custom MCP-style read. The simplest route
+    // is to monkey-patch the agent's executeLocalTool — but that's
+    // private. Easier: monkey-patch fs.promises? read_file uses sync I/O.
+    //
+    // Concretely: we monkey-patch fs.readFileSync to busy-sleep ~50 ms
+    // before returning, but a busy sleep blocks the event loop and kills
+    // the concurrency we want to measure. So instead we patch
+    // Agent.prototype.executeLocalTool to delegate to original after an
+    // await sleep(50). That preserves true async concurrency.
+    const { Agent } = await import('../agent/agent.js');
+    const origExec = (Agent.prototype as any).executeLocalTool;
+    (Agent.prototype as any).executeLocalTool = async function (name: string, args: any) {
+      if (name === 'read_file') {
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      return origExec.call(this, name, args);
+    };
+    // Create three small files to read.
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) {
+      fs.writeFileSync(path.join(workspace, f), `content of ${f}`);
+    }
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [
+        { id: 'call_a', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+        { id: 'call_b', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.txt"}' } },
+        { id: 'call_c', type: 'function', function: { name: 'read_file', arguments: '{"path":"c.txt"}' } },
+      ],
+    }]);
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const t0 = Date.now();
+      await agent.runTurn('read three files', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      const elapsed = Date.now() - t0;
+      // Three 50 ms reads serialized would take ≥150 ms. Concurrent should
+      // settle in ~50 ms plus the second-LLM-call round-trip (still well
+      // under 150 ms in a stubbed test). Give a generous bound to keep CI
+      // stable but tight enough to fail if execution falls back to serial.
+      assert.ok(elapsed < 130, `expected concurrent reads (<130 ms), got ${elapsed} ms`);
+      assert.equal(agent.lastTurnToolCalls, 3, 'all three tool calls must count toward lastTurnToolCalls');
+    } finally {
+      restore();
+      (Agent.prototype as any).executeLocalTool = origExec;
+    }
+  });
+});
+
+test('R4: tool-result chatHistory order matches original call order even when later reads finish first', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { Agent } = await import('../agent/agent.js');
+    const origExec = (Agent.prototype as any).executeLocalTool;
+    // Make read_file's delay depend on the path: a=60ms, b=20ms, c=5ms.
+    // So if reads were appended in finish order, chatHistory would carry
+    // c, b, a. The runtime must instead push them in original order: a, b, c.
+    (Agent.prototype as any).executeLocalTool = async function (name: string, args: any) {
+      if (name === 'read_file') {
+        const delays: Record<string, number> = { 'a.txt': 60, 'b.txt': 20, 'c.txt': 5 };
+        await new Promise((res) => setTimeout(res, delays[args.path] ?? 0));
+      }
+      return origExec.call(this, name, args);
+    };
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) {
+      fs.writeFileSync(path.join(workspace, f), `content-${f}`);
+    }
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [
+        { id: 'id_a', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+        { id: 'id_b', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.txt"}' } },
+        { id: 'id_c', type: 'function', function: { name: 'read_file', arguments: '{"path":"c.txt"}' } },
+      ],
+    }]);
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await agent.runTurn('read all', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      const hist = (agent as any).chatHistory as any[];
+      const toolMsgs = hist.filter((m) => m.role === 'tool');
+      // Three tool results in original (a, b, c) order, NOT settle (c, b, a) order.
+      assert.deepEqual(
+        toolMsgs.map((m) => m.tool_call_id),
+        ['id_a', 'id_b', 'id_c'],
+        'tool_result messages must preserve original call order',
+      );
+    } finally {
+      restore();
+      (Agent.prototype as any).executeLocalTool = origExec;
+    }
+  });
+});
+
+test('R4: mixed batch — 2 reads in parallel, then 1 write_file serially; write tool_result lands after both reads', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { Agent } = await import('../agent/agent.js');
+    const origExec = (Agent.prototype as any).executeLocalTool;
+    const execOrder: string[] = [];
+    (Agent.prototype as any).executeLocalTool = async function (name: string, args: any) {
+      execOrder.push(`start:${name}:${args.path ?? ''}`);
+      if (name === 'read_file') await new Promise((res) => setTimeout(res, 30));
+      const out = await origExec.call(this, name, args);
+      execOrder.push(`end:${name}:${args.path ?? ''}`);
+      return out;
+    };
+    fs.writeFileSync(path.join(workspace, 'a.txt'), 'A');
+    fs.writeFileSync(path.join(workspace, 'b.txt'), 'B');
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [
+        { id: 'r1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+        { id: 'r2', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.txt"}' } },
+        { id: 'w1', type: 'function', function: { name: 'write_file', arguments: '{"path":"out.txt","content":"hi"}' } },
+      ],
+    }]);
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await agent.runTurn('mixed', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      // Both reads must start before either ends (proves parallel), and
+      // write_file must START only after both reads have ENDED (proves serial tail).
+      const startA = execOrder.indexOf('start:read_file:a.txt');
+      const startB = execOrder.indexOf('start:read_file:b.txt');
+      const endA = execOrder.indexOf('end:read_file:a.txt');
+      const endB = execOrder.indexOf('end:read_file:b.txt');
+      const startW = execOrder.indexOf('start:write_file:out.txt');
+      assert.ok(startA >= 0 && startB >= 0, 'both reads must have started');
+      assert.ok(startB < endA, 'read B must start before read A finishes (parallel)');
+      assert.ok(startW > endA && startW > endB, 'write must start after both reads complete');
+      // Tool-result chatHistory order matches call order.
+      const hist = (agent as any).chatHistory as any[];
+      const ids = hist.filter((m) => m.role === 'tool').map((m) => m.tool_call_id);
+      assert.deepEqual(ids, ['r1', 'r2', 'w1']);
+    } finally {
+      restore();
+      (Agent.prototype as any).executeLocalTool = origExec;
+    }
+  });
+});
+
+test('R4: unknown tool name in the batch is treated as serial (conservative fail-safe)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { Agent } = await import('../agent/agent.js');
+    fs.writeFileSync(path.join(workspace, 'a.txt'), 'A');
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [
+        { id: 'r1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+        { id: 'u1', type: 'function', function: { name: 'totally_made_up_tool', arguments: '{}' } },
+        { id: 'r2', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+      ],
+    }]);
+    try {
+      // Unknown tools fall through to the MCP client; make the stub
+      // surface a JSON-RPC-style "unknown tool" so the agent's catch
+      // branch produces the canonical error envelope.
+      const stub = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async (name: string) => { throw new Error(`-32601 Unknown tool: ${name}`); },
+        close: async () => {},
+      } as any;
+      const agent = new Agent(stub, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await agent.runTurn('mixed unknown', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      const hist = (agent as any).chatHistory as any[];
+      const toolMsgs = hist.filter((m) => m.role === 'tool');
+      // All three calls must produce a tool_result, in original order.
+      assert.deepEqual(toolMsgs.map((m) => m.tool_call_id), ['r1', 'u1', 'r2']);
+      // The unknown one is reported as an error envelope.
+      const unknown = toolMsgs.find((m) => m.tool_call_id === 'u1');
+      assert.equal(unknown.isError, true);
+      assert.match(String(unknown.content), /does not exist|Unknown tool/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('R4: BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS=false forces serial execution of read batches', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { Agent } = await import('../agent/agent.js');
+    const origExec = (Agent.prototype as any).executeLocalTool;
+    (Agent.prototype as any).executeLocalTool = async function (name: string, args: any) {
+      if (name === 'read_file') await new Promise((res) => setTimeout(res, 30));
+      return origExec.call(this, name, args);
+    };
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) fs.writeFileSync(path.join(workspace, f), 'x');
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [
+        { id: 'r1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+        { id: 'r2', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.txt"}' } },
+        { id: 'r3', type: 'function', function: { name: 'read_file', arguments: '{"path":"c.txt"}' } },
+      ],
+    }]);
+    const prev = process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
+    process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = 'false';
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const t0 = Date.now();
+      await agent.runTurn('three serial reads', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      const elapsed = Date.now() - t0;
+      // Three 30 ms reads serialized ≈ 90 ms; allow generous bound.
+      assert.ok(elapsed >= 80, `kill switch must restore serial behaviour, got ${elapsed} ms`);
+    } finally {
+      restore();
+      (Agent.prototype as any).executeLocalTool = origExec;
+      if (prev === undefined) delete process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
+      else process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = prev;
+    }
+  });
+});

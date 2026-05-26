@@ -39,6 +39,7 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
+import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
@@ -892,18 +893,31 @@ export class Agent {
         break;
       }
 
-      // Execute tool calls chosen by the LLM
-      for (const tc of response.toolCalls) {
+      // Execute tool calls chosen by the LLM.
+      //
+      // 0.3.8-R4 — Independent read-only tool calls (read_file, list_dir,
+      // grep_search, glob_files, fetch_url, web_search, MCP memory reads)
+      // are dispatched concurrently when emitted in the same assistant
+      // response; consecutive serial tools (writes, shell, orchestration,
+      // unknown names) execute one-by-one in their original position to
+      // preserve causality. Tool-result messages are still appended to
+      // chatHistory in the ORIGINAL call order so the model's next turn
+      // sees a deterministic trace even if a later read settled first.
+      const candidates = [
+        ...LOCAL_TOOLS.map((lt) => lt.name),
+        ...mcpTools.map((t: any) => t.name).filter((n: any) => typeof n === 'string'),
+      ];
+      const toolCalls: any[] = response.toolCalls ?? [];
+      const normalizedNames = toolCalls.map((tc: any) =>
+        normalizeToolName(tc.function.name, candidates),
+      );
+      const parallelEnabled = parallelExecutionEnabled();
+      const safeFlags: boolean[] = toolCalls.map(
+        (_tc: any, idx: number) => parallelEnabled && isParallelSafe(normalizedNames[idx]),
+      );
+
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string }> => {
         this.lastTurnToolCalls += 1;
-        // Normalize the tool name against both local and MCP candidates so
-        // common LLM hallucinations like `Read_File` / `read-file` resolve
-        // to `read_file` instead of falling through to `-32601 Unknown tool`.
-        const rawName = tc.function.name;
-        const candidates = [
-          ...LOCAL_TOOLS.map((lt) => lt.name),
-          ...mcpTools.map((t: any) => t.name).filter((n: any) => typeof n === 'string'),
-        ];
-        const name = normalizeToolName(rawName, candidates);
         // Parse JSON args. If the LLM produced malformed JSON, surface that
         // explicitly via the tool result so it can self-correct on the next
         // turn — the old fallback silently set args={} and the LLM had no
@@ -934,9 +948,7 @@ export class Agent {
           callbacks.onToolEnd(name, { success: false, summary });
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'bad_args' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
-          this.chatHistory.push(toolMsg);
-          this.recordTranscript(toolMsg);
-          continue;
+          return { toolMsg, fullResultText: resultText };
         }
 
         // Repeat-loop guard: if the model has already issued this exact
@@ -955,9 +967,7 @@ export class Agent {
           callbacks.onToolEnd(name, { success: false, summary });
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'repeat' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
-          this.chatHistory.push(toolMsg);
-          this.recordTranscript(toolMsg);
-          continue;
+          return { toolMsg, fullResultText: resultText };
         }
         recentToolSignatures.push(signature);
         // Keep the window small so the guard only blocks tight loops, not
@@ -1095,10 +1105,74 @@ export class Agent {
           content: clampedContent,
           isError
         };
-        this.chatHistory.push(toolMsg);
+        // Return; the caller pushes to chatHistory in original call order
+        // (NOT settle order) and records the FULL untruncated result for
+        // /transcript. Doing the push here would let parallel batches land
+        // in finish order, which the LLM's next turn would see as a
+        // non-deterministic trace.
+        return { toolMsg, fullResultText: resultText };
+      };
+
+      // Partition the tool_calls into runs of consecutive parallel-safe
+      // calls separated by single serial calls. Each run preserves original
+      // position; safe runs of size ≥ 2 dispatch with Promise.allSettled,
+      // serial runs (and unknown-tool fallbacks) execute one-by-one. The
+      // result array is indexed by original call position so the
+      // chatHistory push at the end is deterministic.
+      const processed: Array<{ toolMsg: any; fullResultText: string } | undefined> =
+        new Array(toolCalls.length);
+
+      const runSafeBatch = async (startIdx: number, endIdx: number): Promise<void> => {
+        // [startIdx, endIdx) — at least 1 entry; size > 1 means concurrent.
+        // Calling `processOneToolCall` synchronously schedules every batch
+        // member's onToolStart + repeat-guard prep BEFORE any await yields,
+        // so the user sees N "in flight" tool rows immediately. Promise.
+        // allSettled then waits for all to settle; any rejection is
+        // translated into a "Tool execution failed" envelope so the LLM's
+        // next turn still sees a tool_result for every original tool_call_id.
+        const slice = toolCalls.slice(startIdx, endIdx);
+        const promises = slice.map((tc: any, j: number) =>
+          processOneToolCall(tc, normalizedNames[startIdx + j]),
+        );
+        const settled = await Promise.allSettled(promises);
+        for (let k = 0; k < settled.length; k++) {
+          const s = settled[k];
+          if (s.status === 'fulfilled') {
+            processed[startIdx + k] = s.value;
+          } else {
+            const tc = slice[k];
+            const name = normalizedNames[startIdx + k];
+            const message = s.reason?.message ?? String(s.reason);
+            const resultText = `Tool execution failed: ${message}`;
+            processed[startIdx + k] = {
+              toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError: true },
+              fullResultText: resultText,
+            };
+          }
+        }
+      };
+
+      let i = 0;
+      while (i < toolCalls.length) {
+        if (safeFlags[i]) {
+          let j = i + 1;
+          while (j < toolCalls.length && safeFlags[j]) j++;
+          await runSafeBatch(i, j);
+          i = j;
+        } else {
+          // Serial slot — run in isolation so any state mutation (write,
+          // spawn_agent, update_plan) completes before the next call starts.
+          processed[i] = await processOneToolCall(toolCalls[i], normalizedNames[i]);
+          i++;
+        }
+      }
+
+      for (const entry of processed) {
+        if (!entry) continue;
+        this.chatHistory.push(entry.toolMsg);
         // Record the FULL untruncated result so /transcript shows everything,
         // even when the LLM-facing copy was clamped.
-        this.recordTranscript({ ...toolMsg, content: resultText });
+        this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
       }
     }
 
