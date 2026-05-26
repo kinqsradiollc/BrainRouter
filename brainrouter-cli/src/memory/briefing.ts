@@ -2,6 +2,7 @@ import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { redactText } from '../state/sessionStore.js';
 import { callMcpTool, hasMcpTool } from '../runtime/mcpUtils.js';
 import { extractFilePathHints, looksLikeDebugOrRetry } from './briefingTriggers.js';
+import { assessRecallCards } from './memoryPolicy.js';
 
 export interface BriefingInputs {
   mcpClient: McpClientWrapper;
@@ -141,7 +142,7 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
         const typeTag = rec.type ? ` (${rec.type})` : '';
         const content = (rec.content ?? '').replace(/\s+/g, ' ').trim();
         const preview = content.length > 240 ? content.slice(0, 239) + '…' : content;
-        return `- ${idTag}${typeTag} ${preview}`;
+        return `- ${idTag}${typeTag} ${redactText(preview)}`;
       });
       sections.push(`### ${prettyLabel(r.source)}\n${cards.join('\n')}`);
       recalledRecords.push(...r.records);
@@ -164,6 +165,9 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
       sections.push(`### ${prettyLabel(r.source)}\n${redactText(trimmed.slice(0, 1500))}`);
     }
   }
+
+  const policyWarnings = assessRecallCards(recalledRecords, { workspaceRoot });
+  for (const w of policyWarnings) warnings.push(w);
 
   if (sections.length === 0) {
     return { block: '', recalledRecordIds: [], recalledRecords: [], sourcesQueried, sourcesPlanned, skippedSources, sourceStats, warnings };
