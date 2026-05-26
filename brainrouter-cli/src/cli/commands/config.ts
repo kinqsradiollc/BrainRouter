@@ -12,6 +12,7 @@ import {
 } from '../../state/preferencesStore.js';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
 import { PROVIDER_CATALOG, findProvider, maskApiKey, validateApiKey } from '../wizard/providers.js';
+import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on
 // every keystroke, stacking on step transitions). Ink owns the render
@@ -216,28 +217,62 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
     },
   });
   if (keyResult.kind !== 'accept') return false;
-  const modelResult = await pickFromList({
+
+  // OpenAI doubles as the OpenAI-compatible custom-endpoint flow. Prompt
+  // to confirm or replace the base URL; local providers keep their
+  // fixed loopback endpoints.
+  let endpoint = provider.endpoint;
+  if (provider.id === 'openai') {
+    const current = ctx.config.llm?.endpoint ?? provider.endpoint;
+    const urlResult = await promptText({
+      theme,
+      title: 'API base URL',
+      subtitle: 'Press ENTER for OpenAI direct, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, vLLM, …).',
+      badge: 'OpenAI base URL',
+      prefilled: current,
+      placeholder: provider.endpoint,
+      validate: (raw) => {
+        const v = raw.trim();
+        if (!v) return 'base URL cannot be empty';
+        try { new URL(v); } catch { return 'must be a valid URL'; }
+        return undefined;
+      },
+    });
+    if (urlResult.kind !== 'accept') return false;
+    endpoint = urlResult.text.trim();
+  }
+
+  // Live /v1/models picker — same one the in-REPL /model command uses.
+  // Falls back to the provider's curated short-list when the endpoint
+  // can't be reached; "Other model" is always offered for manual entry.
+  const modelResult = await selectModel({
     theme,
+    provider,
+    apiKey: keyResult.text,
+    endpointOverride: endpoint !== provider.endpoint ? endpoint : undefined,
+    currentModel: ctx.config.llm?.model,
     title: 'Model',
-    subtitle: `Pick the chat model for ${provider.label}.`,
-    rows: provider.models.map((m) => ({ id: m, label: m, value: m === provider.defaultModel ? 'default' : '' })),
-    initialCursor: Math.max(0, provider.models.indexOf(provider.defaultModel)),
-    allowOther: true,
-    otherLabel: 'Other model',
-    otherDescription: 'Type any model name supported by this endpoint',
+    badge: provider.label,
+    eraseOnClose: true,
   });
-  if (modelResult.kind === 'cancelled') return false;
-  const model = modelResult.kind === 'other' ? modelResult.text.trim() : modelResult.id;
+  if (!modelResult) return false;
+  const model = modelResult.model || provider.defaultModel;
+
   ctx.config.llm = {
     provider: 'openai',
     apiKey: keyResult.text,
-    model: model || provider.defaultModel,
-    endpoint: provider.endpoint,
+    model,
+    endpoint,
   };
   saveConfig(ctx.config);
-  ctx.agent.setModel(model || provider.defaultModel);
-  console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model || provider.defaultModel} · ${maskApiKey(keyResult.text)}`));
-  console.log(chalk.gray('    Endpoint changes take effect on the next CLI restart.\n'));
+  ctx.agent.setModel(model);
+  const endpointTail = endpoint !== provider.endpoint ? ` · ${shortenEndpoint(endpoint)}` : '';
+  const sourceTail = modelResult.source === 'live'
+    ? ` (from live /v1/models · ${modelResult.liveCount} returned)`
+    : modelResult.source === 'fallback'
+      ? ` (live list unavailable — picked from curated short-list)`
+      : '';
+  console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model}${endpointTail} · ${maskApiKey(keyResult.text)}${sourceTail}`));
   return true;
 }
 
