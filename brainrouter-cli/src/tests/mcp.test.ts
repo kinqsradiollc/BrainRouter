@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '../runtime/mcpUtils.js';
 import { createSession, getSession, listSessions, updateSession } from '../orchestration/orchestrator.js';
+import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { normalizeSkillsList } from '../cli/commands/workflow.js';
-import { withTempWorkspace } from './_helpers.js';
+import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('McpClientWrapper.isConnected is false before connect', async () => {
   const { McpClientWrapper } = await import('../runtime/mcpClient.js');
@@ -156,6 +157,120 @@ test('orchestrator session registry persists lifecycle transitions', () => {
     assert.equal(fetched?.status, 'running');
     assert.equal(listSessions(workspace).length, 1);
     assert.throws(() => updateSession(workspace, 'missing', { status: 'failed' }), /No child session/);
+  });
+});
+
+test('orchestration: task_agent waits and returns child output', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: `child completed: ${lastUser}` } }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const ctx = {
+        workspaceRoot: workspace,
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell' as const,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+        launchCwd: workspace,
+      };
+      const raw = await executeOrchestrationTool('task_agent', { role: 'explorer', prompt: 'map auth' }, ctx);
+      const result = JSON.parse(raw);
+      assert.equal(result.role, 'explorer');
+      assert.equal(result.status, 'completed');
+      assert.match(result.finalOutput, /child completed: map auth/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: delegate_agent returns running child id with continue semantics', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'background child complete' } }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const ctx = {
+        workspaceRoot: workspace,
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell' as const,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+        launchCwd: workspace,
+      };
+      const raw = await executeOrchestrationTool('delegate_agent', { role: 'explorer', prompt: 'map auth' }, ctx);
+      const result = JSON.parse(raw);
+      assert.equal(result.role, 'explorer');
+      assert.equal(result.status, 'running');
+      assert.match(result.id, /^agent-/);
+      assert.match(result.nextAction, /continue working/i);
+
+      const record = getSession(workspace, result.id);
+      assert.equal(record?.status, 'running');
+      const waited = JSON.parse(await executeOrchestrationTool('wait_agent', { id: result.id, timeoutMs: 1000 }, ctx));
+      assert.equal(waited.status, 'completed');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: spawn_agent wait=true remains backward-compatible', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: `legacy child completed: ${lastUser}` } }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const ctx = {
+        workspaceRoot: workspace,
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell' as const,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+        launchCwd: workspace,
+      };
+      const raw = await executeOrchestrationTool('spawn_agent', { role: 'explorer', prompt: 'map auth', wait: true }, ctx);
+      const result = JSON.parse(raw);
+      assert.equal(result.status, 'completed');
+      assert.match(result.finalOutput, /legacy child completed: map auth/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

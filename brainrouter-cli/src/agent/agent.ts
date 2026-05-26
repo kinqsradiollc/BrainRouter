@@ -16,6 +16,8 @@ import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/sy
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
 import {
+  createTaskAgentTool,
+  createDelegateAgentTool,
   createSpawnAgentTool,
   createSpawnAgentsTool,
   createListAgentsTool,
@@ -26,7 +28,9 @@ import {
   createRouteAgentTool,
   executeOrchestrationTool,
   isOrchestrationToolName,
+  type OrchestrationContext,
 } from '../orchestration/tools.js';
+import { getSession } from '../orchestration/orchestrator.js';
 import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
@@ -43,6 +47,7 @@ import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
+const DEFAULT_CHILD_DRAIN_TIMEOUT_MS = 30_000;
 
 function parseJsonObject(text: string): any | undefined {
   try {
@@ -75,11 +80,22 @@ function trackChildObservation(
   spawned: Set<string>,
   waited: Set<string>,
 ): void {
-  if (toolName === 'spawn_agent' || toolName === 'spawn_agents') {
+  if (
+    toolName === 'spawn_agent' ||
+    toolName === 'spawn_agents' ||
+    toolName === 'task_agent' ||
+    toolName === 'delegate_agent'
+  ) {
     const ids = collectChildIds(parseJsonObject(resultText));
     for (const id of ids) {
       spawned.add(id);
-      if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
+      // task_agent always blocks internally (wraps spawn with wait: true);
+      // spawn_agent({ wait: true }) is the legacy form. Both count as
+      // already-observed, so the child-drain guardrail doesn't double-wait.
+      // delegate_agent is fire-and-forget — must remain unwaited so the
+      // guardrail can force a wait_agents call before the parent answers.
+      if (toolName === 'task_agent') waited.add(id);
+      else if (toolName === 'spawn_agent' && args?.wait) waited.add(id);
     }
     return;
   }
@@ -94,6 +110,37 @@ function trackChildObservation(
     const ids = Array.isArray(args?.ids) ? args.ids.filter((id: unknown): id is string => typeof id === 'string') : [];
     for (const id of ids) waited.add(id);
   }
+}
+
+function parseChildDrainTimeouts(resultText: string): Array<{ id: string; role?: string; status: string; childStatus?: string; summary?: string }> {
+  const parsed = parseJsonObject(resultText);
+  const agents: unknown[] = Array.isArray(parsed?.agents) ? parsed.agents : [];
+  return agents
+    .filter((entry: unknown): entry is Record<string, unknown> => {
+      return !!entry && typeof entry === 'object' && (entry as Record<string, unknown>).status === 'timeout';
+    })
+    .map((entry) => ({
+      id: typeof entry.id === 'string' ? entry.id : '(unknown)',
+      role: typeof entry.role === 'string' ? entry.role : undefined,
+      status: 'timeout',
+      childStatus: typeof entry.childStatus === 'string' ? entry.childStatus : undefined,
+      summary: typeof entry.summary === 'string' ? entry.summary : undefined,
+    }));
+}
+
+function formatChildDrainTimeoutAnswer(timeouts: Array<{ id: string; role?: string; childStatus?: string; summary?: string }>): string {
+  const lines = [
+    `Children still running after the bounded wait (${timeouts.length}):`,
+    ...timeouts.map((child) => {
+      const role = child.role ? ` role=${child.role}` : '';
+      const status = child.childStatus ? ` status=${child.childStatus}` : '';
+      const summary = child.summary ? ` — ${child.summary}` : '';
+      return `- ${child.id}${role}${status}${summary}`;
+    }),
+    '',
+    'Use `/continue` to drain the pending child output and synthesize the result when it is ready.',
+  ];
+  return lines.join('\n');
 }
 
 export interface RunTurnCallbacks {
@@ -113,6 +160,15 @@ export interface RunTurnCallbacks {
    * staring at silence after the tool stream stops.
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  /**
+   * Optional: paired live child tool events surfaced from spawn_agent
+   * children up to the parent REPL. Lets the UI render explicit
+   * "child began Read(...)" / "child finished — 1.2s" rows in scrollback
+   * so long child runs no longer look like the parent has paused
+   * (roadmap §3 child progress visibility).
+   */
+  onChildToolStart?: (event: { childId: string; role: string; tool: string; args: Record<string, any> }) => void;
+  onChildToolEnd?: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
   /**
    * Optional: invoked when the agent's automatic memory pipeline runs —
    * pre-turn briefing, post-turn capture, citation marking. Surfacing these
@@ -302,6 +358,8 @@ export const LOCAL_TOOLS = [
       required: ['patch']
     }
   },
+  createTaskAgentTool(),
+  createDelegateAgentTool(),
   createSpawnAgentTool(),
   createSpawnAgentsTool(),
   createListAgentsTool(),
@@ -683,7 +741,7 @@ export class Agent {
     // a goal cleanly (goal_complete / goal_blocked) or observe state.
     const readOnly = new Set([
       'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
-      'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
+      'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'route_agent',
       'goal_complete', 'goal_blocked',
       // ask_user_choice doesn't touch the workspace — it's an interaction
@@ -842,7 +900,32 @@ export class Agent {
     const REPEAT_GUARD_LIMIT = 3;
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
-    let spawnWaitGuardInjected = false;
+    const buildOrchestrationContext = (): OrchestrationContext => ({
+      workspaceRoot: this.workspaceRoot,
+      parentSessionKey: this.sessionKey,
+      parentAccessMode: this.accessMode,
+      // Thread the parent's trace context so child agents nest their
+      // per-turn spans under THIS turn instead of starting a fresh
+      // trace tree. Lets observability backends reconstruct fan-out.
+      parentTraceId: turnSpan.traceId,
+      parentSpanId: turnSpan.spanId,
+      parentAgentId: this.agentId,
+      parentTier: this.tier,
+      depth: this.agentDepth,
+      mcpClient: this.mcpClient,
+      llmConfig: this.llmConfig,
+      launchCwd: this.launchCwd,
+      recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
+      onChildToolStart: (event) => {
+        callbacks.onChildToolStart?.(event);
+      },
+      onChildToolEnd: (event) => {
+        callbacks.onChildToolEnd?.(event);
+      },
+      onChildComplete: (event) => {
+        callbacks.onChildComplete?.(event);
+      },
+    });
 
     while (loopCount < maxLoops) {
       loopCount++;
@@ -874,18 +957,50 @@ export class Agent {
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
-        if (unobservedChildIds.length > 0 && !spawnWaitGuardInjected) {
-          spawnWaitGuardInjected = true;
-          const waitTool = unobservedChildIds.length === 1 ? 'wait_agent' : 'wait_agents';
+        if (unobservedChildIds.length > 0) {
+          const childRecords = unobservedChildIds.map((id) => getSession(this.workspaceRoot, id));
+          const activeChildIds = childRecords
+            .filter((record) => record?.status === 'pending' || record?.status === 'running')
+            .map((record) => record!.id);
+          const drainTimeoutMs = Math.max(1, Number(process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS) || DEFAULT_CHILD_DRAIN_TIMEOUT_MS);
+          const waitName = 'wait_agents';
+          const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };
+
+          callbacks.onStatusUpdate(`Auto-draining ${unobservedChildIds.length} spawned child agent${unobservedChildIds.length === 1 ? '' : 's'}...`);
+          callbacks.onToolStart(waitName, waitArgs);
+          this.lastTurnToolCalls += 1;
+
+          let waitResultText = '';
+          let waitFailed = false;
+          let waitSummary = '';
+          try {
+            waitResultText = await executeOrchestrationTool(waitName, waitArgs, buildOrchestrationContext());
+            waitSummary = getToolSummary(waitName, waitArgs, waitResultText);
+            trackChildObservation(waitName, waitArgs, waitResultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+          } catch (err: any) {
+            // Wait tool failure: surface the error text to the model so it can
+            // report failure rather than silently synthesizing stale output.
+            waitFailed = true;
+            waitResultText = `Tool execution failed: ${err?.message ?? String(err)}`;
+            waitSummary = err?.message ?? String(err);
+          }
+          callbacks.onToolEnd(waitName, { success: !waitFailed, summary: waitSummary, preview: !waitFailed ? getToolPreview(waitName, waitArgs, waitResultText) : undefined });
+
+          const timeouts = parseChildDrainTimeouts(waitResultText);
+          if (timeouts.length > 0) {
+            finalAnswer = formatChildDrainTimeoutAnswer(timeouts);
+            exitedCleanly = true;
+            break;
+          }
+
           const correction = [
-            `You spawned ${unobservedChildIds.length} child agent${unobservedChildIds.length === 1 ? '' : 's'} in this turn but have not waited for their outputs yet.`,
-            `Call \`${waitTool}\` now for: ${unobservedChildIds.join(', ')}.`,
-            'Do not tell the user you are waiting in prose; use the tool call, then synthesize the returned child output.',
-          ].join(' ');
+            `Runtime child-drain guardrail auto-called \`${waitName}\` because this turn spawned child agents and the model tried to answer without observing them.`,
+            `Child wait result:\n${waitResultText}`,
+            'Now synthesize the child output for the user. Do not say you are waiting unless the wait result timed out.',
+          ].join('\n\n');
           const guardMsg = { role: 'user', content: correction };
           this.chatHistory.push(guardMsg);
           this.recordTranscript(guardMsg);
-          callbacks.onStatusUpdate(`Waiting required for ${unobservedChildIds.length} child agent${unobservedChildIds.length === 1 ? '' : 's'}...`);
           continue;
         }
         finalAnswer = response.content;
@@ -1006,31 +1121,7 @@ export class Agent {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
           if (isOrchestrationToolName(name)) {
-            resultText = await executeOrchestrationTool(name, args, {
-              workspaceRoot: this.workspaceRoot,
-              parentSessionKey: this.sessionKey,
-              parentAccessMode: this.accessMode,
-              // Thread the parent's trace context so child agents nest their
-              // per-turn spans under THIS turn instead of starting a fresh
-              // trace tree. Lets observability backends reconstruct fan-out.
-              parentTraceId: turnSpan.traceId,
-              parentSpanId: turnSpan.spanId,
-              parentAgentId: this.agentId,
-              parentTier: this.tier,
-              depth: this.agentDepth,
-              mcpClient: this.mcpClient,
-              llmConfig: this.llmConfig,
-              launchCwd: this.launchCwd,
-              recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
-              onChildToolEvent: (event) => {
-                // Surface to the REPL via the same onToolStart channel so the
-                // user sees child activity live, prefixed with the child id.
-                callbacks.onToolStart(`${event.role}:${event.childId} → ${event.tool}`, { ok: event.ok, summary: event.summary });
-              },
-              onChildComplete: (event) => {
-                callbacks.onChildComplete?.(event);
-              },
-            });
+            resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
             summary = getToolSummary(name, args, resultText);
             trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
           } else if (isLocal) {
