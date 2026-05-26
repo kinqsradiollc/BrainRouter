@@ -12,7 +12,7 @@
  * same "advance past now" rule.
  */
 
-import { loadSchedules, recordFire, removeSchedule, type ScheduleRecord } from '../state/scheduleStore.js';
+import { loadSchedules, recordFire, removeSchedule, setScheduleEnabled, type ScheduleRecord } from '../state/scheduleStore.js';
 import { parseCron, nextCronFire } from './cronParser.js';
 
 const DEFAULT_INTERVAL_MS = 30_000;
@@ -83,13 +83,12 @@ export function startScheduleTicker(opts: ScheduleTickerOptions): ScheduleTicker
 
       // Cron: advance nextRun strictly past `t`. parseCron should always
       // succeed (we validated on add), but tolerate corruption by
-      // disabling rather than spinning.
+      // disabling rather than spinning forever on a past nextRun.
       const cron = parseCron(s.expr);
       if (!cron) {
         opts.onError?.(`cron expression invalid; disabling ${s.id}: ${s.expr}`);
         try {
-          // Reuse setScheduleEnabled indirectly — keep imports minimal.
-          recordFire(opts.workspaceRoot, s.id, new Date(t), s.nextRun);
+          setScheduleEnabled(opts.workspaceRoot, s.id, false);
         } catch { /* swallow */ }
         continue;
       }

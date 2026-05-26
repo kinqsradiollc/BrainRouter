@@ -989,10 +989,6 @@ export class Agent {
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
         if (unobservedChildIds.length > 0) {
-          const childRecords = unobservedChildIds.map((id) => getSession(this.workspaceRoot, id));
-          const activeChildIds = childRecords
-            .filter((record) => record?.status === 'pending' || record?.status === 'running')
-            .map((record) => record!.id);
           const drainTimeoutMs = Math.max(1, Number(process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS) || DEFAULT_CHILD_DRAIN_TIMEOUT_MS);
           const waitName = 'wait_agents';
           const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };

@@ -105,16 +105,35 @@ export function formatToolCall(name: string, args: Record<string, any> | undefin
   return `${pretty}()`;
 }
 
+// Server ids registered at boot. MCP server names may contain underscores
+// (`my_server`), so a naive `^mcp_[^_]+_(.+)$` regex would mis-strip
+// `mcp_my_server_memory_search` to `server_memory_search`. Callers that
+// know the live server inventory register it here so `stripMcpPrefix` can
+// match the longest known id first.
+let knownMcpServerIds: string[] = [];
+
+export function setKnownMcpServerIds(ids: ReadonlyArray<string>): void {
+  knownMcpServerIds = [...ids].sort((a, b) => b.length - a.length);
+}
+
 /**
  * Strip the `mcp_<server>_` namespace prefix from MCP tool names. As of
  * 0.3.8-R5 the pool normalises to single-underscore at the boundary, so
  * downstream call-sites only ever see this shape.
  *   `mcp_brainrouter_memory_search` → `memory_search`
+ *   `mcp_my_server_memory_search`   → `memory_search` (when `my_server`
+ *                                     is registered via `setKnownMcpServerIds`)
  */
 export function stripMcpPrefix(name: string): string {
-  const sgl = name.match(/^mcp_[^_]+_(.+)$/);
-  if (sgl) return sgl[1];
-  return name;
+  if (!name.startsWith('mcp_')) return name;
+  const rest = name.slice('mcp_'.length);
+  for (const id of knownMcpServerIds) {
+    if (rest.startsWith(`${id}_`)) return rest.slice(id.length + 1);
+  }
+  // Fallback when no server ids are registered (test fixtures, early boot):
+  // assume the server id has no underscores.
+  const idx = rest.indexOf('_');
+  return idx >= 0 ? rest.slice(idx + 1) : name;
 }
 
 /**
