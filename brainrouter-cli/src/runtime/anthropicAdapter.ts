@@ -231,8 +231,23 @@ export interface AnthropicParsedResponse {
   }>;
   // Mapped to OpenAI's field names so the existing token accumulator
   // (which reads prompt_tokens / completion_tokens) keeps working.
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   thinking?: string;
+  /**
+   * Anthropic's stop reason. Surfaced verbatim so callers can detect
+   * `max_tokens` truncation, `refusal`, `pause_turn`, `stop_sequence`.
+   */
+  stopReason?: string;
+  /**
+   * Raw assistant content blocks as Anthropic returned them. Required for
+   * extended-thinking round-trip: when the next turn is an assistant
+   * continuation after a tool_result, the API rejects the request unless
+   * the previous turn's `thinking` block (with its `signature`) and any
+   * `redacted_thinking` blocks are echoed back verbatim. Callers wanting
+   * full round-trip safety should append a synthetic `assistant` message
+   * whose `content` is exactly this array.
+   */
+  rawAssistantBlocks?: any[];
 }
 
 /**
@@ -270,20 +285,56 @@ export function parseAnthropicResponse(data: any): AnthropicParsedResponse {
         },
       });
     }
+    // redacted_thinking blocks are deliberately preserved only via
+    // rawAssistantBlocks below — we never inspect their contents.
   }
-  const usage = data.usage
-    ? {
-        prompt_tokens: data.usage.input_tokens,
-        completion_tokens: data.usage.output_tokens,
-      }
-    : undefined;
+  let usage: AnthropicParsedResponse['usage'];
+  if (data.usage) {
+    usage = {
+      prompt_tokens: data.usage.input_tokens,
+      completion_tokens: data.usage.output_tokens,
+    };
+    if (typeof data.usage.cache_read_input_tokens === 'number') {
+      usage.cache_read_input_tokens = data.usage.cache_read_input_tokens;
+    }
+    if (typeof data.usage.cache_creation_input_tokens === 'number') {
+      usage.cache_creation_input_tokens = data.usage.cache_creation_input_tokens;
+    }
+  }
   const result: AnthropicParsedResponse = {
     content: textParts.join(''),
     usage,
+    stopReason: typeof data.stop_reason === 'string' ? data.stop_reason : undefined,
+    rawAssistantBlocks: blocks,
   };
   if (toolCalls.length > 0) result.toolCalls = toolCalls;
   if (thinkingParts.length > 0) result.thinking = thinkingParts.join('');
   return result;
+}
+
+/**
+ * Anthropic API error with HTTP status + retry-after for callers that want
+ * to back off on 429 / 529 instead of treating every failure the same.
+ */
+export class AnthropicApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public retryAfterMs?: number,
+    public errorType?: string,
+  ) {
+    super(message);
+    this.name = 'AnthropicApiError';
+  }
+}
+
+function parseRetryAfter(headerValue: string | null): number | undefined {
+  if (!headerValue) return undefined;
+  const asNumber = Number(headerValue);
+  if (Number.isFinite(asNumber) && asNumber >= 0) return Math.round(asNumber * 1000);
+  const asDate = Date.parse(headerValue);
+  if (Number.isFinite(asDate)) return Math.max(0, asDate - Date.now());
+  return undefined;
 }
 
 export interface CallAnthropicOptions extends AnthropicBuildOptions {
@@ -341,7 +392,22 @@ export async function callAnthropic(
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Anthropic API error: ${res.status} ${res.statusText} - ${errText}`);
+    const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'));
+    let errorType: string | undefined;
+    try {
+      const parsedErr = JSON.parse(errText);
+      errorType = parsedErr?.error?.type;
+    } catch {
+      errorType = undefined;
+    }
+    // 429 = rate_limit, 529 = overloaded — surface distinctly so callers
+    // (or BRAINROUTER retry policies) can back off rather than dying.
+    throw new AnthropicApiError(
+      `Anthropic API error: ${res.status} ${res.statusText} - ${errText}`,
+      res.status,
+      retryAfterMs,
+      errorType,
+    );
   }
 
   const data = await res.json() as any;
@@ -353,5 +419,7 @@ export async function callAnthropic(
     content: parsed.content,
     toolCalls: parsed.toolCalls,
     usage: parsed.usage,
+    stopReason: parsed.stopReason,
+    rawAssistantBlocks: parsed.rawAssistantBlocks,
   };
 }
