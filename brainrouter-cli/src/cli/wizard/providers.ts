@@ -136,7 +136,9 @@ const KNOWN_PREFIXES = [
   'sk-or-v1-',    // OpenRouter
   'sk-proj-',     // OpenAI scoped
   'dsk-',         // DeepSeek
-  'sk-ant-',      // Anthropic
+  // `sk-ant-` (Anthropic native) was removed in 0.3.9 alongside the
+  // /v1/messages adapter. Routing Claude through OpenRouter uses the
+  // `sk-or-v1-` prefix already covered above.
 ];
 
 export function validateApiKey(

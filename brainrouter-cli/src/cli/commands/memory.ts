@@ -36,6 +36,20 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       await printMemoryCards(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query }, `Cognitive recall · "${query}"`);
       return true;
     }
+    case '/refresh-memory': {
+      // 0.3.9 item 9 — clear the pinned memory anchor. The next briefing
+      // will re-pin as a fresh PIN action, replacing the previous anchor
+      // bytes in the immutable prefix slot. Provider prefix cache will
+      // miss exactly once on the following turn, then re-warm.
+      const hadAnchor = agent.hasPinnedMemoryAnchor();
+      agent.clearPinnedMemoryAnchor();
+      if (hadAnchor) {
+        console.log(chalk.cyan('\nMemory anchor cleared. Next turn will re-pin a fresh briefing.\n'));
+      } else {
+        console.log(chalk.gray('\nNo memory anchor was pinned. Next turn will pin the first available briefing.\n'));
+      }
+      return true;
+    }
     case '/briefing': {
       const b = agent.getLastBriefing();
       console.log(chalk.bold('\nLast Memory Briefing'));

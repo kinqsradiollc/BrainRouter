@@ -31,10 +31,13 @@ export interface ServerConfig {
 }
 
 export interface LLMConfig {
-  // 0.3.8-I6: `anthropic` opts the dispatch layer into the native
-  // `/v1/messages` adapter (see runtime/anthropicAdapter.ts). Every other
-  // provider stays on the OpenAI-compat `/v1/chat/completions` path.
-  provider: 'openai' | 'anthropic';
+  // 0.3.9: the only supported dispatch is OpenAI-compatible
+  // `/v1/chat/completions`. The Anthropic native `/v1/messages`
+  // adapter (added in 0.3.8-I6) was removed in 0.3.9 — Claude
+  // models can still be reached via an OpenAI-compatible gateway
+  // (OpenRouter / Together / Fireworks) by setting `provider: 'openai'`
+  // and pointing `endpoint` at the gateway base URL.
+  provider: 'openai';
   apiKey: string;
   model: string;
   endpoint?: string;
@@ -125,7 +128,8 @@ export function backfillApiKeyFromEnv(endpoint: string | undefined): string | un
     { endpoint: 'https://api.deepseek.com/v1',                      envKey: 'DEEPSEEK_API_KEY' },
     { endpoint: 'https://openrouter.ai/api/v1',                     envKey: 'OPENROUTER_API_KEY' },
     { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY' },
-    { endpoint: 'https://api.anthropic.com/v1',                     envKey: 'ANTHROPIC_API_KEY' },
+    // Anthropic native (api.anthropic.com / ANTHROPIC_API_KEY) was
+    // removed in 0.3.9 — Claude users now route through OpenRouter.
     { endpoint: 'http://localhost:1234/v1',                         envKey: 'LMSTUDIO_API_KEY' },
     { endpoint: 'http://localhost:11434/v1',                        envKey: 'OLLAMA_API_KEY' },
   ];

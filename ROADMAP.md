@@ -24,7 +24,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
 | **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
-| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing, source awareness, and CLI context parity | In progress |
+| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop (Reasonix-inspired) | In progress |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Federation: many agents, one memory; CLI multi-agent Phase 2 | Designed |
 | **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 3-6, brain-side multi-agent roadmap | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
@@ -53,7 +53,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - Quick wins carried from 0.3.7: `/schedule`, `/release-notes`, hooks
   JSON docs, Strict Tool-Call Recovery, per-vendor MCP snippets.
 
-### 0.3.9 — Improve Memory Briefing Before Federation
+### 0.3.9 — Memory Briefing + Cache-First Loop
+
+**Thread A — memory quality (items 1–7, shipped).**
 
 - Adaptive briefing trigger engine instead of blunt first-turn /
   post-compaction / entity-token gating.
@@ -65,6 +67,32 @@ in [`CHANGELOG.md`](CHANGELOG.md).
   sources were queried, and how many tokens were injected or avoided.
 - Read-only local source-sync spike to prepare the 0.4.x source chunk /
   vault work without adding durable schema yet.
+- Hook/policy memory guardrails (secret block, redaction, stale /
+  off-workspace warnings).
+- Local briefing-quality benchmark across six scenarios.
+
+**Thread B — Reasonix-inspired cache-first / repair / cost-control
+(items 8–14, designed, not yet implemented).**
+
+- ImmutablePrefix / AppendOnlyLog / VolatileScratch context regions so
+  the prefix is byte-stable across turns and provider prefix caches
+  actually hit. Reasonix's real-world dashboard: 99.82% cache hit,
+  ~97.7% off the un-cached baseline on a single day.
+- Memory briefing pinned into the immutable prefix as a synthetic tool
+  result — BrainRouter's unique combination of cache-first loop +
+  MCP-backed memory brain.
+- Per-turn cache-hit telemetry normalised across OpenAI / Anthropic /
+  DeepSeek response shapes, surfaced in `/tokens` and the Ink status
+  line.
+- Tool-call repair pipeline: schema flatten (>10-leaf / depth >2 → dot
+  notation), scavenge (recover calls leaked into `reasoning_content`),
+  truncation (rebalance JSON), storm (suppress identical repeats).
+- Turn-end tool-result auto-shrink that preserves the prefix; full raw
+  outputs remain in the transcript.
+- `<<<NEEDS_HIGH>>>` model self-escalation mapped to provider-specific
+  tier ladders.
+- Colored per-turn USD cost, session totals, and cache-savings figure
+  in the Ink top bar.
 
 ### 0.4.0 — Federation + Typed Delegation
 
