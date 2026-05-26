@@ -25,7 +25,9 @@ this changelog.
 
 ## [0.3.9] - Unreleased
 
-CLI memory briefing quality release before 0.4.0.
+CLI memory briefing quality **plus** Reasonix-inspired cache-first loop, tool-call repair, and cost-control. The pre-0.4.0 release.
+
+### Shipped within 0.3.9 (items 1–7)
 
 - **Adaptive briefing triggers.** Gated recall now reasons over first turn, post-compaction, continuation, memory/history, file path, debug/retry, recent tool failure, active-goal periodic refresh, and child-agent synthesis cues instead of only first-turn/post-compaction/entity-token checks.
 - **Source-aware briefing.** Auto-briefing can route across recall, working memory, task state, recall explanations, file history, and failed attempts, while degrading cleanly when optional MCP tools are absent.
@@ -35,6 +37,24 @@ CLI memory briefing quality release before 0.4.0.
 - **Memory capture redaction + secret block.** CLI turn capture redacts obvious secrets and now refuses the capture outright when credential-shaped tokens (`sk-…`, `ghp_…`, `AKIA…`, PEM keys, Slack `xox`) remain in the payload. Recall card previews are redacted to match the opaque-dump path.
 - **Memory policy warnings.** `/briefing` flags stale/superseded/needs-verification records and off-workspace path references in recalled content via a new `memoryPolicy` module.
 - **Briefing benchmark coverage.** Local tests cover trigger cases, compaction savings, and end-to-end `buildMemoryBriefing` runs against stub MCP for all six roadmap scenarios (first-turn, continuation, file-specific, debug retry, post-compaction, child synthesis).
+- **Slim provider catalog.** `/config provider` lists OpenAI / LM Studio / Ollama; OpenAI doubles as the OpenAI-compatible custom base URL flow. `/v1/models` live picker.
+- **Local-endpoint LLM timeouts.** New `brainrouter/src/memory/llm-response.ts` resolves long timeouts for LM Studio / Ollama loopback endpoints without overriding remote-endpoint defaults.
+- **Ink REPL polish.** New `fileIndex.ts` powers `@`-mention file picker, streaming row, paste handling, expanded `/workflow` commands, banner copy.
+
+### Shipped within 0.3.9 (items 8–14, Reasonix-inspired)
+
+- **Cache-first context regions.** `ImmutablePrefix` / `AppendOnlyLog` / `VolatileScratch` (`brainrouter-cli/src/runtime/contextRegions.ts`) so the prefix is byte-stable across turns; SHA-256 fingerprint emitted to tracing on every LLM call. Cites `openSrc/DeepSeek-Reasonix/src/memory/runtime.ts`.
+- **Prefix-pinned memory briefing.** Memory cards pinned into the immutable prefix as a synthetic system message; mid-session re-briefings append a mid-session refresh card to the log instead of rewriting the prefix. New `/refresh-memory` slash command; `BRAINROUTER_PREFIX_MEMORY_ANCHORS=off` env switch falls back to legacy behavior. **Unique to BrainRouter** — combines the Reasonix prefix-cache invariants with our MCP-backed memory brain.
+- **Cache-hit telemetry.** Normalise OpenAI (`prompt_tokens_details.cached_tokens`) and DeepSeek (`prompt_cache_hit_tokens`) cache fields; per-turn cache-hit % in `/tokens` and rolled into `lastTurnUsage` / `sessionUsage`.
+- **Tool-call repair pipeline.** `flatten` (>10-leaf / depth >2 → dot-notation), `scavenge` (recover calls leaked into the content channel), `truncation` (rebalance unbalanced JSON), `storm` (suppress identical-args loops with mutation-aware clearing). New `brainrouter-cli/src/agent/repair/` directory. Suppressed calls surface as `onToolEnd` events + synthetic `ERROR:` tool_results so OpenAI invariants hold.
+- **Turn-end tool-result auto-shrink.** Walks chat history at turn end and compacts oversized `role: tool` entries; full outputs remain in transcripts. `BRAINROUTER_TURN_END_RESULT_CAP_TOKENS` env override (default 3000).
+- **Model-tier self-escalation.** `<<<NEEDS_HIGH>>>` marker (with optional `:reason`) on the first line of a response triggers a one-step tier-up retry; bounded per turn so a marker-loop can't churn. Provider ladders for OpenAI / DeepSeek built in; new `/tier flash|standard|pro|auto` slash command persists the pin.
+- **Cost + cache panel.** `/tokens` now shows colored per-turn USD, session USD, cache savings vs. no-cache baseline. Pricing table at `runtime/pricing.ts`, overridable at `~/.config/brainrouter/pricing.json`.
+
+### Removed in 0.3.9
+
+- **Anthropic native provider support.** The `/v1/messages` adapter added in 0.3.8-I6 (`brainrouter-cli/src/runtime/anthropicAdapter.ts`) and its supporting surfaces (provider catalog entry, `sk-ant-` known prefix, `ANTHROPIC_API_KEY` env-detect row, Anthropic cache-stat branch, Anthropic tier ladder, `claude-*` pricing rows, Anthropic-native runtime tests) were removed. Claude models remain reachable via OpenAI-compatible gateways (OpenRouter, Together, Fireworks); set `provider: 'openai'` and point `endpoint` at the gateway base URL.
+- **Anthropic adapter test file.** `brainrouter-cli/src/tests/anthropic-adapter.test.ts` deleted alongside the adapter.
 
 ---
 

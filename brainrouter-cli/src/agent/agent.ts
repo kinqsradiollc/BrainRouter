@@ -46,8 +46,30 @@ import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
 import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
-import { shouldUseAnthropicNative, callAnthropic } from '../runtime/anthropicAdapter.js';
+// 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
+// 0.3.8 but never delivered enough cache-hit headroom or stability to justify
+// the second provider dispatch). Anthropic models can still be reached through
+// OpenAI-compatible gateways (OpenRouter, Together, etc.) on the OpenAI path.
 import { startSpan, traceEvent } from '../runtime/tracing.js';
+// 0.3.9 item 8 — cache-first context regions. The helper here lets us
+// fingerprint the cache-stable slice of every outbound chat request
+// without rewriting the legacy runTurn message plumbing.
+import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+// 0.3.9 item 10 — provider-normalised cache-hit accounting.
+import { extractCacheStats } from '../runtime/cacheStats.js';
+// 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
+// truncation / storm). Adapted from openSrc/DeepSeek-Reasonix/src/repair/.
+import { ToolCallRepair, type RepairReport } from './repair/index.js';
+// 0.3.9 item 12 — turn-end tool-result auto-shrink.
+import { shrinkOversizedToolResults } from './turnEndShrink.js';
+// 0.3.9 item 13 — model-tier self-escalation.
+import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../runtime/tierLadder.js';
+// 0.3.9 item 9 — prefix-pinned memory briefing policy.
+import {
+  decideAnchorAction,
+  hashBriefingContent,
+  wrapMidSessionRefresh,
+} from '../memory/anchorPin.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
 import { compactToolOutput } from '../prompt/toolCompaction.js';
@@ -719,6 +741,25 @@ export class Agent {
    */
   private lastKnownMcpTools?: Array<{ name: string }>;
   /**
+   * 0.3.9 item 9 — content hash of the currently pinned memory anchor.
+   * `null` means no anchor has been pinned yet this session (or
+   * /refresh-memory just cleared it). When set, subsequent briefings
+   * either no-op (same hash → STABLE) or append (different hash →
+   * APPEND) rather than rewriting the prefix system message.
+   */
+  private pinnedAnchorHash: string | null = null;
+  /**
+   * 0.3.9 item 11 — repair pipeline (lazy: instantiated on first use so
+   * the allowed-tool-names set reflects the live MCP inventory). Reset
+   * at the start of every fresh user turn via `resetStorm()` so a
+   * fresh intent doesn't inherit prior repetition state.
+   */
+  private toolCallRepair: ToolCallRepair | null = null;
+  /** 0.3.9 item 11 — last repair report, surfaced via /briefing debug. */
+  private lastRepairReport: RepairReport | null = null;
+  /** 0.3.9 item 13 — count of NEEDS_HIGH escalations this turn, bounded so a marker loop can't churn. */
+  private tierEscalationsThisTurn = 0;
+  /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
    * fresh recall pull unless a gated trigger fires. `recallNextTurnIsPost-
@@ -871,9 +912,15 @@ export class Agent {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
-    this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0 };
+    this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
     this.lastGoalTransition = undefined;
+    // 0.3.9 item 11 — clear the storm window for the new user intent.
+    // Old repetition state from the previous turn shouldn't suppress a
+    // fresh request that happens to use the same tool with the same args.
+    this.toolCallRepair?.resetStorm();
+    this.lastRepairReport = null;
+    this.tierEscalationsThisTurn = 0;
     // OTEL-style span: one trace per turn, tool calls become child spans.
     // When this Agent was spawned as a child, inherit the parent's traceId
     // + spanId so fan-out runs stitch into one tree across processes (or
@@ -1078,12 +1125,6 @@ export class Agent {
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed.
         const effort = resolveEffort(this.workspaceRoot).effort;
-        if (shouldUseAnthropicNative(this.llmConfig)) {
-          return await callAnthropic(this.llmConfig, this.chatHistory, allTools, {
-            effort,
-            onThinking: (text) => callbacks.onStatusUpdate(`Thinking: ${text.slice(0, 200)}`),
-          });
-        }
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
         // callback is supplied — silent mode / children / tests stay on
@@ -1156,10 +1197,60 @@ export class Agent {
           throw new Error(`LLM Execution failed: ${message}`);
         }
       }
+      // 0.3.9 item 13 — model-tier self-escalation. When the response
+      // starts with `<<<NEEDS_HIGH>>>` (with or without `:reason`), the
+      // model is telling us this task exceeds its current tier. Step
+      // the ladder one up, retry the same turn, and surface a yellow
+      // warning row. Pro-tier marker is a no-op. Bounded by a per-turn
+      // counter so a marker-emitting model can't loop forever.
+      const needsHigh = detectNeedsHigh(response.content);
+      if (needsHigh && (this.tierEscalationsThisTurn ?? 0) < 2) {
+        const provider = (this.llmConfig.provider ?? 'openai').toLowerCase();
+        const ladder = resolveTierLadder({ provider });
+        const cur = currentTier(this.llmConfig.model, ladder);
+        const next = nextTier(cur);
+        if (next && ladder.ladder[next] && ladder.ladder[next] !== this.llmConfig.model) {
+          this.tierEscalationsThisTurn = (this.tierEscalationsThisTurn ?? 0) + 1;
+          const before = this.llmConfig.model;
+          this.llmConfig = { ...this.llmConfig, model: ladder.ladder[next] };
+          traceEvent('tier.escalate', {
+            from: before,
+            to: this.llmConfig.model,
+            provider,
+            reason: needsHigh.reason ?? null,
+          });
+          callbacks.onStatusUpdate(
+            `⚠️ Tier escalation: ${before} → ${this.llmConfig.model}${needsHigh.reason ? ` — ${needsHigh.reason}` : ''}`,
+          );
+          // Retry the SAME turn on the new tier — skip pushing this
+          // half-answer into chatHistory and re-invoke the LLM.
+          continue;
+        }
+      }
+      // Strip the marker from the user-visible content regardless of
+      // whether we escalated (no-op on top-tier).
+      if (needsHigh) {
+        response.content = stripNeedsHigh(response.content);
+      }
+
       if (response.usage) {
         this.lastTurnUsage.promptTokens += response.usage.prompt_tokens ?? 0;
         this.lastTurnUsage.completionTokens += response.usage.completion_tokens ?? 0;
         this.lastTurnUsage.calls += 1;
+        // 0.3.9 item 10 — normalise provider cache fields (OpenAI /
+        // DeepSeek / Anthropic shapes) into a single counter so the
+        // /tokens panel and the usage.jsonl roll-up don't have to
+        // re-branch.
+        const cache = extractCacheStats(response.usage as any);
+        this.lastTurnUsage.cachedTokens += cache.cachedTokens;
+        this.lastTurnUsage.missedTokens += cache.missedTokens;
+        traceEvent('llm_call.cache_stats', {
+          model: this.llmConfig.model,
+          cachedTokens: cache.cachedTokens,
+          missedTokens: cache.missedTokens,
+          cacheHitRatio: cache.cacheHitRatio,
+          source: cache.source,
+        });
       }
 
       // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
@@ -1177,6 +1268,86 @@ export class Agent {
         });
         response.toolCalls = deduped;
       }
+
+      // 0.3.9 item 11 — run the Reasonix-style repair pipeline on the
+      // assistant's tool_calls before they reach dispatch:
+      //   • scavenge — recover calls leaked into the content channel;
+      //   • truncation — rebalance JSON in arguments cut off by
+      //     max_tokens;
+      //   • storm — suppress identical-args loops.
+      // `flatten` runs at registration time, not per-turn (see the
+      // schema-flatten patch in orchestration/tools.ts).
+      const allowedToolNames = new Set<string>(allTools.map((t: any) => t.name).filter(Boolean));
+      if (!this.toolCallRepair) {
+        this.toolCallRepair = new ToolCallRepair({
+          allowedToolNames,
+          isMutating: (call) => {
+            const n = call.function?.name ?? '';
+            return n === 'write_file' || n === 'edit_file' || n === 'apply_patch' || n === 'run_command';
+          },
+          isStormExempt: (call) => {
+            const n = call.function?.name ?? '';
+            return n === 'list_jobs' || n === 'get_status' || n === 'list_agents' || n === 'wait_agent' || n === 'wait_agents';
+          },
+        });
+      }
+      const repairInput = (response.toolCalls ?? []) as any[];
+      // Identify which originals were suppressed by storm/repair (by id) so
+      // we can synthesize matching ERROR tool_results and surface
+      // user-visible `onToolEnd` events. Otherwise the OpenAI invariant
+      // breaks (assistant tool_call with no paired tool_result) and the
+      // legacy "repeat guard tripped" UX regresses.
+      const survivingIds = new Set<string>();
+      const repaired = this.toolCallRepair.process(
+        repairInput.map((c) => ({ id: c.id, type: c.type, function: c.function })),
+        // OpenAI-compat callOpenAI() doesn't return reasoning_content
+        // separately yet — pass content as the secondary scavenge
+        // channel so DSML / leaked JSON in content is still caught.
+        null,
+        typeof response.content === 'string' ? response.content : null,
+      );
+      this.lastRepairReport = repaired.report;
+      for (const c of repaired.calls) if (c.id) survivingIds.add(c.id);
+      if (repaired.report.scavenged > 0 || repaired.report.truncationsFixed > 0 || repaired.report.stormsBroken > 0) {
+        traceEvent('tool_call.repair', {
+          scavenged: repaired.report.scavenged,
+          truncationsFixed: repaired.report.truncationsFixed,
+          truncationsUnrecoverable: repaired.report.truncationsUnrecoverable,
+          stormsBroken: repaired.report.stormsBroken,
+          notes: repaired.report.notes,
+        });
+        if (repaired.report.scavenged > 0) {
+          callbacks.onStatusUpdate(`Repair: scavenged ${repaired.report.scavenged} tool call${repaired.report.scavenged === 1 ? '' : 's'} from response content.`);
+        }
+      }
+      // Surface storm-suppressed originals as `onToolEnd` events so the
+      // user sees "repeat guard tripped (Nx <tool>)" and the model
+      // receives a paired ERROR tool_result on the next request.
+      const suppressedSynthetic: any[] = [];
+      if (repairInput.length > 0) {
+        for (const original of repairInput) {
+          if (original.id && survivingIds.has(original.id)) continue;
+          // The storm pipeline-level suppression was the only path that
+          // can drop a declared call without emitting its own
+          // tool_result. Mirror the legacy guard's user-visible summary.
+          const name = original.function?.name ?? 'unknown';
+          const summary = `repeat guard tripped (storm pipeline ${name})`;
+          callbacks.onToolStart?.(name, {});
+          callbacks.onToolEnd?.(name, { success: false, summary });
+          suppressedSynthetic.push({
+            role: 'tool',
+            tool_call_id: original.id,
+            name,
+            content: `ERROR: ${summary}. The same (name, args) pair fired more times than the pipeline-level storm guard allows. Pick a different action or call goal_blocked if no further path remains.`,
+            isError: true,
+          });
+        }
+      }
+      response.toolCalls = repaired.calls.length > 0 ? (repaired.calls as any[]) : undefined;
+      // Stash the synthetic tool_results to push AFTER the assistant
+      // message lands in chatHistory — preserve OpenAI's tool_call ↔
+      // tool_result ordering.
+      (response as any)._suppressedSyntheticResults = suppressedSynthetic;
       // Record Assistant message
       const assistantMsg: any = { role: 'assistant', content: response.content };
       if (response.toolCalls) {
@@ -1184,6 +1355,19 @@ export class Agent {
       }
       this.chatHistory.push(assistantMsg);
       this.recordTranscript(assistantMsg);
+
+      // 0.3.9 item 11 — flush any storm-suppressed synthetic tool_results
+      // immediately after the assistant message so the LLM sees them
+      // paired with the original tool_call ids. Done before the
+      // no-tool_calls early-exit because the assistantMsg may still
+      // carry some surviving calls (mixed case).
+      const syntheticResults = (response as any)._suppressedSyntheticResults as any[] | undefined;
+      if (syntheticResults && syntheticResults.length > 0) {
+        for (const r of syntheticResults) {
+          this.chatHistory.push(r);
+          this.recordTranscript(r);
+        }
+      }
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
@@ -1681,6 +1865,23 @@ export class Agent {
     this.sessionUsage.completionTokens += this.lastTurnUsage.completionTokens;
     this.sessionUsage.calls += this.lastTurnUsage.calls;
     this.sessionUsage.turns += 1;
+    // 0.3.9 item 10 — roll cache stats into session totals.
+    this.sessionUsage.cachedTokens += this.lastTurnUsage.cachedTokens;
+    this.sessionUsage.missedTokens += this.lastTurnUsage.missedTokens;
+
+    // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
+    // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
+    // replaced with the compacted version on the way out of the turn.
+    // Full raw outputs remain in the transcript layer.
+    const shrinkResult = shrinkOversizedToolResults(this.chatHistory);
+    if (shrinkResult.shrunkCount > 0) {
+      this.memoryMetrics.compactedToolCharsAvoided += shrinkResult.charsSaved;
+      traceEvent('turn_end.shrink', {
+        shrunkCount: shrinkResult.shrunkCount,
+        charsSaved: shrinkResult.charsSaved,
+        tokensSaved: shrinkResult.tokensSaved,
+      });
+    }
     return finalAnswer;
   }
 
@@ -2055,6 +2256,14 @@ export class Agent {
   }
 
   /**
+   * 0.3.9 item 13 — read-only snapshot of the active LLM config for
+   * slash commands that need the provider id (e.g. `/tier`).
+   */
+  public getLlmConfig(): LLMConfig {
+    return { ...this.llmConfig };
+  }
+
+  /**
    * Runtime LLM config swap — `/config` calls this after persisting
    * provider / apiKey / endpoint changes so the LIVE agent picks up the
    * new values without a CLI restart. Pre-0.3.10 only `setModel` existed,
@@ -2107,10 +2316,27 @@ export class Agent {
   }
 
   /** Cumulative token usage across the last runTurn. Cleared at each new turn. */
-  public lastTurnUsage: { promptTokens: number; completionTokens: number; calls: number } = { promptTokens: 0, completionTokens: 0, calls: 0 };
+  public lastTurnUsage: {
+    promptTokens: number;
+    completionTokens: number;
+    calls: number;
+    /** 0.3.9 item 10 — provider-normalised cache hit (prefix-cache served). */
+    cachedTokens: number;
+    /** 0.3.9 item 10 — provider-normalised cache miss (full input price). */
+    missedTokens: number;
+    /** Last call's `prefixFingerprint` (item 8). Lets `/tokens` show whether the prefix was stable. */
+    lastPrefixFingerprint?: string;
+  } = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
 
   /** Cumulative token usage across the WHOLE CLI session (all turns). */
-  public sessionUsage: { promptTokens: number; completionTokens: number; calls: number; turns: number } = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+  public sessionUsage: {
+    promptTokens: number;
+    completionTokens: number;
+    calls: number;
+    turns: number;
+    cachedTokens: number;
+    missedTokens: number;
+  } = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
 
   /**
    * Memory-derived savings counters. These let `/tokens` produce a "memory
@@ -2196,7 +2422,7 @@ export class Agent {
    * matches the displayed sessionKey.
    */
   public resetSessionCounters(): void {
-    this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+    this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
     this.memoryMetrics = {
       briefingTokensInjected: 0,
       offloadCharsAvoided: 0,
@@ -2208,6 +2434,26 @@ export class Agent {
     this.recallNextTurnIsPostCompaction = false;
     this.turnsSinceLastFullBriefing = 0;
     this.recentToolFailure = undefined;
+    // 0.3.9 item 9 — also clear any pinned memory anchor so the new
+    // session starts with a fresh PIN on its first briefing.
+    this.pinnedAnchorHash = null;
+  }
+
+  /**
+   * Clear the pinned memory anchor so the next briefing re-pins. Called
+   * by the `/refresh-memory` slash command — see
+   * `brainrouter-cli/src/cli/commands/memory.ts`. The actual chat
+   * history entry will be replaced on the next `injectRecallContext()`
+   * call (PIN action) once the new briefing is built.
+   */
+  public clearPinnedMemoryAnchor(): void {
+    this.pinnedAnchorHash = null;
+    this.removeTaggedSystemMessage('memory-briefing');
+  }
+
+  /** Inspectable getter used by `/briefing` and tests. */
+  public hasPinnedMemoryAnchor(): boolean {
+    return this.pinnedAnchorHash !== null;
   }
 
   /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
@@ -2437,7 +2683,38 @@ export class Agent {
     };
 
     if (briefing.block) {
-      this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
+      // 0.3.9 item 9 — route the briefing through the anchor-pin policy.
+      // When pinning is enabled (default), the *first* briefing of the
+      // session lands in the tagged system slot (cache-stable). Subsequent
+      // turns that produce identical content are a no-op; turns with new
+      // content append a "mid-session refresh" message instead of
+      // rewriting the prefix, preserving the provider's prefix cache.
+      const newHash = hashBriefingContent(briefing.block);
+      const anchorDecision = decideAnchorAction({
+        newContentHash: newHash,
+        pinnedHash: this.pinnedAnchorHash,
+        envSetting: process.env.BRAINROUTER_PREFIX_MEMORY_ANCHORS,
+      });
+      switch (anchorDecision.action) {
+        case 'PIN':
+          this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
+          this.pinnedAnchorHash = anchorDecision.nextPinnedHash;
+          break;
+        case 'STABLE':
+          // Pinned content is still authoritative — do not touch the
+          // chat history. This is the cache-hit-preserving branch.
+          break;
+        case 'APPEND':
+          this.chatHistory.push({
+            role: 'system',
+            content: wrapMidSessionRefresh(briefing.block),
+          });
+          break;
+        case 'LEGACY':
+        default:
+          this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
+          break;
+      }
       callbacks.onStatusUpdate(
         `Memory briefing loaded: ${briefing.sourcesQueried.join(', ')} (${briefing.recalledRecordIds.length} records).`,
       );
@@ -2996,11 +3273,10 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  * Borrowed shape from openai-node's `ReasoningEffort` enum
  * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
  * straight through to the provider field across OpenAI, DeepSeek,
- * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic models
- * (`claude-*`) use a different field shape (`thinking: { budget_tokens }`)
- * and a different endpoint (`/v1/messages`), so they're intentionally
- * skipped here — brainrouter would need a separate provider adapter to
- * forward into Anthropic's native API.
+ * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic-native
+ * support was removed in 0.3.9; Claude models can still be reached
+ * through OpenRouter / Together / other OpenAI-compatible gateways
+ * that handle the field translation upstream.
  */
 
 /**
@@ -3147,6 +3423,21 @@ export async function callOpenAI(
 
   const body = buildChatCompletionPayload(config, messages, tools, options);
 
+  // 0.3.9 item 8 — emit the cache-stable prefix fingerprint for this
+  // request. When tracing is disabled this resolves to a no-op
+  // (traceEvent short-circuits on missing BRAINROUTER_TRACE_LOG). When
+  // it's on, downstream items can correlate the fingerprint against
+  // the provider's cache_hit telemetry (item 10) to confirm the prefix
+  // is staying byte-stable across turns.
+  const prefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    prefixFingerprint,
+    promptMessages: body.messages.length,
+    toolCount: body.tools?.length ?? 0,
+  });
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
   };
@@ -3280,6 +3571,19 @@ export async function callOpenAIStream(
   const body: any = buildChatCompletionPayload(config, messages, tools, options);
   body.stream = true;
   body.stream_options = { include_usage: true };
+
+  // 0.3.9 item 8 — fingerprint the cache-stable prefix for this stream
+  // call too. Item 10 will correlate this with the SSE-final usage row
+  // when the provider exposes a `cached_tokens` field.
+  const streamPrefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    prefixFingerprint: streamPrefixFingerprint,
+    promptMessages: body.messages.length,
+    toolCount: body.tools?.length ?? 0,
+    stream: true,
+  });
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

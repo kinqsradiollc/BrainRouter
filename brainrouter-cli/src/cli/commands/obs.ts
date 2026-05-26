@@ -140,6 +140,63 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         console.log(chalk.gray(`  Offload ratio: ~${display} saved per token spent.`));
       }
       console.log(chalk.gray('\n  (Offload is measured; briefing tokens are an information-gain stat, not a savings number.)\n'));
+
+      // 0.3.9 item 10 — prefix-cache panel. The numbers come from the
+      // provider's own cache fields normalised by
+      // `runtime/cacheStats.ts`. When both counters are zero the
+      // provider either doesn't expose cache info (LM Studio /
+      // Ollama / older endpoints) or this session hasn't yet seen a
+      // turn — print "—" instead of misleading 0% / 0.
+      const { formatCacheStats } = await import('../../runtime/cacheStats.js');
+      const turnCache = formatCacheStats({
+        cachedTokens: agent.lastTurnUsage.cachedTokens,
+        missedTokens: agent.lastTurnUsage.missedTokens,
+        cacheHitRatio: (agent.lastTurnUsage.cachedTokens + agent.lastTurnUsage.missedTokens) > 0
+          ? agent.lastTurnUsage.cachedTokens / (agent.lastTurnUsage.cachedTokens + agent.lastTurnUsage.missedTokens)
+          : 0,
+        source: 'unknown',
+      });
+      const sessionCache = formatCacheStats({
+        cachedTokens: agent.sessionUsage.cachedTokens,
+        missedTokens: agent.sessionUsage.missedTokens,
+        cacheHitRatio: (agent.sessionUsage.cachedTokens + agent.sessionUsage.missedTokens) > 0
+          ? agent.sessionUsage.cachedTokens / (agent.sessionUsage.cachedTokens + agent.sessionUsage.missedTokens)
+          : 0,
+        source: 'unknown',
+      });
+      console.log(chalk.bold('Prefix cache'));
+      console.log(`  Last turn:   ${chalk.cyan(turnCache)}`);
+      console.log(`  This session: ${chalk.cyan(sessionCache)}`);
+      console.log(chalk.gray('  (Anchored briefing — /refresh-memory rotates the pin if you want a fresh card set.)'));
+
+      // 0.3.9 item 14 — cost panel. Per-turn USD, session USD, and the
+      // cache-savings line. Costs are computed from the active model's
+      // built-in pricing row (`runtime/pricing.ts`), overridable via
+      // `~/.config/brainrouter/pricing.json` for users who want exact
+      // billing parity with their actual contract.
+      const { buildCostSummary } = await import('../../runtime/pricing.js');
+      const cost = buildCostSummary({
+        model: agent.getModel(),
+        turnCachedTokens: agent.lastTurnUsage.cachedTokens,
+        turnMissedTokens: agent.lastTurnUsage.missedTokens,
+        turnCompletionTokens: agent.lastTurnUsage.completionTokens,
+        sessionCachedTokens: agent.sessionUsage.cachedTokens,
+        sessionMissedTokens: agent.sessionUsage.missedTokens,
+        sessionCompletionTokens: agent.sessionUsage.completionTokens,
+      });
+      const bandColor = (band: 'green' | 'yellow' | 'red' | 'mono'): (s: string) => string => {
+        if (band === 'green') return chalk.green;
+        if (band === 'yellow') return chalk.yellow;
+        if (band === 'red') return chalk.red;
+        return chalk.gray;
+      };
+      console.log(chalk.bold('\nCost (built-in pricing — overridable at ~/.config/brainrouter/pricing.json)'));
+      console.log(`  Turn:        ${bandColor(cost.turnBadge.band)(cost.turnBadge.text)}  ${chalk.gray(`(model: ${agent.getModel()})`)}`);
+      console.log(`  Session:     ${bandColor(cost.sessionBadge.band)(cost.sessionBadge.text)}`);
+      if (cost.sessionCacheSavedUsd > 0) {
+        console.log(`  Cache saved: ${chalk.green(`$${cost.sessionCacheSavedUsd.toFixed(4)}`)} ${chalk.gray('this session vs. no-cache baseline.')}`);
+      }
+      console.log();
       return true;
     }
     case '/feedback':

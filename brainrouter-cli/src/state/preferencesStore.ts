@@ -75,6 +75,13 @@ export interface Preferences {
    * `/effort` and the `BRAINROUTER_EFFORT` env override.
    */
   effort: EffortLevel;
+  /**
+   * 0.3.9 item 13 — model-tier pin. `flash | standard | pro` pin the
+   * model for the rest of the session through `/tier`. `null` (the
+   * default) means "follow the model field as-is; allow self-escalation
+   * via the <<<NEEDS_HIGH>>> marker".
+   */
+  tier?: 'flash' | 'standard' | 'pro' | null;
 }
 
 const DEFAULT: Preferences = {

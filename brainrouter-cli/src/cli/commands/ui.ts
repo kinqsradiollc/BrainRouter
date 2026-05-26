@@ -408,6 +408,41 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       }
       return true;
     }
+    case '/tier':
+    {
+      const { resolveTierLadder, currentTier } = await import('../../runtime/tierLadder.js');
+      const arg = (args[0] ?? '').toLowerCase();
+      const prefs = readPreferences(agent.workspaceRoot);
+      const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();
+      const ladder = resolveTierLadder({ provider });
+      if (!arg) {
+        const model = agent.getModel?.() ?? '?';
+        const cur = currentTier(model, ladder);
+        const pinned = prefs.tier ?? null;
+        console.log(chalk.bold(`\nModel tier: ${chalk.cyan(cur ?? 'unknown')}${pinned ? chalk.gray(` (pinned: ${pinned})`) : ''}`));
+        console.log(`  Provider: ${chalk.gray(provider)}`);
+        console.log(`  Ladder:   ${chalk.gray(`flash=${ladder.ladder.flash}, standard=${ladder.ladder.standard}, pro=${ladder.ladder.pro}`)}`);
+        console.log(chalk.gray('  When the model emits `<<<NEEDS_HIGH>>>` (with optional reason), the runtime'));
+        console.log(chalk.gray('  retries the same turn on the next tier up. Auxiliary calls always pin to the'));
+        console.log(chalk.gray('  lowest tier; pro-tier marker is a no-op.'));
+        console.log(chalk.gray('  Toggle with: /tier flash | /tier standard | /tier pro | /tier auto\n'));
+        return true;
+      }
+      if (arg === 'auto' || arg === 'off') {
+        writePreferences(agent.workspaceRoot, { tier: null });
+        console.log(chalk.green('\n✓ Tier pin removed. Self-escalation re-enabled.\n'));
+        return true;
+      }
+      if (arg !== 'flash' && arg !== 'standard' && arg !== 'pro') {
+        console.log(chalk.red(`\nUnknown tier "${arg}". Choose: flash | standard | pro | auto\n`));
+        return true;
+      }
+      const newModel = ladder.ladder[arg as 'flash' | 'standard' | 'pro'];
+      writePreferences(agent.workspaceRoot, { tier: arg as 'flash' | 'standard' | 'pro' });
+      agent.setModel?.(newModel);
+      console.log(chalk.green(`\n✓ Tier pinned to ${arg} (model → ${newModel}).\n`));
+      return true;
+    }
     case '/quiet':
     {
       const prefs = readPreferences(agent.workspaceRoot);

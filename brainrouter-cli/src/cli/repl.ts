@@ -35,7 +35,7 @@ export const SLASH_COMMANDS = [
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
-  '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
+  '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
   '/continue', '/auto-review', '/vim', '/statusline', '/quiet', '/release-notes',
@@ -43,7 +43,7 @@ export const SLASH_COMMANDS = [
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
   '/tokens', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
-  '/theme', '/title', '/personality', '/effort', '/new', '/side', '/btw', '/raw',
+  '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
@@ -87,6 +87,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/memory <query>', desc: 'Search long-term memory (memory_search)' },
       { cmd: '/recall <query>', desc: 'Explicit cognitive recall (no LLM turn)' },
       { cmd: '/briefing', desc: 'Show what was recalled before the most recent turn' },
+      { cmd: '/refresh-memory', desc: 'Clear the pinned memory anchor; next turn re-pins a fresh briefing' },
       { cmd: '/scenes', desc: 'List active focus scenes' },
       { cmd: '/working', desc: 'Show the working-memory canvas' },
       { cmd: '/working reset confirm', desc: 'Clear the canvas' },
