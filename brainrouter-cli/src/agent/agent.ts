@@ -32,6 +32,7 @@ import {
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
   countEntityTokens as countEntityTokensFromText,
   decideMemoryBriefing,
@@ -2224,12 +2225,19 @@ export class Agent {
     }
 
     try {
+      const userContent = redactText(prompt);
+      const assistantContent = redactText(finalAnswer);
+      const policy = assessCapturePayload(`${userContent}\n${assistantContent}`);
+      if (policy.blocked) {
+        callbacks?.onMemoryEvent?.({ kind: 'skipped', reason: policy.reason ?? 'capture blocked by policy' });
+        return;
+      }
       const captureRes = await this.mcpClient.callTool('memory_capture_turn', {
         sessionKey: this.sessionKey,
         activeSkill: this.activeSkill,
         messages: [
-          { role: 'user', content: redactText(prompt), timestamp },
-          { role: 'assistant', content: redactText(finalAnswer), timestamp: Date.now() },
+          { role: 'user', content: userContent, timestamp },
+          { role: 'assistant', content: assistantContent, timestamp: Date.now() },
         ],
       });
       // Parse the structured result so the REPL can tell "wrote 2 sensory + 0
