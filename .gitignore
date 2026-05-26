@@ -23,6 +23,11 @@ build/
 out/
 .next/
 
+# Synthesized at publish time from brainrouter-changelog/ via
+# brainrouter-cli/package.json#sync-changelog. Source of truth is the
+# top-level brainrouter-changelog/ folder.
+brainrouter-cli/changelog/
+
 # Env
 .env
 .env.local

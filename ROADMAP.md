@@ -11,10 +11,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| Latest shipped | **0.3.7** | Shipped — 2026-05-25 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-25) |
-| Current release | **0.3.8** | Planned | [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) |
-| Next patch | **0.3.8** | Planned | [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) |
-| Next major | **0.4.0** | Designed | [`brainrouter-roadmap/0.4.0.md`](brainrouter-roadmap/0.4.0.md) |
+| Latest shipped | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
+| Current release | **0.3.9** | Planned | [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) |
+| Previous | **0.3.7** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-26) |
 
 ---
 
@@ -23,8 +22,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | Release | Theme | Status |
 |---|---|---|
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
-| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-25 |
-| **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Planned |
+| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
+| **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
+| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing, source awareness, and CLI context parity | Planned |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Federation: many agents, one memory; CLI multi-agent Phase 2 | Designed |
 | **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 3-6, brain-side multi-agent roadmap | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
@@ -47,9 +47,24 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - Clear foreground `task_agent` vs background `delegate_agent`
   semantics.
 - Visible child-agent progress in Ink.
+- Visible in-chat `ask_user_choice` and `askYesNo` overlays in the Ink
+  REPL, including multi-select question prompts.
 - Safe parallel execution for independent read tools.
 - Quick wins carried from 0.3.7: `/schedule`, `/release-notes`, hooks
   JSON docs, Strict Tool-Call Recovery, per-vendor MCP snippets.
+
+### 0.3.9 — Improve Memory Briefing Before Federation
+
+- Adaptive briefing trigger engine instead of blunt first-turn /
+  post-compaction / entity-token gating.
+- Source-aware briefing router for recall, working memory, task state,
+  file history, failed attempts, and recall explanations.
+- TokenJuice-lite CLI context compaction for large tool outputs while
+  preserving full transcripts.
+- `/briefing` inspector that explains why memory fired or skipped, which
+  sources were queried, and how many tokens were injected or avoided.
+- Read-only local source-sync spike to prepare the 0.4.x source chunk /
+  vault work without adding durable schema yet.
 
 ### 0.4.0 — Federation + Typed Delegation
 
@@ -86,6 +101,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | File | Purpose |
 |---|---|
 | [`brainrouter-roadmap/README.md`](brainrouter-roadmap/README.md) | Roadmap index and release table |
+| [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) | Pre-0.4 memory briefing and source-awareness plan |
 | [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) | Immediate CLI delegation reliability plan |
 | [`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md`](FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md) | CLI multi-agent architecture and rationale |
 | [`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md`](FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md) | CLI multi-agent implementation checklist |

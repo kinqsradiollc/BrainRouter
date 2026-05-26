@@ -40,6 +40,7 @@ export interface PickerProps {
   footer?: string;
   rows: PickerRow[];
   initialCursor?: number;
+  multiSelect?: boolean;
   allowOther?: boolean;
   otherLabel?: string;
   otherDescription?: string;
@@ -61,6 +62,7 @@ export interface PickerProps {
 
 export type PickerResult =
   | { kind: 'pick'; id: string }
+  | { kind: 'multi'; id: string; ids: string[]; otherText?: string }
   | { kind: 'other'; text: string }
   | { kind: 'cancelled' };
 
@@ -89,6 +91,7 @@ export function Picker(props: PickerProps) {
   const [cursor, setCursor] = useState(() =>
     Math.max(0, Math.min(props.initialCursor ?? 0, augmentedRows.length - 1)),
   );
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [phase, setPhase] = useState<'pick' | 'other'>(
     props.prefilledOther !== undefined ? 'other' : 'pick',
   );
@@ -166,11 +169,31 @@ export function Picker(props: PickerProps) {
     }
     if (key.return) {
       const row = augmentedRows[cursor];
+      if (props.multiSelect) {
+        if (selected.size === 0) return;
+        if (selected.has(OTHER_ID)) {
+          setPhase('other');
+          return;
+        }
+        const ids = augmentedRows.filter((r) => selected.has(r.id)).map((r) => r.id);
+        finish({ kind: 'multi', id: ids[0] ?? '', ids });
+        return;
+      }
       if (row.id === OTHER_ID) {
         setPhase('other');
         return;
       }
       finish({ kind: 'pick', id: row.id });
+      return;
+    }
+    if (input === ' ' && props.multiSelect) {
+      const row = augmentedRows[cursor];
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(row.id)) next.delete(row.id);
+        else next.add(row.id);
+        return next;
+      });
       return;
     }
     if (key.escape || input === 'q') {
@@ -181,13 +204,15 @@ export function Picker(props: PickerProps) {
 
   const footer = props.footer ?? (phase === 'other'
     ? '↵ accept  ·  esc back  ·  ⌫ erase'
-    : '↑/↓ navigate  ·  ↵ confirm  ·  esc / q cancel');
+    : props.multiSelect
+      ? '↑/↓ navigate  ·  space toggle  ·  ↵ confirm  ·  esc / q cancel'
+      : '↑/↓ navigate  ·  ↵ confirm  ·  esc / q cancel');
   const accent = props.accentColor ?? themeToAccent(props.theme?.mode) ?? '#CC9166';
 
   return (
     <Frame title={props.title} subtitle={props.subtitle} badge={props.badge} footer={footer} accentColor={accent}>
       {phase === 'pick' ? (
-        <PickerRows rows={augmentedRows} cursor={cursor} accentColor={accent} />
+        <PickerRows rows={augmentedRows} cursor={cursor} accentColor={accent} multiSelect={!!props.multiSelect} selected={selected} />
       ) : (
         <Box flexDirection="column">
           <Text bold color={accent}>› Type your answer</Text>
@@ -200,6 +225,15 @@ export function Picker(props: PickerProps) {
               onSubmit={(value) => {
                 const trimmed = value.trim();
                 if (!trimmed) return;
+                if (props.multiSelect) {
+                  finish({
+                    kind: 'multi',
+                    id: augmentedRows.find((r) => selected.has(r.id) && r.id !== OTHER_ID)?.id ?? '',
+                    ids: augmentedRows.filter((r) => selected.has(r.id) && r.id !== OTHER_ID).map((r) => r.id),
+                    otherText: trimmed,
+                  });
+                  return;
+                }
                 finish({ kind: 'other', text: trimmed });
               }}
             />
@@ -215,23 +249,24 @@ export function Picker(props: PickerProps) {
   );
 }
 
-function PickerRows({ rows, cursor, accentColor }: { rows: PickerRow[]; cursor: number; accentColor: string }) {
+function PickerRows({ rows, cursor, accentColor, multiSelect, selected }: { rows: PickerRow[]; cursor: number; accentColor: string; multiSelect: boolean; selected: Set<string> }) {
   return (
     <Box flexDirection="column">
       {rows.map((row, i) => (
-        <PickerRowView key={row.id} row={row} selected={i === cursor} accentColor={accentColor} />
+        <PickerRowView key={row.id} row={row} selected={i === cursor} accentColor={accentColor} multiSelect={multiSelect} checked={selected.has(row.id)} />
       ))}
     </Box>
   );
 }
 
-function PickerRowView({ row, selected, accentColor }: { row: PickerRow; selected: boolean; accentColor: string }) {
+function PickerRowView({ row, selected, accentColor, multiSelect, checked }: { row: PickerRow; selected: boolean; accentColor: string; multiSelect: boolean; checked: boolean }) {
   // Selected glyph + bold label + right-aligned value, lifted from
   // openSrc/grok-cli/src/ui/components/SuggestionOverlay.tsx
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={accentColor}>{selected ? ' › ' : '   '}</Text>
+        {multiSelect ? <Text color={checked ? accentColor : 'gray'}>{checked ? '[x] ' : '[ ] '}</Text> : null}
         <Box flexGrow={1}>
           <Text bold={selected} color={selected ? accentColor : undefined}>{row.label}</Text>
         </Box>

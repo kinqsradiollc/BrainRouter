@@ -26,6 +26,7 @@ import { setActiveReadline } from '../cliPrompt.js';
 import { ChatApp, type ChatController, type PushScrollback } from './ChatApp.js';
 import type { SlashCommandDef } from './SlashPalette.js';
 import { handleSlashCommand, lookupSlashDescription, SLASH_COMMANDS } from '../repl.js';
+import { startScheduleTicker, type ScheduleTickerHandle } from '../../runtime/scheduleTicker.js';
 import { formatToolCall } from './toolFormat.js';
 import { setAmbientChat } from './ambientChat.js';
 import { captureConsoleOutput } from './consoleCapture.js';
@@ -326,7 +327,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
       const u = agent.lastTurnUsage;
       const tokens = u.calls > 0 ? `  ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓` : '';
-      controller!.push.setStatus(`${status}  ${elapsed}s${tokens}`);
+      // When children are alive — typically because the parent is in a
+      // wait_agent / wait_agents / R1 guardrail auto-drain — append a
+      // compact "running children" row so the parent never looks frozen.
+      const childrenRow = runningChildren.size > 0 ? `  · ${formatRunningChildrenRow()}` : '';
+      controller!.push.setStatus(`${status}  ${elapsed}s${tokens}${childrenRow}`);
     };
 
     // Per-tool start time + args — agent.runTurn fires onToolStart with
@@ -338,6 +343,24 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     // start time wins, slightly under-counting concurrent invocations).
     const toolStartTimes = new Map<string, number>();
     const toolArgsSnapshot = new Map<string, Record<string, any>>();
+    // Stash child tool args between onChildToolStart and onChildToolEnd so the
+    // end row can render `Read(foo.ts)` instead of just `read_file`. Keyed by
+    // `${childId}:${tool}` so two children running the same tool don't collide.
+    const childToolArgs = new Map<string, Record<string, any>>();
+    // Currently-running children for the compact "running children" status row.
+    // Maintained from onChildToolStart / onChildComplete (the only signals the
+    // REPL gets about child lifecycle that don't require re-reading sessions).
+    const runningChildren = new Map<string, { role: string; tool?: string }>();
+    const formatRunningChildrenRow = (): string => {
+      if (runningChildren.size === 0) return '';
+      const parts: string[] = [];
+      for (const [id, info] of runningChildren) {
+        const idShort = id.slice(0, 8);
+        const tail = info.tool ? ` ${info.tool}` : '';
+        parts.push(`${id.startsWith('agent-') ? id.slice(0, 14) : 'agent-' + idShort} (${info.role}${tail})`);
+      }
+      return `running children: ${parts.join(', ')}`;
+    };
     try {
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
@@ -376,7 +399,48 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           controller!.push.plan(items, explanation);
           tickStatus('Thinking');
         },
+        onChildToolStart: (event) => {
+          const key = `${event.childId}:${event.tool}`;
+          childToolArgs.set(key, event.args ?? {});
+          const prior = runningChildren.get(event.childId);
+          runningChildren.set(event.childId, { role: event.role, tool: event.tool });
+          // Live status row so the user sees WHICH children are alive while
+          // the parent is waiting. Quiet-mode rule: still surface long-running
+          // child state — it's the user's only signal that the parent isn't stuck.
+          const row = formatRunningChildrenRow();
+          if (row) controller!.push.setStatus(row);
+          // First-tool notice: emit a one-line "child started" row so the
+          // scrollback shows the child began before any tool finishes. Quiet
+          // mode suppresses this; the paired end row below is enough.
+          if (!prior && !isQuiet()) {
+            const idShort = event.childId.slice(0, 8);
+            const idLabel = event.childId.startsWith('agent-') ? event.childId.slice(0, 14) : 'agent-' + idShort;
+            controller!.push.notice(`▶ ${idLabel} (${event.role}) running...`, 'info');
+          }
+        },
+        onChildToolEnd: (event) => {
+          const key = `${event.childId}:${event.tool}`;
+          const args = childToolArgs.get(key);
+          childToolArgs.delete(key);
+          // Tool finished — null out the tool field so the running-children
+          // status row stops showing a stale tool name.
+          const cur = runningChildren.get(event.childId);
+          if (cur) runningChildren.set(event.childId, { role: cur.role, tool: undefined });
+          const idShort = event.childId.slice(0, 8);
+          const idLabel = event.childId.startsWith('agent-') ? event.childId.slice(0, 14) : 'agent-' + idShort;
+          const inner = formatToolCall(event.tool, args);
+          const header = `[${idLabel} ${event.role}] ${inner}`;
+          // Quiet-mode rule (carried from R1): hide noisy success previews,
+          // but still print the paired row so the user has a visible signal
+          // that the child made progress.
+          controller!.push.tool(header, event.ok, {
+            preview: !isQuiet() ? event.preview : undefined,
+            durationMs: event.durationMs,
+          });
+          tickStatus('Thinking');
+        },
         onChildComplete: (event) => {
+          runningChildren.delete(event.childId);
           const ok = event.status === 'completed';
           const head = ok
             ? `🏁 Agent ${event.childId} (${event.role}) completed`
@@ -459,6 +523,38 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }
   };
 
+  // Background `/schedule` ticker. Single in-process timer; fires due
+  // cron/one-shot jobs by re-injecting their slash command through the
+  // same dispatcher the user uses. Filtered by sessionKey so a tick
+  // only fires jobs owned by THIS REPL — schedules registered in a
+  // different session sit idle until that session is open. Stops in
+  // the `waitUntilExit` handlers below so /exit and ^C clean up.
+  let scheduleTicker: ScheduleTickerHandle | null = null;
+  const startTicker = () => {
+    if (scheduleTicker) return;
+    scheduleTicker = startScheduleTicker({
+      workspaceRoot: agent.workspaceRoot,
+      sessionKey: agent.sessionKey,
+      fire: (command, sched) => {
+        if (!controller) return;
+        if (isProcessing) {
+          // Catch-up rule: only fire ONCE per missed window. The ticker
+          // has already advanced nextRun past `now`, so silently
+          // dropping a busy-session fire is correct — it won't refire
+          // for the same minute.
+          controller.push.notice(`(schedule ${sched.id} fired while a turn was in flight — skipped)`, 'warn');
+          return;
+        }
+        const parts = command.trim().split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+        const args = parts.slice(1);
+        controller.push.notice(`⏰ Schedule ${sched.id} → ${command}`, 'info');
+        void dispatchSlash(cmd, args, shim);
+      },
+      onError: (msg) => controller?.push.notice(`[schedule] ${msg}`, 'warn'),
+    });
+  };
+
   // Mount Ink. We DON'T set `patchConsole: false` — Ink's default
   // (patchConsole enabled) is exactly what we want: legacy slash
   // commands that still write via chalk + console.log have their
@@ -493,6 +589,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           });
           refreshFooter();
           armIdleHint();
+          startTicker();
         }}
         onAccessModeCycle={() => {
           const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
@@ -552,6 +649,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       setAmbientChat(undefined);
       cleanupResizeClear();
       clearIdleHint();
+      try { scheduleTicker?.stop(); } catch { /* noop */ }
+      scheduleTicker = null;
       try { await mcpClient.close(); } catch { /* already closed */ }
       // Goodbye line is intentionally printed AFTER Ink unmounts so it
       // doesn't get caught inside the redraw region.
@@ -563,6 +662,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       setAmbientChat(undefined);
       cleanupResizeClear();
       clearIdleHint();
+      try { scheduleTicker?.stop(); } catch { /* noop */ }
+      scheduleTicker = null;
       try { await mcpClient.close(); } catch { /* already closed */ }
       resolve();
     });

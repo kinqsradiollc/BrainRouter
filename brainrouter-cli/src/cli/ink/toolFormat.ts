@@ -11,7 +11,7 @@
  *
  * — one-line, identity-revealing, no JSON. These helpers do the same
  * mapping for our built-in LOCAL_TOOLS (cli/../agent/agent.ts) + MCP
- * tool names (which carry an `mcp__<server>__` namespace prefix that
+ * tool names (which carry an `mcp_<server>_` namespace prefix that
  * the user doesn't care about).
  *
  * Reference for the convention: claude-code transcripts (see
@@ -29,10 +29,12 @@
  *     → "Bash(npm test)"
  *   formatToolCall('grep_search', { query: 'authenticate', path: '.' })
  *     → 'Grep("authenticate")'
- *   formatToolCall('mcp__brainrouter__memory_search', { q: 'auth' })
+ *   formatToolCall('mcp_brainrouter_memory_search', { q: 'auth' })
  *     → 'MemorySearch("auth")'
  *   formatToolCall('spawn_agent', { role: 'researcher', prompt: '...' })
  *     → 'Spawn(researcher, "...")'
+ *   formatToolCall('task_agent', { role: 'reviewer', prompt: '...' })
+ *     → 'Task(reviewer, "...")'
  */
 export function formatToolCall(name: string, args: Record<string, any> | undefined): string {
   const safeArgs = args ?? {};
@@ -69,6 +71,18 @@ export function formatToolCall(name: string, args: Record<string, any> | undefin
       const task = truncateOneLine(safeArgs.prompt ?? '', 50);
       return `Spawn(${role}${label}, "${task}")`;
     }
+    case 'task_agent': {
+      const role = String(safeArgs.role ?? safeArgs.agentId ?? 'agent');
+      const label = safeArgs.label ? ` [${safeArgs.label}]` : '';
+      const task = truncateOneLine(safeArgs.prompt ?? '', 50);
+      return `Task(${role}${label}, "${task}")`;
+    }
+    case 'delegate_agent': {
+      const role = String(safeArgs.role ?? safeArgs.agentId ?? 'agent');
+      const label = safeArgs.label ? ` [${safeArgs.label}]` : '';
+      const task = truncateOneLine(safeArgs.prompt ?? '', 50);
+      return `Delegate(${role}${label}, "${task}")`;
+    }
     case 'spawn_agents': {
       const agents = Array.isArray(safeArgs.agents) ? safeArgs.agents : [];
       const roles = agents.map((a: any) => String(a?.role ?? 'agent')).join(', ');
@@ -91,21 +105,35 @@ export function formatToolCall(name: string, args: Record<string, any> | undefin
   return `${pretty}()`;
 }
 
+// Server ids registered at boot. MCP server names may contain underscores
+// (`my_server`), so a naive `^mcp_[^_]+_(.+)$` regex would mis-strip
+// `mcp_my_server_memory_search` to `server_memory_search`. Callers that
+// know the live server inventory register it here so `stripMcpPrefix` can
+// match the longest known id first.
+let knownMcpServerIds: string[] = [];
+
+export function setKnownMcpServerIds(ids: ReadonlyArray<string>): void {
+  knownMcpServerIds = [...ids].sort((a, b) => b.length - a.length);
+}
+
 /**
- * Strip the `mcp__<server>__` or `mcp_<server>_` namespace prefix from MCP tool
- * names. Server ids may contain underscores (e.g. `my_server`), so the
- * double-underscore form uses a lazy match. Both prefix conventions are in use
- * across the multi-MCP codepaths until naming is unified.
- *   `mcp__brainrouter__memory_search` → `memory_search`
- *   `mcp__my_server__memory_search`    → `memory_search`
- *   `mcp_brainrouter_memory_search`    → `memory_search`
+ * Strip the `mcp_<server>_` namespace prefix from MCP tool names. As of
+ * 0.3.8-R5 the pool normalises to single-underscore at the boundary, so
+ * downstream call-sites only ever see this shape.
+ *   `mcp_brainrouter_memory_search` → `memory_search`
+ *   `mcp_my_server_memory_search`   → `memory_search` (when `my_server`
+ *                                     is registered via `setKnownMcpServerIds`)
  */
 export function stripMcpPrefix(name: string): string {
-  const dbl = name.match(/^mcp__.+?__(.+)$/);
-  if (dbl) return dbl[1];
-  const sgl = name.match(/^mcp_[^_]+_(.+)$/);
-  if (sgl) return sgl[1];
-  return name;
+  if (!name.startsWith('mcp_')) return name;
+  const rest = name.slice('mcp_'.length);
+  for (const id of knownMcpServerIds) {
+    if (rest.startsWith(`${id}_`)) return rest.slice(id.length + 1);
+  }
+  // Fallback when no server ids are registered (test fixtures, early boot):
+  // assume the server id has no underscores.
+  const idx = rest.indexOf('_');
+  return idx >= 0 ? rest.slice(idx + 1) : name;
 }
 
 /**

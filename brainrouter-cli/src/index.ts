@@ -89,6 +89,7 @@ import chalk from 'chalk';
 import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
+import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from './config/config.js';
 import { Agent } from './agent/agent.js';
 import { runChat } from './cli/ink/runChat.js';
@@ -109,7 +110,7 @@ const program = new Command();
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.7');
+  .version('0.3.8');
 
 // Chat Command (default)
 program
@@ -213,6 +214,10 @@ program
     // comment); the banner's per-server row is the success signal.
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    // Register live server ids for Ink tool-name display so multi-word
+    // server names (e.g. `my_server`) don't get mis-stripped by the
+    // single-underscore prefix regex.
+    setKnownMcpServerIds(mcpClient.getServerIds());
     const failures = statuses.filter((s) => s.status === 'failed');
     if (failures.length === statuses.length) {
       // Every server failed — equivalent to the pre-0.3.7 "MCP
@@ -324,6 +329,10 @@ program
 
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    // Register live server ids for Ink tool-name display so multi-word
+    // server names (e.g. `my_server`) don't get mis-stripped by the
+    // single-underscore prefix regex.
+    setKnownMcpServerIds(mcpClient.getServerIds());
     const allFailed = statuses.length > 0 && statuses.every((s) => s.status === 'failed');
     if (allFailed) {
       const summary = statuses.map((s) => `${s.serverId}: ${s.error ?? 'unknown'}`).join('; ');

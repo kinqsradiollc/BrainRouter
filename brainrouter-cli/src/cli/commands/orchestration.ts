@@ -52,6 +52,38 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log();
         return true;
       }
+      // `--watch`: poll the same data shape every second and re-render the
+      // running-children list inline. Same shape as `/agents` and the Ink
+      // status row so the user gets a single mental model (roadmap §3).
+      if (args.includes('--watch')) {
+        const intervalMs = 1000;
+        const maxTicks = 600; // ~10 min safety cap; Ctrl-C exits early.
+        let ticks = 0;
+        console.log(chalk.bold('\nWatching child agents (Ctrl-C to stop)…'));
+        await new Promise<void>((resolve) => {
+          const handle = setInterval(() => {
+            reconcileStale(agent.workspaceRoot);
+            const running = listSessions(agent.workspaceRoot)
+              .filter((s) => s.status === 'pending' || s.status === 'running');
+            const stamp = new Date().toISOString().slice(11, 19);
+            if (running.length === 0) {
+              process.stdout.write(`\r[${stamp}] no running children${' '.repeat(40)}`);
+            } else {
+              const parts = running.map((s) => `${s.id.slice(0, 14)} (${s.role})`).join(', ');
+              process.stdout.write(`\r[${stamp}] running: ${parts}${' '.repeat(10)}`);
+            }
+            if (++ticks >= maxTicks) {
+              clearInterval(handle);
+              process.stdout.write('\n');
+              resolve();
+            }
+          }, intervalMs);
+          const onSig = () => { clearInterval(handle); process.stdout.write('\n'); process.off('SIGINT', onSig); resolve(); };
+          process.once('SIGINT', onSig);
+        });
+        console.log();
+        return true;
+      }
       reconcileStale(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
       // `--json` for scripting. Emits a single JSON line on stdout so

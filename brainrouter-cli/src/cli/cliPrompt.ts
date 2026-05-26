@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { getAmbientChat } from './ink/ambientChat.js';
 
 /**
  * Shared bridge between the REPL's readline interface and modules outside
@@ -39,6 +40,9 @@ export function isPickerActive(): boolean { return pickerActive; }
  * (e.g. piped non-interactive runs).
  */
 export function askYesNo(question: string, defaultValue = false): Promise<boolean> {
+  if (getAmbientChat() && process.stdin.isTTY) {
+    return runInkYesNo(question, defaultValue);
+  }
   if (!activeReadline || !process.stdin.isTTY) {
     return Promise.resolve(defaultValue);
   }
@@ -350,7 +354,72 @@ export function askChoice(
       ),
     );
   }
+  if (getAmbientChat()) {
+    return runInkChoice(question, options, opts);
+  }
   return runPicker(question, options, opts);
+}
+
+async function runInkYesNo(question: string, defaultValue: boolean): Promise<boolean> {
+  const { runPicker } = await import('./ink/runPicker.js');
+  const result = await runPicker({
+    title: question,
+    badge: 'Confirm',
+    rows: [
+      { id: 'yes', label: 'Yes', description: 'Allow this action' },
+      { id: 'no', label: 'No', description: 'Do not allow this action' },
+    ],
+    initialCursor: defaultValue ? 0 : 1,
+    allowOther: false,
+  });
+  if (result.kind !== 'pick') return defaultValue;
+  return result.id === 'yes';
+}
+
+async function runInkChoice(
+  question: string,
+  options: ChoiceOption[],
+  opts: AskChoiceOptions,
+): Promise<string | string[]> {
+  const { runPicker } = await import('./ink/runPicker.js');
+  const rows = options.map((option, i) => ({
+    id: `choice:${i}`,
+    label: option.label,
+    description: option.description,
+  }));
+  const result = await runPicker({
+    title: question,
+    badge: opts.header,
+    rows,
+    initialCursor: opts.initialCursor,
+    allowOther: true,
+    otherLabel: OTHER_LABEL,
+    otherDescription: OTHER_DESCRIPTION,
+    prefilledOther: opts.prefilledOther,
+    multiSelect: !!opts.multiSelect,
+    onCursorChange: opts.onCursorChange
+      ? (_id: string, index: number) => {
+          opts.onCursorChange?.(index);
+          return undefined;
+        }
+      : undefined,
+  });
+  if (result.kind === 'cancelled') {
+    throw new CancelledChoiceError();
+  }
+  if (result.kind === 'other') {
+    return result.text;
+  }
+  if (result.kind === 'multi') {
+    const answers = result.ids.map((id) => {
+      const idx = Number(id.slice('choice:'.length));
+      return options[idx]?.label;
+    }).filter((label): label is string => !!label);
+    if (result.otherText) answers.push(result.otherText);
+    return answers;
+  }
+  const idx = Number(result.id.slice('choice:'.length));
+  return options[idx]?.label ?? options[0].label;
 }
 
 function runPicker(

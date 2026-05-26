@@ -75,6 +75,21 @@ export function selectMcpServerIds(
   });
 }
 
+/**
+ * 0.3.8-R5 — Single-underscore `mcp_<server>_<tool>` is the canonical
+ * tool-name shape across the CLI. Any legacy double-underscore
+ * `mcp__<server>__<tool>` form that arrives at the pool boundary
+ * (e.g. through an external surface or older skill) is collapsed here
+ * so downstream code can assume one convention.
+ */
+export function normalizeMcpToolName(name: string): string {
+  if (!name.startsWith('mcp__')) return name;
+  const rest = name.slice('mcp__'.length);
+  const sep = rest.indexOf('__');
+  if (sep < 0) return name;
+  return `mcp_${rest.slice(0, sep)}_${rest.slice(sep + 2)}`;
+}
+
 function isBrainrouterOwnedTool(name: string): boolean {
   return name.startsWith('memory_') ||
     [
@@ -343,6 +358,9 @@ export class McpClientPool {
 
   /** Internal — map a name (prefixed OR raw) to a concrete server + tool. */
   private resolveToolCall(name: string): { serverId: string; tool: string } | undefined {
+    // Back-compat: any legacy double-underscore form is collapsed first so
+    // the rest of the resolver only deals with the canonical shape.
+    name = normalizeMcpToolName(name);
     // Fast path: exact prefixed form match in the index.
     if (name.startsWith('mcp_')) {
       const direct = this.prefixedToServer.get(name);

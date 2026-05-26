@@ -83,3 +83,25 @@ export async function callMcpTool<T = any>(
 export function childSessionKey(parentSessionKey: string, childId: string): string {
   return `${parentSessionKey}:child:${childId}`;
 }
+
+/**
+ * Discovery helper for `Set<string>` tool-name lookups across MCP prefix
+ * conventions. The pool normalises tool names to single-underscore
+ * `mcp_<server>_<tool>` at the boundary (0.3.8-R5), so a discovery check
+ * for "is `memory_recall` exposed?" must match either the bare name (raw
+ * single-server flow) or any `mcp_<server>_memory_recall` (post-pool
+ * normalisation).
+ *
+ * Use this anywhere a caller previously did `toolNames.has('memory_recall')` —
+ * those bare-name checks silently miss prefixed names and were the root
+ * cause of `🧠 Briefing: 0 records from (none)` even with the brain MCP
+ * connected.
+ */
+export function hasMcpTool(toolNames: Set<string>, bareName: string): boolean {
+  if (toolNames.has(bareName)) return true;
+  const suffix = `_${bareName}`;
+  for (const name of toolNames) {
+    if (name.startsWith('mcp_') && name.endsWith(suffix)) return true;
+  }
+  return false;
+}

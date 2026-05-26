@@ -31,7 +31,10 @@ export interface ServerConfig {
 }
 
 export interface LLMConfig {
-  provider: 'openai';
+  // 0.3.8-I6: `anthropic` opts the dispatch layer into the native
+  // `/v1/messages` adapter (see runtime/anthropicAdapter.ts). Every other
+  // provider stays on the OpenAI-compat `/v1/chat/completions` path.
+  provider: 'openai' | 'anthropic';
   apiKey: string;
   model: string;
   endpoint?: string;
