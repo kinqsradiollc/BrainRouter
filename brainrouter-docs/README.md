@@ -12,6 +12,9 @@ deep dives.
   `/where` and `/quiet`, tool loop, access modes, `/compact`, hookify
   rules, multi-agent orchestration, personality overlays, goal state
   machine, session isolation.
+- **[hooks.md](hooks.md)** — authoring reference for shell hooks
+  (`cli/hooks.json`) and hookify rules (`hooks/*.md`): events, schema,
+  three worked examples, debug + limit notes.
 - **[configuration.md](configuration.md)** — env-loader priority chain
   (`$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`),
   `brainrouter-mcp init`, `~/.config/brainrouter/config.json` as the
