@@ -46,74 +46,22 @@ export const PROVIDER_CATALOG: ProviderEntry[] = [
   // the first chat turn. agent.ts now normalizes either shape, but
   // the catalog stays on the base-URL form going forward.
   {
+    // OpenAI doubles as the "any OpenAI-compatible /v1/chat/completions
+    // endpoint" entry — the wizard / `/config provider` prompts the user
+    // to confirm or replace the base URL, so DeepSeek, OpenRouter,
+    // Gemini-OpenAI-compat, Together, Groq, Fireworks, self-hosted
+    // vLLM, etc. all flow through this one row. Removed the per-vendor
+    // entries (deepseek, openrouter, anthropic-via-gateway, gemini) in
+    // 0.3.9 — keeping seven near-identical rows in the picker was more
+    // confusing than the single "OpenAI or compatible" prompt.
     id: 'openai',
-    label: 'OpenAI',
-    hint: 'cloud · gpt-4o / gpt-5 / o-series',
+    label: 'OpenAI (or compatible)',
+    hint: 'cloud · api.openai.com by default · base URL is editable',
     endpoint: 'https://api.openai.com/v1',
     envKey: 'OPENAI_API_KEY',
     local: false,
     models: ['gpt-4o-mini', 'gpt-4o', 'gpt-5', 'o3-mini', 'gpt-5-mini'],
     defaultModel: 'gpt-4o-mini',
-  },
-  {
-    id: 'deepseek',
-    label: 'DeepSeek',
-    hint: 'cloud · deepseek-chat / deepseek-reasoner',
-    endpoint: 'https://api.deepseek.com/v1',
-    envKey: 'DEEPSEEK_API_KEY',
-    local: false,
-    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'],
-    defaultModel: 'deepseek-chat',
-  },
-  {
-    id: 'openrouter',
-    label: 'OpenRouter',
-    hint: 'cloud gateway · any vendor through one key',
-    endpoint: 'https://openrouter.ai/api/v1',
-    envKey: 'OPENROUTER_API_KEY',
-    local: false,
-    models: [
-      'anthropic/claude-sonnet-4',
-      'openai/gpt-4o-mini',
-      'google/gemini-2.5-flash',
-      'deepseek/deepseek-chat',
-      'qwen/qwen3-coder',
-    ],
-    defaultModel: 'anthropic/claude-sonnet-4',
-  },
-  {
-    // Claude needs an OpenAI-compatible gateway today because the
-    // CLI's chat path drives `/v1/chat/completions` and Anthropic's
-    // native API uses `/v1/messages` with a different request shape
-    // (tool_use blocks inside user messages, `thinking: { budget_tokens }`
-    // instead of `reasoning_effort`, etc.). A native `/v1/messages`
-    // adapter is tracked for 0.3.8 — see brainrouter-roadmap/0.3.7.md
-    // Item 6 "Out of scope". Until then, the OpenRouter gateway path
-    // (this entry) is the supported way to talk to Claude.
-    id: 'anthropic-via-gateway',
-    label: 'Claude (via OpenRouter)',
-    hint: 'cloud · claude-* models routed through OpenRouter\'s OpenAI-compat gateway',
-    endpoint: 'https://openrouter.ai/api/v1',
-    envKey: 'OPENROUTER_API_KEY',
-    local: false,
-    models: [
-      'anthropic/claude-sonnet-4.5',
-      'anthropic/claude-opus-4.1',
-      'anthropic/claude-sonnet-4',
-      'anthropic/claude-haiku-4.5',
-      'anthropic/claude-haiku-4',
-    ],
-    defaultModel: 'anthropic/claude-sonnet-4.5',
-  },
-  {
-    id: 'gemini',
-    label: 'Gemini (OpenAI-compat)',
-    hint: 'cloud · Google\'s OpenAI-compat endpoint',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    envKey: 'GEMINI_API_KEY',
-    local: false,
-    models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-    defaultModel: 'gemini-2.5-flash',
   },
   {
     id: 'lmstudio',
