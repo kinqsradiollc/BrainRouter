@@ -32,8 +32,9 @@ CLI memory briefing quality release before 0.4.0.
 - **TokenJuice-lite compaction.** Large JSON and command/tool outputs are compacted before entering model-visible context; full raw outputs remain in transcripts.
 - **Inspectable memory decisions.** `/briefing` now shows decision, reasons, planned/queried sources, skipped sources, source stats, record IDs, warnings, injected tokens, and compacted chars avoided.
 - **Read-only source manifest spike.** `/memories sources [limit]` scans local code/docs into a bounded ephemeral manifest without schema writes, chunk tables, or vault mirroring.
-- **Memory capture redaction.** CLI turn capture redacts obvious secrets before sending user/assistant text to the memory capture tool.
-- **Briefing benchmark coverage.** Local tests cover trigger cases and compaction savings without network or live MCP dependencies.
+- **Memory capture redaction + secret block.** CLI turn capture redacts obvious secrets and now refuses the capture outright when credential-shaped tokens (`sk-…`, `ghp_…`, `AKIA…`, PEM keys, Slack `xox`) remain in the payload. Recall card previews are redacted to match the opaque-dump path.
+- **Memory policy warnings.** `/briefing` flags stale/superseded/needs-verification records and off-workspace path references in recalled content via a new `memoryPolicy` module.
+- **Briefing benchmark coverage.** Local tests cover trigger cases, compaction savings, and end-to-end `buildMemoryBriefing` runs against stub MCP for all six roadmap scenarios (first-turn, continuation, file-specific, debug retry, post-compaction, child synthesis).
 
 ---
 
