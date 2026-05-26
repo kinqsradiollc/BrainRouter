@@ -163,9 +163,51 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
     { key: 'quiet',         label: 'Quiet mode',       current: () => prefs().quiet ? 'on' : 'off',  edit: toggleQuiet },
     { key: 'personality',   label: 'Personality',      current: () => prefs().personality,           edit: editPersonality },
     { key: 'editor',        label: 'Editor mode',      current: () => prefs().editorMode,            edit: editEditorMode },
+    {
+      key: 'claude-api',
+      label: 'Claude API options',
+      current: () => summarizeClaudeApi(config),
+      edit: async () => { printClaudeApiHelp(ctx); return false; },
+    },
     { key: '__raw',         label: 'View raw config',  current: () => 'JSON dump',                   edit: async () => false },
     { key: '__exit',        label: 'Quit (esc)',       current: () => '',                            edit: async () => false },
   ];
+}
+
+function summarizeClaudeApi(config: CommandContext['config']): string {
+  const llm = config.llm;
+  if (!llm) return '(no LLM configured)';
+  if (llm.provider !== 'anthropic') return `(provider is ${llm.provider} — anthropic-only fields hidden)`;
+  const bits: string[] = [];
+  if (llm.temperature !== undefined) bits.push(`temp=${llm.temperature}`);
+  if (llm.maxTokens !== undefined) bits.push(`max=${llm.maxTokens}`);
+  const a = llm.anthropic ?? {};
+  if (a.cache) bits.push(`cache(${a.cacheTtl ?? '5m'})`);
+  if (a.cacheTools) bits.push('cache-tools');
+  if (a.beta) bits.push(`beta=${a.beta.slice(0, 20)}${a.beta.length > 20 ? '…' : ''}`);
+  return bits.length === 0 ? '(defaults)' : bits.join(' · ');
+}
+
+function printClaudeApiHelp(ctx: CommandContext): void {
+  console.log(chalk.bold('\nClaude API options (Anthropic native adapter)'));
+  console.log(chalk.gray('  Set via /config <key> <value>. Use "-" or "unset" to clear.'));
+  const rows: Array<[string, string]> = [
+    ['temperature',          KEY_HANDLERS['temperature'].get(ctx)],
+    ['top-p',                KEY_HANDLERS['top-p'].get(ctx)],
+    ['top-k',                KEY_HANDLERS['top-k'].get(ctx)],
+    ['max-tokens',           KEY_HANDLERS['max-tokens'].get(ctx)],
+    ['stop-sequences',       KEY_HANDLERS['stop-sequences'].get(ctx)],
+    ['metadata-user-id',     KEY_HANDLERS['metadata-user-id'].get(ctx)],
+    ['anthropic-cache',      KEY_HANDLERS['anthropic-cache'].get(ctx)],
+    ['anthropic-cache-ttl',  KEY_HANDLERS['anthropic-cache-ttl'].get(ctx)],
+    ['anthropic-cache-tools',KEY_HANDLERS['anthropic-cache-tools'].get(ctx)],
+    ['anthropic-beta',       KEY_HANDLERS['anthropic-beta'].get(ctx)],
+  ];
+  for (const [k, v] of rows) {
+    console.log(`  ${chalk.cyan(k.padEnd(22))} ${chalk.bold(v)}`);
+  }
+  console.log(chalk.gray('\n  Env overrides (per-shell): BRAINROUTER_ANTHROPIC_CACHE, _CACHE_TTL, _CACHE_TOOLS, _BETA, _NATIVE'));
+  console.log(chalk.gray('  Anthropic caps stop_sequences at 4; auto-adds extended-cache-ttl-2025-04-11 beta on 1h TTL.\n'));
 }
 
 function shortenEndpoint(url?: string): string {
@@ -1006,7 +1048,157 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
       return { ok: true, message: `provider → ${provider.label} ${tail}` };
     },
   },
+  // ---- 0.3.10: LLM sampling + Anthropic API surface ----
+  // All `unset`/`-`/empty value clears the field. Anthropic-only fields
+  // still parse for non-Anthropic providers (we don't gate the setter)
+  // since switching provider should preserve the saved sampling intent.
+  temperature: {
+    get: (ctx) => llmField(ctx, 'temperature'),
+    set: (ctx, value) => setLlmNumber(ctx, value, 'temperature', { min: 0, max: 2 }),
+  },
+  'top-p': {
+    get: (ctx) => llmField(ctx, 'topP'),
+    set: (ctx, value) => setLlmNumber(ctx, value, 'topP', { min: 0, max: 1 }),
+  },
+  'top-k': {
+    get: (ctx) => llmField(ctx, 'topK'),
+    set: (ctx, value) => setLlmNumber(ctx, value, 'topK', { min: 1, max: 500, integer: true }),
+  },
+  'max-tokens': {
+    get: (ctx) => llmField(ctx, 'maxTokens'),
+    set: (ctx, value) => setLlmNumber(ctx, value, 'maxTokens', { min: 1, max: 200000, integer: true }),
+  },
+  'stop-sequences': {
+    get: (ctx) => {
+      const seq = ctx.config.llm?.stopSequences;
+      return seq && seq.length > 0 ? seq.join(', ') : '(unset)';
+    },
+    set: (ctx, value) => {
+      if (!ctx.config.llm) return { ok: false, reason: 'no LLM configured — set /config provider first' };
+      const cleared = isClearValue(value);
+      if (cleared) {
+        delete ctx.config.llm.stopSequences;
+      } else {
+        const items = value.split(',').map((s) => s.trim()).filter(Boolean);
+        if (items.length > 4) {
+          return { ok: false, reason: 'Anthropic caps stop_sequences at 4 entries' };
+        }
+        ctx.config.llm.stopSequences = items;
+      }
+      saveConfig(ctx.config);
+      return { ok: true, message: `stop-sequences → ${cleared ? '(unset)' : ctx.config.llm.stopSequences!.join(', ')}` };
+    },
+  },
+  'metadata-user-id': {
+    get: (ctx) => ctx.config.llm?.metadataUserId ?? '(unset)',
+    set: (ctx, value) => {
+      if (!ctx.config.llm) return { ok: false, reason: 'no LLM configured — set /config provider first' };
+      if (isClearValue(value)) {
+        delete ctx.config.llm.metadataUserId;
+      } else {
+        ctx.config.llm.metadataUserId = value.trim();
+      }
+      saveConfig(ctx.config);
+      return { ok: true, message: `metadata-user-id → ${ctx.config.llm.metadataUserId ?? '(unset)'}` };
+    },
+  },
+  'anthropic-cache': {
+    get: (ctx) => onOff(ctx.config.llm?.anthropic?.cache),
+    set: (ctx, value) => setAnthropicBool(ctx, value, 'cache', 'anthropic-cache'),
+  },
+  'anthropic-cache-ttl': {
+    get: (ctx) => ctx.config.llm?.anthropic?.cacheTtl ?? '(5m default)',
+    set: (ctx, value) => {
+      const v = value.trim().toLowerCase();
+      if (!ctx.config.llm) return { ok: false, reason: 'no LLM configured — set /config provider first' };
+      ctx.config.llm.anthropic = ctx.config.llm.anthropic ?? {};
+      if (isClearValue(v)) {
+        delete ctx.config.llm.anthropic.cacheTtl;
+      } else if (v === '5m' || v === '1h') {
+        ctx.config.llm.anthropic.cacheTtl = v;
+      } else {
+        return { ok: false, reason: 'anthropic-cache-ttl must be 5m or 1h' };
+      }
+      saveConfig(ctx.config);
+      return { ok: true, message: `anthropic-cache-ttl → ${ctx.config.llm.anthropic.cacheTtl ?? '(5m default)'}` };
+    },
+  },
+  'anthropic-cache-tools': {
+    get: (ctx) => onOff(ctx.config.llm?.anthropic?.cacheTools),
+    set: (ctx, value) => setAnthropicBool(ctx, value, 'cacheTools', 'anthropic-cache-tools'),
+  },
+  'anthropic-beta': {
+    get: (ctx) => ctx.config.llm?.anthropic?.beta ?? '(unset)',
+    set: (ctx, value) => {
+      if (!ctx.config.llm) return { ok: false, reason: 'no LLM configured — set /config provider first' };
+      ctx.config.llm.anthropic = ctx.config.llm.anthropic ?? {};
+      if (isClearValue(value)) {
+        delete ctx.config.llm.anthropic.beta;
+      } else {
+        ctx.config.llm.anthropic.beta = value.split(',').map((s) => s.trim()).filter(Boolean).join(',');
+      }
+      saveConfig(ctx.config);
+      return { ok: true, message: `anthropic-beta → ${ctx.config.llm.anthropic.beta ?? '(unset)'}` };
+    },
+  },
 };
+
+function llmField(ctx: CommandContext, key: 'temperature' | 'topP' | 'topK' | 'maxTokens'): string {
+  const v = ctx.config.llm?.[key];
+  return v === undefined ? '(unset)' : String(v);
+}
+
+function onOff(v?: boolean): string {
+  return v === true ? 'on' : v === false ? 'off' : '(unset)';
+}
+
+function isClearValue(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  return v === '' || v === '-' || v === 'unset' || v === 'clear' || v === 'none';
+}
+
+function setLlmNumber(
+  ctx: CommandContext,
+  value: string,
+  key: 'temperature' | 'topP' | 'topK' | 'maxTokens',
+  opts: { min: number; max: number; integer?: boolean },
+): SetResult {
+  if (!ctx.config.llm) return { ok: false, reason: 'no LLM configured — set /config provider first' };
+  if (isClearValue(value)) {
+    delete ctx.config.llm[key];
+    saveConfig(ctx.config);
+    return { ok: true, message: `${key} → (unset)` };
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) return { ok: false, reason: `${key} must be a number (got "${value}")` };
+  if (opts.integer && !Number.isInteger(n)) return { ok: false, reason: `${key} must be an integer` };
+  if (n < opts.min || n > opts.max) return { ok: false, reason: `${key} must be in [${opts.min}, ${opts.max}]` };
+  (ctx.config.llm as any)[key] = n;
+  saveConfig(ctx.config);
+  return { ok: true, message: `${key} → ${n}` };
+}
+
+function setAnthropicBool(
+  ctx: CommandContext,
+  value: string,
+  key: 'cache' | 'cacheTools',
+  label: string,
+): SetResult {
+  if (!ctx.config.llm) return { ok: false, reason: 'no LLM configured — set /config provider first' };
+  const v = value.trim().toLowerCase();
+  if (isClearValue(v)) {
+    if (ctx.config.llm.anthropic) delete ctx.config.llm.anthropic[key];
+    saveConfig(ctx.config);
+    return { ok: true, message: `${label} → (unset)` };
+  }
+  const on = ['on', 'true', '1', 'yes'].includes(v);
+  const off = ['off', 'false', '0', 'no'].includes(v);
+  if (!on && !off) return { ok: false, reason: `${label} must be on|off (got "${value}")` };
+  ctx.config.llm.anthropic = ctx.config.llm.anthropic ?? {};
+  ctx.config.llm.anthropic[key] = on;
+  saveConfig(ctx.config);
+  return { ok: true, message: `${label} → ${on ? 'on' : 'off'}` };
+}
 
 function printKey(ctx: CommandContext, key: string): void {
   const handler = KEY_HANDLERS[key];
