@@ -24,6 +24,7 @@ import { resolveIdentityFromConfig } from '../../runtime/mcpClient.js';
 import { selectMcpServerIds } from '../../runtime/mcpPool.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { resolveTheme } from '../theme.js';
+import { runMcpInstall } from './mcpInstall.js';
 
 export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, mcpClient, config } = ctx;
@@ -213,6 +214,12 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
     return true;
   }
 
+  if (sub === 'install') {
+    const result = runMcpInstall(args.slice(1), config);
+    console.log(result.output);
+    return true;
+  }
+
   if (sub === 'disconnect') {
     if (!targetName) {
       console.log(chalk.red('\nUsage: /mcp disconnect <name>\n'));
@@ -231,7 +238,7 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
     return true;
   }
 
-  console.log(chalk.red(`\nUnknown /mcp subcommand "${sub}". Usage: /mcp list | /mcp tools [server] | /mcp connect <name> | /mcp disconnect <name> | /mcp reconnect [name]\n`));
+  console.log(chalk.red(`\nUnknown /mcp subcommand "${sub}". Usage: /mcp list | /mcp tools [server] | /mcp connect <name> | /mcp disconnect <name> | /mcp reconnect [name] | /mcp install <vendor>|list\n`));
   return true;
 }
 
