@@ -113,6 +113,15 @@ export interface RunTurnCallbacks {
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
   /**
+   * Optional: paired live child tool events surfaced from spawn_agent
+   * children up to the parent REPL. Lets the UI render explicit
+   * "child began Read(...)" / "child finished — 1.2s" rows in scrollback
+   * so long child runs no longer look like the parent has paused
+   * (roadmap §3 child progress visibility).
+   */
+  onChildToolStart?: (event: { childId: string; role: string; tool: string; args: Record<string, any> }) => void;
+  onChildToolEnd?: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
+  /**
    * Optional: invoked when the agent's automatic memory pipeline runs —
    * pre-turn briefing, post-turn capture, citation marking. Surfacing these
    * tells the user the BrainRouter cognitive memory engine is active even
@@ -1012,10 +1021,11 @@ export class Agent {
               llmConfig: this.llmConfig,
               launchCwd: this.launchCwd,
               recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
-              onChildToolEvent: (event) => {
-                // Surface to the REPL via the same onToolStart channel so the
-                // user sees child activity live, prefixed with the child id.
-                callbacks.onToolStart(`${event.role}:${event.childId} → ${event.tool}`, { ok: event.ok, summary: event.summary });
+              onChildToolStart: (event) => {
+                callbacks.onChildToolStart?.(event);
+              },
+              onChildToolEnd: (event) => {
+                callbacks.onChildToolEnd?.(event);
               },
               onChildComplete: (event) => {
                 callbacks.onChildComplete?.(event);

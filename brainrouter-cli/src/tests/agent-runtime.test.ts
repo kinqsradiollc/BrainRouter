@@ -824,3 +824,102 @@ test('P1.2: agentId unknown returns error listing known ids', async () => {
     );
   });
 });
+
+// R3 — Child progress visibility in Ink.
+// Regression: when a spawn_agent child runs a tool, the parent's
+// onChildToolStart and onChildToolEnd callbacks must fire with the
+// child's id, role, tool name, args, ok flag, and a non-negative
+// durationMs. Without this the Ink scrollback has no signal that a
+// long-running child is actually making progress.
+test('runTurn: child tool events propagate to parent onChildToolStart / onChildToolEnd (R3)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    let parentCalls = 0;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
+
+      // The child sees its own bounded prompt "do-child-work". On its
+      // first call it lists the workspace; on its second it produces a
+      // final answer.
+      if (/do-child-work/.test(lastUser)) {
+        const hasToolResult = messages.some((m: any) => m.role === 'tool' && m.name === 'list_dir');
+        if (!hasToolResult) {
+          return new Response(JSON.stringify({
+            choices: [{
+              message: {
+                content: '',
+                tool_calls: [{ id: 'call_child_ls', type: 'function', function: { name: 'list_dir', arguments: '{"path":"."}' } }],
+              },
+            }],
+            usage: { prompt_tokens: 20, completion_tokens: 5 },
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'child done.' } }],
+          usage: { prompt_tokens: 20, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      parentCalls++;
+      if (parentCalls === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_spawn',
+                type: 'function',
+                function: {
+                  name: 'spawn_agent',
+                  arguments: JSON.stringify({ role: 'explorer', prompt: 'do-child-work', wait: true, timeoutMs: 5000 }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'parent done.' } }],
+        usage: { prompt_tokens: 40, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const childStarts: any[] = [];
+      const childEnds: any[] = [];
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await agent.runTurn('please spawn a child', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+        onChildToolStart: (e) => { childStarts.push(e); },
+        onChildToolEnd: (e) => { childEnds.push(e); },
+      });
+      // The child ran list_dir once before its final answer — the parent
+      // must have seen a paired start + end event for that call.
+      const startLs = childStarts.find((e) => e.tool === 'list_dir');
+      const endLs = childEnds.find((e) => e.tool === 'list_dir');
+      assert.ok(startLs, `expected an onChildToolStart for list_dir, got ${JSON.stringify(childStarts.map((e) => e.tool))}`);
+      assert.ok(endLs, `expected an onChildToolEnd for list_dir, got ${JSON.stringify(childEnds.map((e) => e.tool))}`);
+      assert.equal(startLs.role, 'explorer');
+      assert.equal(endLs.role, 'explorer');
+      assert.equal(typeof startLs.childId, 'string');
+      assert.equal(startLs.childId, endLs.childId);
+      assert.equal(typeof endLs.durationMs, 'number');
+      assert.ok(endLs.durationMs >= 0, 'durationMs must be non-negative');
+      assert.equal(endLs.ok, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
