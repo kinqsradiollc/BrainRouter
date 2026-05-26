@@ -599,7 +599,15 @@ async function handleWait(args: any, ctx: OrchestrationContext): Promise<string>
       new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, timeoutMs)),
     ]);
     if (timedOut) {
-      return JSON.stringify({ id, status: 'timeout' }, null, 2);
+      const record = getSession(ctx.workspaceRoot, id);
+      return JSON.stringify({
+        id,
+        status: 'timeout',
+        childStatus: record?.status ?? 'unknown',
+        role: record?.role,
+        label: record?.label,
+        summary: record ? formatSessionSummary(record) : `No child session with id ${id}.`,
+      }, null, 2);
     }
   }
 

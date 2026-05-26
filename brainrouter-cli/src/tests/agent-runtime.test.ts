@@ -335,14 +335,13 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
     let parentCalls = 0;
-    const waitedIds: string[][] = [];
 
     globalThis.fetch = (async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
       const messages = Array.isArray(body.messages) ? body.messages : [];
       const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
 
-      if (/child-one|child-two/.test(lastUser)) {
+      if (lastUser === 'child-one' || lastUser === 'child-two') {
         return new Response(JSON.stringify({
           choices: [{ message: { content: `child output for ${lastUser}` } }],
           usage: { prompt_tokens: 20, completion_tokens: 5 },
@@ -381,29 +380,6 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
 
-      if (/have not waited for their outputs yet/.test(lastUser) && waitedIds.length === 0) {
-        const spawnResult = [...messages].reverse().find((m: any) => m.role === 'tool' && m.name === 'spawn_agents')?.content;
-        const parsed = JSON.parse(spawnResult);
-        const ids = parsed.agents.map((entry: any) => entry.id);
-        waitedIds.push(ids);
-        return new Response(JSON.stringify({
-          choices: [{
-            message: {
-              content: '',
-              tool_calls: [{
-                id: 'call_wait_all',
-                type: 'function',
-                function: {
-                  name: 'wait_agents',
-                  arguments: JSON.stringify({ ids, timeoutMs: 1000 }),
-                },
-              }],
-            },
-          }],
-          usage: { prompt_tokens: 100, completion_tokens: 10 },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-
       return new Response(JSON.stringify({
         choices: [{ message: { content: 'Both child outputs were incorporated.' } }],
         usage: { prompt_tokens: 50, completion_tokens: 6 },
@@ -417,21 +393,104 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
         close: async () => {},
       };
       const toolNames: string[] = [];
+      const waitArgs: any[] = [];
       const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, silent: true,
       });
       const answer = await agent.runTurn('find me any vulnerabilities in the project', {
+        onStatusUpdate: () => {},
+        onToolStart: (name, args) => {
+          toolNames.push(name);
+          if (name === 'wait_agents') waitArgs.push(args);
+        },
+        onToolEnd: () => {},
+      });
+
+      assert.deepEqual(toolNames.filter((name) => name === 'wait_agents'), ['wait_agents']);
+      assert.equal(waitArgs.length, 1);
+      assert.equal(waitArgs[0].ids.length, 2);
+      assert.equal(answer, 'Both child outputs were incorporated.');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn auto-drains spawned children and reports explicit timeout statuses', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    const previousDrainTimeout = process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS;
+    let parentCalls = 0;
+    process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS = '10';
+
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
+
+      if (/slow child task/.test(lastUser)) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'slow child output' } }],
+          usage: { prompt_tokens: 20, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      parentCalls++;
+      if (parentCalls === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'call_spawn',
+                type: 'function',
+                function: {
+                  name: 'spawn_agent',
+                  arguments: JSON.stringify({ role: 'explorer', prompt: 'slow child task' }),
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'I am waiting for the child agent to finish.' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 8 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const toolNames: string[] = [];
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('start the slow child', {
         onStatusUpdate: () => {},
         onToolStart: (name) => { toolNames.push(name); },
         onToolEnd: () => {},
       });
 
       assert.deepEqual(toolNames.filter((name) => name === 'wait_agents'), ['wait_agents']);
-      assert.equal(waitedIds.length, 1);
-      assert.equal(waitedIds[0].length, 2);
-      assert.equal(answer, 'Both child outputs were incorporated.');
+      assert.match(answer, /children still running/i);
+      assert.match(answer, /agent-[a-f0-9]{8}/);
+      assert.match(answer, /explorer/);
+      assert.match(answer, /running|pending/);
+      assert.match(answer, /\/continue/);
+      assert.doesNotMatch(answer, /I am waiting for the child agent/);
+
+      await new Promise((resolve) => setTimeout(resolve, 70));
     } finally {
       globalThis.fetch = originalFetch;
+      if (previousDrainTimeout === undefined) delete process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS;
+      else process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS = previousDrainTimeout;
     }
   });
 });
