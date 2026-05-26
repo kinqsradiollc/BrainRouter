@@ -192,38 +192,53 @@ async function runProviderStep(state: WizardState, theme: Theme): Promise<Wizard
     theme,
     title: 'LLM provider',
     subtitle: detected
-      ? `Detected ${detected.envKey} in your shell — ${detected.label} is pre-selected. Pick "Other" to enter a custom OpenAI-compatible endpoint.`
-      : 'Pick the LLM provider for the chat agent. Pick "Other" to enter a custom OpenAI-compatible endpoint.',
+      ? `Detected ${detected.envKey} in your shell — ${detected.label} is pre-selected.`
+      : 'Pick the LLM provider for the chat agent. "OpenAI (or compatible)" lets you point at any OpenAI-compatible /v1 endpoint.',
     badge: progressBadge('provider'),
     rows,
     initialCursor,
-    allowOther: true,
-    otherLabel: 'Other endpoint',
-    otherDescription: 'OpenAI-compatible /v1/chat/completions URL',
+    allowOther: false,
     eraseOnClose: true,
   });
   if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
-  if (result.kind === 'other') {
-    const url = result.text;
-    if (!url) return state;
-    const ad: ProviderEntry = {
-      id: 'custom',
-      label: 'Custom endpoint',
-      hint: url,
-      endpoint: url,
-      envKey: 'BRAINROUTER_LLM_API_KEY',
-      local: /localhost|127\.0\.0\.1|::1|0\.0\.0\.0/.test(url),
-      models: [],
-      defaultModel: 'gpt-4o-mini',
-    };
-    return reduceWizard(state, {
-      kind: 'advance',
-      patch: { provider: ad, customEndpoint: url },
-    });
-  }
+  if (result.kind !== 'pick') return state;
   const provider = PROVIDER_CATALOG.find((p) => p.id === result.id);
   if (!provider) return state;
+
+  // OpenAI doubles as the OpenAI-compatible custom-endpoint flow: prompt
+  // the user to confirm or replace the base URL. Local providers
+  // (LM Studio / Ollama) keep their fixed loopback endpoints — overriding
+  // those is a config.json edit, not a setup question.
+  if (provider.id === 'openai') {
+    const url = await promptEndpointOverride(theme, provider.endpoint);
+    if (url === undefined) return reduceWizard(state, { kind: 'abort' });
+    const isCustom = url !== provider.endpoint;
+    return reduceWizard(state, {
+      kind: 'advance',
+      patch: isCustom ? { provider, customEndpoint: url } : { provider },
+    });
+  }
   return reduceWizard(state, { kind: 'advance', patch: { provider } });
+}
+
+async function promptEndpointOverride(theme: Theme, defaultEndpoint: string): Promise<string | undefined> {
+  const result = await promptText({
+    theme,
+    title: 'API base URL',
+    subtitle: 'Press ENTER to use OpenAI directly, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, self-hosted vLLM, …). Trailing /chat/completions is added automatically.',
+    badge: 'OpenAI base URL',
+    prefilled: defaultEndpoint,
+    placeholder: 'https://api.openai.com/v1',
+    validate: (raw) => {
+      const v = raw.trim();
+      if (!v) return 'base URL cannot be empty';
+      try { new URL(v); } catch { return 'must be a valid URL'; }
+      return undefined;
+    },
+    eraseOnClose: true,
+  });
+  if (result.kind === 'cancelled') return undefined;
+  return result.text.trim();
 }
 
 // --- API key -----------------------------------------------------------
