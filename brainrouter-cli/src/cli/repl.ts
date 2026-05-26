@@ -21,6 +21,7 @@ import { tryHandleInitCommand } from './commands/init.js';
 import { tryHandleConfigCommand } from './commands/config.js';
 import { tryHandleLoginCommand } from './commands/login.js';
 import { tryHandleScheduleCommand } from './commands/schedule.js';
+import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 
 /**
  * All slash commands the REPL recognizes. Used for tab autocomplete and for
@@ -37,7 +38,7 @@ export const SLASH_COMMANDS = [
   '/memory', '/recall', '/briefing', '/scenes', '/working', '/forget',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
-  '/continue', '/auto-review', '/vim', '/statusline', '/quiet',
+  '/continue', '/auto-review', '/vim', '/statusline', '/quiet', '/release-notes',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
   '/tokens', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
@@ -190,6 +191,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
       { cmd: '/feedback [message]', desc: 'Append feedback entry' },
       { cmd: '/experimental [on|off]', desc: 'Toggle experimental features' },
+      { cmd: '/release-notes [version|list]', desc: 'Show changelog for current (or specified) CLI version' },
     ],
   },
 ];
@@ -287,6 +289,7 @@ export async function handleSlashCommand(
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;
   if (await tryHandleScheduleCommand(cmdCtx)) return;
+  if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;
   if (await tryHandleOrchestrationCommand(cmdCtx)) return;
   if (await tryHandleSessionCommand(cmdCtx)) return;

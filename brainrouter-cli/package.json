@@ -10,6 +10,7 @@
   "files": [
     "agents",
     "bin",
+    "changelog",
     "dist",
     "README.md",
     ".env.example"
@@ -20,7 +21,9 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "prepack": "npm run build && find dist -name '*.test.*' -delete"
+    "prepack": "npm run build && find dist -name '*.test.*' -delete",
+    "sync-changelog": "rm -rf changelog && mkdir -p changelog && cp ../brainrouter-changelog/*.md changelog/",
+    "prepublishOnly": "npm run sync-changelog"
   },
   "dependencies": {
     "@kinqs/brainrouter-sdk": "^0.3.6",
