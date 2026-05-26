@@ -50,8 +50,14 @@ export interface OrchestrationContext {
   launchCwd: string;
   /** Called when a child output got offloaded — chars beyond preview that didn't land in parent context. */
   recordOffload?: (charsAvoided: number) => void;
-  /** Called when the child agent emits a tool call, for live observability. */
-  onChildToolEvent?: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string }) => void;
+  /**
+   * Paired child tool lifecycle callbacks. Fire from the child agent's
+   * onToolStart / onToolEnd so the parent's REPL can render explicit
+   * "child began X" / "child finished X" rows in the scrollback — without
+   * these, long child runs look like the parent has frozen (roadmap §3).
+   */
+  onChildToolStart?: (event: { childId: string; role: string; tool: string; args: Record<string, any> }) => void;
+  onChildToolEnd?: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
   /**
    * Called when a child agent's runTurn ends — success, fail, or empty answer.
    * Lets the REPL surface "✓ agent X completed" so the user knows when to act,
@@ -567,16 +573,32 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
 
   const promise = (async () => {
     try {
+      // Track per-tool start times so the paired onChildToolEnd carries a
+      // real duration — the REPL renders this on the child's end row.
+      const childToolStarts = new Map<string, number>();
       const output = await childAgent.runTurn(prompt, {
         onStatusUpdate: () => {},
-        onToolStart: () => {},
+        onToolStart: (tool, args) => {
+          childToolStarts.set(tool, Date.now());
+          ctx.onChildToolStart?.({
+            childId: record.id,
+            role: role.name,
+            tool,
+            args: args ?? {},
+          });
+        },
         onToolEnd: (tool, result) => {
-          ctx.onChildToolEvent?.({
+          const startedAt = childToolStarts.get(tool);
+          childToolStarts.delete(tool);
+          const durationMs = startedAt ? Date.now() - startedAt : 0;
+          ctx.onChildToolEnd?.({
             childId: record.id,
             role: role.name,
             tool,
             ok: result.success,
             summary: result.summary,
+            preview: result.preview,
+            durationMs,
           });
         },
       });

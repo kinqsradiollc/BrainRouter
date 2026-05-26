@@ -160,6 +160,15 @@ export interface RunTurnCallbacks {
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
   /**
+   * Optional: paired live child tool events surfaced from spawn_agent
+   * children up to the parent REPL. Lets the UI render explicit
+   * "child began Read(...)" / "child finished — 1.2s" rows in scrollback
+   * so long child runs no longer look like the parent has paused
+   * (roadmap §3 child progress visibility).
+   */
+  onChildToolStart?: (event: { childId: string; role: string; tool: string; args: Record<string, any> }) => void;
+  onChildToolEnd?: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
+  /**
    * Optional: invoked when the agent's automatic memory pipeline runs —
    * pre-turn briefing, post-turn capture, citation marking. Surfacing these
    * tells the user the BrainRouter cognitive memory engine is active even
@@ -1101,7 +1110,36 @@ export class Agent {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
           if (isOrchestrationToolName(name)) {
+<<<<<<< HEAD
+            resultText = await executeOrchestrationTool(name, args, {
+              workspaceRoot: this.workspaceRoot,
+              parentSessionKey: this.sessionKey,
+              parentAccessMode: this.accessMode,
+              // Thread the parent's trace context so child agents nest their
+              // per-turn spans under THIS turn instead of starting a fresh
+              // trace tree. Lets observability backends reconstruct fan-out.
+              parentTraceId: turnSpan.traceId,
+              parentSpanId: turnSpan.spanId,
+              parentAgentId: this.agentId,
+              parentTier: this.tier,
+              depth: this.agentDepth,
+              mcpClient: this.mcpClient,
+              llmConfig: this.llmConfig,
+              launchCwd: this.launchCwd,
+              recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
+              onChildToolStart: (event) => {
+                callbacks.onChildToolStart?.(event);
+              },
+              onChildToolEnd: (event) => {
+                callbacks.onChildToolEnd?.(event);
+              },
+              onChildComplete: (event) => {
+                callbacks.onChildComplete?.(event);
+              },
+            });
+=======
             resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
+>>>>>>> origin/release/0.3.8
             summary = getToolSummary(name, args, resultText);
             trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
           } else if (isLocal) {
