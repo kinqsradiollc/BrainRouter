@@ -67,6 +67,18 @@ export interface AnthropicBuildOptions {
   cacheEnabled?: boolean;
   maxTokens?: number;
   thinkingBudgetTokens?: number;
+  /** Cache TTL on the breakpoints we add. Default '5m'; '1h' requires
+   * the `extended-cache-ttl-2025-04-11` beta header. */
+  cacheTtl?: '5m' | '1h';
+  /** Add a cache breakpoint on the last tool definition too. Useful when
+   * the tools list is large and stable across turns. */
+  cacheTools?: boolean;
+  /** Sampling overrides forwarded verbatim. */
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  stopSequences?: string[];
+  metadataUserId?: string;
 }
 
 interface AnthropicMessage {
@@ -78,7 +90,7 @@ interface AnthropicTool {
   name: string;
   description: string;
   input_schema: any;
-  cache_control?: { type: 'ephemeral' };
+  cache_control?: { type: 'ephemeral'; ttl?: '5m' | '1h' };
 }
 
 export interface AnthropicRequestPayload {
@@ -88,6 +100,11 @@ export interface AnthropicRequestPayload {
   messages: AnthropicMessage[];
   tools?: AnthropicTool[];
   thinking?: { type: 'enabled'; budget_tokens: number };
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  stop_sequences?: string[];
+  metadata?: { user_id?: string };
 }
 
 /**
@@ -169,8 +186,16 @@ export function buildAnthropicRequest(
       continue;
     }
     // user
-    const userText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-    out.push({ role: 'user', content: [{ type: 'text', text: userText }] });
+    if (Array.isArray(m.content)) {
+      // Pass structured content blocks through verbatim — caller is
+      // already speaking Anthropic's block shape (image, text, document,
+      // tool_result inside a user turn, etc.). We trust the caller did
+      // their own validation; the API will reject malformed blocks.
+      out.push({ role: 'user', content: m.content });
+    } else {
+      const userText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      out.push({ role: 'user', content: [{ type: 'text', text: userText }] });
+    }
   }
   flushToolResults();
 
@@ -180,9 +205,14 @@ export function buildAnthropicRequest(
     messages: out,
   };
 
+  const ttl = options.cacheTtl ?? '5m';
+  const cacheBreakpoint = ttl === '1h'
+    ? { type: 'ephemeral' as const, ttl: '1h' as const }
+    : { type: 'ephemeral' as const };
+
   if (systemText) {
     if (options.cacheEnabled) {
-      body.system = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
+      body.system = [{ type: 'text', text: systemText, cache_control: cacheBreakpoint }];
     } else {
       body.system = systemText;
     }
@@ -194,6 +224,10 @@ export function buildAnthropicRequest(
       description: t.description || '',
       input_schema: t.inputSchema || { type: 'object', properties: {} },
     }));
+    if (options.cacheEnabled && options.cacheTools) {
+      const last = body.tools[body.tools.length - 1];
+      last.cache_control = cacheBreakpoint;
+    }
   }
 
   // Cache breakpoint on the last assistant message (its last block) so
@@ -203,10 +237,20 @@ export function buildAnthropicRequest(
       const msg = body.messages[i];
       if (msg.role === 'assistant' && Array.isArray(msg.content) && msg.content.length > 0) {
         const last = msg.content[msg.content.length - 1];
-        last.cache_control = { type: 'ephemeral' };
+        last.cache_control = cacheBreakpoint;
         break;
       }
     }
+  }
+
+  if (typeof options.temperature === 'number') body.temperature = options.temperature;
+  if (typeof options.topP === 'number') body.top_p = options.topP;
+  if (typeof options.topK === 'number') body.top_k = options.topK;
+  if (Array.isArray(options.stopSequences) && options.stopSequences.length > 0) {
+    body.stop_sequences = options.stopSequences.slice(0, 4);
+  }
+  if (options.metadataUserId) {
+    body.metadata = { user_id: options.metadataUserId };
   }
 
   if (
@@ -304,9 +348,22 @@ export async function callAnthropic(
   }
 
   const cacheEnabled = process.env.BRAINROUTER_ANTHROPIC_CACHE === '1';
+  const envTtl = (process.env.BRAINROUTER_ANTHROPIC_CACHE_TTL ?? '').toLowerCase();
+  const cacheTtl: '5m' | '1h' | undefined =
+    options.cacheTtl ?? (envTtl === '1h' ? '1h' : envTtl === '5m' ? '5m' : undefined);
+  const cacheTools = options.cacheTools ?? (process.env.BRAINROUTER_ANTHROPIC_CACHE_TOOLS === '1');
   const body = buildAnthropicRequest(config, messages, tools, {
     ...options,
     cacheEnabled: options.cacheEnabled ?? cacheEnabled,
+    cacheTtl,
+    cacheTools,
+    // Pull sampling defaults from LLMConfig when caller didn't override.
+    temperature: options.temperature ?? config.temperature,
+    topP: options.topP ?? config.topP,
+    topK: options.topK ?? config.topK,
+    stopSequences: options.stopSequences ?? config.stopSequences,
+    maxTokens: options.maxTokens ?? config.maxTokens,
+    metadataUserId: options.metadataUserId ?? config.metadataUserId,
   });
 
   const headers: Record<string, string> = {
@@ -314,6 +371,20 @@ export async function callAnthropic(
     'x-api-key': apiKey,
     'anthropic-version': ANTHROPIC_API_VERSION,
   };
+  // Comma-separated betas, e.g.
+  //   BRAINROUTER_ANTHROPIC_BETA=extended-cache-ttl-2025-04-11,interleaved-thinking-2025-05-14
+  const betaEnv = (process.env.BRAINROUTER_ANTHROPIC_BETA ?? '').trim();
+  const autoBetas: string[] = [];
+  if ((options.cacheTtl ?? cacheTtl) === '1h') {
+    autoBetas.push('extended-cache-ttl-2025-04-11');
+  }
+  const betas = [
+    ...betaEnv.split(',').map((s) => s.trim()).filter(Boolean),
+    ...autoBetas,
+  ];
+  if (betas.length > 0) {
+    headers['anthropic-beta'] = Array.from(new Set(betas)).join(',');
+  }
 
   const timeoutMs = Number(process.env.BRAINROUTER_LLM_TIMEOUT_MS || 120000);
   const controller = new AbortController();
