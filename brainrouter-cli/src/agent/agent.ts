@@ -39,6 +39,7 @@ import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
 import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
+import { shouldUseAnthropicNative, callAnthropic } from '../runtime/anthropicAdapter.js';
 import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
@@ -945,7 +946,14 @@ export class Agent {
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed.
         const effort = resolveEffort(this.workspaceRoot).effort;
-        response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+        if (shouldUseAnthropicNative(this.llmConfig)) {
+          response = await callAnthropic(this.llmConfig, this.chatHistory, allTools, {
+            effort,
+            onThinking: (text) => callbacks.onStatusUpdate(`Thinking: ${text.slice(0, 200)}`),
+          });
+        } else {
+          response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+        }
       } catch (err: any) {
         throw new Error(`LLM Execution failed: ${err.message}`);
       }

@@ -349,10 +349,27 @@ Vendor prefixes (`openai/gpt-oss-20b`) and tag suffixes
 models (`gpt-4o-mini`, `qwen2.5-coder`, …) skip the field on every
 server — sending it would be a no-op at best.
 
-Anthropic native (`claude-*` on `/v1/messages`) is **not** covered —
-it uses `thinking: { type: 'enabled', budget_tokens }`, a different
-field shape on a different endpoint. Reaching it needs a separate
-provider adapter (tracked for 0.4.x).
+Anthropic native (`claude-*` on `/v1/messages`) **is** covered as of
+0.3.8 via a dedicated adapter (`runtime/anthropicAdapter.ts`). Set
+`config.llm.provider: 'anthropic'` with `endpoint:
+'https://api.anthropic.com/v1'` and the dispatch layer routes to
+`POST /v1/messages` automatically. Two opt-in env vars on this path:
+
+- `BRAINROUTER_ANTHROPIC_CACHE=1` — adds `cache_control:
+  { type: 'ephemeral' }` to the system prompt and the last assistant
+  message at each turn, enabling Anthropic prompt caching. Default OFF
+  for the safer rollout; flip it on once you've watched a few sessions.
+- `BRAINROUTER_ANTHROPIC_NATIVE=1` — force the native path for
+  vended / reverse-proxied endpoints whose hostname isn't
+  `api.anthropic.com` but which speak the native shape.
+
+Extended thinking on Anthropic is gated by `/effort high` AND a Sonnet 4
+or Opus 4 model name — it sends `thinking: { type: 'enabled',
+budget_tokens: 8000 }`. Thinking output streams past via the existing
+status channel; it is NOT stored in `chatHistory` (re-sending CoT on
+every turn would balloon the bill). Streaming responses (SSE) are
+deliberately out of scope for the 0.3.8 cut — the loop still polls
+non-streaming.
 
 **Surfacing.**
 
