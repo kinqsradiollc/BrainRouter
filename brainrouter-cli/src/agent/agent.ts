@@ -31,7 +31,7 @@ import {
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
-import { buildDefaultSourcePlan, buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import {
   countEntityTokens as countEntityTokensFromText,
   decideMemoryBriefing,
@@ -221,7 +221,7 @@ export interface LastBriefingDetails {
   recordIds: string[];
   recordCount: number;
   tokensInjected: number;
-  tokensSaved: number;
+  charsSaved: number;
   warnings: string[];
 }
 
@@ -639,7 +639,7 @@ export class Agent {
     recordIds: [],
     recordCount: 0,
     tokensInjected: 0,
-    tokensSaved: 0,
+    charsSaved: 0,
     warnings: [],
   };
   /**
@@ -2030,7 +2030,7 @@ export class Agent {
         recordIds: [],
         recordCount: 0,
         tokensInjected: 0,
-        tokensSaved: details.tokensSaved ?? 0,
+        charsSaved: details.charsSaved ?? 0,
         warnings: details.warnings ?? [],
       };
     };
@@ -2062,6 +2062,8 @@ export class Agent {
 
     const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
     const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
+    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal);
+    const sourcesPlannedNames = describeSourcePlan(sourcePlan);
     const decision = decideMemoryBriefing({
       prompt,
       recallMode,
@@ -2089,7 +2091,7 @@ export class Agent {
         resetBriefing({
           decision: decision.action,
           reasons: decision.reasons,
-          sourcesPlanned: buildDefaultSourcePlan(prompt, hasActiveGoal).includeRecall ? ['memory_recall'] : [],
+          sourcesPlanned: sourcesPlannedNames,
         });
         callbacks.onMemoryEvent?.({ kind: 'skipped', reason: decision.reasons.join(', ') || 'gated (no trigger)' });
         return;
@@ -2106,7 +2108,6 @@ export class Agent {
     // "what we're doing now" context twice. The anchor is set immediately
     // before this call in `runTurn` (around line 680), so reading the goal
     // here resolves to the same record the anchor used.
-    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal);
     const briefing = await buildMemoryBriefing({
       mcpClient: this.mcpClient,
       mcpTools,
@@ -2139,7 +2140,7 @@ export class Agent {
       recordIds: briefing.recalledRecordIds,
       recordCount: briefing.recalledRecordIds.length,
       tokensInjected,
-      tokensSaved: this.memoryMetrics.compactedToolCharsAvoided,
+      charsSaved: this.memoryMetrics.compactedToolCharsAvoided,
       warnings: briefing.warnings,
     };
 
