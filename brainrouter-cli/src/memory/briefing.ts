@@ -196,7 +196,7 @@ export function buildDefaultSourcePlan(query: string, hasActiveGoal?: boolean): 
   };
 }
 
-function describeSourcePlan(plan: BriefingSourcePlan): string[] {
+export function describeSourcePlan(plan: BriefingSourcePlan): string[] {
   const sources: string[] = [];
   if (plan.includeRecall) sources.push('memory_recall');
   if (plan.includeWorkingContext) sources.push('memory_working_context');
