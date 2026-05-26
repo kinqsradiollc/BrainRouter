@@ -44,6 +44,12 @@ import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
+import {
+  dedupeToolCalls,
+  parseArgumentsOrError,
+  synthesizeOrphanResults,
+  suggestSimilarToolName,
+} from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
@@ -949,6 +955,21 @@ export class Agent {
         this.lastTurnUsage.calls += 1;
       }
 
+      // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
+      // smaller / quantised) sometimes emit duplicate tool_call ids in a
+      // single response. If we let both through, OpenAI's next request 400s
+      // because one of the duplicates has no paired tool_result. Dedupe
+      // before pushing the assistant message — last occurrence wins (closest
+      // to the model's final intent).
+      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
+      //   middlewares/dangling_tool_call_middleware.py — same well-formed
+      //   history invariant, applied per-response instead of pre-request.
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        const deduped = dedupeToolCalls(response.toolCalls, (id) => {
+          callbacks.onStatusUpdate(`Recovery: dropped duplicate tool_call id "${id}" (last occurrence wins).`);
+        });
+        response.toolCalls = deduped;
+      }
       // Record Assistant message
       const assistantMsg: any = { role: 'assistant', content: response.content };
       if (response.toolCalls) {
@@ -1035,19 +1056,12 @@ export class Agent {
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string }> => {
         this.lastTurnToolCalls += 1;
-        // Parse JSON args. If the LLM produced malformed JSON, surface that
-        // explicitly via the tool result so it can self-correct on the next
-        // turn — the old fallback silently set args={} and the LLM had no
-        // signal that anything was wrong.
-        let args: any = {};
-        let argParseError: string | undefined;
-        try {
-          args = typeof tc.function.arguments === 'string'
-            ? JSON.parse(tc.function.arguments)
-            : tc.function.arguments;
-        } catch (e: any) {
-          argParseError = `Tool argument JSON was malformed: ${e.message}. Re-issue the tool call with valid JSON arguments.`;
-        }
+        // 0.3.8-I4: Use the strict-recovery helper so a malformed-arguments
+        // tool_call surfaces as a structured tool_result (with the raw
+        // arguments echoed back) instead of throwing out of the loop.
+        const parsedArgs = parseArgumentsOrError(tc);
+        let args: any = parsedArgs.args;
+        const argParseError: string | undefined = parsedArgs.error;
 
         const isLocal = LOCAL_TOOLS.some(lt => lt.name === name);
         callbacks.onToolStart(name, args);
@@ -1152,8 +1166,14 @@ export class Agent {
           // the next iteration self-corrects instead of retrying garbage.
           if (/-32601|Unknown tool|MethodNotFound/i.test(message)) {
             const hint = explainUnknownToolName(name);
-            resultText = `Tool "${name}" does not exist. ${hint}\nUnderlying error: ${message}`;
-            summary = `unknown tool — ${hint.slice(0, 120)}`;
+            // 0.3.8-I4: surface a "did you mean: X?" suggestion when the
+            // LLM-emitted name normalises to a real registered tool (case,
+            // separator, or alias mismatch). This is cheaper for the model
+            // to recover from than the generic skill-vs-tool explanation.
+            const didYouMean = suggestSimilarToolName(name, candidates, normalizeToolName);
+            const suggestionLine = didYouMean ? `did you mean: ${didYouMean}?\n` : '';
+            resultText = `Tool "${name}" does not exist. ${suggestionLine}${hint}\nUnderlying error: ${message}`;
+            summary = didYouMean ? `unknown tool — did you mean ${didYouMean}?` : `unknown tool — ${hint.slice(0, 120)}`;
           } else {
             resultText = `Tool execution failed: ${message}`;
             summary = message;
@@ -1266,6 +1286,25 @@ export class Agent {
         // Record the FULL untruncated result so /transcript shows everything,
         // even when the LLM-facing copy was clamped.
         this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
+      }
+
+      // 0.3.8-I4: orphan safety net. Even after dedupe + the per-call
+      // recovery branches above, a tool_call without a paired tool_result
+      // would 400 the next OpenAI request. Synthesize ERROR envelopes for
+      // any unmatched id so strict tool_call ↔ tool_result pairing is
+      // preserved. Synthetic content is a plain `ERROR: …` string so the
+      // R1 child-drain guardrail's parseJsonObject(resultText) returns
+      // undefined and we don't accidentally claim a child was spawned.
+      // Synthetics do NOT bump lastTurnToolCalls — they aren't real
+      // dispatches, just a well-formed-history fix.
+      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
+      //   middlewares/dangling_tool_call_middleware.py.
+      const producedResults = processed.filter((p): p is NonNullable<typeof p> => !!p).map((p) => p.toolMsg);
+      const orphans = synthesizeOrphanResults(toolCalls, producedResults);
+      for (const synthetic of orphans) {
+        this.chatHistory.push(synthetic);
+        this.recordTranscript(synthetic);
+        callbacks.onStatusUpdate(`Recovery: synthesized placeholder for orphan tool_call ${synthetic.tool_call_id}.`);
       }
     }
 
