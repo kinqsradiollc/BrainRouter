@@ -82,6 +82,8 @@ openSrc/deer-flow
 openSrc/grok-cli
 openSrc/vibekit
 openSrc/AutoResearchClaw
+openSrc/claude-code-openSource
+openSrc/DeepSeek-Reasonix
 
 # Local agent reference doc for openSrc/ vendored projects — useful but
 # personal (machine-specific paths, evolving notes) so it stays out of git.

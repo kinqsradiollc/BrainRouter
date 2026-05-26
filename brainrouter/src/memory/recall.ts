@@ -8,6 +8,7 @@ import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
 import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
+import { isExternalTimeoutError } from "./llm-response.js";
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
@@ -353,7 +354,17 @@ export class MemoryRecallPipeline {
         judgeRejected = topResults.length - judgeApproved;
         topResults = judgeResult.approvedIndices.map((i) => topResults[i]);
       } catch (e) {
-        console.error("[BrainRouter] Relevance judge failed during recall, keeping reranker output:", (e as Error).message);
+        // Locally-hosted LLMs (LM Studio, Ollama) timing out on the
+        // relevance judge isn't a server bug — it just means the
+        // judge model is slow. Tone the message down to a single warn
+        // line (no stack trace) so it doesn't dump several frames of
+        // noise into the CLI's terminal on every recall. Non-timeout
+        // failures still get the full error for diagnostics.
+        if (isExternalTimeoutError(e)) {
+          console.warn("[BrainRouter] Relevance judge timed out; keeping reranker output.");
+        } else {
+          console.error("[BrainRouter] Relevance judge failed during recall, keeping reranker output:", (e as Error).message);
+        }
       }
     }
 

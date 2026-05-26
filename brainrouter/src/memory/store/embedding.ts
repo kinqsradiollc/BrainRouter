@@ -1,12 +1,14 @@
 import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../retry.js";
 import { acquireLLMSlot } from "../llm-semaphore.js";
+import { resolveLLMTimeoutMs } from "../llm-response.js";
 
 export class EmbeddingService {
   private readonly endpoint: string;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly dimensions: number;
+  private readonly timeoutMs: number;
   private readonly ready: boolean;
 
   constructor(config: EmbeddingServiceConfig) {
@@ -14,6 +16,12 @@ export class EmbeddingService {
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "text-embedding-3-small";
     this.dimensions = config.dimensions ?? 768;
+    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
+      endpoint: this.endpoint,
+      requestedMs: 60_000,
+      envVarNames: ["BRAINROUTER_EMBEDDING_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
+      localMinimumMs: 120_000,
+    }));
 
     // Graceful fallback: If no API key is provided, we disable the embedding service.
     this.ready = !!this.apiKey;
@@ -55,6 +63,7 @@ export class EmbeddingService {
           input: text,
           model: this.model,
         }),
+        signal: AbortSignal.timeout(this.timeoutMs),
       }, {
         label: "Embedding API",
       });

@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Agent, buildChatCompletionPayload } from '../agent/agent.js';
 import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../state/goalStore.js';
@@ -104,6 +106,43 @@ test('Agent.setModel / getModel switches the LLM model at runtime', () => {
     assert.equal(agent.getModel(), 'test-model');
     agent.setModel('claude-sonnet-4-5');
     assert.equal(agent.getModel(), 'claude-sonnet-4-5');
+  });
+});
+
+test('Agent.setLLMConfig: /config writes propagate to the live agent without restart', () => {
+  withTempWorkspace((workspace) => {
+    const agent = makeAgent(workspace);
+    // Baseline from makeAgent fixture: openai, apiKey='k', model='test-model', no endpoint.
+    assert.equal(agent.getLLMConfig().apiKey, 'k');
+    assert.equal(agent.getLLMConfig().endpoint, undefined);
+    // Simulate /config changing the API key + endpoint (e.g. user
+    // pointed the CLI at LM Studio). Pre-0.3.10 this required a CLI
+    // restart because the agent only exposed setModel.
+    agent.setLLMConfig({
+      apiKey: 'lm-studio-key',
+      endpoint: 'http://localhost:1234/v1',
+      model: 'qwen3-coder-30b',
+    });
+    const after = agent.getLLMConfig();
+    assert.equal(after.apiKey, 'lm-studio-key');
+    assert.equal(after.endpoint, 'http://localhost:1234/v1');
+    assert.equal(after.model, 'qwen3-coder-30b');
+    // Provider was not in the partial; setLLMConfig merges, so it
+    // should be preserved from the prior config.
+    assert.equal(after.provider, 'openai');
+  });
+});
+
+test('Agent.setLLMConfig: partial updates leave untouched fields alone', () => {
+  withTempWorkspace((workspace) => {
+    const agent = makeAgent(workspace);
+    agent.setLLMConfig({ endpoint: 'http://example.com/v1' });
+    const after = agent.getLLMConfig();
+    assert.equal(after.endpoint, 'http://example.com/v1');
+    // model + apiKey + provider untouched.
+    assert.equal(after.model, 'test-model');
+    assert.equal(after.apiKey, 'k');
+    assert.equal(after.provider, 'openai');
   });
 });
 
@@ -331,10 +370,68 @@ test('runTurn empty LLM answer after a tool call returns a useful summary (not t
   });
 });
 
+test('runTurn repeat sequence guard stops same tool with changing args', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    for (let i = 1; i <= 5; i++) {
+      fs.writeFileSync(path.join(workspace, `file-${i}.txt`), `content ${i}`);
+    }
+    const originalFetch = globalThis.fetch;
+    const previousLimit = process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT;
+    let llmCalls = 0;
+    process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT = '3';
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls <= 5) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: `call_read_${llmCalls}`,
+                type: 'function',
+                function: { name: 'read_file', arguments: JSON.stringify({ path: `file-${llmCalls}.txt` }) },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 40, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'I stopped the read loop.' } }],
+        usage: { prompt_tokens: 40, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const events: Array<{ name: string; ok: boolean; summary: string }> = [];
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('read a bunch', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => { events.push({ name, ok: result.success, summary: result.summary }); },
+      });
+      assert.equal(answer, 'I stopped the read loop.');
+      assert.equal(events.filter((e) => e.name === 'read_file' && e.ok).length, 3);
+      assert.equal(events.some((e) => e.name === 'read_file' && !e.ok && /repeat sequence guard/.test(e.summary)), true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousLimit === undefined) delete process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT;
+      else process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT = previousLimit;
+    }
+  });
+});
+
 test('runTurn forces wait_agents before final answer after spawn_agents', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
     let parentCalls = 0;
+    let sawChildResultSystem = false;
 
     globalThis.fetch = (async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
@@ -380,6 +477,13 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
 
+      sawChildResultSystem = messages.some((m: any) =>
+        m.role === 'system' &&
+        typeof m.content === 'string' &&
+        m.content.includes('Recently waited child-agent outputs') &&
+        m.content.includes('child output for child-one') &&
+        m.content.includes('child output for child-two'),
+      );
       return new Response(JSON.stringify({
         choices: [{ message: { content: 'Both child outputs were incorporated.' } }],
         usage: { prompt_tokens: 50, completion_tokens: 6 },
@@ -409,6 +513,7 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
       assert.deepEqual(toolNames.filter((name) => name === 'wait_agents'), ['wait_agents']);
       assert.equal(waitArgs.length, 1);
       assert.equal(waitArgs[0].ids.length, 2);
+      assert.equal(sawChildResultSystem, true);
       assert.equal(answer, 'Both child outputs were incorporated.');
     } finally {
       globalThis.fetch = originalFetch;
@@ -825,14 +930,24 @@ test('P1.2: reasoning tier cannot spawn another reasoning agent', async () => {
 
 test('P1.2: reasoning tier can spawn a worker agent', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
-    const ctx = makeStubOrchCtx(workspace, { parentTier: 'reasoning', depth: 1 });
-    // Should pass the tier check (proceeds to createSession, then fails on null mcpClient)
-    // We check it throws but NOT a hierarchy error.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'worker done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
     try {
-      await executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'implement it' }, ctx);
-    } catch (err: any) {
-      assert.doesNotMatch(String(err.message), /cannot delegate|cannot spawn.*reasoning/i,
-        'hierarchy check must not fire for reasoning→worker');
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+      const ctx = makeStubOrchCtx(workspace, {
+        parentTier: 'reasoning',
+        depth: 1,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+      });
+      const raw = await executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'implement it', wait: true }, ctx);
+      const result = JSON.parse(raw);
+      assert.equal(result.status, 'completed');
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });
@@ -856,19 +971,26 @@ test('P1.2: depth cap is enforced at default limit (3)', async () => {
 
 test('P1.2: depth cap is overridable via BRAINROUTER_MAX_SPAWN_DEPTH', async () => {
   const prev = process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+  const originalFetch = globalThis.fetch;
   try {
     process.env.BRAINROUTER_MAX_SPAWN_DEPTH = '5';
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'worker done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
     await withTempWorkspaceAsync(async (workspace) => {
-      const ctx = makeStubOrchCtx(workspace, { depth: 3 });
-      // Depth 3 < limit 5, so no cap error; expect a different failure (null mcpClient).
-      try {
-        await executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'task' }, ctx);
-      } catch (err: any) {
-        assert.doesNotMatch(String(err.message), /depth cap/i,
-          'depth cap must not fire when depth is below the custom limit');
-      }
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+      const ctx = makeStubOrchCtx(workspace, {
+        depth: 3,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+      });
+      const raw = await executeOrchestrationTool('spawn_agent', { role: 'worker', prompt: 'task', wait: true }, ctx);
+      const result = JSON.parse(raw);
+      assert.equal(result.status, 'completed');
     });
   } finally {
+    globalThis.fetch = originalFetch;
     if (prev === undefined) delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
     else process.env.BRAINROUTER_MAX_SPAWN_DEPTH = prev;
   }
@@ -1070,10 +1192,88 @@ test('orchestration: task_agent timeout returns explicit timeout envelope', asyn
         ctx,
       );
       const result = JSON.parse(raw);
-      assert.match(result.status, /timeout|running|pending/i,
+      assert.match(result.status, /timeout|running|pending|failed/i,
         `expected timeout-shaped envelope; got ${JSON.stringify(result)}`);
       assert.match(result.id, /^agent-/);
       await new Promise((resolve) => setTimeout(resolve, 150));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: background child timeout marks session failed with synthetic output', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'too late' } }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const ctx = {
+        workspaceRoot: workspace,
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell' as const,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+        launchCwd: workspace,
+      };
+      const raw = await executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'explorer', prompt: 'slow background task', timeoutMs: 10 },
+        ctx,
+      );
+      const result = JSON.parse(raw);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const { getSession } = await import('../orchestration/orchestrator.js');
+      const record = getSession(workspace, result.id);
+      assert.equal(record?.status, 'failed');
+      assert.match(record?.finalOutput ?? '', /ERROR: Child agent .* exceeded wall-clock timeout/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: invalid child workdir falls back to parent cwd', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    try {
+      const childCwd = path.join(workspace, 'subdir');
+      fs.mkdirSync(childCwd);
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const raw = await executeOrchestrationTool('spawn_agent', {
+        role: 'explorer',
+        prompt: 'quick',
+        workdir: '/definitely/not/a/real/path',
+      }, {
+        workspaceRoot: workspace,
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell' as const,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+        launchCwd: childCwd,
+      });
+      const result = JSON.parse(raw);
+      const { trackedPromiseFor } = await import('../orchestration/tools.js');
+      await trackedPromiseFor(result.id);
+      assert.equal(result.workdir, fs.realpathSync(childCwd));
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1101,19 +1301,16 @@ test('P1.2: agentId unknown returns error listing known ids', async () => {
 // order so the model's next turn sees a deterministic trace.
 // ---------------------------------------------------------------------------
 
-import fs from 'node:fs';
-import path from 'node:path';
-
 test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, rejects writers/orchestration/unknowns', async () => {
   const { isParallelSafe } = await import('../agent/toolSafety.js');
-  // Bare read-only locals — safe.
-  for (const name of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search']) {
+  // Bare read-only locals + concurrency-safe agent spawners (0.3.9) — safe.
+  for (const name of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'task_agent', 'delegate_agent']) {
     assert.equal(isParallelSafe(name), true, `${name} must be parallel-safe`);
   }
-  // Writers / shell / orchestration / interactive — never safe.
+  // Writers / shell / bookkeeping-sensitive orchestration / interactive — never safe.
   for (const name of [
     'write_file', 'edit_file', 'apply_patch', 'run_command',
-    'spawn_agent', 'spawn_agents', 'task_agent', 'delegate_agent',
+    'spawn_agent', 'spawn_agents',
     'wait_agent', 'wait_agents', 'close_agent', 'route_agent',
     'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice',
     'list_agents', 'read_agent_transcript',

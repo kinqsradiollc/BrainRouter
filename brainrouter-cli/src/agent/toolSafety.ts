@@ -21,15 +21,24 @@
  *
  * Explicitly EXCLUDED (must stay serial):
  *   - write_file / edit_file / apply_patch / run_command  — workspace mutation.
- *   - spawn_agent / spawn_agents / task_agent / delegate_agent
- *     / wait_agent / wait_agents / close_agent / route_agent
- *     / read_agent_transcript  — orchestration / child-session mutation.
- *     (R1's child-drain guardrail tracks every spawn/wait one-by-one;
- *     running them in parallel would let bookkeeping diverge.)
+ *   - spawn_agent / spawn_agents — bookkeeping-sensitive (kept serial out of
+ *     caution; the model usually drives spawns through task_agent /
+ *     delegate_agent anyway).
+ *   - wait_agent / wait_agents / close_agent / read_agent_transcript /
+ *     route_agent  — child-drain guardrail tracks observations one-by-one.
  *   - update_plan / goal_complete / goal_blocked  — session state mutation.
  *   - ask_user_choice  — interactive picker; must not interleave with other UI.
- *   - list_agents  — reads orchestration state but classified serial out of
- *     caution; cheap and rarely batched.
+ *   - list_agents  — reads orchestration state but cheap and rarely batched.
+ *
+ * Concurrency-safe additions (0.3.9 — parallel agent spawn):
+ *   - task_agent / delegate_agent run multiple children concurrently when
+ *     batched in one assistant message. Safe because: (a) createSession +
+ *     updateSession in orchestrator.ts are fully synchronous JS sequences
+ *     (read → mutate → atomic rename) that cannot interleave under Node's
+ *     single-threaded event loop, and (b) trackChildObservation is sync Set
+ *     mutation. This matches Claude Code's "launch many agents in one
+ *     message" UX — previously batched task_agent calls serialized end-to-end
+ *     waits, which defeated the point of batching.
  */
 const PARALLEL_SAFE_LOCAL_TOOLS = new Set<string>([
   'read_file',
@@ -38,6 +47,8 @@ const PARALLEL_SAFE_LOCAL_TOOLS = new Set<string>([
   'glob_files',
   'fetch_url',
   'web_search',
+  'task_agent',
+  'delegate_agent',
 ]);
 
 /**

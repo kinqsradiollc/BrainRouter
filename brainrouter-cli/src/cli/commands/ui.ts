@@ -166,7 +166,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       if (reconciled > 0) console.log(`  Reconciled ${chalk.yellow(reconciled)} stale child session(s).`);
       const childSessions = listSessions(agent.workspaceRoot);
       console.log(`  Child sessions: ${chalk.yellow(childSessions.length)} total`);
-      const orchestrationTools = ['spawn_agent', 'list_agents', 'wait_agent', 'read_agent_transcript', 'close_agent', 'update_plan'];
+      const orchestrationTools = ['task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'read_agent_transcript', 'close_agent', 'update_plan'];
       for (const tn of orchestrationTools) {
         const has = LOCAL_TOOLS.some((lt: any) => lt.name === tn);
         console.log(`  ${tn}: ${has ? chalk.green('available') : chalk.red('missing')}`);

@@ -365,6 +365,7 @@ export interface EmbeddingServiceConfig {
   apiKey?: string;
   model?: string;
   dimensions?: number;
+  timeoutMs?: number;
 }
 
 export interface RerankerServiceConfig {
@@ -372,6 +373,7 @@ export interface RerankerServiceConfig {
   apiKey?: string;
   model?: string;
   topN?: number;
+  timeoutMs?: number;
 }
 
 export interface RelevanceJudgeServiceConfig {
