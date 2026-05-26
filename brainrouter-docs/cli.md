@@ -400,7 +400,9 @@ provider forwarding heuristic
 
 | Tool | Purpose |
 | --- | --- |
-| `spawn_agent` | Spawn one child. |
+| `task_agent` | Run one foreground child and wait for completed output, failure, or timeout. |
+| `delegate_agent` | Start one background child and continue working in the parent turn. |
+| `spawn_agent` | Low-level compatibility primitive for one child; `wait: true` is still supported. |
 | `spawn_agents` | Spawn a batch in one tool call. |
 | `list_agents` | List active children. |
 | `wait_agent` / `wait_agents` | Block until child(ren) finish. |
@@ -993,8 +995,22 @@ exit from a `pre-tool` hook blocks the tool call.
 
 ## Multi-agent orchestration
 
-`spawn_agent` (one child) or `spawn_agents` (batch in one tool call)
-dispatch to bounded roles.
+Use the clearest tool for the child semantics:
+
+- `task_agent` runs one foreground child task and blocks until it returns
+  completed output, a failure, or a timeout envelope.
+- `delegate_agent` starts one background child, returns a running child
+  id, and tells the parent to continue useful work until `wait_agent` is
+  needed.
+- `spawn_agent` and `spawn_agents` remain low-level compatibility
+  primitives. `spawn_agent({ wait: true })` still behaves like a
+  foreground child task.
+
+The model policy is direct answer → direct tool → foreground
+`task_agent` → background `delegate_agent` → low-level
+`spawn_agent`/`spawn_agents` for batching or special control.
+
+All child tools dispatch to bounded roles.
 
 ### Roles
 
@@ -1025,6 +1041,23 @@ picks one from the leading verb / intent:
 
 `route_agent({ task })` returns the inferred role + rationale without
 spawning. Useful for sanity-checking a costly fan-out.
+
+### Foreground and background children
+
+```ts
+task_agent({
+  role: 'reviewer',
+  prompt: 'Review the staged CLI orchestration diff for regressions.',
+  timeoutMs: 120000
+})
+// → { id, role, status: 'completed' | 'failed' | 'timeout', finalOutput? }
+
+delegate_agent({
+  role: 'explorer',
+  prompt: 'Map all prompt-policy references while I update docs.'
+})
+// → { id, role, access, status: 'running', nextAction: 'continue working ...' }
+```
 
 ### Batch spawn
 
