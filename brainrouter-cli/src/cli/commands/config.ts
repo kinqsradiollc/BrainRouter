@@ -992,17 +992,45 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
         apiKey = keyResult.text;
       }
 
+      // OpenAI doubles as the OpenAI-compatible base-URL flow. Prompt
+      // to confirm or replace the endpoint; local providers keep their
+      // fixed loopback URLs.
+      let endpoint = provider.endpoint;
+      if (provider.id === 'openai') {
+        const theme = themeFor(ctx);
+        const current = ctx.config.llm?.endpoint ?? provider.endpoint;
+        const urlResult = await promptText({
+          theme,
+          title: 'API base URL',
+          subtitle: 'Press ENTER for OpenAI direct, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, vLLM, …).',
+          badge: 'OpenAI base URL',
+          prefilled: current,
+          placeholder: provider.endpoint,
+          validate: (raw) => {
+            const v = raw.trim();
+            if (!v) return 'base URL cannot be empty';
+            try { new URL(v); } catch { return 'must be a valid URL'; }
+            return undefined;
+          },
+        });
+        if (urlResult.kind !== 'accept') {
+          return { ok: false, reason: 'cancelled — provider unchanged' };
+        }
+        endpoint = urlResult.text.trim();
+      }
+
       ctx.config.llm = {
         provider: 'openai',
         apiKey,
         model: provider.defaultModel,
-        endpoint: provider.endpoint,
+        endpoint,
       };
       saveConfig(ctx.config);
       ctx.agent.setModel(provider.defaultModel);
+      const endpointTail = endpoint !== provider.endpoint ? ` · endpoint ${endpoint}` : '';
       const tail = sameProvider
-        ? '(provider unchanged — reused existing key + reset model to default)'
-        : `(model defaulted to ${provider.defaultModel} · key ${maskApiKey(apiKey)})`;
+        ? `(provider unchanged — reused existing key + reset model to default${endpointTail})`
+        : `(model defaulted to ${provider.defaultModel} · key ${maskApiKey(apiKey)}${endpointTail})`;
       return { ok: true, message: `provider → ${provider.label} ${tail}` };
     },
   },
