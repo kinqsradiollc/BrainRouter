@@ -8,6 +8,7 @@ import path from 'node:path';
 // this is a near-no-op type swap.
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
+import { getCliKnobs } from '../config/config.js';
 import {
   createSession,
   formatSessionSummary,
@@ -211,7 +212,8 @@ function resolveChildLaunchCwd(ctx: OrchestrationContext, rawWorkdir: unknown): 
 }
 
 function childTimeoutMsFromArgs(args: any): number {
-  const raw = Number(args?.timeoutMs ?? process.env.BRAINROUTER_CHILD_AGENT_TIMEOUT_MS ?? DEFAULT_CHILD_AGENT_TIMEOUT_MS);
+  const knobValue = getCliKnobs().childAgentTimeoutMs;
+  const raw = Number(args?.timeoutMs ?? knobValue ?? DEFAULT_CHILD_AGENT_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_CHILD_AGENT_TIMEOUT_MS;
 }
 
@@ -577,7 +579,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   if (!prompt.trim()) throw new Error('spawn_agent requires a non-empty prompt.');
 
   // P1.2 — spawn hierarchy checks.
-  const rawMaxDepth = parseInt(process.env.BRAINROUTER_MAX_SPAWN_DEPTH ?? '3', 10);
+  const rawMaxDepth = getCliKnobs().maxSpawnDepth;
   const maxDepth = Number.isFinite(rawMaxDepth) && rawMaxDepth > 0 ? rawMaxDepth : 3;
   const currentDepth = ctx.depth ?? 0;
   const parentTier = ctx.parentTier;
@@ -589,7 +591,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     throw new Error(`Tier "reasoning" cannot spawn a "${childTier}" agent — only "worker" children are allowed.`);
   }
   if (currentDepth >= maxDepth) {
-    throw new Error(`Spawn depth cap reached (${currentDepth}/${maxDepth}). Reduce agent nesting or raise BRAINROUTER_MAX_SPAWN_DEPTH.`);
+    throw new Error(`Spawn depth cap reached (${currentDepth}/${maxDepth}). Reduce agent nesting or raise cli.maxSpawnDepth in ~/.config/brainrouter/config.json.`);
   }
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
@@ -737,10 +739,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // The REPL renders this in a multi-line `agent-result` scrollback
       // block so the body wraps freely. Configurable via env var for power
       // users who want to cap it tighter on small terminals.
-      const AGENT_PREVIEW_MAX = Math.max(
-        400,
-        Number(process.env.BRAINROUTER_AGENT_PREVIEW_CHARS) || 2500,
-      );
+      const AGENT_PREVIEW_MAX = Math.max(400, getCliKnobs().agentPreviewChars);
       const previewBody = output
         ? (output.length <= AGENT_PREVIEW_MAX
             ? output

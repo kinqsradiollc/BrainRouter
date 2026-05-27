@@ -22,6 +22,7 @@
 import { scavengeToolCalls, type ScavengedToolCall } from './scavenge.js';
 import { repairTruncatedJson } from './truncation.js';
 import { StormBreaker, type IsMutating, type IsStormExempt, type ToolCallLike } from './storm.js';
+import { getCliKnobs } from '../../config/config.js';
 
 export { analyzeSchema, flattenSchema, nestArguments } from './flatten.js';
 export type { FlattenDecision, JSONSchema } from './flatten.js';
@@ -161,16 +162,16 @@ function looksParseable(s: string): boolean {
 }
 
 function defaultStormWindow(): number {
-  const raw = Number.parseInt(process.env.BRAINROUTER_STORM_WINDOW ?? '', 10);
+  const raw = getCliKnobs().stormWindow;
   return Number.isFinite(raw) && raw >= 2 && raw <= 32 ? raw : 6;
 }
 
 function defaultStormThreshold(): number {
-  const raw = Number.parseInt(process.env.BRAINROUTER_STORM_THRESHOLD ?? '', 10);
-  // Default 4: the existing per-turn legacy `REPEAT_GUARD_LIMIT = 3`
+  // Default 4 — the existing per-turn legacy REPEAT_GUARD_LIMIT = 3
   // already suppresses the 4th identical call inside one runTurn. Our
-  // pipeline-level guard is a complement that adds scavenge / truncation
-  // / mutation-aware clearing — keep its trigger one step LATER (the
-  // 4th call) so it doesn't pre-empt the legacy guard.
+  // pipeline-level guard adds scavenge / truncation / mutation-aware
+  // clearing — keep its trigger one step LATER so it doesn't pre-empt
+  // the legacy guard.
+  const raw = getCliKnobs().stormThreshold;
   return Number.isFinite(raw) && raw >= 2 && raw <= 16 ? raw : 4;
 }

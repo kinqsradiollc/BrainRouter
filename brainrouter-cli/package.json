@@ -11,9 +11,9 @@
     "agents",
     "bin",
     "changelog",
+    "config",
     "dist",
-    "README.md",
-    ".env.example"
+    "README.md"
   ],
   "scripts": {
     "clean": "rm -rf dist",

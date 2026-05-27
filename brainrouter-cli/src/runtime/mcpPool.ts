@@ -8,15 +8,13 @@ import type { LLMConfig, ServerConfig } from '../config/config.js';
  * so existing call-sites that hold an `mcpClient` reference keep
  * working unchanged.
  *
- * Pattern lifted from Claude Code's `.mcp.json` model (see
- * `openSrc/claude-code/CHANGELOG.md` — concurrent startup at line 688,
+ * Concurrent startup:,
  * tool prefixing at line 1515, graceful degradation at line 189). Our
  * shape:
  *
  *   - All configured servers attempt connection concurrently on boot,
  *     each with a 5s timeout. Offline ones do NOT block others.
  *   - Tools surface to the agent with `mcp_<serverId>_<toolName>`
- *     prefix (Claude Code style).
  *   - `callTool` accepts BOTH the prefixed form (the canonical name
  *     the LLM sees in the tool inventory) AND the raw form (back-compat
  *     for the existing system prompt and skills that hardcode

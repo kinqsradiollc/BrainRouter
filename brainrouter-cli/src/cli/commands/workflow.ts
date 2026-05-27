@@ -459,7 +459,6 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
       // Workflow adapted from claude-code's code-review plugin
-      // (openSrc/claude-code/plugins/code-review/commands/code-review.md):
       // Triage → Summary → 4 parallel reviewers (2 conventions + 2 bug-hunters) →
       // validation pass → HIGH SIGNAL filter → final report.
       await runSkillCommand(agent, mcpClient, command, scope, [

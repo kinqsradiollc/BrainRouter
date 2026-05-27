@@ -11,6 +11,7 @@ import chalk from 'chalk';
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
+import { getCliKnobs } from '../config/config.js';
 import { appendTranscriptEntry, redactText } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
@@ -44,7 +45,7 @@ import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
 import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
-import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
+import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
@@ -60,6 +61,15 @@ import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
 // truncation / storm). Adapted from openSrc/DeepSeek-Reasonix/src/repair/.
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
+// 0.3.9 token-tally rework: content-aware estimator. The compaction
+// threshold itself stays a single `BRAINROUTER_AUTO_COMPACT_TOKENS`
+// absolute knob — the model's max context window isn't a good driver
+// because hitting 75% of a 1M-context model still costs real money,
+// and the user might want to compact much earlier.
+import {
+  estimateTokens as estimateTokensContentAware,
+  estimateChatHistoryTokens,
+} from '../runtime/tokenEstimate.js';
 // 0.3.9 item 12 — turn-end tool-result auto-shrink.
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
 // 0.3.9 item 13 — model-tier self-escalation.
@@ -203,7 +213,7 @@ function summarizeWaitedChildOutputs(resultText: string): string | undefined {
   }
   if (sections.length === 0) return undefined;
   const body = sections.join('\n\n---\n\n');
-  const maxChars = Number(process.env.BRAINROUTER_CHILD_RESULT_SYSTEM_CHARS) || 12_000;
+  const maxChars = getCliKnobs().childResultSystemChars;
   const clamped = body.length > maxChars
     ? `${body.slice(0, maxChars)}\n...[truncated ${body.length - maxChars} chars; use read_agent_transcript or /agent show <id> for full output]`
     : body;
@@ -760,6 +770,16 @@ export class Agent {
   /** 0.3.9 item 13 — count of NEEDS_HIGH escalations this turn, bounded so a marker loop can't churn. */
   private tierEscalationsThisTurn = 0;
   /**
+   * 0.3.9 token-tally rework: most-recent authoritative `prompt_tokens`
+   * from the provider's `usage` payload. The compaction trigger prefers
+   * this over the content-aware estimator because the provider charged
+   * us for exactly this number — no rounding, no JSON-syntax inflation,
+   * no language-class bucket guesses. `undefined` on turn 1 and after a
+   * successful compaction (the compact log doesn't reflect the prior
+   * `prompt_tokens` value).
+   */
+  private lastSeenPromptTokens: number | undefined;
+  /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
    * fresh recall pull unless a gated trigger fires. `recallNextTurnIsPost-
@@ -978,17 +998,31 @@ export class Agent {
     const allTools = [...filteredLocalTools, ...visibleMcpTools];
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools and ${mcpTools.length} MCP tools.`);
 
-    // Auto-compact: if the chat history has grown past the configured token
-    // budget, summarize before this turn starts. Otherwise the model sees
-    // ever-growing context (briefings, tool outputs, prior turns) and the
-    // request balloons until the endpoint rejects it. Default threshold is
-    // generous; users can lower BRAINROUTER_AUTO_COMPACT_TOKENS to ~30000
-    // for cost-sensitive models.
+    // Auto-compact pre-turn check.
+    //
+    // Threshold: `BRAINROUTER_AUTO_COMPACT_TOKENS` (default 80_000). Single
+    // absolute knob — the model's max context window is NOT used as the
+    // driver because (a) hitting 75% of a 1M-context model still costs
+    // real money and the user might want to compact much earlier, (b)
+    // smaller models with tight windows are better served by a hard
+    // ceiling the user explicitly set.
+    //
+    // Token-count source (the actual correction in 0.3.9):
+    //   1. `lastSeenPromptTokens` — the authoritative `usage.prompt_tokens`
+    //      from the previous response. The provider charged us for this
+    //      number, so it's the truest count available.
+    //   2. Content-aware estimator (`tokenEstimate.ts → estimateChatHistoryTokens`)
+    //      — fallback for turn 1 (no usage yet) and silent runs. Buckets
+    //      chars by class (prose / code-density / CJK) so CJK pastes and
+    //      code dumps don't drift the count by 2–4× as the old
+    //      `text.length / 4` proxy did.
     if (!this.silent) {
-      const autoCompactThreshold = Number(process.env.BRAINROUTER_AUTO_COMPACT_TOKENS) || 80_000;
-      const estimated = Agent.estimateTokens(JSON.stringify(this.chatHistory));
-      if (estimated > autoCompactThreshold && this.chatHistory.length > 6) {
-        callbacks.onStatusUpdate(`Auto-compacting history (~${estimated} tokens > ${autoCompactThreshold})...`);
+      const autoCompactThreshold = getCliKnobs().autoCompactTokens;
+      const promptTokens = this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
+        ? this.lastSeenPromptTokens
+        : estimateChatHistoryTokens(this.chatHistory as any);
+      if (promptTokens > autoCompactThreshold && this.chatHistory.length > 6) {
+        callbacks.onStatusUpdate(`Auto-compacting history (~${promptTokens.toLocaleString()} tokens > ${autoCompactThreshold.toLocaleString()})...`);
         try {
           const beforeLen = this.chatHistory.length;
           const r = await this.compactHistory();
@@ -999,6 +1033,11 @@ export class Agent {
               summary: r.summary,
             });
           }
+          // After a successful compaction the prior `lastSeenPromptTokens`
+          // is stale — the history we just summarized doesn't reflect the
+          // new compact log. Reset so the next turn's estimator falls back
+          // to its content-aware count of the COMPACTED history.
+          this.lastSeenPromptTokens = undefined;
         } catch {
           // If compaction fails (no LLM, network), continue without it — better
           // a big payload than a hard turn failure.
@@ -1063,7 +1102,7 @@ export class Agent {
     // → write tasks) can easily eat 10-15 iterations. 20 was too tight and
     // caused workflows to abort mid-architect. Cap defaults to 60 and is
     // overridable via BRAINROUTER_MAX_TOOL_LOOPS for very heavy workflows.
-    const maxLoops = Math.max(5, Number(process.env.BRAINROUTER_MAX_TOOL_LOOPS) || 60);
+    const maxLoops = Math.max(5, getCliKnobs().maxToolLoops);
     let finalAnswer = '';
     // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
     // branch below. Bounded so a model that ONLY emits preambles can't keep
@@ -1085,7 +1124,7 @@ export class Agent {
     // threshold higher than OpenCode's identical-input approval guard so
     // normal multi-file exploration still works, but stop 20+ Read(...) spins.
     const recentToolSequences: string[] = [];
-    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, Number(process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT) || 8);
+    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
     const buildOrchestrationContext = (): OrchestrationContext => ({
@@ -1131,7 +1170,7 @@ export class Agent {
         // the non-streaming path so their behavior is unchanged.
         const streamRequested = Boolean(
           callbacks.onAssistantDelta || callbacks.onReasoningDelta,
-        ) && process.env.BRAINROUTER_DISABLE_STREAM !== '1';
+        ) && getCliKnobs().disableStream !== true;
         if (streamRequested) {
           try {
             let started = false;
@@ -1237,6 +1276,13 @@ export class Agent {
         this.lastTurnUsage.promptTokens += response.usage.prompt_tokens ?? 0;
         this.lastTurnUsage.completionTokens += response.usage.completion_tokens ?? 0;
         this.lastTurnUsage.calls += 1;
+        // 0.3.9 token-tally rework: track the LATEST authoritative
+        // prompt_tokens count so the next turn's auto-compact decision
+        // uses what the provider actually charged us, not the legacy
+        // `JSON.stringify(history).length / 4` proxy.
+        if (typeof response.usage.prompt_tokens === 'number' && response.usage.prompt_tokens > 0) {
+          this.lastSeenPromptTokens = response.usage.prompt_tokens;
+        }
         // 0.3.9 item 10 — normalise provider cache fields (OpenAI /
         // DeepSeek / Anthropic shapes) into a single counter so the
         // /tokens panel and the usage.jsonl roll-up don't have to
@@ -1372,7 +1418,7 @@ export class Agent {
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
         if (unobservedChildIds.length > 0) {
-          const drainTimeoutMs = Math.max(1, Number(process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS) || DEFAULT_CHILD_DRAIN_TIMEOUT_MS);
+          const drainTimeoutMs = Math.max(1, getCliKnobs().childDrainTimeoutMs);
           const waitName = 'wait_agents';
           const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };
 
@@ -1694,7 +1740,7 @@ export class Agent {
           this.memoryMetrics.compactedToolCharsAvoided += compaction.omittedChars;
         }
         const llmVisibleResult = compaction.inlineText;
-        const MAX_TOOL_RESULT_CHARS = Number(process.env.BRAINROUTER_MAX_TOOL_RESULT_CHARS) || 8000;
+        const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
         const clampedContent = llmVisibleResult.length > MAX_TOOL_RESULT_CHARS
           ? llmVisibleResult.slice(0, MAX_TOOL_RESULT_CHARS) +
             `\n…[truncated ${llmVisibleResult.length - MAX_TOOL_RESULT_CHARS} chars after ${compaction.ruleId} compaction — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
@@ -1885,9 +1931,17 @@ export class Agent {
     return finalAnswer;
   }
 
-  /** Rough token estimate (1 token ≈ 4 characters of English / code). */
+  /**
+   * Content-aware token estimate. Calls into `runtime/tokenEstimate.ts`
+   * which buckets characters by class (prose / code-density / CJK) and
+   * applies per-class chars-per-token ratios — closer to the provider's
+   * actual BPE tokenizer than the old `text.length / 4` heuristic.
+   *
+   * Used only as a fallback when authoritative `response.usage.prompt_tokens`
+   * isn't available (turn 1, silent/offline runs).
+   */
   public static estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    return estimateTokensContentAware(text);
   }
 
   private async executeLocalTool(name: string, args: Record<string, any>): Promise<string> {
@@ -2030,7 +2084,14 @@ export class Agent {
         //     commands need parent opt-in (fast mode) and dangerous commands
         //     are always denied.
         const prefs = readPreferences(this.workspaceRoot);
-        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent });
+        // 0.3.9 — pass `goalActive` so the resolver can auto-approve
+        // SAFE commands when a /goal is active. Without this, the very
+        // first run_command of a goal-mode session blocks the auto-
+        // continuation on the askYesNo prompt, defeating the purpose of
+        // "type a goal, walk away". Dangerous commands still ask.
+        const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
+        const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
+        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent, goalActive: goalIsActive });
         if (approval === 'deny-silent') {
           if (isDangerousCommand(cmd)) {
             return (
@@ -2049,7 +2110,11 @@ export class Agent {
           );
         }
         if (approval === 'auto-approve') {
-          const tag = this.silent ? 'Auto-approved (silent child)' : 'Auto-approved';
+          const tag = this.silent
+            ? 'Auto-approved (silent child)'
+            : goalIsActive && prefs.executionMode !== 'fast'
+              ? 'Auto-approved (/goal active)'
+              : 'Auto-approved';
           console.log(chalk.gray(`▶  ${tag}: ${chalk.cyan(cmd)}`));
         } else {
           // approval === 'ask' — interactive y/N. Use the parent REPL's
@@ -2057,11 +2122,27 @@ export class Agent {
           // readline against the same stdin and dumps a stray "line" event
           // back into the parent rl when it exits, which used to surface as
           // the bogus "A previous turn is still running" warning.
-          const dangerNote = isDangerousCommand(cmd)
-            ? chalk.red(' (flagged as potentially destructive)')
-            : '';
-          console.log(`\n${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}${dangerNote}`);
-          const approved = await askYesNo('Allow execution? (y/N) ', false);
+          //
+          // The question we hand to `askYesNo` ALWAYS includes the command
+          // itself. The legacy split — print command via `console.log`, then
+          // ask "Allow execution? (y/N)" — works in the readline path because
+          // both land on the same stream, but the Ink overlay (`runInkYesNo`)
+          // only sees the question string. Without the command embedded here
+          // the modal renders "Allow execution? (y/N)" with no context, and
+          // the user has to take it on faith. Embedding the command keeps
+          // both surfaces honest. (Fix flagged on 2026-05-27.)
+          const dangerous = isDangerousCommand(cmd);
+          // Legacy console.log kept so the readline path also has a visible
+          // record above the prompt; the Ink path renders the same content
+          // inside the modal title via the helper's structured string.
+          // No leading `\n` — patchConsole already inserts a row boundary
+          // when promoting this above the Ink frame, and adding our own
+          // newline pushes the frame down an extra row every approval,
+          // contributing to the "frame keeps growing / viewport scrolls
+          // up" feel in main-screen mode. (0.3.9 — 2026-05-27)
+          console.log(`${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}${dangerous ? chalk.red(' (potentially destructive)') : ''}`);
+          const question = buildRunCommandPrompt(cmd);
+          const approved = await askYesNo(question, false);
           if (!approved) {
             return 'Command execution rejected by user.';
           }
@@ -2147,6 +2228,41 @@ export class Agent {
           throw new NoTTYError(
             'ask_user_choice is not available to silent child agents. Decide the answer yourself, ' +
             'state which option you picked and why, and return that as your final answer to the parent.',
+          );
+        }
+        // Autonomy bypass. The picker is suppressed in two cases:
+        //
+        //   1. /yolo on (executionMode=fast AND reviewPolicy=proceed) —
+        //      the user has explicitly opted out of in-turn prompts.
+        //   2. /goal active — the user has typed a goal and the auto-
+        //      continuation loop is running; blocking on a picker
+        //      stalls the whole reason /goal exists. The model decides
+        //      itself and states which option in its reply.
+        //
+        // Both refusal messages use NoTTYError so the existing model
+        // contract ("fall back to deciding yourself") fires verbatim.
+        // A trace event records which axis triggered the bypass.
+        const yoloPrefs = readPreferences(this.workspaceRoot);
+        const yoloOn = yoloPrefs.executionMode === 'fast' && yoloPrefs.reviewPolicy === 'proceed';
+        const goalForPicker = readGoal(this.workspaceRoot, this.sessionKey);
+        const goalActiveForPicker = !!(goalForPicker?.text && goalForPicker.status === 'active');
+        if (yoloOn || goalActiveForPicker) {
+          const reason = yoloOn && goalActiveForPicker ? 'yolo+goal' : yoloOn ? 'yolo' : 'goal';
+          traceEvent('ask_user_choice.bypass', {
+            reason,
+            question,
+            optionLabels: options.map((o) => o.label),
+          });
+          const triggerNote = yoloOn
+            ? '/yolo (executionMode=fast + reviewPolicy=proceed)'
+            : `the active /goal "${goalForPicker!.text.slice(0, 80)}${goalForPicker!.text.length > 80 ? '…' : ''}"`;
+          throw new NoTTYError(
+            `ask_user_choice was suppressed by ${triggerNote}. ` +
+            'The user has explicitly opted out of in-turn prompts — pick the option you would pick, ' +
+            'state which one you picked and why in your reply, and keep going. ' +
+            (yoloOn
+              ? 'Toggle off with /yolo off if you actually need to ask.'
+              : 'Stop the goal with /goal pause or /goal clear if you actually need to ask.'),
           );
         }
         // Eager TTY check so we fail without disturbing the screen. askChoice
@@ -2693,7 +2809,7 @@ export class Agent {
       const anchorDecision = decideAnchorAction({
         newContentHash: newHash,
         pinnedHash: this.pinnedAnchorHash,
-        envSetting: process.env.BRAINROUTER_PREFIX_MEMORY_ANCHORS,
+        envSetting: getCliKnobs().prefixMemoryAnchors,
       });
       switch (anchorDecision.action) {
         case 'PIN':
@@ -2865,7 +2981,7 @@ export class Agent {
  * and expect `{ results: [{title, url, snippet}] }`.
  */
 async function runWebSearch(query: string, maxResults: number): Promise<string> {
-  const customEndpoint = process.env.BRAINROUTER_WEB_SEARCH_ENDPOINT?.trim();
+  const customEndpoint = getCliKnobs().webSearchEndpoint?.trim();
   if (customEndpoint) {
     try {
       const res = await fetch(customEndpoint, {
@@ -3280,11 +3396,10 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  */
 
 /**
- * 9b: resolve the recall-gating mode for this process. `BRAINROUTER_RECALL_MODE`
- * env var beats everything; unset defaults to `gated`. Anything outside the
- * three valid values falls back to `gated` (defensive — better to be helpful
- * than crash on a typo). Re-resolved each turn so users can flip with
- * `export BRAINROUTER_RECALL_MODE=always` mid-session via a /run command.
+ * 9b: resolve the recall-gating mode for this process. Reads `cli.recallMode`
+ * from `~/.config/brainrouter/config.json`. Unset defaults to `gated`. The
+ * TypeScript union narrows the surface so a typo can't reach this code path
+ * — defensive parsing was retired with the env-var path in 0.3.9.
  */
 export function resolveRecallMode(): 'always' | 'gated' | 'off' {
   return resolveRecallModeFromEnv();
@@ -3445,7 +3560,7 @@ export async function callOpenAI(
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const timeoutMs = Number(process.env.BRAINROUTER_LLM_TIMEOUT_MS || 120000);
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -3591,7 +3706,7 @@ export async function callOpenAIStream(
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-  const timeoutMs = Number(process.env.BRAINROUTER_LLM_TIMEOUT_MS || 120000);
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 

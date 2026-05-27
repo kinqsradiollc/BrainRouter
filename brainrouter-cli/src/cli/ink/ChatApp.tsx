@@ -7,6 +7,9 @@ import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 import { renderMarkdown } from './markdownRender.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
+// 0.3.9 — show the model's max prompt-context window in the footer next
+// to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
+import { formatContextWindow } from '../../runtime/contextWindow.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -141,7 +144,7 @@ export type ScrollbackEntry =
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
   /**
-   * Tool call result row — claude-code style:
+   * Tool call result row — claude code style:
    *   ⏺ Read(src/foo.ts)            (green ⏺ when ok, red when failed)
    *     ⎿ <preview line 1>          (if preview present, with ⎿ connector)
    *       <preview line 2>           (continuation lines plain indent)
@@ -1342,10 +1345,16 @@ function FooterStatus({
   const effortGlyph = footer.effort === 'high' ? '●' : footer.effort === 'medium' ? '◐' : footer.effort === 'low' ? '○' : '';
   const effortColor = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
 
-  // Left side: model · session · branch.  Right side: ? for shortcuts.
-  // Spreads out so the footer feels like claude-code's bottom bar.
+  // Left side: model (· Nk ctx) · session · branch. Right: ? for shortcuts.
+  // The "Nk ctx" segment surfaces the model's max prompt context so the
+  // user can see how close they are to the limit. Lookup lives in
+  // `runtime/contextWindow.ts`; unknown models render "?" rather than
+  // a guess. Override via ~/.config/brainrouter/contextWindows.json.
   const leftSegs: string[] = [];
-  if (footer.model) leftSegs.push(footer.model);
+  if (footer.model) {
+    const ctxLabel = formatContextWindow(footer.model);
+    leftSegs.push(`${footer.model}${ctxLabel !== '?' ? ` · ${ctxLabel} ctx` : ''}`);
+  }
   if (footer.session) leftSegs.push(footer.session.slice(0, 16));
   if (footer.branch) leftSegs.push(footer.branch);
   if (footer.rightExtra) leftSegs.push(footer.rightExtra);

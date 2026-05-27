@@ -11,6 +11,7 @@ import { readPreferences, writePreferences } from '../state/preferencesStore.js'
 import { blockGoal, setGoal, tickGoalIteration } from '../state/goalStore.js';
 import { updatePlan } from '../state/taskStore.js';
 import { createWorkflow } from '../state/workflowArtifacts.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
 /**
  * Tests for the 0.3.6 CLI shell redesign — theme, banner, statusline,
@@ -20,29 +21,19 @@ import { createWorkflow } from '../state/workflowArtifacts.js';
 
 function withTempWorkspace(fn: (workspace: string) => void) {
   const previousCwd = process.cwd();
-  const previousWorkspace = process.env.BRAINROUTER_WORKSPACE;
   const previousHome = process.env.BRAINROUTER_HOME;
-  const previousTheme = process.env.BRAINROUTER_THEME;
-  const previousQuiet = process.env.BRAINROUTER_QUIET;
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-cli-shell-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-home-shell-'));
   try {
-    delete process.env.BRAINROUTER_WORKSPACE;
-    delete process.env.BRAINROUTER_THEME;
-    delete process.env.BRAINROUTER_QUIET;
+    _resetCliKnobsCache();
     process.env.BRAINROUTER_HOME = home;
     process.chdir(workspace);
     fn(workspace);
   } finally {
     process.chdir(previousCwd);
-    if (previousWorkspace === undefined) delete process.env.BRAINROUTER_WORKSPACE;
-    else process.env.BRAINROUTER_WORKSPACE = previousWorkspace;
+    _resetCliKnobsCache();
     if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
     else process.env.BRAINROUTER_HOME = previousHome;
-    if (previousTheme === undefined) delete process.env.BRAINROUTER_THEME;
-    else process.env.BRAINROUTER_THEME = previousTheme;
-    if (previousQuiet === undefined) delete process.env.BRAINROUTER_QUIET;
-    else process.env.BRAINROUTER_QUIET = previousQuiet;
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -74,12 +65,12 @@ test('theme: dark palette wraps text and reports mode = dark', () => {
   assert.equal(theme.mode, 'dark');
 });
 
-test('theme: BRAINROUTER_THEME env var wins over preference', () => {
+test('theme: cli.theme in config wins over workspace preference', () => {
   withTempWorkspace((workspace) => {
     writePreferences(workspace, { theme: 'light' });
-    process.env.BRAINROUTER_THEME = 'mono';
+    setCliKnobOverride({ theme: 'dark' });
     const resolved = resolveTheme(workspace);
-    assert.equal(resolved.mode, 'mono');
+    assert.equal(resolved.mode, 'dark');
   });
 });
 
@@ -98,9 +89,9 @@ test('theme: defaults to dark when nothing configured', () => {
   });
 });
 
-test('theme: invalid env value falls through to default', () => {
+test('theme: cli.theme=auto falls through to default (dark)', () => {
   withTempWorkspace((workspace) => {
-    process.env.BRAINROUTER_THEME = 'rainbow';
+    setCliKnobOverride({ theme: 'auto' });
     const resolved = resolveTheme(workspace);
     assert.equal(resolved.mode, 'dark');
   });

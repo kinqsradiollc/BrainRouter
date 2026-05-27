@@ -7,7 +7,6 @@
  * .next, build outputs, lockfiles. Caps the result at 5000 entries so a
  * monorepo with hundreds of thousands of files doesn't pin the REPL.
  *
- * Modeled after openSrc/grok-cli/src/utils/file-index.ts in spirit, but
  * trimmed to what the Ink composer actually needs (fuzzy substring
  * scoring is good enough; we don't need full-blown trigram indexing).
  */

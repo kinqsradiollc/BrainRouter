@@ -48,7 +48,7 @@ export interface AnchorDecisionInput {
   newContentHash: string;
   /** SHA-256 (16 hex) of the currently pinned anchor's content; `null` if no pin yet. */
   pinnedHash: string | null;
-  /** Snapshot of the env var (the agent passes `process.env.BRAINROUTER_PREFIX_MEMORY_ANCHORS`). */
+  /** Snapshot of the `cli.prefixMemoryAnchors` knob from config.json (`'on'` / `'off'`). */
   envSetting: string | undefined;
 }
 

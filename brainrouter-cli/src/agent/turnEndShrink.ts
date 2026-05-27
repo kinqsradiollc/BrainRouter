@@ -27,6 +27,7 @@
  */
 
 import { compactToolOutput } from '../prompt/toolCompaction.js';
+import { getCliKnobs } from '../config/config.js';
 
 /** Default cap. Overridable via BRAINROUTER_TURN_END_RESULT_CAP_TOKENS. */
 export const TURN_END_RESULT_CAP_TOKENS = 3000;
@@ -125,13 +126,13 @@ function shortPreview(text: string, charCap: number): string {
 }
 
 function readCapTokensFromEnv(): number {
-  const raw = Number.parseInt(process.env.BRAINROUTER_TURN_END_RESULT_CAP_TOKENS ?? '', 10);
+  const raw = getCliKnobs().turnEndResultCapTokens;
   if (Number.isFinite(raw) && raw >= 200 && raw <= 200_000) return raw;
   return TURN_END_RESULT_CAP_TOKENS;
 }
 
 function readProactiveRatioFromEnv(): number {
-  const raw = Number.parseFloat(process.env.BRAINROUTER_TURN_END_SHRINK_RATIO ?? '');
+  const raw = getCliKnobs().turnEndShrinkRatio;
   if (Number.isFinite(raw) && raw > 0 && raw < 1) return raw;
   return PROACTIVE_SHRINK_RATIO;
 }

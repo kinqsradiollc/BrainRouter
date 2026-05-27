@@ -109,7 +109,7 @@ test('PROVIDER_CATALOG is slimmed to openai + lmstudio + ollama only', () => {
 });
 
 test('findProvider returns the entry for known ids and undefined for unknown', () => {
-  assert.equal(findProvider('openai')?.label, 'OpenAI (or compatible)');
+  assert.equal(findProvider('openai')?.label, 'OpenAI');
   assert.equal(findProvider('lmstudio')?.local, true);
   assert.equal(findProvider('deepseek'), undefined, 'deepseek removed in 0.3.9 slim');
   assert.equal(findProvider('not-a-real-provider'), undefined);

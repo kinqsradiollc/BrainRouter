@@ -1,4 +1,5 @@
 import type { LLMConfig } from '../config/config.js';
+import { getCliKnobs } from '../config/config.js';
 
 /**
  * Conversation compaction for long sessions.
@@ -115,7 +116,7 @@ export async function runCompaction(llm: LLMConfig, input: CompactionInput): Pro
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-  const timeoutMs = Number(process.env.BRAINROUTER_LLM_TIMEOUT_MS || 60000);
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;

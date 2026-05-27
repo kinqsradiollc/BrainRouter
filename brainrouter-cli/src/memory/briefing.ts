@@ -78,6 +78,21 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[] }>> = [];
 
   if (sourcePlan.includeRecall && hasMcpTool(toolNames, 'memory_recall')) {
+    // The brain-side `recall.ts` pipeline ALREADY ships per-stage
+    // fallbacks:
+    //
+    //   - Vector search failure → continue with FTS + filepath only.
+    //   - Reranker failure → fall back to RRF order.
+    //   - Relevance-judge failure → keep reranker output.
+    //   - All-empty Stage 1 → return cleanly with `keyword-empty` /
+    //     `hybrid-empty` strategy marker.
+    //
+    // A CLI-side `memory_recall → memory_search` retry on top of that
+    // was redundant (the brain's chain already handles every stage
+    // failure) and could mask real bugs by silently routing to lower-
+    // quality FTS rows. Removed in 0.3.9. To disable individual brain
+    // stages, set the corresponding brainrouter/.env switches (e.g.
+    // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=false).
     tasks.push(callSafe('memory_recall', { sessionKey, query, activeSkill }, mcpClient, maxChars, extractRecords));
   } else if (sourcePlan.includeRecall) {
     skippedSources.push({ source: 'memory_recall', reason: 'tool unavailable' });
@@ -263,6 +278,13 @@ async function callSafe(
   const records = extractRecordsFn && res.parsed ? extractRecordsFn(res.parsed) : undefined;
   return { source: toolName, text: res.text.slice(0, maxChars), records };
 }
+
+// (Removed in 0.3.9: callRecallWithFallback wrapper + the two env helpers
+// that controlled it. The brain's recall.ts ships a 3-layer fallback chain
+// of its own — vector → fts+filepath, reranker → RRF, judge → reranker —
+// so a CLI-side retry was redundant and could mask real bugs by silently
+// routing to lower-quality FTS rows. Disable individual brain stages via
+// brainrouter/.env knobs (BRAINROUTER_RELEVANCE_JUDGE_ENABLED=false, etc.).)
 
 function extractRecords(parsed: any): RecalledRecord[] {
   if (!parsed) return [];

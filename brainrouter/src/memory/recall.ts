@@ -10,6 +10,53 @@ import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { isExternalTimeoutError } from "./llm-response.js";
 
+/**
+ * Recall pipeline limit knobs. Each stage of the pipeline has a width
+ * (how many candidates flow through) — these used to be hardcoded
+ * `15 / 15 / 20 / 5` in this file, which meant any user wanting more
+ * recall coverage had to patch the source. Now env-overridable:
+ *
+ *   BRAINROUTER_RECALL_FTS_LIMIT      (default 15)  Stage 1 FTS5 top-K
+ *   BRAINROUTER_RECALL_VEC_LIMIT      (default 15)  Stage 1 vector top-K
+ *   BRAINROUTER_RECALL_RERANK_POOL    (default 20)  Stage 2 reranker pool size
+ *   BRAINROUTER_RECALL_TOP_RESULTS    (default 5)   final size when reranker is off
+ *
+ * Each is clamped to [1, 200] to keep a typo from blowing up the
+ * downstream LLM-judge call. Reading env once per recall is fine —
+ * recall is already an LLM-grade operation, the env read is in the
+ * noise.
+ */
+function recallLimit(envName: string, defaultValue: number, max = 200): number {
+  const raw = process.env[envName];
+  if (!raw) return defaultValue;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return defaultValue;
+  return Math.min(parsed, max);
+}
+
+export interface RecallLimits {
+  ftsLimit: number;
+  vecLimit: number;
+  rerankPool: number;
+  topResults: number;
+}
+
+export const RECALL_LIMITS_DEFAULT: RecallLimits = {
+  ftsLimit: 15,
+  vecLimit: 15,
+  rerankPool: 20,
+  topResults: 5,
+};
+
+export function readRecallLimits(): RecallLimits {
+  return {
+    ftsLimit: recallLimit('BRAINROUTER_RECALL_FTS_LIMIT', RECALL_LIMITS_DEFAULT.ftsLimit),
+    vecLimit: recallLimit('BRAINROUTER_RECALL_VEC_LIMIT', RECALL_LIMITS_DEFAULT.vecLimit),
+    rerankPool: recallLimit('BRAINROUTER_RECALL_RERANK_POOL', RECALL_LIMITS_DEFAULT.rerankPool),
+    topResults: recallLimit('BRAINROUTER_RECALL_TOP_RESULTS', RECALL_LIMITS_DEFAULT.topResults),
+  };
+}
+
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
   const ageMs = Date.now() - new Date(memory.created_time).getTime();
@@ -94,17 +141,18 @@ export class MemoryRecallPipeline {
     const startTime = Date.now();
     const { userId, sessionKey, query, activeSkill, filters } = params;
     const intent = detectTaskIntent(query);
+    const limits = readRecallLimits();
 
-    // 1. FTS5 BM25 search (Top 15)
-    const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, 15);
+    // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
+    const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
     const filePathResultsRaw = this.expandWithFilePathMatches(userId, query);
 
-    // 2. Vector search (Top 15, if enabled)
+    // 2. Vector search (Top-K, env: BRAINROUTER_RECALL_VEC_LIMIT)
     let vecResultsRaw: VectorSearchResult[] = [];
     if (this.embeddingService.isReady()) {
       try {
         const queryVec = await this.embeddingService.embed(query);
-        vecResultsRaw = this.store.searchCognitiveVec(userId, queryVec, 15);
+        vecResultsRaw = this.store.searchCognitiveVec(userId, queryVec, limits.vecLimit);
       } catch (e) {
         console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
       }
@@ -306,10 +354,15 @@ export class MemoryRecallPipeline {
     }
 
     sparkScoredResults.sort((a, b) => b.score - a.score);
-    let topResults = sparkScoredResults.slice(0, 5);
-    
-    // Stage 3 — Reranker (Top 20 from RRF + Sparks)
-    const rerankCandidates = sparkScoredResults.slice(0, 20);
+    // Final result count when no reranker is configured (env:
+    // BRAINROUTER_RECALL_TOP_RESULTS, default 5).
+    let topResults = sparkScoredResults.slice(0, limits.topResults);
+
+    // Stage 3 — Reranker pool (env: BRAINROUTER_RECALL_RERANK_POOL, default 20).
+    // This is the pool of candidates handed to the cross-encoder; the
+    // reranker itself outputs `BRAINROUTER_RERANKER_TOP_N` rows (already
+    // configurable).
+    const rerankCandidates = sparkScoredResults.slice(0, limits.rerankPool);
     let usedReranker = false;
     
     if (this.rerankerService.isReady()) {

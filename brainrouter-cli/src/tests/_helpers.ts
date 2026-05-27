@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../agent/agent.js';
+import { _resetCliKnobsCache } from '../config/config.js';
 
 /**
  * Construct an Agent without touching MCP or the LLM. Only safe for tests
@@ -38,25 +39,26 @@ export function makeAgent(workspace: string): Agent {
 
 /**
  * Run a synchronous test body inside a fresh temp workspace. Restores cwd,
- * BRAINROUTER_WORKSPACE, and BRAINROUTER_HOME afterwards. BRAINROUTER_HOME
- * is also pinned to a sibling tmp dir so tests never touch the real
- * `~/.brainrouter` on the developer's machine.
+ * the CLI-knobs cache, and `BRAINROUTER_HOME` afterwards. `BRAINROUTER_HOME`
+ * is pinned to a sibling tmp dir so tests never touch the real
+ * `~/.config/brainrouter` on the developer's machine. (It's an installation
+ * /test-isolation knob, not a CLI behaviour knob — it stays in env.)
  */
 export function withTempWorkspace(fn: (workspace: string) => void) {
   const previousCwd = process.cwd();
-  const previousWorkspace = process.env.BRAINROUTER_WORKSPACE;
   const previousHome = process.env.BRAINROUTER_HOME;
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-cli-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-home-'));
+  // Do NOT reset CLI knobs on entry — tests that compose `setCliKnobOverride`
+  // before calling this helper would lose their override otherwise. Resets
+  // happen on exit so the next test starts clean.
   try {
-    delete process.env.BRAINROUTER_WORKSPACE;
     process.env.BRAINROUTER_HOME = home;
     process.chdir(workspace);
     fn(workspace);
   } finally {
     process.chdir(previousCwd);
-    if (previousWorkspace === undefined) delete process.env.BRAINROUTER_WORKSPACE;
-    else process.env.BRAINROUTER_WORKSPACE = previousWorkspace;
+    _resetCliKnobsCache();
     if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
     else process.env.BRAINROUTER_HOME = previousHome;
     fs.rmSync(workspace, { recursive: true, force: true });
@@ -73,12 +75,14 @@ export async function withTempWorkspaceAsync<T>(fn: (workspace: string) => Promi
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-home-'));
   const previousCwd = process.cwd();
   const previousHome = process.env.BRAINROUTER_HOME;
+  // Do NOT reset CLI knobs on entry — see withTempWorkspace.
   process.env.BRAINROUTER_HOME = home;
   process.chdir(tmp);
   try {
     return await fn(tmp);
   } finally {
     process.chdir(previousCwd);
+    _resetCliKnobsCache();
     if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
     else process.env.BRAINROUTER_HOME = previousHome;
     fs.rmSync(tmp, { recursive: true, force: true });

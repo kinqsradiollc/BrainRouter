@@ -11,6 +11,7 @@ import { listSessions } from '../../orchestration/orchestrator.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
 import { getCliStateFile } from '../../state/cliState.js';
+import { getCliKnobs } from '../../config/config.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 
@@ -42,10 +43,11 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
     }
     case '/watch':
     {
-      const tracePath = process.env.BRAINROUTER_TRACE_LOG?.trim();
+      const tracePath = getCliKnobs().traceLog?.trim();
       if (!tracePath) {
         console.log(chalk.yellow('\nLive tracing is off. Enable with:'));
-        console.log(chalk.gray('  export BRAINROUTER_TRACE_LOG=' + path.join(agent.workspaceRoot, '.brainrouter/cli/trace.jsonl')));
+        console.log(chalk.gray('  Edit ~/.config/brainrouter/config.json and set:'));
+        console.log(chalk.gray(`    cli.traceLog = "${path.join(agent.workspaceRoot, '.brainrouter/cli/trace.jsonl')}"`));
         console.log(chalk.gray('  (restart the CLI so the change takes effect)\n'));
         console.log(chalk.gray('Without it, you can still see per-tool activity inline in this REPL,'));
         console.log(chalk.gray('and child-agent tool calls now surface as "role:id → tool" lines.'));
