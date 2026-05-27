@@ -104,6 +104,14 @@ ${testSection}
 - Testing: _(unit/integration patterns)_
 - Commits: conventional commits (\`feat\`, \`fix\`, \`chore\`, ...)
 
+## Agent discipline (defaults)
+
+- Default to writing NO code comments. Only add one when the WHY is non-obvious — a hidden constraint, subtle invariant, or workaround for a specific bug. Don't explain WHAT the code does; well-named identifiers cover that.
+- Don't add features, refactors, or abstractions beyond what was asked. Three similar lines beats a premature abstraction.
+- Don't add error handling, fallbacks, or validation for scenarios that can't happen. Trust internal code and framework guarantees. Only validate at system boundaries (user input, external APIs).
+- Read before editing. Run tests after changes. Verify a task actually works before reporting it complete.
+- Use \`file_path:line_number\` references when pointing at code so the user can jump to it.
+
 ## Boundaries
 
 - Always do: run tests before claiming work is complete; cite memory record ids when used.
@@ -139,6 +147,14 @@ Describe what this project is and the high-level architecture in 2-3 sentences.
 - Code style: …
 - Testing: …
 - Commits: conventional commits (\`feat\`, \`fix\`, \`chore\`, …).
+
+## Agent discipline (defaults)
+
+- Default to writing NO code comments. Only add one when the WHY is non-obvious.
+- Don't add features, refactors, or abstractions beyond what was asked.
+- Don't add error handling for scenarios that can't happen. Validate only at system boundaries.
+- Read before editing. Run tests after changes. Verify a task actually works before reporting complete.
+- Use \`file_path:line_number\` references when pointing at code.
 
 ## Boundaries
 

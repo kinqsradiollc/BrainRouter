@@ -1,0 +1,106 @@
+{
+  "$schema": "brainrouter-models/1",
+  "lastUpdated": "2026-05-27",
+  "models": {
+    "gpt-5-pro": {
+      "contextWindow": 400000,
+      "pricing": { "inputCacheMiss": 15.0, "output": 120.0 }
+    },
+    "gpt-5": {
+      "contextWindow": 400000,
+      "pricing": { "inputCacheHit": 0.125, "inputCacheMiss": 1.25, "output": 10.0 }
+    },
+    "gpt-5-mini": {
+      "contextWindow": 400000,
+      "pricing": { "inputCacheHit": 0.025, "inputCacheMiss": 0.25, "output": 2.0 }
+    },
+    "gpt-5-codex": {
+      "contextWindow": 400000,
+      "pricing": { "inputCacheHit": 0.125, "inputCacheMiss": 1.25, "output": 10.0 }
+    },
+    "gpt-4o": {
+      "contextWindow": 128000,
+      "pricing": { "inputCacheHit": 1.25, "inputCacheMiss": 2.5, "output": 10.0 }
+    },
+    "gpt-4o-mini": {
+      "contextWindow": 128000,
+      "pricing": { "inputCacheMiss": 0.15, "output": 0.6 }
+    },
+    "o1": {
+      "contextWindow": 200000,
+      "pricing": { "inputCacheHit": 7.5, "inputCacheMiss": 15.0, "output": 60.0 }
+    },
+    "o3": {
+      "contextWindow": 200000,
+      "pricing": { "inputCacheHit": 0.25, "inputCacheMiss": 1.0, "output": 4.0 }
+    },
+    "o3-mini": {
+      "contextWindow": 200000,
+      "pricing": { "inputCacheHit": 0.55, "inputCacheMiss": 1.1, "output": 4.4 }
+    },
+    "o4-mini": {
+      "contextWindow": 200000,
+      "pricing": { "inputCacheHit": 0.275, "inputCacheMiss": 1.1, "output": 4.4 }
+    },
+    "deepseek-v4-flash": {
+      "contextWindow": 1000000,
+      "pricing": { "inputCacheHit": 0.0028, "inputCacheMiss": 0.14, "output": 0.28 }
+    },
+    "deepseek-v4-pro": {
+      "contextWindow": 1000000,
+      "pricing": { "inputCacheHit": 0.003625, "inputCacheMiss": 0.435, "output": 0.87 }
+    },
+    "deepseek-chat": {
+      "contextWindow": 64000
+    },
+    "deepseek-reasoner": {
+      "contextWindow": 64000
+    },
+    "deepseek-r1": {
+      "contextWindow": 128000
+    },
+    "qwen2.5-coder": {
+      "contextWindow": 131072
+    },
+    "qwen2.5-coder:7b": {
+      "contextWindow": 131072
+    },
+    "gpt-oss-20b": {
+      "contextWindow": 131072
+    },
+    "gpt-oss-120b": {
+      "contextWindow": 131072
+    },
+    "deepseek-r1-distill-qwen-32b": {
+      "contextWindow": 64000
+    },
+    "llama3.1:8b": {
+      "contextWindow": 128000
+    },
+    "gemma-2": {
+      "contextWindow": 8192
+    },
+    "lm-studio": {
+      "pricing": { "inputCacheHit": 0, "inputCacheMiss": 0, "output": 0 }
+    },
+    "ollama": {
+      "pricing": { "inputCacheHit": 0, "inputCacheMiss": 0, "output": 0 }
+    }
+  },
+  "familyFallbacks": [
+    { "match": "^gpt-5-codex", "fallbackTo": "gpt-5-codex" },
+    { "match": "^gpt-5-pro", "fallbackTo": "gpt-5-pro" },
+    { "match": "^gpt-5-mini", "fallbackTo": "gpt-5-mini" },
+    { "match": "^gpt-5", "fallbackTo": "gpt-5" },
+    { "match": "^gpt-4o-mini", "fallbackTo": "gpt-4o-mini" },
+    { "match": "^gpt-4o", "fallbackTo": "gpt-4o" },
+    { "match": "^o4-mini", "fallbackTo": "o4-mini" },
+    { "match": "^o3-mini", "fallbackTo": "o3-mini" },
+    { "match": "^o3", "fallbackTo": "o3" },
+    { "match": "^o1", "fallbackTo": "o1" },
+    { "match": "^deepseek-v[34]-pro", "fallbackTo": "deepseek-v4-pro" },
+    { "match": "^deepseek-v[34]", "fallbackTo": "deepseek-v4-flash" },
+    { "match": "^deepseek-r[12]", "fallbackTo": "deepseek-r1" },
+    { "match": "^qwen2\\.5-coder", "fallbackTo": "qwen2.5-coder" }
+  ]
+}

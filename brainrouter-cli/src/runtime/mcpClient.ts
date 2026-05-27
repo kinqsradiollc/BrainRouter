@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { LLMConfig, ServerConfig } from '../config/config.js';
+import { getCliKnobs } from '../config/config.js';
 
 export class McpClientWrapper {
   public client: Client;
@@ -266,7 +267,7 @@ export class McpClientWrapper {
     // no per-tool timeout, and the LLM call timeout only fired between tool
     // rounds. Race the tool call against a configurable timeout so a flaky
     // child server can't lock up the whole CLI.
-    const timeoutMs = Number(process.env.BRAINROUTER_MCP_TIMEOUT_MS) || 60_000;
+    const timeoutMs = getCliKnobs().mcpTimeoutMs;
     return Promise.race([
       this.client.callTool({ name, arguments: args }),
       new Promise<never>((_, reject) =>

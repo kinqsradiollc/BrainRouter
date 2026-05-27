@@ -1,0 +1,24 @@
+{
+  "$schema": "brainrouter-api-key-prefixes/1",
+  "_doc": [
+    "Two related lookups:",
+    "  - known: API-key prefixes the wizard recognises; an unfamiliar prefix produces a one-shot warning but still accepts the key.",
+    "  - foreignModelPrefixes: model-id prefixes that suggest the user picked a foreign-vendor model while the active endpoint is api.openai.com itself. Catches the `anthropic/claude-*` foot-gun.",
+    "Loaded by brainrouter-cli/src/runtime/configLoader.ts at startup."
+  ],
+  "lastUpdated": "2026-05-27",
+  "known": [
+    { "prefix": "sk-", "vendor": "OpenAI" },
+    { "prefix": "sk-or-v1-", "vendor": "OpenRouter" },
+    { "prefix": "sk-proj-", "vendor": "OpenAI (scoped project key)" },
+    { "prefix": "dsk-", "vendor": "DeepSeek" }
+  ],
+  "foreignModelPrefixes": [
+    { "prefix": "anthropic/", "vendor": "Anthropic" },
+    { "prefix": "google/", "vendor": "Google" },
+    { "prefix": "meta/", "vendor": "Meta" },
+    { "prefix": "mistralai/", "vendor": "Mistral" },
+    { "prefix": "qwen/", "vendor": "Qwen" },
+    { "prefix": "deepseek/", "vendor": "DeepSeek" }
+  ]
+}

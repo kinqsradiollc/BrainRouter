@@ -177,6 +177,13 @@ export interface DiagnosticsBundle {
       byType: Record<string, number>;
       citationRate: number;
       lastRecallAt: string | null;
+      /** Rows in sensory_stream — always written on capture; useful when
+       *  `total` is 0 but capture is firing (cognitive extraction hasn't run yet). */
+      sensoryTotal: number;
+      /** Sensory rows the cognitive extractor hasn't consumed yet. */
+      sensoryUnextracted: number;
+      /** Rows in contextual_focus for this user. */
+      focusSceneTotal: number;
       extraction: ExtractionStatus;
     };
   };
@@ -365,6 +372,7 @@ export interface EmbeddingServiceConfig {
   apiKey?: string;
   model?: string;
   dimensions?: number;
+  timeoutMs?: number;
 }
 
 export interface RerankerServiceConfig {
@@ -372,6 +380,7 @@ export interface RerankerServiceConfig {
   apiKey?: string;
   model?: string;
   topN?: number;
+  timeoutMs?: number;
 }
 
 export interface RelevanceJudgeServiceConfig {

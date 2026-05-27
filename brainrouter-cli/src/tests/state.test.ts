@@ -9,6 +9,7 @@ import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, get
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../state/hooksStore.js';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../state/preferencesStore.js';
 import { withTempWorkspace } from './_helpers.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
 test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
   withTempWorkspace((workspace) => {
@@ -295,31 +296,23 @@ test('preferencesStore: effort defaults to medium and round-trips through write+
   });
 });
 
-test('resolveEffort: env > preference > default', async () => {
+test('resolveEffort: cli.effort > preference > default', async () => {
   const { resolveEffort } = await import('../state/preferencesStore.js');
   withTempWorkspace((workspace) => {
-    // Default (no env, no pref) → medium.
-    delete process.env.BRAINROUTER_EFFORT;
-    assert.deepEqual(resolveEffort(workspace), { effort: 'medium', source: 'default' });
-
-    // Preference wins when no env is set.
-    writePreferences(workspace, { effort: 'low' });
-    assert.deepEqual(resolveEffort(workspace), { effort: 'low', source: 'preference' });
-
-    // Env beats preference even when preference disagrees.
-    process.env.BRAINROUTER_EFFORT = 'high';
     try {
-      assert.deepEqual(resolveEffort(workspace), { effort: 'high', source: 'env' });
-    } finally {
-      delete process.env.BRAINROUTER_EFFORT;
-    }
+      // Default (no config knob, no pref) → medium.
+      _resetCliKnobsCache();
+      assert.deepEqual(resolveEffort(workspace), { effort: 'medium', source: 'default' });
 
-    // Garbled env value falls through to the preference, not crash.
-    process.env.BRAINROUTER_EFFORT = 'ludicrous';
-    try {
-      assert.equal(resolveEffort(workspace).effort, 'low');
+      // Preference wins when cli.effort is unset.
+      writePreferences(workspace, { effort: 'low' });
+      assert.deepEqual(resolveEffort(workspace), { effort: 'low', source: 'preference' });
+
+      // `cli.effort` beats preference even when preference disagrees.
+      setCliKnobOverride({ effort: 'high' });
+      assert.deepEqual(resolveEffort(workspace), { effort: 'high', source: 'config' });
     } finally {
-      delete process.env.BRAINROUTER_EFFORT;
+      _resetCliKnobsCache();
     }
   });
 });

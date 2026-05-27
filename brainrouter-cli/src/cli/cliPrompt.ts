@@ -291,8 +291,6 @@ export function renderPicker(state: PickerState, question: string, header?: stri
  * moves the cursor (no-op keys, ENTER, SPACE don't fire it). The 0.3.7
  * theme picker uses this to live-preview the selected theme by redrawing
  * the banner accent before the user confirms — pattern lifted from
- * `openSrc/codex/codex-rs/tui/src/bottom_pane/list_selection_view.rs` and
- * `openSrc/codex/codex-rs/tui/src/theme_picker.rs`.
  *
  * `prefilledOther` opens the picker with the synthetic "Other" row
  * already selected AND the free-text input pre-filled. Used when a value

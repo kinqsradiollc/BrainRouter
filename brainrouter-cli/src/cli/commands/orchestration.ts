@@ -132,9 +132,10 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     }
     case '/agent':
     {
-      const id = args[0];
-      if (!id) { console.log(chalk.red('\nUsage: /agent <id> [--full]\n')); break; }
-      const full = args.includes('--full');
+      const showMode = args[0] === 'show';
+      const id = showMode ? args[1] : args[0];
+      if (!id) { console.log(chalk.red('\nUsage: /agent <id> [--full]\n       /agent show <id>\n')); break; }
+      const full = showMode || args.includes('--full');
       const s = getSession(agent.workspaceRoot, id);
       if (!s) { console.log(chalk.red(`\nNo session ${id}\n`)); break; }
       console.log(chalk.bold(`\nAgent ${s.id}`));
@@ -180,7 +181,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         return true;
       }
       ctx.repl.runAgentTurn(
-        `Use the spawn_agent tool to start a ${role} child agent with this prompt:\n\n${prompt}\n\nReturn the child agent id when done.`,
+        `Use the delegate_agent tool to start a ${role} child agent (background) with this prompt:\n\n${prompt}\n\nReturn the child agent id when done. If you need the result immediately, use task_agent instead.`,
       );
       return true;
     }

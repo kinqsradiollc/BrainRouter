@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, saveConfig, type ServerConfig } from '../../config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, type ServerConfig } from '../../config/config.js';
 import {
   readPreferences,
   writePreferences,
@@ -12,6 +12,7 @@ import {
 } from '../../state/preferencesStore.js';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
 import { PROVIDER_CATALOG, findProvider, maskApiKey, validateApiKey } from '../wizard/providers.js';
+import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on
 // every keystroke, stacking on step transitions). Ink owns the render
@@ -26,14 +27,6 @@ import { buildTheme, type Theme } from '../theme.js';
 /**
  * `/config` slash command — 0.3.7 redesign on the new atomic-frame picker
  * (`../wizard/picker.ts`).
- *
- * Verb-overloaded (lifted from
- * `openSrc/DeepSeek-TUI/crates/tui/src/commands/config.rs:43`):
- *
- *   - `/config`              — open the settings home panel
- *   - `/config <key>`        — print the current value for <key>
- *   - `/config <key> <val>`  — set <key> to <val> and persist
- *   - `/config raw|json`     — print scrubbed JSON dump
  *
  * Persistence routes through `saveConfig` / `writePreferences` — never
  * touches JSON files directly so future schema changes stay centralized.
@@ -216,28 +209,65 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
     },
   });
   if (keyResult.kind !== 'accept') return false;
-  const modelResult = await pickFromList({
+
+  // OpenAI doubles as the OpenAI-compatible custom-endpoint flow. Prompt
+  // to confirm or replace the base URL; local providers keep their
+  // fixed loopback endpoints.
+  let endpoint = provider.endpoint;
+  if (provider.id === 'openai') {
+    const current = ctx.config.llm?.endpoint ?? provider.endpoint;
+    const urlResult = await promptText({
+      theme,
+      title: 'API base URL',
+      subtitle: 'Press ENTER for OpenAI direct, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, vLLM, …).',
+      badge: 'OpenAI base URL',
+      prefilled: current,
+      placeholder: provider.endpoint,
+      validate: (raw) => {
+        const v = raw.trim();
+        if (!v) return 'base URL cannot be empty';
+        try { new URL(v); } catch { return 'must be a valid URL'; }
+        return undefined;
+      },
+    });
+    if (urlResult.kind !== 'accept') return false;
+    endpoint = urlResult.text.trim();
+  }
+
+  // Live /v1/models picker — same one the in-REPL /model command uses.
+  // Falls back to the provider's curated short-list when the endpoint
+  // can't be reached; "Other model" is always offered for manual entry.
+  const modelResult = await selectModel({
     theme,
-    title: 'Model',
-    subtitle: `Pick the chat model for ${provider.label}.`,
-    rows: provider.models.map((m) => ({ id: m, label: m, value: m === provider.defaultModel ? 'default' : '' })),
-    initialCursor: Math.max(0, provider.models.indexOf(provider.defaultModel)),
-    allowOther: true,
-    otherLabel: 'Other model',
-    otherDescription: 'Type any model name supported by this endpoint',
-  });
-  if (modelResult.kind === 'cancelled') return false;
-  const model = modelResult.kind === 'other' ? modelResult.text.trim() : modelResult.id;
-  ctx.config.llm = {
-    provider: 'openai',
+    provider,
     apiKey: keyResult.text,
-    model: model || provider.defaultModel,
-    endpoint: provider.endpoint,
+    endpointOverride: endpoint !== provider.endpoint ? endpoint : undefined,
+    currentModel: ctx.config.llm?.model,
+    title: 'Model',
+    badge: provider.label,
+    eraseOnClose: true,
+  });
+  if (!modelResult) return false;
+  const model = modelResult.model || provider.defaultModel;
+
+  ctx.config.llm = {
+    provider: provider.id,
+    apiKey: keyResult.text,
+    model,
+    endpoint,
   };
   saveConfig(ctx.config);
-  ctx.agent.setModel(model || provider.defaultModel);
-  console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model || provider.defaultModel} · ${maskApiKey(keyResult.text)}`));
-  console.log(chalk.gray('    Endpoint changes take effect on the next CLI restart.\n'));
+  // setLLMConfig (not just setModel) so the live agent picks up the new
+  // apiKey + endpoint immediately. Pre-fix: only setModel was called and
+  // the running agent kept using the stale apiKey/endpoint until restart.
+  ctx.agent.setLLMConfig(ctx.config.llm);
+  const endpointTail = endpoint !== provider.endpoint ? ` · ${shortenEndpoint(endpoint)}` : '';
+  const sourceTail = modelResult.source === 'live'
+    ? ` (from live /v1/models · ${modelResult.liveCount} returned)`
+    : modelResult.source === 'fallback'
+      ? ` (live list unavailable — picked from curated short-list)`
+      : '';
+  console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model}${endpointTail} · ${maskApiKey(keyResult.text)}${sourceTail}`));
   return true;
 }
 
@@ -254,9 +284,6 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
  * and auto-connects via the running pool when possible — no CLI
  * restart needed.
  *
- * Pattern lifted from Claude Code's `/mcp` interactive menu (see
- * `openSrc/claude-code/CHANGELOG.md` line 2525): one screen lists all
- * servers, each row drills into per-server actions.
  */
 async function editMcp(ctx: CommandContext): Promise<boolean> {
   while (true) {
@@ -793,8 +820,7 @@ async function toggleQuiet(ctx: CommandContext): Promise<boolean> {
   const current = readPreferences(ctx.agent.workspaceRoot).quiet;
   const next = !current;
   writePreferences(ctx.agent.workspaceRoot, { quiet: next });
-  if (next) process.env.BRAINROUTER_QUIET = '1';
-  else delete process.env.BRAINROUTER_QUIET;
+  setCliKnobOverride({ quiet: next });
   console.log(chalk.green(`\n  ✓ Quiet mode → ${next ? 'on' : 'off'}\n`));
   return true;
 }
@@ -905,8 +931,7 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
       const off = ['off', 'false', '0', 'no'].includes(v);
       if (!on && !off) return { ok: false, reason: `quiet must be on|off (got "${value}")` };
       writePreferences(ctx.agent.workspaceRoot, { quiet: on });
-      if (on) process.env.BRAINROUTER_QUIET = '1';
-      else delete process.env.BRAINROUTER_QUIET;
+      setCliKnobOverride({ quiet: on });
       return { ok: true, message: `quiet → ${on ? 'on' : 'off'}` };
     },
   },
@@ -946,8 +971,13 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
     get: (ctx) => {
       const llm = ctx.config.llm;
       if (!llm) return '(unset)';
+      // Read the stored provider id directly. Earlier this reverse-looked
+      // up the catalog by endpoint, which returned the wrong id when a
+      // user edited the OpenAI base URL ("custom") or when an old wizard
+      // run mis-saved provider="openai" alongside a local endpoint.
+      if (llm.provider && findProvider(llm.provider)) return llm.provider;
       const match = PROVIDER_CATALOG.find((p) => p.endpoint === llm.endpoint);
-      return match?.id ?? 'custom';
+      return match?.id ?? llm.provider ?? 'custom';
     },
     // Async so we can re-prompt for the API key when the provider
     // changes. Pre-0.3.7 this setter silently reused the OLD provider's
@@ -956,9 +986,12 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
     set: async (ctx, value) => {
       const provider = findProvider(value.trim().toLowerCase());
       if (!provider) return { ok: false, reason: `unknown provider id "${value}" — open /config (bare) and pick interactively` };
-      const previousProviderId = (ctx.config.llm?.endpoint
-        ? PROVIDER_CATALOG.find((p) => p.endpoint === ctx.config.llm!.endpoint)?.id
-        : undefined);
+      // Prefer the stored provider id; fall back to endpoint matching for
+      // configs written before the hardcoded-"openai" bug fix.
+      const previousProviderId = ctx.config.llm?.provider
+        || (ctx.config.llm?.endpoint
+          ? PROVIDER_CATALOG.find((p) => p.endpoint === ctx.config.llm!.endpoint)?.id
+          : undefined);
       const sameProvider = previousProviderId === provider.id;
 
       // Reusing the existing key is correct when the provider isn't
@@ -992,17 +1025,48 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
         apiKey = keyResult.text;
       }
 
+      // OpenAI doubles as the OpenAI-compatible base-URL flow. Prompt
+      // to confirm or replace the endpoint; local providers keep their
+      // fixed loopback URLs.
+      let endpoint = provider.endpoint;
+      if (provider.id === 'openai') {
+        const theme = themeFor(ctx);
+        const current = ctx.config.llm?.endpoint ?? provider.endpoint;
+        const urlResult = await promptText({
+          theme,
+          title: 'API base URL',
+          subtitle: 'Press ENTER for OpenAI direct, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, vLLM, …).',
+          badge: 'OpenAI base URL',
+          prefilled: current,
+          placeholder: provider.endpoint,
+          validate: (raw) => {
+            const v = raw.trim();
+            if (!v) return 'base URL cannot be empty';
+            try { new URL(v); } catch { return 'must be a valid URL'; }
+            return undefined;
+          },
+        });
+        if (urlResult.kind !== 'accept') {
+          return { ok: false, reason: 'cancelled — provider unchanged' };
+        }
+        endpoint = urlResult.text.trim();
+      }
+
       ctx.config.llm = {
-        provider: 'openai',
+        provider: provider.id,
         apiKey,
         model: provider.defaultModel,
-        endpoint: provider.endpoint,
+        endpoint,
       };
       saveConfig(ctx.config);
-      ctx.agent.setModel(provider.defaultModel);
+      // Same fix as the apiKey path: propagate the FULL llm config to
+      // the live agent so endpoint + apiKey changes take effect without
+      // a CLI restart.
+      ctx.agent.setLLMConfig(ctx.config.llm);
+      const endpointTail = endpoint !== provider.endpoint ? ` · endpoint ${endpoint}` : '';
       const tail = sameProvider
-        ? '(provider unchanged — reused existing key + reset model to default)'
-        : `(model defaulted to ${provider.defaultModel} · key ${maskApiKey(apiKey)})`;
+        ? `(provider unchanged — reused existing key + reset model to default${endpointTail})`
+        : `(model defaulted to ${provider.defaultModel} · key ${maskApiKey(apiKey)}${endpointTail})`;
       return { ok: true, message: `provider → ${provider.label} ${tail}` };
     },
   },

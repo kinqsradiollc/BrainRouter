@@ -11,7 +11,8 @@ import chalk from 'chalk';
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
-import { appendTranscriptEntry } from '../state/sessionStore.js';
+import { getCliKnobs } from '../config/config.js';
+import { appendTranscriptEntry, redactText } from '../state/sessionStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -31,18 +32,57 @@ import {
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
-import { buildMemoryBriefing, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
+import { assessCapturePayload } from '../memory/memoryPolicy.js';
+import {
+  countEntityTokens as countEntityTokensFromText,
+  decideMemoryBriefing,
+  resolveRecallMode as resolveRecallModeFromEnv,
+  type BriefingDecision,
+} from '../memory/briefingTriggers.js';
 import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
 import { runHooks } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
-import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
+import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
-import { shouldUseAnthropicNative, callAnthropic } from '../runtime/anthropicAdapter.js';
+// 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
+// 0.3.8 but never delivered enough cache-hit headroom or stability to justify
+// the second provider dispatch). Anthropic models can still be reached through
+// OpenAI-compatible gateways (OpenRouter, Together, etc.) on the OpenAI path.
 import { startSpan, traceEvent } from '../runtime/tracing.js';
+// 0.3.9 item 8 — cache-first context regions. The helper here lets us
+// fingerprint the cache-stable slice of every outbound chat request
+// without rewriting the legacy runTurn message plumbing.
+import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+// 0.3.9 item 10 — provider-normalised cache-hit accounting.
+import { extractCacheStats } from '../runtime/cacheStats.js';
+// 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
+// truncation / storm). Adapted from openSrc/DeepSeek-Reasonix/src/repair/.
+import { ToolCallRepair, type RepairReport } from './repair/index.js';
+// 0.3.9 token-tally rework: content-aware estimator. The compaction
+// threshold itself stays a single `BRAINROUTER_AUTO_COMPACT_TOKENS`
+// absolute knob — the model's max context window isn't a good driver
+// because hitting 75% of a 1M-context model still costs real money,
+// and the user might want to compact much earlier.
+import {
+  estimateTokens as estimateTokensContentAware,
+  estimateChatHistoryTokens,
+} from '../runtime/tokenEstimate.js';
+// 0.3.9 item 12 — turn-end tool-result auto-shrink.
+import { shrinkOversizedToolResults } from './turnEndShrink.js';
+// 0.3.9 item 13 — model-tier self-escalation.
+import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../runtime/tierLadder.js';
+// 0.3.9 item 9 — prefix-pinned memory briefing policy.
+import {
+  decideAnchorAction,
+  hashBriefingContent,
+  wrapMidSessionRefresh,
+} from '../memory/anchorPin.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
+import { compactToolOutput } from '../prompt/toolCompaction.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 import {
@@ -50,6 +90,7 @@ import {
   parseArgumentsOrError,
   synthesizeOrphanResults,
   suggestSimilarToolName,
+  looksLikeStalledPreamble,
 } from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
@@ -150,6 +191,41 @@ function formatChildDrainTimeoutAnswer(timeouts: Array<{ id: string; role?: stri
   return lines.join('\n');
 }
 
+function summarizeWaitedChildOutputs(resultText: string): string | undefined {
+  const parsed = parseJsonObject(resultText);
+  if (!parsed) return undefined;
+  const agents = Array.isArray(parsed.agents) ? parsed.agents : [parsed];
+  const sections: string[] = [];
+  for (const entry of agents) {
+    if (!entry || typeof entry !== 'object') continue;
+    const child = entry as Record<string, unknown>;
+    const id = typeof child.id === 'string' ? child.id : undefined;
+    const status = typeof child.status === 'string' ? child.status : undefined;
+    const role = typeof child.role === 'string' ? child.role : undefined;
+    const output = typeof child.finalOutput === 'string'
+      ? child.finalOutput
+      : (typeof child.error === 'string' ? `ERROR: ${child.error}` : undefined);
+    if (!id || !output) continue;
+    sections.push([
+      `Child ${id}${role ? ` (${role})` : ''} ${status ? `[${status}]` : ''}`,
+      output,
+    ].join('\n'));
+  }
+  if (sections.length === 0) return undefined;
+  const body = sections.join('\n\n---\n\n');
+  const maxChars = getCliKnobs().childResultSystemChars;
+  const clamped = body.length > maxChars
+    ? `${body.slice(0, maxChars)}\n...[truncated ${body.length - maxChars} chars; use read_agent_transcript or /agent show <id> for full output]`
+    : body;
+  return [
+    '<system-reminder id="child-results">',
+    'Recently waited child-agent outputs are available below. Synthesize these results directly; do not ignore them or continue as if the children are still running.',
+    '',
+    clamped,
+    '</system-reminder>',
+  ].join('\n');
+}
+
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
   onToolStart: (name: string, args: Record<string, any>) => void;
@@ -183,6 +259,35 @@ export interface RunTurnCallbacks {
    * though those MCP calls are hidden from the LLM's tool stream.
    */
   onMemoryEvent?: (event: MemoryEvent) => void;
+  /**
+   * TIER A streaming hooks — when any of these are provided, the agent
+   * switches to a streaming LLM call (SSE) so the UI sees text appear
+   * character-by-character (grok-cli parity). When omitted (silent /
+   * child agents / tests), the original non-streaming path is used.
+   * Firing order per assistant turn:
+   *   onAssistantTurnStart → onAssistantDelta* (and/or onReasoningDelta*)
+   *   → onAssistantTurnEnd(finalText)
+   * onReasoningDelta carries chain-of-thought / reasoning_content chunks
+   * — UI should render in dim italic and truncate per its own policy.
+   */
+  onAssistantTurnStart?: () => void;
+  onAssistantDelta?: (chunk: string) => void;
+  onAssistantTurnEnd?: (fullText: string) => void;
+  onReasoningDelta?: (chunk: string) => void;
+  /**
+   * Fired right after a compaction collapses chat history. The UI uses
+   * this to render a visible "📦 Compacted N → summary" scrollback row
+   * so users see why context appears to reset mid-conversation.
+   */
+  onCompactionEvent?: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
+  /**
+   * Side-question: when set, the agent registers an `ask_user` tool. When
+   * the model invokes it mid-turn, the agent calls this callback and
+   * awaits the user's answer (resolved by the UI overlay) before
+   * returning the answer as the tool result. Silent / child agents leave
+   * this unset so the tool is not exposed.
+   */
+  onSideQuestion?: (question: string, choices?: string[]) => Promise<string>;
 }
 
 export type MemoryEvent =
@@ -203,6 +308,20 @@ export type MemoryEvent =
   | { kind: 'citation'; recordIds: string[] }
   | { kind: 'contradiction'; warning: string }
   | { kind: 'skipped'; reason: string };
+
+export interface LastBriefingDetails {
+  decision: BriefingDecision['action'] | 'none';
+  reasons: string[];
+  sources: string[];
+  sourcesPlanned: string[];
+  skippedSources: Array<{ source: string; reason: string }>;
+  sourceStats: Array<{ source: string; chars: number; records: number }>;
+  recordIds: string[];
+  recordCount: number;
+  tokensInjected: number;
+  charsSaved: number;
+  warnings: string[];
+}
 
 export interface ChatCompletionPayload {
   model: string;
@@ -449,7 +568,7 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `openSrc/`, `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -608,6 +727,19 @@ export class Agent {
   private recalledRecordIds: string[] = [];
   private recalledRecords: RecalledRecord[] = [];
   private lastBriefingSources: string[] = [];
+  private lastBriefingDetails: LastBriefingDetails = {
+    decision: 'none',
+    reasons: [],
+    sources: [],
+    sourcesPlanned: [],
+    skippedSources: [],
+    sourceStats: [],
+    recordIds: [],
+    recordCount: 0,
+    tokensInjected: 0,
+    charsSaved: 0,
+    warnings: [],
+  };
   /**
    * 10b: latest MCP tool inventory captured by `listTools()` calls. Used by
    * `createSystemMessage` to decide whether the BrainRouter memory section
@@ -618,6 +750,35 @@ export class Agent {
    * builder until then (back-compat for callers that don't list pre-turn).
    */
   private lastKnownMcpTools?: Array<{ name: string }>;
+  /**
+   * 0.3.9 item 9 — content hash of the currently pinned memory anchor.
+   * `null` means no anchor has been pinned yet this session (or
+   * /refresh-memory just cleared it). When set, subsequent briefings
+   * either no-op (same hash → STABLE) or append (different hash →
+   * APPEND) rather than rewriting the prefix system message.
+   */
+  private pinnedAnchorHash: string | null = null;
+  /**
+   * 0.3.9 item 11 — repair pipeline (lazy: instantiated on first use so
+   * the allowed-tool-names set reflects the live MCP inventory). Reset
+   * at the start of every fresh user turn via `resetStorm()` so a
+   * fresh intent doesn't inherit prior repetition state.
+   */
+  private toolCallRepair: ToolCallRepair | null = null;
+  /** 0.3.9 item 11 — last repair report, surfaced via /briefing debug. */
+  private lastRepairReport: RepairReport | null = null;
+  /** 0.3.9 item 13 — count of NEEDS_HIGH escalations this turn, bounded so a marker loop can't churn. */
+  private tierEscalationsThisTurn = 0;
+  /**
+   * 0.3.9 token-tally rework: most-recent authoritative `prompt_tokens`
+   * from the provider's `usage` payload. The compaction trigger prefers
+   * this over the content-aware estimator because the provider charged
+   * us for exactly this number — no rounding, no JSON-syntax inflation,
+   * no language-class bucket guesses. `undefined` on turn 1 and after a
+   * successful compaction (the compact log doesn't reflect the prior
+   * `prompt_tokens` value).
+   */
+  private lastSeenPromptTokens: number | undefined;
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -630,6 +791,8 @@ export class Agent {
    */
   private recallHasFiredThisSession = false;
   private recallNextTurnIsPostCompaction = false;
+  private turnsSinceLastFullBriefing = 0;
+  private recentToolFailure?: string;
   private roleOverlay?: string;
   private accessMode: AccessMode;
   private silent: boolean;
@@ -769,9 +932,15 @@ export class Agent {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
-    this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0 };
+    this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
     this.lastGoalTransition = undefined;
+    // 0.3.9 item 11 — clear the storm window for the new user intent.
+    // Old repetition state from the previous turn shouldn't suppress a
+    // fresh request that happens to use the same tool with the same args.
+    this.toolCallRepair?.resetStorm();
+    this.lastRepairReport = null;
+    this.tierEscalationsThisTurn = 0;
     // OTEL-style span: one trace per turn, tool calls become child spans.
     // When this Agent was spawned as a child, inherit the parent's traceId
     // + spanId so fan-out runs stitch into one tree across processes (or
@@ -810,7 +979,17 @@ export class Agent {
     }
 
     const allowed = this.allowedToolsForAccess();
-    const filteredLocalTools = LOCAL_TOOLS.filter(t => allowed.has(t.name));
+    // OpenCode parity: collapse the orchestration surface the LLM sees onto
+    // task_agent (foreground) + delegate_agent (background). spawn_agent /
+    // spawn_agents stay registered and executable (workflow.ts slash commands
+    // still call them, and `executeOrchestrationTool` dispatches them) but
+    // we don't advertise them to the model — that's what made the model
+    // pick four overlapping tools at random instead of consistently using
+    // task_agent the way OpenCode users see Task get picked.
+    const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
+    const filteredLocalTools = LOCAL_TOOLS.filter(
+      (t) => allowed.has(t.name) && !MODEL_HIDDEN_TOOLS.has(t.name),
+    );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
@@ -819,19 +998,46 @@ export class Agent {
     const allTools = [...filteredLocalTools, ...visibleMcpTools];
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools and ${mcpTools.length} MCP tools.`);
 
-    // Auto-compact: if the chat history has grown past the configured token
-    // budget, summarize before this turn starts. Otherwise the model sees
-    // ever-growing context (briefings, tool outputs, prior turns) and the
-    // request balloons until the endpoint rejects it. Default threshold is
-    // generous; users can lower BRAINROUTER_AUTO_COMPACT_TOKENS to ~30000
-    // for cost-sensitive models.
+    // Auto-compact pre-turn check.
+    //
+    // Threshold: `BRAINROUTER_AUTO_COMPACT_TOKENS` (default 80_000). Single
+    // absolute knob — the model's max context window is NOT used as the
+    // driver because (a) hitting 75% of a 1M-context model still costs
+    // real money and the user might want to compact much earlier, (b)
+    // smaller models with tight windows are better served by a hard
+    // ceiling the user explicitly set.
+    //
+    // Token-count source (the actual correction in 0.3.9):
+    //   1. `lastSeenPromptTokens` — the authoritative `usage.prompt_tokens`
+    //      from the previous response. The provider charged us for this
+    //      number, so it's the truest count available.
+    //   2. Content-aware estimator (`tokenEstimate.ts → estimateChatHistoryTokens`)
+    //      — fallback for turn 1 (no usage yet) and silent runs. Buckets
+    //      chars by class (prose / code-density / CJK) so CJK pastes and
+    //      code dumps don't drift the count by 2–4× as the old
+    //      `text.length / 4` proxy did.
     if (!this.silent) {
-      const autoCompactThreshold = Number(process.env.BRAINROUTER_AUTO_COMPACT_TOKENS) || 80_000;
-      const estimated = Agent.estimateTokens(JSON.stringify(this.chatHistory));
-      if (estimated > autoCompactThreshold && this.chatHistory.length > 6) {
-        callbacks.onStatusUpdate(`Auto-compacting history (~${estimated} tokens > ${autoCompactThreshold})...`);
+      const autoCompactThreshold = getCliKnobs().autoCompactTokens;
+      const promptTokens = this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
+        ? this.lastSeenPromptTokens
+        : estimateChatHistoryTokens(this.chatHistory as any);
+      if (promptTokens > autoCompactThreshold && this.chatHistory.length > 6) {
+        callbacks.onStatusUpdate(`Auto-compacting history (~${promptTokens.toLocaleString()} tokens > ${autoCompactThreshold.toLocaleString()})...`);
         try {
-          await this.compactHistory();
+          const beforeLen = this.chatHistory.length;
+          const r = await this.compactHistory();
+          if (r && callbacks.onCompactionEvent) {
+            callbacks.onCompactionEvent({
+              droppedMessages: Math.max(0, beforeLen - this.chatHistory.length),
+              keptMessages: this.chatHistory.length,
+              summary: r.summary,
+            });
+          }
+          // After a successful compaction the prior `lastSeenPromptTokens`
+          // is stale — the history we just summarized doesn't reflect the
+          // new compact log. Reset so the next turn's estimator falls back
+          // to its content-aware count of the COMPACTED history.
+          this.lastSeenPromptTokens = undefined;
         } catch {
           // If compaction fails (no LLM, network), continue without it — better
           // a big payload than a hard turn failure.
@@ -896,8 +1102,14 @@ export class Agent {
     // → write tasks) can easily eat 10-15 iterations. 20 was too tight and
     // caused workflows to abort mid-architect. Cap defaults to 60 and is
     // overridable via BRAINROUTER_MAX_TOOL_LOOPS for very heavy workflows.
-    const maxLoops = Math.max(5, Number(process.env.BRAINROUTER_MAX_TOOL_LOOPS) || 60);
+    const maxLoops = Math.max(5, getCliKnobs().maxToolLoops);
     let finalAnswer = '';
+    // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
+    // branch below. Bounded so a model that ONLY emits preambles can't keep
+    // the loop alive forever. Two extra iterations is enough for the model to
+    // either deliver the answer or admit it can't.
+    let preambleGuardFired = 0;
+    const PREAMBLE_GUARD_MAX = 2;
     // Tracks whether we exited the loop because the LLM stopped requesting
     // tools (clean break) vs because we hit maxLoops. Critical: an empty
     // `finalAnswer === ''` from a clean break is NOT a loop-limit timeout.
@@ -907,6 +1119,12 @@ export class Agent {
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
     const REPEAT_GUARD_LIMIT = 3;
+    // OpenCode calls this class of failure a "doom loop": the same tool
+    // pattern repeats even if the arguments keep changing. Keep BrainRouter's
+    // threshold higher than OpenCode's identical-input approval guard so
+    // normal multi-file exploration still works, but stop 20+ Read(...) spins.
+    const recentToolSequences: string[] = [];
+    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
     const buildOrchestrationContext = (): OrchestrationContext => ({
@@ -941,26 +1159,144 @@ export class Agent {
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
       let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-      try {
+      const invokeLlm = async () => {
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed.
         const effort = resolveEffort(this.workspaceRoot).effort;
-        if (shouldUseAnthropicNative(this.llmConfig)) {
-          response = await callAnthropic(this.llmConfig, this.chatHistory, allTools, {
-            effort,
-            onThinking: (text) => callbacks.onStatusUpdate(`Thinking: ${text.slice(0, 200)}`),
-          });
-        } else {
-          response = await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+        // TIER A: stream when the UI is listening for deltas, AND the
+        // user hasn't disabled it. Streaming opts in only when a delta
+        // callback is supplied — silent mode / children / tests stay on
+        // the non-streaming path so their behavior is unchanged.
+        const streamRequested = Boolean(
+          callbacks.onAssistantDelta || callbacks.onReasoningDelta,
+        ) && getCliKnobs().disableStream !== true;
+        if (streamRequested) {
+          try {
+            let started = false;
+            const final = await callOpenAIStream(
+              this.llmConfig,
+              this.chatHistory,
+              allTools,
+              { effort },
+              {
+                onTextDelta: (text) => {
+                  if (!started) {
+                    started = true;
+                    callbacks.onAssistantTurnStart?.();
+                  }
+                  callbacks.onAssistantDelta?.(text);
+                },
+                onReasoningDelta: (text) => {
+                  callbacks.onReasoningDelta?.(text);
+                },
+              },
+            );
+            if (started) callbacks.onAssistantTurnEnd?.(final.content);
+            return { content: final.content, toolCalls: final.toolCalls, usage: final.usage };
+          } catch (streamErr: any) {
+            // Streaming failed (provider doesn't support SSE, malformed
+            // chunks, network blip). Fall back transparently to the
+            // non-streaming path so the turn still completes — log via
+            // status so the user can see why their text wasn't live.
+            callbacks.onStatusUpdate(`Streaming failed (${String(streamErr?.message ?? streamErr).slice(0, 120)}) — falling back to non-streaming.`);
+          }
         }
+        return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+      };
+      try {
+        response = await invokeLlm();
       } catch (err: any) {
-        throw new Error(`LLM Execution failed: ${err.message}`);
+        // Layered LLM recovery — adapted from claude-code's queryLoop in
+        // openSrc/claude-code-openSource/src/query.ts. We detect context-
+        // window-exceeded errors (the single failure mode where a fresh
+        // request is guaranteed to fail the same way) and trigger a
+        // reactive compaction before retrying ONCE. Other errors propagate
+        // unchanged — bare rethrow preserves the prior surface for
+        // network/auth/rate-limit failures the user wants to see.
+        const message = String(err?.message ?? err);
+        const looksContextOverflow = /context length|context window|maximum context|too many tokens|reduce the length|prompt is too long|413|tokens? exceed/i.test(message);
+        if (looksContextOverflow && !this.silent && this.chatHistory.length > 6) {
+          callbacks.onStatusUpdate(`Context overflow detected — reactive compaction before retry...`);
+          try {
+            const beforeLen = this.chatHistory.length;
+            const r = await this.compactHistory();
+            if (r && callbacks.onCompactionEvent) {
+              callbacks.onCompactionEvent({
+                droppedMessages: Math.max(0, beforeLen - this.chatHistory.length),
+                keptMessages: this.chatHistory.length,
+                summary: r.summary,
+              });
+            }
+            response = await invokeLlm();
+          } catch (retryErr: any) {
+            throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
+          }
+        } else {
+          throw new Error(`LLM Execution failed: ${message}`);
+        }
       }
+      // 0.3.9 item 13 — model-tier self-escalation. When the response
+      // starts with `<<<NEEDS_HIGH>>>` (with or without `:reason`), the
+      // model is telling us this task exceeds its current tier. Step
+      // the ladder one up, retry the same turn, and surface a yellow
+      // warning row. Pro-tier marker is a no-op. Bounded by a per-turn
+      // counter so a marker-emitting model can't loop forever.
+      const needsHigh = detectNeedsHigh(response.content);
+      if (needsHigh && (this.tierEscalationsThisTurn ?? 0) < 2) {
+        const provider = (this.llmConfig.provider ?? 'openai').toLowerCase();
+        const ladder = resolveTierLadder({ provider });
+        const cur = currentTier(this.llmConfig.model, ladder);
+        const next = nextTier(cur);
+        if (next && ladder.ladder[next] && ladder.ladder[next] !== this.llmConfig.model) {
+          this.tierEscalationsThisTurn = (this.tierEscalationsThisTurn ?? 0) + 1;
+          const before = this.llmConfig.model;
+          this.llmConfig = { ...this.llmConfig, model: ladder.ladder[next] };
+          traceEvent('tier.escalate', {
+            from: before,
+            to: this.llmConfig.model,
+            provider,
+            reason: needsHigh.reason ?? null,
+          });
+          callbacks.onStatusUpdate(
+            `⚠️ Tier escalation: ${before} → ${this.llmConfig.model}${needsHigh.reason ? ` — ${needsHigh.reason}` : ''}`,
+          );
+          // Retry the SAME turn on the new tier — skip pushing this
+          // half-answer into chatHistory and re-invoke the LLM.
+          continue;
+        }
+      }
+      // Strip the marker from the user-visible content regardless of
+      // whether we escalated (no-op on top-tier).
+      if (needsHigh) {
+        response.content = stripNeedsHigh(response.content);
+      }
+
       if (response.usage) {
         this.lastTurnUsage.promptTokens += response.usage.prompt_tokens ?? 0;
         this.lastTurnUsage.completionTokens += response.usage.completion_tokens ?? 0;
         this.lastTurnUsage.calls += 1;
+        // 0.3.9 token-tally rework: track the LATEST authoritative
+        // prompt_tokens count so the next turn's auto-compact decision
+        // uses what the provider actually charged us, not the legacy
+        // `JSON.stringify(history).length / 4` proxy.
+        if (typeof response.usage.prompt_tokens === 'number' && response.usage.prompt_tokens > 0) {
+          this.lastSeenPromptTokens = response.usage.prompt_tokens;
+        }
+        // 0.3.9 item 10 — normalise provider cache fields (OpenAI /
+        // DeepSeek / Anthropic shapes) into a single counter so the
+        // /tokens panel and the usage.jsonl roll-up don't have to
+        // re-branch.
+        const cache = extractCacheStats(response.usage as any);
+        this.lastTurnUsage.cachedTokens += cache.cachedTokens;
+        this.lastTurnUsage.missedTokens += cache.missedTokens;
+        traceEvent('llm_call.cache_stats', {
+          model: this.llmConfig.model,
+          cachedTokens: cache.cachedTokens,
+          missedTokens: cache.missedTokens,
+          cacheHitRatio: cache.cacheHitRatio,
+          source: cache.source,
+        });
       }
 
       // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
@@ -978,6 +1314,86 @@ export class Agent {
         });
         response.toolCalls = deduped;
       }
+
+      // 0.3.9 item 11 — run the Reasonix-style repair pipeline on the
+      // assistant's tool_calls before they reach dispatch:
+      //   • scavenge — recover calls leaked into the content channel;
+      //   • truncation — rebalance JSON in arguments cut off by
+      //     max_tokens;
+      //   • storm — suppress identical-args loops.
+      // `flatten` runs at registration time, not per-turn (see the
+      // schema-flatten patch in orchestration/tools.ts).
+      const allowedToolNames = new Set<string>(allTools.map((t: any) => t.name).filter(Boolean));
+      if (!this.toolCallRepair) {
+        this.toolCallRepair = new ToolCallRepair({
+          allowedToolNames,
+          isMutating: (call) => {
+            const n = call.function?.name ?? '';
+            return n === 'write_file' || n === 'edit_file' || n === 'apply_patch' || n === 'run_command';
+          },
+          isStormExempt: (call) => {
+            const n = call.function?.name ?? '';
+            return n === 'list_jobs' || n === 'get_status' || n === 'list_agents' || n === 'wait_agent' || n === 'wait_agents';
+          },
+        });
+      }
+      const repairInput = (response.toolCalls ?? []) as any[];
+      // Identify which originals were suppressed by storm/repair (by id) so
+      // we can synthesize matching ERROR tool_results and surface
+      // user-visible `onToolEnd` events. Otherwise the OpenAI invariant
+      // breaks (assistant tool_call with no paired tool_result) and the
+      // legacy "repeat guard tripped" UX regresses.
+      const survivingIds = new Set<string>();
+      const repaired = this.toolCallRepair.process(
+        repairInput.map((c) => ({ id: c.id, type: c.type, function: c.function })),
+        // OpenAI-compat callOpenAI() doesn't return reasoning_content
+        // separately yet — pass content as the secondary scavenge
+        // channel so DSML / leaked JSON in content is still caught.
+        null,
+        typeof response.content === 'string' ? response.content : null,
+      );
+      this.lastRepairReport = repaired.report;
+      for (const c of repaired.calls) if (c.id) survivingIds.add(c.id);
+      if (repaired.report.scavenged > 0 || repaired.report.truncationsFixed > 0 || repaired.report.stormsBroken > 0) {
+        traceEvent('tool_call.repair', {
+          scavenged: repaired.report.scavenged,
+          truncationsFixed: repaired.report.truncationsFixed,
+          truncationsUnrecoverable: repaired.report.truncationsUnrecoverable,
+          stormsBroken: repaired.report.stormsBroken,
+          notes: repaired.report.notes,
+        });
+        if (repaired.report.scavenged > 0) {
+          callbacks.onStatusUpdate(`Repair: scavenged ${repaired.report.scavenged} tool call${repaired.report.scavenged === 1 ? '' : 's'} from response content.`);
+        }
+      }
+      // Surface storm-suppressed originals as `onToolEnd` events so the
+      // user sees "repeat guard tripped (Nx <tool>)" and the model
+      // receives a paired ERROR tool_result on the next request.
+      const suppressedSynthetic: any[] = [];
+      if (repairInput.length > 0) {
+        for (const original of repairInput) {
+          if (original.id && survivingIds.has(original.id)) continue;
+          // The storm pipeline-level suppression was the only path that
+          // can drop a declared call without emitting its own
+          // tool_result. Mirror the legacy guard's user-visible summary.
+          const name = original.function?.name ?? 'unknown';
+          const summary = `repeat guard tripped (storm pipeline ${name})`;
+          callbacks.onToolStart?.(name, {});
+          callbacks.onToolEnd?.(name, { success: false, summary });
+          suppressedSynthetic.push({
+            role: 'tool',
+            tool_call_id: original.id,
+            name,
+            content: `ERROR: ${summary}. The same (name, args) pair fired more times than the pipeline-level storm guard allows. Pick a different action or call goal_blocked if no further path remains.`,
+            isError: true,
+          });
+        }
+      }
+      response.toolCalls = repaired.calls.length > 0 ? (repaired.calls as any[]) : undefined;
+      // Stash the synthetic tool_results to push AFTER the assistant
+      // message lands in chatHistory — preserve OpenAI's tool_call ↔
+      // tool_result ordering.
+      (response as any)._suppressedSyntheticResults = suppressedSynthetic;
       // Record Assistant message
       const assistantMsg: any = { role: 'assistant', content: response.content };
       if (response.toolCalls) {
@@ -986,10 +1402,23 @@ export class Agent {
       this.chatHistory.push(assistantMsg);
       this.recordTranscript(assistantMsg);
 
+      // 0.3.9 item 11 — flush any storm-suppressed synthetic tool_results
+      // immediately after the assistant message so the LLM sees them
+      // paired with the original tool_call ids. Done before the
+      // no-tool_calls early-exit because the assistantMsg may still
+      // carry some surviving calls (mixed case).
+      const syntheticResults = (response as any)._suppressedSyntheticResults as any[] | undefined;
+      if (syntheticResults && syntheticResults.length > 0) {
+        for (const r of syntheticResults) {
+          this.chatHistory.push(r);
+          this.recordTranscript(r);
+        }
+      }
+
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
         if (unobservedChildIds.length > 0) {
-          const drainTimeoutMs = Math.max(1, Number(process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS) || DEFAULT_CHILD_DRAIN_TIMEOUT_MS);
+          const drainTimeoutMs = Math.max(1, getCliKnobs().childDrainTimeoutMs);
           const waitName = 'wait_agents';
           const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };
 
@@ -1025,11 +1454,62 @@ export class Agent {
             `Child wait result:\n${waitResultText}`,
             'Now synthesize the child output for the user. Do not say you are waiting unless the wait result timed out.',
           ].join('\n\n');
+          const childResultSystem = summarizeWaitedChildOutputs(waitResultText);
+          if (childResultSystem) {
+            const systemMsg = { role: 'system', content: childResultSystem };
+            this.chatHistory.push(systemMsg);
+            this.recordTranscript(systemMsg);
+          }
           const guardMsg = { role: 'user', content: correction };
           this.chatHistory.push(guardMsg);
           this.recordTranscript(guardMsg);
           continue;
         }
+
+        // Stalled-preamble guardrail: when the model emits a short preamble
+        // like "I'll start by exploring…" / "Let me check…" but ATTACHES NO
+        // tool_calls in the same response, the loop would otherwise break
+        // with that preamble as the final answer — leaving the user staring
+        // at an announcement of work the model never did. This is the most
+        // common Gemma 2B / free-tier OS-model failure mode after we started
+        // teaching them OpenCode's "send a preamble before tool batches"
+        // pattern.
+        //
+        // Fire only when:
+        //   1. The turn already had ≥1 real tool call (so we know the model
+        //      engaged — this isn't a fresh "I don't have enough info" reply)
+        //   2. `looksLikeStalledPreamble(content)` matches the start-of-text
+        //      preamble regexes in toolCallRecovery.ts
+        //   3. We haven't already injected the guardrail too many times this
+        //      turn (PREAMBLE_GUARD_MAX = 2)
+        //
+        // Inject a corrective user message and continue one more iteration.
+        // The model either delivers the substantive answer or, on the next
+        // pass, writes a real reply that escapes the preamble heuristic.
+        if (
+          preambleGuardFired < PREAMBLE_GUARD_MAX &&
+          this.lastTurnToolCalls > 0 &&
+          looksLikeStalledPreamble(response.content)
+        ) {
+          preambleGuardFired += 1;
+          const preview = response.content.trim().slice(0, 140);
+          const correction = [
+            'Runtime preamble guardrail tripped.',
+            `Your last assistant message was a preamble ("${preview}${response.content.trim().length > 140 ? '…' : ''}") but ended with NO tool_calls. The user is still waiting for the actual answer — they cannot see your intent, only your tool_calls and final prose.`,
+            '',
+            'Do ONE of these now, in THIS response:',
+            '1. **Execute the next tool batch you announced** — emit structured tool_calls for the reads/grep/spawn you said you were about to do. The preamble alone does not count.',
+            '2. **Write the substantive answer the user originally asked for** — the actual analysis, findings, code references, or conclusions. Not another preamble.',
+            '',
+            'Do NOT write "I\'ll start by…", "Let me…", or any other preamble again. Either call tools or deliver the answer.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Recovery: preamble-without-action (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing continuation`);
+          continue;
+        }
+
         finalAnswer = response.content;
         exitedCleanly = true;
         break;
@@ -1053,12 +1533,44 @@ export class Agent {
       const normalizedNames = toolCalls.map((tc: any) =>
         normalizeToolName(tc.function.name, candidates),
       );
+      const sequenceSignature = JSON.stringify(normalizedNames);
+      const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
+      recentToolSequences.push(sequenceSignature);
+      if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
+      if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT) {
+        const sequenceLabel = normalizedNames.join(' → ');
+        const resultText = [
+          `Repeat-loop guard tripped: the same tool sequence (${sequenceLabel}) has repeated ${previousSequenceRepeats + 1} times in this turn.`,
+          'The arguments changed, but the action pattern is stalled.',
+          'Stop calling the same tool pattern. Use the evidence already gathered, switch strategy, spawn a bounded child, or report what remains unknown.',
+        ].join(' ');
+        const processed = toolCalls.map((tc: any, idx: number) => ({
+          toolMsg: {
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: normalizedNames[idx],
+            content: resultText,
+            isError: true,
+          },
+          fullResultText: resultText,
+        }));
+        for (const name of normalizedNames) {
+          callbacks.onToolStart(name, {});
+          callbacks.onToolEnd(name, { success: false, summary: `repeat sequence guard tripped (${previousSequenceRepeats + 1}× ${sequenceLabel})`, preview: resultText });
+          traceEvent('brainrouter.tool', { tool: name, ok: false, local: LOCAL_TOOLS.some(lt => lt.name === name), session_key: this.sessionKey, guard: 'repeat_sequence' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+        }
+        for (const entry of processed) {
+          this.chatHistory.push(entry.toolMsg);
+          this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
+        }
+        continue;
+      }
       const parallelEnabled = parallelExecutionEnabled();
       const safeFlags: boolean[] = toolCalls.map(
         (_tc: any, idx: number) => parallelEnabled && isParallelSafe(normalizedNames[idx]),
       );
 
-      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string }> => {
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
         // 0.3.8-I4: Use the strict-recovery helper so a malformed-arguments
         // tool_call surfaces as a structured tool_result (with the raw
@@ -1183,6 +1695,9 @@ export class Agent {
             summary = message;
           }
         }
+        if (isError) {
+          this.recentToolFailure = `${name}: ${summary || resultText.slice(0, 160)}`;
+        }
 
         const finalSummary = hookifyWarnings.length > 0 ? `${summary} | ${hookifyWarnings.join(' | ')}` : summary;
         // Inspection tools (list_dir, grep_search, glob_files) commonly fail to
@@ -1190,7 +1705,17 @@ export class Agent {
         // "I have listed the directory" instead of echoing the contents. Compute
         // a short preview from the raw result so the REPL can show the user
         // SOMETHING even when the model declines to.
-        const preview = !isError ? getToolPreview(name, args, resultText) : undefined;
+        //
+        // For ERROR cases, surface the failure text as the preview too —
+        // previously `preview: undefined` meant the user just saw
+        // `Read(.) · 0ms` with no indication WHY the tool failed (e.g. "EISDIR:
+        // illegal operation on a directory"). Truncate to 400 chars so a
+        // stack trace doesn't blow up the scrollback.
+        const preview = !isError
+          ? getToolPreview(name, args, resultText)
+          : (resultText
+              ? `${resultText.length > 400 ? resultText.slice(0, 400) + '…' : resultText}`
+              : (summary || undefined));
         callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview });
         traceEvent('brainrouter.tool', {
           tool: name,
@@ -1210,11 +1735,16 @@ export class Agent {
         // verbatim every subsequent turn, which blew the context window in
         // long sessions. Clamp at ~8 KB per result for the LLM-visible copy
         // while keeping the full text on disk via recordTranscript.
-        const MAX_TOOL_RESULT_CHARS = Number(process.env.BRAINROUTER_MAX_TOOL_RESULT_CHARS) || 8000;
-        const clampedContent = resultText.length > MAX_TOOL_RESULT_CHARS
-          ? resultText.slice(0, MAX_TOOL_RESULT_CHARS) +
-            `\n…[truncated ${resultText.length - MAX_TOOL_RESULT_CHARS} chars — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
-          : resultText;
+        const compaction = compactToolOutput({ toolName: name, args, output: resultText });
+        if (compaction.omittedChars > 0) {
+          this.memoryMetrics.compactedToolCharsAvoided += compaction.omittedChars;
+        }
+        const llmVisibleResult = compaction.inlineText;
+        const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
+        const clampedContent = llmVisibleResult.length > MAX_TOOL_RESULT_CHARS
+          ? llmVisibleResult.slice(0, MAX_TOOL_RESULT_CHARS) +
+            `\n…[truncated ${llmVisibleResult.length - MAX_TOOL_RESULT_CHARS} chars after ${compaction.ruleId} compaction — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
+          : llmVisibleResult;
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
@@ -1222,12 +1752,16 @@ export class Agent {
           content: clampedContent,
           isError
         };
+        const childResultSystem = (name === 'wait_agent' || name === 'wait_agents')
+          ? summarizeWaitedChildOutputs(resultText)
+          : undefined;
+        const systemMsg = childResultSystem ? { role: 'system', content: childResultSystem } : undefined;
         // Return; the caller pushes to chatHistory in original call order
         // (NOT settle order) and records the FULL untruncated result for
         // /transcript. Doing the push here would let parallel batches land
         // in finish order, which the LLM's next turn would see as a
         // non-deterministic trace.
-        return { toolMsg, fullResultText: resultText };
+        return { toolMsg, fullResultText: resultText, systemMsg };
       };
 
       // Partition the tool_calls into runs of consecutive parallel-safe
@@ -1236,7 +1770,7 @@ export class Agent {
       // serial runs (and unknown-tool fallbacks) execute one-by-one. The
       // result array is indexed by original call position so the
       // chatHistory push at the end is deterministic.
-      const processed: Array<{ toolMsg: any; fullResultText: string } | undefined> =
+      const processed: Array<{ toolMsg: any; fullResultText: string; systemMsg?: any } | undefined> =
         new Array(toolCalls.length);
 
       const runSafeBatch = async (startIdx: number, endIdx: number): Promise<void> => {
@@ -1284,12 +1818,20 @@ export class Agent {
         }
       }
 
+      const postToolSystemMessages: any[] = [];
       for (const entry of processed) {
         if (!entry) continue;
         this.chatHistory.push(entry.toolMsg);
         // Record the FULL untruncated result so /transcript shows everything,
         // even when the LLM-facing copy was clamped.
         this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
+        if (entry.systemMsg) {
+          postToolSystemMessages.push(entry.systemMsg);
+        }
+      }
+      for (const systemMsg of postToolSystemMessages) {
+        this.chatHistory.push(systemMsg);
+        this.recordTranscript(systemMsg);
       }
 
       // 0.3.8-I4: orphan safety net. Even after dedupe + the per-call
@@ -1369,12 +1911,37 @@ export class Agent {
     this.sessionUsage.completionTokens += this.lastTurnUsage.completionTokens;
     this.sessionUsage.calls += this.lastTurnUsage.calls;
     this.sessionUsage.turns += 1;
+    // 0.3.9 item 10 — roll cache stats into session totals.
+    this.sessionUsage.cachedTokens += this.lastTurnUsage.cachedTokens;
+    this.sessionUsage.missedTokens += this.lastTurnUsage.missedTokens;
+
+    // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
+    // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
+    // replaced with the compacted version on the way out of the turn.
+    // Full raw outputs remain in the transcript layer.
+    const shrinkResult = shrinkOversizedToolResults(this.chatHistory);
+    if (shrinkResult.shrunkCount > 0) {
+      this.memoryMetrics.compactedToolCharsAvoided += shrinkResult.charsSaved;
+      traceEvent('turn_end.shrink', {
+        shrunkCount: shrinkResult.shrunkCount,
+        charsSaved: shrinkResult.charsSaved,
+        tokensSaved: shrinkResult.tokensSaved,
+      });
+    }
     return finalAnswer;
   }
 
-  /** Rough token estimate (1 token ≈ 4 characters of English / code). */
+  /**
+   * Content-aware token estimate. Calls into `runtime/tokenEstimate.ts`
+   * which buckets characters by class (prose / code-density / CJK) and
+   * applies per-class chars-per-token ratios — closer to the provider's
+   * actual BPE tokenizer than the old `text.length / 4` heuristic.
+   *
+   * Used only as a fallback when authoritative `response.usage.prompt_tokens`
+   * isn't available (turn 1, silent/offline runs).
+   */
   public static estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    return estimateTokensContentAware(text);
   }
 
   private async executeLocalTool(name: string, args: Record<string, any>): Promise<string> {
@@ -1517,7 +2084,14 @@ export class Agent {
         //     commands need parent opt-in (fast mode) and dangerous commands
         //     are always denied.
         const prefs = readPreferences(this.workspaceRoot);
-        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent });
+        // 0.3.9 — pass `goalActive` so the resolver can auto-approve
+        // SAFE commands when a /goal is active. Without this, the very
+        // first run_command of a goal-mode session blocks the auto-
+        // continuation on the askYesNo prompt, defeating the purpose of
+        // "type a goal, walk away". Dangerous commands still ask.
+        const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
+        const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
+        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent, goalActive: goalIsActive });
         if (approval === 'deny-silent') {
           if (isDangerousCommand(cmd)) {
             return (
@@ -1536,7 +2110,11 @@ export class Agent {
           );
         }
         if (approval === 'auto-approve') {
-          const tag = this.silent ? 'Auto-approved (silent child)' : 'Auto-approved';
+          const tag = this.silent
+            ? 'Auto-approved (silent child)'
+            : goalIsActive && prefs.executionMode !== 'fast'
+              ? 'Auto-approved (/goal active)'
+              : 'Auto-approved';
           console.log(chalk.gray(`▶  ${tag}: ${chalk.cyan(cmd)}`));
         } else {
           // approval === 'ask' — interactive y/N. Use the parent REPL's
@@ -1544,11 +2122,27 @@ export class Agent {
           // readline against the same stdin and dumps a stray "line" event
           // back into the parent rl when it exits, which used to surface as
           // the bogus "A previous turn is still running" warning.
-          const dangerNote = isDangerousCommand(cmd)
-            ? chalk.red(' (flagged as potentially destructive)')
-            : '';
-          console.log(`\n${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}${dangerNote}`);
-          const approved = await askYesNo('Allow execution? (y/N) ', false);
+          //
+          // The question we hand to `askYesNo` ALWAYS includes the command
+          // itself. The legacy split — print command via `console.log`, then
+          // ask "Allow execution? (y/N)" — works in the readline path because
+          // both land on the same stream, but the Ink overlay (`runInkYesNo`)
+          // only sees the question string. Without the command embedded here
+          // the modal renders "Allow execution? (y/N)" with no context, and
+          // the user has to take it on faith. Embedding the command keeps
+          // both surfaces honest. (Fix flagged on 2026-05-27.)
+          const dangerous = isDangerousCommand(cmd);
+          // Legacy console.log kept so the readline path also has a visible
+          // record above the prompt; the Ink path renders the same content
+          // inside the modal title via the helper's structured string.
+          // No leading `\n` — patchConsole already inserts a row boundary
+          // when promoting this above the Ink frame, and adding our own
+          // newline pushes the frame down an extra row every approval,
+          // contributing to the "frame keeps growing / viewport scrolls
+          // up" feel in main-screen mode. (0.3.9 — 2026-05-27)
+          console.log(`${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}${dangerous ? chalk.red(' (potentially destructive)') : ''}`);
+          const question = buildRunCommandPrompt(cmd);
+          const approved = await askYesNo(question, false);
           if (!approved) {
             return 'Command execution rejected by user.';
           }
@@ -1634,6 +2228,41 @@ export class Agent {
           throw new NoTTYError(
             'ask_user_choice is not available to silent child agents. Decide the answer yourself, ' +
             'state which option you picked and why, and return that as your final answer to the parent.',
+          );
+        }
+        // Autonomy bypass. The picker is suppressed in two cases:
+        //
+        //   1. /yolo on (executionMode=fast AND reviewPolicy=proceed) —
+        //      the user has explicitly opted out of in-turn prompts.
+        //   2. /goal active — the user has typed a goal and the auto-
+        //      continuation loop is running; blocking on a picker
+        //      stalls the whole reason /goal exists. The model decides
+        //      itself and states which option in its reply.
+        //
+        // Both refusal messages use NoTTYError so the existing model
+        // contract ("fall back to deciding yourself") fires verbatim.
+        // A trace event records which axis triggered the bypass.
+        const yoloPrefs = readPreferences(this.workspaceRoot);
+        const yoloOn = yoloPrefs.executionMode === 'fast' && yoloPrefs.reviewPolicy === 'proceed';
+        const goalForPicker = readGoal(this.workspaceRoot, this.sessionKey);
+        const goalActiveForPicker = !!(goalForPicker?.text && goalForPicker.status === 'active');
+        if (yoloOn || goalActiveForPicker) {
+          const reason = yoloOn && goalActiveForPicker ? 'yolo+goal' : yoloOn ? 'yolo' : 'goal';
+          traceEvent('ask_user_choice.bypass', {
+            reason,
+            question,
+            optionLabels: options.map((o) => o.label),
+          });
+          const triggerNote = yoloOn
+            ? '/yolo (executionMode=fast + reviewPolicy=proceed)'
+            : `the active /goal "${goalForPicker!.text.slice(0, 80)}${goalForPicker!.text.length > 80 ? '…' : ''}"`;
+          throw new NoTTYError(
+            `ask_user_choice was suppressed by ${triggerNote}. ` +
+            'The user has explicitly opted out of in-turn prompts — pick the option you would pick, ' +
+            'state which one you picked and why in your reply, and keep going. ' +
+            (yoloOn
+              ? 'Toggle off with /yolo off if you actually need to ask.'
+              : 'Stop the goal with /goal pause or /goal clear if you actually need to ask.'),
           );
         }
         // Eager TTY check so we fail without disturbing the screen. askChoice
@@ -1742,6 +2371,33 @@ export class Agent {
     return this.llmConfig.model;
   }
 
+  /**
+   * 0.3.9 item 13 — read-only snapshot of the active LLM config for
+   * slash commands that need the provider id (e.g. `/tier`).
+   */
+  public getLlmConfig(): LLMConfig {
+    return { ...this.llmConfig };
+  }
+
+  /**
+   * Runtime LLM config swap — `/config` calls this after persisting
+   * provider / apiKey / endpoint changes so the LIVE agent picks up the
+   * new values without a CLI restart. Pre-0.3.10 only `setModel` existed,
+   * so changing the API key or endpoint via /config updated the on-disk
+   * config but the running agent kept using the stale values from
+   * construction time — users had to restart the CLI for changes to
+   * take effect.
+   *
+   * Merges with the current llmConfig so callers can pass partial
+   * updates (e.g. just the endpoint).
+   */
+  public setLLMConfig(next: Partial<LLMConfig>): void {
+    this.llmConfig = { ...this.llmConfig, ...next };
+  }
+  public getLLMConfig(): LLMConfig {
+    return this.llmConfig;
+  }
+
   /** Runtime access-mode cycle for `/permissions` and Shift+Tab plan-mode toggle. */
   public getAccessMode(): AccessMode {
     return this.accessMode;
@@ -1776,10 +2432,27 @@ export class Agent {
   }
 
   /** Cumulative token usage across the last runTurn. Cleared at each new turn. */
-  public lastTurnUsage: { promptTokens: number; completionTokens: number; calls: number } = { promptTokens: 0, completionTokens: 0, calls: 0 };
+  public lastTurnUsage: {
+    promptTokens: number;
+    completionTokens: number;
+    calls: number;
+    /** 0.3.9 item 10 — provider-normalised cache hit (prefix-cache served). */
+    cachedTokens: number;
+    /** 0.3.9 item 10 — provider-normalised cache miss (full input price). */
+    missedTokens: number;
+    /** Last call's `prefixFingerprint` (item 8). Lets `/tokens` show whether the prefix was stable. */
+    lastPrefixFingerprint?: string;
+  } = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
 
   /** Cumulative token usage across the WHOLE CLI session (all turns). */
-  public sessionUsage: { promptTokens: number; completionTokens: number; calls: number; turns: number } = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+  public sessionUsage: {
+    promptTokens: number;
+    completionTokens: number;
+    calls: number;
+    turns: number;
+    cachedTokens: number;
+    missedTokens: number;
+  } = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
 
   /**
    * Memory-derived savings counters. These let `/tokens` produce a "memory
@@ -1791,6 +2464,8 @@ export class Agent {
    *    files or re-explaining via prompts.
    *  - offloadCharsAvoided:     chars of child-agent output that were pushed
    *    to working memory instead of pasted back into parent context.
+   *  - compactedToolCharsAvoided: chars omitted from model-visible tool
+   *    results after semantic compaction. Raw outputs remain in transcripts.
    *  - recallRecordsConsulted:  count of memory record references the
    *    briefing put in front of the model this session.
    */
@@ -1798,6 +2473,7 @@ export class Agent {
     briefingTokensInjected: 0,
     offloadCharsAvoided: 0,
     recallRecordsConsulted: 0,
+    compactedToolCharsAvoided: 0,
   };
 
   /** Last assistant message of the most recent turn — used by `/copy`. */
@@ -1862,15 +2538,38 @@ export class Agent {
    * matches the displayed sessionKey.
    */
   public resetSessionCounters(): void {
-    this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+    this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
     this.memoryMetrics = {
       briefingTokensInjected: 0,
       offloadCharsAvoided: 0,
       recallRecordsConsulted: 0,
+      compactedToolCharsAvoided: 0,
     };
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;
+    this.turnsSinceLastFullBriefing = 0;
+    this.recentToolFailure = undefined;
+    // 0.3.9 item 9 — also clear any pinned memory anchor so the new
+    // session starts with a fresh PIN on its first briefing.
+    this.pinnedAnchorHash = null;
+  }
+
+  /**
+   * Clear the pinned memory anchor so the next briefing re-pins. Called
+   * by the `/refresh-memory` slash command — see
+   * `brainrouter-cli/src/cli/commands/memory.ts`. The actual chat
+   * history entry will be replaced on the next `injectRecallContext()`
+   * call (PIN action) once the new briefing is built.
+   */
+  public clearPinnedMemoryAnchor(): void {
+    this.pinnedAnchorHash = null;
+    this.removeTaggedSystemMessage('memory-briefing');
+  }
+
+  /** Inspectable getter used by `/briefing` and tests. */
+  public hasPinnedMemoryAnchor(): boolean {
+    return this.pinnedAnchorHash !== null;
   }
 
   /** Fork the current chat history into a fresh sessionKey. Returns the new key. */
@@ -1951,6 +2650,11 @@ export class Agent {
       reviewPolicy: prefs.reviewPolicy,
       effort: resolveEffort(this.workspaceRoot).effort,
       connectedMcpTools,
+      // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
+      // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)
+      // pick up an aggressive Beast-mode reinforcement block; strong
+      // families (claude-*, gpt-4/5, o-series, gemini-2.5) get no overlay.
+      model: this.llmConfig.model,
     });
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
@@ -1966,10 +2670,27 @@ export class Agent {
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {
-    if (!this.enableRecall) {
+    const resetBriefing = (details: Partial<LastBriefingDetails>) => {
       this.recalledRecords = [];
       this.recalledRecordIds = [];
       this.lastBriefingSources = [];
+      this.lastBriefingDetails = {
+        decision: details.decision ?? 'none',
+        reasons: details.reasons ?? [],
+        sources: [],
+        sourcesPlanned: details.sourcesPlanned ?? [],
+        skippedSources: details.skippedSources ?? [],
+        sourceStats: [],
+        recordIds: [],
+        recordCount: 0,
+        tokensInjected: 0,
+        charsSaved: details.charsSaved ?? 0,
+        warnings: details.warnings ?? [],
+      };
+    };
+
+    if (!this.enableRecall) {
+      resetBriefing({ decision: 'skip', reasons: [this.silent ? 'silent agent (child)' : 'recall disabled'] });
       callbacks.onMemoryEvent?.({ kind: 'skipped', reason: this.silent ? 'silent agent (child)' : 'recall disabled' });
       return;
     }
@@ -1986,21 +2707,29 @@ export class Agent {
     //     something specific that memory might have history on
     // The env knob `BRAINROUTER_RECALL_MODE=always|gated|off` lets users
     // preserve pre-9b behaviour or kill recall entirely for benchmarking.
-    const recallMode = resolveRecallMode();
+    const recallMode = resolveRecallModeFromEnv();
     if (recallMode === 'off') {
-      this.recalledRecords = [];
-      this.recalledRecordIds = [];
-      this.lastBriefingSources = [];
+      resetBriefing({ decision: 'skip', reasons: ['recallMode=off'] });
       callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'recallMode=off' });
       return;
     }
 
+    const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
+    const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
+    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal);
+    const sourcesPlannedNames = describeSourcePlan(sourcePlan);
+    const decision = decideMemoryBriefing({
+      prompt,
+      recallMode,
+      recallHasFiredThisSession: this.recallHasFiredThisSession,
+      postCompaction: this.recallNextTurnIsPostCompaction,
+      hasActiveGoal,
+      recentToolFailure: this.recentToolFailure,
+      turnsSinceLastFullBriefing: this.turnsSinceLastFullBriefing,
+    });
+
     if (recallMode === 'gated') {
-      const isFirstTurn = !this.recallHasFiredThisSession;
-      const justCompacted = this.recallNextTurnIsPostCompaction;
-      const entityHits = countEntityTokens(prompt);
-      const hasEntityCue = entityHits >= 2;
-      if (!isFirstTurn && !justCompacted && !hasEntityCue) {
+      if (decision.action !== 'fire') {
         // Skip the full briefing — emit a lightweight system-reminder so
         // the model knows it can pull memory itself if it needs to. The
         // reminder is tagged so the next turn replaces it cleanly.
@@ -2008,13 +2737,17 @@ export class Agent {
           'memory-hint',
           [
             '## Memory available (gated mode)',
-            'BrainRouter memory is available this turn but the auto-briefing was skipped (no first-turn / post-compaction / entity-cue trigger). Call `memory_recall` / `memory_search` / `memory_file_history` yourself if you need history on a specific entity, file, or decision.',
+            `Auto-briefing decision: ${decision.action}. Reasons: ${decision.reasons.join(', ')}.`,
+            'Call `memory_recall` / `memory_search` / `memory_file_history` yourself if you need history on a specific entity, file, or decision.',
           ].join('\n'),
         );
-        this.recalledRecords = [];
-        this.recalledRecordIds = [];
-        this.lastBriefingSources = [];
-        callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'gated (no trigger)' });
+        this.turnsSinceLastFullBriefing += 1;
+        resetBriefing({
+          decision: decision.action,
+          reasons: decision.reasons,
+          sourcesPlanned: sourcesPlannedNames,
+        });
+        callbacks.onMemoryEvent?.({ kind: 'skipped', reason: decision.reasons.join(', ') || 'gated (no trigger)' });
         return;
       }
       // Reset the post-compaction flag now that we're firing because of it.
@@ -2029,8 +2762,6 @@ export class Agent {
     // "what we're doing now" context twice. The anchor is set immediately
     // before this call in `runTurn` (around line 680), so reading the goal
     // here resolves to the same record the anchor used.
-    const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
-    const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
     const briefing = await buildMemoryBriefing({
       mcpClient: this.mcpClient,
       mcpTools,
@@ -2039,21 +2770,71 @@ export class Agent {
       query: prompt,
       activeSkill: this.activeSkill,
       hasActiveGoal,
+      maxCharsPerSource: decision.budget.maxCharsPerSource,
+      sourcePlan,
     });
 
     this.recalledRecords = briefing.recalledRecords;
     this.recalledRecordIds = briefing.recalledRecordIds;
     this.lastBriefingSources = briefing.sourcesQueried;
     this.recallHasFiredThisSession = true;
+    this.turnsSinceLastFullBriefing = 0;
+    this.recentToolFailure = undefined;
     // Drop any prior lightweight hint now that the full briefing is live.
     this.removeTaggedSystemMessage('memory-hint');
 
+    const tokensInjected = briefing.block ? Agent.estimateTokens(briefing.block) : 0;
+    this.lastBriefingDetails = {
+      decision: 'fire',
+      reasons: decision.reasons,
+      sources: briefing.sourcesQueried,
+      sourcesPlanned: briefing.sourcesPlanned,
+      skippedSources: briefing.skippedSources,
+      sourceStats: briefing.sourceStats,
+      recordIds: briefing.recalledRecordIds,
+      recordCount: briefing.recalledRecordIds.length,
+      tokensInjected,
+      charsSaved: this.memoryMetrics.compactedToolCharsAvoided,
+      warnings: briefing.warnings,
+    };
+
     if (briefing.block) {
-      this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
+      // 0.3.9 item 9 — route the briefing through the anchor-pin policy.
+      // When pinning is enabled (default), the *first* briefing of the
+      // session lands in the tagged system slot (cache-stable). Subsequent
+      // turns that produce identical content are a no-op; turns with new
+      // content append a "mid-session refresh" message instead of
+      // rewriting the prefix, preserving the provider's prefix cache.
+      const newHash = hashBriefingContent(briefing.block);
+      const anchorDecision = decideAnchorAction({
+        newContentHash: newHash,
+        pinnedHash: this.pinnedAnchorHash,
+        envSetting: getCliKnobs().prefixMemoryAnchors,
+      });
+      switch (anchorDecision.action) {
+        case 'PIN':
+          this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
+          this.pinnedAnchorHash = anchorDecision.nextPinnedHash;
+          break;
+        case 'STABLE':
+          // Pinned content is still authoritative — do not touch the
+          // chat history. This is the cache-hit-preserving branch.
+          break;
+        case 'APPEND':
+          this.chatHistory.push({
+            role: 'system',
+            content: wrapMidSessionRefresh(briefing.block),
+          });
+          break;
+        case 'LEGACY':
+        default:
+          this.replaceTaggedSystemMessage('memory-briefing', briefing.block);
+          break;
+      }
       callbacks.onStatusUpdate(
         `Memory briefing loaded: ${briefing.sourcesQueried.join(', ')} (${briefing.recalledRecordIds.length} records).`,
       );
-      this.memoryMetrics.briefingTokensInjected += Agent.estimateTokens(briefing.block);
+      this.memoryMetrics.briefingTokensInjected += tokensInjected;
       this.memoryMetrics.recallRecordsConsulted += briefing.recalledRecordIds.length;
     }
     callbacks.onMemoryEvent?.({
@@ -2064,8 +2845,17 @@ export class Agent {
   }
 
   /** Inspectable summary of the most recent memory briefing. Used by the `/briefing` slash command. */
-  public getLastBriefing(): { sources: string[]; recordIds: string[] } {
-    return { sources: [...this.lastBriefingSources], recordIds: [...this.recalledRecordIds] };
+  public getLastBriefing(): LastBriefingDetails {
+    return {
+      ...this.lastBriefingDetails,
+      sources: [...this.lastBriefingDetails.sources],
+      sourcesPlanned: [...this.lastBriefingDetails.sourcesPlanned],
+      skippedSources: [...this.lastBriefingDetails.skippedSources],
+      sourceStats: [...this.lastBriefingDetails.sourceStats],
+      recordIds: [...this.lastBriefingDetails.recordIds],
+      reasons: [...this.lastBriefingDetails.reasons],
+      warnings: [...this.lastBriefingDetails.warnings],
+    };
   }
 
   /**
@@ -2119,12 +2909,19 @@ export class Agent {
     }
 
     try {
+      const userContent = redactText(prompt);
+      const assistantContent = redactText(finalAnswer);
+      const policy = assessCapturePayload(`${userContent}\n${assistantContent}`);
+      if (policy.blocked) {
+        callbacks?.onMemoryEvent?.({ kind: 'skipped', reason: policy.reason ?? 'capture blocked by policy' });
+        return;
+      }
       const captureRes = await this.mcpClient.callTool('memory_capture_turn', {
         sessionKey: this.sessionKey,
         activeSkill: this.activeSkill,
         messages: [
-          { role: 'user', content: prompt, timestamp },
-          { role: 'assistant', content: finalAnswer, timestamp: Date.now() },
+          { role: 'user', content: userContent, timestamp },
+          { role: 'assistant', content: assistantContent, timestamp: Date.now() },
         ],
       });
       // Parse the structured result so the REPL can tell "wrote 2 sensory + 0
@@ -2184,7 +2981,7 @@ export class Agent {
  * and expect `{ results: [{title, url, snippet}] }`.
  */
 async function runWebSearch(query: string, maxResults: number): Promise<string> {
-  const customEndpoint = process.env.BRAINROUTER_WEB_SEARCH_ENDPOINT?.trim();
+  const customEndpoint = getCliKnobs().webSearchEndpoint?.trim();
   if (customEndpoint) {
     try {
       const res = await fetch(customEndpoint, {
@@ -2592,24 +3389,20 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  * Borrowed shape from openai-node's `ReasoningEffort` enum
  * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
  * straight through to the provider field across OpenAI, DeepSeek,
- * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic models
- * (`claude-*`) use a different field shape (`thinking: { budget_tokens }`)
- * and a different endpoint (`/v1/messages`), so they're intentionally
- * skipped here — brainrouter would need a separate provider adapter to
- * forward into Anthropic's native API.
+ * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic-native
+ * support was removed in 0.3.9; Claude models can still be reached
+ * through OpenRouter / Together / other OpenAI-compatible gateways
+ * that handle the field translation upstream.
  */
 
 /**
- * 9b: resolve the recall-gating mode for this process. `BRAINROUTER_RECALL_MODE`
- * env var beats everything; unset defaults to `gated`. Anything outside the
- * three valid values falls back to `gated` (defensive — better to be helpful
- * than crash on a typo). Re-resolved each turn so users can flip with
- * `export BRAINROUTER_RECALL_MODE=always` mid-session via a /run command.
+ * 9b: resolve the recall-gating mode for this process. Reads `cli.recallMode`
+ * from `~/.config/brainrouter/config.json`. Unset defaults to `gated`. The
+ * TypeScript union narrows the surface so a typo can't reach this code path
+ * — defensive parsing was retired with the env-var path in 0.3.9.
  */
 export function resolveRecallMode(): 'always' | 'gated' | 'off' {
-  const raw = (process.env.BRAINROUTER_RECALL_MODE ?? '').toLowerCase().trim();
-  if (raw === 'always' || raw === 'gated' || raw === 'off') return raw;
-  return 'gated';
+  return resolveRecallModeFromEnv();
 }
 
 /**
@@ -2622,25 +3415,7 @@ export function resolveRecallMode(): 'always' | 'gated' | 'off' {
  * false negatives waste an ask. Tunable threshold via the caller.
  */
 export function countEntityTokens(text: string): number {
-  if (!text) return 0;
-  let count = 0;
-  // File paths and identifiers (`/` or `\`).
-  const pathMatches = text.match(/[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,8}(?![A-Za-z])|(?:[\w-]+\/){1,}[\w.-]+/g);
-  if (pathMatches) count += pathMatches.length;
-  // Identifier-shaped tokens longer than 4 chars (camelCase, snake_case, PascalCase).
-  const identMatches = text.match(/\b(?:[a-z]+[A-Z][A-Za-z0-9]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+|[a-z]+_[a-z][\w]+)\b/g);
-  if (identMatches) count += identMatches.length;
-  // Proper nouns (capitalized, not at sentence start, ≥3 chars). We split on
-  // sentence boundaries first so the first word of each sentence is skipped.
-  const sentences = text.split(/[.!?]\s+/);
-  for (const s of sentences) {
-    const words = s.split(/\s+/);
-    for (let i = 1; i < words.length; i++) {
-      const w = words[i].replace(/[^A-Za-z]/g, '');
-      if (w.length >= 3 && /^[A-Z][a-z]+$/.test(w)) count++;
-    }
-  }
-  return count;
+  return countEntityTokensFromText(text);
 }
 
 export function supportsReasoningEffortField(config: LLMConfig): boolean {
@@ -2763,6 +3538,21 @@ export async function callOpenAI(
 
   const body = buildChatCompletionPayload(config, messages, tools, options);
 
+  // 0.3.9 item 8 — emit the cache-stable prefix fingerprint for this
+  // request. When tracing is disabled this resolves to a no-op
+  // (traceEvent short-circuits on missing BRAINROUTER_TRACE_LOG). When
+  // it's on, downstream items can correlate the fingerprint against
+  // the provider's cache_hit telemetry (item 10) to confirm the prefix
+  // is staying byte-stable across turns.
+  const prefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    prefixFingerprint,
+    promptMessages: body.messages.length,
+    toolCount: body.tools?.length ?? 0,
+  });
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
   };
@@ -2770,7 +3560,7 @@ export async function callOpenAI(
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const timeoutMs = Number(process.env.BRAINROUTER_LLM_TIMEOUT_MS || 120000);
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -2855,5 +3645,175 @@ export async function callOpenAI(
     content: choice.message.content ?? '',
     toolCalls: choice.message.tool_calls,
     usage: data.usage,
+  };
+}
+
+/**
+ * Streaming variant of `callOpenAI`. Returns the same shape after the
+ * stream completes, but invokes `handlers.onTextDelta` / `onReasoningDelta`
+ * as SSE frames arrive so the UI can paint live.
+ *
+ * Supports OpenAI-flavored SSE: lines starting with `data: ` followed by
+ * either `[DONE]` or a JSON frame `{ choices: [{ delta: {...} }], ... }`.
+ * Tool-call deltas accumulate by `index` (the standard OpenAI shape) so
+ * we end with a fully-assembled `tool_calls` array compatible with the
+ * existing non-streaming code path.
+ *
+ * Falls back to throwing on non-SSE bodies — callers must wrap in
+ * try/catch and retry with the non-streaming `callOpenAI` if needed.
+ */
+export async function callOpenAIStream(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+  handlers: {
+    onTextDelta?: (text: string) => void;
+    onReasoningDelta?: (text: string) => void;
+  } = {},
+) {
+  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  let apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
+  const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
+  if (!apiKey && !isLocal) {
+    throw new Error('LLM API key is required for OpenAI provider.');
+  }
+  if (!apiKey && isLocal) {
+    apiKey = 'sk-local-placeholder';
+  }
+
+  const body: any = buildChatCompletionPayload(config, messages, tools, options);
+  body.stream = true;
+  body.stream_options = { include_usage: true };
+
+  // 0.3.9 item 8 — fingerprint the cache-stable prefix for this stream
+  // call too. Item 10 will correlate this with the SSE-final usage row
+  // when the provider exposes a `cached_tokens` field.
+  const streamPrefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    prefixFingerprint: streamPrefixFingerprint,
+    promptMessages: body.messages.length,
+    toolCount: body.tools?.length ?? 0,
+    stream: true,
+  });
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+  };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const release = await acquireLLMSlot();
+  let res: Response;
+  try {
+    res = await fetch(`${endpoint}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    release();
+    clearTimeout(timeout);
+    if (err?.name === 'AbortError') {
+      throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
+    }
+    throw err;
+  }
+
+  if (!res.ok || !res.body) {
+    release();
+    clearTimeout(timeout);
+    const errText = res.body ? await res.text() : '';
+    throw new Error(`OpenAI API error (stream): ${res.status} ${res.statusText} - ${errText}`);
+  }
+
+  // Accumulators that match the non-streaming response shape.
+  let content = '';
+  let reasoning = '';
+  const toolCallsByIndex = new Map<number, { id?: string; type?: string; function: { name: string; arguments: string } }>();
+  let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+
+  const reader = (res.body as any).getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by blank lines (`\n\n`). Some servers
+      // (LM Studio in particular) emit `\r\n\r\n` — normalize.
+      let sepIdx: number;
+      while ((sepIdx = buffer.search(/\r?\n\r?\n/)) !== -1) {
+        const frame = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx).replace(/^\r?\n\r?\n/, '');
+        for (const rawLine of frame.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let frameJson: any;
+          try { frameJson = JSON.parse(payload); } catch { continue; }
+          if (frameJson?.usage) {
+            usage = {
+              prompt_tokens: frameJson.usage.prompt_tokens,
+              completion_tokens: frameJson.usage.completion_tokens,
+            };
+          }
+          const choice = frameJson?.choices?.[0];
+          if (!choice) continue;
+          const delta = choice.delta ?? {};
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
+            content += delta.content;
+            handlers.onTextDelta?.(delta.content);
+          }
+          // Reasoning frames (xAI/OpenRouter use `reasoning`, others use `reasoning_content`)
+          const r = (typeof delta.reasoning === 'string' ? delta.reasoning : undefined)
+            ?? (typeof delta.reasoning_content === 'string' ? delta.reasoning_content : undefined);
+          if (r && r.length > 0) {
+            reasoning += r;
+            handlers.onReasoningDelta?.(r);
+          }
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const idx = typeof tc.index === 'number' ? tc.index : 0;
+              const acc = toolCallsByIndex.get(idx) ?? { function: { name: '', arguments: '' } };
+              if (tc.id) acc.id = tc.id;
+              if (tc.type) acc.type = tc.type;
+              // Concatenate (some providers fragment the name across frames;
+              // the OpenAI-standard "name only in first frame" still works
+              // because subsequent frames omit the field).
+              if (tc.function?.name) acc.function.name += tc.function.name;
+              if (typeof tc.function?.arguments === 'string') acc.function.arguments += tc.function.arguments;
+              toolCallsByIndex.set(idx, acc);
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    release();
+    clearTimeout(timeout);
+  }
+
+  const toolCalls = [...toolCallsByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
+    .filter((tc) => tc.function.name); // drop incomplete entries
+
+  return {
+    content,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+    reasoning: reasoning || undefined,
   };
 }

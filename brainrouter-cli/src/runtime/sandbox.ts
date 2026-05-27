@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getCliKnobs } from '../config/config.js';
 
 /**
  * Optional sandboxing for `run_command`.
@@ -40,14 +41,13 @@ export function resolveSandboxConfig(
   workspaceRoot: string,
   persistedExtras?: { readPaths?: string[]; writePaths?: string[] },
 ): SandboxConfig {
-  const enabled = (process.env.BRAINROUTER_SANDBOX ?? '').toLowerCase() === 'on';
-  const envReads = (process.env.BRAINROUTER_SANDBOX_READ_PATHS ?? '')
-    .split(path.delimiter).map((p) => p.trim()).filter(Boolean);
-  const envWrites = (process.env.BRAINROUTER_SANDBOX_WRITE_PATHS ?? '')
-    .split(path.delimiter).map((p) => p.trim()).filter(Boolean);
-  const readPaths = Array.from(new Set([...(persistedExtras?.readPaths ?? []), ...envReads]));
-  const writePaths = Array.from(new Set([...(persistedExtras?.writePaths ?? []), ...envWrites]));
-  const allowNetwork = (process.env.BRAINROUTER_SANDBOX_NETWORK ?? '').toLowerCase() === 'on';
+  const knobs = getCliKnobs();
+  const enabled = knobs.sandbox === 'on';
+  const cfgReads = knobs.sandboxReadPaths;
+  const cfgWrites = knobs.sandboxWritePaths;
+  const readPaths = Array.from(new Set([...(persistedExtras?.readPaths ?? []), ...cfgReads]));
+  const writePaths = Array.from(new Set([...(persistedExtras?.writePaths ?? []), ...cfgWrites]));
+  const allowNetwork = knobs.sandboxNetwork;
   return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork };
 }
 

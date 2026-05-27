@@ -82,7 +82,7 @@ export interface PickFromListOptions {
    * footer). Returning `undefined` or `[]` means "no preview".
    *
    * The picker takes care of the redraw — the callback must NOT write
-   * to stdout. Mirrors `openSrc/codex/codex-rs/tui/src/theme_picker.rs`
+   * to stdout.
    * (preview returns a row spec, never `stdout.write`).
    */
   onCursorChange?: (cursorId: string, cursorIndex: number) => string[] | undefined;

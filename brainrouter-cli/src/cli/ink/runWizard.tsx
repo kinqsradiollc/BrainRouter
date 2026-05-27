@@ -101,7 +101,7 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
   const config = loadOrInitConfig();
   if (draft.provider) {
     config.llm = {
-      provider: 'openai',
+      provider: draft.provider.id,
       apiKey: draft.apiKey ?? '',
       model: draft.model ?? draft.provider.defaultModel,
       endpoint: draft.customEndpoint ?? draft.provider.endpoint,

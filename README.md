@@ -88,7 +88,7 @@ Tweak individual settings in-REPL:
 /login                             # MCP profile editor
 ```
 
-Tool-runtime knobs (sandbox, trace log, web-search backend, tool-loop limits) are set as shell environment variables — see [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) for the full list.
+Tool-runtime knobs (sandbox, trace log, tool-loop limits, theme, quiet, recall mode, parallel-safe tool calls, etc.) live alongside provider creds under `cli.*` in the same `~/.config/brainrouter/config.json` — `.env` files are not read by the CLI. The full field reference is the `CliKnobs` interface in [`brainrouter-cli/src/config/config.ts`](brainrouter-cli/src/config/config.ts); see [`brainrouter-docs/configuration.md`](brainrouter-docs/configuration.md) for the prose walkthrough.
 
 ## Run
 

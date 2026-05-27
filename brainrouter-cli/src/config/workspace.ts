@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { getCliKnobs } from './config.js';
 
 export interface WorkspaceInfo {
   launchCwd: string;
@@ -11,12 +12,16 @@ const ROOT_MARKERS = ['AGENT.md', 'AGENTS.md', '.git'];
 
 export function findWorkspaceRoot(startDir = process.cwd()): WorkspaceInfo {
   const launchCwd = fs.realpathSync(startDir);
-  const envRoot = process.env.BRAINROUTER_WORKSPACE;
-  if (envRoot) {
+  // `--workspace` CLI flag (relayed via `setCliKnobOverride`) wins over
+  // marker-based discovery. The historical BRAINROUTER_WORKSPACE env var
+  // was retired in 0.3.9 in favour of `cli.workspaceOverride` /
+  // `setCliKnobOverride`.
+  const overrideRoot = getCliKnobs().workspaceOverride;
+  if (overrideRoot) {
     return {
       launchCwd,
-      workspaceRoot: fs.realpathSync(path.resolve(envRoot)),
-      reason: 'BRAINROUTER_WORKSPACE',
+      workspaceRoot: fs.realpathSync(path.resolve(overrideRoot)),
+      reason: '--workspace flag',
     };
   }
 

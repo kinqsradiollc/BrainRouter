@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getCliKnobs } from '../config/config.js';
 
 /**
  * Lightweight tracing in OTEL-flavored JSONL.
@@ -34,7 +35,7 @@ interface TraceEvent {
 let cachedLogPath: string | null | undefined;
 function resolveLogPath(): string | null {
   if (cachedLogPath !== undefined) return cachedLogPath;
-  const raw = process.env.BRAINROUTER_TRACE_LOG?.trim();
+  const raw = getCliKnobs().traceLog?.trim();
   cachedLogPath = raw ? path.resolve(raw) : null;
   if (cachedLogPath) {
     try { fs.mkdirSync(path.dirname(cachedLogPath), { recursive: true }); } catch { /* noop */ }

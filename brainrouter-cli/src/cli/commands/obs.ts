@@ -11,6 +11,7 @@ import { listSessions } from '../../orchestration/orchestrator.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
 import { getCliStateFile } from '../../state/cliState.js';
+import { getCliKnobs } from '../../config/config.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 
@@ -42,10 +43,11 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
     }
     case '/watch':
     {
-      const tracePath = process.env.BRAINROUTER_TRACE_LOG?.trim();
+      const tracePath = getCliKnobs().traceLog?.trim();
       if (!tracePath) {
         console.log(chalk.yellow('\nLive tracing is off. Enable with:'));
-        console.log(chalk.gray('  export BRAINROUTER_TRACE_LOG=' + path.join(agent.workspaceRoot, '.brainrouter/cli/trace.jsonl')));
+        console.log(chalk.gray('  Edit ~/.config/brainrouter/config.json and set:'));
+        console.log(chalk.gray(`    cli.traceLog = "${path.join(agent.workspaceRoot, '.brainrouter/cli/trace.jsonl')}"`));
         console.log(chalk.gray('  (restart the CLI so the change takes effect)\n'));
         console.log(chalk.gray('Without it, you can still see per-tool activity inline in this REPL,'));
         console.log(chalk.gray('and child-agent tool calls now surface as "role:id → tool" lines.'));
@@ -114,6 +116,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       //     session.promptTokens. We report them so the user can see how
       //     much of the prompt budget memory is consuming.
       const offloadSavedTokens = Math.round(metrics.offloadCharsAvoided / 4);
+      const compactionSavedTokens = Math.round((metrics.compactedToolCharsAvoided ?? 0) / 4);
       const totalSpent = session.promptTokens + session.completionTokens + childPrompt + childCompletion;
 
       console.log(chalk.bold('\nToken usage — this session'));
@@ -131,6 +134,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.bold('\nMemory'));
       console.log(`  Briefing tokens injected: ${chalk.gray(metrics.briefingTokensInjected.toLocaleString())}  ${chalk.gray(`(${metrics.recallRecordsConsulted} records consulted — already included in parent ↑)`)}`);
       console.log(`  Child output offloaded:   ${chalk.gray(metrics.offloadCharsAvoided.toLocaleString())} chars  ${chalk.gray(`(≈${offloadSavedTokens.toLocaleString()} parent tokens not spent)`)}`);
+      console.log(`  Tool output compacted:    ${chalk.gray((metrics.compactedToolCharsAvoided ?? 0).toLocaleString())} chars  ${chalk.gray(`(≈${compactionSavedTokens.toLocaleString()} parent tokens not spent)`)}`);
 
       if (offloadSavedTokens > 0 && totalSpent > 0) {
         const ratio = offloadSavedTokens / totalSpent;
@@ -138,6 +142,63 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         console.log(chalk.gray(`  Offload ratio: ~${display} saved per token spent.`));
       }
       console.log(chalk.gray('\n  (Offload is measured; briefing tokens are an information-gain stat, not a savings number.)\n'));
+
+      // 0.3.9 item 10 — prefix-cache panel. The numbers come from the
+      // provider's own cache fields normalised by
+      // `runtime/cacheStats.ts`. When both counters are zero the
+      // provider either doesn't expose cache info (LM Studio /
+      // Ollama / older endpoints) or this session hasn't yet seen a
+      // turn — print "—" instead of misleading 0% / 0.
+      const { formatCacheStats } = await import('../../runtime/cacheStats.js');
+      const turnCache = formatCacheStats({
+        cachedTokens: agent.lastTurnUsage.cachedTokens,
+        missedTokens: agent.lastTurnUsage.missedTokens,
+        cacheHitRatio: (agent.lastTurnUsage.cachedTokens + agent.lastTurnUsage.missedTokens) > 0
+          ? agent.lastTurnUsage.cachedTokens / (agent.lastTurnUsage.cachedTokens + agent.lastTurnUsage.missedTokens)
+          : 0,
+        source: 'unknown',
+      });
+      const sessionCache = formatCacheStats({
+        cachedTokens: agent.sessionUsage.cachedTokens,
+        missedTokens: agent.sessionUsage.missedTokens,
+        cacheHitRatio: (agent.sessionUsage.cachedTokens + agent.sessionUsage.missedTokens) > 0
+          ? agent.sessionUsage.cachedTokens / (agent.sessionUsage.cachedTokens + agent.sessionUsage.missedTokens)
+          : 0,
+        source: 'unknown',
+      });
+      console.log(chalk.bold('Prefix cache'));
+      console.log(`  Last turn:   ${chalk.cyan(turnCache)}`);
+      console.log(`  This session: ${chalk.cyan(sessionCache)}`);
+      console.log(chalk.gray('  (Anchored briefing — /refresh-memory rotates the pin if you want a fresh card set.)'));
+
+      // 0.3.9 item 14 — cost panel. Per-turn USD, session USD, and the
+      // cache-savings line. Costs are computed from the active model's
+      // built-in pricing row (`runtime/pricing.ts`), overridable via
+      // `~/.config/brainrouter/pricing.json` for users who want exact
+      // billing parity with their actual contract.
+      const { buildCostSummary } = await import('../../runtime/pricing.js');
+      const cost = buildCostSummary({
+        model: agent.getModel(),
+        turnCachedTokens: agent.lastTurnUsage.cachedTokens,
+        turnMissedTokens: agent.lastTurnUsage.missedTokens,
+        turnCompletionTokens: agent.lastTurnUsage.completionTokens,
+        sessionCachedTokens: agent.sessionUsage.cachedTokens,
+        sessionMissedTokens: agent.sessionUsage.missedTokens,
+        sessionCompletionTokens: agent.sessionUsage.completionTokens,
+      });
+      const bandColor = (band: 'green' | 'yellow' | 'red' | 'mono'): (s: string) => string => {
+        if (band === 'green') return chalk.green;
+        if (band === 'yellow') return chalk.yellow;
+        if (band === 'red') return chalk.red;
+        return chalk.gray;
+      };
+      console.log(chalk.bold('\nCost (built-in pricing — overridable at ~/.config/brainrouter/pricing.json)'));
+      console.log(`  Turn:        ${bandColor(cost.turnBadge.band)(cost.turnBadge.text)}  ${chalk.gray(`(model: ${agent.getModel()})`)}`);
+      console.log(`  Session:     ${bandColor(cost.sessionBadge.band)(cost.sessionBadge.text)}`);
+      if (cost.sessionCacheSavedUsd > 0) {
+        console.log(`  Cache saved: ${chalk.green(`$${cost.sessionCacheSavedUsd.toFixed(4)}`)} ${chalk.gray('this session vs. no-cache baseline.')}`);
+      }
+      console.log();
       return true;
     }
     case '/feedback':

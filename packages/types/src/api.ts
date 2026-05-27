@@ -80,6 +80,9 @@ export interface MemoryStatsResponse {
   byType: Record<string, number>;
   citationRate: number;
   lastRecallAt: string | null;
+  sensoryTotal: number;
+  sensoryUnextracted: number;
+  focusSceneTotal: number;
   extraction: unknown;
 }
 

@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Config } from '../config/config.js';
 import type { Goal } from '../state/goalStore.js';
 import { formatBudget } from '../state/goalStore.js';
@@ -30,7 +32,24 @@ import { BOX, type Theme } from './theme.js';
  * it once. Pure-function so tests can assert against the rendered output.
  */
 
-const VERSION = '0.3.8';
+/**
+ * Read the version from our own package.json instead of hardcoding it.
+ * Hardcoded version drifted to '0.3.8' on release/0.3.9 and was only
+ * caught visually — same pattern releaseNotes.ts uses. Module-load
+ * read is fine: package.json is bundled and present at runtime; the
+ * try/catch falls back gracefully if path resolution ever changes.
+ */
+function readPkgVersion(): string {
+  try {
+    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+const VERSION = readPkgVersion();
 const TITLE = '🧠 BrainRouter CLI';
 // Width floor for the BOXED banner. Below this we fall through to the
 // `renderPlainBanner` plaintext format. Was 56 — that caused the box to

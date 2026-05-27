@@ -13,6 +13,7 @@ import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { fetchWithExternalRetry } from "./retry.js";
 import { acquireLLMSlot } from "./llm-semaphore.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs } from "./llm-response.js";
 import "dotenv/config";
 import path from "node:path";
 import os from "node:os";
@@ -57,6 +58,14 @@ class ModelLLMRunner implements LLMRunner {
     }
     messages.push({ role: "user", content: prompt });
 
+    const effectiveTimeoutMs = resolveLLMTimeoutMs({
+      endpoint,
+      requestedMs: timeoutMs,
+      envVarNames: taskId === "cognitive-extraction"
+        ? ["BRAINROUTER_EXTRACTION_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"]
+        : ["BRAINROUTER_LLM_TIMEOUT_MS"],
+    });
+
     const doFetch = () => fetchWithExternalRetry(endpoint, {
       method: "POST",
       headers: {
@@ -64,7 +73,7 @@ class ModelLLMRunner implements LLMRunner {
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ model, messages }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(effectiveTimeoutMs),
     }, {
       label: `[BrainRouter:${taskId}] LLM API`,
     });
@@ -125,9 +134,11 @@ class ModelLLMRunner implements LLMRunner {
           `Response body: ${JSON.stringify(data).slice(0, 600)}`,
         );
       }
+      // Tolerate standard, streaming-style, and reasoning-model shapes. Some
+      // local OpenAI-compatible backends return an empty message.content with
+      // useful output in reasoning_content.
       const choice = data.choices[0];
-      // Tolerate both message (standard) and delta (streaming-style) shapes.
-      const content = choice?.message?.content ?? choice?.delta?.content;
+      const content = extractChatCompletionText(data);
       if (typeof content !== "string") {
         throw new Error(
           `[BrainRouter:${taskId}] LLM choice had no usable content. Choice: ${JSON.stringify(choice).slice(0, 600)}`,
@@ -191,6 +202,9 @@ export class MemoryEngine {
       apiKey: process.env.BRAINROUTER_EMBEDDING_API_KEY ?? process.env.BRAINROUTER_LLM_API_KEY,
       model: process.env.BRAINROUTER_EMBEDDING_MODEL,
       dimensions: process.env.BRAINROUTER_EMBEDDING_DIMENSIONS ? parseInt(process.env.BRAINROUTER_EMBEDDING_DIMENSIONS, 10) : undefined,
+      timeoutMs: process.env.BRAINROUTER_EMBEDDING_TIMEOUT_MS
+        ? parseInt(process.env.BRAINROUTER_EMBEDDING_TIMEOUT_MS, 10)
+        : undefined,
     });
 
     const rerankerService = new RerankerService({
@@ -199,6 +213,9 @@ export class MemoryEngine {
       model: process.env.BRAINROUTER_RERANKER_MODEL,
       topN: process.env.BRAINROUTER_RERANKER_TOP_N
         ? parseInt(process.env.BRAINROUTER_RERANKER_TOP_N, 10)
+        : undefined,
+      timeoutMs: process.env.BRAINROUTER_RERANKER_TIMEOUT_MS
+        ? parseInt(process.env.BRAINROUTER_RERANKER_TIMEOUT_MS, 10)
         : undefined,
     });
 

@@ -6,6 +6,10 @@ import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
 import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 import { renderMarkdown } from './markdownRender.js';
 import { useTerminalSize } from './useTerminalSize.js';
+import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
+// 0.3.9 — show the model's max prompt-context window in the footer next
+// to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
+import { formatContextWindow } from '../../runtime/contextWindow.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -55,6 +59,8 @@ export interface ChatAppProps {
   initialBanner: string;
   initialOfflineWarning?: string;
   initialHint: string;
+  /** Workspace root for @-mention file completions. Defaults to cwd. */
+  workspaceRoot?: string;
   /** Static description of the slash commands the user can run. */
   slashCommands: SlashCommandDef[];
   /** Initial prompt label, e.g. "brainrouter[effort:low]". */
@@ -98,6 +104,15 @@ export interface FooterState {
   effort?: string;
   /** Free-form right-side text (statusline segments). */
   rightExtra?: string;
+  /**
+   * Count of background child agents (delegate_agent / fire-and-forget
+   * spawn_agent) currently in `pending` or `running` status. When > 0 the
+   * footer renders "· N working" even if the parent turn has yielded back
+   * to idle — without this the user can't tell the CLI is still doing work
+   * and has to run /where to check. Refreshed on every child lifecycle
+   * event and once per turn boundary.
+   */
+  runningChildren?: number;
 }
 
 export interface ChatController {
@@ -129,7 +144,7 @@ export type ScrollbackEntry =
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
   /**
-   * Tool call result row — claude-code style:
+   * Tool call result row — claude code style:
    *   ⏺ Read(src/foo.ts)            (green ⏺ when ok, red when failed)
    *     ⎿ <preview line 1>          (if preview present, with ⎿ connector)
    *       <preview line 2>           (continuation lines plain indent)
@@ -142,7 +157,31 @@ export type ScrollbackEntry =
   /** Plan rendering: optional `explanation` renders above the checklist as a dim line. */
   | { id: number; kind: 'plan'; items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[]; explanation?: string }
   /** Notice severity:  info → gray dim · warn → yellow · error → red bold. */
-  | { id: number; kind: 'notice'; text: string; level?: 'info' | 'warn' | 'error' };
+  | { id: number; kind: 'notice'; text: string; level?: 'info' | 'warn' | 'error' }
+  /**
+   * Multi-line child-agent completion block — green ✓ header + indented
+   * wrapped body containing the agent's actual headline/summary. Replaces
+   * the old single-line `🏁 Agent X — Y` notice that was being clipped at
+   * terminal width by Ink's `wrap="truncate"`. The body wraps freely so the
+   * user can read the agent's findings without running /agent transcript.
+   */
+  | { id: number; kind: 'agent-result'; childId: string; role: string; status: 'completed' | 'failed'; body: string }
+  /** TIER B compaction row — grok-cli parity. */
+  | { id: number; kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
+  /**
+   * Persisted reasoning / chain-of-thought block. Rendered dim-italic
+   * with a 💭 marker so it's visually distinct from prose. Stays in
+   * scrollback after the LLM call ends so users can scroll back and
+   * read what the model was thinking.
+   */
+  | { id: number; kind: 'reasoning'; text: string }
+  /**
+   * Pinned multi-agent fleet row — surfaces ALL currently-running children
+   * at once so users see parallelism. Updates in place via setChildFleet
+   * (controller.push.setChildFleet) instead of pushing a new row per
+   * event. Removed when the fleet drains to zero.
+   */
+  | { id: number; kind: 'child-fleet'; children: Array<{ childId: string; role: string; tool?: string }>; };
 
 export interface PushScrollback {
   raw(text: string, opts?: { noWrap?: boolean }): void;
@@ -160,10 +199,115 @@ export interface PushScrollback {
   plan(items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[], explanation?: string): void;
   /** Severity defaults to 'info' when omitted (back-compat). */
   notice(text: string, level?: 'info' | 'warn' | 'error'): void;
+  /** Multi-line agent completion block — used by spawn_agent's onChildComplete callback in runChat. */
+  agentResult(event: { childId: string; role: string; status: 'completed' | 'failed'; body: string }): void;
   /** Update the live spinner label (e.g. "Thinking  5s  1.2k↑ 0.4k↓"). */
   setStatus(label: string): void;
   /** Show / hide the spinner without pushing a scrollback entry. */
   setPhase(phase: 'idle' | 'turn-running'): void;
+  /**
+   * TIER A live-streaming API. The agent pushes incremental text via
+   * `assistantDelta`; the chat renders a transient row beneath the
+   * scrollback. `assistantDeltaEnd` clears the transient buffer — the
+   * caller is responsible for pushing the final `assistant(...)` entry
+   * afterwards (so token / duration metadata can ride along).
+   */
+  assistantDeltaStart(): void;
+  assistantDelta(chunk: string): void;
+  assistantDeltaEnd(): void;
+  /** Streaming reasoning (chain-of-thought) preview. Replaces, not appends. */
+  reasoningDelta(chunk: string): void;
+  /** Visible compaction notice — grok-cli parity (§2.1 of IMPLEMENTATION_PLAN.md). */
+  compaction(event: { droppedMessages: number; keptMessages: number; summary: string }): void;
+  /**
+   * Update (or remove) the pinned child-fleet row. Pass an empty array
+   * to remove the row entirely. Pass N>=1 to add or replace it; the row
+   * lives at a stable id so updates don't churn scrollback.
+   */
+  setChildFleet(children: Array<{ childId: string; role: string; tool?: string }>): void;
+  /**
+   * Multi-agent batch-spawn notice. Renders `🚀 Spawned N agents in
+   * parallel: a, b, c` as a single scrollback row so the user sees the
+   * launch as one event instead of N interleaved "▶ X running" lines.
+   */
+  spawnBatch(children: Array<{ childId: string; role: string }>): void;
+}
+
+// Max characters of reasoning to display in the live dim-italic block.
+// Long chains-of-thought (10k+ chars) used to reflow the whole Ink
+// frame on every flush — the dim block grew unbounded and dominated
+// the viewport, making scrolling feel jittery as it pushed older
+// scrollback off-screen. We render only the trailing window during
+// streaming; the full text is still committed to scrollback as a
+// 'reasoning' entry on call-end (see assistantDeltaEnd) so users can
+// scroll back and read the entire chain. ~1.5 KB is roughly 20-30
+// lines on a typical 100-col terminal — enough to feel live without
+// overwhelming the layout.
+export const REASONING_TAIL_CHARS = 1500;
+
+export function tailReasoning(text: string): string {
+  if (text.length <= REASONING_TAIL_CHARS) return text;
+  // Cut at a word boundary near the start of the tail window so the
+  // first visible character isn't a mid-word fragment.
+  const slice = text.slice(text.length - REASONING_TAIL_CHARS);
+  const firstSpace = slice.indexOf(' ');
+  return '… ' + (firstSpace > 0 && firstSpace < 80 ? slice.slice(firstSpace + 1) : slice);
+}
+
+// Stable-height window for the LIVE reasoning panel. Without this, the
+// dim-italic block grows line-by-line as the model thinks, pushing the
+// composer downward; once the block exceeds the terminal viewport, the
+// terminal itself scrolls, and the user sees the viewport rolling
+// upward continuously while the model reasons. That's the
+// "keep scrolling while thinking" bug.
+//
+// The fix: render the reasoning panel at a FIXED row count. We wrap
+// the tail text to the terminal width, then keep only the last
+// REASONING_VISIBLE_LINES wrapped lines, padding with blank lines when
+// there are fewer. Ink emits a constant-height frame, so terminal
+// native scroll never triggers during reasoning.
+export const REASONING_VISIBLE_LINES = 6;
+
+export function buildReasoningWindow(text: string, cols: number): string {
+  if (!text) return '';
+  // Wrap the visible tail to terminal width. We use a simple greedy
+  // word-wrap; long unbroken tokens are hard-cut at `cols`. Account for
+  // the paddingLeft={3} on the render Box, hence `cols - 4` (3 for
+  // padding, 1 for safety/cursor).
+  const width = Math.max(20, cols - 4);
+  const wrapped: string[] = [];
+  for (const para of text.split('\n')) {
+    if (para === '') {
+      wrapped.push('');
+      continue;
+    }
+    let line = '';
+    for (const word of para.split(/(\s+)/)) {
+      if (!word) continue;
+      if ((line + word).length <= width) {
+        line += word;
+      } else {
+        if (line.trim()) wrapped.push(line.trimEnd());
+        if (word.length > width) {
+          // Hard-break very long tokens at width boundaries.
+          for (let i = 0; i < word.length; i += width) {
+            const chunk = word.slice(i, i + width);
+            if (i + width >= word.length) {
+              line = chunk;
+            } else {
+              wrapped.push(chunk);
+            }
+          }
+        } else {
+          line = word.trimStart();
+        }
+      }
+    }
+    if (line) wrapped.push(line);
+  }
+  // Keep only the last N lines.
+  const tail = wrapped.slice(-REASONING_VISIBLE_LINES);
+  return tail.join('\n');
 }
 
 // --- Main app ---------------------------------------------------------
@@ -180,6 +324,7 @@ export function ChatApp({
   onAccessModeCycle,
   initialAccessMode = 'read',
   initialFooter = {},
+  workspaceRoot,
 }: ChatAppProps) {
   const { exit } = useApp();
   // useTerminalSize subscribes to stdout 'resize' and pushes the new
@@ -221,6 +366,50 @@ export function ChatApp({
    * keys; centralizing here makes the precedence explicit.)
    */
   const [paletteCursor, setPaletteCursor] = useState(0);
+  // TIER A: transient live-assistant + reasoning rows shown beneath the
+  // scrollback while the model streams. Cleared when the agent fires
+  // assistantDeltaEnd() and the final assistant() row lands in scrollback.
+  const [liveAssistant, setLiveAssistant] = useState<string>('');
+  const [liveReasoning, setLiveReasoning] = useState<string>('');
+  // Throttle delta-driven setState to ~30Hz so a high-rate token stream
+  // doesn't pin the Ink reconciler. We accumulate into a ref-buffer and
+  // flush on a timer.
+  const liveAssistantBufRef = useRef<string>('');
+  // Reasoning is also streamed, and the *previous* implementation
+  // replaced state with just the latest chunk — so the dim-italic row
+  // flashed one token at a time instead of building up. We now
+  // accumulate in a ref-buffer (same pattern as the assistant stream)
+  // and render the trailing window so long chains-of-thought don't
+  // dominate the viewport.
+  const liveReasoningBufRef = useRef<string>('');
+  // Single shared flush timer for BOTH assistant + reasoning streams.
+  // Originally each had its own 33ms timer which meant two independent
+  // setState calls per ~33ms, doubling the re-render rate of the entire
+  // tree and producing visible flicker. Coalescing into one timer at
+  // 80ms gives us ~12Hz which is still visually fluid for token
+  // streaming while letting the reconciler breathe between frames.
+  const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Back-compat aliases kept so any code path still touching the
+  // per-stream timer refs (e.g. cancellation paths in turn-end) sees
+  // the same shared timer. assistantDeltaEnd / assistant() clear via
+  // these names; pointing both at the shared ref keeps that working.
+  const liveAssistantFlushTimerRef = liveFlushTimerRef;
+  const liveReasoningFlushTimerRef = liveFlushTimerRef;
+  const scheduleLiveFlush = useCallback(() => {
+    if (liveFlushTimerRef.current) return;
+    liveFlushTimerRef.current = setTimeout(() => {
+      liveFlushTimerRef.current = null;
+      // Single render pass for both streams — React 18 auto-batches
+      // setState calls in timers/microtasks, but being explicit makes
+      // the intent clear: one frame, not two.
+      setLiveAssistant(liveAssistantBufRef.current);
+      setLiveReasoning(liveReasoningBufRef.current);
+    }, 80);
+  }, []);
+  // Stable id of the pinned child-fleet row (when present). Lets
+  // setChildFleet update the same row in place instead of churning a
+  // new entry on every child tool event. -1 means no row currently shown.
+  const childFleetIdRef = useRef<number>(-1);
 
   const pushFns = useMemo<PushScrollback>(() => {
     const push = (entry: any) => {
@@ -232,13 +421,135 @@ export function ChatApp({
     return {
       raw: (text, opts) => push({ kind: 'raw', text, noWrap: opts?.noWrap }),
       user: (text) => push({ kind: 'user', text }),
-      assistant: (text, meta) => push({ kind: 'assistant', text, ...meta }),
+      assistant: (text, meta) => {
+        // The final assistant message for the turn is landing — clear
+        // any leftover live-stream state so we don't double-render it.
+        if (liveAssistantFlushTimerRef.current) {
+          clearTimeout(liveAssistantFlushTimerRef.current);
+          liveAssistantFlushTimerRef.current = null;
+        }
+        if (liveReasoningFlushTimerRef.current) {
+          clearTimeout(liveReasoningFlushTimerRef.current);
+          liveReasoningFlushTimerRef.current = null;
+        }
+        liveAssistantBufRef.current = '';
+        liveReasoningBufRef.current = '';
+        setLiveAssistant('');
+        setLiveReasoning('');
+        push({ kind: 'assistant', text, ...meta });
+      },
       tool: (header, ok, opts) => push({ kind: 'tool', header, ok, ...opts }),
       memory: (level, text) => push({ kind: 'memory', level, text }),
       plan: (items, explanation) => push({ kind: 'plan', items, explanation }),
       notice: (text, level) => push({ kind: 'notice', text, level: level ?? 'info' }),
+      agentResult: (event) => push({ kind: 'agent-result', childId: event.childId, role: event.role, status: event.status, body: event.body }),
       setStatus: (label) => setSpinnerLabel(label),
       setPhase: (p) => setPhase(p),
+      assistantDeltaStart: () => {
+        // A new LLM call is streaming. If there's leftover text from a
+        // PRIOR call in this same turn (model emitted a preamble, then
+        // tool-called, now coming back for the real answer), commit it
+        // as its own scrollback row first so it doesn't vanish. Same
+        // treatment for the reasoning buffer.
+        const carryAssistant = liveAssistantBufRef.current;
+        if (carryAssistant && carryAssistant.trim()) {
+          push({ kind: 'assistant', text: carryAssistant });
+        }
+        const carryReasoning = liveReasoningBufRef.current;
+        if (carryReasoning && carryReasoning.trim()) {
+          push({ kind: 'reasoning', text: carryReasoning });
+        }
+        if (liveAssistantFlushTimerRef.current) {
+          clearTimeout(liveAssistantFlushTimerRef.current);
+          liveAssistantFlushTimerRef.current = null;
+        }
+        if (liveReasoningFlushTimerRef.current) {
+          clearTimeout(liveReasoningFlushTimerRef.current);
+          liveReasoningFlushTimerRef.current = null;
+        }
+        liveAssistantBufRef.current = '';
+        liveReasoningBufRef.current = '';
+        setLiveAssistant('');
+        setLiveReasoning('');
+      },
+      assistantDelta: (chunk) => {
+        liveAssistantBufRef.current += chunk;
+        scheduleLiveFlush();
+      },
+      assistantDeltaEnd: () => {
+        // Stop appending and flush whatever's pending so the visible
+        // row matches the model's final text. Do NOT clear — clearing
+        // here was the "text vanishes" bug: for intermediate LLM calls
+        // (preamble → tool → real answer) the text gets wiped before
+        // anything commits it. We let it persist; the NEXT
+        // assistantDeltaStart commits it as a row, and the final
+        // assistant(...) push clears the live state with metadata.
+        if (liveAssistantFlushTimerRef.current) {
+          clearTimeout(liveAssistantFlushTimerRef.current);
+          liveAssistantFlushTimerRef.current = null;
+        }
+        setLiveAssistant(liveAssistantBufRef.current);
+        // Commit the reasoning block to scrollback so the chain-of-thought
+        // persists for scrollback review. The next LLM call's reasoning
+        // gets its own block via assistantDeltaStart's carry-commit.
+        if (liveReasoningFlushTimerRef.current) {
+          clearTimeout(liveReasoningFlushTimerRef.current);
+          liveReasoningFlushTimerRef.current = null;
+        }
+        const finalReasoning = liveReasoningBufRef.current;
+        if (finalReasoning && finalReasoning.trim()) {
+          push({ kind: 'reasoning', text: finalReasoning });
+        }
+        liveReasoningBufRef.current = '';
+        setLiveReasoning('');
+      },
+      reasoningDelta: (chunk) => {
+        // Stream the FULL reasoning the same way prose streams: append
+        // to the buffer and render the whole thing in a dim-italic
+        // block. Throttled to ~33Hz so a fast token rate doesn't pin
+        // Ink. On call-end the buffer is committed to scrollback as a
+        // persistent `reasoning` entry so users can scroll back and
+        // read it later.
+        const safe = chunk.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+        liveReasoningBufRef.current += safe;
+        scheduleLiveFlush();
+      },
+      compaction: (event) => push({ kind: 'compaction', droppedMessages: event.droppedMessages, keptMessages: event.keptMessages, summary: event.summary }),
+      setChildFleet: (children) => {
+        setScrollback((rows) => {
+          const currentId = childFleetIdRef.current;
+          // Empty → remove the pinned row (if any).
+          if (children.length === 0) {
+            if (currentId < 0) return rows;
+            childFleetIdRef.current = -1;
+            return rows.filter((r) => r.id !== currentId);
+          }
+          // Existing row → update in place.
+          if (currentId >= 0) {
+            const idx = rows.findIndex((r) => r.id === currentId);
+            if (idx >= 0) {
+              const next = rows.slice();
+              next[idx] = { id: currentId, kind: 'child-fleet', children };
+              return next;
+            }
+          }
+          // New row → push and remember id.
+          const id = ++nextIdRef.current;
+          childFleetIdRef.current = id;
+          return [...rows, { id, kind: 'child-fleet', children }];
+        });
+      },
+      spawnBatch: (children) => {
+        if (children.length === 0) return;
+        const names = children.map((c) => {
+          const idShort = c.childId.startsWith('agent-') ? c.childId.slice(0, 14) : `agent-${c.childId.slice(0, 8)}`;
+          return `${idShort} (${c.role})`;
+        }).join(', ');
+        const prefix = children.length > 1
+          ? `🚀 Spawned ${children.length} agents in parallel`
+          : `🚀 Spawned 1 agent`;
+        push({ kind: 'notice', text: `${prefix}: ${names}`, level: 'info' });
+      },
     };
   }, []);
 
@@ -301,6 +612,30 @@ export function ChatApp({
   // Slash palette visibility — open when input is just `/<query>`
   // with no whitespace yet (so the user is still composing the
   // command name, not args).
+  // @-mention completion — derive matches from the trailing `@token` in
+  // the composer. Empty token (just `@`) shows the top of the index so
+  // the user discovers the feature. Disabled (no matches) when the
+  // composer doesn't end with an @-token.
+  const [atCursor, setAtCursor] = useState(0);
+  const [atDismissed, setAtDismissed] = useState(false);
+  const atMatches = useMemo(() => {
+    if (atDismissed) return [];
+    const token = extractAtToken(composerValue);
+    if (token === null) return [];
+    const idx = getFileIndex(workspaceRoot ?? process.cwd());
+    return token === '' ? idx.slice(0, 8) : matchFiles(idx, token, 8);
+  }, [composerValue, atDismissed, workspaceRoot]);
+  useEffect(() => {
+    // Reset dismissal as soon as the user starts a fresh @-token.
+    const token = extractAtToken(composerValue);
+    if (token === null) {
+      setAtDismissed(false);
+      setAtCursor(0);
+    } else {
+      setAtCursor((c) => (atMatches.length === 0 ? 0 : Math.min(c, atMatches.length - 1)));
+    }
+  }, [composerValue, atMatches.length]);
+
   const slashQuery = useMemo(() => {
     if (!composerValue.startsWith('/')) return null;
     const tail = composerValue.slice(1);
@@ -370,6 +705,21 @@ export function ChatApp({
       exit();
       return;
     }
+    // Ctrl+L clears the visible scrollback (terminal-level) and the
+    // in-memory entry list, leaving only the banner. Standard REPL UX
+    // — when long sessions feel cluttered, the user can hard-reset the
+    // viewport without restarting the CLI. The agent's conversation
+    // history is unaffected; only the rendered scrollback resets.
+    if (key.ctrl && input === 'l') {
+      setScrollback((rows) => rows.filter((r) => r.kind === 'raw'));
+      if (process.stdout.isTTY) {
+        // \x1b[2J clears visible screen; \x1b[3J clears scrollback;
+        // \x1b[H homes the cursor. Same sequence renderWithResizeClear
+        // emits on resize.
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+      }
+      return;
+    }
     if (key.shift && key.tab && onAccessModeCycle) {
       const next = onAccessModeCycle();
       if (next === 'read' || next === 'write' || next === 'shell') {
@@ -377,6 +727,28 @@ export function ChatApp({
         pushFns.notice(`Access mode → ${next}`);
       }
       return;
+    }
+    // @-mention navigation — takes precedence over slash palette since
+    // they're mutually exclusive (slash starts the buffer; @ trails it).
+    if (atMatches.length > 0) {
+      if (key.upArrow) {
+        setAtCursor((c) => (c - 1 + atMatches.length) % atMatches.length);
+        return;
+      }
+      if (key.downArrow) {
+        setAtCursor((c) => (c + 1) % atMatches.length);
+        return;
+      }
+      if (key.tab && !key.shift) {
+        const picked = atMatches[atCursor] ?? atMatches[0];
+        setComposerValue(applyAtCompletion(composerValue, picked));
+        setAtCursor(0);
+        return;
+      }
+      if (key.escape) {
+        setAtDismissed(true);
+        return;
+      }
     }
     // Palette navigation — only when palette is open AND there's at
     // least one match. We DON'T use `key.return` here because Enter is
@@ -412,6 +784,37 @@ export function ChatApp({
         {scrollback.map((entry) => (
           <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} />
         ))}
+        {/* TIER A: transient live assistant + reasoning rows. The
+            assistant streams here mid-turn; when the turn finishes,
+            assistantDeltaEnd() clears these and runChat.tsx pushes the
+            final 'assistant' scrollback entry with token/duration meta. */}
+        {liveReasoning ? (
+          // Stable-height reasoning panel. The body Box has a fixed
+          // `height` equal to REASONING_VISIBLE_LINES, so as the model
+          // streams more chain-of-thought the Ink frame DOES NOT grow
+          // — the tail just slides upward inside the fixed window.
+          // This eliminates the "keep scrolling while thinking" bug:
+          // the terminal native scroll only triggers when total
+          // rendered content exceeds the viewport. With a fixed-height
+          // panel, the layout's total row count stays constant during
+          // reasoning, so the terminal never scrolls.
+          <Box flexDirection="column" marginTop={1}>
+            <Text color="magenta" italic dimColor>
+              💭 thinking{liveReasoning.length > REASONING_TAIL_CHARS ? ` (${liveReasoning.length.toLocaleString()} chars)` : ''}
+            </Text>
+            <Box paddingLeft={3} height={REASONING_VISIBLE_LINES} flexDirection="column">
+              <Text color="gray" italic wrap="truncate-end">
+                {buildReasoningWindow(tailReasoning(liveReasoning), cols)}<Text color="gray">▍</Text>
+              </Text>
+            </Box>
+          </Box>
+        ) : null}
+        {liveAssistant ? (
+          <Box marginTop={1}>
+            <Text color="green">⏺ </Text>
+            <Text>{liveAssistant}<Text color="gray">▍</Text></Text>
+          </Box>
+        ) : null}
       </Box>
 
       {/* Overlay (e.g. /config picker) — when active, it OWNS the
@@ -436,7 +839,13 @@ export function ChatApp({
               adapter's status text — typically the formatted active tool.
               wrap="truncate" on the label so a long tool call header
               (Bash(...long command...)) doesn't wrap and leave residue. */}
-          {phase === 'turn-running' ? (
+          {/* Hide the spinner once content is actively streaming — the
+              gray ▍ cursor in the live assistant/reasoning row IS the
+              activity indicator, and the spinner is an additional
+              setInterval-driven re-render at ~10Hz that adds noise to
+              the frame on top of streaming flushes. The spinner returns
+              the moment the model goes quiet (between tool calls). */}
+          {phase === 'turn-running' && !liveAssistant && !liveReasoning ? (
             <Box>
               <Text color={turnElapsedMs >= 10_000 ? 'yellow' : 'green'}>
                 {React.createElement(Spinner as any, { type: 'dots' })}
@@ -473,6 +882,20 @@ export function ChatApp({
             />
           ) : null}
 
+          {/* @-mention file completions — appear when composer ends with `@token`.
+              Tab accepts the highlighted candidate (handled in the useInput hook
+              above the composer). Esc clears. Arrow keys navigate. */}
+          {atMatches.length > 0 ? (
+            <Box flexDirection="column" marginTop={0}>
+              <Text color="gray" dimColor>  @ files (Tab to accept, ↑/↓ to navigate, Esc to dismiss)</Text>
+              {atMatches.map((m, i) => (
+                <Text key={m} color={i === atCursor ? accentColor : 'gray'}>
+                  {i === atCursor ? '  › ' : '    '}{m}
+                </Text>
+              ))}
+            </Box>
+          ) : null}
+
           {/* Footer status line. */}
           <FooterStatus
             promptLabel={promptLabel}
@@ -501,7 +924,15 @@ export function ChatApp({
  *   ✓ / ✗  status mark             — final status line of tool block
  *   ↳  plan / memory dim-italic explanation
  */
-function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
+// React.memo: scrollback entries are immutable once pushed (their `id`
+// is stable, their `entry` object is never mutated in place — push
+// always allocates a fresh object), so we can short-circuit re-renders
+// when the parent re-renders for unrelated reasons (live streaming
+// state, spinner tick, composer keystroke). Without this memo, every
+// 80ms streaming tick re-walks the entire scrollback (potentially 1000+
+// entries) and Ink re-diffs each row — that's the dominant cause of
+// the visible flicker / flashing during streaming.
+const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
   switch (entry.kind) {
     case 'raw':
       return <Text wrap={entry.noWrap ? 'truncate' : 'wrap'}>{entry.text}</Text>;
@@ -657,8 +1088,87 @@ function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentC
         </Box>
       );
     }
+    case 'agent-result': {
+      // Multi-line agent completion block. Header gets a 🏁/💥 icon and
+      // the agent id/role; body wraps freely so long findings (Headline,
+      // TL;DR, Summary blocks the child wrote) survive without being
+      // clipped to terminal width like the old single-line notice was.
+      const ok = entry.status === 'completed';
+      const icon = ok ? '🏁' : '💥';
+      const headerColor = ok ? 'green' : 'red';
+      const bodyLines = entry.body ? entry.body.split('\n') : [];
+      return (
+        <Box flexDirection="column">
+          <Text color={headerColor} bold>
+            {`${icon} Agent ${entry.childId} (${entry.role}) ${entry.status}`}
+          </Text>
+          {bodyLines.length > 0 ? (
+            <Box paddingLeft={4} flexDirection="column">
+              {bodyLines.map((line, i) => (
+                <Text key={i} color="gray" wrap="wrap">{line || ' '}</Text>
+              ))}
+            </Box>
+          ) : null}
+        </Box>
+      );
+    }
+    case 'reasoning': {
+      const lines = entry.text.split('\n');
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="magenta" italic dimColor>💭 thinking</Text>
+          <Box paddingLeft={3} flexDirection="column">
+            {lines.map((line, i) => (
+              <Text key={i} color="gray" italic wrap="wrap">{line || ' '}</Text>
+            ))}
+          </Box>
+        </Box>
+      );
+    }
+    case 'child-fleet': {
+      const n = entry.children.length;
+      if (n === 0) return null;
+      const badge = n > 1 ? `[×${n} parallel] ` : '';
+      // Color-cycle the per-child chips so multiple parallel agents are
+      // visually distinguishable at a glance.
+      const palette = ['cyan', 'magenta', 'yellow', 'blueBright', 'greenBright'];
+      return (
+        <Box flexDirection="column">
+          <Box>
+            <Text color="green" bold>{`◐ ${badge}running:`} </Text>
+            {entry.children.map((c, i) => {
+              const idShort = c.childId.startsWith('agent-') ? c.childId.slice(0, 14) : `agent-${c.childId.slice(0, 8)}`;
+              const color = palette[i % palette.length];
+              const tail = c.tool ? ` ${c.tool}` : '';
+              return (
+                <React.Fragment key={c.childId}>
+                  {i > 0 ? <Text color="gray"> · </Text> : null}
+                  <Text color={color}>{idShort}</Text>
+                  <Text color="gray">{` (${c.role})${tail}`}</Text>
+                </React.Fragment>
+              );
+            })}
+          </Box>
+        </Box>
+      );
+    }
+    case 'compaction': {
+      const summaryLines = entry.summary ? entry.summary.split('\n').slice(0, 8) : [];
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="cyan" bold>{`📦 Compacted ${entry.droppedMessages} message(s) → kept ${entry.keptMessages}`}</Text>
+          {summaryLines.length > 0 ? (
+            <Box paddingLeft={3} flexDirection="column">
+              {summaryLines.map((line, i) => (
+                <Text key={i} color="gray" dimColor wrap="wrap">{line || ' '}</Text>
+              ))}
+            </Box>
+          ) : null}
+        </Box>
+      );
+    }
   }
-}
+});
 
 /**
  * Render one line of a tool-result preview. Diff lines get red/green
@@ -835,10 +1345,16 @@ function FooterStatus({
   const effortGlyph = footer.effort === 'high' ? '●' : footer.effort === 'medium' ? '◐' : footer.effort === 'low' ? '○' : '';
   const effortColor = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
 
-  // Left side: model · session · branch.  Right side: ? for shortcuts.
-  // Spreads out so the footer feels like claude-code's bottom bar.
+  // Left side: model (· Nk ctx) · session · branch. Right: ? for shortcuts.
+  // The "Nk ctx" segment surfaces the model's max prompt context so the
+  // user can see how close they are to the limit. Lookup lives in
+  // `runtime/contextWindow.ts`; unknown models render "?" rather than
+  // a guess. Override via ~/.config/brainrouter/contextWindows.json.
   const leftSegs: string[] = [];
-  if (footer.model) leftSegs.push(footer.model);
+  if (footer.model) {
+    const ctxLabel = formatContextWindow(footer.model);
+    leftSegs.push(`${footer.model}${ctxLabel !== '?' ? ` · ${ctxLabel} ctx` : ''}`);
+  }
   if (footer.session) leftSegs.push(footer.session.slice(0, 16));
   if (footer.branch) leftSegs.push(footer.branch);
   if (footer.rightExtra) leftSegs.push(footer.rightExtra);
@@ -881,6 +1397,9 @@ function FooterStatus({
         ) : null}
         {phase === 'turn-running' && cols >= 50 ? (
           <Text color="gray" dimColor>{'  · running'}</Text>
+        ) : null}
+        {phase === 'idle' && (footer.runningChildren ?? 0) > 0 && cols >= 50 ? (
+          <Text color="yellow">{`  · ${footer.runningChildren} working`}</Text>
         ) : null}
       </Text>
       {showRightHint ? (
