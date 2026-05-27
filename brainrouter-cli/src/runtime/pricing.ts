@@ -1,57 +1,24 @@
 /**
  * Cost + cache savings (0.3.9 item 14).
  *
- * `/tokens` and the Ink status line surface per-turn USD by reading
- * the active model's pricing from this table plus any user override.
- * The cache-savings figure is computed against the model's miss rate
- * vs. the cache-hit rate, so it answers "how much did prefix caching
- * actually save me on the last turn?".
+ * Defaults live in `brainrouter-cli/config/models.json` (the `pricing`
+ * field on each model entry) so vendor pricing updates can ship as a
+ * JSON edit instead of a TypeScript edit. User overrides at
+ * `~/.config/brainrouter/pricing.json` win over the shipped table.
  *
- * Pricing source-of-truth: vendor docs at the time of writing. None
- * of this is hot-keyed; the table is intentionally small (the
- * 0.3.9 slim-catalog has three provider rows). Bigger / more dynamic
- * pricing lives behind `~/.config/brainrouter/pricing.json` overrides.
+ * Cache-savings figure is computed against the model's miss rate vs.
+ * the cache-hit rate — answers "how much did prefix caching actually
+ * save me on the last turn?".
  *
- * Reference: openSrc/DeepSeek-Reasonix/src/telemetry/stats.ts.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { extractCacheStats, type CacheStats } from './cacheStats.js';
+import { loadModelsConfig, type ModelPricing } from './configLoader.js';
 
-export interface ModelPricing {
-  /** USD per 1M cached-input tokens (hit). */
-  inputCacheHit: number;
-  /** USD per 1M un-cached-input tokens (miss). */
-  inputCacheMiss: number;
-  /** USD per 1M output tokens. */
-  output: number;
-}
-
-/**
- * Built-in pricing as of 0.3.9. **Treat as a default, not a contract.**
- * Vendor pricing drifts; users should override via
- * `~/.config/brainrouter/pricing.json` for anything load-bearing.
- *
- * Lookup is case-insensitive; we strip any vendor prefix (`openai/`,
- * `openrouter/`) before matching. Anthropic-native rows were removed
- * in 0.3.9 alongside the native /v1/messages adapter — users routing
- * Claude through OpenRouter can supply override rows in
- * `~/.config/brainrouter/pricing.json`.
- */
-export const DEFAULT_PRICING: Record<string, ModelPricing> = {
-  // OpenAI (gpt-5 family — placeholder, vendor list drifts).
-  'gpt-5-pro': { inputCacheHit: 0.7, inputCacheMiss: 7.0, output: 28.0 },
-  'gpt-5': { inputCacheHit: 0.125, inputCacheMiss: 1.25, output: 5.0 },
-  'gpt-5-mini': { inputCacheHit: 0.025, inputCacheMiss: 0.25, output: 1.0 },
-  // DeepSeek (numbers from Reasonix telemetry table).
-  'deepseek-v4-pro': { inputCacheHit: 0.003625, inputCacheMiss: 0.435, output: 0.87 },
-  'deepseek-v4-flash': { inputCacheHit: 0.0028, inputCacheMiss: 0.14, output: 0.28 },
-  // Local endpoints — free.
-  'lm-studio': { inputCacheHit: 0, inputCacheMiss: 0, output: 0 },
-  'ollama': { inputCacheHit: 0, inputCacheMiss: 0, output: 0 },
-};
+export type { ModelPricing } from './configLoader.js';
 
 let cachedOverride: Record<string, ModelPricing> | undefined;
 
@@ -67,22 +34,21 @@ function loadOverride(): Record<string, ModelPricing> {
       }
     }
   } catch {
-    // Bad / missing override → ignore, fall back to defaults.
+    // Bad / missing override → ignore, fall back to JSON defaults.
   }
   cachedOverride = {};
   return cachedOverride;
 }
 
-/** Reset the cached override (test hook). */
+/** Test hook. */
 export function _resetPricingCache(): void {
   cachedOverride = undefined;
 }
 
 /**
- * Resolve pricing for a model. Strips vendor prefixes; falls back to
- * a zero-cost row when no entry is found so callers don't divide-by-
- * undefined. Returns `undefined` ONLY when the model id is itself
- * empty/invalid.
+ * Resolve pricing for a model. Strips vendor prefixes; falls back to a
+ * zero-cost row when no entry is found so callers don't divide-by-
+ * undefined. Returns `undefined` ONLY when the model id is empty/invalid.
  */
 export function pricingFor(modelId: string | undefined | null): ModelPricing | undefined {
   if (!modelId || typeof modelId !== 'string') return undefined;
@@ -90,7 +56,11 @@ export function pricingFor(modelId: string | undefined | null): ModelPricing | u
     ? modelId.toLowerCase().slice(modelId.lastIndexOf('/') + 1)
     : modelId.toLowerCase();
   const override = loadOverride();
-  return override[stripped] ?? DEFAULT_PRICING[stripped] ?? { inputCacheHit: 0, inputCacheMiss: 0, output: 0 };
+  if (override[stripped]) return override[stripped];
+  const cfg = loadModelsConfig();
+  const entry = cfg.models[stripped];
+  if (entry?.pricing) return entry.pricing;
+  return { inputCacheHit: 0, inputCacheMiss: 0, output: 0 };
 }
 
 export interface UsageLike {
@@ -112,8 +82,8 @@ export function costUsd(modelId: string, usage: UsageLike): number {
 }
 
 /**
- * USD savings from cache hits, vs. the same workload paying miss
- * pricing for every cached token. Always ≥ 0.
+ * USD savings from cache hits, vs. the same workload paying miss pricing
+ * for every cached token. Always ≥ 0.
  */
 export function cacheSavingsUsd(modelId: string, cachedTokens: number): number {
   if (cachedTokens <= 0) return 0;
@@ -124,7 +94,6 @@ export function cacheSavingsUsd(modelId: string, cachedTokens: number): number {
 
 /**
  * Format a USD cost with a colour band:
- *
  *   - green  <$0.05
  *   - yellow $0.05–0.20
  *   - red    ≥$0.20

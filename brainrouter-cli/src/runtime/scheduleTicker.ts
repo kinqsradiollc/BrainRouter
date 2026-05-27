@@ -1,8 +1,8 @@
 /**
  * In-process ticker that fires due `/schedule` jobs.
  *
- * Singleton per CLI process. Wakes every 30s (override via
- * `BRAINROUTER_SCHEDULE_TICK_MS`), reloads the persisted store, fires
+ * Singleton per CLI process. Wakes every 30s (override via `cli.scheduleTickMs`
+ * in `~/.config/brainrouter/config.json`), reloads the persisted store, fires
  * any jobs whose `nextRun` is now in the past, then advances `nextRun`
  * past `now()` so a missed window only fires ONCE (catch-up
  * idempotency).
@@ -14,6 +14,7 @@
 
 import { loadSchedules, recordFire, removeSchedule, setScheduleEnabled, type ScheduleRecord } from '../state/scheduleStore.js';
 import { parseCron, nextCronFire } from './cronParser.js';
+import { getCliKnobs } from '../config/config.js';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 100;
@@ -46,8 +47,8 @@ export function isScheduleTickerRunning(): boolean {
 export function startScheduleTicker(opts: ScheduleTickerOptions): ScheduleTickerHandle {
   if (active) return active;
 
-  const envOverride = Number(process.env.BRAINROUTER_SCHEDULE_TICK_MS);
-  const rawInterval = opts.intervalMs ?? (Number.isFinite(envOverride) && envOverride > 0 ? envOverride : DEFAULT_INTERVAL_MS);
+  const cfgOverride = getCliKnobs().scheduleTickMs;
+  const rawInterval = opts.intervalMs ?? (Number.isFinite(cfgOverride) && cfgOverride > 0 ? cfgOverride : DEFAULT_INTERVAL_MS);
   const interval = Math.max(MIN_INTERVAL_MS, rawInterval);
   const now = opts.now ?? (() => Date.now());
 

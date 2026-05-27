@@ -7,6 +7,7 @@ import { listSessions, type ChildSessionRecord } from '../orchestration/orchestr
 import type { RecalledRecord } from '../memory/briefing.js';
 import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
 import { BOX, type Theme } from './theme.js';
+import { formatContextWindow } from '../runtime/contextWindow.js';
 
 /**
  * `/where` — single-screen "where am I right now" answer.
@@ -52,7 +53,7 @@ export interface WhereInputs {
   executionMode: ExecutionMode;
   reviewPolicy: ReviewPolicy;
   effort: EffortLevel;
-  effortSource: 'env' | 'preference' | 'default';
+  effortSource: 'config' | 'preference' | 'default';
   workflowSlug?: string;
   workflowMeta?: WorkflowMeta;
   goal?: Goal;
@@ -80,15 +81,23 @@ function renderWorkspace(inputs: WhereInputs, theme: Theme): string[] {
   // /where is the "tell me everything" surface, so we show the effort level
   // regardless of whether it's at default — unlike the statusline, which
   // hides medium to keep the prompt quiet. Tag the source in parens when
-  // env beat the preference so users can see why the value differs from
-  // what they set with /effort.
-  const effortLine = inputs.effortSource === 'env'
-    ? `effort  ${inputs.effort}  ${dim('(env)')}`
+  // `cli.effort` in config.json beat the preference so users can see why
+  // the value differs from what they set with /effort.
+  const effortLine = inputs.effortSource === 'config'
+    ? `effort  ${inputs.effort}  ${dim('(config)')}`
     : `effort  ${inputs.effort}`;
   const lines = [
     renderHeader('Workspace', theme),
     indent(theme.plain(`${base}  ${dim('(' + inputs.workspaceRoot + ')')}`)),
-    indent(dim(`session ${inputs.sessionKey.slice(0, 8)}  ·  model ${inputs.model}  ·  mode ${inputs.accessMode}`)),
+    // Append the model's prompt-context window ("128k ctx", "1M ctx",
+    // "?" when unknown) so /where surfaces the same number as the
+    // footer at a glance. Lookup is purely client-side and tolerant of
+    // unknown model ids — see runtime/contextWindow.ts.
+    indent(dim((() => {
+      const ctxLabel = formatContextWindow(inputs.model);
+      const modelSeg = ctxLabel !== '?' ? `model ${inputs.model} (${ctxLabel} ctx)` : `model ${inputs.model}`;
+      return `session ${inputs.sessionKey.slice(0, 8)}  ·  ${modelSeg}  ·  mode ${inputs.accessMode}`;
+    })())),
     indent(dim(`exec    ${inputs.executionMode}  ·  review ${inputs.reviewPolicy}  ·  ${effortLine}`)),
     indent(dim(`mcp     ${inputs.mcpProfile}  ·  ${inputs.mcpTransport}  ·  ${inputs.mcpOnline ? 'online' : 'offline'}`)),
   ];

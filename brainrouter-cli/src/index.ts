@@ -61,9 +61,10 @@ process.emitWarning = ((warning: string | Error, ...rest: any[]) => {
  * with no error. If that happens again under any future regression,
  * one of these handlers will catch it and print the cause.
  *
- * `BRAINROUTER_DEBUG_EXIT=1` (default off) enables verbose exit tracing
- * including the beforeExit event so we can see whether the event loop
- * drained (= stdin refcount issue) vs explicit process.exit (= bug).
+ * `cli.debugExit: true` in `~/.config/brainrouter/config.json` (default off)
+ * enables verbose exit tracing including the beforeExit event so we can
+ * see whether the event loop drained (= stdin refcount issue) vs explicit
+ * process.exit (= bug).
  */
 process.on('uncaughtException', (err) => {
   process.stderr.write(`\n[brainrouter] Uncaught exception killed the process:\n${err?.stack ?? err}\n`);
@@ -73,7 +74,14 @@ process.on('unhandledRejection', (reason: any) => {
   process.stderr.write(`\n[brainrouter] Unhandled promise rejection killed the process:\n${reason?.stack ?? reason}\n`);
   process.exit(1);
 });
-if (process.env.BRAINROUTER_DEBUG_EXIT === '1') {
+
+import fs from 'node:fs';
+import { Command } from 'commander';
+import inquirer from 'inquirer';
+import chalk from 'chalk';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride } from './config/config.js';
+
+if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {
     process.stderr.write(`[brainrouter:debug] beforeExit code=${code} (event loop drained — likely Ink stdin.unref leak)\n`);
   });
@@ -81,12 +89,6 @@ if (process.env.BRAINROUTER_DEBUG_EXIT === '1') {
     process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
   });
 }
-
-import fs from 'node:fs';
-import { Command } from 'commander';
-import inquirer from 'inquirer';
-import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath } from './config/config.js';
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
@@ -123,13 +125,13 @@ program
   .option('--quiet', 'Suppress recall tables, briefing dumps, and tool-completion previews (model prose only). Toggle in-session with /quiet.')
   .action(async (options) => {
     if (options.workspace) {
-      process.env.BRAINROUTER_WORKSPACE = options.workspace;
+      setCliKnobOverride({ workspaceOverride: options.workspace });
     }
     if (options.quiet) {
       // Quiet mode is durable in preferences, but `--quiet` should turn it
       // on for THIS session without permanently flipping the user's saved
-      // setting. Set a process env that the REPL preference-merger checks.
-      process.env.BRAINROUTER_QUIET = '1';
+      // setting. Set an in-process knob override that the REPL checks.
+      setCliKnobOverride({ quiet: true });
     }
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
@@ -260,8 +262,11 @@ program
   .option('--timeout <ms>', 'LLM request timeout in ms')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .action(async (promptParts: string[], options) => {
-    if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
-    if (options.timeout) process.env.BRAINROUTER_LLM_TIMEOUT_MS = String(options.timeout);
+    if (options.workspace) setCliKnobOverride({ workspaceOverride: options.workspace });
+    if (options.timeout) {
+      const ms = Number(options.timeout);
+      if (Number.isFinite(ms) && ms > 0) setCliKnobOverride({ llmTimeoutMs: ms });
+    }
 
     let prompt = (promptParts ?? []).join(' ').trim();
     if (prompt === '-' || !prompt) {
@@ -614,7 +619,7 @@ program
   .option('--json', 'Emit a single JSON line on stdout for scripting')
   .option('-w, --workspace <path>', 'Workspace root override')
   .action(async (options) => {
-    if (options.workspace) process.env.BRAINROUTER_WORKSPACE = options.workspace;
+    if (options.workspace) setCliKnobOverride({ workspaceOverride: options.workspace });
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.

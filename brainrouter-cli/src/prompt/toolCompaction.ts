@@ -1,3 +1,5 @@
+import { getCliKnobs } from '../config/config.js';
+
 export interface ToolCompactionInput {
   toolName: string;
   args?: Record<string, unknown>;
@@ -17,7 +19,7 @@ const PATH_RE = /(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+|\b[A-Za-z0-
 const ERROR_RE = /\b(error|failed|failure|exception|traceback|expected|received|not found|cannot|denied|timeout|timed out|warning)\b/i;
 
 function enabled(): boolean {
-  return process.env.BRAINROUTER_CONTEXT_COMPACTION !== 'false';
+  return getCliKnobs().contextCompaction;
 }
 
 function oneLine(text: string): string {

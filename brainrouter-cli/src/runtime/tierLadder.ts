@@ -5,7 +5,7 @@
  * model tiers. Users on multi-tier providers cannot let the *model*
  * decide when a task exceeds its current tier's reasoning budget.
  *
- * Reasonix exposes this via the `<<<NEEDS_PRO>>>` marker — the model
+ * Exposes this via the `<<<NEEDS_PRO>>>` marker — the model
  * emits it on the FIRST line of its response when it has decided that
  * the task needs a stronger model. The runtime aborts the current
  * call and retries on the next tier.
@@ -29,6 +29,7 @@
  */
 
 import { readPreferences, writePreferences } from '../state/preferencesStore.js';
+import { loadProvidersConfig } from './configLoader.js';
 
 /** First-line marker. Matches both forms: bare and with `:reason`. */
 export const NEEDS_HIGH_MARKER_RE = /^\s*<<<NEEDS_HIGH(?::\s*([^>]*))?>>>/m;
@@ -43,35 +44,32 @@ export interface TierLadder {
 }
 
 /**
- * Built-in ladders. Add the user's `tierLadder` override from
- * `~/.config/brainrouter/config.json` via `resolveTierLadder()`.
+ * Built-in ladders are now loaded from `brainrouter-cli/config/providers.json`
+ * (the `tierLadder` field on each provider entry). The exported `DEFAULT_LADDERS`
+ * is computed once at module-load time so existing test assertions against the
+ * map still work, and `resolveTierLadder` consults it via that lookup.
  *
- * The default ladders mirror the published model families as of
- * 0.3.9. They aren't authoritative — every key can be overridden in
- * the user's config. Don't ship a list that pins one vendor's marketing.
+ * To change a built-in ladder: edit `config/providers.json`. To override per
+ * user: `~/.config/brainrouter/config.json` under `tierLadder`.
  */
-export const DEFAULT_LADDERS: Record<string, TierLadder> = {
-  // Anthropic native ladder removed in 0.3.9 alongside the native
-  // /v1/messages adapter. Users who route Claude through OpenRouter or
-  // a similar OpenAI-compat gateway can supply a custom ladder via the
-  // user override in `~/.config/brainrouter/config.json`.
-  openai: {
-    provider: 'openai',
-    ladder: {
-      flash: 'gpt-5-mini',
-      standard: 'gpt-5',
-      pro: 'gpt-5-pro',
-    },
-  },
-  deepseek: {
-    provider: 'deepseek',
-    ladder: {
-      flash: 'deepseek-v4-flash',
-      standard: 'deepseek-v4-flash',
-      pro: 'deepseek-v4-pro',
-    },
-  },
-};
+function buildDefaultLaddersFromConfig(): Record<string, TierLadder> {
+  const cfg = loadProvidersConfig();
+  const out: Record<string, TierLadder> = {};
+  for (const [providerId, entry] of Object.entries(cfg.providers)) {
+    if (!entry.tierLadder) continue;
+    out[providerId] = {
+      provider: providerId,
+      ladder: {
+        flash: entry.tierLadder.flash,
+        standard: entry.tierLadder.standard,
+        pro: entry.tierLadder.pro,
+      },
+    };
+  }
+  return out;
+}
+
+export const DEFAULT_LADDERS: Record<string, TierLadder> = buildDefaultLaddersFromConfig();
 
 /**
  * Detect a self-escalation marker on the first non-empty line of the

@@ -193,7 +193,7 @@ async function runProviderStep(state: WizardState, theme: Theme): Promise<Wizard
     title: 'LLM provider',
     subtitle: detected
       ? `Detected ${detected.envKey} in your shell — ${detected.label} is pre-selected.`
-      : 'Pick the LLM provider for the chat agent. "OpenAI (or compatible)" lets you point at any OpenAI-compatible /v1 endpoint.',
+      : 'Pick the LLM provider for the chat agent. Picking OpenAI lets you edit the base URL to point at any OpenAI-compatible /v1 endpoint.',
     badge: progressBadge('provider'),
     rows,
     initialCursor,
@@ -385,7 +385,7 @@ async function probeMcp(pick: McpPick, draft: WizardDraft): Promise<{ ok: boolea
   if (pick.kind === 'skip') return { ok: true };
   const wrapper = new McpClientWrapper();
   const llmConfig = draft.provider && draft.model
-    ? { provider: 'openai' as const, apiKey: draft.apiKey ?? '', model: draft.model, endpoint: draft.customEndpoint ?? draft.provider.endpoint }
+    ? { provider: draft.provider.id, apiKey: draft.apiKey ?? '', model: draft.model, endpoint: draft.customEndpoint ?? draft.provider.endpoint }
     : undefined;
   const serverConfig = mcpPickToServerConfig(pick);
   if (!serverConfig) return { ok: false, warning: 'Could not build MCP server config for this pick.' };
@@ -457,7 +457,7 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
   const config = loadOrInitConfig();
   if (draft.provider) {
     config.llm = {
-      provider: 'openai',
+      provider: draft.provider.id,
       apiKey: draft.apiKey ?? '',
       model: draft.model ?? draft.provider.defaultModel,
       endpoint: draft.customEndpoint ?? draft.provider.endpoint,

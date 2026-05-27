@@ -1,0 +1,58 @@
+{
+  "$schema": "brainrouter-providers/1",
+  "_doc": [
+    "Provider catalog + per-provider tier ladders.",
+    "Loaded by brainrouter-cli/src/runtime/configLoader.ts at startup.",
+    "User overrides at ~/.config/brainrouter/providers.json merge on top.",
+    "pickerVisible: when true, the entry appears in the /config provider picker and the wizard.",
+    "tierLadder: map of {flash,standard,pro} model IDs for the <<<NEEDS_HIGH>>> self-escalation.",
+    "Anthropic native was removed in 0.3.9 — route Claude via OpenAI-compatible gateways."
+  ],
+  "lastUpdated": "2026-05-27",
+  "providers": {
+    "openai": {
+      "pickerVisible": true,
+      "label": "OpenAI",
+      "hint": "cloud · api.openai.com · use \"Other\" for any compatible /v1 endpoint",
+      "endpoint": "https://api.openai.com/v1",
+      "envKey": "OPENAI_API_KEY",
+      "local": false,
+      "models": ["gpt-4o-mini", "gpt-4o", "gpt-5", "o3-mini", "gpt-5-mini"],
+      "defaultModel": "gpt-4o-mini",
+      "tierLadder": {
+        "flash": "gpt-5-mini",
+        "standard": "gpt-5",
+        "pro": "gpt-5-pro"
+      }
+    },
+    "lmstudio": {
+      "pickerVisible": true,
+      "label": "LM Studio (local)",
+      "hint": "local · http://localhost:1234 · blank API key OK",
+      "endpoint": "http://localhost:1234/v1",
+      "envKey": "LMSTUDIO_API_KEY",
+      "local": true,
+      "models": ["qwen2.5-coder", "gpt-oss-20b", "deepseek-r1-distill-qwen-32b"],
+      "defaultModel": "qwen2.5-coder"
+    },
+    "ollama": {
+      "pickerVisible": true,
+      "label": "Ollama (local)",
+      "hint": "local · http://localhost:11434 · blank API key OK",
+      "endpoint": "http://localhost:11434/v1",
+      "envKey": "OLLAMA_API_KEY",
+      "local": true,
+      "models": ["qwen2.5-coder:7b", "llama3.1:8b", "deepseek-r1:14b"],
+      "defaultModel": "qwen2.5-coder:7b"
+    },
+    "deepseek": {
+      "pickerVisible": false,
+      "_note": "Routed via the OpenAI-compatible flow (point endpoint at api.deepseek.com/v1). Tier ladder kept here so <<<NEEDS_HIGH>>> still works when DeepSeek is the active provider.",
+      "tierLadder": {
+        "flash": "deepseek-v4-flash",
+        "standard": "deepseek-v4-flash",
+        "pro": "deepseek-v4-pro"
+      }
+    }
+  }
+}

@@ -26,8 +26,6 @@
  * `/tokens` panel, the Ink status line, the usage.jsonl roll-up)
  * reads from one place.
  *
- * Reference: `openSrc/DeepSeek-Reasonix/src/telemetry/stats.ts`
- * (`pricingFor`, `costUsd`, `cacheSavingsUsd`).
  */
 
 export interface ProviderUsage {

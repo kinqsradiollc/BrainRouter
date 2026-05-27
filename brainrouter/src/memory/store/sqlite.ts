@@ -1964,15 +1964,33 @@ export class SqliteMemoryStore implements IMemoryStore {
     archived: number;
     byType: Record<string, number>;
     citationRate: number;
+    /**
+     * Timestamp of the latest sensory row (MAX of `recorded_at`).
+     * Historically named `lastRecallAt` for back-compat with the
+     * dashboard /api/stats consumer; kept here under that name to
+     * avoid a sweeping rename across packages/types + dashboard.
+     */
     lastRecallAt: string | null;
+    /**
+     * Rows in `sensory_stream` for this user. ALWAYS written on every
+     * `memory_capture_turn`. When `total === 0` but `sensoryTotal > 0`
+     * the user can tell capture is working but cognitive extraction
+     * either hasn't fired yet (extractEveryNTurns=3) or failed silently.
+     */
+    sensoryTotal: number;
+    /** Sensory rows that the cognitive extractor has not consumed yet. */
+    sensoryUnextracted: number;
+    /** Rows in `contextual_focus` for this user. */
+    focusSceneTotal: number;
     extraction: ExtractionStatus;
   } {
     const totalRow = this.db.prepare("SELECT COUNT(*) as c FROM cognitive_records WHERE user_id = ?").get(userId) as any;
     const archivedRow = this.db.prepare("SELECT COUNT(*) as c FROM cognitive_records WHERE user_id = ? AND archived = 1").get(userId) as any;
     const typeRows = this.db.prepare("SELECT type, COUNT(*) as c FROM cognitive_records WHERE user_id = ? GROUP BY type").all(userId) as any[];
     const citationRows = this.db.prepare("SELECT SUM(citation_count) as cited, COUNT(*) as total FROM cognitive_records WHERE user_id = ?").get(userId) as any;
-    const lastRecall = this.db.prepare(
-      "SELECT MAX(recorded_at) as last_at FROM sensory_stream WHERE user_id = ?"
+    const sensoryTotalRow = this.db.prepare("SELECT COUNT(*) as c, MAX(recorded_at) as last_at FROM sensory_stream WHERE user_id = ?").get(userId) as any;
+    const sensoryUnextractedRow = this.db.prepare(
+      "SELECT COUNT(*) as c FROM sensory_stream WHERE user_id = ? AND extracted_at IS NULL"
     ).get(userId) as any;
 
     const byType: Record<string, number> = {};
@@ -1985,7 +2003,10 @@ export class SqliteMemoryStore implements IMemoryStore {
       archived: archivedRow?.c ?? 0,
       byType,
       citationRate: totalRecords > 0 ? cited / totalRecords : 0,
-      lastRecallAt: lastRecall?.last_at ?? null,
+      lastRecallAt: sensoryTotalRow?.last_at ?? null,
+      sensoryTotal: sensoryTotalRow?.c ?? 0,
+      sensoryUnextracted: sensoryUnextractedRow?.c ?? 0,
+      focusSceneTotal: this.getContextualFocusCount(userId),
       extraction: this.getExtractionStatus(userId),
     };
   }

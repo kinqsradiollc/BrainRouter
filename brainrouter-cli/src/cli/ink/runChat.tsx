@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import type { Agent } from '../../agent/agent.js';
 import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
 import type { Config } from '../../config/config.js';
+import { getCliKnobs, setCliKnobOverride } from '../../config/config.js';
 import type { WorkspaceInfo } from '../../config/workspace.js';
 import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
@@ -114,7 +115,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   let exited = false;
 
   const isQuiet = (): boolean => {
-    if (process.env.BRAINROUTER_QUIET === '1') return true;
+    if (getCliKnobs().quiet) return true;
     try { return readPreferences(agent.workspaceRoot).quiet === true; } catch { return false; }
   };
 
@@ -736,6 +737,27 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           refreshFooter();
           armIdleHint();
           startTicker();
+          // 0.3.9 — when the active LLM endpoint is a local LM Studio,
+          // fire-and-forget the native /api/v1/models fetch so
+          // `contextWindowFor`, `/status`, `/where`, and future model
+          // pickers can use real `max_context_length` / `trained_for_tool_use`
+          // signals instead of guessing from the shipped JSON. Failure is
+          // silent — the cache just stays empty and the JSON fallback
+          // continues to drive the footer.
+          (async () => {
+            try {
+              const endpoint = (agent as any).llmConfig?.endpoint;
+              if (endpoint) {
+                const { refreshLmStudioCache } = await import('../../runtime/lmStudioApi.js');
+                const count = await refreshLmStudioCache(endpoint);
+                if (count > 0) {
+                  refreshFooter();
+                }
+              }
+            } catch {
+              // ignore — LM Studio probably isn't running
+            }
+          })();
         }}
         onAccessModeCycle={() => {
           const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];

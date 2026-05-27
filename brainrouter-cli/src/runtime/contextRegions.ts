@@ -27,11 +27,6 @@
  * so memory edits invalidate the prefix exactly when needed (and only
  * then).
  *
- * Reasonix reference for invariants: see Pillar 1 in
- * openSrc/DeepSeek-Reasonix/docs/ARCHITECTURE.md and the cache-hit
- * case study in benchmarks/real-world-cache/README.md (single user,
- * 2026-05-01: 99.82% cache hit, $1.38 instead of ~$61 on the same
- * workload).
  */
 
 import { createHash } from 'node:crypto';

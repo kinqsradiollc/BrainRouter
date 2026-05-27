@@ -51,8 +51,9 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
 test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
   const { acquireLLMSlot, getLLMSemaphoreState, resetLLMSemaphoreForTests } =
     await import('../runtime/llmSemaphore.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
   // Force a known cap of 2 for this test.
-  process.env.BRAINROUTER_LLM_MAX_CONCURRENT = '2';
+  setCliKnobOverride({ llmMaxConcurrent: 2 });
   resetLLMSemaphoreForTests();
   try {
     const r1 = await acquireLLMSlot();
@@ -85,7 +86,7 @@ test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
     r3();
     assert.equal(getLLMSemaphoreState().inFlight, 0);
   } finally {
-    delete process.env.BRAINROUTER_LLM_MAX_CONCURRENT;
+    _resetCliKnobsCache();
     resetLLMSemaphoreForTests();
   }
 });
@@ -110,33 +111,33 @@ test('loopRunner: only one loop runs at a time and stop releases the slot', asyn
   assert.equal(isLoopRunning(), false);
 });
 
-test('resolveSandboxConfig reflects env toggles', () => {
-  const prevEnabled = process.env.BRAINROUTER_SANDBOX;
-  const prevReads = process.env.BRAINROUTER_SANDBOX_READ_PATHS;
+test('resolveSandboxConfig reflects cli.sandbox knobs', async () => {
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
   try {
-    process.env.BRAINROUTER_SANDBOX = 'on';
-    process.env.BRAINROUTER_SANDBOX_READ_PATHS = '/usr/local:/opt';
+    setCliKnobOverride({
+      sandbox: 'on',
+      sandboxReadPaths: ['/usr/local', '/opt'],
+    });
     const cfg = resolveSandboxConfig('/tmp/x');
     assert.equal(cfg.enabled, true);
     assert.deepEqual(cfg.readPaths, ['/usr/local', '/opt']);
     assert.equal(cfg.allowNetwork, false);
   } finally {
-    if (prevEnabled === undefined) delete process.env.BRAINROUTER_SANDBOX; else process.env.BRAINROUTER_SANDBOX = prevEnabled;
-    if (prevReads === undefined) delete process.env.BRAINROUTER_SANDBOX_READ_PATHS; else process.env.BRAINROUTER_SANDBOX_READ_PATHS = prevReads;
+    _resetCliKnobsCache();
   }
 });
 
-test('tracing.startSpan is a no-op when BRAINROUTER_TRACE_LOG is unset', () => {
-  const prev = process.env.BRAINROUTER_TRACE_LOG;
-  delete process.env.BRAINROUTER_TRACE_LOG;
+test('tracing.startSpan is a no-op when cli.traceLog is unset', async () => {
+  const { _resetCliKnobsCache } = await import('../config/config.js');
   try {
+    _resetCliKnobsCache();
     assert.equal(traceEnabled(), false);
     const span = startSpan('test', { foo: 'bar' });
     span.end({ done: true });
     // No throw, no file created — that's the test.
     assert.equal(typeof span.end, 'function');
   } finally {
-    if (prev !== undefined) process.env.BRAINROUTER_TRACE_LOG = prev;
+    _resetCliKnobsCache();
   }
 });
 

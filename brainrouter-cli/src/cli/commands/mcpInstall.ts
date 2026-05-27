@@ -6,8 +6,6 @@
  * pastes the block themselves. Direct-write is a future enhancement
  * (roadmap: tracked under post-0.4.0 polish; intentionally not a follow-up).
  *
- * Adapted from semble's per-agent install docs pattern
- * (openSrc/semble/src/semble/agents/) — one focused entry per vendor.
  */
 
 import chalk from 'chalk';

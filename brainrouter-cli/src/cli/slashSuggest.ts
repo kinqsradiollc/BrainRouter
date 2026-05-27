@@ -11,10 +11,8 @@ import { buildTheme, type Theme } from './theme.js';
  *
  * Pattern lineage:
  *   - Two-tier ranking (exact → prefix → includes, lower wins, stable
- *     secondary sort by original index) lifted from
- *     `openSrc/grok-cli/src/ui/slash-menu.ts:44-64`.
- *   - Popup height cap (max ~6 visible) from
- *     `openSrc/codex/codex-rs/tui/src/bottom_pane/popup_consts.rs`
+ *     secondary sort by original index)
+ *   - Popup height cap (max ~6 visible)
  *     and the Claude Code CHANGELOG note (line 378) explicitly
  *     capping the popup at "3-5 visible commands instead of scaling
  *     with terminal height."

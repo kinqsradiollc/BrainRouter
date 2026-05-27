@@ -1,3 +1,5 @@
+import { getCliKnobs } from '../config/config.js';
+
 export type RecallMode = 'always' | 'gated' | 'off';
 
 export type BriefingDecisionAction = 'fire' | 'hint-only' | 'skip';
@@ -29,9 +31,7 @@ const CHILD_SYNTHESIS_RE = /\b(child agent|subagent|worker result|agent result|s
 const SOCIAL_RE = /^(thanks|thank you|ok|okay|cool|nice|great|got it|yep|yes|no|sure|sounds good)[.!? ]*$/i;
 
 export function resolveRecallMode(): RecallMode {
-  const raw = (process.env.BRAINROUTER_RECALL_MODE ?? '').toLowerCase().trim();
-  if (raw === 'always' || raw === 'gated' || raw === 'off') return raw;
-  return 'gated';
+  return getCliKnobs().recallMode;
 }
 
 /**
@@ -69,8 +69,9 @@ export function looksLikeDebugOrRetry(text: string): boolean {
 export function decideMemoryBriefing(input: BriefingTriggerInput): BriefingDecision {
   const prompt = input.prompt.trim();
   const reasons: string[] = [];
-  const maxCharsPerSource = Number(process.env.BRAINROUTER_BRIEFING_MAX_CHARS_PER_SOURCE) || 4000;
-  const maxSources = Number(process.env.BRAINROUTER_BRIEFING_MAX_SOURCES) || 6;
+  const knobs = getCliKnobs();
+  const maxCharsPerSource = knobs.briefingMaxCharsPerSource;
+  const maxSources = knobs.briefingMaxSources;
 
   if (input.recallMode === 'off') {
     return {

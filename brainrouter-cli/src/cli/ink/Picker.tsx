@@ -21,7 +21,7 @@ import { useTerminalSize } from './useTerminalSize.js';
  *   - Value column right-aligned per row
  *   - `›` selected glyph + theme-colored highlight
  *
- * Pattern lineage: state machine + reducer split lifted from grok-cli's
+ * State machine + reducer spli
  * SuggestionOverlay; live-preview-from-state contract from codex's
  * theme_picker.rs.
  */

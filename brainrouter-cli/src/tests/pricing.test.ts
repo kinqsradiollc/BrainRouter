@@ -16,7 +16,7 @@ test('pricingFor returns the built-in row for known models', () => {
   assert.ok(p);
   assert.equal(p!.inputCacheHit, 0.125);
   assert.equal(p!.inputCacheMiss, 1.25);
-  assert.equal(p!.output, 5.0);
+  assert.equal(p!.output, 10.0);
 });
 
 test('pricingFor strips vendor prefix (openrouter / openai)', () => {

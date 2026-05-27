@@ -1,5 +1,6 @@
 import chalk, { type ChalkInstance } from 'chalk';
 import { readPreferences } from '../state/preferencesStore.js';
+import { getCliKnobs } from '../config/config.js';
 
 /**
  * Consolidated terminal theme tokens.
@@ -23,13 +24,11 @@ import { readPreferences } from '../state/preferencesStore.js';
  *   - `mono`  — pure identity functions; no ANSI color, just text. For
  *               screenshot grabs, CI logs, and pipe-to-less.
  *
- * Selection order: `BRAINROUTER_THEME` env var > workspace preferences
- * (`preferences.theme`) > `dark`. `auto` falls back to `dark` for now —
- * autodetecting light terminals from TTY hints is unreliable enough that
- * we leave it to the user to be explicit.
+ * Selection order: `~/.config/brainrouter/config.json` `cli.theme` >
+ * workspace preferences (`preferences.theme`) > `dark`. `auto` falls back
+ * to `dark` for now — autodetecting light terminals from TTY hints is
+ * unreliable enough that we leave it to the user to be explicit.
  *
- * Inspired by DeepSeek-TUI's `palette.rs` (see openSrc/DeepSeek-TUI/crates/tui/src/palette.rs),
- * which centralizes its terminal color tokens for the same reason.
  */
 
 export type ThemeMode = 'dark' | 'light' | 'mono';
@@ -125,14 +124,16 @@ export function buildTheme(mode: ThemeMode): Theme {
 }
 
 /**
- * Resolve the active theme using env-var > preference > default precedence.
+ * Resolve the active theme using config > preference > default precedence.
  * Pass `workspaceRoot` to honor a per-workspace `/theme` setting; omit to
- * resolve from env only (useful in test helpers where preferences storage
- * might not be initialized).
+ * resolve from config only (useful in test helpers where preferences
+ * storage might not be initialized).
  */
 export function resolveTheme(workspaceRoot?: string): Theme {
-  const envMode = normalizeMode(process.env.BRAINROUTER_THEME);
-  if (envMode) return buildTheme(envMode);
+  // `cli.theme` from config.json. Default is 'auto', which we map to 'dark'.
+  // A real explicit 'dark'/'light'/'mono' overrides workspace preferences.
+  const cfgTheme = getCliKnobs().theme;
+  if (cfgTheme === 'dark' || cfgTheme === 'light') return buildTheme(cfgTheme);
   if (workspaceRoot) {
     try {
       const prefs = readPreferences(workspaceRoot);

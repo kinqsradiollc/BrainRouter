@@ -1,3 +1,5 @@
+import { getCliKnobs } from '../config/config.js';
+
 // 0.3.8-R4 — Single source of truth for which tool calls are safe to
 // dispatch concurrently within one LLM response.
 //
@@ -102,13 +104,12 @@ function stripMcpPrefix(name: string): string | undefined {
 }
 
 /**
- * Kill switch: `BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS=false` (or `0`/`off`/`no`)
- * forces every batch back to strict serial execution — the pre-R4 shape.
- * Useful when debugging an issue and you want to rule out concurrency, or
- * when running against an LLM provider that rate-limits tool dispatch.
+ * Kill switch: set `cli.parallelSafeToolCalls: false` in
+ * `~/.config/brainrouter/config.json` to force every batch back to strict
+ * serial execution — the pre-R4 shape. Useful when debugging an issue and
+ * you want to rule out concurrency, or when running against an LLM
+ * provider that rate-limits tool dispatch.
  */
 export function parallelExecutionEnabled(): boolean {
-  const raw = (process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS ?? '').trim().toLowerCase();
-  if (raw === 'false' || raw === '0' || raw === 'off' || raw === 'no') return false;
-  return true;
+  return getCliKnobs().parallelSafeToolCalls;
 }

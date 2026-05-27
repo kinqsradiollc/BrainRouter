@@ -5,32 +5,25 @@ import path from 'node:path';
 import { Agent, buildChatCompletionPayload } from '../agent/agent.js';
 import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../state/goalStore.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
-test('resolveRecallMode: env > default with defensive fallback (9b)', async () => {
+test('resolveRecallMode: cli.recallMode > default (9b)', async () => {
   const { resolveRecallMode } = await import('../agent/agent.js');
-  const prev = process.env.BRAINROUTER_RECALL_MODE;
   try {
-    delete process.env.BRAINROUTER_RECALL_MODE;
-    assert.equal(resolveRecallMode(), 'gated', 'unset env defaults to gated');
+    _resetCliKnobsCache();
+    assert.equal(resolveRecallMode(), 'gated', 'unset config defaults to gated');
 
-    process.env.BRAINROUTER_RECALL_MODE = 'always';
+    setCliKnobOverride({ recallMode: 'always' });
     assert.equal(resolveRecallMode(), 'always');
 
-    process.env.BRAINROUTER_RECALL_MODE = 'off';
+    setCliKnobOverride({ recallMode: 'off' });
     assert.equal(resolveRecallMode(), 'off');
 
-    process.env.BRAINROUTER_RECALL_MODE = 'GATED';
-    assert.equal(resolveRecallMode(), 'gated', 'case-insensitive');
-
-    process.env.BRAINROUTER_RECALL_MODE = 'ludicrous';
-    assert.equal(resolveRecallMode(), 'gated', 'garbled value falls through to gated default — defensive');
-
-    process.env.BRAINROUTER_RECALL_MODE = '';
-    assert.equal(resolveRecallMode(), 'gated', 'empty string falls through to gated default');
+    setCliKnobOverride({ recallMode: 'gated' });
+    assert.equal(resolveRecallMode(), 'gated');
   } finally {
-    if (prev === undefined) delete process.env.BRAINROUTER_RECALL_MODE;
-    else process.env.BRAINROUTER_RECALL_MODE = prev;
+    _resetCliKnobsCache();
   }
 });
 
@@ -376,9 +369,8 @@ test('runTurn repeat sequence guard stops same tool with changing args', async (
       fs.writeFileSync(path.join(workspace, `file-${i}.txt`), `content ${i}`);
     }
     const originalFetch = globalThis.fetch;
-    const previousLimit = process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT;
     let llmCalls = 0;
-    process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT = '3';
+    setCliKnobOverride({ repeatToolSequenceLimit: 3 });
     globalThis.fetch = (async () => {
       llmCalls++;
       if (llmCalls <= 5) {
@@ -421,8 +413,7 @@ test('runTurn repeat sequence guard stops same tool with changing args', async (
       assert.equal(events.some((e) => e.name === 'read_file' && !e.ok && /repeat sequence guard/.test(e.summary)), true);
     } finally {
       globalThis.fetch = originalFetch;
-      if (previousLimit === undefined) delete process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT;
-      else process.env.BRAINROUTER_REPEAT_TOOL_SEQUENCE_LIMIT = previousLimit;
+      _resetCliKnobsCache();
     }
   });
 });
@@ -524,9 +515,8 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
 test('runTurn auto-drains spawned children and reports explicit timeout statuses', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
-    const previousDrainTimeout = process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS;
     let parentCalls = 0;
-    process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS = '10';
+    setCliKnobOverride({ childDrainTimeoutMs: 10 });
 
     globalThis.fetch = (async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
@@ -594,8 +584,7 @@ test('runTurn auto-drains spawned children and reports explicit timeout statuses
       await new Promise((resolve) => setTimeout(resolve, 70));
     } finally {
       globalThis.fetch = originalFetch;
-      if (previousDrainTimeout === undefined) delete process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS;
-      else process.env.BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS = previousDrainTimeout;
+      _resetCliKnobsCache();
     }
   });
 });
@@ -953,9 +942,8 @@ test('P1.2: reasoning tier can spawn a worker agent', async () => {
 });
 
 test('P1.2: depth cap is enforced at default limit (3)', async () => {
-  const prev = process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
   try {
-    delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+    _resetCliKnobsCache();
     await withTempWorkspaceAsync(async (workspace) => {
       const ctx = makeStubOrchCtx(workspace, { depth: 3 });
       await assert.rejects(
@@ -964,16 +952,14 @@ test('P1.2: depth cap is enforced at default limit (3)', async () => {
       );
     });
   } finally {
-    if (prev === undefined) delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
-    else process.env.BRAINROUTER_MAX_SPAWN_DEPTH = prev;
+    _resetCliKnobsCache();
   }
 });
 
-test('P1.2: depth cap is overridable via BRAINROUTER_MAX_SPAWN_DEPTH', async () => {
-  const prev = process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
+test('P1.2: depth cap is overridable via cli.maxSpawnDepth', async () => {
   const originalFetch = globalThis.fetch;
   try {
-    process.env.BRAINROUTER_MAX_SPAWN_DEPTH = '5';
+    setCliKnobOverride({ maxSpawnDepth: 5 });
     globalThis.fetch = (async () => new Response(JSON.stringify({
       choices: [{ message: { content: 'worker done' } }],
       usage: { prompt_tokens: 20, completion_tokens: 5 },
@@ -991,8 +977,7 @@ test('P1.2: depth cap is overridable via BRAINROUTER_MAX_SPAWN_DEPTH', async () 
     });
   } finally {
     globalThis.fetch = originalFetch;
-    if (prev === undefined) delete process.env.BRAINROUTER_MAX_SPAWN_DEPTH;
-    else process.env.BRAINROUTER_MAX_SPAWN_DEPTH = prev;
+    _resetCliKnobsCache();
   }
 });
 
@@ -1328,21 +1313,17 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
   assert.equal(isParallelSafe('not_a_tool_we_know_about'), false);
 });
 
-test('toolSafety.parallelExecutionEnabled honors BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS kill switch', async () => {
+test('toolSafety.parallelExecutionEnabled honors cli.parallelSafeToolCalls kill switch', async () => {
   const { parallelExecutionEnabled } = await import('../agent/toolSafety.js');
-  const prev = process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
   try {
-    delete process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
+    _resetCliKnobsCache();
     assert.equal(parallelExecutionEnabled(), true, 'default ON');
-    for (const off of ['false', '0', 'off', 'no', 'FALSE']) {
-      process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = off;
-      assert.equal(parallelExecutionEnabled(), false, `${off} disables`);
-    }
-    process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = 'true';
+    setCliKnobOverride({ parallelSafeToolCalls: false });
+    assert.equal(parallelExecutionEnabled(), false, 'false disables');
+    setCliKnobOverride({ parallelSafeToolCalls: true });
     assert.equal(parallelExecutionEnabled(), true);
   } finally {
-    if (prev === undefined) delete process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
-    else process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = prev;
+    _resetCliKnobsCache();
   }
 });
 
@@ -1585,8 +1566,7 @@ test('R4: BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS=false forces serial execution of 
         { id: 'r3', type: 'function', function: { name: 'read_file', arguments: '{"path":"c.txt"}' } },
       ],
     }]);
-    const prev = process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
-    process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = 'false';
+    setCliKnobOverride({ parallelSafeToolCalls: false });
     try {
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, silent: true,
@@ -1601,8 +1581,7 @@ test('R4: BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS=false forces serial execution of 
     } finally {
       restore();
       (Agent.prototype as any).executeLocalTool = origExec;
-      if (prev === undefined) delete process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS;
-      else process.env.BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS = prev;
+      _resetCliKnobsCache();
     }
   });
 });
