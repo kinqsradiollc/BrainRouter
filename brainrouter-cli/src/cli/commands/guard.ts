@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '../../state/hooksStore.js';
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '../../state/hookifyStore.js';
-import { saveConfig } from '../../config/config.js';
+import { saveConfig, getCliKnobs } from '../../config/config.js';
 import type { CommandContext } from './_context.js';
 
 
@@ -175,9 +175,9 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       const rest = args.slice(1).join(' ').trim();
       const prefs = readPreferences(agent.workspaceRoot);
       const showState = () => {
-        const enabled = (process.env.BRAINROUTER_SANDBOX ?? '').toLowerCase() === 'on';
+        const enabled = getCliKnobs().sandbox === 'on';
         console.log(chalk.bold('\nSandbox'));
-        console.log(`  Engine:  ${enabled ? chalk.green('on') : chalk.gray('off')} ${chalk.gray('(BRAINROUTER_SANDBOX env)')}`);
+        console.log(`  Engine:  ${enabled ? chalk.green('on') : chalk.gray('off')} ${chalk.gray('(cli.sandbox in config.json)')}`);
         console.log(`  Platform: ${chalk.cyan(process.platform)} ${chalk.gray(process.platform === 'darwin' ? '(sandbox-exec)' : process.platform === 'linux' ? '(bwrap/firejail)' : '(unsupported — run_command runs unsandboxed)')}`);
         console.log(`  Workspace (always rw): ${chalk.blue(agent.workspaceRoot)}`);
         console.log(chalk.bold('  Read-only grants:'));

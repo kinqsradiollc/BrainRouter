@@ -6,12 +6,14 @@ import chalk from 'chalk';
 import type { Agent } from '../../agent/agent.js';
 import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
 import type { Config } from '../../config/config.js';
+import { getCliKnobs, setCliKnobOverride } from '../../config/config.js';
 import type { WorkspaceInfo } from '../../config/workspace.js';
 import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
 import { readPreferences } from '../../state/preferencesStore.js';
-import { listSessions } from '../../orchestration/orchestrator.js';
+import { runHooks } from '../../state/hooksStore.js';
+import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { expandMentions } from '../../memory/mentions.js';
 import {
   addGoalTokens,
@@ -64,8 +66,23 @@ export interface RunChatOptions {
 
 export async function runChat(opts: RunChatOptions): Promise<void> {
   const { agent, mcpClient, config } = opts;
+  // Fire user-registered session-start hooks. Previously these were
+  // accepted by `/hooks add session-start <cmd>` and persisted to
+  // hooks.json but never actually executed — silent dead config. Hooks
+  // run synchronously with a 5s timeout (see hooksStore.runHooks).
+  try {
+    runHooks(agent.workspaceRoot, 'session-start', {
+      payload: { sessionKey: agent.sessionKey, model: (agent as any).llmConfig?.model },
+    });
+  } catch { /* hook errors must not block the REPL boot */ }
   const theme = resolveTheme(agent.workspaceRoot);
   const banner = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
+  // Track the last rendered banner so slash commands that change banner-
+  // visible state (model, MCP profile, session, workflow, goal) can push
+  // a fresh one into scrollback rather than leaving stale values on
+  // screen. Diff-based: a command that didn't change anything banner
+  // surfaces doesn't re-print. See dispatchSlash's finally below.
+  let lastRenderedBanner = banner;
 
   const offlineWarning = mcpClient.isConnected()
     ? undefined
@@ -89,13 +106,16 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // remains a single owner of the turn lifecycle.
   let isProcessing = false;
   let pendingContinuation = false;
+  // Anti-spin corrective: give /goal ONE retry with a stronger nudge before
+  // halting on a prose-only turn. Resets on any tool-call turn or goal clear.
+  let goalNoToolStrikes = 0;
   let idleHintFired = false;
   let idleHintTimer: NodeJS.Timeout | undefined;
   let controller: ChatController | undefined;
   let exited = false;
 
   const isQuiet = (): boolean => {
-    if (process.env.BRAINROUTER_QUIET === '1') return true;
+    if (getCliKnobs().quiet) return true;
     try { return readPreferences(agent.workspaceRoot).quiet === true; } catch { return false; }
   };
 
@@ -149,6 +169,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       effort: prefs.effort,
       accessMode: agent.getAccessMode() as 'read' | 'write' | 'shell',
       rightExtra: rendered.length > 0 ? rendered.join(' · ') : undefined,
+      // Surface background-child count so the footer says "· N working"
+      // even after the parent turn yields back to idle. Without this the
+      // user had to run /where to discover that delegate_agent / fire-
+      // and-forget children were still alive in the session store.
+      runningChildren: getRunningChildCount(),
     });
     refreshTerminalTitle();
   };
@@ -182,6 +207,13 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
 
   const getRunningChildCount = (): number => {
     try {
+      // Reconcile first so child records from prior CLI processes (dead
+      // pids) don't get counted as "working". Without this the footer
+      // showed phantom "· N working" forever for zombies left over by an
+      // earlier crash / Ctrl-C exit. reconcileStale is idempotent and
+      // only writes the JSON file when there were actual stale entries
+      // to flip — subsequent calls are pure reads.
+      reconcileStale(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
       return sessions.filter((s) => s.status === 'pending' || s.status === 'running').length;
     } catch {
@@ -262,12 +294,15 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       }
     }
 
+    // Reset the strike counter the moment the model actually emits tool calls.
+    if (agent.lastTurnToolCalls > 0) goalNoToolStrikes = 0;
+
+    const goalActive = !!goalAfter && goalAfter.status === 'active' && goalHasBudgetLeft(goalAfter) && agent.lastGoalTransition === undefined;
+    const correctiveAvailable = goalActive && agent.lastTurnToolCalls === 0 && goalNoToolStrikes < 1;
+
     const shouldContinue =
-      !!goalAfter &&
-      goalAfter.status === 'active' &&
-      goalHasBudgetLeft(goalAfter) &&
-      agent.lastTurnToolCalls > 0 &&
-      agent.lastGoalTransition === undefined;
+      goalActive &&
+      (agent.lastTurnToolCalls > 0 || correctiveAvailable);
 
     if (goalAfter && goalAfter.status === 'complete') {
       controller?.push.notice(`🎯 Goal achieved — ${goalAfter.blockedReason ?? 'evidence on record.'}`, 'info');
@@ -282,15 +317,21 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       const limited = usageLimitGoal(agent.workspaceRoot, agent.sessionKey, reason);
       controller?.push.notice(`⏸ ${reason} Extend with /goal budget <n> and /goal resume, mark /goal complete, or /goal clear.`, 'warn');
       if (limited) goalAfter = limited;
-    } else if (goalAfter && goalAfter.status === 'active' && agent.lastTurnToolCalls === 0) {
-      controller?.push.notice(`(goal continuation suppressed: last turn made no tool calls — anti-spin)`, 'info');
+    } else if (goalAfter && goalAfter.status === 'active' && agent.lastTurnToolCalls === 0 && !correctiveAvailable) {
+      controller?.push.notice(`(goal continuation halted: two prose-only turns in a row — type a message or /goal clear to continue)`, 'warn');
+    } else if (correctiveAvailable) {
+      controller?.push.notice(`(prose-only turn — sending one corrective retry; emit tool calls or call goal_blocked)`, 'info');
     }
 
     if (shouldContinue && goalAfter) {
       pendingContinuation = true;
       const next = goalAfter.budget.iterationsUsed + 1;
+      if (correctiveAvailable) goalNoToolStrikes += 1;
       controller?.push.notice(`(goal continuation queued — iteration ${next}/${formatBudget(goalAfter.budget.maxIterations)}; type anything to cancel)`, 'info');
-      const followUp = buildGoalContinuationPrompt(goalAfter, afterPrompt, afterAnswer);
+      const baseFollowUp = buildGoalContinuationPrompt(goalAfter, afterPrompt, afterAnswer);
+      const followUp = correctiveAvailable
+        ? `${baseFollowUp}\n\n**CORRECTIVE NOTICE:** your previous turn emitted zero tool calls — that violates the goal contract. THIS turn MUST emit at least one tool call (start exploration with parallel \`list_dir\` + \`glob_files\` + \`read_file\` of AGENT.md/README.md in a single message) OR call \`goal_blocked\` with a concrete reason. Prose-only is not an option.`
+        : baseFollowUp;
       setImmediate(() => {
         if (!pendingContinuation || isProcessing) return;
         pendingContinuation = false;
@@ -330,7 +371,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // When children are alive — typically because the parent is in a
       // wait_agent / wait_agents / R1 guardrail auto-drain — append a
       // compact "running children" row so the parent never looks frozen.
-      const childrenRow = runningChildren.size > 0 ? `  · ${formatRunningChildrenRow()}` : '';
+      // Compact tail in the status line ("· 3 parallel"); the pinned
+      // child-fleet scrollback row carries the full per-agent detail so
+      // we don't need to cram every name in here.
+      const n = runningChildren.size;
+      const childrenRow = n > 0 ? `  · ${n} parallel` : '';
       controller!.push.setStatus(`${status}  ${elapsed}s${tokens}${childrenRow}`);
     };
 
@@ -351,19 +396,61 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     // Maintained from onChildToolStart / onChildComplete (the only signals the
     // REPL gets about child lifecycle that don't require re-reading sessions).
     const runningChildren = new Map<string, { role: string; tool?: string }>();
-    const formatRunningChildrenRow = (): string => {
-      if (runningChildren.size === 0) return '';
-      const parts: string[] = [];
-      for (const [id, info] of runningChildren) {
-        const idShort = id.slice(0, 8);
-        const tail = info.tool ? ` ${info.tool}` : '';
-        parts.push(`${id.startsWith('agent-') ? id.slice(0, 14) : 'agent-' + idShort} (${info.role}${tail})`);
-      }
-      return `running children: ${parts.join(', ')}`;
+    // Debounce pushes of the child-fleet row update so a burst of N
+    // onChildToolStart events (which all fire within milliseconds when
+    // spawn_agents launches a batch) coalesces into ONE render. Without
+    // this, the row flips through "1 running" → "2 running" → "3 running"
+    // in quick succession and the user sees flicker instead of "3 parallel".
+    let fleetFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleFleetFlush = () => {
+      if (fleetFlushTimer) return;
+      fleetFlushTimer = setTimeout(() => {
+        fleetFlushTimer = null;
+        const snapshot = [...runningChildren.entries()].map(([childId, info]) => ({
+          childId, role: info.role, tool: info.tool,
+        }));
+        controller!.push.setChildFleet(snapshot);
+      }, 50);
+    };
+    // Batch-spawn detection — when 2+ NEW children appear within a short
+    // window, emit a single "🚀 Spawned N agents in parallel: …" notice
+    // instead of N individual "▶ X running" lines.
+    const pendingSpawns: Array<{ childId: string; role: string }> = [];
+    let pendingSpawnTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushPendingSpawns = () => {
+      pendingSpawnTimer = null;
+      if (pendingSpawns.length === 0) return;
+      controller!.push.spawnBatch(pendingSpawns.slice());
+      pendingSpawns.length = 0;
+    };
+    const enqueueSpawnNotice = (childId: string, role: string) => {
+      pendingSpawns.push({ childId, role });
+      if (pendingSpawnTimer) clearTimeout(pendingSpawnTimer);
+      pendingSpawnTimer = setTimeout(flushPendingSpawns, 120);
     };
     try {
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
+        // TIER A live streaming hooks. The agent calls these as SSE
+        // frames arrive so the chat shows text character-by-character
+        // (grok-cli parity). assistantDeltaEnd() clears the transient
+        // row; the final scrollback entry is pushed below.
+        onAssistantTurnStart: () => {
+          controller!.push.assistantDeltaStart();
+        },
+        onAssistantDelta: (chunk) => {
+          controller!.push.assistantDelta(chunk);
+        },
+        onAssistantTurnEnd: () => {
+          controller!.push.assistantDeltaEnd();
+        },
+        onReasoningDelta: (chunk) => {
+          controller!.push.reasoningDelta(chunk);
+        },
+        onCompactionEvent: (event) => {
+          controller!.push.compaction(event);
+          tickStatus('Thinking');
+        },
         onToolStart: (name, args) => {
           // Surface the in-flight tool via the spinner status line — the
           // scrollback entry is pushed at onToolEnd so each tool call is
@@ -404,28 +491,34 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           childToolArgs.set(key, event.args ?? {});
           const prior = runningChildren.get(event.childId);
           runningChildren.set(event.childId, { role: event.role, tool: event.tool });
-          // Live status row so the user sees WHICH children are alive while
-          // the parent is waiting. Quiet-mode rule: still surface long-running
-          // child state — it's the user's only signal that the parent isn't stuck.
-          const row = formatRunningChildrenRow();
-          if (row) controller!.push.setStatus(row);
-          // First-tool notice: emit a one-line "child started" row so the
-          // scrollback shows the child began before any tool finishes. Quiet
-          // mode suppresses this; the paired end row below is enough.
+          // Update the pinned child-fleet scrollback row (debounced) so
+          // ALL running children are visible at once. Multi-agent
+          // parallelism is the point — the old transient setStatus only
+          // showed the most recent event.
+          scheduleFleetFlush();
+          // First-tool notice: queue the child for the batch-spawn
+          // detector. If 2+ NEW children appear within the debounce
+          // window they collapse into a single "🚀 Spawned N agents in
+          // parallel: …" notice; a single late arrival still renders
+          // as one line.
           if (!prior && !isQuiet()) {
-            const idShort = event.childId.slice(0, 8);
-            const idLabel = event.childId.startsWith('agent-') ? event.childId.slice(0, 14) : 'agent-' + idShort;
-            controller!.push.notice(`▶ ${idLabel} (${event.role}) running...`, 'info');
+            enqueueSpawnNotice(event.childId, event.role);
           }
+          // Surface the new child in the footer ("· N working") even if the
+          // parent is in the middle of a tool batch — getRunningChildCount
+          // reads session-store status so the count is authoritative.
+          refreshFooter();
         },
         onChildToolEnd: (event) => {
           const key = `${event.childId}:${event.tool}`;
           const args = childToolArgs.get(key);
           childToolArgs.delete(key);
-          // Tool finished — null out the tool field so the running-children
-          // status row stops showing a stale tool name.
+          // Tool finished — null out the tool field so the fleet row
+          // stops showing a stale tool name, and re-flush so the user
+          // sees the live transition (running Read → running Bash, etc.).
           const cur = runningChildren.get(event.childId);
           if (cur) runningChildren.set(event.childId, { role: cur.role, tool: undefined });
+          scheduleFleetFlush();
           const idShort = event.childId.slice(0, 8);
           const idLabel = event.childId.startsWith('agent-') ? event.childId.slice(0, 14) : 'agent-' + idShort;
           const inner = formatToolCall(event.tool, args);
@@ -441,15 +534,23 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
         },
         onChildComplete: (event) => {
           runningChildren.delete(event.childId);
+          scheduleFleetFlush();
           const ok = event.status === 'completed';
-          const head = ok
-            ? `🏁 Agent ${event.childId} (${event.role}) completed`
-            : `💥 Agent ${event.childId} (${event.role}) failed`;
-          const tail = ok && event.preview
-            ? ` — ${event.preview}`
-            : event.error ? ` — ${event.error}` : '';
-          controller!.push.notice(head + tail, ok ? 'info' : 'error');
+          // Multi-line block so the agent's full headline/summary survives
+          // instead of being clipped to terminal width. Falls back to the
+          // error string when the child failed.
+          const body = ok ? (event.preview ?? '') : (event.error ?? 'agent failed without an error message');
+          controller!.push.agentResult({
+            childId: event.childId,
+            role: event.role,
+            status: event.status,
+            body,
+          });
           tickStatus('Thinking');
+          // Decrement the footer "· N working" pill as soon as a child
+          // settles — without this it'd stay stuck at the pre-completion
+          // number until the next user input refreshes the footer.
+          refreshFooter();
         },
         onMemoryEvent: (event) => {
           if (isQuiet() && event.kind !== 'contradiction') return;
@@ -487,6 +588,20 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       });
 
       parentDone = true;
+      // Flush any pending batch-spawn notice + final fleet snapshot so
+      // the last bits of state aren't stranded behind a 50ms / 120ms
+      // debounce when the turn finishes faster than that.
+      if (pendingSpawnTimer) {
+        clearTimeout(pendingSpawnTimer);
+        flushPendingSpawns();
+      }
+      if (fleetFlushTimer) {
+        clearTimeout(fleetFlushTimer);
+        fleetFlushTimer = null;
+      }
+      controller!.push.setChildFleet([...runningChildren.entries()].map(([childId, info]) => ({
+        childId, role: info.role, tool: info.tool,
+      })));
       const elapsed = Date.now() - startedAt;
       const u = agent.lastTurnUsage;
       // Pass the raw answer to ChatApp; ChatApp's ScrollbackRow renders
@@ -519,8 +634,39 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       agent.activeSkill = undefined;
       agent.refreshSystemPrompt();
       refreshFooter();
+      // If background children survived the parent turn (delegate_agent
+      // fire-and-forget pattern), arm the polling ticker so the footer
+      // count decrements when they finish — without this the "· N working"
+      // pill would stick until the user types something.
+      ensureChildRefreshTimer();
       armIdleHint();
     }
+  };
+
+  // Lightweight footer ticker — keeps the "· N working" indicator in sync
+  // with the session-store agent registry even when child events don't
+  // route back through the parent's callbacks (e.g. delegate_agent
+  // fire-and-forget runs that outlive the parent turn, or children
+  // finishing while the user is idle at the composer). Runs only while
+  // there's something to count; goes silent when the registry is empty
+  // so we're not waking up every 3s on idle sessions.
+  let childRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let lastChildCount = 0;
+  const tickChildRefresh = () => {
+    const count = getRunningChildCount();
+    if (count !== lastChildCount) {
+      lastChildCount = count;
+      refreshFooter();
+    }
+    if (count === 0 && childRefreshTimer) {
+      clearInterval(childRefreshTimer);
+      childRefreshTimer = null;
+    }
+  };
+  const ensureChildRefreshTimer = () => {
+    if (childRefreshTimer) return;
+    if (getRunningChildCount() === 0) return;
+    childRefreshTimer = setInterval(tickChildRefresh, 3000);
   };
 
   // Background `/schedule` ticker. Single in-process timer; fires due
@@ -565,6 +711,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
         initialBanner={'\n' + banner}
         initialOfflineWarning={offlineWarning}
         initialHint={hint}
+        workspaceRoot={agent.workspaceRoot}
         slashCommands={slashCatalog}
         promptLabel={`brainrouter[${agent.getAccessMode()}]`}
         initialAccessMode={agent.getAccessMode() as 'read' | 'write' | 'shell'}
@@ -590,6 +737,27 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           refreshFooter();
           armIdleHint();
           startTicker();
+          // 0.3.9 — when the active LLM endpoint is a local LM Studio,
+          // fire-and-forget the native /api/v1/models fetch so
+          // `contextWindowFor`, `/status`, `/where`, and future model
+          // pickers can use real `max_context_length` / `trained_for_tool_use`
+          // signals instead of guessing from the shipped JSON. Failure is
+          // silent — the cache just stays empty and the JSON fallback
+          // continues to drive the footer.
+          (async () => {
+            try {
+              const endpoint = (agent as any).llmConfig?.endpoint;
+              if (endpoint) {
+                const { refreshLmStudioCache } = await import('../../runtime/lmStudioApi.js');
+                const count = await refreshLmStudioCache(endpoint);
+                if (count > 0) {
+                  refreshFooter();
+                }
+              }
+            } catch {
+              // ignore — LM Studio probably isn't running
+            }
+          })();
         }}
         onAccessModeCycle={() => {
           const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
@@ -651,7 +819,13 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       clearIdleHint();
       try { scheduleTicker?.stop(); } catch { /* noop */ }
       scheduleTicker = null;
+      if (childRefreshTimer) { clearInterval(childRefreshTimer); childRefreshTimer = null; }
       try { await mcpClient.close(); } catch { /* already closed */ }
+      try {
+        runHooks(agent.workspaceRoot, 'session-end', {
+          payload: { sessionKey: agent.sessionKey, exitReason: 'clean' },
+        });
+      } catch { /* hook errors must not block REPL shutdown */ }
       // Goodbye line is intentionally printed AFTER Ink unmounts so it
       // doesn't get caught inside the redraw region.
       process.stdout.write(chalk.bold.hex('#CC9166')('Goodbye!\n'));
@@ -664,7 +838,13 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       clearIdleHint();
       try { scheduleTicker?.stop(); } catch { /* noop */ }
       scheduleTicker = null;
+      if (childRefreshTimer) { clearInterval(childRefreshTimer); childRefreshTimer = null; }
       try { await mcpClient.close(); } catch { /* already closed */ }
+      try {
+        runHooks(agent.workspaceRoot, 'session-end', {
+          payload: { sessionKey: agent.sessionKey, exitReason: 'error' },
+        });
+      } catch { /* hook errors must not block REPL shutdown */ }
       resolve();
     });
   });
@@ -693,6 +873,19 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // the footer reflects them immediately rather than waiting for
       // the next chat turn to refresh.
       refreshFooter();
+      // Refresh the boxed banner in place when slash commands changed
+      // banner-visible state (model, MCP profile, workflow, goal).
+      // Diff-based so /theme, /effort, /quiet, etc. stay silent.
+      // Uses controller.replaceBanner — overwrites the original banner
+      // entry in scrollback rather than pushing a new copy, so there's
+      // only ever one banner box on screen.
+      try {
+        const fresh = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
+        if (fresh !== lastRenderedBanner) {
+          controller.replaceBanner('\n' + fresh);
+          lastRenderedBanner = fresh;
+        }
+      } catch { /* banner reprint is best-effort; don't break the command */ }
     }
   }
 }

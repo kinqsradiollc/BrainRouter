@@ -96,10 +96,14 @@ test('reduceWizard commit only fires on the done step', () => {
 
 // --- Provider catalog --------------------------------------------------
 
-test('PROVIDER_CATALOG carries at least openai + deepseek + openrouter + a local entry', () => {
+test('PROVIDER_CATALOG is slimmed to openai + lmstudio + ollama only', () => {
   const ids = PROVIDER_CATALOG.map((p) => p.id);
-  for (const required of ['openai', 'deepseek', 'openrouter']) {
-    assert.ok(ids.includes(required), `expected ${required} in PROVIDER_CATALOG`);
+  assert.deepEqual(ids.sort(), ['lmstudio', 'ollama', 'openai']);
+  // OpenAI doubles as the OpenAI-compatible custom-endpoint flow; per-vendor
+  // entries (deepseek, openrouter, anthropic-via-gateway, gemini) were
+  // removed in 0.3.9 in favour of the editable base URL prompt.
+  for (const removed of ['deepseek', 'openrouter', 'anthropic-via-gateway', 'gemini']) {
+    assert.ok(!ids.includes(removed), `${removed} should be gone from PROVIDER_CATALOG`);
   }
   assert.ok(PROVIDER_CATALOG.some((p) => p.local), 'at least one local provider (LM Studio / Ollama)');
 });
@@ -107,22 +111,22 @@ test('PROVIDER_CATALOG carries at least openai + deepseek + openrouter + a local
 test('findProvider returns the entry for known ids and undefined for unknown', () => {
   assert.equal(findProvider('openai')?.label, 'OpenAI');
   assert.equal(findProvider('lmstudio')?.local, true);
+  assert.equal(findProvider('deepseek'), undefined, 'deepseek removed in 0.3.9 slim');
   assert.equal(findProvider('not-a-real-provider'), undefined);
 });
 
 test('detectProviderFromEnv picks the first catalog entry whose envKey is set', () => {
-  // PROVIDER_CATALOG order = precedence. OpenAI is first; deepseek is next.
-  // When only DEEPSEEK_API_KEY is set, deepseek wins.
-  const detected = detectProviderFromEnv({ DEEPSEEK_API_KEY: 'dsk-fake' } as any);
-  assert.equal(detected?.id, 'deepseek');
-
-  // When both are set, OpenAI wins (it comes first in PROVIDER_CATALOG).
-  const both = detectProviderFromEnv({ OPENAI_API_KEY: 'sk-fake', DEEPSEEK_API_KEY: 'dsk-fake' } as any);
-  assert.equal(both?.id, 'openai');
+  // PROVIDER_CATALOG order = precedence. OpenAI is first.
+  const detected = detectProviderFromEnv({ OPENAI_API_KEY: 'sk-fake' } as any);
+  assert.equal(detected?.id, 'openai');
 
   // Empty env → nothing detected.
   const nothing = detectProviderFromEnv({} as any);
   assert.equal(nothing, undefined);
+
+  // Removed-provider env vars no longer match.
+  const stale = detectProviderFromEnv({ DEEPSEEK_API_KEY: 'dsk-fake' } as any);
+  assert.equal(stale, undefined, 'DEEPSEEK_API_KEY should no longer pre-select anything');
 });
 
 // --- API key validation tier -------------------------------------------

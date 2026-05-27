@@ -1,6 +1,7 @@
 import type { RelevanceJudgeServiceConfig, RelevanceVerdict } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../retry.js";
 import { acquireLLMSlot } from "../llm-semaphore.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs } from "../llm-response.js";
 
 export interface JudgeCandidate {
   /** Stable id used for logging — typically the memory's record_id. */
@@ -41,7 +42,12 @@ export class RelevanceJudgeService {
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "gpt-4o-mini";
     this.maxCandidates = Math.max(1, config.maxCandidates ?? 10);
-    this.timeoutMs = Math.max(1000, config.timeoutMs ?? 15_000);
+    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
+      endpoint: this.endpoint,
+      requestedMs: 15_000,
+      envVarNames: ["BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
+      localMinimumMs: 120_000,
+    }));
 
     this.ready = this.enabled && !!this.apiKey;
     if (this.enabled && !this.apiKey) {
@@ -156,8 +162,7 @@ export class RelevanceJudgeService {
         const errMsg = typeof data.error === "string" ? data.error : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
         throw new Error(`Relevance Judge endpoint returned an error envelope: ${errMsg}`);
       }
-      const choice = data?.choices?.[0];
-      const content = choice?.message?.content ?? choice?.delta?.content;
+      const content = extractChatCompletionText(data);
       if (typeof content !== "string") {
         throw new Error(`Relevance Judge returned no usable content. Response: ${JSON.stringify(data).slice(0, 400)}`);
       }

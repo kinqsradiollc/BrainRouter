@@ -259,10 +259,49 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       }
       console.log(chalk.bold('\nGit changes detected:'));
       console.log(chalk.gray(statusOut));
-      const prompt =
-        `Based on the following git status and git diff, please create a commit. ` +
-        `Stage the modified/untracked files (using git add) and run git commit with an appropriate conventional commit message.\n\n` +
-        `Git status:\n${statusOut}\n\nDiff:\n${diffOut}`;
+      // Commit protocol adapted from Claude Code's "Committing changes with
+      // git" instructions. Specifies parallel status/diff/log inspection,
+      // explicit file staging (never `-A`/`.` which can sweep up secrets),
+      // HEREDOC commit-message formatting, and a no-amend rule that prevents
+      // a failed pre-commit hook from silently rewriting a previous commit.
+      const prompt = [
+        'Create a git commit for the staged + unstaged changes below.',
+        '',
+        '## Commit protocol',
+        '1. Inspect recent commit history with `git log --oneline -10` to match this repo\'s message style (run in parallel with reading the diff).',
+        '2. Draft a concise commit message that focuses on WHY, not just WHAT. Match the recent style — if recent commits use Conventional Commits (`feat:`, `fix:`, `docs(scope):`), follow that; otherwise mirror what you see.',
+        '3. Stage files by explicit name with `git add path/to/file` — DO NOT use `git add -A`, `git add .`, or `git add -u`. Those sweep up `.env`, credentials, build artifacts, and other accidents.',
+        '4. Skip any file that looks like it contains secrets (`.env*`, `*credentials*`, `*.pem`, `*.key`) — surface a warning to the user instead of staging it.',
+        '5. Commit with a HEREDOC so multi-line messages format correctly:',
+        '   ```',
+        '   git commit -m "$(cat <<\'EOF\'',
+        '   <subject line>',
+        '',
+        '   <optional body explaining WHY>',
+        '',
+        '   Co-Authored-By: BrainRouter CLI <noreply@brainrouter.local>',
+        '   EOF',
+        '   )"',
+        '   ```',
+        '6. Run `git status` after the commit to verify it landed.',
+        '',
+        '## Hard rules',
+        '- NEVER use `--no-verify` (skips hooks) or `--no-gpg-sign` unless the user explicitly asks. If a pre-commit hook fails, the commit DID NOT happen — fix the underlying issue, re-stage, and create a NEW commit. DO NOT `--amend` after a hook failure (amend would rewrite the PREVIOUS commit and silently lose work).',
+        '- NEVER `git push` unless the user explicitly asks.',
+        '- NEVER update git config.',
+        '',
+        '## Repository state',
+        '',
+        '### git status --short',
+        '```',
+        statusOut.trim(),
+        '```',
+        '',
+        '### git diff HEAD',
+        '```diff',
+        diffOut.trim(),
+        '```',
+      ].join('\n');
       ctx.repl.runAgentTurn(prompt);
       return true;
     }
@@ -295,20 +334,57 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       } catch (err: any) {
         console.log(chalk.yellow(`Plan setup warning: ${err.message}`));
       }
+      // Workflow adapted from claude-code's feature-dev plugin
+      // (openSrc/claude-code/plugins/feature-dev/commands/feature-dev.md):
+      // 7 phases — Discovery → Codebase Exploration (parallel explorers) →
+      // Clarifying Questions → Architecture (parallel architects) →
+      // Implementation (HARD APPROVAL GATE) → Quality Review (parallel
+      // reviewers) → Summary. The approval gates are load-bearing.
       await runSkillCommand(agent, mcpClient, command, feature, [
-        '## Required memory-first opening',
-        'Run `memory_search` with the feature name AND `memory_graph_query` to surface prior knowledge in this workspace. Pass any recovered record IDs to children via `spawn_agent`\'s `seedRecordIds`.',
+        '# Feature Development',
         '',
-        '## Workflow (mandatory, no shortcuts)',
+        'You are helping a developer implement a new feature. Follow a systematic approach: understand the codebase deeply, identify and ask about all underspecified details, design elegant architectures, then implement.',
+        '',
+        '## Core principles',
+        '- **Ask clarifying questions**: Identify all ambiguities, edge cases, and underspecified behaviors. Ask specific, concrete questions rather than making assumptions. Wait for user answers before proceeding with implementation. Ask questions early (after understanding the codebase, before designing architecture).',
+        '- **Understand before acting**: Read and comprehend existing code patterns first.',
+        '- **Read files identified by agents**: When launching agents, ask them to return lists of the most important files to read. After agents complete, read those files to build detailed context.',
+        '- **Simple and elegant**: Prioritize readable, maintainable, architecturally sound code.',
+        '- **Use update_plan**: Track all progress throughout.',
+        '',
+        '## Required memory-first opening',
+        'Run `memory_search` with the feature name AND `memory_graph_query` to surface prior knowledge. Pass recovered record IDs to children via `task_agent`\'s `seedRecordIds`.',
+        '',
         `Workflow slug: \`${meta.slug}\`. Folder: \`${path.dirname(specPath)}\`.`,
         '',
-        'Phase 1 — Exploration: call `spawn_agent` AT LEAST TWICE in parallel with role=explorer. Different children must cover different parts of the codebase relevant to this feature. Do not narrate exploration yourself; use the tool.',
+        '## Phase 1: Discovery',
+        `Initial request: ${feature}`,
+        'Actions: 1) Mark the Discovery item `in_progress` via `update_plan`. 2) If feature is unclear, use `ask_user_choice` to ask the user about problem, desired behavior, constraints. 3) Summarize understanding and confirm.',
         '',
-        'Phase 2 — Architecture: after explorers complete (use `wait_agent`), call `spawn_agent` with role=architect to produce ≥2 design alternatives and a recommended slice.',
+        '## Phase 2: Codebase Exploration',
+        '**Actions:** Launch 2–3 `task_agent` calls IN PARALLEL with `role=explorer` (single assistant message, multiple tool_calls). Each agent must target a different aspect (similar features, high-level architecture, UX patterns, integration points). Each agent must include "return a list of 5–10 key files to read" in the prompt.',
+        'After explorers return, `read_file` on every file they identified to build deep context. Then present a comprehensive summary of findings to the user.',
         '',
-        `Phase 3 — Persist artifacts: call \`write_file\` to create \`${specPath}\` (the spec) AND \`${tasksPath}\` (the task breakdown). Use the spec-driven-skill structure for \`spec.md\` and the planning-skill structure for \`tasks.md\`. These files are the canonical record — do NOT produce a chat-only plan.`,
+        '## Phase 3: Clarifying Questions (CRITICAL — DO NOT SKIP)',
+        'Review the codebase findings against the original feature request. Identify underspecified aspects: edge cases, error handling, integration points, scope boundaries, design preferences, backward compatibility, performance needs.',
+        'Use `ask_user_choice` for mutually-exclusive options; plain prose for free-form. **Wait for answers before proceeding to architecture.** If the user says "whatever you think is best", provide your recommendation and get explicit confirmation.',
         '',
-        'Phase 4 — STOP: present a short summary in chat referencing the file paths, then explicitly ask the user to confirm before any `worker` implementation begins.',
+        '## Phase 4: Architecture Design',
+        'Launch 2–3 `task_agent` calls IN PARALLEL with `role=architect`, each with a different focus: (a) minimal changes (smallest change, maximum reuse), (b) clean architecture (maintainability, elegant abstractions), (c) pragmatic balance (speed + quality).',
+        'Review all approaches and form your opinion. Present to user: brief summary of each, trade-offs comparison, **your recommendation with reasoning**, concrete implementation differences. **Ask user which approach they prefer.**',
+        '',
+        `## Phase 5: Implementation — DO NOT START WITHOUT USER APPROVAL`,
+        '1. Wait for explicit user approval.',
+        `2. \`write_file\` \`${specPath}\` (spec) AND \`${tasksPath}\` (task breakdown). These files are the canonical record — do NOT produce a chat-only plan.`,
+        '3. Re-read all files identified in Phases 2 and 4.',
+        '4. Implement the chosen architecture. Follow codebase conventions strictly. Update plan items as you progress.',
+        '',
+        '## Phase 6: Quality Review',
+        'Launch 3 `task_agent` calls IN PARALLEL with `role=reviewer access=read`, each with a different focus: (a) simplicity / DRY / elegance, (b) bugs / functional correctness, (c) project conventions / abstractions.',
+        '**HIGH SIGNAL ONLY** filter: only flag issues where (i) code will fail to compile/parse (syntax/type errors, missing imports), (ii) code will definitely produce wrong results regardless of inputs (clear logic errors), or (iii) unambiguous CLAUDE.md/AGENTS.md violations where you can quote the rule. Do NOT flag style concerns, potential issues that depend on specific inputs, or subjective suggestions. Consolidate findings, present highest-severity to user, ask whether to fix now / fix later / proceed as-is.',
+        '',
+        '## Phase 7: Summary',
+        'Mark all plan items completed. Summarize what was built, key decisions, files modified, suggested next steps.',
       ].join('\n'), ctx.repl.runAgentTurn);
       return true;
     }
@@ -382,20 +458,61 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review', sessionKey: agent.sessionKey });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
+      // Workflow adapted from claude-code's code-review plugin
+      // Triage → Summary → 4 parallel reviewers (2 conventions + 2 bug-hunters) →
+      // validation pass → HIGH SIGNAL filter → final report.
       await runSkillCommand(agent, mcpClient, command, scope, [
-        '## Required memory-first opening',
-        'Run `memory_search` for similar past reviews and `memory_file_history` for any files touched by this diff. Pass relevant record IDs through `seedRecordIds`.',
+        '# Code Review',
         '',
-        '## Workflow (mandatory)',
+        `Provide a code review for: ${scope}`,
+        '',
+        '**Agent assumptions (applies to all subagents launched here):**',
+        '- All tools are functional and will work without error. Do not test tools or make exploratory calls.',
+        '- Only call a tool if it is required to complete the task. Every tool call should have a clear purpose.',
+        '',
+        '## Required memory-first opening',
+        'Run `memory_search` for similar past reviews and `memory_file_history` for any files touched by this diff. Pass relevant record IDs to children via `seedRecordIds`.',
+        '',
         `Workflow slug: \`${meta.slug}\`. Output file: \`${reportPath}\`.`,
         '',
-        'Step 1: call `spawn_agent` THREE times in parallel with role=reviewer and access=read. Focuses:',
-        '(a) correctness / bugs / security;',
-        '(b) maintainability / readability / design;',
-        '(c) conventions / tests / documentation.',
-        'Step 2: `wait_agent` on all three.',
-        `Step 3: \`write_file\` to \`${reportPath}\` containing a severity-ordered synthesis (blocker / major / minor / nit) with file:line citations.`,
-        'Step 4: summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.',
+        '## Step 1: Triage',
+        'Use `task_agent` (role=explorer, fast) to check whether this review should proceed: is the scope closed/draft, trivial, or already reviewed? If so, stop here and tell the user.',
+        '',
+        '## Step 2: Locate guidelines',
+        'Use `task_agent` (role=explorer) to return the list of file paths (not contents) of ALL relevant guideline files: root `AGENT.md`/`AGENTS.md`/`CLAUDE.md`, and any of those in directories containing files modified by this scope.',
+        '',
+        '## Step 3: Summary',
+        'Use `task_agent` (role=explorer) to read the diff and return a summary of the changes.',
+        '',
+        '## Step 4: Parallel review (4 agents in ONE message)',
+        'Launch 4 `task_agent` calls IN PARALLEL — single assistant message, four tool_calls:',
+        '- Agents 1+2 (CLAUDE.md/AGENTS.md compliance, role=reviewer access=read): audit changes for guideline compliance. When evaluating compliance for a file, only consider guideline files that share a path with the file or its parents.',
+        '- Agents 3+4 (bug hunters, role=reviewer access=read): scan for obvious bugs and incorrect logic in the diff. Focus only on the diff itself without reading extra context. Flag only significant bugs; ignore nitpicks and likely false positives. Do not flag issues you cannot validate from the diff alone.',
+        '',
+        '**HIGH SIGNAL ONLY filter (CRITICAL):** Only flag issues where:',
+        '- Code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references).',
+        '- Code will definitely produce wrong results regardless of inputs (clear logic errors).',
+        '- Clear, unambiguous guideline violations where you can quote the exact rule being broken.',
+        '',
+        '**Do NOT flag:**',
+        '- Code style or quality concerns.',
+        '- Potential issues that depend on specific inputs or state.',
+        '- Subjective suggestions or improvements.',
+        '- Pre-existing issues.',
+        '- Issues a linter will catch (do not run the linter to verify).',
+        '- General code-quality concerns (test coverage, security) unless explicitly required by AGENTS.md.',
+        '',
+        'If you are not certain an issue is real, do not flag it. False positives erode trust and waste reviewer time.',
+        '',
+        '## Step 5: Validate',
+        'For each issue found in Step 4, launch a parallel `task_agent` (role=reviewer access=read) to validate the claim. Each validator gets the issue description and confirms it is truly an issue with high confidence by re-checking the relevant code.',
+        '',
+        '## Step 6: Filter',
+        'Drop any issue that did not validate in Step 5. The survivors are the high-signal issues.',
+        '',
+        '## Step 7: Output',
+        `\`write_file\` to \`${reportPath}\`: severity-ordered findings (Critical / Important) with file:line citations and concrete fix suggestions. If no issues survived filtering, the report says "No issues found. Checked for bugs and guideline compliance."`,
+        'Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.',
       ].join('\n'), ctx.repl.runAgentTurn);
       return true;
     }
@@ -418,8 +535,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         `Workflow slug: \`${slug}\`. Walkthrough file: \`${walkPath}\`.`,
         '',
         'Step 1: `update_plan` to mark this item `in_progress`.',
-        'Step 2: `spawn_agent` role=worker access=write with concrete acceptance criteria AND `seedRecordIds`.',
-        'Step 3: after the worker completes, `spawn_agent` role=verifier access=shell to run tests/typechecks.',
+        'Step 2: `task_agent` role=worker access=write with concrete acceptance criteria AND `seedRecordIds`.',
+        'Step 3: after the worker returns, `task_agent` role=verifier access=shell to run tests/typechecks.',
         `Step 4: append a section to \`${walkPath}\` (use \`read_file\` then \`write_file\`) recording: item name, files changed, verification commands run, PASS/FAIL, follow-ups.`,
         'Step 5: only on PASS, `update_plan` to `completed` AND `memory_task_update` with outcome. On FAIL, keep `in_progress`, surface failing output, `memory_task_update` with blocker.',
       ].join('\n'), ctx.repl.runAgentTurn);
@@ -450,8 +567,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         `The user just approved workflow \`${slug}\`. Begin implementation now.\n\n` +
         `1. If \`${tasksPath}\` does not exist yet, read \`${artifactRelativePath(agent.workspaceRoot, slug, ARTIFACT.spec)}\` and \`write_file\` a complete tasks.md (vertical slices, S/M-sized, with acceptance criteria) before doing anything else.\n` +
         `2. Pick the first pending task from tasks.md and call \`update_plan\` to mark it in_progress.\n` +
-        `3. \`spawn_agent\` role=worker access=write to implement it. Pass any relevant recalled record IDs via seedRecordIds.\n` +
-        `4. After the worker completes, \`spawn_agent\` role=verifier access=shell to run tests/typechecks.\n` +
+        `3. \`task_agent\` role=worker access=write to implement it. Pass any relevant recalled record IDs via seedRecordIds.\n` +
+        `4. After the worker returns, \`task_agent\` role=verifier access=shell to run tests/typechecks.\n` +
         `5. Append a section to \`${walkPath}\` (read+write) recording the outcome.\n` +
         `6. STOP after the first task and ask whether to continue. Do not silently work through every task — the user approves slices, not the whole batch.`,
       );

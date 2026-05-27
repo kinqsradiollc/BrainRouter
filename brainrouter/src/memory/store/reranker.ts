@@ -1,5 +1,6 @@
 import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../retry.js";
+import { resolveLLMTimeoutMs } from "../llm-response.js";
 
 export interface RankedResult {
   index: number;
@@ -11,6 +12,7 @@ export class RerankerService {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly topN: number;
+  private readonly timeoutMs: number;
   private readonly ready: boolean;
 
   constructor(config: RerankerServiceConfig) {
@@ -18,6 +20,12 @@ export class RerankerService {
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "rerank-english-v3.0";
     this.topN = config.topN ?? 5;
+    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
+      endpoint: this.endpoint,
+      requestedMs: 60_000,
+      envVarNames: ["BRAINROUTER_RERANKER_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
+      localMinimumMs: 120_000,
+    }));
 
     // Graceful fallback: If no API key is provided, disable the reranker service.
     this.ready = !!this.apiKey;
@@ -76,6 +84,7 @@ export class RerankerService {
         model: this.model,
         top_n: requestTopN,
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     }, {
       label: "Reranker API",
     });

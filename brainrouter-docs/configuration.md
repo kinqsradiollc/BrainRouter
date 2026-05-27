@@ -43,8 +43,8 @@ cover.
 | What | Where | Owns |
 | --- | --- | --- |
 | **MCP server env** | `~/.config/brainrouter/server.env` (global install) **or** `brainrouter/.env` (monorepo dev) | LLM credentials, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
-| **CLI credentials + transport** | `~/.config/brainrouter/config.json` | Chat model, endpoint, API key, MCP server profiles, active profile — the CLI's single source of truth since 0.3.7. |
-| **CLI runtime knobs** | Shell env (`export BRAINROUTER_*=…`) | Tool-loop limits, sandbox flags, web search backend, trace log, workspace override, quiet/theme overrides. The CLI no longer reads any `.env` file. |
+| **CLI credentials + transport** | `~/.config/brainrouter/config.json` (`llm.*`, `servers.*`, `activeServer`) | Chat model, endpoint, API key, MCP server profiles, active profile — the CLI's single source of truth since 0.3.7. |
+| **CLI runtime knobs** | `~/.config/brainrouter/config.json` (`cli.*` block) | Tool-loop limits, sandbox, trace log, workspace override, quiet/theme overrides, recall mode, parallel-safe tools, child-drain / shrink ratios, etc. Behaviour env vars were retired in 0.3.9 — the full field list is the `CliKnobs` interface in [`brainrouter-cli/src/config/config.ts`](../brainrouter-cli/src/config/config.ts). The CLI no longer reads any `.env` file. |
 | **MCP client transport** | `~/.config/brainrouter/config.json` (`servers` / `activeServer`) | Stdio vs HTTP MCP transport profile selection. |
 
 The MCP server ships a template at [`brainrouter/.env.example`](../brainrouter/.env.example) — copy it to `~/.config/brainrouter/server.env` via `brainrouter-mcp init`. The CLI has no `.env` template; use the wizard or `/config` instead.
@@ -87,16 +87,17 @@ concerns and a strict env boundary since 0.3.7:
 | Process | Config source |
 | --- | --- |
 | **MCP server** | `brainrouter/.env` (monorepo dev) or `~/.config/brainrouter/server.env` (global install) — LLM credentials, retrieval pipeline, memory engine, auth, JWT, admin seed. |
-| **CLI agent** | `~/.config/brainrouter/config.json` (chat-LLM creds, endpoint, model, MCP transport profile) + shell env (`BRAINROUTER_*` vars) for runtime knobs. The CLI reads **no `.env` file at all**. |
+| **CLI agent** | `~/.config/brainrouter/config.json` — `llm.*` for chat-LLM creds / endpoint / model, `servers.*` + `activeServer` for MCP transport, and `cli.*` for every behaviour knob (tool-loop limits, sandbox, trace log, theme, quiet, etc.). The CLI reads **no `.env` file at all**. |
 
 Why the hard split?
 
 - The MCP's cognitive extractor and the CLI's chat agent can run on
   different models. Each side picks its own credentials.
-- CLI-only knobs (`BRAINROUTER_SANDBOX`, `BRAINROUTER_MAX_TOOL_LOOPS`,
-  `BRAINROUTER_TRACE_LOG`, …) have no meaning in the MCP server.
+- CLI-only knobs (`cli.sandbox`, `cli.maxToolLoops`, `cli.traceLog`, …)
+  have no meaning in the MCP server.
 - A shared `.env` created silent precedence bugs where stale env vars
-  could shadow the on-disk `config.json`.
+  could shadow the on-disk `config.json` — retired in 0.3.9 in favour
+  of the single `cli.*` block.
 
 ### Loading & propagation
 

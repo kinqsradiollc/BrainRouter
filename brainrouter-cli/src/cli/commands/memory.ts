@@ -16,6 +16,7 @@ import { spinner as makeSpinner } from '../spinner.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { consolidateMemories } from '../../memory/consolidation.js';
+import { scanWorkspaceSources } from '../../memory/sourceManifest.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import type { CommandContext } from './_context.js';
 import { printMcpCall, printMemoryCards } from './_helpers.js';
@@ -35,15 +36,47 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       await printMemoryCards(mcpClient, 'memory_recall', { sessionKey: agent.sessionKey, query }, `Cognitive recall · "${query}"`);
       return true;
     }
+    case '/refresh-memory': {
+      // 0.3.9 item 9 — clear the pinned memory anchor. The next briefing
+      // will re-pin as a fresh PIN action, replacing the previous anchor
+      // bytes in the immutable prefix slot. Provider prefix cache will
+      // miss exactly once on the following turn, then re-warm.
+      const hadAnchor = agent.hasPinnedMemoryAnchor();
+      agent.clearPinnedMemoryAnchor();
+      if (hadAnchor) {
+        console.log(chalk.cyan('\nMemory anchor cleared. Next turn will re-pin a fresh briefing.\n'));
+      } else {
+        console.log(chalk.gray('\nNo memory anchor was pinned. Next turn will pin the first available briefing.\n'));
+      }
+      return true;
+    }
     case '/briefing': {
       const b = agent.getLastBriefing();
       console.log(chalk.bold('\nLast Memory Briefing'));
-      if (b.sources.length === 0) {
-        console.log(chalk.yellow('  No briefing has been built yet. Start a turn or use /recall.'));
-      } else {
-        console.log(`  Sources queried: ${chalk.cyan(b.sources.join(', '))}`);
-        console.log(`  Recalled record IDs (${b.recordIds.length}): ${chalk.gray(b.recordIds.slice(0, 10).join(', '))}${b.recordIds.length > 10 ? '…' : ''}`);
+      console.log(`  Decision: ${chalk.cyan(b.decision)}`);
+      if (b.reasons.length > 0) console.log(`  Reasons: ${chalk.gray(b.reasons.join(', '))}`);
+      if (b.sourcesPlanned.length > 0) console.log(`  Sources planned: ${chalk.gray(b.sourcesPlanned.join(', '))}`);
+      if (b.sources.length > 0) console.log(`  Sources queried: ${chalk.cyan(b.sources.join(', '))}`);
+      if (b.sourceStats.length > 0) {
+        console.log(chalk.bold('\n  Source stats'));
+        for (const s of b.sourceStats) {
+          console.log(`    ${chalk.cyan(s.source.padEnd(24))} ${String(s.records).padStart(3)} records  ${String(s.chars).padStart(5)} chars`);
+        }
       }
+      if (b.skippedSources.length > 0) {
+        console.log(chalk.bold('\n  Skipped sources'));
+        for (const s of b.skippedSources) console.log(`    ${chalk.gray(s.source)} — ${s.reason}`);
+      }
+      if (b.recordIds.length > 0) {
+        console.log(`\n  Recalled record IDs (${b.recordIds.length}): ${chalk.gray(b.recordIds.slice(0, 10).join(', '))}${b.recordIds.length > 10 ? '…' : ''}`);
+      }
+      if (b.warnings.length > 0) {
+        console.log(chalk.bold.yellow('\n  Warnings'));
+        for (const w of b.warnings) console.log(`    ${w}`);
+      }
+      console.log(chalk.gray(`\n  Tokens injected: ${b.tokensInjected.toLocaleString()}  ·  compacted chars avoided: ${b.charsSaved.toLocaleString()}`));
+      if (b.sources.length === 0 && b.decision !== 'none') console.log(chalk.gray('  Manual fallback: /recall <query> or /memory <query>'));
+      if (b.decision === 'none') console.log(chalk.yellow('  No briefing has been built yet. Start a turn or use /recall.'));
       console.log();
       return true;
     }
@@ -202,6 +235,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log(chalk.gray('  Subcommands:'));
         console.log(chalk.gray('    /memories on | off          — toggle the pipeline'));
         console.log(chalk.gray('    /memories consolidate       — write user/feedback/project/reference files'));
+        console.log(chalk.gray('    /memories sources [limit]   — read-only local source manifest spike'));
         console.log(chalk.gray('    /memories status            — show this view\n'));
         return true;
       }
@@ -227,7 +261,23 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         }
         return true;
       }
-      console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, consolidate.\n`));
+      if (sub === 'sources') {
+        const limitArg = Number(args[1]);
+        const manifest = scanWorkspaceSources(agent.workspaceRoot, {
+          limit: Number.isFinite(limitArg) && limitArg > 0 ? limitArg : 80,
+        });
+        console.log(chalk.bold('\nSource manifest spike'));
+        console.log(`  Workspace: ${chalk.gray(manifest.workspaceRoot)}`);
+        console.log(`  Entries: ${chalk.cyan(manifest.entries.length)}`);
+        console.log(`  Skipped: ${chalk.gray(`${manifest.skipped.directories} dirs, ${manifest.skipped.largeFiles} large, ${manifest.skipped.unsupportedFiles} unsupported`)}`);
+        for (const entry of manifest.entries.slice(0, 30)) {
+          console.log(`  ${chalk.cyan(entry.kind.padEnd(6))} ${entry.path} ${chalk.gray(`${entry.size} bytes ${entry.hash}`)}`);
+        }
+        if (manifest.entries.length > 30) console.log(chalk.gray(`  …and ${manifest.entries.length - 30} more`));
+        console.log();
+        return true;
+      }
+      console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, consolidate, sources.\n`));
       return true;
     }
   }

@@ -123,4 +123,30 @@ describe("cognitive extractor JSON escape repair", () => {
       String.raw`café collateral`,
     ]);
   });
+
+  it("fails extraction instead of consuming sensory rows when the LLM returns empty output", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner(""),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toContain("empty response");
+  });
+
+  it("fails extraction instead of treating reasoning prose as an empty memory list", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner("I am still thinking through the extraction task."),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toContain("non-JSON output");
+  });
 });

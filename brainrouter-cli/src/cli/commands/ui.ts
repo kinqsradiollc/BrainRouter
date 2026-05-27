@@ -17,11 +17,12 @@ import { readPlan } from '../../state/taskStore.js';
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
-import { getConfigPath, saveConfig } from '../../config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride } from '../../config/config.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
 import { PROVIDER_CATALOG, findProvider } from '../wizard/providers.js';
+import { loadApiKeyPrefixesConfig } from '../../runtime/configLoader.js';
 import { selectModel } from '../wizard/modelsApi.js';
 import { buildTheme } from '../theme.js';
 import { listFilesystemSkills } from '../../prompt/skillCatalog.js';
@@ -46,10 +47,34 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
 
       const llm = config.llm;
       if (llm) {
+        // Show the model's max prompt-context window inline so users
+        // can tell whether they're 5% or 95% through it. Source +
+        // override path live in runtime/contextWindow.ts. Unknown
+        // models render "?" rather than a guess.
+        const { formatContextWindow } = await import('../../runtime/contextWindow.js');
+        const ctxLabel = formatContextWindow(llm.model);
         console.log(`  LLM Provider:  ${chalk.green(llm.provider)}`);
-        console.log(`  LLM Model:     ${chalk.cyan(llm.model)}`);
+        console.log(`  LLM Model:     ${chalk.cyan(llm.model)}${ctxLabel !== '?' ? chalk.gray(` (${ctxLabel} ctx)`) : ''}`);
         if (llm.endpoint) {
           console.log(`  LLM Endpoint:  ${chalk.blue(llm.endpoint)}`);
+        }
+
+        // LM Studio enrichment: when we have a native /api/v1/models
+        // entry for the active model, surface signals the shipped JSON
+        // doesn't carry — currently-loaded? trained for tool use?
+        // reasoning modes? format + quantisation. This is the "is my
+        // model actually appropriate for the agent loop?" check.
+        const { lookupLmStudioModel } = await import('../../runtime/lmStudioApi.js');
+        const lm = lookupLmStudioModel(llm.model);
+        if (lm) {
+          const loadedBadge = lm.loaded ? chalk.green('● loaded') : chalk.gray('○ not loaded');
+          console.log(`  LM Studio:     ${loadedBadge}${lm.paramsString ? chalk.gray(`  ·  ${lm.paramsString}`) : ''}${lm.quantisation ? chalk.gray(`  ·  ${lm.quantisation}`) : ''}${lm.format ? chalk.gray(`  ·  ${lm.format}`) : ''}`);
+          if (lm.trainedForToolUse === false) {
+            console.log(chalk.yellow(`  ⚠️  LM Studio reports this model as NOT trained for tool use — the agent loop may fail on tool_call output. Consider a model packaged with tool-use training.`));
+          }
+          if (lm.reasoning && lm.reasoning.allowedOptions.length > 0 && !lm.reasoning.allowedOptions.includes('off')) {
+            console.log(chalk.gray(`  Reasoning: forced ${lm.reasoning.allowedOptions.join(' | ')} (default ${lm.reasoning.defaultOption ?? '—'}). /effort flag is a no-op upstream.`));
+          }
         }
       }
 
@@ -60,18 +85,62 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         const latency = Date.now() - start;
         spinner.succeed(chalk.green(`Latency check: ${latency}ms`));
 
-        // Diagnostics / memory stats
+        // Diagnostics / memory stats.
+        //
+        // Field names align with brain-side `getMemoryStats()` in
+        // `brainrouter/src/memory/store/sqlite.ts`. Earlier this code
+        // read `stats.totalCount` and `stats.typeCounts` — fields the
+        // brain never emits — so every /status panel printed 0 even
+        // when cognitive_records had hundreds of rows. The brain emits
+        // `total`, `byType`, `sensoryTotal`, etc.; we read those names
+        // verbatim now. Bug surfaced 2026-05-27.
         const diag = await callMcpTool<any>(mcpClient, 'memory_diagnostics', {});
         if (!diag.isError && diag.parsed) {
           const stats = diag.parsed.databaseStats?.userStats;
           if (stats) {
+            const cognitiveTotal = stats.total ?? 0;
+            const byType = stats.byType ?? {};
+            const sensoryTotal = stats.sensoryTotal ?? 0;
+            const sensoryUnextracted = stats.sensoryUnextracted ?? 0;
+            const focusSceneTotal = stats.focusSceneTotal ?? 0;
+            const extraction = stats.extraction ?? {};
+
             console.log(chalk.bold('\n📊 Cognitive Memory Database Stats:'));
-            console.log(`  Total Memories:       ${chalk.yellow(stats.totalCount ?? 0)}`);
-            console.log(`    - Instructions:     ${chalk.gray(stats.typeCounts?.instruction ?? 0)}`);
-            console.log(`    - Codebase Facts:   ${chalk.gray(stats.typeCounts?.codebase_fact ?? 0)}`);
-            console.log(`    - Architectures:    ${chalk.gray(stats.typeCounts?.architecture_decision ?? 0)}`);
-            console.log(`  Total Focus Scenes:   ${chalk.yellow(stats.totalScenes ?? 0)}`);
-            console.log(`  Working Memory Items: ${chalk.yellow(stats.workingMemoryCount ?? 0)}`);
+            console.log(`  Cognitive Records:    ${chalk.yellow(cognitiveTotal.toLocaleString())}`);
+            console.log(`    - Instructions:     ${chalk.gray((byType.instruction ?? 0).toLocaleString())}`);
+            console.log(`    - Codebase Facts:   ${chalk.gray((byType.codebase_fact ?? 0).toLocaleString())}`);
+            console.log(`    - Architectures:    ${chalk.gray((byType.architecture_decision ?? 0).toLocaleString())}`);
+            const otherTypes = Object.entries(byType).filter(([k]) => !['instruction', 'codebase_fact', 'architecture_decision'].includes(k));
+            for (const [type, count] of otherTypes) {
+              console.log(`    - ${type.padEnd(18)}${chalk.gray((count as number).toLocaleString())}`);
+            }
+            // Sensory tells the "is capture firing at all?" story. When
+            // cognitive is 0 but sensory > 0, extraction is the bottleneck
+            // (threshold not reached OR the LLM extraction call is failing).
+            console.log(`  Sensory Stream:       ${chalk.yellow(sensoryTotal.toLocaleString())}${sensoryUnextracted > 0 ? chalk.gray(`  (${sensoryUnextracted.toLocaleString()} awaiting extraction)`) : ''}`);
+            console.log(`  Focus Scenes:         ${chalk.yellow(focusSceneTotal.toLocaleString())}`);
+            if (stats.lastRecallAt) {
+              console.log(`  Last Captured:        ${chalk.gray(stats.lastRecallAt)}`);
+            }
+            // Surface extraction health. `syncPaused` fires when 5+
+            // consecutive failures occurred — usually the local LM is
+            // OOM, the API key is missing, or the model returns non-JSON.
+            if (extraction.syncPaused) {
+              console.log(chalk.red(`  ⚠️  Extraction PAUSED after ${extraction.extractionErrors} consecutive failures.`));
+              if (extraction.lastErrorMessage) {
+                console.log(chalk.gray(`     Last error: ${String(extraction.lastErrorMessage).slice(0, 200)}`));
+              }
+              console.log(chalk.gray(`     Fix the upstream LLM (model loaded / API key set), then run /memories consolidate to backfill.`));
+            } else if (extraction.extractionErrors > 0) {
+              console.log(chalk.yellow(`  ⚠️  ${extraction.extractionErrors} recent extraction failure(s). Last: ${extraction.lastErrorAt ?? '(unknown)'}.`));
+              if (extraction.lastErrorMessage) {
+                console.log(chalk.gray(`     ${String(extraction.lastErrorMessage).slice(0, 200)}`));
+              }
+            } else if (cognitiveTotal === 0 && sensoryTotal > 0) {
+              console.log(chalk.gray(`  (Cognitive extraction fires every 3 sensory turns — keep talking to populate.)`));
+            } else if (cognitiveTotal === 0 && sensoryTotal === 0) {
+              console.log(chalk.gray(`  (No captures yet for this user. Run a turn to start populating memory.)`));
+            }
           }
         }
       } catch (err: any) {
@@ -166,7 +235,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       if (reconciled > 0) console.log(`  Reconciled ${chalk.yellow(reconciled)} stale child session(s).`);
       const childSessions = listSessions(agent.workspaceRoot);
       console.log(`  Child sessions: ${chalk.yellow(childSessions.length)} total`);
-      const orchestrationTools = ['spawn_agent', 'list_agents', 'wait_agent', 'read_agent_transcript', 'close_agent', 'update_plan'];
+      const orchestrationTools = ['task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'read_agent_transcript', 'close_agent', 'update_plan'];
       for (const tn of orchestrationTools) {
         const has = LOCAL_TOOLS.some((lt: any) => lt.name === tn);
         console.log(`  ${tn}: ${has ? chalk.green('available') : chalk.red('missing')}`);
@@ -192,14 +261,14 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
         return true;
       }
-      // No-arg → open the picker. Resolves provider by matching the
-      // saved endpoint against PROVIDER_CATALOG; falls back to the
-      // OpenAI entry when nothing matches (the agent loop also
-      // defaults to OpenAI-compatible shapes).
+      // No-arg → open the picker. Resolves provider by reading the
+      // stored llm.provider id first; falls back to endpoint matching
+      // for old configs, then to the OpenAI entry as last resort.
       const themeMode = readPreferences(agent.workspaceRoot).theme;
       const theme = buildTheme(themeMode === 'mono' ? 'mono' : themeMode === 'light' ? 'light' : 'dark');
       const llm = config.llm;
       const provider =
+        (llm?.provider && findProvider(llm.provider)) ||
         (llm?.endpoint && PROVIDER_CATALOG.find((p) => p.endpoint.replace(/\/$/, '') === (llm.endpoint ?? '').replace(/\/$/, ''))) ||
         findProvider('openai')!;
       const result = await selectModel({
@@ -223,7 +292,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       // a different vendor's namespace (anthropic/*, google/*, etc.)
       // and the active provider isn't a multi-vendor gateway, warn so
       // the user doesn't hit a confusing 404 on the next turn.
-      if (looksLikeForeignModel(result.model, provider)) {
+      if (looksLikeForeignModel(result.model, { id: provider.id, endpoint: llm?.endpoint ?? provider.endpoint })) {
         console.log(chalk.yellow(
           `\n  ⚠ "${result.model}" looks like a different provider's namespace. ` +
           `Active endpoint: ${provider.label}.` +
@@ -378,7 +447,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       if (!arg) {
         const resolved = resolveEffort(agent.workspaceRoot);
         const sourceTag =
-          resolved.source === 'env' ? chalk.gray(' (env: BRAINROUTER_EFFORT)') :
+          resolved.source === 'config' ? chalk.gray(' (cli.effort in config.json)') :
           resolved.source === 'preference' ? chalk.gray(' (preference)') :
           chalk.gray(' (default)');
         console.log(chalk.bold(`\nReasoning depth: ${chalk.cyan(resolved.effort)}${sourceTag}`));
@@ -389,7 +458,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.gray('  Magistral, *-reasoning, *-thinking — works on OpenAI, DeepSeek, OpenRouter,'));
         console.log(chalk.gray('  LM Studio 0.3.29+, Ollama), the level is also forwarded as `reasoning_effort`.'));
         console.log(chalk.gray('  Toggle with: /effort low | /effort medium | /effort high'));
-        console.log(chalk.gray('  Env override (one-shot): BRAINROUTER_EFFORT=high brainrouter\n'));
+        console.log(chalk.gray('  Permanent override: set `cli.effort` in ~/.config/brainrouter/config.json.\n'));
         return true;
       }
       if (!valid.includes(arg as EffortLevel)) {
@@ -399,13 +468,48 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       writePreferences(agent.workspaceRoot, { effort: arg as EffortLevel });
       agent.refreshSystemPrompt();
       const after = resolveEffort(agent.workspaceRoot);
-      // Surface a friendly nudge when the env var would still shadow the new
-      // preference on the next process boot.
-      if (process.env.BRAINROUTER_EFFORT && after.source === 'env') {
-        console.log(chalk.yellow(`\n✓ Preference saved as ${arg}, but BRAINROUTER_EFFORT=${process.env.BRAINROUTER_EFFORT} is still active this process — env wins.\n`));
+      // Surface a friendly nudge when `cli.effort` in `config.json` is still
+      // explicitly set and would shadow the workspace preference next boot.
+      if (after.source === 'config' && after.effort !== arg) {
+        console.log(chalk.yellow(`\n✓ Preference saved as ${arg}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
       } else {
         console.log(chalk.green(`\n✓ Reasoning depth → ${arg}. Applies on the next turn.\n`));
       }
+      return true;
+    }
+    case '/tier':
+    {
+      const { resolveTierLadder, currentTier } = await import('../../runtime/tierLadder.js');
+      const arg = (args[0] ?? '').toLowerCase();
+      const prefs = readPreferences(agent.workspaceRoot);
+      const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();
+      const ladder = resolveTierLadder({ provider });
+      if (!arg) {
+        const model = agent.getModel?.() ?? '?';
+        const cur = currentTier(model, ladder);
+        const pinned = prefs.tier ?? null;
+        console.log(chalk.bold(`\nModel tier: ${chalk.cyan(cur ?? 'unknown')}${pinned ? chalk.gray(` (pinned: ${pinned})`) : ''}`));
+        console.log(`  Provider: ${chalk.gray(provider)}`);
+        console.log(`  Ladder:   ${chalk.gray(`flash=${ladder.ladder.flash}, standard=${ladder.ladder.standard}, pro=${ladder.ladder.pro}`)}`);
+        console.log(chalk.gray('  When the model emits `<<<NEEDS_HIGH>>>` (with optional reason), the runtime'));
+        console.log(chalk.gray('  retries the same turn on the next tier up. Auxiliary calls always pin to the'));
+        console.log(chalk.gray('  lowest tier; pro-tier marker is a no-op.'));
+        console.log(chalk.gray('  Toggle with: /tier flash | /tier standard | /tier pro | /tier auto\n'));
+        return true;
+      }
+      if (arg === 'auto' || arg === 'off') {
+        writePreferences(agent.workspaceRoot, { tier: null });
+        console.log(chalk.green('\n✓ Tier pin removed. Self-escalation re-enabled.\n'));
+        return true;
+      }
+      if (arg !== 'flash' && arg !== 'standard' && arg !== 'pro') {
+        console.log(chalk.red(`\nUnknown tier "${arg}". Choose: flash | standard | pro | auto\n`));
+        return true;
+      }
+      const newModel = ladder.ladder[arg as 'flash' | 'standard' | 'pro'];
+      writePreferences(agent.workspaceRoot, { tier: arg as 'flash' | 'standard' | 'pro' });
+      agent.setModel?.(newModel);
+      console.log(chalk.green(`\n✓ Tier pinned to ${arg} (model → ${newModel}).\n`));
       return true;
     }
     case '/quiet':
@@ -414,13 +518,9 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       const arg = (args[0] ?? '').toLowerCase();
       const next = arg ? (arg === 'on' || arg === 'true' || arg === '1') : !prefs.quiet;
       writePreferences(agent.workspaceRoot, { quiet: next });
-      // `--quiet` set a one-shot env override at startup; once the user
+      // `--quiet` set a one-shot knob override at startup; once the user
       // explicitly toggles in-session their choice wins from now on.
-      if (next) {
-        process.env.BRAINROUTER_QUIET = '1';
-      } else {
-        delete process.env.BRAINROUTER_QUIET;
-      }
+      setCliKnobOverride({ quiet: next });
       const detail = next
         ? 'recall tables, briefing dumps, and tool-completion previews are now hidden.'
         : 'full chrome restored — recall tables, previews, and briefings will print again.';
@@ -560,24 +660,21 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
 
 /**
  * Heuristic — does the picked model id look like it belongs to a
- * different vendor than the active provider's endpoint? Catches the
+ * different vendor than the active OpenAI endpoint? Catches the
  * common foot-gun of picking `anthropic/claude-*` while pointed at
- * OpenAI direct, where the request 404s at the endpoint and the user
+ * api.openai.com, where the request 404s at the endpoint and the user
  * has no obvious "you needed to switch endpoints" signal.
  *
- * Returns false for gateway providers (OpenRouter, "anthropic-via-gateway")
- * since multi-vendor namespaces are expected there.
+ * Only applies when the endpoint is api.openai.com itself — once the
+ * user has overridden the base URL (OpenRouter, Together, vLLM, …)
+ * multi-vendor namespaces are expected and the guard would false-fire.
  */
-function looksLikeForeignModel(model: string, provider: { id: string }): boolean {
-  // Gateways are vendor-agnostic by design.
-  if (provider.id === 'openrouter' || provider.id === 'anthropic-via-gateway') return false;
-  const FOREIGN_PREFIXES: Record<string, string[]> = {
-    openai:    ['anthropic/', 'google/', 'meta/', 'mistralai/', 'qwen/', 'deepseek/'],
-    deepseek:  ['anthropic/', 'google/', 'openai/', 'meta/', 'mistralai/'],
-    gemini:    ['anthropic/', 'openai/', 'meta/', 'mistralai/', 'deepseek/'],
-    lmstudio:  [],
-    ollama:    [],
-  };
-  const list = FOREIGN_PREFIXES[provider.id] ?? [];
-  return list.some((prefix) => model.startsWith(prefix));
+function looksLikeForeignModel(model: string, provider: { id: string; endpoint?: string }): boolean {
+  if (provider.id !== 'openai') return false;
+  // Custom OpenAI-compatible endpoints (OpenRouter etc.) are vendor-agnostic.
+  if (provider.endpoint && !/^https?:\/\/api\.openai\.com\b/.test(provider.endpoint)) return false;
+  // Foreign-model prefixes now live in config/api-key-prefixes.json so users
+  // can update the list when a new gateway vendor namespace shows up.
+  const prefixes = loadApiKeyPrefixesConfig().foreignModelPrefixes.map((e) => e.prefix);
+  return prefixes.some((prefix) => model.startsWith(prefix));
 }

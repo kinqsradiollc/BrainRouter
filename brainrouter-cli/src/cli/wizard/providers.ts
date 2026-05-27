@@ -1,22 +1,18 @@
 /**
  * 0.3.7 wizard — curated provider catalogue.
  *
- * One source of truth for "which LLM providers do we present in the
- * onboarding picker?" — keeps the wizard step and the `/config` provider
- * picker in sync. Each entry carries the canonical endpoint, the env-var
- * name the user is most likely to have set (so we can pre-detect), a
- * short hint line for the picker, and a curated model short-list.
+ * As of 0.3.9 the catalog data lives in `brainrouter-cli/config/providers.json`
+ * (entries with `pickerVisible: true`). This module is a thin TypeScript wrapper
+ * over `configLoader` so existing imports (`PROVIDER_CATALOG`, `findProvider`,
+ * `detectProviderFromEnv`, `validateApiKey`, `maskApiKey`) keep working.
  *
- * Lineage:
- *   - The "env-var-name as a hint" pattern is borrowed from
- *     `openSrc/codex/codex-rs/tui/src/onboarding/auth.rs`
- *     (`ApiKeyInputState.prepopulated_from_env`).
- *   - The "configured / needs-key / optional-key" row tag is from
- *     `openSrc/DeepSeek-TUI/crates/tui/src/tui/provider_picker.rs`.
+ * Adding a provider: edit `config/providers.json` (set `pickerVisible: true` to
+ * make it appear here). The `/config` provider picker reads the same array
+ * through this module's `PROVIDER_CATALOG` export.
  *
- * Adding a provider here makes it appear in the wizard AND the
- * `/config` panel — no other registration needed.
  */
+
+import { loadApiKeyPrefixesConfig, loadProvidersConfig } from '../../runtime/configLoader.js';
 
 export interface ProviderEntry {
   /** Stable id used in config.json + tests. */
@@ -37,105 +33,45 @@ export interface ProviderEntry {
   defaultModel: string;
 }
 
-export const PROVIDER_CATALOG: ProviderEntry[] = [
-  // NOTE: endpoint values are the BASE URL (ending in `/v1` or
-  // `/api/v1`), NOT the full `/chat/completions` URL. The agent's
-  // callOpenAI() in agent.ts appends `/chat/completions` itself. An
-  // older revision of this catalog stored the full URL, which led to
-  // a duplicated `/chat/completions/chat/completions` and a 404 on
-  // the first chat turn. agent.ts now normalizes either shape, but
-  // the catalog stays on the base-URL form going forward.
-  {
-    id: 'openai',
-    label: 'OpenAI',
-    hint: 'cloud · gpt-4o / gpt-5 / o-series',
-    endpoint: 'https://api.openai.com/v1',
-    envKey: 'OPENAI_API_KEY',
-    local: false,
-    models: ['gpt-4o-mini', 'gpt-4o', 'gpt-5', 'o3-mini', 'gpt-5-mini'],
-    defaultModel: 'gpt-4o-mini',
-  },
-  {
-    id: 'deepseek',
-    label: 'DeepSeek',
-    hint: 'cloud · deepseek-chat / deepseek-reasoner',
-    endpoint: 'https://api.deepseek.com/v1',
-    envKey: 'DEEPSEEK_API_KEY',
-    local: false,
-    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'],
-    defaultModel: 'deepseek-chat',
-  },
-  {
-    id: 'openrouter',
-    label: 'OpenRouter',
-    hint: 'cloud gateway · any vendor through one key',
-    endpoint: 'https://openrouter.ai/api/v1',
-    envKey: 'OPENROUTER_API_KEY',
-    local: false,
-    models: [
-      'anthropic/claude-sonnet-4',
-      'openai/gpt-4o-mini',
-      'google/gemini-2.5-flash',
-      'deepseek/deepseek-chat',
-      'qwen/qwen3-coder',
-    ],
-    defaultModel: 'anthropic/claude-sonnet-4',
-  },
-  {
-    // Claude needs an OpenAI-compatible gateway today because the
-    // CLI's chat path drives `/v1/chat/completions` and Anthropic's
-    // native API uses `/v1/messages` with a different request shape
-    // (tool_use blocks inside user messages, `thinking: { budget_tokens }`
-    // instead of `reasoning_effort`, etc.). A native `/v1/messages`
-    // adapter is tracked for 0.3.8 — see brainrouter-roadmap/0.3.7.md
-    // Item 6 "Out of scope". Until then, the OpenRouter gateway path
-    // (this entry) is the supported way to talk to Claude.
-    id: 'anthropic-via-gateway',
-    label: 'Claude (via OpenRouter)',
-    hint: 'cloud · claude-* models routed through OpenRouter\'s OpenAI-compat gateway',
-    endpoint: 'https://openrouter.ai/api/v1',
-    envKey: 'OPENROUTER_API_KEY',
-    local: false,
-    models: [
-      'anthropic/claude-sonnet-4.5',
-      'anthropic/claude-opus-4.1',
-      'anthropic/claude-sonnet-4',
-      'anthropic/claude-haiku-4.5',
-      'anthropic/claude-haiku-4',
-    ],
-    defaultModel: 'anthropic/claude-sonnet-4.5',
-  },
-  {
-    id: 'gemini',
-    label: 'Gemini (OpenAI-compat)',
-    hint: 'cloud · Google\'s OpenAI-compat endpoint',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    envKey: 'GEMINI_API_KEY',
-    local: false,
-    models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-    defaultModel: 'gemini-2.5-flash',
-  },
-  {
-    id: 'lmstudio',
-    label: 'LM Studio (local)',
-    hint: 'local · http://localhost:1234 · blank API key OK',
-    endpoint: 'http://localhost:1234/v1',
-    envKey: 'LMSTUDIO_API_KEY',
-    local: true,
-    models: ['qwen2.5-coder', 'gpt-oss-20b', 'deepseek-r1-distill-qwen-32b'],
-    defaultModel: 'qwen2.5-coder',
-  },
-  {
-    id: 'ollama',
-    label: 'Ollama (local)',
-    hint: 'local · http://localhost:11434 · blank API key OK',
-    endpoint: 'http://localhost:11434/v1',
-    envKey: 'OLLAMA_API_KEY',
-    local: true,
-    models: ['qwen2.5-coder:7b', 'llama3.1:8b', 'deepseek-r1:14b'],
-    defaultModel: 'qwen2.5-coder:7b',
-  },
-];
+/**
+ * The provider catalog now lives in `brainrouter-cli/config/providers.json`.
+ * This module reads the JSON file via `configLoader` and filters to entries
+ * with `pickerVisible: true` so the picker stays tight (deepseek lives in
+ * the JSON for tier-ladder purposes but is hidden from the picker — point
+ * the OpenAI base URL at api.deepseek.com/v1 instead).
+ *
+ * NOTE: endpoint values are BASE URLs (ending in `/v1` or `/api/v1`), NOT
+ * full `/chat/completions` URLs. The agent's `callOpenAI()` appends the
+ * suffix itself. Older revisions stored the full URL and produced
+ * `/chat/completions/chat/completions` 404s.
+ */
+function buildProviderCatalogFromConfig(): ProviderEntry[] {
+  const cfg = loadProvidersConfig();
+  const out: ProviderEntry[] = [];
+  for (const [id, entry] of Object.entries(cfg.providers)) {
+    if (entry.pickerVisible !== true) continue;
+    // Each picker-visible entry MUST carry the picker fields. Skip silently
+    // when a config edit ships a half-populated row so the rest of the
+    // catalog stays usable.
+    if (!entry.label || !entry.hint || !entry.endpoint || !entry.envKey ||
+        !entry.models || entry.models.length === 0 || !entry.defaultModel) {
+      continue;
+    }
+    out.push({
+      id,
+      label: entry.label,
+      hint: entry.hint,
+      endpoint: entry.endpoint,
+      envKey: entry.envKey,
+      local: entry.local === true,
+      models: entry.models,
+      defaultModel: entry.defaultModel,
+    });
+  }
+  return out;
+}
+
+export const PROVIDER_CATALOG: ProviderEntry[] = buildProviderCatalogFromConfig();
 
 /**
  * Look up a provider entry by stable id. Returns undefined when the id
@@ -173,7 +109,6 @@ export function detectProviderFromEnv(
  *   ask the user to re-enter.
  *
  * Pattern lifted from
- * `openSrc/DeepSeek-TUI/crates/tui/src/tui/onboarding/mod.rs:172`
  * (`enum ApiKeyValidation { Accept{warning}, Reject(String) }`). The
  * idea is to warn-not-block on unrecognised key shapes because every
  * vendor invents new prefixes (`sk-`, `sk-or-v1-`, `dsk-`, `pk-`, …)
@@ -183,13 +118,16 @@ export type ApiKeyValidation =
   | { kind: 'accept'; warning?: string }
   | { kind: 'reject'; reason: string };
 
-const KNOWN_PREFIXES = [
-  'sk-',          // OpenAI
-  'sk-or-v1-',    // OpenRouter
-  'sk-proj-',     // OpenAI scoped
-  'dsk-',         // DeepSeek
-  'sk-ant-',      // Anthropic
-];
+/**
+ * Known API-key prefixes are now loaded from
+ * `brainrouter-cli/config/api-key-prefixes.json`. An unfamiliar prefix
+ * yields a one-shot wizard warning ("did you paste a tag?") but still
+ * persists the key.
+ */
+function loadKnownPrefixes(): string[] {
+  const cfg = loadApiKeyPrefixesConfig();
+  return cfg.known.map((e) => e.prefix);
+}
 
 export function validateApiKey(
   raw: string,
@@ -210,11 +148,12 @@ export function validateApiKey(
   if (key.length < 16) {
     return { kind: 'reject', reason: `Key is ${key.length} characters — that looks like a paste error (real provider keys are 32+ chars).` };
   }
-  const hasKnownPrefix = KNOWN_PREFIXES.some((p) => key.startsWith(p));
+  const knownPrefixes = loadKnownPrefixes();
+  const hasKnownPrefix = knownPrefixes.some((p) => key.startsWith(p));
   if (!hasKnownPrefix) {
     return {
       kind: 'accept',
-      warning: `Unfamiliar key prefix (expected one of ${KNOWN_PREFIXES.slice(0, 3).join(', ')}…). Saved as-is — if calls fail, double-check the value from your provider's dashboard.`,
+      warning: `Unfamiliar key prefix (expected one of ${knownPrefixes.slice(0, 3).join(', ')}…). Saved as-is — if calls fail, double-check the value from your provider's dashboard.`,
     };
   }
   return { kind: 'accept' };

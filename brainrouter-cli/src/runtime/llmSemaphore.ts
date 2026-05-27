@@ -11,23 +11,21 @@
  * or any throughput-bounded endpoint), the model thrashes or auto-unloads.
  * Capping concurrency here prevents the CLI process from overwhelming the
  * backend. The MCP child has its own matching semaphore (mcp/.../llm-semaphore.ts)
- * with the same env knob, so the two processes coordinate by setting the
- * same `BRAINROUTER_LLM_MAX_CONCURRENT` budget.
+ * with the same knob, so the two processes coordinate by setting the same
+ * `cli.llmMaxConcurrent` budget in `~/.config/brainrouter/config.json`.
  *
- * Env knob:
- *   BRAINROUTER_LLM_MAX_CONCURRENT  (default 4; values < 1 disable the cap)
+ * Knob:
+ *   cli.llmMaxConcurrent  (default 4; values < 1 disable the cap)
  *
  * Cap defaults higher on the CLI side than on MCP (4 vs 2) because the
  * user-facing chat is latency-sensitive; we'd rather burst chat calls and
  * queue background extraction.
  */
 
-const DEFAULT_CAP = 4;
+import { getCliKnobs } from '../config/config.js';
 
 function resolveCap(): number {
-  const raw = process.env.BRAINROUTER_LLM_MAX_CONCURRENT;
-  if (!raw) return DEFAULT_CAP;
-  const parsed = parseInt(raw, 10);
+  const parsed = getCliKnobs().llmMaxConcurrent;
   if (!Number.isFinite(parsed) || parsed < 1) return Number.POSITIVE_INFINITY;
   return parsed;
 }

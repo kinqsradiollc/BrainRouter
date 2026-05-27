@@ -1,4 +1,5 @@
 import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
+import { getRawCliKnobs } from '../config/config.js';
 
 /**
  * Per-workspace runtime preferences that don't justify their own file.
@@ -75,6 +76,13 @@ export interface Preferences {
    * `/effort` and the `BRAINROUTER_EFFORT` env override.
    */
   effort: EffortLevel;
+  /**
+   * 0.3.9 item 13 — model-tier pin. `flash | standard | pro` pin the
+   * model for the rest of the session through `/tier`. `null` (the
+   * default) means "follow the model field as-is; allow self-escalation
+   * via the <<<NEEDS_HIGH>>> marker".
+   */
+  tier?: 'flash' | 'standard' | 'pro' | null;
 }
 
 const DEFAULT: Preferences = {
@@ -157,7 +165,7 @@ export function applyYoloOff(workspaceRoot: string): Preferences {
 
 export interface ResolvedEffort {
   effort: EffortLevel;
-  source: 'env' | 'preference' | 'default';
+  source: 'config' | 'preference' | 'default';
 }
 
 function normalizeEffort(raw: unknown): EffortLevel | undefined {
@@ -167,21 +175,20 @@ function normalizeEffort(raw: unknown): EffortLevel | undefined {
 }
 
 /**
- * Resolve the active reasoning-depth level using env > preference > default.
- * Matches the precedence pattern set by `resolveTheme` and the
- * `BRAINROUTER_QUIET` override.
+ * Resolve the active reasoning-depth level using config > preference > default.
+ * Matches the precedence pattern set by `resolveTheme` and the `cli.quiet`
+ * override.
  *
- * A garbled `BRAINROUTER_EFFORT` value (e.g. `BRAINROUTER_EFFORT=ludicrous`)
- * is treated as unset so users don't get cryptic crashes — the preference
- * takes over.
+ * A garbled `cli.effort` value is treated as unset so users don't get
+ * cryptic crashes — the per-workspace preference takes over.
  *
  * We read the raw file (not `readPreferences`) so we can distinguish a
  * preference that was explicitly written from the default that
  * `readPreferences` injects via its spread.
  */
 export function resolveEffort(workspaceRoot?: string): ResolvedEffort {
-  const envEffort = normalizeEffort(process.env.BRAINROUTER_EFFORT);
-  if (envEffort) return { effort: envEffort, source: 'env' };
+  const cfgEffort = normalizeEffort(getRawCliKnobs().effort);
+  if (cfgEffort) return { effort: cfgEffort, source: 'config' };
   if (workspaceRoot) {
     try {
       const stored = readJsonFile<Partial<Preferences>>(

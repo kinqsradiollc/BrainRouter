@@ -56,6 +56,22 @@ const DANGEROUS_PATTERNS: RegExp[] = [
   /\bdocker\s+system\s+prune\b/,
   /\bdocker\s+(?:rm|rmi)\s+-f/,
   /\bkubectl\s+delete\b/,
+  // Hook-bypass / signing-bypass on git (claude-code calls these out
+  // explicitly — skipping pre-commit / pre-push hooks is the most common
+  // way agents "make a failing check go away" without fixing the root cause).
+  /\bgit\s+(?:commit|push|merge|rebase|cherry-pick|revert)\s+[^\n]*--no-verify\b/,
+  /\bgit\s+commit\s+[^\n]*--no-gpg-sign\b/,
+  // find / xargs deletion patterns — easy to typo into a workspace wipe
+  // (`find . -name '*' -delete` is technically valid and removes everything).
+  /\bfind\b[^|;&\n]*-delete\b/,
+  /\bfind\b[^|;&\n]*-exec\s+rm\b/,
+  /\|\s*xargs\b[^|;&\n]*\b(?:rm|unlink)\b/,
+  // Cloud-resource deletion — irreversible blast radius far exceeds local rm.
+  /\bterraform\s+destroy\b/,
+  /\baws\s+s3\s+rm\b[^\n]*--recursive\b/,
+  /\baws\s+(?:ec2|rds|s3api|iam)\s+delete-/,
+  /\bgcloud\s+[^\n]*\sdelete\b/,
+  /\baz\s+[^\n]*\sdelete\b/,
 ];
 
 /**
@@ -88,6 +104,12 @@ export type RunCommandApproval = 'auto-approve' | 'ask' | 'deny-silent';
  *   - Interactive parents in `fast` mode skip the prompt for safe commands
  *     and still gate dangerous ones through `askYesNo`. In `planning` mode
  *     every command routes through `askYesNo`.
+ *   - **0.3.9: when a `/goal` is active**, the user has implicitly opted
+ *     into autonomy ("type a goal, walk away"). Treat an active goal as
+ *     equivalent to fast-mode for SAFE commands — auto-approve so the
+ *     auto-continuation loop doesn't stall on the first `run_command`.
+ *     Dangerous commands STILL prompt regardless of goal state because
+ *     the danger gate is a safety floor, not a "I need user input" gate.
  *
  * The `executionMode === 'fast'` check is the single source of truth for
  * "yolo-ish" behavior — the legacy `autoApproveShell` flag is migrated into
@@ -97,14 +119,44 @@ export type RunCommandApproval = 'auto-approve' | 'ask' | 'deny-silent';
 export function resolveRunCommandApproval(
   prefs: { executionMode: 'planning' | 'fast' },
   command: string,
-  opts: { silent: boolean },
+  opts: { silent: boolean; goalActive?: boolean },
 ): RunCommandApproval {
   const fastMode = prefs.executionMode === 'fast';
+  const goalActive = opts.goalActive === true;
+  // Goal-active acts as fast-mode for the safe-command branch only. The
+  // executionMode pref itself isn't mutated — when the goal ends, the
+  // user's prior /mode preference takes over again.
+  const autoApproveSafe = fastMode || goalActive;
   const dangerous = isDangerousCommand(command);
   if (opts.silent) {
     if (dangerous) return 'deny-silent';
-    return fastMode ? 'auto-approve' : 'deny-silent';
+    return autoApproveSafe ? 'auto-approve' : 'deny-silent';
   }
-  if (fastMode && !dangerous) return 'auto-approve';
+  if (autoApproveSafe && !dangerous) return 'auto-approve';
   return 'ask';
+}
+
+/**
+ * Build the multi-line prompt the user sees in the dangerous-command
+ * approval flow. The string is the value passed straight to
+ * `askYesNo` — the Ink overlay renders it as the modal title, and the
+ * legacy readline path uses the same content above the y/N input. The
+ * helper is exported so unit tests can assert that the prompt actually
+ * embeds the command rather than dropping it on the floor (the legacy
+ * split — separate console.log + generic "Allow execution? (y/N)" —
+ * worked on readline but broke under the Ink modal).
+ */
+export function buildRunCommandPrompt(cmd: string): string {
+  const dangerous = isDangerousCommand(cmd);
+  const lines = [
+    dangerous
+      ? '⚠️  Allow this potentially-destructive command?'
+      : '⚠️  Allow this command?',
+    '',
+  ];
+  if (dangerous) {
+    lines.push('(flagged as potentially destructive — rm -rf, sudo, force-push, …)', '');
+  }
+  lines.push(`  ${cmd}`, '', '(y/N) ');
+  return lines.join('\n');
 }

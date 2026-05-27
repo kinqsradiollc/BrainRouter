@@ -131,6 +131,73 @@ export function synthesizeOrphanResults<T extends ToolCallLike>(
 }
 
 /**
+ * Detect "stalled preamble" responses — short content that announces an
+ * action ("I'll start by…", "Let me…", "Now I'll…") but isn't followed by
+ * any tool_calls in the same assistant message. Smaller / weaker models
+ * (Gemma 2B, free-tier OS) hit this often: they write the preamble that
+ * Codex / OpenCode taught them to write but then forget to emit the actual
+ * tool_calls before yielding the turn, leaving the user staring at "I'll
+ * start by exploring…" with no follow-through.
+ *
+ * Used by the runtime preamble guardrail in `agent.ts` — when the loop is
+ * about to exit with no tool_calls AND `looksLikeStalledPreamble(content)`
+ * is true AND the turn already had ≥1 tool call earlier, we inject a
+ * corrective system message and continue one more iteration. Bounded by a
+ * counter so a model that ONLY emits preambles can't loop forever.
+ *
+ * Conservative on purpose: long content (>400 chars) is assumed to have
+ * substance, and the regex anchors on the START of the trimmed content so
+ * legitimate replies that contain "I'll" mid-sentence aren't false-positive.
+ */
+export function looksLikeStalledPreamble(content: string | null | undefined): boolean {
+  if (typeof content !== 'string') return false;
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.length > 400) return false;
+
+  // Common preamble starters lifted from OpenCode's beast.txt examples
+  // (`openSrc/opencode/packages/opencode/src/session/prompt/beast.txt:99-105`):
+  // "Let me fetch the URL…", "Now, I will search…", "OK! Now let's…",
+  // "I need to update several files here…". Anchored at start of string —
+  // a sentence that begins this way and is short is overwhelmingly a
+  // preamble, not a complete answer.
+  const preambleStarters = [
+    /^I['’]?ll\b/i,
+    /^I will\b/i,
+    /^I['’]?m going to\b/i,
+    /^I['’]?m about to\b/i,
+    /^Let me\b/i,
+    /^Let['’]?s\b/i,
+    /^Now,?\s+I['’]?ll\b/i,
+    /^Now,?\s+I will\b/i,
+    /^Now,?\s+let['’]?s\b/i,
+    /^Next,?\s+I['’]?ll\b/i,
+    /^Next,?\s+I will\b/i,
+    /^First,?\s+I['’]?ll\b/i,
+    /^First,?\s+I will\b/i,
+    /^Starting\b/i,
+    /^Starting by\b/i,
+    /^Standby\b/i,
+    /^Stand by\b/i,
+    /^OK[!,.]?\s+(?:Now|Let)/i,
+    // Additional claude-code-observed preamble forms (open-source models
+    // trained on Claude Code transcripts emit these). Anchored at start of
+    // string so legitimate mid-sentence uses don't false-positive.
+    /^Looking at\b/i,
+    /^Checking\b/i,
+    /^Reading\b/i,
+    /^Searching\b/i,
+    /^Investigating\b/i,
+    /^Exploring\b/i,
+    /^Examining\b/i,
+    /^Going to\b/i,
+    /^About to\b/i,
+    /^Will (?:read|check|search|run|look|explore|investigate|examine|grep|find)\b/i,
+  ];
+  return preambleStarters.some((re) => re.test(trimmed));
+}
+
+/**
  * Use the caller's existing `normalizeToolName` to surface a "did you mean"
  * suggestion when the LLM emits a tool name that doesn't exist as-is but
  * normalizes to a real registered tool. Tolerates the single-underscore

@@ -175,6 +175,14 @@ export interface IMemoryStore {
     byType: Record<string, number>;
     citationRate: number;
     lastRecallAt: string | null;
+    /** Rows in sensory_stream — always written on capture, even when
+     *  cognitive extraction hasn't run yet. Distinguishes "capture is
+     *  firing but extractor lagging" from "nothing captured at all". */
+    sensoryTotal: number;
+    /** Sensory rows the cognitive extractor hasn't consumed yet. */
+    sensoryUnextracted: number;
+    /** Rows in contextual_focus for this user. */
+    focusSceneTotal: number;
     extraction: ExtractionStatus;
   };
   upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): void;
