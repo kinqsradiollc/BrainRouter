@@ -11,8 +11,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| Latest shipped | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
-| Current release | **0.3.9** | In progress | [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) |
+| Latest shipped | **0.3.9** | Shipped — 2026-05-28 | [`CHANGELOG.md`](CHANGELOG.md#039---2026-05-28) |
+| Previous | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
 | Previous | **0.3.7** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-26) |
 
 ---
@@ -24,7 +24,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
 | **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
-| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop (Reasonix-inspired) | In progress |
+| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop (Reasonix-inspired) + CLI knobs → `config.json` | Shipped — 2026-05-28 |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Federation: many agents, one memory; CLI multi-agent Phase 2 | Designed |
 | **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 3-6, brain-side multi-agent roadmap | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
@@ -72,16 +72,15 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - Local briefing-quality benchmark across six scenarios.
 
 **Thread B — Reasonix-inspired cache-first / repair / cost-control
-(items 8–14, designed, not yet implemented).**
+(items 8–14, shipped).**
 
 - ImmutablePrefix / AppendOnlyLog / VolatileScratch context regions so
   the prefix is byte-stable across turns and provider prefix caches
-  actually hit. Reasonix's real-world dashboard: 99.82% cache hit,
-  ~97.7% off the un-cached baseline on a single day.
+  actually hit.
 - Memory briefing pinned into the immutable prefix as a synthetic tool
   result — BrainRouter's unique combination of cache-first loop +
   MCP-backed memory brain.
-- Per-turn cache-hit telemetry normalised across OpenAI / Anthropic /
+- Per-turn cache-hit telemetry normalised across OpenAI-compatible and
   DeepSeek response shapes, surfaced in `/tokens` and the Ink status
   line.
 - Tool-call repair pipeline: schema flatten (>10-leaf / depth >2 → dot
@@ -129,8 +128,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | File | Purpose |
 |---|---|
 | [`brainrouter-roadmap/README.md`](brainrouter-roadmap/README.md) | Roadmap index and release table |
-| [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) | Pre-0.4 memory briefing and source-awareness plan |
-| [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) | Immediate CLI delegation reliability plan |
+| [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) | Pre-0.4 memory, cache, repair, cost, and config plan |
+| [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) | CLI delegation reliability plan |
 | [`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md`](FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md) | CLI multi-agent architecture and rationale |
 | [`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md`](FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md) | CLI multi-agent implementation checklist |
 | [`FEATURE_OPENHUMAN_BRAINROUTER.md`](FEATURE_OPENHUMAN_BRAINROUTER.md) | MCP brain-side memory-agent roadmap |
