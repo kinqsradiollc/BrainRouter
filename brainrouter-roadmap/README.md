@@ -12,7 +12,7 @@ context for each release.
 |---:|---|---|---|
 | 1 | **[0.3.7](0.3.7.md)** | Shipped | How do we finish the Ink/config CLI shell? |
 | 2 | **[0.3.8](0.3.8.md)** | Shipped | How do we stop child-agent waiting/stuck behavior? |
-| 3 | **[0.3.9](0.3.9.md)** | In progress | Memory briefing quality (items 1–7, shipped) + Reasonix-inspired cache-first loop / tool-call repair / cost-control (items 8–14, new) |
+| 3 | **[0.3.9](0.3.9.md)** | In progress | Memory briefing quality (items 1–7) + Reasonix-inspired cache-first loop / tool-call repair / cost-control (items 8–14) + CLI knobs consolidated into `~/.config/brainrouter/config.json` |
 | 4 | **[0.4.0](0.4.0.md)** | Designed | How do multiple CLIs share one memory plane? |
 | 5 | **[0.4.x](0.4.x.md)** | Planned | How do we harden orchestration and brain agents? |
 | 6 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI and marketplace? |
@@ -28,7 +28,7 @@ Latest shipped: **[0.3.8](0.3.8.md)** on 2026-05-26.
 | [`0.3.6.md`](0.3.6.md) | Shipped 0.3.6 cycle reference |
 | [`0.3.7.md`](0.3.7.md) | Shipped 0.3.7 cycle reference |
 | [`0.3.8.md`](0.3.8.md) | Shipped 0.3.8 cycle reference |
-| [`0.3.9.md`](0.3.9.md) | Memory briefing quality (items 1–7, shipped) + Reasonix-inspired cache-first loop / repair / cost-control (items 8–14, new) |
+| [`0.3.9.md`](0.3.9.md) | Memory briefing quality (items 1–7) + Reasonix-inspired cache-first loop / repair / cost-control (items 8–14) + CLI knobs migration to `config.json` |
 | [`0.4.0.md`](0.4.0.md) | Federation MVP plus CLI multi-agent Phase 2 |
 | [`0.4.x.md`](0.4.x.md) | Post-federation CLI orchestration and MCP brain-agent roadmap |
 | [`0.5.0.md`](0.5.0.md) | Fullscreen TUI, plugin marketplace, cross-harness handoff |

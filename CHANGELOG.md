@@ -25,7 +25,15 @@ this changelog.
 
 ## [0.3.9] - Unreleased
 
-CLI memory briefing quality **plus** Reasonix-inspired cache-first loop, tool-call repair, and cost-control. The pre-0.4.0 release.
+CLI memory briefing quality **plus** Reasonix-inspired cache-first loop, tool-call repair, cost-control, and a clean-room CLI configuration story. The pre-0.4.0 release.
+
+### CLI configuration consolidated
+
+- **Single source of truth: `~/.config/brainrouter/config.json`.** Every former `BRAINROUTER_*` behaviour env var (recall mode, sandbox, alt-screen, tool-loop / sequence / storm thresholds, parallel safety, theme, quiet, effort, timeouts, child-drain / child-agent / shrink ratios, schedule tick, debug-exit, workspace, trace log, etc.) is now a typed field under `cli.*` in `~/.config/brainrouter/config.json`, lazy-loaded once per process via `getCliKnobs()` and overridable in-process by argv flags or tests via `setCliKnobOverride()`. `.env` support fully retired — credential env vars (`OPENAI_API_KEY`, `BRAINROUTER_API_KEY`, …) and the `BRAINROUTER_HOME` install override remain.
+- **Externalised model + provider catalogs.** New JSON files under `brainrouter-cli/config/` — `models.json` (per-model context windows + pricing), `providers.json` (catalog, endpoints, envKey), `api-key-prefixes.json` (wizard validation). Edits no longer require a rebuild; `runtime/configLoader.ts` loads + caches with fallback defaults.
+- **LM Studio native `/api/v1/models` enrichment.** When the active endpoint is `http://localhost:1234/v1`, the CLI fetches LM Studio's richer JSON (loaded state, params, quantisation, format, trained-for-tool-use flag, reasoning options) and surfaces it in `/status` and the wizard model picker. Non-LM-Studio endpoints unaffected.
+- **Content-aware token estimator.** `runtime/tokenEstimate.ts` buckets characters into CJK / code-density / prose for a 20–40% more accurate token count on mixed inputs; used as the fallback when `response.usage.prompt_tokens` is unavailable. Auto-compact still fires on a single absolute `cli.autoCompactTokens` threshold (default 80,000) — no model-context-window driven compaction.
+- **CLI-side recall fallback wrapper dropped.** Brain ships per-stage fallbacks already (vector → fts+filepath → reranker via RRF → judge via reranker); the redundant CLI wrapper and its hardcoded `RECALL_*` knobs were removed.
 
 ### Shipped within 0.3.9 (items 1–7)
 
