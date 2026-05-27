@@ -13,8 +13,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
-| **[0.3.9](0.3.9.md)** | Unreleased | In progress | Adaptive memory briefing + source-aware router (items 1–7) · Reasonix-inspired cache-first loop, tool-call repair, turn-end shrink, tier self-escalation, cost+cache panel (items 8–14) · CLI knobs consolidated into `~/.config/brainrouter/config.json` · externalised model/provider catalogs · LM Studio `/api/v1/models` enrichment · Anthropic native adapter removed |
-| **[0.3.8](0.3.8.md)** | 2026-05-26 | Shipped | CLI delegation reliability, parallel-safe reads, cron `/schedule`, `/release-notes`, hooks docs, strict tool-call recovery, per-vendor MCP install snippets, native Anthropic adapter, briefing prefix fix, Ink question overlays |
+| **[0.3.9](0.3.9.md)** | 2026-05-28 | Shipped | Memory briefing, cache-first loop, tool repair, cost panel, CLI knobs → `config.json` |
+| **[0.3.8](0.3.8.md)** | 2026-05-26 | Shipped | Delegation reliability, parallel reads, CLI quick wins, briefing prefix fix |
 | **[0.3.7](0.3.7.md)** | 2026-05-26 | Shipped | Ink chat REPL, wizard, `/config`, `/login`, CLI/server env separation |
 | **[0.3.6](0.3.6.md)** | 2026-05-25 | Shipped | Context budget, MCP identity/offline UX, multi-MCP foundation, multi-workflow |
 | [0.3.5](0.3.5.md) | 2026-05-22 | Shipped | Global-install UX fix |
@@ -37,6 +37,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
    both places.
 4. Future planned work belongs in [`ROADMAP.md`](../ROADMAP.md), not in
    changelog files.
+5. Start new per-version notes from
+   [`CHANGELOG_TEMPLATE.md`](CHANGELOG_TEMPLATE.md).
 
 The [`changelog-generator` skill](../skills/lifecycle/changelog-generator/SKILL.md)
 can help assemble release notes from commits and task files.

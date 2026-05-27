@@ -4,8 +4,8 @@ All notable BrainRouter changes. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and versions
 follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
-Use this file for the **current release view**. Full per-version notes
-live in [`brainrouter-changelog/`](brainrouter-changelog/).
+Use this file for the current release view. Full per-version notes live
+in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
@@ -13,7 +13,7 @@ live in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
-| **0.3.9** | In progress | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
+| **0.3.9** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
 | **0.3.6** | Shipped — 2026-05-25 | [`brainrouter-changelog/0.3.6.md`](brainrouter-changelog/0.3.6.md) |
@@ -23,101 +23,79 @@ this changelog.
 
 ---
 
-## [0.3.9] - Unreleased
+## [0.3.9] - 2026-05-28
 
-CLI memory briefing quality **plus** Reasonix-inspired cache-first loop, tool-call repair, cost-control, and a clean-room CLI configuration story. The pre-0.4.0 release.
+Memory briefing quality, cache-first context, tool-call repair,
+cost-control, and CLI configuration cleanup.
 
-### CLI configuration consolidated
+### Breaking / Removed
 
-- **Single source of truth: `~/.config/brainrouter/config.json`.** Every former `BRAINROUTER_*` behaviour env var (recall mode, sandbox, alt-screen, tool-loop / sequence / storm thresholds, parallel safety, theme, quiet, effort, timeouts, child-drain / child-agent / shrink ratios, schedule tick, debug-exit, workspace, trace log, etc.) is now a typed field under `cli.*` in `~/.config/brainrouter/config.json`, lazy-loaded once per process via `getCliKnobs()` and overridable in-process by argv flags or tests via `setCliKnobOverride()`. `.env` support fully retired — credential env vars (`OPENAI_API_KEY`, `BRAINROUTER_API_KEY`, …) and the `BRAINROUTER_HOME` install override remain.
-- **Externalised model + provider catalogs.** New JSON files under `brainrouter-cli/config/` — `models.json` (per-model context windows + pricing), `providers.json` (catalog, endpoints, envKey), `api-key-prefixes.json` (wizard validation). Edits no longer require a rebuild; `runtime/configLoader.ts` loads + caches with fallback defaults.
-- **LM Studio native `/api/v1/models` enrichment.** When the active endpoint is `http://localhost:1234/v1`, the CLI fetches LM Studio's richer JSON (loaded state, params, quantisation, format, trained-for-tool-use flag, reasoning options) and surfaces it in `/status` and the wizard model picker. Non-LM-Studio endpoints unaffected.
-- **Content-aware token estimator.** `runtime/tokenEstimate.ts` buckets characters into CJK / code-density / prose for a 20–40% more accurate token count on mixed inputs; used as the fallback when `response.usage.prompt_tokens` is unavailable. Auto-compact still fires on a single absolute `cli.autoCompactTokens` threshold (default 80,000) — no model-context-window driven compaction.
-- **CLI-side recall fallback wrapper dropped.** Brain ships per-stage fallbacks already (vector → fts+filepath → reranker via RRF → judge via reranker); the redundant CLI wrapper and its hardcoded `RECALL_*` knobs were removed.
+- CLI `.env` loading removed; behavior settings now live under `cli.*`
+  in `~/.config/brainrouter/config.json`.
+- Native Anthropic `/v1/messages` adapter removed; Claude remains
+  reachable through OpenAI-compatible gateways.
+- CLI recall fallback wrapper removed; the brain-side recall pipeline
+  owns fallback behavior.
 
-### Shipped within 0.3.9 (items 1–7)
+### Added
 
-- **Adaptive briefing triggers.** Gated recall now reasons over first turn, post-compaction, continuation, memory/history, file path, debug/retry, recent tool failure, active-goal periodic refresh, and child-agent synthesis cues instead of only first-turn/post-compaction/entity-token checks.
-- **Source-aware briefing.** Auto-briefing can route across recall, working memory, task state, recall explanations, file history, and failed attempts, while degrading cleanly when optional MCP tools are absent.
-- **TokenJuice-lite compaction.** Large JSON and command/tool outputs are compacted before entering model-visible context; full raw outputs remain in transcripts.
-- **Inspectable memory decisions.** `/briefing` now shows decision, reasons, planned/queried sources, skipped sources, source stats, record IDs, warnings, injected tokens, and compacted chars avoided.
-- **Read-only source manifest spike.** `/memories sources [limit]` scans local code/docs into a bounded ephemeral manifest without schema writes, chunk tables, or vault mirroring.
-- **Memory capture redaction + secret block.** CLI turn capture redacts obvious secrets and now refuses the capture outright when credential-shaped tokens (`sk-…`, `ghp_…`, `AKIA…`, PEM keys, Slack `xox`) remain in the payload. Recall card previews are redacted to match the opaque-dump path.
-- **Memory policy warnings.** `/briefing` flags stale/superseded/needs-verification records and off-workspace path references in recalled content via a new `memoryPolicy` module.
-- **Briefing benchmark coverage.** Local tests cover trigger cases, compaction savings, and end-to-end `buildMemoryBriefing` runs against stub MCP for all six roadmap scenarios (first-turn, continuation, file-specific, debug retry, post-compaction, child synthesis).
-- **Slim provider catalog.** `/config provider` lists OpenAI / LM Studio / Ollama; OpenAI doubles as the OpenAI-compatible custom base URL flow. `/v1/models` live picker.
-- **Local-endpoint LLM timeouts.** New `brainrouter/src/memory/llm-response.ts` resolves long timeouts for LM Studio / Ollama loopback endpoints without overriding remote-endpoint defaults.
-- **Ink REPL polish.** New `fileIndex.ts` powers `@`-mention file picker, streaming row, paste handling, expanded `/workflow` commands, banner copy.
+- Adaptive, source-aware memory briefing with `/briefing` inspection.
+- Read-only source manifest via `/memories sources [limit]`.
+- Cache-first context regions and prefix-pinned memory cards.
+- Cache-hit telemetry, tool-call repair, turn-end tool-result shrink,
+  model-tier self-escalation, and cost/cache reporting in `/tokens`.
 
-### Shipped within 0.3.9 (items 8–14, Reasonix-inspired)
+### Changed
 
-- **Cache-first context regions.** `ImmutablePrefix` / `AppendOnlyLog` / `VolatileScratch` (`brainrouter-cli/src/runtime/contextRegions.ts`) so the prefix is byte-stable across turns; SHA-256 fingerprint emitted to tracing on every LLM call. Cites `openSrc/DeepSeek-Reasonix/src/memory/runtime.ts`.
-- **Prefix-pinned memory briefing.** Memory cards pinned into the immutable prefix as a synthetic system message; mid-session re-briefings append a mid-session refresh card to the log instead of rewriting the prefix. New `/refresh-memory` slash command; `BRAINROUTER_PREFIX_MEMORY_ANCHORS=off` env switch falls back to legacy behavior. **Unique to BrainRouter** — combines the Reasonix prefix-cache invariants with our MCP-backed memory brain.
-- **Cache-hit telemetry.** Normalise OpenAI (`prompt_tokens_details.cached_tokens`) and DeepSeek (`prompt_cache_hit_tokens`) cache fields; per-turn cache-hit % in `/tokens` and rolled into `lastTurnUsage` / `sessionUsage`.
-- **Tool-call repair pipeline.** `flatten` (>10-leaf / depth >2 → dot-notation), `scavenge` (recover calls leaked into the content channel), `truncation` (rebalance unbalanced JSON), `storm` (suppress identical-args loops with mutation-aware clearing). New `brainrouter-cli/src/agent/repair/` directory. Suppressed calls surface as `onToolEnd` events + synthetic `ERROR:` tool_results so OpenAI invariants hold.
-- **Turn-end tool-result auto-shrink.** Walks chat history at turn end and compacts oversized `role: tool` entries; full outputs remain in transcripts. `BRAINROUTER_TURN_END_RESULT_CAP_TOKENS` env override (default 3000).
-- **Model-tier self-escalation.** `<<<NEEDS_HIGH>>>` marker (with optional `:reason`) on the first line of a response triggers a one-step tier-up retry; bounded per turn so a marker-loop can't churn. Provider ladders for OpenAI / DeepSeek built in; new `/tier flash|standard|pro|auto` slash command persists the pin.
-- **Cost + cache panel.** `/tokens` now shows colored per-turn USD, session USD, cache savings vs. no-cache baseline. Pricing table at `runtime/pricing.ts`, overridable at `~/.config/brainrouter/pricing.json`.
-
-### Removed in 0.3.9
-
-- **Anthropic native provider support.** The `/v1/messages` adapter added in 0.3.8-I6 (`brainrouter-cli/src/runtime/anthropicAdapter.ts`) and its supporting surfaces (provider catalog entry, `sk-ant-` known prefix, `ANTHROPIC_API_KEY` env-detect row, Anthropic cache-stat branch, Anthropic tier ladder, `claude-*` pricing rows, Anthropic-native runtime tests) were removed. Claude models remain reachable via OpenAI-compatible gateways (OpenRouter, Together, Fireworks); set `provider: 'openai'` and point `endpoint` at the gateway base URL.
-- **Anthropic adapter test file.** `brainrouter-cli/src/tests/anthropic-adapter.test.ts` deleted alongside the adapter.
+- CLI behavior knobs consolidated into typed `config.json` fields.
+- Model/provider/API-key-prefix catalogs moved to JSON files.
+- LM Studio `/api/v1/models` metadata appears in `/status` and the
+  wizard when using the local LM Studio endpoint.
+- Provider picker slimmed to OpenAI, LM Studio, and Ollama; OpenAI is
+  the custom OpenAI-compatible endpoint path.
+- Memory capture redacts secrets and blocks credential-shaped payloads.
 
 ---
 
 ## [0.3.8] - 2026-05-26
 
-CLI delegation reliability, parallel reads, native Anthropic adapter, and a tranche of quick wins carried from 0.3.7.
+CLI delegation reliability, parallel reads, native Anthropic adapter,
+and quick wins carried from 0.3.7.
 
-- **Runtime child-drain guardrail.** Parent turn refuses to accept a no-tool answer while spawned children are pending/running; auto-calls `wait_agents` with a bounded timeout (`BRAINROUTER_CHILD_DRAIN_TIMEOUT_MS`, default 30 s); timeout returns explicit child ids/statuses + `/continue` hint.
-- **`task_agent` / `delegate_agent` split.** Foreground `task_agent` blocks with a timeout envelope; background `delegate_agent` returns a running id with a "continue working" hint. System prompt steers: direct → direct tool → task → delegate. `spawn_agent({ wait: true })` backward-compatible.
-- **Child progress visibility in Ink.** Per-child tool rows (id, role, tool, duration, success/error, summary) plus a live "running children" status row while the parent waits.
-- **Safe parallel execution for read-only tools.** Independent reads run via `Promise.allSettled`; writes/shell/orchestration stay serial; tool_result order preserved; unknown tools fail safe to serial.
-- **Cron-style `/schedule`.** Standard 5-field cron alongside the existing `in 5m` / `at 14:30` one-shots. Persistent `.brainrouter/schedules.json`; in-process ticker with catch-up after sleep; `/schedule list|remove|enable|disable`.
-- **`/release-notes` in-CLI.** Render current or past version notes inside the Ink REPL; `/release-notes list` enumerates bundled versions. Build ships `changelog/*.md` with the npm package.
-- **Strict tool-call recovery.** Dedup duplicate tool_call ids; synthetic error tool_results on `JSON.parse` failures; orphan-result synthesis keeps OpenAI's strict pairing well-formed; unknown tool names return a "did you mean: <closest>" hint.
-- **Per-vendor MCP install snippets.** `/mcp install <vendor>` for Claude Desktop, Cursor, Windsurf, VS Code Continue, Zed — paste-ready JSON with the active profile's URL/API key substituted. `/mcp install list` enumerates vendors with OS-resolved paths.
-- **Native Anthropic `/v1/messages` adapter.** Talk Anthropic's native shape when the profile is Anthropic; `tool_use`/`tool_result` content blocks; system field extracted; opt-in prompt caching (`BRAINROUTER_ANTHROPIC_CACHE=1`); extended thinking on Claude 4-series Sonnet/Opus with `/effort high`. OpenAI path byte-identical for other providers.
-- **Hooks JSON authoring doc.** New `brainrouter-docs/hooks.md` covers `.brainrouter/hooks.json` + `.brainrouter/hookify/*.json` schemas with three worked examples and debugging tips.
-- **Ink question overlays.** `ask_user_choice` and `askYesNo` render through the active Ink chat overlay instead of the legacy raw stdout picker; single-select, multi-select, and `Other` fallback all supported.
-
-## Fixes
-
-- **Briefing now finds prefixed memory tools.** `🧠 Briefing: 0 records from (none)` no longer appears when the brain MCP exposes `mcp_brainrouter_memory_recall`. New `hasMcpTool` helper matches both bare and `mcp_<server>_<tool>` shapes.
-- **Single-underscore tool naming standardised.** `mcp_<server>_<tool>` is canonical everywhere; double-underscore `mcp__<server>__<tool>` deprecated and normalised at the pool boundary. CI grep guard prevents regressions.
-- **R1 guardrail recognises `task_agent` / `delegate_agent`.** Without this, `delegate_agent` silently bypassed the child-drain guardrail.
-- **`task_agent` / `delegate_agent` access-mode gating.** Added to the read-only allowed-tool set.
-- **`handleDelegateAgent` propagates errors verbatim** when there's no parseable child id, preserving both the failure message and the id the guardrail needs.
-- **`handleWait` no longer leaks setTimeout handles.**
-- **`parseInt` NaN guard for `BRAINROUTER_MAX_SPAWN_DEPTH`** — garbled env values fall back to the default (3) instead of disabling the cap.
-- **JWT base64url tampering detection** — `verifyJwt` compares signatures in base64url string space; previous raw-byte comparison missed single-character padding-bit changes.
+- Runtime child-drain guardrail prevents prose-only fake waiting while
+  child agents are still running.
+- `task_agent` and `delegate_agent` split foreground vs background
+  child work.
+- Child progress rows, Ink question overlays, and visible yes/no
+  approvals improve REPL feedback.
+- Safe read-only tool calls can run in parallel while writes remain
+  serialized.
+- `/schedule`, `/release-notes`, hooks docs, strict tool-call recovery,
+  and per-vendor MCP install snippets shipped.
+- Briefing now finds prefixed memory tools; `mcp_<server>_<tool>` is the
+  canonical MCP tool-name form.
 
 ## [0.3.7] - 2026-05-26
 
-Terminal UI redesign, in-terminal configuration, full Ink chat REPL, and multi-agent registry foundations.
+Terminal UI redesign, in-terminal configuration, full Ink chat REPL, and
+multi-agent registry foundations.
 
-- **Full Ink chat REPL.** Every surface — banner, composer, scrollback, tool events, slash palette, footer — renders through a single Ink tree. Inline slash palette with fuzzy ranking and keyboard navigation; `/config` / `/login` / `/init` render as overlays inside the chat, eliminating raw-mode conflicts.
-- **First-run wizard** auto-triggers on first launch: `Welcome → Theme → Provider → API key → Model → MCP → AGENT.md → Done`. Re-enterable via `/init`; `/init agentmd` for legacy AGENT.md-only scaffold.
-- **`/config` settings panel + multi-profile MCP manager.** Arrow-key settings home; `/config <key>` / `/config <key> <value>` scriptable forms. MCP row rebuilt as a full profile manager (list, add, edit, probe, remove) with hot-connect — no CLI restart needed.
-- **`/login`** in-REPL MCP profile editor; **`/model`** live model picker from the active endpoint's `/v1/models`.
-- **Multi-MCP pool.** Connects to all configured servers concurrently on boot; tools merged into one inventory with `mcp__<serverId>__<tool>` prefixing. `/mcp connect|disconnect|reconnect` commands; one server failure does not cascade.
-- **Identity-based MCP tool prefix.** Servers with `identity: "brainrouter"` expose tools as `mcp__brainrouter__<tool>` regardless of their config key — skills targeting the canonical prefix survive profile renames.
-- **Data-driven agent registry.** Built-in agents (`explorer`, `architect`, `reviewer`, `worker`, `verifier`) are JSON files under `brainrouter-cli/agents/`. Three-tier merge: built-in → user-global → workspace, workspace wins. `spawn_agent` gains `agentId`; `/agents defs` lists all definitions.
-- **Spawn tier hierarchy + depth caps.** `tier` field (`reasoning` | `worker`) on each definition; depth capped at 3 (`BRAINROUTER_MAX_SPAWN_DEPTH`). `worker` agents cannot delegate; `reasoning` agents can only spawn `worker` children.
-- **CLI/server env separation.** CLI reads credentials only from `~/.config/brainrouter/config.json`; package `.env` files no longer read. MCP child stderr piped — server logs no longer bleed into the Ink UI.
-
----
+- Full Ink chat REPL, slash palette, first-run wizard, `/config`,
+  `/login`, `/init`, and live `/model` picker.
+- Multi-profile MCP manager with hot connect/disconnect/reconnect.
+- Data-driven built-in agent registry and spawn-tier/depth rules.
+- CLI/server env separation so server logs no longer bleed into the UI.
 
 ## [0.3.6] - 2026-05-25
 
-Smarter recall, friendlier CLI, more reliable agent loop.
+Smarter recall, friendlier CLI, and a more reliable agent loop.
 
-- **Multi-workflow concurrency.** `/workflow switch <slug>` flips between workflows in the same workspace; `/workflows` lists them with artifact markers.
-- **New session knobs.** `/effort low|medium|high`, `/mode planning|fast`, `/review-policy request|proceed`, `/grill-me <task>`, and `ask_user_choice` mid-turn arrow-key picker.
-- **Context budget — 70% lighter system prompt + gated recall.** Static prompt cut from ~4,750 → ~1,400 tokens; briefing fires only on turn 1, post-compaction, or entity-rich prompts. Goal text deduplicated to a single per-turn anchor.
-- **MCP identity + offline UX + multi-MCP foundation.** BrainRouter MCP auto-detected; offline swaps system prompt to a `⚠️ OFFLINE` block. New `/mcp list` / `/mcp reconnect` / `/mcp tools` dispatcher.
-- **REPL stdin no longer freezes** after spinner-based slash commands.
+- Multi-workflow switching and workflow listing.
+- `/effort`, `/mode`, `/review-policy`, `/grill-me`, and mid-turn
+  `ask_user_choice`.
+- Static prompt cut from about 4,750 tokens to about 1,400 tokens, with
+  gated recall and deduplicated goal anchors.
+- MCP identity detection, offline UX, and multi-MCP foundations.
 
 ---
 
