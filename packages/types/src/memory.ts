@@ -119,6 +119,32 @@ export interface CognitiveRecord {
   lastCitedAt: string | null;
   neverCitedCount: number;
   archived: boolean;
+  /**
+   * Federation Stage 1 (0.4.0) — optional workspace identifier the
+   * record was captured under. Default is a stable hash of the
+   * workspace root path (see `workspaceTagFromPath`). NULL means
+   * "no workspace context known at capture time" — recall filters
+   * are NULL-tolerant on either side so legacy records keep
+   * surfacing across all workspaces until they're re-captured.
+   */
+  workspaceTag?: string | null;
+}
+
+import { createHash } from "node:crypto";
+
+/**
+ * Compute the canonical workspace tag from a workspace root path —
+ * a 16-char hex SHA-256 prefix. The same root always hashes to the
+ * same tag, so the BrainRouter CLI and any peer MCP client agree on
+ * the identifier without coordinating.
+ *
+ * Empty/missing input returns `null` rather than a hash of an empty
+ * string, so callers can pass an unresolved workspace through without
+ * accidentally tagging records with a synthetic constant.
+ */
+export function workspaceTagFromPath(workspaceRoot: string | undefined | null): string | null {
+  if (!workspaceRoot || workspaceRoot.trim() === "") return null;
+  return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
 }
 
 export interface MemoryEvidence {
@@ -211,6 +237,8 @@ export interface VectorSearchResult {
   session_id: string;
   metadata_json: string;
   created_time: string;
+  /** Federation Stage 1 (0.4.0) — workspace hash; NULL on legacy rows. */
+  workspace_tag?: string | null;
 }
 
 
@@ -232,6 +260,8 @@ export interface CognitiveFtsResult {
   created_time: string;
   /** ACE feedback: number of times this memory was cited by the agent. */
   citation_count?: number;
+  /** Federation Stage 1 (0.4.0) — workspace hash; NULL on legacy rows. */
+  workspace_tag?: string | null;
 }
 
 export interface RecalledMemory {

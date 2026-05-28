@@ -1,8 +1,31 @@
 # Installing BrainRouter MCP in Non-CLI Hosts
 
 BrainRouter exposes an HTTP MCP server you can plug into any host that
-speaks the Model Context Protocol — Claude Desktop, Cursor, Windsurf,
-VS Code (Continue), Zed, Cline, and more.
+speaks the Model Context Protocol — Claude Desktop, Claude Code, Codex,
+Cursor, Gemini CLI, Windsurf, VS Code (Continue), Zed, Cline, and more.
+
+## Federation primer (0.4.0)
+
+As of **0.4.0**, every MCP-aware host you connect to a BrainRouter
+profile joins a **shared memory plane** keyed by your BrainRouter
+userId (resolved from the API key in the snippet below). A spec
+drafted in BrainRouter CLI this morning is visible to Claude Code or
+Codex this afternoon without any handoff step. Two windows of the same
+host pointed at the same key federate too — they see each other's
+sessions and can pass messages once Stages 2–3 land.
+
+Concretely:
+
+- **Shared memory.** All cognitive records, working memory, and
+  briefing sources resolve against the same SQLite pool when hosts
+  share a userId. WAL mode is required (and verified by the brain
+  store on boot — see §4.1 `FED-S1-T1`).
+- **Per-host transport.** All federated hosts use the same HTTP MCP
+  endpoint with `Authorization: Bearer <api-key>` — there's no
+  per-vendor protocol surface to learn.
+- **Workspace scoping (optional).** A future Stage 1 task wires a
+  `workspaceTag` filter so an editing-project-A session doesn't see
+  the noise from project-B (FED-S1-T3); ungated until then.
 
 The fastest path is the in-CLI snippet generator:
 
@@ -24,7 +47,10 @@ an active profile yet.
 | id                | Host                          | Config path (POSIX)                                                              |
 | ----------------- | ----------------------------- | -------------------------------------------------------------------------------- |
 | `claude-desktop`  | Claude Desktop                | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)        |
+| `claude-code`     | Claude Code (CLI)             | `~/.claude/mcp.json`                                                             |
+| `codex`           | Codex (CLI)                   | `~/.codex/mcp.json`                                                              |
 | `cursor`          | Cursor                        | `~/.cursor/mcp.json`                                                             |
+| `gemini-cli`      | Gemini CLI                    | `~/.gemini/mcp.json`                                                             |
 | `windsurf`        | Windsurf (Codeium)            | `~/.codeium/windsurf/mcp_config.json`                                            |
 | `vscode-continue` | VS Code (Continue extension)  | `~/.continue/config.json` (under `experimental.modelContextProtocolServers`)     |
 | `zed`             | Zed                           | `~/.config/zed/settings.json` (under `context_servers`)                          |
@@ -33,7 +59,10 @@ an active profile yet.
 Per-vendor restart behaviour:
 
 - **Claude Desktop** — full quit + reopen (only re-reads config on cold start).
+- **Claude Code** — start a fresh `claude` session; `~/.claude/mcp.json` is re-read at session start.
+- **Codex** — start a fresh `codex` session; `~/.codex/mcp.json` is re-read at session start.
 - **Cursor** — auto-reloads; reopen the MCP panel if the server doesn't appear.
+- **Gemini CLI** — reloads on next invocation; no daemon to restart.
 - **Windsurf** — click "Refresh" in the MCP panel.
 - **VS Code Continue** — picks up changes live; no reload required.
 - **Zed** — reloads on save; reopen the assistant panel.
@@ -55,6 +84,38 @@ Per-vendor restart behaviour:
 ```
 
 Paste into `~/.cursor/mcp.json`, merging with any existing `mcpServers`.
+
+## Example: Claude Code
+
+`/mcp install claude-code` prints:
+
+```json
+{
+  "mcpServers": {
+    "brainrouter": {
+      "url": "https://api.brainrouter.cloud/mcp",
+      "headers": { "Authorization": "Bearer br_live_..." }
+    }
+  }
+}
+```
+
+Save to `~/.claude/mcp.json` (merge with any existing `mcpServers`),
+then start a fresh `claude` session. The shared memory pool is
+immediate — any record you wrote from BrainRouter CLI under the same
+userId is recallable from Claude Code.
+
+## Example: Codex
+
+`/mcp install codex` prints the same shape, destined for
+`~/.codex/mcp.json`. Restart pattern identical: start a fresh `codex`
+session.
+
+## Example: Gemini CLI
+
+`/mcp install gemini-cli` prints the same shape, destined for
+`~/.gemini/mcp.json`. No restart needed — the next `gemini` invocation
+picks it up.
 
 ## Conventions
 
