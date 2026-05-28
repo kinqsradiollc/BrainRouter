@@ -100,7 +100,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/audit', desc: 'Recent memory audit log' },
       { cmd: '/export [path]', desc: 'Dump memory + evidence + ops to JSON' },
       { cmd: '/import <path>', desc: 'Import a BrainRouter memory envelope' },
-      { cmd: '/persona <name>', desc: 'Fetch a persona definition' },
+      { cmd: '/persona', desc: 'Show active Core Identity; subcommands: refresh, on, off, <name>' },
       { cmd: '/skill-hints <skill> <hints>', desc: 'Register extraction hints' },
       { cmd: '/diagnostics', desc: 'Scrubbed runtime + DB stats bundle' },
     ],

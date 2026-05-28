@@ -56,6 +56,12 @@ import { createSkill, createSkillSchema } from './tools/create_skill.js';
 import { updateSkill, updateSkillSchema } from './tools/update_skill.js';
 import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from './tools/memory_capture_turn.js';
 import { memoryRecallToolSchema, handleMemoryRecall } from './tools/memory_recall.js';
+import {
+  memoryPersonaToolSchema,
+  handleMemoryPersona,
+  memoryPersonaRefreshToolSchema,
+  handleMemoryPersonaRefresh,
+} from './tools/memory_persona.js';
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
@@ -249,6 +255,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       },
       memoryCaptureTurnToolSchema,
       memoryRecallToolSchema,
+      memoryPersonaToolSchema,
+      memoryPersonaRefreshToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
@@ -286,6 +294,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
         case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
         case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
+        case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
+        case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);

@@ -2716,7 +2716,11 @@ export class Agent {
 
     const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
     const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
-    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal);
+    const personaPref = readPreferences(this.workspaceRoot).personaAnchorEnabled;
+    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal, {
+      personaAnchorConfig: getCliKnobs().personaAnchor,
+      personaAnchorPreference: personaPref,
+    });
     const sourcesPlannedNames = describeSourcePlan(sourcePlan);
     const decision = decideMemoryBriefing({
       prompt,

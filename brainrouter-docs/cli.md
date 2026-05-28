@@ -606,7 +606,10 @@ tall ones. `/help <category>` drills in.
 | `/audit` | Run a governance audit. |
 | `/export <path>` | Export the memory store. |
 | `/import <path>` | Import a memory snapshot. |
-| `/persona` | Show the current CoreIdentity. |
+| `/persona` | Show active Core Identity (markdown body + hash + anchor state). |
+| `/persona refresh` | Re-distill Core Identity via `memory_persona_refresh`; clears the pinned anchor. |
+| `/persona on\|off` | Toggle the workspace persona anchor (does not delete the `core_identity` row). |
+| `/persona <name>` | Back-compat: fetch a named persona definition from the Registry (legacy `get_persona`). |
 | `/skill-hints` | List registered skill keyword triggers. |
 | `/diagnostics` | Show MCP-side memory diagnostics. |
 | `/working` | Inspect the working-memory canvas. |
@@ -738,6 +741,11 @@ Provider-agnostic — works against any OpenAI-compatible endpoint.
 
 Each turn the CLI **may** open with an injected briefing built from:
 
+- `memory_persona` (Core Identity) — pinned at the top of the briefing
+  as a dedicated `### Core Identity` section. Hash-stable across turns,
+  so the prefix cache holds; only re-anchors when the persona body
+  changes. Gated by `cli.personaAnchor` in `config.json` *and* the
+  per-workspace preference toggled by `/persona on|off` (0.4.0).
 - `memory_recall` against the user prompt.
 - `memory_working_context` (active scenes + working canvas).
 - `memory_task_state` (open task / handover state) — **skipped** when an

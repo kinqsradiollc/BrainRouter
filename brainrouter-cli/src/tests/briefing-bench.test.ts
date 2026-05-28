@@ -201,6 +201,102 @@ test('briefing bench: buildMemoryBriefing surfaces expected record IDs across al
   }
 });
 
+test('briefing bench: persona pinned at top of block with hash metadata', async () => {
+  const briefing = await buildMemoryBriefing({
+    mcpClient: makeStubClient({
+      memory_persona: {
+        personaMd: '# Anh\nSenior engineer; prefers terse responses.',
+        hash: 'abcdef0123456789',
+        cognitiveCountAtGeneration: 12,
+        updatedTime: '2026-05-28T00:00:00Z',
+      },
+      memory_recall: { recalledCognitiveMemories: [{ recordId: 'rec-x', content: 'hit' }] },
+    }),
+    mcpTools: [{ name: 'memory_persona' }, { name: 'memory_recall' }],
+    sessionKey: 'bench',
+    workspaceRoot: '/tmp/bench-ws',
+    query: 'continue from the previous issue',
+  });
+  assert.ok(briefing.sourcesQueried.includes('memory_persona'));
+  assert.match(briefing.block, /### Core Identity \(hash abcdef0123456789 · 12 cognitives\)/);
+  // Persona section appears before the recalled-cognitive-memories section.
+  const personaIdx = briefing.block.indexOf('### Core Identity');
+  const recallIdx = briefing.block.indexOf('### Recalled cognitive memories');
+  assert.ok(personaIdx >= 0 && recallIdx > personaIdx, 'persona section must precede recall section');
+});
+
+test('briefing bench: persona tool absent → skippedSources records the gap', async () => {
+  const briefing = await buildMemoryBriefing({
+    mcpClient: makeStubClient({
+      memory_recall: { recalledCognitiveMemories: [{ recordId: 'rec-only', content: 'present' }] },
+    }),
+    mcpTools: [{ name: 'memory_recall' }],
+    sessionKey: 'bench',
+    workspaceRoot: '/tmp/bench-ws',
+    query: 'start this task',
+  });
+  assert.ok(
+    briefing.skippedSources.some((s) => s.source === 'memory_persona' && /unavailable/.test(s.reason)),
+    `expected persona skipped, got: ${JSON.stringify(briefing.skippedSources)}`,
+  );
+});
+
+test('briefing bench: cli.personaAnchor=off suppresses persona from default plan', async () => {
+  const { buildDefaultSourcePlan, describeSourcePlan } = await import('../memory/briefing.js');
+  const plan = buildDefaultSourcePlan('start this task', false, { personaAnchorConfig: 'off' });
+  assert.equal(plan.includeCoreIdentity, false);
+  assert.ok(!describeSourcePlan(plan).includes('memory_persona'));
+});
+
+test('briefing bench: personaAnchorPreference=false overrides config=on', async () => {
+  const { buildDefaultSourcePlan } = await import('../memory/briefing.js');
+  const plan = buildDefaultSourcePlan('start this task', false, {
+    personaAnchorConfig: 'on',
+    personaAnchorPreference: false,
+  });
+  assert.equal(plan.includeCoreIdentity, false);
+});
+
+test('briefing bench: persona body longer than maxChars cap renders fully (no JSON truncation)', async () => {
+  // A 10k-char persona is well over the default briefingMaxCharsPerSource of
+  // 4000. The renderer must read the structured `parsed` payload from the MCP
+  // client — not the sliced raw text — or the trailing JSON closing brace
+  // gets chopped and parsing fails silently.
+  const longBody = '# Anh\n' + 'Senior engineer with strong preferences. '.repeat(250);
+  const briefing = await buildMemoryBriefing({
+    mcpClient: makeStubClient({
+      memory_persona: {
+        personaMd: longBody,
+        hash: 'deadbeefcafebabe',
+        cognitiveCountAtGeneration: 99,
+      },
+    }),
+    mcpTools: [{ name: 'memory_persona' }],
+    sessionKey: 'bench',
+    workspaceRoot: '/tmp/bench-ws',
+    query: 'start this task',
+    maxCharsPerSource: 4000,
+  });
+  assert.match(briefing.block, /### Core Identity \(hash deadbeefcafebabe · 99 cognitives\)/);
+  assert.ok(briefing.block.includes(longBody.trim()), 'full persona body must render even when raw text exceeds maxChars');
+});
+
+test('briefing bench: persona body is empty → section is silently skipped', async () => {
+  const briefing = await buildMemoryBriefing({
+    mcpClient: makeStubClient({
+      memory_persona: { personaMd: null, hash: '', reason: 'no Core Identity yet' },
+      memory_recall: { recalledCognitiveMemories: [{ recordId: 'rec-y', content: 'hit' }] },
+    }),
+    mcpTools: [{ name: 'memory_persona' }, { name: 'memory_recall' }],
+    sessionKey: 'bench',
+    workspaceRoot: '/tmp/bench-ws',
+    query: 'start this task',
+  });
+  // memory_persona was queried (it appears in sourcesQueried) but produced no section.
+  assert.ok(briefing.sourcesQueried.includes('memory_persona'));
+  assert.ok(!briefing.block.includes('### Core Identity'));
+});
+
 test('briefing bench: missing optional tools degrade silently', async () => {
   const briefing = await buildMemoryBriefing({
     mcpClient: makeStubClient({

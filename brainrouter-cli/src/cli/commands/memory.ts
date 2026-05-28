@@ -18,6 +18,7 @@ import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { consolidateMemories } from '../../memory/consolidation.js';
 import { scanWorkspaceSources } from '../../memory/sourceManifest.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
+import { getCliKnobs } from '../../config/config.js';
 import type { CommandContext } from './_context.js';
 import { printMcpCall, printMemoryCards } from './_helpers.js';
 
@@ -189,12 +190,75 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       return true;
     }
     case '/persona': {
-      const name = args.join(' ').trim();
-      if (!name) {
-        console.log(chalk.red('\nUsage: /persona <persona-name>\n'));
-        console.log(chalk.gray('  Example: /persona code-reviewer (see /skills for available personas)\n'));
+      const sub = args[0]?.trim();
+
+      // Subcommand: /persona refresh — re-distill Core Identity via the brain.
+      if (sub === 'refresh') {
+        const spinner = makeSpinner(chalk.gray('Re-distilling Core Identity from persona + instruction cognitives…')).start();
+        const res = await callMcpTool<any>(mcpClient, 'memory_persona_refresh', {});
+        if (res.isError) {
+          spinner.fail(chalk.red(`memory_persona_refresh failed: ${res.text || '(no message)'}`));
+          return true;
+        }
+        const parsed = res.parsed ?? {};
+        if (parsed.status === 'ok' && parsed.personaMd) {
+          spinner.succeed(chalk.green(`Core Identity refreshed (hash ${parsed.hash}, ${parsed.cognitiveCountAtGeneration ?? '?'} cognitives).`));
+          agent.clearPinnedMemoryAnchor();
+          console.log(chalk.gray('  Anchor cleared — next turn will re-pin the new persona.\n'));
+        } else {
+          spinner.warn(chalk.yellow(`Refresh skipped: ${parsed.reason ?? 'unknown reason'}\n`));
+        }
         return true;
       }
+
+      // Subcommands: /persona on | off — toggle preference; do not delete the
+      // underlying core_identity row.
+      if (sub === 'on' || sub === 'off') {
+        const enabled = sub === 'on';
+        writePreferences(agent.workspaceRoot, { personaAnchorEnabled: enabled });
+        agent.clearPinnedMemoryAnchor();
+        console.log(chalk.green(`\n✓ Persona anchor ${enabled ? 'enabled' : 'disabled'}.`));
+        console.log(chalk.gray('  Anchor cleared — next turn will rebuild the briefing.\n'));
+        return true;
+      }
+
+      // Subcommand: /persona show (or no args) — render the active Core Identity.
+      if (!sub || sub === 'show' || sub === 'status') {
+        const prefs = readPreferences(agent.workspaceRoot);
+        const configOff = getCliKnobs().personaAnchor === 'off';
+        const effectivelyOn = prefs.personaAnchorEnabled && !configOff;
+        const res = await callMcpTool<any>(mcpClient, 'memory_persona', {});
+        console.log(chalk.bold('\nCore Identity'));
+        console.log(`  Anchor:     ${effectivelyOn ? chalk.green('on') : chalk.gray('off')}${configOff ? chalk.gray(' (config.json cli.personaAnchor=off)') : ''}`);
+        if (res.isError) {
+          console.log(chalk.red(`  memory_persona failed: ${res.text || '(no message)'}`));
+          return true;
+        }
+        const parsed = res.parsed ?? {};
+        if (!parsed.personaMd) {
+          console.log(chalk.yellow(`  ${parsed.reason ?? 'No Core Identity yet.'}`));
+          console.log(chalk.gray('  Run: /persona refresh\n'));
+          return true;
+        }
+        console.log(`  Hash:       ${chalk.cyan(parsed.hash ?? '(unknown)')}`);
+        if (parsed.cognitiveCountAtGeneration != null) {
+          console.log(`  Cognitives: ${chalk.cyan(String(parsed.cognitiveCountAtGeneration))}`);
+        }
+        if (parsed.updatedTime) console.log(`  Updated:    ${chalk.gray(parsed.updatedTime)}`);
+        if (parsed.createdTime) console.log(`  Created:    ${chalk.gray(parsed.createdTime)}`);
+        console.log(chalk.bold('\n  Body:'));
+        for (const line of String(parsed.personaMd).split('\n')) {
+          console.log('    ' + line);
+        }
+        console.log();
+        return true;
+      }
+
+      // Back-compat: /persona <named-persona> still fetches a registry persona
+      // definition (e.g. /persona code-reviewer). Reserved subcommands above
+      // shadow this only for the exact tokens `refresh`, `on`, `off`, `show`,
+      // `status`.
+      const name = args.join(' ').trim();
       await printMcpCall(mcpClient, 'get_persona', { name }, `Persona · ${name}`);
       return true;
     }
@@ -234,6 +298,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log(`  Enabled: ${prefs.memoriesEnabled ? chalk.green('on') : chalk.gray('off')}`);
         console.log(chalk.gray('  Subcommands:'));
         console.log(chalk.gray('    /memories on | off          — toggle the pipeline'));
+        console.log(chalk.gray('    /memories list [query]      — list memories with citation precision'));
         console.log(chalk.gray('    /memories consolidate       — write user/feedback/project/reference files'));
         console.log(chalk.gray('    /memories sources [limit]   — read-only local source manifest spike'));
         console.log(chalk.gray('    /memories status            — show this view\n'));
@@ -261,6 +326,33 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         }
         return true;
       }
+      if (sub === 'list') {
+        // /memories list [query] — surface recent records with citation
+        // metrics so users can see what the brain is about to archive
+        // before auto-archive fires (T5). Backed by memory_search since
+        // it returns full CognitiveRecord shapes including citationCount
+        // and neverCitedCount.
+        const query = args.slice(1).join(' ').trim() || '*';
+        const res = await callMcpTool<any>(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey });
+        if (res.isError) {
+          console.log(chalk.red(`\nmemory_search failed: ${res.text || '(no message)'}\n`));
+          return true;
+        }
+        const memories = extractMemories(res.parsed);
+        console.log();
+        console.log(renderMemoryCards(memories, `Memories${query !== '*' ? ` · "${query}"` : ''}`, 20));
+        const noisy = memories.filter((m) => {
+          const total = (m.citationCount ?? 0) + (m.neverCitedCount ?? 0);
+          if (total === 0) return false;
+          return (m.citationCount ?? 0) / total < 0.2;
+        });
+        if (noisy.length > 0) {
+          console.log(chalk.yellow(`  ⚠ ${noisy.length} record(s) below 20% recall precision — auto-archive may fire soon.`));
+          console.log(chalk.gray('    Inspect with /memory <query> or archive manually with /forget <recordId>.'));
+        }
+        console.log();
+        return true;
+      }
       if (sub === 'sources') {
         const limitArg = Number(args[1]);
         const manifest = scanWorkspaceSources(agent.workspaceRoot, {
@@ -277,7 +369,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log();
         return true;
       }
-      console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, consolidate, sources.\n`));
+      console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, list, consolidate, sources.\n`));
       return true;
     }
   }
