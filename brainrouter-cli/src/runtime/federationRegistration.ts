@@ -85,10 +85,15 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
     if (stopped) return;
     void heartbeatOnce(options, clientKind);
   }, intervalMs);
-  // Don't keep the process alive just for heartbeats — the REPL owns
-  // the lifetime.
-  timer.unref?.();
-
+  // Deliberately NOT calling `timer.unref()`. The Ink REPL's stdin
+  // handler keeps the event loop alive while a user is typing, but
+  // when the user leaves the terminal idle Ink's internal state can
+  // drop to a point where the heartbeat is the only thing left. With
+  // `unref()`, Node would consider the loop idle, drain, and stop
+  // firing the timer — sessions die after ~5 min even though the
+  // process is still attached and rendering. The REPL's `finally`
+  // block calls `handle.stop()` on exit, which clears the interval
+  // explicitly, so we don't need `unref()` to allow shutdown.
   return {
     sessionKey: options.sessionKey,
     clientKind,
