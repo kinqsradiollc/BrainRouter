@@ -17,6 +17,7 @@ import type { McpClientPool } from './mcpPool.js';
 import { callMcpTool, hasMcpTool } from './mcpUtils.js';
 
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+const INBOX_POLL_INTERVAL_MS = 5 * 1000;
 
 /**
  * Mint a federation sessionKey for *this CLI process*.
@@ -65,6 +66,21 @@ export interface FederationOptions {
   getUsage?: () => UsageSnapshot | undefined;
   /** Override the 30s heartbeat cadence (mostly for tests). */
   intervalMs?: number;
+  /** Override the 5s inbox poll cadence (mostly for tests). */
+  inboxIntervalMs?: number;
+  /**
+   * Called once per poll tick when new `text`-kind inbox messages
+   * arrive. The default REPL wiring prints a banner above the next
+   * prompt; tests can stub this to assert delivery without rendering.
+   */
+  onInboxText?: (messages: InboxTextMessage[]) => void;
+}
+
+export interface InboxTextMessage {
+  id: string;
+  fromSessionKey: string;
+  text: string;
+  receivedAt: string;
 }
 
 export interface UsageSnapshot {
@@ -85,6 +101,8 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
 
   const clientKind = options.clientKind ?? 'brainrouter-cli';
   const intervalMs = options.intervalMs ?? HEARTBEAT_INTERVAL_MS;
+  const inboxIntervalMs = options.inboxIntervalMs ?? INBOX_POLL_INTERVAL_MS;
+  const hasInbox = hasMcpTool(toolNames, 'session_inbox_read');
 
   await registerOnce(options, clientKind);
 
@@ -93,6 +111,17 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
     if (stopped) return;
     void heartbeatOnce(options, clientKind);
   }, intervalMs);
+
+  // Federation Stage 3 (FED-S3-T6) — inbox poller. Pull-only for now;
+  // SSE push is deferred to 0.4.1 per the spec sub-item marked `[-]`.
+  // 5 s cadence balances "feels live" against MCP call cost.
+  let inboxTimer: NodeJS.Timeout | undefined;
+  if (hasInbox && options.onInboxText) {
+    inboxTimer = setInterval(() => {
+      if (stopped) return;
+      void pollInboxOnce(options);
+    }, inboxIntervalMs);
+  }
   // Deliberately NOT calling `timer.unref()`. The Ink REPL's stdin
   // handler keeps the event loop alive while a user is typing, but
   // when the user leaves the terminal idle Ink's internal state can
@@ -109,9 +138,43 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
+      if (inboxTimer) clearInterval(inboxTimer);
       await unregisterOnce(options);
     },
   };
+}
+
+async function pollInboxOnce(options: FederationOptions): Promise<void> {
+  if (!options.onInboxText) return;
+  try {
+    const res = await callMcpTool<{
+      messages?: Array<{ id: string; kind: string; fromSessionKey: string; payload: any; createdAt: string }>;
+    }>(options.mcpClient, 'session_inbox_read', { sessionKey: options.sessionKey, peek: false });
+    if (res.isError) return;
+    const messages = res.parsed?.messages ?? [];
+    // Only surface `text`-kind in Stage 3. Other kinds are
+    // schema-reserved and stay invisible to the user until Stage 4 +
+    // multi-agent Phase 2 consumers ship.
+    const textMessages: InboxTextMessage[] = [];
+    for (const m of messages) {
+      if (m.kind !== 'text') continue;
+      const text = typeof m.payload?.text === 'string' ? m.payload.text : '';
+      if (!text) continue;
+      textMessages.push({
+        id: m.id,
+        fromSessionKey: m.fromSessionKey,
+        text,
+        receivedAt: m.createdAt,
+      });
+    }
+    if (textMessages.length > 0) {
+      options.onInboxText(textMessages);
+    }
+  } catch {
+    // Brain reachable + the auto-recovery layer in mcpClient already
+    // handles `Session not found`. Anything else surviving past that
+    // is genuinely transient — drop the tick.
+  }
 }
 
 async function unregisterOnce(options: FederationOptions): Promise<void> {

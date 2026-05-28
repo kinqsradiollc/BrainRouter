@@ -29,6 +29,73 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       console.log();
       return true;
     }
+    case '/dm':
+    {
+      // Federation Stage 3 (FED-S3-T6) — point-to-point chat. Takes a
+      // sessionKey (or a 12-char prefix from `/agents --remote`) plus a
+      // message. Drops the message into the recipient's inbox; that
+      // session's poll picks it up within ~5 s and renders a banner
+      // above its next prompt.
+      const target = args[0];
+      const message = args.slice(1).join(' ').trim();
+      if (!target || !message) {
+        console.log(chalk.red('\nUsage: /dm <sessionKey | sessionKey-prefix> <message>\n'));
+        return true;
+      }
+      const fromKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const res = await callMcpTool<{ delivered: number; ids: string[] }>(
+        mcpClient,
+        'session_send',
+        { from: fromKey, to: target, kind: 'text', payload: { text: message } },
+      );
+      if (res.isError) {
+        console.log(chalk.red(`\nsession_send failed: ${res.text || '(no message)'}\n`));
+        return true;
+      }
+      const delivered = res.parsed?.delivered ?? 0;
+      if (delivered === 0) {
+        console.log(chalk.yellow(`\nNo active session matched "${target}" (heartbeats only within the last 2 min reach the inbox).\n`));
+      } else {
+        console.log(chalk.gray(`\nDelivered to ${delivered} session.\n`));
+      }
+      return true;
+    }
+    case '/broadcast':
+    {
+      // Federation Stage 3 (FED-S3-T6) — broadcast text to every active
+      // peer under your userId. Optional first arg `<clientKind>:*`
+      // narrows the broadcast (e.g. `/broadcast claude-code:* heads up`).
+      const first = args[0];
+      const looksLikePattern = typeof first === 'string' && /^[a-z][a-z0-9-]*:\*$/i.test(first);
+      const address = looksLikePattern ? first : '*';
+      const messageParts = looksLikePattern ? args.slice(1) : args;
+      const message = messageParts.join(' ').trim();
+      if (!message) {
+        console.log(chalk.red('\nUsage: /broadcast [<clientKind>:*] <message>\n'));
+        console.log(chalk.gray('  Examples:'));
+        console.log(chalk.gray('    /broadcast heads up, deploying main'));
+        console.log(chalk.gray('    /broadcast claude-code:* please pull latest\n'));
+        return true;
+      }
+      const fromKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const res = await callMcpTool<{ delivered: number; ids: string[] }>(
+        mcpClient,
+        'session_send',
+        { from: fromKey, to: address, kind: 'text', payload: { text: message } },
+      );
+      if (res.isError) {
+        console.log(chalk.red(`\nsession_send failed: ${res.text || '(no message)'}\n`));
+        return true;
+      }
+      const delivered = res.parsed?.delivered ?? 0;
+      const tag = looksLikePattern ? `${first} peers` : 'active peers';
+      if (delivered === 0) {
+        console.log(chalk.yellow(`\nNo ${tag} are currently active (no heartbeat within the last 2 min).\n`));
+      } else {
+        console.log(chalk.gray(`\nBroadcast delivered to ${delivered} ${tag}.\n`));
+      }
+      return true;
+    }
     case '/agents':
     {
       // `--remote` (FED-S2-T6): list peers attached to the same BrainRouter

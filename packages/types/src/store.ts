@@ -2,6 +2,9 @@ import type {
   ActiveSessionFilters,
   ActiveSessionRecord,
   ActiveSessionUsage,
+  SessionInboxFilters,
+  SessionInboxKind,
+  SessionInboxRecord,
   GraphEdge,
   GraphNode,
   ContradictionRecord,
@@ -150,6 +153,28 @@ export interface IMemoryStore {
   unregisterActiveSession(userId: string, sessionKey: string): boolean;
   listActiveSessions(filters: ActiveSessionFilters): ActiveSessionRecord[];
   sweepActiveSessions(olderThanMs: number): number;
+
+  /**
+   * Federation Stage 3 (0.4.0) — cross-CLI messaging.
+   *
+   * - `sendSessionMessage` writes one row PER recipient. The caller
+   *   passes the literal addressing string (`sessionKey`, `clientKind:*`,
+   *   or `*`); the store resolves it against `active_sessions` at send
+   *   time and fans out. Returns the persisted ids so the sender can
+   *   surface "delivered to N peers" feedback.
+   * - `readSessionInbox` returns undelivered rows for the given session
+   *   (or all rows when `includeDelivered: true`). When called without
+   *   `peek`, the caller will follow up with `ackSessionInbox` on the
+   *   ids it accepted; this two-step shape lets a flaky reader replay
+   *   on crash without losing messages.
+   * - `ackSessionInbox` stamps `delivered_at = ?`. Idempotent.
+   * - `sweepSessionInbox` deletes delivered rows older than the
+   *   threshold (keeps the table from growing unbounded).
+   */
+  sendSessionMessage(record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">, options?: { idGenerator?: () => string; now?: string }): SessionInboxRecord[];
+  readSessionInbox(filters: SessionInboxFilters): SessionInboxRecord[];
+  ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): number;
+  sweepSessionInbox(olderThanMs: number): number;
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
   searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
   upsertContradiction(data: {

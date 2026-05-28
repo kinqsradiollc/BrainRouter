@@ -186,6 +186,58 @@ export interface ActiveSessionUsage {
   updatedAt: string;
 }
 
+/**
+ * Federation Stage 3 (0.4.0) — cross-CLI messaging payload kinds.
+ *
+ * `text` is the only kind a Stage 3 CLI consumer renders today (via
+ * `/dm` and `/broadcast`). The other four are schema-reserved so
+ * Stage 4 (cross-vendor delegate) and CLI Multi-Agent Phase 2
+ * (goal handoff between sessions) can carry richer payloads without
+ * a schema migration.
+ */
+export type SessionInboxKind =
+  | "text"
+  | "tool-result"
+  | "memory-ref"
+  | "goal-handoff"
+  | "delegate";
+
+/**
+ * One row in the brain's `session_inbox` table. Owned by the
+ * recipient's user — the sending session puts a message in the
+ * recipient's inbox, the recipient pulls or peeks.
+ *
+ * `toSessionKey` accepts three address shapes:
+ *   - exact `sessionKey`            — point-to-point
+ *   - `clientKind:*` (e.g. `codex:*`) — pattern broadcast
+ *   - `*`                           — broadcast to every active session
+ *                                     under the sender's userId
+ *
+ * The store fans out broadcast forms into one row per matched
+ * recipient at send time. Each recipient sees a unique inbox id
+ * and acks independently.
+ */
+export interface SessionInboxRecord {
+  id: string;
+  userId: string;
+  fromSessionKey: string;
+  toSessionKey: string;
+  kind: SessionInboxKind;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  /** ISO timestamp when the recipient's last non-peek read covered this id. NULL until then. */
+  deliveredAt: string | null;
+}
+
+export interface SessionInboxFilters {
+  userId: string;
+  toSessionKey: string;
+  /** When `true`, include rows already marked delivered. Default `false`. */
+  includeDelivered?: boolean;
+  /** Cap the page size. Default 50. */
+  limit?: number;
+}
+
 export interface ActiveSessionFilters {
   userId?: string;
   clientKind?: string;

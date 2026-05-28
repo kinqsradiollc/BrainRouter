@@ -252,11 +252,21 @@ program
     const { attachFederation, resolveFederationSessionKey } = await import(
       './runtime/federationRegistration.js'
     );
+    const federationKey = resolveFederationSessionKey(workspace.workspaceRoot);
+    agent.setFederationSessionKey(federationKey);
     const federation = await attachFederation({
       mcpClient,
-      sessionKey: resolveFederationSessionKey(workspace.workspaceRoot),
+      sessionKey: federationKey,
       workspaceRoot: workspace.workspaceRoot,
       clientKind: 'brainrouter-cli',
+      // Federation Stage 3: render incoming text messages as a banner
+      // above the next prompt. The poller fires every 5 s; `text`-kind
+      // is the only kind we surface in 0.4.0, other kinds stay in the
+      // inbox for Stage 4 / multi-agent Phase 2 consumers.
+      onInboxText: async (messages) => {
+        const { renderIncomingMessages } = await import('./cli/incomingBanner.js');
+        renderIncomingMessages(messages);
+      },
     });
     // Hard-kill safety net: Ctrl-C, SIGTERM, and `process.exit` paths
     // skip the `finally` below. Best-effort unregister on signal so a
