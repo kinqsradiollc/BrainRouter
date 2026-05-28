@@ -88,7 +88,7 @@ export interface Preferences {
    * into the cache-stable briefing prefix on every turn. `false`
    * suppresses persona injection without deleting the underlying
    * `core_identity` row. Tied to `/persona on|off` and the
-   * `BRAINROUTER_PERSONA_ANCHOR=off` env override.
+   * `cli.personaAnchor` config knob.
    */
   personaAnchorEnabled: boolean;
 }
