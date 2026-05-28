@@ -114,6 +114,35 @@ foundations, and CLI multi-agent Phase 2. Full notes in
   current implementation is a 5 s poll. Same UX, simpler surface.
   Tracked as a 0.4.1 follow-up.
 
+### CLI Multi-Agent Phase 2 (typed delegation)
+
+- **Synthesized `delegate_<agentId>` tools.** One per agent
+  definition in the registry, rebuilt every turn. Description
+  surfaces the agent's `whenToUse` so the LLM picks by reading
+  the tool list (not by guessing role names). `spawn_agent` /
+  `task_agent` stay as escape hatches.
+- **`route_task` direct-first policy.** Returns a typed 4-tier
+  decision: `answer-direct` / `direct-tool` / `spawn-inline` /
+  `spawn-worker` with `recommendedTool`, `agentId`, `confidence`,
+  `memoryEvidence`. `route_agent` becomes a deprecated alias.
+- **Memory-aware routing.** When the brain is online,
+  `route_task` queries past `agent_route_feedback` records via
+  `memory_recall` and boosts confidence; offline path caps
+  confidence at 0.6.
+- **Parent execution context snapshot.** Typed packet handed to
+  every child — memory refs (not bodies), plan/briefing
+  excerpts, hashed workspace instructions. Persisted on the
+  child session record AND written as the child's first
+  transcript entry. `/agents show <id>` renders it. Same shape
+  Stage 4 will use over the wire for cross-vendor delegate.
+- **Typed output contracts** for the 5 built-in roles
+  (explorer / architect / reviewer / worker / verifier). The
+  child's system prompt gains a "Required structured output"
+  block; `parseChildOutput` parses the result tolerantly.
+- **`agent_route_feedback` emitter** on every child completion.
+  Records the routing decision + outcome via `memory_capture_turn`
+  so future `route_task` calls can learn from history.
+
 ---
 
 ## [0.3.9] - 2026-05-28

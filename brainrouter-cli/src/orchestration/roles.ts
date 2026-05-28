@@ -1,3 +1,5 @@
+import { describeContractForPrompt, getOutputContract } from './outputContracts.js';
+
 export type AccessMode = 'read' | 'write' | 'shell';
 
 export interface AgentRole {
@@ -111,7 +113,11 @@ export function listRoles(): AgentRole[] {
 }
 
 export function buildRolePrompt(role: AgentRole, basePrompt: string, taskPrompt: string): string {
-  return [
+  // MAS-P2-M5: when the role has a typed output contract, append a
+  // "Required structured output" block so the model produces the
+  // markdown sections `parseChildOutput()` looks for.
+  const contract = getOutputContract(role.name);
+  const sections: string[] = [
     basePrompt,
     '',
     role.promptOverlay,
@@ -122,8 +128,10 @@ export function buildRolePrompt(role: AgentRole, basePrompt: string, taskPrompt:
     // extractChildPreview() looks for these exact heading variants.
     '## Headline-first output (universal)',
     'Open your final response with a `## Headline` block (≤ 6 lines, the verdict + the 1-3 most important facts the parent needs). Detail follows. If you do not produce this block, the parent will only see your intro paragraph and the conclusion will be lost behind a "fetch full output" ref.',
-    '',
-    '## Task',
-    taskPrompt,
-  ].join('\n');
+  ];
+  if (contract) {
+    sections.push('', describeContractForPrompt(contract));
+  }
+  sections.push('', '## Task', taskPrompt);
+  return sections.join('\n');
 }

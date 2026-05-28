@@ -25,6 +25,13 @@ export interface ChildSessionRecord {
   depth?: number;
   /** LLM usage attributable to this child (filled when the child completes). */
   usage?: { promptTokens: number; completionTokens: number; calls: number; turns: number };
+  /**
+   * MAS-P2-M3 — typed snapshot of the parent's runtime state at the
+   * moment of spawn. Persisted so `/agents show <id>` can render it
+   * post-hoc; the child also receives a copy as its first transcript
+   * entry. See `orchestration/parentContext.ts`.
+   */
+  parentContext?: import('./parentContext.js').ParentExecutionContextSnapshot;
 }
 
 interface SessionsFile {
