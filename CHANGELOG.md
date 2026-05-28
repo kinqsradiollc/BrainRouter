@@ -143,6 +143,28 @@ foundations, and CLI multi-agent Phase 2. Full notes in
   Records the routing decision + outcome via `memory_capture_turn`
   so future `route_task` calls can learn from history.
 
+### Brain-side design pass (0.4.0 — design only)
+
+- **`BrainAgent` interface** exported from
+  `@kinqs/brainrouter-types`. Captures the agent registry shape
+  (`id`, `description`, `inputSchema`, `outputSchema`, `modelClass`,
+  `maxAttempts`, `timeoutMs`, `batchSize`, `idempotencyKey`,
+  `reads`, `writes`, `emits`, `dependsOn`). Phase 1 implements.
+- **`MemoryJobRecord` + `MemoryJobStatus`** — type stubs for the
+  observable, retryable job queue that replaces today's scattered
+  setInterval handles + ad-hoc retry logic.
+- **`MemoryBlackboardItem`** — the candidate-memory layer Phase 5
+  uses to chain dedup / contradiction / evidence agents before a
+  record lands.
+- **[`brainrouter-docs/brain-agents.md`](brainrouter-docs/brain-agents.md)** —
+  full design freeze: registry inventory with locked-in agent IDs,
+  SQL sketches, retry-with-backoff lifecycle, MCP tool schemas
+  (`memory_agent_status` / `memory_agent_run` /
+  `memory_job_retry`), and the Phase 1 implementation layout.
+- **Zero runtime change.** Types are importable today; the brain
+  pipeline still runs the existing scattered stages. Phase 1
+  (0.4.1) ships the runtime against this contract.
+
 ---
 
 ## [0.3.9] - 2026-05-28
