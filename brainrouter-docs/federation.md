@@ -75,12 +75,14 @@ fires.
 | **Undelivered** | Visible to the recipient via `session_inbox_read`. Never swept — survives until the recipient acks it. |
 | **Delivered** | Acked. Hidden from default reads. Surfaced via `includeDelivered: true`. Swept after 1 hour. |
 
-The CLI's inbox poll fires `session_inbox_read` without `peek: true`,
-so reading auto-acks. Callers that need at-least-once-delivery (e.g.
-a recovering CLI replaying its inbox after a crash) call `peek: true`
-and then `session_inbox_ack` only for the ids they've actually
-persisted. The two-step flow is intentional — losing a banner because
-the REPL crashed mid-render is worse UX than seeing it twice.
+The CLI's background banner poll calls `session_inbox_read` with
+`peek: true` and de-duplicates row ids locally. Banner display is only
+a notification; it does not consume the message. When the user asks
+the agent to answer inbox messages, the agent's explicit
+`session_inbox_read` call can still retrieve and ack those rows.
+Callers that need at-least-once-delivery can use the same `peek: true`
+flow and then `session_inbox_ack` only for the ids they actually
+persisted or processed.
 
 What Stage 3 deliberately **does not do yet**: send messages between
 peers as a chat UI, hand off goals, or route delegated work across

@@ -105,6 +105,10 @@ design pass. Full notes in
   (default auto-acks; `peek: true` lets a crashy reader replay
   safely), `session_inbox_ack` (idempotent batch ack, up to 500
   ids per call).
+- **Non-destructive banners.** The CLI's background inbox poll peeks
+  and de-duplicates locally, so a visible `📨` banner remains available
+  for a later explicit `session_inbox_read` when the user asks the
+  agent to answer peer messages.
 - **`kind` enum** accepts all five values (`text`, `tool-result`,
   `memory-ref`, `goal-handoff`, `delegate`) so Stage 4 and CLI
   Multi-Agent Phase 2 can carry structured payloads without a

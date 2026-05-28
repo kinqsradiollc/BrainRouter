@@ -134,6 +134,7 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
   let activeHandler: ((messages: InboxTextMessage[]) => void | Promise<void>) | null =
     options.onInboxText ?? null;
   const buffered: InboxTextMessage[] = [];
+  const seenInboxIds = new Set<string>();
   const dispatch = async (messages: InboxTextMessage[]): Promise<void> => {
     if (!activeHandler) {
       buffered.push(...messages);
@@ -149,7 +150,7 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
   if (hasInbox) {
     inboxTimer = setInterval(() => {
       if (stopped) return;
-      void pollInboxOnce(options, dispatch);
+      void pollInboxOnce(options, seenInboxIds, dispatch);
     }, inboxIntervalMs);
   }
   // Deliberately NOT calling `timer.unref()`. The Ink REPL's stdin
@@ -183,12 +184,13 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
 
 async function pollInboxOnce(
   options: FederationOptions,
+  seenInboxIds: Set<string>,
   dispatch: (messages: InboxTextMessage[]) => Promise<void>,
 ): Promise<void> {
   try {
     const res = await callMcpTool<{
       messages?: Array<{ id: string; kind: string; fromSessionKey: string; payload: any; createdAt: string }>;
-    }>(options.mcpClient, 'session_inbox_read', { sessionKey: options.sessionKey, peek: false });
+    }>(options.mcpClient, 'session_inbox_read', { sessionKey: options.sessionKey, peek: true });
     if (res.isError) return;
     const messages = res.parsed?.messages ?? [];
     // Only surface `text`-kind in Stage 3. Other kinds are
@@ -196,6 +198,8 @@ async function pollInboxOnce(
     // multi-agent Phase 2 consumers ship.
     const textMessages: InboxTextMessage[] = [];
     for (const m of messages) {
+      if (seenInboxIds.has(m.id)) continue;
+      seenInboxIds.add(m.id);
       if (m.kind !== 'text') continue;
       const text = typeof m.payload?.text === 'string' ? m.payload.text : '';
       if (!text) continue;
@@ -205,6 +209,11 @@ async function pollInboxOnce(
         text,
         receivedAt: m.createdAt,
       });
+    }
+    while (seenInboxIds.size > 1_000) {
+      const oldest = seenInboxIds.values().next().value;
+      if (!oldest) break;
+      seenInboxIds.delete(oldest);
     }
     if (textMessages.length > 0) {
       await dispatch(textMessages);

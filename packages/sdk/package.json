@@ -13,7 +13,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@kinqs/brainrouter-types": "^0.3.8"
+    "@kinqs/brainrouter-types": "^0.4.0"
   },
   "devDependencies": {
     "typescript": "^5.5.4"

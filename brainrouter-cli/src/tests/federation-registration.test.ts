@@ -239,8 +239,59 @@ test('attachFederation: inbox poller fires session_inbox_read on its own cadence
 
   const reads = recordedCalls.filter((c) => c.name === 'session_inbox_read');
   assert.ok(reads.length >= 2, `expected ≥2 inbox polls, got ${reads.length}`);
+  assert.equal(reads[0].args.peek, true, 'background banner poll must not consume inbox rows');
   assert.ok(dispatched.length >= 1, 'callback must have fired at least once');
   assert.deepEqual(dispatched[0], [{ id: 'm-1', text: 'hi' }]);
+});
+
+test('attachFederation: peeked inbox messages are de-duplicated locally between polls', async () => {
+  const repeated = { id: 'repeat-1', kind: 'text', fromSessionKey: 'peer-a', payload: { text: 'same row' }, createdAt: new Date().toISOString() };
+  let pollCount = 0;
+  const client = {
+    async listTools() {
+      return {
+        tools: [
+          { name: 'session_register' },
+          { name: 'session_heartbeat' },
+          { name: 'session_unregister' },
+          { name: 'session_inbox_read' },
+        ],
+      };
+    },
+    async callTool(name: string, args: any) {
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: { sessionKey: args.sessionKey } }) }] };
+      }
+      if (name === 'session_heartbeat') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+      }
+      if (name === 'session_inbox_read') {
+        pollCount++;
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ messages: [repeated] }) }] };
+      }
+      if (name === 'session_unregister') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ deleted: true }) }] };
+      }
+      return { isError: true, content: [{ type: 'text', text: 'unknown tool' }] };
+    },
+  } as any;
+
+  const dispatched: string[] = [];
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-dedupe',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+    inboxIntervalMs: 10,
+    onInboxText: (messages) => {
+      for (const m of messages) dispatched.push(m.id);
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await handle?.stop();
+
+  assert.ok(pollCount >= 2, `expected repeated polling, got ${pollCount}`);
+  assert.deepEqual(dispatched, ['repeat-1']);
 });
 
 test('attachFederation: inbox poll is skipped entirely when the brain lacks session_inbox_read', async () => {
@@ -402,4 +453,3 @@ test('attachFederation: setOnInboxText(null) detaches without buffering replays 
   // detached and may have buffered. The detach itself must not throw.
   assert.ok(collected.some((m) => m.id === 'first'));
 });
-
