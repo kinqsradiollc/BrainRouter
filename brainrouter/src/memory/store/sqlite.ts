@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -94,6 +94,31 @@ function evidenceRowToRecord(row: any): MemoryEvidence {
     excerpt: row.excerpt ?? "",
     observedAt: row.observed_at ?? "",
     metadata: parseJsonObject(row.metadata_json),
+  };
+}
+
+function activeSessionRowToRecord(row: any, includeUsage: boolean): ActiveSessionRecord {
+  let usage: ActiveSessionUsage | null | undefined;
+  if (includeUsage && row.usage_json) {
+    try {
+      usage = JSON.parse(row.usage_json);
+    } catch {
+      usage = null;
+    }
+  } else if (!includeUsage) {
+    usage = undefined;
+  } else {
+    usage = null;
+  }
+  return {
+    sessionKey: row.session_key,
+    userId: row.user_id,
+    clientKind: row.client_kind ?? "http-unknown",
+    workspaceRoot: row.workspace_root ?? "",
+    startedAt: row.started_at,
+    lastHeartbeatAt: row.last_heartbeat_at,
+    metadata: parseJsonObject(row.metadata_json),
+    ...(usage !== undefined ? { usage } : {}),
   };
 }
 
@@ -308,6 +333,28 @@ export class SqliteMemoryStore implements IMemoryStore {
         created_at TEXT NOT NULL
       )
     `);
+
+    // Federation Stage 2 (0.4.0) — active-session registry. Composite
+    // PK on `(session_key, user_id)` prevents a misbehaving client
+    // from accidentally stomping another user's session if it reuses
+    // the same key. `usage_json` is NULL when the client doesn't
+    // report telemetry (FED-S2-T8).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS active_sessions (
+        session_key TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        client_kind TEXT NOT NULL DEFAULT 'http-unknown',
+        workspace_root TEXT DEFAULT '',
+        started_at TEXT NOT NULL,
+        last_heartbeat_at TEXT NOT NULL,
+        metadata_json TEXT DEFAULT '{}',
+        usage_json TEXT DEFAULT NULL,
+        PRIMARY KEY (session_key, user_id)
+      )
+    `);
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_active_sessions_user_heartbeat ON active_sessions(user_id, last_heartbeat_at DESC)",
+    );
 
     this.stmtSensoryUpsertMeta = this.db.prepare(`
       INSERT INTO sensory_stream (
@@ -1420,6 +1467,118 @@ export class SqliteMemoryStore implements IMemoryStore {
       result.set(row.record_id, row.workspace_tag ?? null);
     }
     return result;
+  }
+
+  // ── Federation Stage 2 (0.4.0): active session registry ────────────────
+
+  public registerActiveSession(record: ActiveSessionRecord): ActiveSessionRecord {
+    // Idempotent upsert. On insert, `started_at` is set from the record.
+    // On conflict we preserve the existing `started_at` (so a re-register
+    // does not reset the session's lifetime) but always advance
+    // `last_heartbeat_at` and refresh client metadata / usage.
+    this.db
+      .prepare(
+        `INSERT INTO active_sessions (session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_key, user_id) DO UPDATE SET
+           client_kind = excluded.client_kind,
+           workspace_root = excluded.workspace_root,
+           last_heartbeat_at = excluded.last_heartbeat_at,
+           metadata_json = excluded.metadata_json,
+           usage_json = COALESCE(excluded.usage_json, active_sessions.usage_json)`,
+      )
+      .run(
+        record.sessionKey,
+        record.userId,
+        record.clientKind,
+        record.workspaceRoot,
+        record.startedAt,
+        record.lastHeartbeatAt,
+        JSON.stringify(record.metadata ?? {}),
+        record.usage ? JSON.stringify(record.usage) : null,
+      );
+    return this.getActiveSession(record.userId, record.sessionKey)!;
+  }
+
+  public heartbeatActiveSession(
+    userId: string,
+    sessionKey: string,
+    at: string,
+    usage?: ActiveSessionUsage | null,
+  ): boolean {
+    // Heartbeats are 1-per-30s × N peers; deliberately omit the
+    // operation_log write that other mutators emit (audit volume
+    // guard per FED-S2-T3).
+    const result = this.db
+      .prepare(
+        `UPDATE active_sessions
+         SET last_heartbeat_at = ?,
+             usage_json = COALESCE(?, usage_json)
+         WHERE session_key = ? AND user_id = ?`,
+      )
+      .run(at, usage ? JSON.stringify(usage) : null, sessionKey, userId);
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public listActiveSessions(filters: ActiveSessionFilters): ActiveSessionRecord[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filters.userId) {
+      where.push("user_id = ?");
+      params.push(filters.userId);
+    }
+    if (filters.clientKind) {
+      where.push("client_kind = ?");
+      params.push(filters.clientKind);
+    }
+    if (filters.workspaceRoot) {
+      where.push("workspace_root = ?");
+      params.push(filters.workspaceRoot);
+    }
+    if (!filters.includeStale) {
+      const threshold = filters.staleThresholdMs ?? 2 * 60 * 1000;
+      const cutoff = new Date(Date.now() - threshold).toISOString();
+      where.push("last_heartbeat_at >= ?");
+      params.push(cutoff);
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json
+         FROM active_sessions
+         ${whereSql}
+         ORDER BY last_heartbeat_at DESC, session_key ASC`,
+      )
+      .all(...params) as Array<{
+        session_key: string;
+        user_id: string;
+        client_kind: string;
+        workspace_root: string;
+        started_at: string;
+        last_heartbeat_at: string;
+        metadata_json: string | null;
+        usage_json: string | null;
+      }>;
+    return rows.map((row) => activeSessionRowToRecord(row, filters.includeUsage ?? false));
+  }
+
+  public sweepActiveSessions(olderThanMs: number): number {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const result = this.db
+      .prepare("DELETE FROM active_sessions WHERE last_heartbeat_at < ?")
+      .run(cutoff);
+    return Number(result.changes ?? 0);
+  }
+
+  private getActiveSession(userId: string, sessionKey: string): ActiveSessionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json
+         FROM active_sessions
+         WHERE session_key = ? AND user_id = ?`,
+      )
+      .get(sessionKey, userId) as any;
+    return row ? activeSessionRowToRecord(row, true) : null;
   }
 
   public upsertCoreIdentity(record: CoreIdentityRecord) {

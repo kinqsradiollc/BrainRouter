@@ -4,7 +4,7 @@
  */
 
 import chalk from 'chalk';
-import { childSessionKey } from '../../runtime/mcpUtils.js';
+import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
@@ -31,6 +31,91 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     }
     case '/agents':
     {
+      // `--remote` (FED-S2-T6): list peers attached to the same BrainRouter
+      // brain via `session_list`. Local-child output stays the default —
+      // `--remote` is opt-in. `--watch` flips to a live re-poll, `--json`
+      // dumps the raw payload, `--usage` opts in to the per-session token
+      // / USD snapshot (FED-S2-T8).
+      if (args.includes('--remote')) {
+        const watch = args.includes('--watch');
+        const wantUsage = args.includes('--usage');
+        const wantJson = args.includes('--json');
+        const wantStale = args.includes('--include-stale');
+
+        const renderOnce = async (): Promise<void> => {
+          const res = await callMcpTool<{ sessions: any[] }>(mcpClient, 'session_list', {
+            includeUsage: wantUsage,
+            includeStale: wantStale,
+          });
+          if (res.isError) {
+            console.log(chalk.red(`\nsession_list failed: ${res.text || '(no message)'}\n`));
+            return;
+          }
+          const sessions = res.parsed?.sessions ?? [];
+          if (wantJson) {
+            console.log(JSON.stringify({ sessions }));
+            return;
+          }
+          if (sessions.length === 0) {
+            console.log(chalk.gray('\nNo active remote sessions (default scope = heartbeat within 2 min). Try --include-stale.\n'));
+            return;
+          }
+          console.log(chalk.bold(`\nRemote sessions (${sessions.length})`));
+          const KIND_W = Math.max(...sessions.map((s: any) => (s.clientKind ?? '').length), 6) + 2;
+          const SK_W = 14;
+          const HB_W = 12;
+          const header = `  ${'CLIENT'.padEnd(KIND_W)}${'SESSION'.padEnd(SK_W)}${'HEARTBEAT'.padEnd(HB_W)}${wantUsage ? 'TOKENS    USD     ' : ''}WORKSPACE`;
+          console.log(chalk.gray(header));
+          const now = Date.now();
+          for (const s of sessions) {
+            const kind = chalk.cyan((s.clientKind ?? 'unknown').padEnd(KIND_W));
+            const sk = chalk.gray((s.sessionKey ?? '').slice(0, 12).padEnd(SK_W));
+            const hbMs = now - new Date(s.lastHeartbeatAt ?? 0).getTime();
+            const hbAge = hbMs < 60_000
+              ? `${Math.max(1, Math.round(hbMs / 1000))}s ago`
+              : `${Math.round(hbMs / 60_000)}m ago`;
+            const hbStr = (hbMs > 2 * 60_000 ? chalk.gray : chalk.green)(hbAge.padEnd(HB_W));
+            let usageStr = '';
+            if (wantUsage) {
+              const usage = s.usage ?? {};
+              const tokens = (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
+              const usd = typeof usage.totalUsd === 'number' ? usage.totalUsd : null;
+              usageStr =
+                chalk.gray(String(tokens).padStart(9)) + '  ' +
+                chalk.gray((usd === null ? '   —   ' : `$${usd.toFixed(3)}`).padEnd(8));
+            }
+            const ws = chalk.gray(s.workspaceRoot ?? '');
+            console.log(`  ${kind}${sk}${hbStr}${usageStr}${ws}`);
+          }
+          console.log();
+        };
+
+        if (!watch) {
+          await renderOnce();
+          return true;
+        }
+
+        // --watch loop: re-poll every 2s. Same Ctrl-C-aware shape the local
+        // /agents --watch uses.
+        const intervalMs = 2_000;
+        const maxTicks = 300; // 10 min safety cap.
+        let ticks = 0;
+        console.log(chalk.bold('\nWatching remote sessions (Ctrl-C to stop)…'));
+        await new Promise<void>((resolve) => {
+          const tick = async () => {
+            try { await renderOnce(); } catch { /* network blip — keep watching */ }
+          };
+          tick();
+          const handle = setInterval(() => {
+            tick();
+            if (++ticks >= maxTicks) { clearInterval(handle); resolve(); }
+          }, intervalMs);
+          const onSig = () => { clearInterval(handle); process.off('SIGINT', onSig); resolve(); };
+          process.once('SIGINT', onSig);
+        });
+        return true;
+      }
+
       if (args[0] === 'defs') {
         const defs = listAgentDefs(agent.workspaceRoot);
         console.log(chalk.bold('\nAgent Definitions:'));
