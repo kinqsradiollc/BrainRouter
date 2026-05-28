@@ -16,9 +16,11 @@ deep dives.
   (`cli/hooks.json`) and hookify rules (`hooks/*.md`): events, schema,
   three worked examples, debug + limit notes.
 - **[federation.md](federation.md)** — 0.4.0 shared-memory plane:
-  `/agents --remote`, dashboard Live Sessions widget, the
-  active/stale/swept lifecycle, hard-kill + brain-restart recovery
-  semantics, privacy boundary.
+  `/agents --remote`, `/dm` and `/broadcast` cross-CLI messaging, the
+  dashboard Live Sessions widget, the active/stale/swept lifecycle,
+  hard-kill + brain-restart recovery, privacy boundary, **plus a
+  15-minute end-to-end walkthrough running three federated terminals
+  on a real test project**.
 - **[configuration.md](configuration.md)** — env-loader priority chain
   (`$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`),
   `brainrouter-mcp init`, `~/.config/brainrouter/config.json` as the

@@ -226,6 +226,184 @@ Stage 3's `session_send` will need to defend against this too —
 sending to a session that died 30 s ago should bounce immediately, not
 hang waiting for the recipient to deliver.
 
+## End-to-end walkthrough — three federated terminals on one project
+
+A 15-minute exercise that exercises every shipped federation surface
+on a real (throwaway) project. Each step lists what to look for so
+you can confirm federation is doing what it says.
+
+### Setup (one-time)
+
+```bash
+# Brain — leave running in its own terminal
+cd /path/to/BrainRouter
+git checkout release/0.4.0 && git pull --ff-only
+cd brainrouter && npm run build && npm run dev:http   # listens on :3747
+
+# CLI — build + link so `brainrouter` is on PATH
+cd ../brainrouter-cli && npm run build && npm link
+
+# Scaffold a real test project
+mkdir -p ~/code/portfolio-demo && cd ~/code/portfolio-demo
+npm init -y >/dev/null
+npm install --save-dev vitest @testing-library/dom jsdom >/dev/null
+mkdir -p src/components tests
+cat > AGENT.md <<'EOF'
+# Portfolio demo
+
+A throwaway project to exercise BrainRouter federation across three
+concurrent terminals.
+
+## Stack
+
+- Plain ESM TypeScript, no framework — a single HTML file with a few
+  imported components.
+- vitest for tests, jsdom for DOM assertions.
+- Accessibility: every section must have a heading and an aria-label.
+
+## Sections
+
+1. Hero (name, tagline, CTA)
+2. Projects (3 cards)
+3. Contact (mailto link, accessible form labels)
+EOF
+```
+
+### Step 1 — Terminal A (planner)
+
+```
+cd ~/code/portfolio-demo && brainrouter
+```
+
+```
+> /goal Build the portfolio landing page per AGENT.md. Plan first; ship Hero, Projects, Contact in that order.
+> Read AGENT.md, propose a file layout, and capture each architectural decision as a separate memory record.
+```
+
+The agent reads `AGENT.md`, proposes a layout, and calls
+`memory_capture_turn` 3–4 times. **Look for** the `💾 Captured N records`
+line in A's output. That's the data the other terminals are about to
+see.
+
+### Step 2 — Terminal B (implementer)
+
+```
+cd ~/code/portfolio-demo && brainrouter
+```
+
+Before typing a prompt:
+
+```
+> /briefing
+```
+
+**Look for** a `memory_recall` row in the source-stats table with 3+
+records. Those are the architecture decisions A just wrote. You did
+not paste them — federation did.
+
+Sanity-check presence:
+
+```
+> /agents --remote
+```
+
+You should see **two** rows: A and B, same workspace path, heartbeat
+< 30 s ago. (If you only see one, the persistent-key collision bug is
+back — file an issue.)
+
+Now implement, leaning on what's in memory:
+
+```
+> Implement src/components/hero.ts following the architecture decisions in memory. Just the Hero this round.
+```
+
+The agent writes `hero.ts` consistent with A's decisions — plain HTML,
+no React, aria-label on the section — without you re-stating any of
+those constraints.
+
+### Step 3 — Terminal C (tester / watcher)
+
+```
+cd ~/code/portfolio-demo && brainrouter
+```
+
+```
+> /goal Watch tests/landing.spec.ts and report failures back to A and B as they happen. Use /dm.
+> Start `npx vitest run` once tests/landing.spec.ts exists; otherwise create a smoke test for the Hero based on the architecture decisions in memory.
+```
+
+C will recall the same decisions and write a vitest spec asserting
+the `<h1>`, the aria-label, etc.
+
+### Step 4 — Send a directed nudge (Stage 3)
+
+In A:
+
+```
+> /agents --remote
+# copy the 12-char prefix of C's session
+
+> /dm <c-prefix> please also add an axe-core a11y test for the Hero and run it once.
+```
+
+**Look for in C** within ~5 s:
+
+```
+┌─ 📨 from <a-prefix>… (3s ago)
+│ please also add an axe-core a11y test for the Hero and run it once.
+└─
+```
+
+The Stage 3 inbox is informational today — C doesn't auto-react. The
+banner is what the user reads to know the message arrived. (Auto-react
+on inbound messages is a CLI Multi-Agent Phase 2 / Stage 4 follow-up.)
+
+### Step 5 — Cost rollup + clean exit
+
+```
+> /agents --remote --usage --include-stale
+```
+
+Three rows, each with its own prompt/completion token counts and USD
+total. If you ever wonder *"why did this 30-minute session cost
+$1.40?"*, the answer is broken out per session.
+
+Then in any terminal:
+
+```
+> /exit
+```
+
+Immediately run `/agents --remote` from one of the surviving terminals.
+The exited session is **gone within a couple of seconds** — graceful
+`session_unregister`, not 5 minutes later via the sweeper. That's the
+per-process identity work.
+
+### Bonus — brain restart recovery
+
+In the brain terminal, Ctrl-C the `npm run dev:http` and immediately
+restart it. From any CLI, run `/agents --remote`. The first call may
+hang briefly while the transport detects the dead session-id; the
+second works. The CLIs re-register transparently within ~30 s.
+
+### What you proved works
+
+| Capability | Step | Stage |
+|---|---|---|
+| Persona auto-injected into every CLI prompt | 1 — agent acts per your captured preferences | Persona (#60) |
+| Memory written in A → recalled in B | 2's `/briefing` showing A's records | Stage 1 (#61) |
+| Multi-terminal presence + per-session cost | 2's `/agents --remote`, 5's `--usage` | Stage 2 (#63) |
+| Per-process identity (no terminal collision) | 2 shows **two** rows, not one | Stage 2 fix |
+| Graceful unregister on `/exit` | 5's "gone within seconds" check | Stage 2 fix |
+| Text wire between peers | 4's banner appearing in C | Stage 3 (#64) |
+| Brain restart recovery | Bonus | Stage 2 fix |
+
+### What's intentionally missing (and where it lands)
+
+- **The recipient doesn't auto-react to a DM.** Stage 3 is a wire, not a workflow. A future change can let the agent loop treat inbound text as a prompt; today the banner is informational.
+- **No `delegate_task("codex", …)`.** Stage 4 + CLI Multi-Agent Phase 2. The inbox `kind` enum already reserves `delegate` so when those land they ride the same wire.
+- **Banner latency ≤ 5 s, not ≤ 250 ms.** SSE push deferred to 0.4.1.
+
 ## Privacy & scope
 
 - **Scoped by `userId`.** A session only sees peers under the same
