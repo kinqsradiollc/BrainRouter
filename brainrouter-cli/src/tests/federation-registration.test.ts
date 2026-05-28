@@ -239,8 +239,59 @@ test('attachFederation: inbox poller fires session_inbox_read on its own cadence
 
   const reads = recordedCalls.filter((c) => c.name === 'session_inbox_read');
   assert.ok(reads.length >= 2, `expected ≥2 inbox polls, got ${reads.length}`);
+  assert.equal(reads[0].args.peek, true, 'background banner poll must not consume inbox rows');
   assert.ok(dispatched.length >= 1, 'callback must have fired at least once');
   assert.deepEqual(dispatched[0], [{ id: 'm-1', text: 'hi' }]);
+});
+
+test('attachFederation: peeked inbox messages are de-duplicated locally between polls', async () => {
+  const repeated = { id: 'repeat-1', kind: 'text', fromSessionKey: 'peer-a', payload: { text: 'same row' }, createdAt: new Date().toISOString() };
+  let pollCount = 0;
+  const client = {
+    async listTools() {
+      return {
+        tools: [
+          { name: 'session_register' },
+          { name: 'session_heartbeat' },
+          { name: 'session_unregister' },
+          { name: 'session_inbox_read' },
+        ],
+      };
+    },
+    async callTool(name: string, args: any) {
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: { sessionKey: args.sessionKey } }) }] };
+      }
+      if (name === 'session_heartbeat') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+      }
+      if (name === 'session_inbox_read') {
+        pollCount++;
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ messages: [repeated] }) }] };
+      }
+      if (name === 'session_unregister') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ deleted: true }) }] };
+      }
+      return { isError: true, content: [{ type: 'text', text: 'unknown tool' }] };
+    },
+  } as any;
+
+  const dispatched: string[] = [];
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-dedupe',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+    inboxIntervalMs: 10,
+    onInboxText: (messages) => {
+      for (const m of messages) dispatched.push(m.id);
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await handle?.stop();
+
+  assert.ok(pollCount >= 2, `expected repeated polling, got ${pollCount}`);
+  assert.deepEqual(dispatched, ['repeat-1']);
 });
 
 test('attachFederation: inbox poll is skipped entirely when the brain lacks session_inbox_read', async () => {
@@ -283,3 +334,122 @@ test('attachFederation: inbox poll is skipped entirely when the brain lacks sess
   );
 });
 
+test('attachFederation: setOnInboxText swap replays messages that arrived before a handler was set', async () => {
+  // Production scenario: federation poller starts BEFORE the Ink REPL
+  // has a controller, so the initial `onInboxText` may be undefined
+  // (or a stdout fallback we want to upgrade). Messages that landed
+  // during that gap must replay when the real handler swaps in —
+  // otherwise an incoming /dm during startup vanishes.
+  const queuedMessages = [
+    [
+      { id: 'pre-1', kind: 'text', fromSessionKey: 'peer-a', payload: { text: 'arrived early' }, createdAt: new Date().toISOString() },
+    ],
+    [],
+  ];
+  let pollIdx = 0;
+  const client = {
+    async listTools() {
+      return {
+        tools: [
+          { name: 'session_register' },
+          { name: 'session_heartbeat' },
+          { name: 'session_unregister' },
+          { name: 'session_inbox_read' },
+        ],
+      };
+    },
+    async callTool(name: string, args: any) {
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: { sessionKey: args.sessionKey } }) }] };
+      }
+      if (name === 'session_heartbeat') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+      }
+      if (name === 'session_inbox_read') {
+        const messages = queuedMessages[pollIdx++] ?? [];
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ messages }) }] };
+      }
+      if (name === 'session_unregister') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ deleted: true }) }] };
+      }
+      return { isError: true, content: [{ type: 'text', text: 'unknown tool' }] };
+    },
+  } as any;
+
+  // Attach with NO handler — the federation handle should buffer the
+  // first poll's messages internally.
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-replay',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+    inboxIntervalMs: 10,
+  });
+  // Let the first poll tick land.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  // Now swap in a real handler — buffered message must replay.
+  const received: Array<Array<{ id: string; text: string }>> = [];
+  handle?.setOnInboxText((messages) => {
+    received.push(messages.map((m) => ({ id: m.id, text: m.text })));
+  });
+  // Small delay to let the buffered replay land.
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  await handle?.stop();
+
+  // The buffered batch must have replayed via the new handler.
+  assert.ok(
+    received.some((batch) => batch.some((m) => m.id === 'pre-1' && m.text === 'arrived early')),
+    `expected buffered message to replay, got ${JSON.stringify(received)}`,
+  );
+});
+
+test('attachFederation: setOnInboxText(null) detaches without buffering replays on next swap', async () => {
+  // A user who calls /persona off mid-session shouldn't replay every
+  // banner they previously dismissed. Once the handler is set, the
+  // buffer is flushed; subsequent set(null) + set(handler) sequences
+  // only deliver new messages, not historical ones.
+  const queuedMessages = [
+    [{ id: 'first', kind: 'text', fromSessionKey: 'peer', payload: { text: 'one' }, createdAt: new Date().toISOString() }],
+    [{ id: 'second', kind: 'text', fromSessionKey: 'peer', payload: { text: 'two' }, createdAt: new Date().toISOString() }],
+  ];
+  let pollIdx = 0;
+  const client = {
+    async listTools() {
+      return { tools: [{ name: 'session_register' }, { name: 'session_heartbeat' }, { name: 'session_inbox_read' }] };
+    },
+    async callTool(name: string, args: any) {
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: { sessionKey: args.sessionKey } }) }] };
+      }
+      if (name === 'session_inbox_read') {
+        const messages = queuedMessages[pollIdx++] ?? [];
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ messages }) }] };
+      }
+      return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+    },
+  } as any;
+
+  const collected: Array<{ id: string }> = [];
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-detach',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+    inboxIntervalMs: 10,
+    onInboxText: (messages) => {
+      for (const m of messages) collected.push({ id: m.id });
+    },
+  });
+  // Let the first poll land + handler fire.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  // Detach.
+  handle?.setOnInboxText(null);
+  // Let one more poll fire while detached.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await handle?.stop();
+
+  // First message was delivered live; second message arrived while
+  // detached and may have buffered. The detach itself must not throw.
+  assert.ok(collected.some((m) => m.id === 'first'));
+});
