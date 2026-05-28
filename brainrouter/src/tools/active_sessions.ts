@@ -157,6 +157,38 @@ export async function handleSessionHeartbeat(args: any, options?: { defaultUserI
   }
 }
 
+// ── session_unregister ──────────────────────────────────────────────────
+
+export const sessionUnregisterToolSchema = {
+  name: "session_unregister",
+  description:
+    "Remove an active session row immediately. Called by clients on clean exit so peers don't see a 5-min ghost while the sweeper catches up. Idempotent: returns `{ deleted: false }` when no matching row exists. Safe to call from a shutdown hook even when the brain may already be down — callers should swallow errors.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      userId: { type: "string", description: "User id; falls back to the default user." },
+      sessionKey: { type: "string", description: "The key returned from `session_register`." },
+    },
+    required: ["sessionKey"],
+  },
+} as const;
+
+const sessionUnregisterSchema = z.object({
+  userId: z.string().optional(),
+  sessionKey: z.string(),
+});
+
+export async function handleSessionUnregister(args: any, options?: { defaultUserId?: string }) {
+  try {
+    const params = sessionUnregisterSchema.parse(args ?? {});
+    const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
+    const deleted = memoryEngine.store.unregisterActiveSession(effectiveUserId, params.sessionKey);
+    return toolResult({ deleted });
+  } catch (err) {
+    return toolError("session_unregister", err);
+  }
+}
+
 // ── session_list ────────────────────────────────────────────────────────
 
 export const sessionListToolSchema = {

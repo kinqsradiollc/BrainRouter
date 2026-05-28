@@ -40,6 +40,9 @@ function makeStubClient(opts: {
       if (name === 'session_register') {
         return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: { sessionKey: args.sessionKey } }) }] };
       }
+      if (name === 'session_unregister') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ deleted: true }) }] };
+      }
       return { isError: true, content: [{ type: 'text', text: 'unknown tool' }] };
     },
   } as any;
@@ -74,7 +77,7 @@ test('attachFederation: registers once on startup', async () => {
   assert.equal(registers[0].args.sessionKey, 'sk-startup');
   assert.equal(registers[0].args.workspaceRoot, '/repos/alpha');
   assert.equal(registers[0].args.clientKind, 'brainrouter-cli');
-  handle?.stop();
+  await handle?.stop();
 });
 
 test('attachFederation: heartbeat tick calls session_heartbeat', async () => {
@@ -89,7 +92,7 @@ test('attachFederation: heartbeat tick calls session_heartbeat', async () => {
   });
   // Wait for ~3 ticks.
   await new Promise((resolve) => setTimeout(resolve, 45));
-  handle?.stop();
+  await handle?.stop();
   const hbs = calls.filter((c) => c.name === 'session_heartbeat');
   assert.ok(hbs.length >= 2, `expected ≥2 heartbeats, got ${hbs.length}`);
   assert.equal(hbs[0].args.sessionKey, 'sk-hb');
@@ -109,7 +112,7 @@ test('attachFederation: re-registers when brain returns updated:false (row was s
   });
   // Two heartbeats + the swept-recovery re-register need a beat to land.
   await new Promise((resolve) => setTimeout(resolve, 50));
-  handle?.stop();
+  await handle?.stop();
   const registers = calls.filter((c) => c.name === 'session_register');
   // Startup + at least one re-register after the swept heartbeat.
   assert.ok(registers.length >= 2, `expected ≥2 registers, got ${registers.length}`);
@@ -126,9 +129,57 @@ test('attachFederation: stop() halts further heartbeats', async () => {
     intervalMs: 10,
   });
   await new Promise((resolve) => setTimeout(resolve, 25));
-  handle?.stop();
+  await handle?.stop();
   const beforeStop = calls.filter((c) => c.name === 'session_heartbeat').length;
   await new Promise((resolve) => setTimeout(resolve, 40));
   const afterStop = calls.filter((c) => c.name === 'session_heartbeat').length;
   assert.equal(afterStop, beforeStop, 'no heartbeats fire after stop()');
+});
+
+test('attachFederation: stop() fires session_unregister exactly once', async () => {
+  const { client, calls } = makeStubClient({
+    listTools: [{ name: 'session_register' }, { name: 'session_heartbeat' }, { name: 'session_unregister' }],
+  });
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-bye',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+  });
+  await handle?.stop();
+  await handle?.stop(); // second call must be a no-op — idempotent guard.
+  const unregisters = calls.filter((c) => c.name === 'session_unregister');
+  assert.equal(unregisters.length, 1, `expected 1 unregister call, got ${unregisters.length}`);
+  assert.equal(unregisters[0].args.sessionKey, 'sk-bye');
+});
+
+test('attachFederation: stop() returns promptly when the unregister never resolves (hung brain)', async () => {
+  let unregistered = 0;
+  const client = {
+    async listTools() {
+      return { tools: [{ name: 'session_register' }, { name: 'session_heartbeat' }, { name: 'session_unregister' }] };
+    },
+    async callTool(name: string) {
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: {} }) }] };
+      }
+      if (name === 'session_unregister') {
+        unregistered++;
+        // Never resolves — `stop()` must hit its internal 1.5 s timeout.
+        return new Promise(() => {});
+      }
+      return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+    },
+  } as any;
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-hang',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+  });
+  const t0 = Date.now();
+  await handle?.stop();
+  const elapsed = Date.now() - t0;
+  assert.equal(unregistered, 1, 'unregister must be attempted');
+  assert.ok(elapsed < 2_500, `stop() must respect the timeout; took ${elapsed}ms`);
 });
