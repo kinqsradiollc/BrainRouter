@@ -20,9 +20,13 @@ import {
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
-import { readTranscriptEntries } from '../state/sessionStore.js';
+import { appendTranscriptEntry, readTranscriptEntries } from '../state/sessionStore.js';
 import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
 import { readPreferences } from '../state/preferencesStore.js';
+import { buildParentExecutionContextSnapshot } from './parentContext.js';
+import { getOutputContract } from './outputContracts.js';
+import { routeTask } from './router.js';
+import { emitAgentRouteFeedback, type RouteOutcome } from './memoryEvents.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -67,6 +71,17 @@ export interface OrchestrationContext {
    * instead of seeing tool events and then silence.
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  // MAS-P2-M3 parent-context accessors. Each returns the parent's
+  // runtime state at spawn time — all optional so callers can adopt
+  // incrementally. When omitted, the snapshot field stays undefined
+  // rather than guessing.
+  parentBriefingBlock?: () => string | null | undefined;
+  parentRecalledRecordIds?: () => string[];
+  parentGoal?: () => { text: string; status: string } | null | undefined;
+  parentPlanText?: () => string | null | undefined;
+  parentVisibleTools?: () => string[];
+  parentExecutionMode?: string;
+  parentReviewPolicy?: string;
 }
 
 // Threshold above which a child agent's final output is offloaded to the
@@ -140,6 +155,7 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
   'read_agent_transcript',
   'close_agent',
   'route_agent',
+  'route_task',
 ]);
 
 /**
@@ -170,6 +186,12 @@ export function inferRoleFromTask(task: string): 'explorer' | 'architect' | 'rev
 }
 
 export function isOrchestrationToolName(name: string): boolean {
+  // MAS-P2-M1: any `delegate_<...>` (except the legacy generic
+  // `delegate_agent` which is already in the set) routes through
+  // the orchestration dispatcher as a synthesized delegate tool.
+  if (name.startsWith(DELEGATE_TOOL_PREFIX) && name !== 'delegate_agent') {
+    return true;
+  }
   return ORCHESTRATION_TOOL_NAMES.has(name);
 }
 
@@ -433,8 +455,7 @@ export function createRouteAgentTool() {
   return {
     name: 'route_agent',
     description:
-      'Recommend a role (explorer/architect/reviewer/worker/verifier) for a task without spawning. ' +
-      'Useful when you want a sanity check on which role a free-text task should go to before calling spawn_agent.',
+      'DEPRECATED — use `route_task` (MAS-P2-M2). Recommend a role (explorer/architect/reviewer/worker/verifier) for a task without spawning. The new tool returns a richer 4-tier policy decision (answer-direct / direct-tool / spawn-inline / spawn-worker) plus confidence + memory evidence.',
     inputSchema: {
       type: 'object',
       properties: { task: { type: 'string' } },
@@ -443,11 +464,146 @@ export function createRouteAgentTool() {
   };
 }
 
+/**
+ * MAS-P2-M2 — `route_task` tool. Returns a typed 4-tier policy
+ * decision (answer-direct / direct-tool / spawn-inline / spawn-worker)
+ * with the recommended tool, agent id (when inline), confidence, and
+ * memory evidence (MAS-P2-M4).
+ */
+export function createRouteTaskTool() {
+  return {
+    name: 'route_task',
+    description:
+      'Direct-first delegation dry-run. Returns `{ tier, reason, recommendedTool, agentId, confidence, memoryEvidence }`. Tiers: `answer-direct` (no tool — reply in prose), `direct-tool` (one concrete tool answers — e.g. `read_file`, `grep_search`, `run_command`), `spawn-inline` (specialized child via `delegate_<id>`), `spawn-worker` (long-running tracked work; worker threads ship in 0.4.2). Call this BEFORE spawning to pick the right tier — fan-out without it routinely over-delegates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'The task prompt the parent is considering routing.' },
+      },
+      required: ['task'],
+    },
+  };
+}
+
+/**
+ * MAS-P2-M1: per-turn synthesized `delegate_<agentId>` tools.
+ *
+ * Walks the active agent registry (built-ins + user + workspace) and
+ * emits one tool per definition with description = the agent's
+ * `whenToUse`. The synthesized tool routes through `handleTaskAgent`
+ * (foreground `wait: true` spawn) — that's the high-discoverability
+ * pattern the LLM picks naturally vs. choosing role names inside a
+ * generic `spawn_agent({ role: '...' })`. The legacy `spawn_agent` /
+ * `delegate_agent` stay as escape hatches for prompts the registry
+ * doesn't cover.
+ *
+ * Per-turn (not cached): a workspace pack swap or a `/persona refresh`
+ * changes the def set without restart, so the tool list reflects
+ * the live registry on every assistant turn.
+ *
+ * Routes through `task_agent` semantics (foreground wait + structured
+ * return), not background `delegate_agent`. The naming is a bit of a
+ * lie historically — "delegate_*" in MAS-P2 actually means "send the
+ * work over and get the answer back". That matches what the LLM
+ * expects when it sees `delegate_reviewer`.
+ */
+export function synthesizeDelegateTools(
+  loadedDefs: Array<{ def: { id: string; delegateName: string; whenToUse: string; defaultAccess?: AccessMode } }>,
+): Array<{
+  name: string;
+  description: string;
+  inputSchema: any;
+  agentId: string;
+}> {
+  const tools: Array<{ name: string; description: string; inputSchema: any; agentId: string }> = [];
+  const seen = new Set<string>();
+  for (const loaded of loadedDefs) {
+    const def = loaded.def;
+    const name = def.delegateName || `delegate_${def.id}`;
+    // Defensive: a workspace override that names two defs with the
+    // same delegateName would otherwise stomp the model's tool list.
+    // First-write-wins, but log so the operator notices.
+    if (seen.has(name)) {
+      console.error(`[BrainRouter] duplicate delegate tool name "${name}" — dropping the later definition.`);
+      continue;
+    }
+    seen.add(name);
+    tools.push({
+      name,
+      agentId: def.id,
+      description:
+        `Delegate this task to the typed \`${def.id}\` agent and wait for its structured output. ` +
+        `${def.whenToUse} ` +
+        `Use this in preference to spawn_agent({ role: '${def.id}' }) — the typed tool surface is what \`route_task\` recommends.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
+          label: { type: 'string', description: 'Optional short label for the child run.' },
+          ownership: {
+            type: 'string',
+            description: 'Optional ownership constraint (file glob, module, or responsibility) — recorded on the parent-context snapshot.',
+          },
+          access: {
+            type: 'string',
+            enum: ['read', 'write', 'shell'],
+            description: `Override the agent's default access mode (${def.defaultAccess ?? 'read'}).`,
+          },
+          timeoutMs: { type: 'integer', description: 'Optional wall-clock timeout in ms.' },
+          workdir: { type: 'string', description: 'Optional workspace-relative child launch directory.' },
+          seedRecordIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional BrainRouter memory record IDs the parent already recalled.',
+          },
+        },
+        required: ['prompt'],
+      },
+    });
+  }
+  return tools;
+}
+
+const DELEGATE_TOOL_PREFIX = 'delegate_';
+
+/**
+ * Match a synthesized delegate tool name to its underlying agent id.
+ * Returns `null` for plain `delegate_agent` (the legacy generic tool)
+ * so the existing dispatch path keeps working.
+ */
+function resolveDelegateAgentId(
+  name: string,
+  loadedDefs: Array<{ def: { id: string; delegateName: string } }>,
+): string | null {
+  if (name === 'delegate_agent') return null;
+  for (const loaded of loadedDefs) {
+    if (loaded.def.delegateName === name) return loaded.def.id;
+  }
+  // Fallback: prefix-strip and check the registry by id directly.
+  if (name.startsWith(DELEGATE_TOOL_PREFIX)) {
+    const id = name.slice(DELEGATE_TOOL_PREFIX.length);
+    if (loadedDefs.some((l) => l.def.id === id)) return id;
+  }
+  return null;
+}
+
 export async function executeOrchestrationTool(
   name: string,
   args: any,
   ctx: OrchestrationContext,
 ): Promise<string> {
+  // MAS-P2-M1: synthesized delegate_<agentId> tools route through
+  // task_agent (foreground wait). Resolved against the live registry
+  // so an in-session pack swap takes effect on the next call.
+  if (name.startsWith(DELEGATE_TOOL_PREFIX) && name !== 'delegate_agent') {
+    const loadedDefs = listAll(ctx.workspaceRoot);
+    const agentId = resolveDelegateAgentId(name, loadedDefs);
+    if (agentId) {
+      return await handleTaskAgent({ ...args, agentId }, ctx);
+    }
+    // Fall through to the unknown-tool error so the loop surfaces it.
+  }
+
   switch (name) {
     case 'task_agent':
       return await handleTaskAgent(args, ctx);
@@ -469,9 +625,70 @@ export async function executeOrchestrationTool(
       return handleClose(args, ctx);
     case 'route_agent':
       return handleRoute(args);
+    case 'route_task':
+      return await handleRouteTask(args, ctx);
     default:
       throw new Error(`Unknown orchestration tool: ${name}`);
   }
+}
+
+/**
+ * MAS-P2-M6 — best-effort route-feedback emit on child completion.
+ * Computes durationMs from the persisted record's startedAt timestamp
+ * so the brain can join on real wall-clock spans.
+ */
+async function emitRouteFeedback(
+  ctx: OrchestrationContext,
+  args: {
+    task: string;
+    chosenAgentId: string;
+    parentAgentId?: string;
+    ownership: string | null;
+    outcome: RouteOutcome;
+    record: ChildSessionRecord;
+    completedAt: string;
+    tokenCost?: number;
+  },
+): Promise<void> {
+  const startedMs = Date.parse(args.record.startedAt);
+  const completedMs = Date.parse(args.completedAt);
+  const durationMs =
+    Number.isFinite(startedMs) && Number.isFinite(completedMs)
+      ? Math.max(0, completedMs - startedMs)
+      : undefined;
+  await emitAgentRouteFeedback(
+    { mcpClient: ctx.mcpClient, sessionKey: ctx.parentSessionKey },
+    {
+      task: args.task,
+      chosenAgentId: args.chosenAgentId,
+      parentAgentId: args.parentAgentId,
+      ownership: args.ownership,
+      outcome: args.outcome,
+      durationMs,
+      tokenCost: args.tokenCost,
+    },
+  );
+}
+
+async function handleRouteTask(args: any, ctx: OrchestrationContext): Promise<string> {
+  const task = String(args?.task ?? '');
+  if (!task.trim()) throw new Error('route_task requires `task`.');
+  // Snapshot the connected MCP tool set so the router knows whether
+  // it can attempt the memory_recall hop.
+  let toolNames: Set<string> | undefined;
+  try {
+    const res = await ctx.mcpClient.listTools();
+    toolNames = new Set(((res as { tools?: Array<{ name: string }> }).tools ?? []).map((t) => t.name));
+  } catch {
+    toolNames = undefined;
+  }
+  const result = await routeTask({
+    task,
+    mcpClient: ctx.mcpClient,
+    mcpToolNames: toolNames,
+    sessionKey: ctx.parentSessionKey,
+  });
+  return JSON.stringify(result, null, 2);
 }
 
 async function handleTaskAgent(args: any, ctx: OrchestrationContext): Promise<string> {
@@ -612,6 +829,43 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   const seededIds: string[] = Array.isArray(args.seedRecordIds)
     ? args.seedRecordIds.filter((id: unknown): id is string => typeof id === 'string').slice(0, 20)
     : [];
+
+  // MAS-P2-M3: build the typed parent-context snapshot from the
+  // accessor methods the agent exposes. Skip silently when a piece
+  // of state isn't available — partial snapshots are explicitly OK.
+  const parentBriefing = ctx.parentBriefingBlock?.();
+  const parentRecalledIds = ctx.parentRecalledRecordIds?.() ?? seededIds;
+  const parentGoal = ctx.parentGoal?.();
+  const parentPlan = ctx.parentPlanText?.();
+  const parentExecutionMode = ctx.parentExecutionMode;
+  const parentReviewPolicy = ctx.parentReviewPolicy;
+  const ownership = typeof args.ownership === 'string' ? args.ownership : null;
+  const snapshot = buildParentExecutionContextSnapshot({
+    parentSessionKey: ctx.parentSessionKey,
+    childSessionKey: childKey,
+    parentAgentId: role.name,
+    accessMode: access,
+    trace: ctx.parentTraceId && ctx.parentSpanId
+      ? { traceId: ctx.parentTraceId, spanId: ctx.parentSpanId }
+      : undefined,
+    goal: parentGoal ?? undefined,
+    planText: parentPlan ?? undefined,
+    recalledRecordIds: parentRecalledIds,
+    briefingBlock: parentBriefing ?? undefined,
+    visibleTools: ctx.parentVisibleTools?.(),
+    reviewPolicy: parentReviewPolicy,
+    executionMode: parentExecutionMode,
+    workspaceInstructions: loadWorkspaceInstructionSummary(ctx.workspaceRoot),
+    ownership,
+    outputContract: getOutputContract(role.name)?.id ?? null,
+  });
+  updateSession(ctx.workspaceRoot, record.id, { parentContext: snapshot });
+  appendTranscriptEntry(ctx.workspaceRoot, childKey, {
+    role: 'system',
+    name: 'parent_context',
+    content: JSON.stringify(snapshot),
+  });
+
   const basePrompt = buildSystemPrompt({
     workspaceRoot: ctx.workspaceRoot,
     launchCwd: childLaunchCwd,
@@ -713,11 +967,26 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
         }
       }
 
+      const completedAt = new Date().toISOString();
       updateSession(ctx.workspaceRoot, record.id, {
         status: 'completed',
-        completedAt: new Date().toISOString(),
+        completedAt,
         finalOutput: storedOutput,
         usage: { ...childAgent.sessionUsage },
+      });
+      // MAS-P2-M6: fire-and-forget feedback record. Skipped silently
+      // when MCP is offline or memory_capture_turn isn't exposed.
+      void emitRouteFeedback(ctx, {
+        task: prompt,
+        chosenAgentId: role.name,
+        parentAgentId: ctx.parentAgentId,
+        ownership,
+        outcome: 'success',
+        record,
+        completedAt,
+        tokenCost:
+          (childAgent.sessionUsage?.promptTokens ?? 0) +
+          (childAgent.sessionUsage?.completionTokens ?? 0),
       });
       // Roll the offload savings into the parent's metrics so /tokens can
       // report what didn't have to land back in the parent's context window.
@@ -774,11 +1043,21 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     } catch (err: any) {
       const message = err?.message ?? String(err);
       const syntheticOutput = `ERROR: ${message}`;
+      const completedAt = new Date().toISOString();
       updateSession(ctx.workspaceRoot, record.id, {
         status: 'failed',
-        completedAt: new Date().toISOString(),
+        completedAt,
         error: message,
         finalOutput: syntheticOutput,
+      });
+      void emitRouteFeedback(ctx, {
+        task: prompt,
+        chosenAgentId: role.name,
+        parentAgentId: ctx.parentAgentId,
+        ownership,
+        outcome: 'failure',
+        record,
+        completedAt,
       });
       ctx.onChildComplete?.({
         childId: record.id,

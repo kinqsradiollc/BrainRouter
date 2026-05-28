@@ -14,5 +14,5 @@
   "subagents": [],
   "delegateName": "delegate_architect",
   "tier": "reasoning",
-  "outputContract": null
+  "outputContract": "architect"
 }
