@@ -4,6 +4,10 @@ BrainRouter exposes an HTTP MCP server you can plug into any host that
 speaks the Model Context Protocol — Claude Desktop, Claude Code, Codex,
 Cursor, Gemini CLI, Windsurf, VS Code (Continue), Zed, Cline, and more.
 
+> **See also:** [`federation.md`](federation.md) for the full lifecycle
+> (active / stale / swept / recovered), `/agents --remote` usage, and
+> the privacy boundary.
+
 ## Federation primer (0.4.0)
 
 As of **0.4.0**, every MCP-aware host you connect to a BrainRouter

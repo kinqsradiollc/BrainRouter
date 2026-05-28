@@ -15,6 +15,10 @@ deep dives.
 - **[hooks.md](hooks.md)** — authoring reference for shell hooks
   (`cli/hooks.json`) and hookify rules (`hooks/*.md`): events, schema,
   three worked examples, debug + limit notes.
+- **[federation.md](federation.md)** — 0.4.0 shared-memory plane:
+  `/agents --remote`, dashboard Live Sessions widget, the
+  active/stale/swept lifecycle, hard-kill + brain-restart recovery
+  semantics, privacy boundary.
 - **[configuration.md](configuration.md)** — env-loader priority chain
   (`$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`),
   `brainrouter-mcp init`, `~/.config/brainrouter/config.json` as the

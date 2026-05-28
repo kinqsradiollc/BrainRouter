@@ -135,7 +135,8 @@ const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Multi-Agent Orchestration',
     entries: [
       { cmd: '/roles', desc: 'List available agent roles' },
-      { cmd: '/agents [--json]', desc: 'List child agent sessions' },
+      { cmd: '/agents [--json]', desc: 'List local child-agent sessions in this CLI.' },
+      { cmd: '/agents --remote [--watch] [--usage] [--include-stale] [--json]', desc: 'List federated peer CLIs / hosts attached to the same brain (0.4.0 Stage 2).' },
       { cmd: '/agent <id> [--full]', desc: 'Detail + recent transcript of a child' },
       { cmd: '/spawn <role> <prompt>', desc: 'Spawn a child agent' },
       { cmd: '/wait <id> [ms]', desc: 'Wait for a child to finish' },
