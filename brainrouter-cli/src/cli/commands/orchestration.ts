@@ -57,7 +57,9 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
             return;
           }
           if (sessions.length === 0) {
-            console.log(chalk.gray('\nNo active remote sessions (default scope = heartbeat within 2 min). Try --include-stale.\n'));
+            console.log(chalk.gray('\nNo active remote sessions (default scope = heartbeat within 2 min). Try --include-stale.'));
+            console.log(chalk.gray('  Hint: peers show up here when another MCP host (Claude Code, Codex, Cursor, Gemini CLI, …)'));
+            console.log(chalk.gray('  registers against the same brain. See `brainrouter-docs/mcp-install.md` for setup.\n'));
             return;
           }
           console.log(chalk.bold(`\nRemote sessions (${sessions.length})`));
@@ -211,6 +213,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
           }
         }
         console.log(chalk.gray('\n  (pipe-friendly output: /agents --json)'));
+        console.log(chalk.gray('  See also: /agents --remote to list peer CLIs/hosts attached to the same brain (federation).'));
       }
       console.log();
       return true;
