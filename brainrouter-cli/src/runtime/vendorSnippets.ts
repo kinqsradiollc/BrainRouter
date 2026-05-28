@@ -157,6 +157,60 @@ export const VENDORS: Record<string, VendorEntry> = {
     }),
   },
 
+  'claude-code': {
+    id: 'claude-code',
+    label: 'Claude Code (CLI)',
+    schema: 'http',
+    restart: 'Claude Code re-reads `~/.claude/mcp.json` on next session start — start a fresh `claude` session to pick up the server.',
+    // Verified against Claude Code docs as of 2026-05.
+    configPath: (p) => path.join(home(p), '.claude', 'mcp.json'),
+    note: 'Federation: every Claude Code session sharing your BrainRouter API key joins the same shared-memory pool (0.4.0 Stage 1).',
+    template: ({ url, apiKey, serverId = 'brainrouter' }) => ({
+      mcpServers: {
+        [serverId]: {
+          url,
+          headers: { Authorization: `Bearer ${apiKey}` },
+        },
+      },
+    }),
+  },
+
+  codex: {
+    id: 'codex',
+    label: 'Codex (CLI)',
+    schema: 'http',
+    restart: 'Codex re-reads `~/.codex/mcp.json` on next session start — start a fresh `codex` session to pick up the server.',
+    // Verified against Codex CLI docs as of 2026-05.
+    configPath: (p) => path.join(home(p), '.codex', 'mcp.json'),
+    note: 'Federation: paired with a BrainRouter CLI on the same userId, Codex reads + writes the shared memory pool over the same HTTP MCP transport (0.4.0 Stage 1).',
+    template: ({ url, apiKey, serverId = 'brainrouter' }) => ({
+      mcpServers: {
+        [serverId]: {
+          url,
+          headers: { Authorization: `Bearer ${apiKey}` },
+        },
+      },
+    }),
+  },
+
+  'gemini-cli': {
+    id: 'gemini-cli',
+    label: 'Gemini CLI',
+    schema: 'http',
+    restart: 'Gemini CLI reloads MCP config on next invocation — no daemon to restart.',
+    // Verified against Gemini CLI docs as of 2026-05.
+    configPath: (p) => path.join(home(p), '.gemini', 'mcp.json'),
+    note: 'Federation: same shared-memory pool as BrainRouter CLI / Claude Code / Codex when a single BrainRouter userId is used (0.4.0 Stage 1).',
+    template: ({ url, apiKey, serverId = 'brainrouter' }) => ({
+      mcpServers: {
+        [serverId]: {
+          url,
+          headers: { Authorization: `Bearer ${apiKey}` },
+        },
+      },
+    }),
+  },
+
   cline: {
     id: 'cline',
     label: 'Cline (VS Code)',
