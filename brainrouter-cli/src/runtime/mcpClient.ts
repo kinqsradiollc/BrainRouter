@@ -6,6 +6,20 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { LLMConfig, ServerConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 
+/**
+ * Match the Streamable HTTP session-expiry error so `callTool` can
+ * trigger a one-shot reconnect + retry. The MCP SDK surfaces the
+ * server's payload verbatim, so we string-sniff the canonical
+ * error message; broader than a JSON parse to also catch the
+ * "Streamable HTTP error: Error POSTing to endpoint" prefix that
+ * wraps it.
+ */
+export function isSessionNotFoundError(err: unknown): boolean {
+  if (!err) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return /Session not found/i.test(message) || /mcp-session-id/i.test(message);
+}
+
 export class McpClientWrapper {
   public client: Client;
   private transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
@@ -25,6 +39,16 @@ export class McpClientWrapper {
    */
   private identity: 'brainrouter' | 'third-party' | 'unknown' = 'unknown';
   private serverName?: string;
+  /**
+   * Stashed at `connect()` time so we can re-establish the transport
+   * automatically when the Streamable HTTP server invalidates our
+   * `mcp-session-id` (the classic case is the brain process
+   * restarting while the CLI keeps running — every subsequent call
+   * fails with "Session not found. Send a POST without
+   * mcp-session-id to initialise" until we redial).
+   */
+  private lastServerConfig?: ServerConfig;
+  private lastLlmConfig?: LLMConfig;
 
   constructor() {
     this.client = new Client(
@@ -61,6 +85,9 @@ export class McpClientWrapper {
     // The tool-signature fallback (memory_recall + list_skills) runs after
     // the first successful `listTools` in `refreshIdentityFromTools`.
     this.identity = resolveIdentityFromConfig(serverConfig, name);
+    // Stash for the session-expiry auto-reconnect path in `callTool`.
+    this.lastServerConfig = serverConfig;
+    this.lastLlmConfig = llmConfig;
     return this._connect(serverConfig, llmConfig);
   }
 
@@ -268,15 +295,60 @@ export class McpClientWrapper {
     // rounds. Race the tool call against a configurable timeout so a flaky
     // child server can't lock up the whole CLI.
     const timeoutMs = getCliKnobs().mcpTimeoutMs;
-    return Promise.race([
-      this.client.callTool({ name, arguments: args }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`MCP tool "${name}" timed out after ${timeoutMs}ms`)),
-          timeoutMs,
+    const invoke = () =>
+      Promise.race([
+        this.client.callTool({ name, arguments: args }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`MCP tool "${name}" timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          ),
         ),
-      ),
-    ]);
+      ]);
+    try {
+      return await invoke();
+    } catch (err) {
+      // Streamable HTTP session-expiry recovery: when the brain
+      // restarts (or the server-side session ages out) it stops
+      // recognising our cached `mcp-session-id` and every call after
+      // that fails forever. Detect the specific error string, redial
+      // the transport, retry once. Catches both the raw SDK error and
+      // the JSON envelope shape the server returns.
+      if (isSessionNotFoundError(err) && this.lastServerConfig) {
+        try {
+          await this.reinit();
+          return await invoke();
+        } catch {
+          // Fall through to the original error if re-init / retry
+          // didn't recover — caller's isError check still applies.
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Force-tear-down the transport + reconnect using the stashed
+   * `serverConfig`. Used by the session-expiry recovery path; safe to
+   * call repeatedly because `close()` swallows its own errors.
+   */
+  private async reinit(): Promise<void> {
+    try {
+      await this.close();
+    } catch {
+      // ignore — the transport was already in a bad state.
+    }
+    // `close()` flipped `connected` to false; clear `transport` so the
+    // next _connect builds a fresh one.
+    this.transport = null;
+    this.connected = false;
+    // Rebuild the underlying Client too — the SDK caches transport
+    // state on the Client instance and won't accept a second connect.
+    this.client = new Client(
+      { name: 'brainrouter-cli', version: '0.3.8' },
+      { capabilities: {} },
+    );
+    await this._connect(this.lastServerConfig!, this.lastLlmConfig);
   }
 
   async close(): Promise<void> {

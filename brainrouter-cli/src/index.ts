@@ -242,7 +242,36 @@ program
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
     });
-    await runChat({ agent, mcpClient, config, workspace });
+    // Federation Stage 2 (FED-S2-T2/T3): claim a row in the brain's
+    // active_sessions registry + heartbeat every 30s. Resolves to null
+    // (no-op) when the brain pre-dates Stage 2 — older brains keep
+    // working unchanged. The federation sessionKey is per-workspace
+    // and persisted (NOT the same as agent.sessionKey, which is the
+    // chat session and rotates per-launch) so clean restarts refresh
+    // the registry row instead of stacking ghosts.
+    const { attachFederation, resolveFederationSessionKey } = await import(
+      './runtime/federationRegistration.js'
+    );
+    const federation = await attachFederation({
+      mcpClient,
+      sessionKey: resolveFederationSessionKey(workspace.workspaceRoot),
+      workspaceRoot: workspace.workspaceRoot,
+      clientKind: 'brainrouter-cli',
+    });
+    // Hard-kill safety net: Ctrl-C, SIGTERM, and `process.exit` paths
+    // skip the `finally` below. Best-effort unregister on signal so a
+    // mid-tool-call kill doesn't leave a ghost waiting for the brain's
+    // 5-min sweeper. Errors are swallowed by `stop()` itself.
+    const onSignal = () => { void federation?.stop(); };
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    try {
+      await runChat({ agent, mcpClient, config, workspace });
+    } finally {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+      await federation?.stop();
+    }
   });
 
 // One-shot non-interactive run — pipe-friendly for scripting/CI.

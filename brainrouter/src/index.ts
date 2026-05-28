@@ -62,6 +62,16 @@ import {
   memoryPersonaRefreshToolSchema,
   handleMemoryPersonaRefresh,
 } from './tools/memory_persona.js';
+import {
+  sessionRegisterToolSchema,
+  handleSessionRegister,
+  sessionHeartbeatToolSchema,
+  handleSessionHeartbeat,
+  sessionUnregisterToolSchema,
+  handleSessionUnregister,
+  sessionListToolSchema,
+  handleSessionList,
+} from './tools/active_sessions.js';
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
@@ -80,6 +90,7 @@ import { usersRouter } from './api/routes/users.js';
 import { memoriesRouter } from './api/routes/memories.js';
 import { scenesRouter } from './api/routes/scenes.js';
 import { personaRouter } from './api/routes/persona.js';
+import { sessionsRouter } from './api/routes/sessions.js';
 import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
 import { graphRouter } from './api/routes/graph.js';
@@ -257,6 +268,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryRecallToolSchema,
       memoryPersonaToolSchema,
       memoryPersonaRefreshToolSchema,
+      sessionRegisterToolSchema,
+      sessionHeartbeatToolSchema,
+      sessionUnregisterToolSchema,
+      sessionListToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
@@ -296,6 +311,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
         case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
         case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
+        case 'session_register': return await handleSessionRegister(request.params.arguments, { defaultUserId });
+        case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, { defaultUserId });
+        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, { defaultUserId });
+        case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
@@ -402,6 +421,7 @@ if (USE_HTTP) {
   app.use("/api/memories", memoriesRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);
+  app.use("/api/sessions", sessionsRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
   app.use("/api/graph", graphRouter);

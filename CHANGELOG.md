@@ -51,6 +51,44 @@ foundations, and CLI multi-agent Phase 2. Full notes in
   `· cited N · uncited M (P%)` with a `⚠️ noisy` flag below 20% —
   makes pre-auto-archive memory quality visible.
 
+### Federation Stage 1 (shared-memory foundation)
+
+- **SQLite WAL hardening** — `journal_mode=WAL` is verified at boot
+  and the brain logs a federation-aware warning when a host
+  filesystem refuses WAL.
+- **Per-client install snippets** for Claude Code, Codex, and
+  Gemini CLI; federation primer added to
+  [`brainrouter-docs/mcp-install.md`](brainrouter-docs/mcp-install.md).
+- **`workspaceTag` on memories.** Optional 16-char hash that lets a
+  CLI scope recall to a single workspace; NULL-tolerant so existing
+  records stay visible during gradual rollout.
+
+### Federation Stage 2 (active-session registry + cross-vendor presence)
+
+- **Live peer presence.** New `session_register` /
+  `session_heartbeat` / `session_unregister` / `session_list` MCP
+  tools backed by an `active_sessions` table. Every
+  BrainRouter-aware CLI / host (Claude Code, Codex, Cursor, Gemini
+  CLI, …) attached to the same brain shows up as a row.
+  Per-process identity: two terminals open in the same workspace
+  show as two distinct sessions.
+- **`/agents --remote`.** Lists peer sessions with `--watch`,
+  `--usage`, `--include-stale`, `--json` flags. Auto-registers on
+  REPL startup; heartbeats every 30 s; auto-recovers when the brain
+  restarts; calls `session_unregister` on `/exit` so a clean shutdown
+  removes the row immediately.
+- **Live Sessions widget** on the dashboard Overview page, polling
+  the new `/api/sessions` REST route every 10 s.
+- **Per-session telemetry** — tokens / USD snapshot rides
+  heartbeats. Opt-in via `--usage` (CLI) and `includeUsage: true`
+  (REST / MCP). Heartbeats deliberately skip `operation_log` —
+  audit volume guard.
+- **Stale-session sweeper** runs every minute; sessions are
+  swept 5 min after the last heartbeat.
+- See [`brainrouter-docs/federation.md`](brainrouter-docs/federation.md)
+  for the full lifecycle (active / stale / swept / recovered) and the
+  privacy boundary.
+
 ---
 
 ## [0.3.9] - 2026-05-28
