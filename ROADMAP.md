@@ -28,96 +28,46 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop (Reasonix-inspired) + CLI knobs → `config.json` | Shipped — 2026-05-28 |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A5 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Next |
-| **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 5-6, brain-side multi-agent roadmap | Planned |
+| **[0.4.x](brainrouter-roadmap/0.4.x.md)** (0.4.2–0.4.3) | Federation Stage 5, CLI multi-agent Phases 5-6, brain-side capture/tree/blackboard | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
 
 ---
 
 ## What Each Upcoming Release Means
 
-### 0.3.7 — Finish the CLI Shell
+> Shipped releases (0.3.x, 0.4.0) live in [`CHANGELOG.md`](CHANGELOG.md)
+> and `brainrouter-changelog/`. This section only describes work that is
+> still ahead.
 
-- Full Ink chat REPL.
-- In-REPL first-run wizard.
-- `/config`, `/login`, `/init`, and `/model` picker flows.
-- CLI/server env separation.
-- Small additive multi-agent registry foundations if the cycle allows.
+### 0.4.1 — Federation Handoff + Ownership + Brain Job Queue *(Next)*
 
-### 0.3.8 — Fix Delegation Reliability
+- **Federation Stage 4 — work handoff.** `/handoff <target>` packet
+  (reuses the multi-agent `ParentExecutionContextSnapshot`),
+  `<clientKind>:next-idle` resolution, accept/decline on the receiver,
+  and a `memory_recall` fallback for non-BrainRouter receivers.
+- **Multi-Agent Phase 3 — ownership.** `spawn_agents` gains
+  `ownership` globs; write/shell fan-out is refused without one;
+  `writeFile`/`editFile`/`applyPatch` enforce the glob.
+- **Multi-Agent Phase 4 — budgeting + gates.** Tool-surface budgeting,
+  supervisor gates, per-agent accounting, and auto-chaining.
+- **Augmentations A1–A5** (deferred from 0.4.0): project (multi-folder)
+  scope, apply-time memory dedup, modular ranking refactor, pluggable
+  tracing backend (`cli.tracingBackend`), and HTTP gateway hardening.
+- **Brain-side Phase 1 — job queue + agent registry.** `memory_jobs`
+  table, a `BrainAgent` registry wrapping the existing pipeline stages,
+  and `memory_agent_status` / `memory_agent_run` / `memory_job_retry`
+  MCP tools with a dashboard/CLI health surface.
 
-- Runtime child-drain guardrail for the "I am waiting" failure mode.
-- Clear foreground `task_agent` vs background `delegate_agent`
-  semantics.
-- Visible child-agent progress in Ink.
-- Visible in-chat `ask_user_choice` and `askYesNo` overlays in the Ink
-  REPL, including multi-select question prompts.
-- Safe parallel execution for independent read tools.
-- Quick wins carried from 0.3.7: `/schedule`, `/release-notes`, hooks
-  JSON docs, Strict Tool-Call Recovery, per-vendor MCP snippets.
+### 0.4.x (0.4.2–0.4.3) — Durable Orchestration and Brain Agents
 
-### 0.3.9 — Memory Briefing + Cache-First Loop
-
-**Thread A — memory quality (items 1–7, shipped).**
-
-- Adaptive briefing trigger engine instead of blunt first-turn /
-  post-compaction / entity-token gating.
-- Source-aware briefing router for recall, working memory, task state,
-  file history, failed attempts, and recall explanations.
-- TokenJuice-lite CLI context compaction for large tool outputs while
-  preserving full transcripts.
-- `/briefing` inspector that explains why memory fired or skipped, which
-  sources were queried, and how many tokens were injected or avoided.
-- Read-only local source-sync spike to prepare the 0.4.x source chunk /
-  vault work without adding durable schema yet.
-- Hook/policy memory guardrails (secret block, redaction, stale /
-  off-workspace warnings).
-- Local briefing-quality benchmark across six scenarios.
-
-**Thread B — Reasonix-inspired cache-first / repair / cost-control
-(items 8–14, shipped).**
-
-- ImmutablePrefix / AppendOnlyLog / VolatileScratch context regions so
-  the prefix is byte-stable across turns and provider prefix caches
-  actually hit.
-- Memory briefing pinned into the immutable prefix as a synthetic tool
-  result — BrainRouter's unique combination of cache-first loop +
-  MCP-backed memory brain.
-- Per-turn cache-hit telemetry normalised across OpenAI-compatible and
-  DeepSeek response shapes, surfaced in `/tokens` and the Ink status
-  line.
-- Tool-call repair pipeline: schema flatten (>10-leaf / depth >2 → dot
-  notation), scavenge (recover calls leaked into `reasoning_content`),
-  truncation (rebalance JSON), storm (suppress identical repeats).
-- Turn-end tool-result auto-shrink that preserves the prefix; full raw
-  outputs remain in the transcript.
-- `<<<NEEDS_HIGH>>>` model self-escalation mapped to provider-specific
-  tier ladders.
-- Colored per-turn USD cost, session totals, and cache-savings figure
-  in the Ink top bar.
-
-### 0.4.0 — Persona Injection + Federation + Typed Delegation
-
-- **Persona injection (top priority).** The brain already distills a
-  Core Identity but the CLI never injects it into the LLM prompt —
-  `buildDefaultSourcePlan` in `briefing.ts` lists six sources and
-  persona is missing. Land `memory_persona` MCP tool family, pin the
-  persona into the 0.3.9 cache-stable prefix, `/persona` slash
-  command, and `/where` + `/briefing` + `/memories` visibility.
-- Shared memory across BrainRouter CLI, Claude Code, Codex, Cursor,
-  Gemini CLI, and other MCP-aware clients.
-- Active-session registry, session heartbeat, and cross-session inbox.
-- CLI multi-agent Phase 2: synthesized `delegate_*` tools, `route_task`,
-  parent execution context snapshots, output-contract scaffolding.
-
-### 0.4.x — Durable Orchestration and Brain Agents
-
-- Ownership contracts, tool budgeting, supervisor gates, review fan-out,
-  worker threads, packs, and transcript debugger.
-- **Brain-side (MCP server):** job queue + brain-agent registry (0.4.1);
-  token-aware capture (TokenJuice) + source chunks + vault mirror (0.4.2);
-  memory tree + blackboard commit pipeline (0.4.3).
-- Individual brain tasks: `BRAIN-P1-TN` through `BRAIN-P5-TN` in
-  [`FULL_TASKS.MD`](FULL_TASKS.MD) §5.6, §6.6–6.7, §7.1–7.2.
+- Federation Stage 5 (cross-vendor delegation), multi-agent Phases 5–6
+  (review fan-out, result handoff, worker threads, packs, memory
+  capture + brain awareness), and the agent transcript debugger.
+- **Brain-side (MCP server):** token-aware capture (TokenJuice) +
+  source chunks + vault mirror (0.4.2); memory tree + blackboard commit
+  pipeline (0.4.3).
+- Individual brain tasks: `BRAIN-P2-TN` through `BRAIN-P5-TN` in
+  [`FULL_TASKS.MD`](FULL_TASKS.MD) §6.6–6.7, §7.1–7.2.
 - Full spec: [`FEATURE_OPENHUMAN_BRAINROUTER.md`](FEATURE_OPENHUMAN_BRAINROUTER.md).
 
 ### 0.5.0 — Power User Surface
