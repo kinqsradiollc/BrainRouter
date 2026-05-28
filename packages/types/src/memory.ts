@@ -147,6 +147,60 @@ export function workspaceTagFromPath(workspaceRoot: string | undefined | null): 
   return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
 }
 
+/**
+ * Federation Stage 2 (0.4.0) — registry row for a CLI / MCP client that
+ * is currently attached to the brain. Identity is the composite
+ * `(sessionKey, userId)` so a misbehaving client can't accidentally
+ * stomp another user's session by reusing the same key.
+ */
+export interface ActiveSessionRecord {
+  sessionKey: string;
+  userId: string;
+  /**
+   * Client self-report. Known kinds: `brainrouter-cli`, `claude-code`,
+   * `codex`, `cursor`, `gemini-cli`. Falls back to `http-unknown` when
+   * a client connects over HTTP without identifying itself.
+   */
+  clientKind: string;
+  workspaceRoot: string;
+  /** ISO timestamp; never updated after registration. */
+  startedAt: string;
+  /** ISO timestamp; bumped on every heartbeat. */
+  lastHeartbeatAt: string;
+  metadata: Record<string, unknown>;
+  /**
+   * Optional usage snapshot (FED-S2-T8). Last-write-wins on heartbeat;
+   * NULL when the client doesn't report telemetry. Same shape the CLI
+   * surfaces via `/tokens`.
+   */
+  usage?: ActiveSessionUsage | null;
+}
+
+export interface ActiveSessionUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedPromptTokens?: number;
+  totalUsd?: number;
+  cacheSavingsUsd?: number;
+  /** ISO timestamp of the snapshot the client sent. */
+  updatedAt: string;
+}
+
+export interface ActiveSessionFilters {
+  userId?: string;
+  clientKind?: string;
+  workspaceRoot?: string;
+  /**
+   * When false (default), exclude rows whose lastHeartbeatAt is older
+   * than `staleThresholdMs` (default 120000 = 2 min). When true, return
+   * everything in the table — useful for diagnostics + the sweeper.
+   */
+  includeStale?: boolean;
+  staleThresholdMs?: number;
+  /** When true, include the `usage` field in returned rows (FED-S2-T8). */
+  includeUsage?: boolean;
+}
+
 export interface MemoryEvidence {
   id: string;
   userId: string;

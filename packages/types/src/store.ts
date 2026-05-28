@@ -1,4 +1,7 @@
 import type {
+  ActiveSessionFilters,
+  ActiveSessionRecord,
+  ActiveSessionUsage,
   GraphEdge,
   GraphNode,
   ContradictionRecord,
@@ -112,6 +115,34 @@ export interface IMemoryStore {
    * both map to `null` in the returned map.
    */
   getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null>;
+
+  /**
+   * Federation Stage 2 (0.4.0) — active-session registry surface.
+   *
+   * - `registerActiveSession` upserts a row keyed by `(sessionKey, userId)`.
+   *   On insert, `startedAt` is set to the provided value; on conflict it
+   *   is preserved (so a re-register does not reset session start time).
+   *   `lastHeartbeatAt` always advances to the provided value.
+   * - `heartbeatActiveSession` updates `lastHeartbeatAt` (and optionally
+   *   `usage`) for an existing row. Returns `true` when a row was
+   *   updated, `false` when no matching session existed (callers can
+   *   re-register on that signal). MUST NOT write to `operation_log`
+   *   — heartbeats are 1/30s × N peers, audit volume would explode.
+   * - `listActiveSessions` returns rows that match the filters. By
+   *   default excludes sessions whose heartbeat is older than
+   *   `staleThresholdMs` (2 min).
+   * - `sweepActiveSessions` deletes rows older than the given threshold.
+   *   Returns the count removed.
+   */
+  registerActiveSession(record: ActiveSessionRecord): ActiveSessionRecord;
+  heartbeatActiveSession(
+    userId: string,
+    sessionKey: string,
+    at: string,
+    usage?: ActiveSessionUsage | null,
+  ): boolean;
+  listActiveSessions(filters: ActiveSessionFilters): ActiveSessionRecord[];
+  sweepActiveSessions(olderThanMs: number): number;
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
   searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
   upsertContradiction(data: {

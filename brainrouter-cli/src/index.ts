@@ -242,7 +242,22 @@ program
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
     });
-    await runChat({ agent, mcpClient, config, workspace });
+    // Federation Stage 2 (FED-S2-T2/T3): claim a row in the brain's
+    // active_sessions registry + heartbeat every 30s. Resolves to null
+    // (no-op) when the brain pre-dates Stage 2 — older brains keep
+    // working unchanged.
+    const { attachFederation } = await import('./runtime/federationRegistration.js');
+    const federation = await attachFederation({
+      mcpClient,
+      sessionKey: agent.sessionKey,
+      workspaceRoot: workspace.workspaceRoot,
+      clientKind: 'brainrouter-cli',
+    });
+    try {
+      await runChat({ agent, mcpClient, config, workspace });
+    } finally {
+      federation?.stop();
+    }
   });
 
 // One-shot non-interactive run — pipe-friendly for scripting/CI.

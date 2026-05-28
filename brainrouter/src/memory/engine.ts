@@ -160,6 +160,7 @@ export class MemoryEngine {
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
+  private activeSessionSweeperTimer?: NodeJS.Timeout;
   /**
    * Reentrancy guard: setInterval doesn't wait for the previous callback to
    * finish before firing the next tick. If a sweep takes longer than the
@@ -253,6 +254,7 @@ export class MemoryEngine {
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.startExtractionSweeper();
+    this.startActiveSessionSweeper();
   }
 
   private async ensureSeedAdminUser() {
@@ -702,6 +704,50 @@ export class MemoryEngine {
         });
     }, intervalMs);
     this.sweeperTimer.unref?.();
+  }
+
+  /**
+   * Federation Stage 2 (FED-S2-T5) — drop stale active_sessions rows.
+   * Runs alongside the extraction sweeper so we don't add yet another
+   * timer; cadence is configurable via `BRAINROUTER_SESSION_SWEEP_*`.
+   *
+   * Defaults: tick every minute, drop rows whose `lastHeartbeatAt` is
+   * older than 5 minutes. The 5-minute floor matches the spec: clients
+   * heartbeat at 30s, so 5 minutes is "10 missed beats" — enough margin
+   * for transient network blips without leaving ghost sessions in the
+   * registry indefinitely.
+   */
+  private startActiveSessionSweeper(): void {
+    if (process.env.BRAINROUTER_DISABLE_SESSION_SWEEPER === "true") return;
+
+    const DEFAULT_INTERVAL_MS = 60 * 1000; // 1 minute
+    const MIN_INTERVAL_MS = 10 * 1000;
+    const raw = parseInt(
+      process.env.BRAINROUTER_SESSION_SWEEP_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
+      10,
+    );
+    if (!Number.isFinite(raw) || raw <= 0) return;
+    const intervalMs = Math.max(raw, MIN_INTERVAL_MS);
+
+    const olderThanMs = parseInt(
+      process.env.BRAINROUTER_SESSION_SWEEP_MAX_AGE_MS ?? String(5 * 60 * 1000),
+      10,
+    );
+
+    this.activeSessionSweeperTimer = setInterval(() => {
+      try {
+        const removed = this.store.sweepActiveSessions(olderThanMs);
+        if (removed > 0) {
+          console.error(`[BrainRouter] active_sessions sweeper removed ${removed} stale row(s).`);
+        }
+      } catch (err) {
+        console.error(
+          "[BrainRouter] active_sessions sweeper failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }, intervalMs);
+    this.activeSessionSweeperTimer.unref?.();
   }
 
   public async sweepUnextractedBacklog() {

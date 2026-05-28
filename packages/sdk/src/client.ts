@@ -34,6 +34,7 @@ import {
   WorkingResetRequest,
   WorkingResetResponse,
   ActiveSessionsResponse,
+  ActiveSessionRecord,
   CoreIdentityRecord,
   SkillActivationsResponse,
 } from "@kinqs/brainrouter-types";
@@ -174,6 +175,14 @@ export class BrainRouterClient {
   getScenes(params?: CursorPaginationParams) { return this.get<ScenesResponse>("/api/scenes", params); }
   deleteScene(id: string) { return this.deleteReq<{ success: boolean }>(`/api/scenes/${id}`); }
   getPersona() { return this.get<{ persona: CoreIdentityRecord | null }>("/api/persona"); }
+  /**
+   * Federation Stage 2 (0.4.0) — list the user's active peer sessions
+   * (CLIs / MCP hosts currently attached to the brain). Default scope
+   * is heartbeats within the last 2 minutes.
+   */
+  getRemoteSessions(params?: { clientKind?: string; workspaceRoot?: string; includeStale?: boolean; includeUsage?: boolean; staleThresholdMs?: number }) {
+    return this.get<{ sessions: ActiveSessionRecord[] }>("/api/sessions", params);
+  }
   getContradictions(params?: CursorPaginationParams) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
   resolveContradiction(id: string, status: "resolved" | "dismissed") { return this.post<{ success: boolean }>(`/api/contradictions/${id}/resolve`, { status }); }
 
