@@ -18,6 +18,21 @@ test('VENDORS includes the five minimum required vendors', () => {
   assert.ok(listVendors().length >= 5);
 });
 
+test('VENDORS includes the federation CLI vendors (0.4.0 Stage 1)', () => {
+  for (const id of ['claude-code', 'codex', 'gemini-cli']) {
+    assert.ok(VENDORS[id], `missing federation vendor ${id}`);
+    // Each carries a federation primer note so users see the shared-memory
+    // contract right where they paste the snippet.
+    assert.match(VENDORS[id].note ?? '', /[Ff]ederation/);
+  }
+});
+
+test('federation CLI vendors target the conventional dotfile path', () => {
+  assert.match(VENDORS['claude-code'].configPath('darwin'), /\/\.claude\/mcp\.json$/);
+  assert.match(VENDORS['codex'].configPath('darwin'), /\/\.codex\/mcp\.json$/);
+  assert.match(VENDORS['gemini-cli'].configPath('darwin'), /\/\.gemini\/mcp\.json$/);
+});
+
 test('each vendor template renders an object containing the URL and API key verbatim', () => {
   for (const entry of listVendors()) {
     const snippet = renderSnippet(entry, VARS);

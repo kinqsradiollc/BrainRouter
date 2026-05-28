@@ -80,6 +80,7 @@ function cognitiveRowToRecord(row: any): CognitiveRecord {
     lastCitedAt: row.last_cited_at ?? null,
     neverCitedCount: row.never_cited_count ?? 0,
     archived: Boolean(row.archived),
+    workspaceTag: row.workspace_tag ?? null,
   };
 }
 
@@ -140,7 +141,35 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
 
     this.db.exec("PRAGMA busy_timeout = 5000");
+
+    // WAL is required by 0.4.0 federation — multiple MCP-aware CLIs share
+    // one db and need concurrent reads + a single writer. Without WAL,
+    // parallel writes serialize and a long extraction blocks every peer's
+    // recall. SQLite can silently refuse WAL on some filesystems
+    // (network shares, certain tmpfs configurations), so we set it AND
+    // read back the effective mode and warn if it didn't take. We don't
+    // throw — a single-client install on an exotic FS should still boot
+    // — but the federation hardening guarantees only hold when this
+    // resolves to `wal`.
     this.db.exec("PRAGMA journal_mode = WAL");
+    const mode = this.getJournalMode();
+    if (mode.toLowerCase() !== "wal") {
+      console.error(
+        `[BrainRouter] WARNING: SQLite journal_mode resolved to '${mode}', not 'wal'. ` +
+          `Federation concurrency guarantees do not hold. ` +
+          `Check the underlying filesystem (network mounts and certain tmpfs configurations refuse WAL).`,
+      );
+    }
+  }
+
+  /**
+   * Returns the effective `journal_mode` PRAGMA. Federation depends on
+   * this being `wal`; the constructor warns when it isn't, but callers
+   * (and tests) may want to assert it directly.
+   */
+  public getJournalMode(): string {
+    const row = this.db.prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
+    return row?.journal_mode ?? "unknown";
   }
 
   public init() {
@@ -330,9 +359,24 @@ export class SqliteMemoryStore implements IMemoryStore {
         verification_status TEXT DEFAULT '',
         repo_paths_json TEXT DEFAULT '[]',
         file_paths_json TEXT DEFAULT '[]',
-        commands_json TEXT DEFAULT '[]'
+        commands_json TEXT DEFAULT '[]',
+        workspace_tag TEXT
       )
     `);
+
+    // Federation Stage 1 (0.4.0) — add `workspace_tag` to existing
+    // databases that pre-date the column. SQLite's ADD COLUMN is
+    // idempotent only via try/catch; we swallow the "duplicate column"
+    // error so a brain that's been upgraded once doesn't crash on
+    // subsequent boots. Existing rows pick up NULL, which the recall
+    // filter treats as "tag unknown — surface in every workspace".
+    try {
+      this.db.exec("ALTER TABLE cognitive_records ADD COLUMN workspace_tag TEXT");
+    } catch (e) {
+      const msg = (e as Error).message || "";
+      if (!/duplicate column name/i.test(msg)) throw e;
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_workspace_tag ON cognitive_records(user_id, workspace_tag)");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_evidence (
@@ -384,8 +428,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
-        repo_paths_json, file_paths_json, commands_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        repo_paths_json, file_paths_json, commands_json, workspace_tag
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -406,7 +450,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         verification_status=excluded.verification_status,
         repo_paths_json=excluded.repo_paths_json,
         file_paths_json=excluded.file_paths_json,
-        commands_json=excluded.commands_json
+        commands_json=excluded.commands_json,
+        workspace_tag=COALESCE(excluded.workspace_tag, cognitive_records.workspace_tag)
     `);
 
     this.stmtCognitiveGetMeta = this.db.prepare(`
@@ -649,7 +694,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? [])
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
         );
 
         // FTS5 Insert
@@ -699,7 +744,7 @@ export class SqliteMemoryStore implements IMemoryStore {
         record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
         record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
         JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-        JSON.stringify(record.commands ?? [])
+        JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
       );
 
       // FTS5 Insert (delete old first if it exists to emulate UPSERT)
@@ -946,7 +991,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata ?? {}), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? [])
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
         );
         this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
         this.stmtCognitiveFtsInsert.run(
@@ -1352,6 +1397,30 @@ export class SqliteMemoryStore implements IMemoryStore {
   // ============================
   // Core Identity Methods
   // ============================
+
+  /**
+   * Federation Stage 1 (0.4.0) — batch lookup of `workspace_tag` for
+   * recall filtering. Returns a Map keyed by recordId; ids not present
+   * in the DB and ids with NULL tag both map to `null`. The caller
+   * (recall pipeline) is responsible for applying NULL-tolerant logic.
+   */
+  public getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null> {
+    const result = new Map<string, string | null>();
+    if (recordIds.length === 0) return result;
+    // Pre-fill every id with null so missing rows fall through to the
+    // NULL-tolerant filter branch instead of being dropped silently.
+    for (const id of recordIds) result.set(id, null);
+    const placeholders = recordIds.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT record_id, workspace_tag FROM cognitive_records WHERE user_id = ? AND record_id IN (${placeholders})`,
+      )
+      .all(userId, ...recordIds) as Array<{ record_id: string; workspace_tag: string | null }>;
+    for (const row of rows) {
+      result.set(row.record_id, row.workspace_tag ?? null);
+    }
+    return result;
+  }
 
   public upsertCoreIdentity(record: CoreIdentityRecord) {
     const stmt = this.db.prepare(`

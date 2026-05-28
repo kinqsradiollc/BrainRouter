@@ -104,6 +104,14 @@ export interface IMemoryStore {
   hardDeleteMemory(userId: string, recordId: string, reason: string): void;
   searchCognitiveFts(userId: string, query: string, limit: number): CognitiveFtsResult[];
   searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): CognitiveFtsResult[];
+  /**
+   * Federation Stage 1 (0.4.0) — batch lookup of `workspace_tag` for a
+   * set of record ids. Used by the recall pipeline when a workspace
+   * filter is set, to apply the NULL-tolerant scope after FTS / vector
+   * / filepath candidate gathering. Missing record ids and NULL tags
+   * both map to `null` in the returned map.
+   */
+  getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null>;
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
   searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
   upsertContradiction(data: {
