@@ -30,7 +30,7 @@ is documented inline in [`memory-engine.md`](memory-engine.md) and the
 | **`/dm <sessionKey \| prefix> <message>`** | Point-to-point text. Recipient sees a banner (📨) above their next prompt within ~5 s. |
 | **`/broadcast <message>`** | Text to every active peer under your userId. |
 | **`/broadcast <clientKind>:* <message>`** | Pattern broadcast — `/broadcast claude-code:* please pull latest`. |
-| **Incoming banner** | Background poll (5 s) renders incoming `text`-kind messages above the active prompt. No render hook, no chat UI — just visibility. |
+| **Incoming banner** | Background poll (5 s) renders incoming `text`-kind messages as Ink scrollback notices ABOVE the composer — they persist there like any other turn output, not below the footer where Ink would stomp them on the next redraw. |
 
 What Stage 3 deliberately **does not do yet**:
 

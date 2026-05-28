@@ -27,12 +27,25 @@ const BANNER_WIDTH = 80;
 
 export function renderIncomingMessages(messages: InboxTextMessage[]): void {
   if (messages.length === 0) return;
-  // One block per message rather than one mega-banner. Two messages
-  // arriving in the same poll tick (5 s window) is unusual enough
-  // that we'd rather see them framed separately than smushed.
+  // Fallback path used by headless / non-Ink contexts (e.g. before
+  // `runChat` has wired the controller, or for one-shot scripts).
+  // Inside the Ink REPL the same banners are pushed through
+  // `controller.push.notice` so they land in persistent scrollback
+  // ABOVE the composer rather than below it (where Ink would stomp
+  // them on the next redraw).
   for (const m of messages) {
     process.stdout.write('\n' + formatBanner(m) + '\n');
   }
+}
+
+/**
+ * Same banner shape as `renderIncomingMessages` but returns the
+ * formatted string instead of writing to stdout. Used by the Ink
+ * REPL to push the banner through `controller.push.notice` so it
+ * lands in persistent scrollback.
+ */
+export function formatIncomingBanner(m: InboxTextMessage): string {
+  return formatBanner(m);
 }
 
 function formatBanner(m: InboxTextMessage): string {

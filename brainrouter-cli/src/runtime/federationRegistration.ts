@@ -54,6 +54,15 @@ export interface FederationHandle {
    * sweeper handles whatever this misses.
    */
   stop(): Promise<void>;
+  /**
+   * Swap the `onInboxText` handler at runtime. The REPL uses this to
+   * upgrade from the initial stdout-fallback renderer (Ink stomps it
+   * on the next redraw) to `controller.push.notice` once the Ink
+   * scrollback is mounted. Messages that arrived during the gap are
+   * replayed once, so banners that landed before the REPL was ready
+   * don't get lost.
+   */
+  setOnInboxText(handler: ((messages: InboxTextMessage[]) => void | Promise<void>) | null): void;
 }
 
 export interface FederationOptions {
@@ -115,11 +124,32 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
   // Federation Stage 3 (FED-S3-T6) — inbox poller. Pull-only for now;
   // SSE push is deferred to 0.4.1 per the spec sub-item marked `[-]`.
   // 5 s cadence balances "feels live" against MCP call cost.
+  //
+  // The handler is swap-able at runtime (see `setOnInboxText` on the
+  // returned handle) so the REPL can upgrade from a stdout-fallback
+  // renderer to `controller.push.notice` once the Ink scrollback is
+  // mounted. Buffered messages that arrived during the gap replay on
+  // swap so nothing is lost.
   let inboxTimer: NodeJS.Timeout | undefined;
-  if (hasInbox && options.onInboxText) {
+  let activeHandler: ((messages: InboxTextMessage[]) => void | Promise<void>) | null =
+    options.onInboxText ?? null;
+  const buffered: InboxTextMessage[] = [];
+  const dispatch = async (messages: InboxTextMessage[]): Promise<void> => {
+    if (!activeHandler) {
+      buffered.push(...messages);
+      return;
+    }
+    try {
+      await activeHandler(messages);
+    } catch {
+      // Handler errors must not break the poller; the next tick
+      // gets another chance.
+    }
+  };
+  if (hasInbox) {
     inboxTimer = setInterval(() => {
       if (stopped) return;
-      void pollInboxOnce(options);
+      void pollInboxOnce(options, dispatch);
     }, inboxIntervalMs);
   }
   // Deliberately NOT calling `timer.unref()`. The Ink REPL's stdin
@@ -141,11 +171,20 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
       if (inboxTimer) clearInterval(inboxTimer);
       await unregisterOnce(options);
     },
+    setOnInboxText(handler) {
+      activeHandler = handler;
+      if (handler && buffered.length > 0) {
+        const replay = buffered.splice(0, buffered.length);
+        void handler(replay);
+      }
+    },
   };
 }
 
-async function pollInboxOnce(options: FederationOptions): Promise<void> {
-  if (!options.onInboxText) return;
+async function pollInboxOnce(
+  options: FederationOptions,
+  dispatch: (messages: InboxTextMessage[]) => Promise<void>,
+): Promise<void> {
   try {
     const res = await callMcpTool<{
       messages?: Array<{ id: string; kind: string; fromSessionKey: string; payload: any; createdAt: string }>;
@@ -168,7 +207,7 @@ async function pollInboxOnce(options: FederationOptions): Promise<void> {
       });
     }
     if (textMessages.length > 0) {
-      options.onInboxText(textMessages);
+      await dispatch(textMessages);
     }
   } catch {
     // Brain reachable + the auto-recovery layer in mcpClient already
