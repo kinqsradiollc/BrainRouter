@@ -96,11 +96,20 @@ export interface RecallFilters {
   minPriority?: number;
   /** Restrict to records produced under this skill_tag. */
   skillTag?: string;
+  /**
+   * Federation Stage 1 (0.4.0) — restrict to records captured in this
+   * workspace. NULL-tolerant on both sides: a record with no tag is
+   * never filtered out (legacy / pre-migration rows surface in every
+   * workspace), and a missing filter likewise surfaces every record.
+   * Pass `workspaceTagFromPath(root)` to compute the canonical tag.
+   */
+  workspaceTag?: string;
 }
 
-function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
+export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
   records: T[],
   filters?: RecallFilters,
+  workspaceTagLookup?: Map<string, string | null>,
 ): T[] {
   if (!filters) return records;
   const afterMs = filters.capturedAfter ? new Date(filters.capturedAfter).getTime() : undefined;
@@ -117,6 +126,19 @@ function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
       if (Number.isNaN(created)) return false;
       if (afterMs !== undefined && created < afterMs) return false;
       if (beforeMs !== undefined && created > beforeMs) return false;
+    }
+    if (filters.workspaceTag) {
+      // NULL-tolerant on both sides — a record with no captured tag
+      // (legacy / pre-migration) surfaces in every workspace, and a
+      // missing filter (handled above by `!filters`) likewise surfaces
+      // every record. Federation rollout is gradual: as soon as a peer
+      // CLI starts tagging new captures, those records get scoped; old
+      // ones keep flowing through until they're re-extracted.
+      const tag =
+        (r as { workspace_tag?: string | null }).workspace_tag ??
+        workspaceTagLookup?.get(r.record_id) ??
+        null;
+      if (tag !== null && tag !== filters.workspaceTag) return false;
     }
     return true;
   });
@@ -158,13 +180,30 @@ export class MemoryRecallPipeline {
       }
     }
 
+    // Federation Stage 1 — when a workspace filter is set, pre-fetch the
+    // workspace_tag for every candidate id once. The FTS5 virtual table
+    // doesn't carry the tag (its schema is frozen), and adding it would
+    // require a heavy reindex. A single batch SELECT against
+    // cognitive_records is cheap (≤ ftsLimit + vecLimit + filePath ids,
+    // typically ~30-50 ids) and keeps the FTS5 contract intact.
+    let workspaceTagLookup: Map<string, string | null> | undefined;
+    if (filters?.workspaceTag) {
+      const candidateIds = new Set<string>();
+      for (const r of ftsResultsRaw) candidateIds.add(r.record_id);
+      for (const r of vecResultsRaw) candidateIds.add(r.record_id);
+      for (const r of filePathResultsRaw) candidateIds.add(r.record_id);
+      if (candidateIds.size > 0) {
+        workspaceTagLookup = this.store.getWorkspaceTagsByRecordIds(userId, [...candidateIds]);
+      }
+    }
+
     // Filter the three candidate streams BEFORE RRF so the rank is computed
     // on the actually-relevant pool, not a filtered subset of an unfiltered
     // rank (which would bias scores toward records that happen to be in the
     // top-15 globally even if irrelevant to the filter).
-    const ftsResults = applyFilters(ftsResultsRaw, filters);
-    const vecResults = applyFilters(vecResultsRaw, filters);
-    const filePathResults = applyFilters(filePathResultsRaw, filters);
+    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup);
+    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup);
+    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup);
 
     if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
       const emptyStrategy = this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty";

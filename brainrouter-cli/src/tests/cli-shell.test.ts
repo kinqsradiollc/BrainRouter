@@ -629,6 +629,74 @@ test('/where: blocked goal surfaces blockedReason', () => {
   });
 });
 
+test('/where: persona pinned line shows when briefing emitted a memory_persona stat', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const inputs = gatherWhereInputs({
+      workspaceRoot: workspace,
+      sessionKey: 'sk-persona',
+      model: 'gpt-4o-mini',
+      mcpProfile: 'local-http',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      mcpIdentity: 'brainrouter',
+      accessMode: 'shell',
+      recalledRecords: [],
+      briefingSources: ['memory_persona', 'memory_recall'],
+      briefingSourceStats: [
+        { source: 'memory_persona', chars: 412, records: 0 },
+        { source: 'memory_recall', chars: 1024, records: 5 },
+      ],
+    });
+    const out = renderWhere(inputs, theme);
+    assert.match(out, /persona pinned · 412 chars/);
+  });
+});
+
+test('/where: persona line reports "no body yet" when anchor is on but brain has no persona', () => {
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    const inputs = gatherWhereInputs({
+      workspaceRoot: workspace,
+      sessionKey: 'sk-no-persona',
+      model: 'm',
+      mcpProfile: 'p',
+      mcpTransport: 'http',
+      mcpOnline: true,
+      accessMode: 'shell',
+      recalledRecords: [],
+      briefingSources: [],
+    });
+    const out = renderWhere(inputs, theme);
+    assert.match(out, /persona no body yet/);
+  });
+});
+
+test('/where: persona line hidden semantics — cli.personaAnchor=off forces off message', async () => {
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
+  withTempWorkspace((workspace) => {
+    const theme = buildTheme('mono');
+    setCliKnobOverride({ personaAnchor: 'off' });
+    try {
+      const inputs = gatherWhereInputs({
+        workspaceRoot: workspace,
+        sessionKey: 'sk-off',
+        model: 'm',
+        mcpProfile: 'p',
+        mcpTransport: 'http',
+        mcpOnline: true,
+        accessMode: 'shell',
+        recalledRecords: [],
+        briefingSources: [],
+      });
+      const out = renderWhere(inputs, theme);
+      assert.match(out, /persona off · cli\.personaAnchor=off/);
+    } finally {
+      _resetCliKnobsCache();
+    }
+  });
+});
+
 // ---- preferences (quiet) -------------------------------------------------
 
 test('preferencesStore: quiet defaults to false', () => {

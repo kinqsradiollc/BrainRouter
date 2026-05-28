@@ -1,4 +1,10 @@
 import type {
+  ActiveSessionFilters,
+  ActiveSessionRecord,
+  ActiveSessionUsage,
+  SessionInboxFilters,
+  SessionInboxKind,
+  SessionInboxRecord,
   GraphEdge,
   GraphNode,
   ContradictionRecord,
@@ -104,6 +110,71 @@ export interface IMemoryStore {
   hardDeleteMemory(userId: string, recordId: string, reason: string): void;
   searchCognitiveFts(userId: string, query: string, limit: number): CognitiveFtsResult[];
   searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): CognitiveFtsResult[];
+  /**
+   * Federation Stage 1 (0.4.0) — batch lookup of `workspace_tag` for a
+   * set of record ids. Used by the recall pipeline when a workspace
+   * filter is set, to apply the NULL-tolerant scope after FTS / vector
+   * / filepath candidate gathering. Missing record ids and NULL tags
+   * both map to `null` in the returned map.
+   */
+  getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null>;
+
+  /**
+   * Federation Stage 2 (0.4.0) — active-session registry surface.
+   *
+   * - `registerActiveSession` upserts a row keyed by `(sessionKey, userId)`.
+   *   On insert, `startedAt` is set to the provided value; on conflict it
+   *   is preserved (so a re-register does not reset session start time).
+   *   `lastHeartbeatAt` always advances to the provided value.
+   * - `heartbeatActiveSession` updates `lastHeartbeatAt` (and optionally
+   *   `usage`) for an existing row. Returns `true` when a row was
+   *   updated, `false` when no matching session existed (callers can
+   *   re-register on that signal). MUST NOT write to `operation_log`
+   *   — heartbeats are 1/30s × N peers, audit volume would explode.
+   * - `listActiveSessions` returns rows that match the filters. By
+   *   default excludes sessions whose heartbeat is older than
+   *   `staleThresholdMs` (2 min).
+   * - `sweepActiveSessions` deletes rows older than the given threshold.
+   *   Returns the count removed.
+   */
+  registerActiveSession(record: ActiveSessionRecord): ActiveSessionRecord;
+  heartbeatActiveSession(
+    userId: string,
+    sessionKey: string,
+    at: string,
+    usage?: ActiveSessionUsage | null,
+  ): boolean;
+  /**
+   * Federation Stage 2 follow-up: graceful unregister on clean CLI exit.
+   * Returns `true` when a row was deleted, `false` when no matching row
+   * existed (idempotent — safe to call multiple times). The 5-min
+   * sweeper still acts as the safety net for hard kills.
+   */
+  unregisterActiveSession(userId: string, sessionKey: string): boolean;
+  listActiveSessions(filters: ActiveSessionFilters): ActiveSessionRecord[];
+  sweepActiveSessions(olderThanMs: number): number;
+
+  /**
+   * Federation Stage 3 (0.4.0) — cross-CLI messaging.
+   *
+   * - `sendSessionMessage` writes one row PER recipient. The caller
+   *   passes the literal addressing string (`sessionKey`, `clientKind:*`,
+   *   or `*`); the store resolves it against `active_sessions` at send
+   *   time and fans out. Returns the persisted ids so the sender can
+   *   surface "delivered to N peers" feedback.
+   * - `readSessionInbox` returns undelivered rows for the given session
+   *   (or all rows when `includeDelivered: true`). When called without
+   *   `peek`, the caller will follow up with `ackSessionInbox` on the
+   *   ids it accepted; this two-step shape lets a flaky reader replay
+   *   on crash without losing messages.
+   * - `ackSessionInbox` stamps `delivered_at = ?`. Idempotent.
+   * - `sweepSessionInbox` deletes delivered rows older than the
+   *   threshold (keeps the table from growing unbounded).
+   */
+  sendSessionMessage(record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">, options?: { idGenerator?: () => string; now?: string }): SessionInboxRecord[];
+  readSessionInbox(filters: SessionInboxFilters): SessionInboxRecord[];
+  ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): number;
+  sweepSessionInbox(olderThanMs: number): number;
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
   searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
   upsertContradiction(data: {

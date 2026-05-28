@@ -13,6 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
 | **0.3.9** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
@@ -20,6 +21,155 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
 this changelog.
+
+---
+
+## [0.4.0] - 2026-05-28
+
+Persona injection (the anchor item — closes the gap where the brain
+distilled a Core Identity but the CLI never injected it), federation
+(shared memory + active-session registry + cross-CLI messaging),
+CLI multi-agent Phase 2 (typed delegation), and the brain-side
+design pass. Full notes in
+[`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md).
+
+### Added
+
+- **Core Identity in the briefing prefix.** New `### Core Identity`
+  section in every briefing, pinned into the 0.3.9 cache-stable
+  prefix — zero token cost after turn 1, re-anchors only when the
+  persona body changes.
+- **`/persona` slash command.** Show / refresh / on / off the active
+  Core Identity; back-compat `<name>` form preserved.
+- **`memory_persona` + `memory_persona_refresh` MCP tools.** Brain
+  exposes a canonical reader and on-demand distillation trigger,
+  both returning a 16-char content hash.
+- **`cli.personaAnchor` config knob.** System-wide on/off in
+  `~/.config/brainrouter/config.json`. Per-workspace
+  `personaAnchorEnabled` preference layered on top.
+- **`/where` persona line and `/briefing` row.** Both surface anchor
+  state so users can confirm the prefix actually carries it.
+- **`/memories list [query]`.** Per-card precision badge
+  `· cited N · uncited M (P%)` with a `⚠️ noisy` flag below 20% —
+  makes pre-auto-archive memory quality visible.
+
+### Federation Stage 1 (shared-memory foundation)
+
+- **SQLite WAL hardening** — `journal_mode=WAL` is verified at boot
+  and the brain logs a federation-aware warning when a host
+  filesystem refuses WAL.
+- **Per-client install snippets** for Claude Code, Codex, and
+  Gemini CLI; federation primer added to
+  [`brainrouter-docs/mcp-install.md`](brainrouter-docs/mcp-install.md).
+- **`workspaceTag` on memories.** Optional 16-char hash that lets a
+  CLI scope recall to a single workspace; NULL-tolerant so existing
+  records stay visible during gradual rollout.
+
+### Federation Stage 2 (active-session registry + cross-vendor presence)
+
+- **Live peer presence.** New `session_register` /
+  `session_heartbeat` / `session_unregister` / `session_list` MCP
+  tools backed by an `active_sessions` table. Every
+  BrainRouter-aware CLI / host (Claude Code, Codex, Cursor, Gemini
+  CLI, …) attached to the same brain shows up as a row.
+  Per-process identity: two terminals open in the same workspace
+  show as two distinct sessions.
+- **`/agents --remote`.** Lists peer sessions with `--watch`,
+  `--usage`, `--include-stale`, `--json` flags. Auto-registers on
+  REPL startup; heartbeats every 30 s; auto-recovers when the brain
+  restarts; calls `session_unregister` on `/exit` so a clean shutdown
+  removes the row immediately.
+- **Live Sessions widget** on the dashboard Overview page, polling
+  the new `/api/sessions` REST route every 10 s.
+- **Per-session telemetry** — tokens / USD snapshot rides
+  heartbeats. Opt-in via `--usage` (CLI) and `includeUsage: true`
+  (REST / MCP). Heartbeats deliberately skip `operation_log` —
+  audit volume guard.
+- **Stale-session sweeper** runs every minute; sessions are
+  swept 5 min after the last heartbeat.
+- See [`brainrouter-docs/federation.md`](brainrouter-docs/federation.md)
+  for the full lifecycle (active / stale / swept / recovered) and the
+  privacy boundary.
+
+### Federation Stage 3 (cross-CLI messaging)
+
+- **`/dm <sessionKey> <message>`** — point-to-point text to another
+  federated peer. Recipient sees an `📨` banner above their next
+  prompt within ~5 s.
+- **`/broadcast <message>`** — fans out to every active peer under
+  your userId. `/broadcast <clientKind>:* <message>` narrows to
+  one client kind (e.g. `claude-code:*`).
+- **Three MCP tools.** `session_send` (writes one row per recipient
+  — broadcast addresses are resolved against `active_sessions` at
+  send time so each peer acks independently), `session_inbox_read`
+  (default auto-acks; `peek: true` lets a crashy reader replay
+  safely), `session_inbox_ack` (idempotent batch ack, up to 500
+  ids per call).
+- **Non-destructive banners.** The CLI's background inbox poll peeks
+  and de-duplicates locally, so a visible `📨` banner remains available
+  for a later explicit `session_inbox_read` when the user asks the
+  agent to answer peer messages.
+- **`kind` enum** accepts all five values (`text`, `tool-result`,
+  `memory-ref`, `goal-handoff`, `delegate`) so Stage 4 and CLI
+  Multi-Agent Phase 2 can carry structured payloads without a
+  schema migration. Only `text` is rendered by Stage 3 CLIs.
+- **Inbox sweeper** drops delivered rows older than 1 hour
+  (configurable via `BRAINROUTER_INBOX_SWEEP_*`). Undelivered rows
+  never sweep — they survive the recipient's downtime.
+- **SSE push deferred.** Spec calls for SSE-fed notifications; the
+  current implementation is a 5 s poll. Same UX, simpler surface.
+  Tracked as a 0.4.1 follow-up.
+
+### CLI Multi-Agent Phase 2 (typed delegation)
+
+- **Synthesized `delegate_<agentId>` tools.** One per agent
+  definition in the registry, rebuilt every turn. Description
+  surfaces the agent's `whenToUse` so the LLM picks by reading
+  the tool list (not by guessing role names). `spawn_agent` /
+  `task_agent` stay as escape hatches.
+- **`route_task` direct-first policy.** Returns a typed 4-tier
+  decision: `answer-direct` / `direct-tool` / `spawn-inline` /
+  `spawn-worker` with `recommendedTool`, `agentId`, `confidence`,
+  `memoryEvidence`. `route_agent` becomes a deprecated alias.
+- **Memory-aware routing.** When the brain is online,
+  `route_task` queries past `agent_route_feedback` records via
+  `memory_recall` and boosts confidence; offline path caps
+  confidence at 0.6.
+- **Parent execution context snapshot.** Typed packet handed to
+  every child — memory refs (not bodies), plan/briefing
+  excerpts, hashed workspace instructions. Persisted on the
+  child session record AND written as the child's first
+  transcript entry. `/agents show <id>` renders it. Same shape
+  Stage 4 will use over the wire for cross-vendor delegate.
+- **Typed output contracts** for the 5 built-in roles
+  (explorer / architect / reviewer / worker / verifier). The
+  child's system prompt gains a "Required structured output"
+  block; `parseChildOutput` parses the result tolerantly.
+- **`agent_route_feedback` emitter** on every child completion.
+  Records the routing decision + outcome via `memory_capture_turn`
+  so future `route_task` calls can learn from history.
+
+### Brain-side design pass (0.4.0 — design only)
+
+- **`BrainAgent` interface** exported from
+  `@kinqs/brainrouter-types`. Captures the agent registry shape
+  (`id`, `description`, `inputSchema`, `outputSchema`, `modelClass`,
+  `maxAttempts`, `timeoutMs`, `batchSize`, `idempotencyKey`,
+  `reads`, `writes`, `emits`, `dependsOn`). Phase 1 implements.
+- **`MemoryJobRecord` + `MemoryJobStatus`** — type stubs for the
+  observable, retryable job queue that replaces today's scattered
+  setInterval handles + ad-hoc retry logic.
+- **`MemoryBlackboardItem`** — the candidate-memory layer Phase 5
+  uses to chain dedup / contradiction / evidence agents before a
+  record lands.
+- **[`brainrouter-docs/brain-agents.md`](brainrouter-docs/brain-agents.md)** —
+  full design freeze: registry inventory with locked-in agent IDs,
+  SQL sketches, retry-with-backoff lifecycle, MCP tool schemas
+  (`memory_agent_status` / `memory_agent_run` /
+  `memory_job_retry`), and the Phase 1 implementation layout.
+- **Zero runtime change.** Types are importable today; the brain
+  pipeline still runs the existing scattered stages. Phase 1
+  (0.4.1) ships the runtime against this contract.
 
 ---
 

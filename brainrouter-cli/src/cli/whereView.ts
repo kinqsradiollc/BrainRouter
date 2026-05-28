@@ -6,6 +6,7 @@ import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '../state/w
 import { listSessions, type ChildSessionRecord } from '../orchestration/orchestrator.js';
 import type { RecalledRecord } from '../memory/briefing.js';
 import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
+import { getCliKnobs } from '../config/config.js';
 import { BOX, type Theme } from './theme.js';
 import { formatContextWindow } from '../runtime/contextWindow.js';
 
@@ -61,6 +62,19 @@ export interface WhereInputs {
   recalledRecords: RecalledRecord[];
   briefingSources: string[];
   childSessions: ChildSessionRecord[];
+  /**
+   * Persona anchor state for the `/where` panel. Populated by
+   * `gatherWhereInputs` from `cli.personaAnchor` (config.json) +
+   * `personaAnchorEnabled` (workspace preference) + the last briefing's
+   * source stats. `injectedChars > 0` means the most recent turn
+   * actually pinned a Core Identity section.
+   */
+  persona: {
+    anchorEnabled: boolean;
+    /** True when `cli.personaAnchor` in `config.json` is forcing the anchor off. */
+    configOff: boolean;
+    injectedChars?: number;
+  };
 }
 
 const RECALL_LIMIT = 5;
@@ -108,6 +122,21 @@ function renderWorkspace(inputs: WhereInputs, theme: Theme): string[] {
   if (inputs.mcpIdentity === 'brainrouter') {
     const brainState = inputs.mcpOnline ? '🟢 online' : '🔴 offline · cloud unreachable';
     lines.push(indent(dim(`brain   ${brainState}`)));
+  }
+  // Persona anchor state — shows whether the briefing's cache-stable
+  // prefix carries a Core Identity section. Hidden entirely when the user
+  // has turned the anchor off (the env override forces off too); still
+  // shown as "no body yet" when on but the brain has no persona row.
+  if (inputs.persona.anchorEnabled && !inputs.persona.configOff) {
+    const injected = inputs.persona.injectedChars ?? 0;
+    const state = injected > 0
+      ? `pinned · ${injected.toLocaleString()} chars`
+      : 'no body yet';
+    lines.push(indent(dim(`persona ${state}`)));
+  } else if (inputs.persona.configOff) {
+    lines.push(indent(dim('persona off · cli.personaAnchor=off')));
+  } else {
+    lines.push(indent(dim('persona off')));
   }
   return lines;
 }
@@ -264,6 +293,12 @@ export function gatherWhereInputs(args: {
   accessMode: string;
   recalledRecords: RecalledRecord[];
   briefingSources: string[];
+  /**
+   * Per-source stats from the most recent briefing. Used by the persona
+   * panel — when `memory_persona` produced any chars, the `/where`
+   * persona line renders "pinned · <chars> chars".
+   */
+  briefingSourceStats?: Array<{ source: string; chars: number; records: number }>;
 }): WhereInputs {
   const workflowSlug = (() => {
     // 9d-bugfix: session-scoped binding so a fresh CLI shows no workflow
@@ -284,6 +319,8 @@ export function gatherWhereInputs(args: {
   })();
   const prefs = readPreferences(args.workspaceRoot);
   const resolvedEffort = resolveEffort(args.workspaceRoot);
+  const configOff = getCliKnobs().personaAnchor === 'off';
+  const personaStat = args.briefingSourceStats?.find((s) => s.source === 'memory_persona');
   return {
     ...args,
     executionMode: prefs.executionMode,
@@ -295,5 +332,10 @@ export function gatherWhereInputs(args: {
     goal,
     plan,
     childSessions,
+    persona: {
+      anchorEnabled: prefs.personaAnchorEnabled,
+      configOff,
+      injectedChars: personaStat?.chars,
+    },
   };
 }

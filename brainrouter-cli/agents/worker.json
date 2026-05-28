@@ -14,5 +14,5 @@
   "subagents": [],
   "delegateName": "delegate_worker",
   "tier": "worker",
-  "outputContract": null
+  "outputContract": "worker"
 }

@@ -9,6 +9,7 @@ import { StatCard } from "../../components/StatCard";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
+import { LiveSessionsPanel } from "../../components/LiveSessionsPanel";
 import { useAuth } from "../../components/AuthProvider";
 
 const containerVariants = {
@@ -106,6 +107,11 @@ export default function Page() {
           <StatCard title="Archived Records" value={data?.archived ?? "0"} />
           <StatCard title="Citation Rate" value={data ? `${(data.citationRate * 100).toFixed(1)}%` : "0.0%"} />
           <StatCard title="Last Memory Recall" value={formattedDate} />
+        </motion.div>
+
+        {/* Federation Stage 2 (FED-S2-T7): live peer sessions */}
+        <motion.div variants={itemVariants}>
+          <LiveSessionsPanel client={client} />
         </motion.div>
 
         {/* Asymmetric Bento Grid Details */}

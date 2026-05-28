@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -80,6 +80,7 @@ function cognitiveRowToRecord(row: any): CognitiveRecord {
     lastCitedAt: row.last_cited_at ?? null,
     neverCitedCount: row.never_cited_count ?? 0,
     archived: Boolean(row.archived),
+    workspaceTag: row.workspace_tag ?? null,
   };
 }
 
@@ -93,6 +94,62 @@ function evidenceRowToRecord(row: any): MemoryEvidence {
     excerpt: row.excerpt ?? "",
     observedAt: row.observed_at ?? "",
     metadata: parseJsonObject(row.metadata_json),
+  };
+}
+
+function activeSessionRowToRecord(row: any, includeUsage: boolean): ActiveSessionRecord {
+  let usage: ActiveSessionUsage | null | undefined;
+  if (includeUsage && row.usage_json) {
+    try {
+      usage = JSON.parse(row.usage_json);
+    } catch {
+      usage = null;
+    }
+  } else if (!includeUsage) {
+    usage = undefined;
+  } else {
+    usage = null;
+  }
+  return {
+    sessionKey: row.session_key,
+    userId: row.user_id,
+    clientKind: row.client_kind ?? "http-unknown",
+    workspaceRoot: row.workspace_root ?? "",
+    startedAt: row.started_at,
+    lastHeartbeatAt: row.last_heartbeat_at,
+    metadata: parseJsonObject(row.metadata_json),
+    ...(usage !== undefined ? { usage } : {}),
+  };
+}
+
+function inboxRowToRecord(row: {
+  id: string;
+  user_id: string;
+  from_session_key: string;
+  to_session_key: string;
+  kind: string;
+  payload_json: string;
+  created_at: string;
+  delivered_at: string | null;
+}): SessionInboxRecord {
+  let payload: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(row.payload_json);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      payload = parsed;
+    }
+  } catch {
+    payload = {};
+  }
+  return {
+    id: row.id,
+    userId: row.user_id,
+    fromSessionKey: row.from_session_key,
+    toSessionKey: row.to_session_key,
+    kind: row.kind as SessionInboxKind,
+    payload,
+    createdAt: row.created_at,
+    deliveredAt: row.delivered_at,
   };
 }
 
@@ -140,7 +197,35 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
 
     this.db.exec("PRAGMA busy_timeout = 5000");
+
+    // WAL is required by 0.4.0 federation — multiple MCP-aware CLIs share
+    // one db and need concurrent reads + a single writer. Without WAL,
+    // parallel writes serialize and a long extraction blocks every peer's
+    // recall. SQLite can silently refuse WAL on some filesystems
+    // (network shares, certain tmpfs configurations), so we set it AND
+    // read back the effective mode and warn if it didn't take. We don't
+    // throw — a single-client install on an exotic FS should still boot
+    // — but the federation hardening guarantees only hold when this
+    // resolves to `wal`.
     this.db.exec("PRAGMA journal_mode = WAL");
+    const mode = this.getJournalMode();
+    if (mode.toLowerCase() !== "wal") {
+      console.error(
+        `[BrainRouter] WARNING: SQLite journal_mode resolved to '${mode}', not 'wal'. ` +
+          `Federation concurrency guarantees do not hold. ` +
+          `Check the underlying filesystem (network mounts and certain tmpfs configurations refuse WAL).`,
+      );
+    }
+  }
+
+  /**
+   * Returns the effective `journal_mode` PRAGMA. Federation depends on
+   * this being `wal`; the constructor warns when it isn't, but callers
+   * (and tests) may want to assert it directly.
+   */
+  public getJournalMode(): string {
+    const row = this.db.prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
+    return row?.journal_mode ?? "unknown";
   }
 
   public init() {
@@ -280,6 +365,51 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
 
+    // Federation Stage 2 (0.4.0) — active-session registry. Composite
+    // PK on `(session_key, user_id)` prevents a misbehaving client
+    // from accidentally stomping another user's session if it reuses
+    // the same key. `usage_json` is NULL when the client doesn't
+    // report telemetry (FED-S2-T8).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS active_sessions (
+        session_key TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        client_kind TEXT NOT NULL DEFAULT 'http-unknown',
+        workspace_root TEXT DEFAULT '',
+        started_at TEXT NOT NULL,
+        last_heartbeat_at TEXT NOT NULL,
+        metadata_json TEXT DEFAULT '{}',
+        usage_json TEXT DEFAULT NULL,
+        PRIMARY KEY (session_key, user_id)
+      )
+    `);
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_active_sessions_user_heartbeat ON active_sessions(user_id, last_heartbeat_at DESC)",
+    );
+
+    // Federation Stage 3 (0.4.0) — cross-CLI inbox. Per-recipient row;
+    // broadcasts are fanned out at send time so each recipient sees a
+    // distinct id and acks independently. Indexed by recipient + read
+    // order so `session_inbox_read` is O(log N + page).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS session_inbox (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        from_session_key TEXT NOT NULL,
+        to_session_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        delivered_at TEXT DEFAULT NULL
+      )
+    `);
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_inbox_recipient ON session_inbox(user_id, to_session_key, created_at)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_inbox_delivered ON session_inbox(delivered_at)",
+    );
+
     this.stmtSensoryUpsertMeta = this.db.prepare(`
       INSERT INTO sensory_stream (
         record_id, user_id, session_key, session_id, role, message_text, recorded_at, timestamp, skill_tag
@@ -330,9 +460,24 @@ export class SqliteMemoryStore implements IMemoryStore {
         verification_status TEXT DEFAULT '',
         repo_paths_json TEXT DEFAULT '[]',
         file_paths_json TEXT DEFAULT '[]',
-        commands_json TEXT DEFAULT '[]'
+        commands_json TEXT DEFAULT '[]',
+        workspace_tag TEXT
       )
     `);
+
+    // Federation Stage 1 (0.4.0) — add `workspace_tag` to existing
+    // databases that pre-date the column. SQLite's ADD COLUMN is
+    // idempotent only via try/catch; we swallow the "duplicate column"
+    // error so a brain that's been upgraded once doesn't crash on
+    // subsequent boots. Existing rows pick up NULL, which the recall
+    // filter treats as "tag unknown — surface in every workspace".
+    try {
+      this.db.exec("ALTER TABLE cognitive_records ADD COLUMN workspace_tag TEXT");
+    } catch (e) {
+      const msg = (e as Error).message || "";
+      if (!/duplicate column name/i.test(msg)) throw e;
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_workspace_tag ON cognitive_records(user_id, workspace_tag)");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_evidence (
@@ -384,8 +529,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
-        repo_paths_json, file_paths_json, commands_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        repo_paths_json, file_paths_json, commands_json, workspace_tag
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -406,7 +551,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         verification_status=excluded.verification_status,
         repo_paths_json=excluded.repo_paths_json,
         file_paths_json=excluded.file_paths_json,
-        commands_json=excluded.commands_json
+        commands_json=excluded.commands_json,
+        workspace_tag=COALESCE(excluded.workspace_tag, cognitive_records.workspace_tag)
     `);
 
     this.stmtCognitiveGetMeta = this.db.prepare(`
@@ -649,7 +795,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? [])
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
         );
 
         // FTS5 Insert
@@ -699,7 +845,7 @@ export class SqliteMemoryStore implements IMemoryStore {
         record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
         record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
         JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-        JSON.stringify(record.commands ?? [])
+        JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
       );
 
       // FTS5 Insert (delete old first if it exists to emulate UPSERT)
@@ -946,7 +1092,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata ?? {}), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? [])
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
         );
         this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
         this.stmtCognitiveFtsInsert.run(
@@ -1352,6 +1498,297 @@ export class SqliteMemoryStore implements IMemoryStore {
   // ============================
   // Core Identity Methods
   // ============================
+
+  /**
+   * Federation Stage 1 (0.4.0) — batch lookup of `workspace_tag` for
+   * recall filtering. Returns a Map keyed by recordId; ids not present
+   * in the DB and ids with NULL tag both map to `null`. The caller
+   * (recall pipeline) is responsible for applying NULL-tolerant logic.
+   */
+  public getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null> {
+    const result = new Map<string, string | null>();
+    if (recordIds.length === 0) return result;
+    // Pre-fill every id with null so missing rows fall through to the
+    // NULL-tolerant filter branch instead of being dropped silently.
+    for (const id of recordIds) result.set(id, null);
+    const placeholders = recordIds.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT record_id, workspace_tag FROM cognitive_records WHERE user_id = ? AND record_id IN (${placeholders})`,
+      )
+      .all(userId, ...recordIds) as Array<{ record_id: string; workspace_tag: string | null }>;
+    for (const row of rows) {
+      result.set(row.record_id, row.workspace_tag ?? null);
+    }
+    return result;
+  }
+
+  // ── Federation Stage 2 (0.4.0): active session registry ────────────────
+
+  public registerActiveSession(record: ActiveSessionRecord): ActiveSessionRecord {
+    // Idempotent upsert. On insert, `started_at` is set from the record.
+    // On conflict we preserve the existing `started_at` (so a re-register
+    // does not reset the session's lifetime) but always advance
+    // `last_heartbeat_at` and refresh client metadata / usage.
+    this.db
+      .prepare(
+        `INSERT INTO active_sessions (session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_key, user_id) DO UPDATE SET
+           client_kind = excluded.client_kind,
+           workspace_root = excluded.workspace_root,
+           last_heartbeat_at = excluded.last_heartbeat_at,
+           metadata_json = excluded.metadata_json,
+           usage_json = COALESCE(excluded.usage_json, active_sessions.usage_json)`,
+      )
+      .run(
+        record.sessionKey,
+        record.userId,
+        record.clientKind,
+        record.workspaceRoot,
+        record.startedAt,
+        record.lastHeartbeatAt,
+        JSON.stringify(record.metadata ?? {}),
+        record.usage ? JSON.stringify(record.usage) : null,
+      );
+    return this.getActiveSession(record.userId, record.sessionKey)!;
+  }
+
+  public heartbeatActiveSession(
+    userId: string,
+    sessionKey: string,
+    at: string,
+    usage?: ActiveSessionUsage | null,
+  ): boolean {
+    // Heartbeats are 1-per-30s × N peers; deliberately omit the
+    // operation_log write that other mutators emit (audit volume
+    // guard per FED-S2-T3).
+    const result = this.db
+      .prepare(
+        `UPDATE active_sessions
+         SET last_heartbeat_at = ?,
+             usage_json = COALESCE(?, usage_json)
+         WHERE session_key = ? AND user_id = ?`,
+      )
+      .run(at, usage ? JSON.stringify(usage) : null, sessionKey, userId);
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public listActiveSessions(filters: ActiveSessionFilters): ActiveSessionRecord[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filters.userId) {
+      where.push("user_id = ?");
+      params.push(filters.userId);
+    }
+    if (filters.clientKind) {
+      where.push("client_kind = ?");
+      params.push(filters.clientKind);
+    }
+    if (filters.workspaceRoot) {
+      where.push("workspace_root = ?");
+      params.push(filters.workspaceRoot);
+    }
+    if (!filters.includeStale) {
+      const threshold = filters.staleThresholdMs ?? 2 * 60 * 1000;
+      const cutoff = new Date(Date.now() - threshold).toISOString();
+      where.push("last_heartbeat_at >= ?");
+      params.push(cutoff);
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json
+         FROM active_sessions
+         ${whereSql}
+         ORDER BY last_heartbeat_at DESC, session_key ASC`,
+      )
+      .all(...params) as Array<{
+        session_key: string;
+        user_id: string;
+        client_kind: string;
+        workspace_root: string;
+        started_at: string;
+        last_heartbeat_at: string;
+        metadata_json: string | null;
+        usage_json: string | null;
+      }>;
+    return rows.map((row) => activeSessionRowToRecord(row, filters.includeUsage ?? false));
+  }
+
+  public unregisterActiveSession(userId: string, sessionKey: string): boolean {
+    // Mirror `heartbeatActiveSession` — skip the `operation_log` write.
+    // Federation churn is high-volume and audit value is low: we already
+    // have `started_at` / `last_heartbeat_at` on the row itself, and a
+    // dropped row is just absence-of-row.
+    const result = this.db
+      .prepare("DELETE FROM active_sessions WHERE session_key = ? AND user_id = ?")
+      .run(sessionKey, userId);
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  // ── Federation Stage 3 (0.4.0): cross-CLI inbox ────────────────────────
+
+  public sendSessionMessage(
+    record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">,
+    options?: { idGenerator?: () => string; now?: string },
+  ): SessionInboxRecord[] {
+    const now = options?.now ?? new Date().toISOString();
+    const idFor = options?.idGenerator ?? (() => randomUUID());
+
+    // Resolve the addressing string into a concrete list of recipient
+    // sessionKeys. Three shapes:
+    //   1. `*`                   → every active peer under user_id
+    //   2. `<clientKind>:*`      → every active peer matching that kind
+    //   3. exact `<sessionKey>`  → singleton (no resolution needed)
+    //
+    // Broadcast forms only fan out to ACTIVE sessions (heartbeat within
+    // the active window). A peer that's currently stale won't receive
+    // the broadcast — by design; addressing into the past has no useful
+    // semantics here.
+    const recipients = this.resolveInboxRecipients(record.userId, record.toSessionKey);
+    if (recipients.length === 0) return [];
+
+    const stmt = this.db.prepare(
+      `INSERT INTO session_inbox (id, user_id, from_session_key, to_session_key, kind, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    const rows: SessionInboxRecord[] = [];
+    for (const recipientSessionKey of recipients) {
+      const id = idFor();
+      stmt.run(
+        id,
+        record.userId,
+        record.fromSessionKey,
+        recipientSessionKey,
+        record.kind,
+        JSON.stringify(record.payload ?? {}),
+        now,
+      );
+      rows.push({
+        id,
+        userId: record.userId,
+        fromSessionKey: record.fromSessionKey,
+        toSessionKey: recipientSessionKey,
+        kind: record.kind,
+        payload: record.payload ?? {},
+        createdAt: now,
+        deliveredAt: null,
+      });
+    }
+    return rows;
+  }
+
+  private resolveInboxRecipients(userId: string, address: string): string[] {
+    if (!address) return [];
+    if (address === "*" || address.toLowerCase() === "broadcast") {
+      return this.activeSessionKeysForUser(userId);
+    }
+    const wildcardMatch = /^([^:]+):\*$/.exec(address);
+    if (wildcardMatch) {
+      const clientKind = wildcardMatch[1];
+      return this.activeSessionKeysForUser(userId, clientKind);
+    }
+    // Exact sessionKey — no need to verify it exists. The recipient
+    // may have just disconnected; the row stays until read or swept.
+    return [address];
+  }
+
+  private activeSessionKeysForUser(userId: string, clientKindFilter?: string): string[] {
+    const activeCutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const rows = clientKindFilter
+      ? (this.db
+          .prepare(
+            `SELECT session_key FROM active_sessions
+             WHERE user_id = ? AND client_kind = ? AND last_heartbeat_at >= ?`,
+          )
+          .all(userId, clientKindFilter, activeCutoff) as Array<{ session_key: string }>)
+      : (this.db
+          .prepare(
+            `SELECT session_key FROM active_sessions
+             WHERE user_id = ? AND last_heartbeat_at >= ?`,
+          )
+          .all(userId, activeCutoff) as Array<{ session_key: string }>);
+    return rows.map((r) => r.session_key);
+  }
+
+  public readSessionInbox(filters: SessionInboxFilters): SessionInboxRecord[] {
+    const limit = filters.limit ?? 50;
+    const includeDelivered = filters.includeDelivered ?? false;
+    const where: string[] = ["user_id = ?", "to_session_key = ?"];
+    const params: (string | number)[] = [filters.userId, filters.toSessionKey];
+    if (!includeDelivered) where.push("delivered_at IS NULL");
+    const rows = this.db
+      .prepare(
+        `SELECT id, user_id, from_session_key, to_session_key, kind, payload_json, created_at, delivered_at
+         FROM session_inbox
+         WHERE ${where.join(" AND ")}
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as Array<{
+        id: string;
+        user_id: string;
+        from_session_key: string;
+        to_session_key: string;
+        kind: string;
+        payload_json: string;
+        created_at: string;
+        delivered_at: string | null;
+      }>;
+    return rows.map(inboxRowToRecord);
+  }
+
+  public ackSessionInbox(
+    userId: string,
+    toSessionKey: string,
+    ids: string[],
+    at: string,
+  ): number {
+    if (ids.length === 0) return 0;
+    // Use a single statement with an IN() clause built from placeholders.
+    // Cap at 500 to avoid hitting SQLite's variable limit; callers
+    // batch into smaller chunks if they need more.
+    const capped = ids.slice(0, 500);
+    const placeholders = capped.map(() => "?").join(",");
+    const result = this.db
+      .prepare(
+        `UPDATE session_inbox
+         SET delivered_at = ?
+         WHERE user_id = ? AND to_session_key = ? AND delivered_at IS NULL
+           AND id IN (${placeholders})`,
+      )
+      .run(at, userId, toSessionKey, ...capped);
+    return Number(result.changes ?? 0);
+  }
+
+  public sweepSessionInbox(olderThanMs: number): number {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const result = this.db
+      .prepare("DELETE FROM session_inbox WHERE delivered_at IS NOT NULL AND delivered_at < ?")
+      .run(cutoff);
+    return Number(result.changes ?? 0);
+  }
+
+  public sweepActiveSessions(olderThanMs: number): number {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const result = this.db
+      .prepare("DELETE FROM active_sessions WHERE last_heartbeat_at < ?")
+      .run(cutoff);
+    return Number(result.changes ?? 0);
+  }
+
+  private getActiveSession(userId: string, sessionKey: string): ActiveSessionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json
+         FROM active_sessions
+         WHERE session_key = ? AND user_id = ?`,
+      )
+      .get(sessionKey, userId) as any;
+    return row ? activeSessionRowToRecord(row, true) : null;
+  }
 
   public upsertCoreIdentity(record: CoreIdentityRecord) {
     const stmt = this.db.prepare(`

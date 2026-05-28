@@ -4,7 +4,7 @@
  */
 
 import chalk from 'chalk';
-import { childSessionKey } from '../../runtime/mcpUtils.js';
+import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
@@ -14,6 +14,49 @@ import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 
+interface DmAddressResolution {
+  to: string;
+  error?: string;
+}
+
+function isLikelyFullSessionKey(target: string): boolean {
+  return target.length >= 32 || target.includes(':child:');
+}
+
+async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], target: string): Promise<DmAddressResolution> {
+  const rawTarget = target.trim();
+  const res = await callMcpTool<{ sessions: Array<{ sessionKey?: string }> }>(
+    mcpClient,
+    'session_list',
+    { includeStale: true },
+  );
+  if (res.isError) {
+    return { to: rawTarget };
+  }
+
+  const sessionKeys = (res.parsed?.sessions ?? [])
+    .map((s) => s.sessionKey)
+    .filter((key): key is string => typeof key === 'string' && key.length > 0);
+  const exact = sessionKeys.find((key) => key === rawTarget);
+  if (exact) return { to: exact };
+
+  const matches = sessionKeys.filter((key) => key.startsWith(rawTarget));
+  if (matches.length === 1) return { to: matches[0] };
+  if (matches.length > 1) {
+    const prefixes = matches.map((key) => key.slice(0, 12)).join(', ');
+    return {
+      to: rawTarget,
+      error: `Ambiguous session prefix "${rawTarget}" matched ${matches.length} sessions (${prefixes}). Use more characters.`,
+    };
+  }
+  if (!isLikelyFullSessionKey(rawTarget)) {
+    return {
+      to: rawTarget,
+      error: `No active or recently-seen session matched prefix "${rawTarget}". Use /agents --remote to copy a session prefix.`,
+    };
+  }
+  return { to: rawTarget };
+}
 
 export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config, rl, repl } = ctx;
@@ -29,8 +72,195 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       console.log();
       return true;
     }
+    case '/dm':
+    {
+      // Federation Stage 3 (FED-S3-T6) — point-to-point chat. Takes a
+      // sessionKey (or a 12-char prefix from `/agents --remote`) plus a
+      // message. Drops the message into the recipient's inbox; that
+      // session's poll picks it up within ~5 s and renders a banner
+      // above its next prompt.
+      const target = args[0];
+      const message = args.slice(1).join(' ').trim();
+      if (!target || !message) {
+        console.log(chalk.red('\nUsage: /dm <sessionKey | sessionKey-prefix> <message>\n'));
+        return true;
+      }
+      const fromKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const resolved = await resolveDmAddress(mcpClient, target);
+      if (resolved.error) {
+        console.log(chalk.yellow(`\n${resolved.error}\n`));
+        return true;
+      }
+      const res = await callMcpTool<{ delivered: number; ids: string[] }>(
+        mcpClient,
+        'session_send',
+        { from: fromKey, to: resolved.to, kind: 'text', payload: { text: message } },
+      );
+      if (res.isError) {
+        console.log(chalk.red(`\nsession_send failed: ${res.text || '(no message)'}\n`));
+        return true;
+      }
+      const delivered = res.parsed?.delivered ?? 0;
+      if (delivered === 0) {
+        console.log(chalk.yellow(`\nNo active session matched "${resolved.to}" (heartbeats only within the last 2 min reach the inbox).\n`));
+      } else {
+        console.log(chalk.gray(`\nDelivered to ${delivered} session.\n`));
+      }
+      return true;
+    }
+    case '/broadcast':
+    {
+      // Federation Stage 3 (FED-S3-T6) — broadcast text to every active
+      // peer under your userId. Optional first arg `<clientKind>:*`
+      // narrows the broadcast (e.g. `/broadcast claude-code:* heads up`).
+      const first = args[0];
+      const looksLikePattern = typeof first === 'string' && /^[a-z][a-z0-9-]*:\*$/i.test(first);
+      const address = looksLikePattern ? first : '*';
+      const messageParts = looksLikePattern ? args.slice(1) : args;
+      const message = messageParts.join(' ').trim();
+      if (!message) {
+        console.log(chalk.red('\nUsage: /broadcast [<clientKind>:*] <message>\n'));
+        console.log(chalk.gray('  Examples:'));
+        console.log(chalk.gray('    /broadcast heads up, deploying main'));
+        console.log(chalk.gray('    /broadcast claude-code:* please pull latest\n'));
+        return true;
+      }
+      const fromKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const res = await callMcpTool<{ delivered: number; ids: string[] }>(
+        mcpClient,
+        'session_send',
+        { from: fromKey, to: address, kind: 'text', payload: { text: message } },
+      );
+      if (res.isError) {
+        console.log(chalk.red(`\nsession_send failed: ${res.text || '(no message)'}\n`));
+        return true;
+      }
+      const delivered = res.parsed?.delivered ?? 0;
+      const tag = looksLikePattern ? `${first} peers` : 'active peers';
+      if (delivered === 0) {
+        console.log(chalk.yellow(`\nNo ${tag} are currently active (no heartbeat within the last 2 min).\n`));
+      } else {
+        console.log(chalk.gray(`\nBroadcast delivered to ${delivered} ${tag}.\n`));
+      }
+      return true;
+    }
     case '/agents':
     {
+      // `--remote` (FED-S2-T6): list peers attached to the same BrainRouter
+      // brain via `session_list`. Local-child output stays the default —
+      // `--remote` is opt-in. `--watch` flips to a live re-poll, `--json`
+      // dumps the raw payload, `--usage` opts in to the per-session token
+      // / USD snapshot (FED-S2-T8).
+      if (args.includes('--remote')) {
+        const watch = args.includes('--watch');
+        const wantUsage = args.includes('--usage');
+        const wantJson = args.includes('--json');
+        const wantStale = args.includes('--include-stale');
+
+        const renderOnce = async (): Promise<void> => {
+          const res = await callMcpTool<{ sessions: any[] }>(mcpClient, 'session_list', {
+            includeUsage: wantUsage,
+            includeStale: wantStale,
+          });
+          if (res.isError) {
+            console.log(chalk.red(`\nsession_list failed: ${res.text || '(no message)'}\n`));
+            return;
+          }
+          const sessions = res.parsed?.sessions ?? [];
+          if (wantJson) {
+            console.log(JSON.stringify({ sessions }));
+            return;
+          }
+          if (sessions.length === 0) {
+            console.log(chalk.gray('\nNo active remote sessions (default scope = heartbeat within 2 min). Try --include-stale.'));
+            console.log(chalk.gray('  Hint: peers show up here when another MCP host (Claude Code, Codex, Cursor, Gemini CLI, …)'));
+            console.log(chalk.gray('  registers against the same brain. See `brainrouter-docs/mcp-install.md` for setup.\n'));
+            return;
+          }
+          console.log(chalk.bold(`\nRemote sessions (${sessions.length})`));
+          const KIND_W = Math.max(...sessions.map((s: any) => (s.clientKind ?? '').length), 6) + 2;
+          const SK_W = 14;
+          const HB_W = 12;
+          const header = `  ${'CLIENT'.padEnd(KIND_W)}${'SESSION'.padEnd(SK_W)}${'HEARTBEAT'.padEnd(HB_W)}${wantUsage ? 'TOKENS    USD     ' : ''}WORKSPACE`;
+          console.log(chalk.gray(header));
+          const now = Date.now();
+          for (const s of sessions) {
+            const kind = chalk.cyan((s.clientKind ?? 'unknown').padEnd(KIND_W));
+            const sk = chalk.gray((s.sessionKey ?? '').slice(0, 12).padEnd(SK_W));
+            const hbMs = now - new Date(s.lastHeartbeatAt ?? 0).getTime();
+            const hbAge = hbMs < 60_000
+              ? `${Math.max(1, Math.round(hbMs / 1000))}s ago`
+              : `${Math.round(hbMs / 60_000)}m ago`;
+            const hbStr = (hbMs > 2 * 60_000 ? chalk.gray : chalk.green)(hbAge.padEnd(HB_W));
+            let usageStr = '';
+            if (wantUsage) {
+              const usage = s.usage ?? {};
+              const tokens = (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
+              const usd = typeof usage.totalUsd === 'number' ? usage.totalUsd : null;
+              usageStr =
+                chalk.gray(String(tokens).padStart(9)) + '  ' +
+                chalk.gray((usd === null ? '   —   ' : `$${usd.toFixed(3)}`).padEnd(8));
+            }
+            const ws = chalk.gray(s.workspaceRoot ?? '');
+            console.log(`  ${kind}${sk}${hbStr}${usageStr}${ws}`);
+          }
+          console.log();
+        };
+
+        if (!watch) {
+          await renderOnce();
+          return true;
+        }
+
+        // --watch loop: re-poll every 2s. Auto-exits after ~20 s
+        // because the Ink REPL owns SIGINT — relying on Ctrl-C to
+        // break out would leave the slash command awaiting forever
+        // (the user sees "thinking" until the 10-min cap). 10 ticks
+        // is enough to watch a peer come / go without blocking the
+        // prompt for long; re-run the command for another window.
+        const intervalMs = 2_000;
+        const maxTicks = 10; // ~20s window
+        let ticks = 0;
+        console.log(chalk.bold(`\nWatching remote sessions (re-polls ${maxTicks}× every ${intervalMs / 1000}s, then auto-exits)…`));
+        await new Promise<void>((resolve) => {
+          const tick = async () => {
+            try { await renderOnce(); } catch { /* network blip — keep watching */ }
+          };
+          tick();
+          const handle = setInterval(() => {
+            tick();
+            if (++ticks >= maxTicks) {
+              clearInterval(handle);
+              console.log(chalk.gray('  Watch window expired. Re-run /agents --remote --watch to keep watching.'));
+              resolve();
+            }
+          }, intervalMs);
+        });
+        return true;
+      }
+
+      // MAS-P2-M3: `/agents show <id>` renders the parent-execution
+      // context snapshot persisted on the child's session record. Helps
+      // users (and AI agents debugging spawn issues) see exactly what
+      // the parent handed off to the child.
+      if (args[0] === 'show' && args[1]) {
+        const target = args[1];
+        const sessions = listSessions(agent.workspaceRoot);
+        const match = sessions.find((s) => s.id === target || s.id.startsWith(target));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${target}". Try /agents to list, or pass a full id.\n`));
+          return true;
+        }
+        const { formatSnapshotForHuman } = await import('../../orchestration/parentContext.js');
+        console.log(chalk.bold(`\nChild ${match.id} (${match.role}) — ${match.status}`));
+        if (match.parentContext) {
+          console.log(formatSnapshotForHuman(match.parentContext));
+        } else {
+          console.log(chalk.gray('  No parent context recorded — child was spawned before MAS-P2-M3 landed.'));
+        }
+        console.log();
+        return true;
+      }
       if (args[0] === 'defs') {
         const defs = listAgentDefs(agent.workspaceRoot);
         console.log(chalk.bold('\nAgent Definitions:'));
@@ -126,6 +356,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
           }
         }
         console.log(chalk.gray('\n  (pipe-friendly output: /agents --json)'));
+        console.log(chalk.gray('  See also: /agents --remote to list peer CLIs/hosts attached to the same brain (federation).'));
       }
       console.log();
       return true;

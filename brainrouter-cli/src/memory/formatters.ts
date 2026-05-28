@@ -19,6 +19,24 @@ export interface FlatMemory {
   skillTag?: string;
   priority?: number;
   confidence?: number;
+  /** Times this record has been retrieved AND cited by the model in a turn. */
+  citationCount?: number;
+  /** Times this record was retrieved but the model did NOT cite it. */
+  neverCitedCount?: number;
+}
+
+/**
+ * Compute citation precision — `citationCount / (citationCount + neverCitedCount)`.
+ * Returns `null` when the record has no recall history yet (denominator 0), so
+ * callers can render "—" instead of misleading "0%". Records under 0.20
+ * precision are visually flagged as noisy.
+ */
+export function recallPrecision(m: FlatMemory): number | null {
+  const cited = m.citationCount ?? 0;
+  const never = m.neverCitedCount ?? 0;
+  const total = cited + never;
+  if (total === 0) return null;
+  return cited / total;
 }
 
 /**
@@ -33,6 +51,8 @@ export function extractMemories(parsed: any): FlatMemory[] {
     if (!m || typeof m !== 'object') return;
     const recordId = (m.recordId ?? m.record_id ?? m.id ?? '').toString();
     if (!recordId) return;
+    const citationCount = m.citationCount ?? m.citation_count;
+    const neverCitedCount = m.neverCitedCount ?? m.never_cited_count;
     out.push({
       recordId,
       type: (m.type ?? 'memory').toString(),
@@ -41,6 +61,8 @@ export function extractMemories(parsed: any): FlatMemory[] {
       skillTag: m.skillTag ?? m.skill_tag,
       priority: typeof m.priority === 'number' ? m.priority : undefined,
       confidence: typeof m.confidence === 'number' ? m.confidence : undefined,
+      citationCount: typeof citationCount === 'number' ? citationCount : undefined,
+      neverCitedCount: typeof neverCitedCount === 'number' ? neverCitedCount : undefined,
     });
   };
 
@@ -94,7 +116,7 @@ export function renderMemoryCards(memories: FlatMemory[], heading: string, limit
     const type = chalk.cyan(`[${m.type}]`);
     const scene = m.sceneName ? chalk.gray(` · ${m.sceneName}`) : '';
     const preview = m.content.length > 200 ? m.content.slice(0, 197) + '…' : m.content;
-    lines.push(`  ${type}${scene}`);
+    lines.push(`  ${type}${scene}${renderCitationBadge(m)}`);
     lines.push(`    ${id}`);
     lines.push(`    ${preview}`);
   }
@@ -102,6 +124,22 @@ export function renderMemoryCards(memories: FlatMemory[], heading: string, limit
     lines.push(chalk.gray(`  …and ${memories.length - limit} more (use /memory <query> to filter further)`));
   }
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Render a per-card citation badge — `· cited 3 · uncited 12 (20%) ⚠️ noisy`.
+ * Hidden when the record has no recall history at all (denominator 0), so a
+ * just-extracted memory doesn't pick up a misleading "0%" tag on its first
+ * surface. Visible threshold for the noisy flag matches T5: precision < 20%.
+ */
+function renderCitationBadge(m: FlatMemory): string {
+  const cited = m.citationCount ?? 0;
+  const never = m.neverCitedCount ?? 0;
+  if (cited === 0 && never === 0) return '';
+  const precision = recallPrecision(m);
+  const pctText = precision === null ? '—' : `${Math.round(precision * 100)}%`;
+  const noisy = precision !== null && precision < 0.2 ? ' ⚠️ noisy' : '';
+  return chalk.gray(` · cited ${cited} · uncited ${never} (${pctText})`) + (noisy ? chalk.yellow(noisy) : '');
 }
 
 /**
