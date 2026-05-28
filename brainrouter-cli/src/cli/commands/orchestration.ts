@@ -97,12 +97,16 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
           return true;
         }
 
-        // --watch loop: re-poll every 2s. Same Ctrl-C-aware shape the local
-        // /agents --watch uses.
+        // --watch loop: re-poll every 2s. Auto-exits after ~20 s
+        // because the Ink REPL owns SIGINT — relying on Ctrl-C to
+        // break out would leave the slash command awaiting forever
+        // (the user sees "thinking" until the 10-min cap). 10 ticks
+        // is enough to watch a peer come / go without blocking the
+        // prompt for long; re-run the command for another window.
         const intervalMs = 2_000;
-        const maxTicks = 300; // 10 min safety cap.
+        const maxTicks = 10; // ~20s window
         let ticks = 0;
-        console.log(chalk.bold('\nWatching remote sessions (Ctrl-C to stop)…'));
+        console.log(chalk.bold(`\nWatching remote sessions (re-polls ${maxTicks}× every ${intervalMs / 1000}s, then auto-exits)…`));
         await new Promise<void>((resolve) => {
           const tick = async () => {
             try { await renderOnce(); } catch { /* network blip — keep watching */ }
@@ -110,10 +114,12 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
           tick();
           const handle = setInterval(() => {
             tick();
-            if (++ticks >= maxTicks) { clearInterval(handle); resolve(); }
+            if (++ticks >= maxTicks) {
+              clearInterval(handle);
+              console.log(chalk.gray('  Watch window expired. Re-run /agents --remote --watch to keep watching.'));
+              resolve();
+            }
           }, intervalMs);
-          const onSig = () => { clearInterval(handle); process.off('SIGINT', onSig); resolve(); };
-          process.once('SIGINT', onSig);
         });
         return true;
       }

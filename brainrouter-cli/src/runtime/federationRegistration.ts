@@ -12,10 +12,34 @@
  * resilient across `npm run dev` restarts of the brain.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { McpClientPool } from './mcpPool.js';
 import { callMcpTool, hasMcpTool } from './mcpUtils.js';
+import { getCliStateFile, readJsonFile, writeJsonFile } from '../state/cliState.js';
 
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+
+/**
+ * Stable federation sessionKey for *this CLI process on this workspace*.
+ * Persisted to `<workspace>/.brainrouter/cli/federation.json` so a clean
+ * restart re-uses the same key — the brain's idempotent
+ * `session_register` refreshes the existing row instead of stacking a
+ * new ghost. Without this, every CLI start would mint a fresh UUID and
+ * leave a 5-min trail of stale rows in the registry.
+ *
+ * The agent's *chat* sessionKey is intentionally a separate concept
+ * (still random per startup). This is purely the federation identity.
+ */
+export function resolveFederationSessionKey(workspaceRoot: string): string {
+  const path = getCliStateFile(workspaceRoot, 'federation.json');
+  const stored = readJsonFile<{ sessionKey?: string }>(path, {});
+  if (typeof stored.sessionKey === 'string' && stored.sessionKey.length > 0) {
+    return stored.sessionKey;
+  }
+  const fresh = randomUUID();
+  writeJsonFile(path, { sessionKey: fresh, createdAt: new Date().toISOString() });
+  return fresh;
+}
 
 export interface FederationHandle {
   sessionKey: string;

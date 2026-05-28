@@ -17,7 +17,7 @@ is documented inline in [`memory-engine.md`](memory-engine.md) and the
 | Surface | What it shows |
 |---|---|
 | **`/agents --remote`** (CLI) | One-shot table of peer sessions: client kind, sessionKey prefix, last heartbeat age, workspace, optional usage. |
-| **`/agents --remote --watch`** | Live re-poll (2 s) of the same table. Ctrl-C exits. |
+| **`/agents --remote --watch`** | Bounded re-poll: 10 ticks × 2 s ≈ 20 s, then auto-exits with a "re-run to keep watching" hint. The Ink REPL owns SIGINT, so we can't rely on Ctrl-C to break out — the bound is deliberate. |
 | **`/agents --remote --usage`** | Adds TOKENS / USD columns sourced from each peer's `/tokens` snapshot. |
 | **`/agents --remote --include-stale`** | Surfaces sessions whose last heartbeat is 2–5 min old (not yet swept). |
 | **`/agents --remote --json`** | Pipe-friendly output for `jq` / status bars / CI. |
@@ -112,17 +112,35 @@ hard kills anyway, so we treat *every* CLI exit the same way and let
 the heartbeat-or-not signal carry the truth. The cost is a 5-min
 ghost window; the benefit is one code path that's robust to anything.
 
+**Restart deduplication.** The federation `sessionKey` is persisted
+to `<workspace>/.brainrouter/cli/federation.json` per workspace, so a
+clean restart from the same directory **reuses** the existing key.
+The brain's idempotent `session_register` then refreshes the existing
+row instead of stacking a new ghost on top. Without this, every CLI
+launch would mint a fresh UUID and a busy day of restarts would
+accumulate 10+ stale rows before the sweeper cleaned them up. (This
+is a separate identifier from the agent's chat sessionKey — that one
+still rotates per launch.)
+
 ### Brain restart
 
-The in-memory registry is gone, but your CLI process is still
-heartbeating. The next heartbeat returns `{ updated: false }`. The CLI
-sees that and **auto-re-registers**. You see a 30 s gap in `--watch`
-and then the session reappears.
+Two layers of recovery kick in:
 
-This recovery loop is exercised by
-[`federation-registration.test.ts`](../brainrouter-cli/src/tests/federation-registration.test.ts)
-— the "re-registers when brain returns updated:false" case is exactly
-this scenario.
+1. **MCP transport recovery.** The Streamable HTTP transport caches
+   the brain's `mcp-session-id`. When the brain restarts, that id is
+   permanently invalid — pre-fix, every subsequent tool call failed
+   with `Session not found. Send a POST without mcp-session-id to
+   initialise`. The CLI now detects that error string in `callTool`,
+   rebuilds the transport with the stashed server config, and retries
+   the call exactly once. Transparent to the caller; covered by
+   [`federation-session-recovery.test.ts`](../brainrouter-cli/src/tests/federation-session-recovery.test.ts).
+2. **Registry recovery.** The brain's in-memory registry is gone, but
+   your CLI process is still heartbeating. The next heartbeat returns
+   `{ updated: false }`. The CLI sees that and **auto-re-registers**.
+   You see a 30 s gap in `--watch` and then the session reappears.
+   Covered by the
+   "re-registers when brain returns updated:false" case in
+   [`federation-registration.test.ts`](../brainrouter-cli/src/tests/federation-registration.test.ts).
 
 ## Caveat: presence is heartbeat-driven, not authoritative
 
