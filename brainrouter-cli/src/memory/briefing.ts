@@ -52,6 +52,14 @@ export interface BriefingResult {
 }
 
 export interface BriefingSourcePlan {
+  /**
+   * Pin the brain's distilled Core Identity (`memory_persona`) at the
+   * top of the briefing. Long-lived, hash-stable content — belongs in
+   * the cache-stable prefix. Gated by `cli.personaAnchor` in
+   * `config.json` *and* the per-workspace `personaAnchorEnabled`
+   * preference; both must be on for the section to fire.
+   */
+  includeCoreIdentity: boolean;
   includeRecall: boolean;
   includeWorkingContext: boolean;
   includeTaskState: boolean;
@@ -75,8 +83,13 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   const skippedSources: Array<{ source: string; reason: string }> = [];
   const warnings: string[] = [];
 
-  const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[] }>> = [];
+  const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[]; parsed?: any }>> = [];
 
+  if (sourcePlan.includeCoreIdentity && hasMcpTool(toolNames, 'memory_persona')) {
+    tasks.push(callSafe('memory_persona', {}, mcpClient, maxChars));
+  } else if (sourcePlan.includeCoreIdentity) {
+    skippedSources.push({ source: 'memory_persona', reason: 'tool unavailable' });
+  }
   if (sourcePlan.includeRecall && hasMcpTool(toolNames, 'memory_recall')) {
     // The brain-side `recall.ts` pipeline ALREADY ships per-stage
     // fallbacks:
@@ -137,6 +150,15 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
     if (!r.text) continue;
     sourcesQueried.push(r.source);
     sourceStats.push({ source: r.source, chars: r.text.length, records: r.records?.length ?? 0 });
+    if (r.source === 'memory_persona') {
+      // Render from the already-parsed payload, not the sliced `text`.
+      // A persona body longer than `briefingMaxCharsPerSource` would
+      // otherwise be chopped mid-JSON and silently fail to parse,
+      // dropping the Core Identity section without warning.
+      const personaSection = renderCoreIdentitySection(r.parsed, r.text);
+      if (personaSection) sections.push(personaSection);
+      continue;
+    }
     if (r.source === 'memory_working_context') {
       const workingSection = renderWorkingMemorySection(r.text);
       if (workingSection) {
@@ -202,10 +224,37 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   return { block, recalledRecordIds, recalledRecords, sourcesQueried, sourcesPlanned, skippedSources, sourceStats, warnings };
 }
 
-export function buildDefaultSourcePlan(query: string, hasActiveGoal?: boolean): BriefingSourcePlan {
+/**
+ * The persona anchor is gated by two independent knobs:
+ *   - `cli.personaAnchor` in `config.json` — system-wide default
+ *     ('on' / 'off'). Migrated from `BRAINROUTER_PERSONA_ANCHOR` in
+ *     the 0.3.9 env→config sweep; no env var is consulted.
+ *   - `personaAnchorEnabled` workspace preference — runtime toggle
+ *     driven by `/persona on|off`.
+ *
+ * Both must be on for the anchor to fire. Callers pass `configKnob`
+ * (the resolved config setting) and `preference` (the workspace
+ * preference).
+ */
+export function isPersonaAnchorEnabled(
+  configKnob: 'on' | 'off',
+  preference?: boolean,
+): boolean {
+  if (configKnob === 'off') return false;
+  if (preference === false) return false;
+  return true;
+}
+
+export function buildDefaultSourcePlan(
+  query: string,
+  hasActiveGoal?: boolean,
+  options?: { personaAnchorConfig?: 'on' | 'off'; personaAnchorPreference?: boolean },
+): BriefingSourcePlan {
   const fileHistoryPaths = extractFilePathHints(query);
   const debugCue = looksLikeDebugOrRetry(query);
+  const configKnob = options?.personaAnchorConfig ?? 'on';
   return {
+    includeCoreIdentity: isPersonaAnchorEnabled(configKnob, options?.personaAnchorPreference),
     includeRecall: true,
     includeWorkingContext: true,
     includeTaskState: !hasActiveGoal,
@@ -217,6 +266,7 @@ export function buildDefaultSourcePlan(query: string, hasActiveGoal?: boolean): 
 
 export function describeSourcePlan(plan: BriefingSourcePlan): string[] {
   const sources: string[] = [];
+  if (plan.includeCoreIdentity) sources.push('memory_persona');
   if (plan.includeRecall) sources.push('memory_recall');
   if (plan.includeWorkingContext) sources.push('memory_working_context');
   if (plan.includeTaskState) sources.push('memory_task_state');
@@ -272,11 +322,14 @@ async function callSafe(
   mcpClient: McpClientWrapper,
   maxChars: number,
   extractRecordsFn?: (parsed: any) => RecalledRecord[],
-): Promise<{ source: string; text: string | null; records?: RecalledRecord[] }> {
+): Promise<{ source: string; text: string | null; records?: RecalledRecord[]; parsed?: any }> {
   const res = await callMcpTool(mcpClient, toolName, args);
   if (res.isError || !res.text.trim()) return { source: toolName, text: null };
   const records = extractRecordsFn && res.parsed ? extractRecordsFn(res.parsed) : undefined;
-  return { source: toolName, text: res.text.slice(0, maxChars), records };
+  // `text` is sliced for the opaque-dump rendering path; renderers that
+  // need the structured payload (e.g. `renderCoreIdentitySection`) read
+  // `parsed` instead to avoid truncating JSON mid-string.
+  return { source: toolName, text: res.text.slice(0, maxChars), records, parsed: res.parsed };
 }
 
 // (Removed in 0.3.9: callRecallWithFallback wrapper + the two env helpers
@@ -313,6 +366,7 @@ function extractRecords(parsed: any): RecalledRecord[] {
 
 function prettyLabel(toolName: string): string {
   switch (toolName) {
+    case 'memory_persona': return 'Core Identity';
     case 'memory_recall': return 'Recalled cognitive memories';
     case 'memory_working_context': return 'Working memory canvas';
     case 'memory_task_state': return 'Open task / handover state';
@@ -321,6 +375,52 @@ function prettyLabel(toolName: string): string {
     case 'memory_file_history': return 'File history';
     default: return toolName;
   }
+}
+
+/**
+ * Render the brain's distilled Core Identity (`memory_persona`) as a
+ * dedicated briefing section. The persona body is durable, long-lived,
+ * and hash-stable per user — pinning it at the top keeps the
+ * cache-stable prefix anchored on "who this user is" rather than
+ * whatever the latest turn happened to recall.
+ *
+ * Prefers the structured `parsed` payload from `callMcpTool`. Falls
+ * back to JSON-parsing the raw text only when `parsed` is missing,
+ * because the raw text path is sliced at `briefingMaxCharsPerSource`
+ * and can be invalid JSON for personas longer than the cap.
+ *
+ * Returns null when the tool reported no Core Identity yet — caller
+ * skips the section silently so we don't pollute the prefix with empty
+ * scaffolding.
+ */
+function renderCoreIdentitySection(parsedPayload: any, rawText?: string | null): string | null {
+  let parsed: any = parsedPayload;
+  if (!parsed && rawText) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const personaMd: string | undefined =
+    typeof parsed.personaMd === 'string' ? parsed.personaMd : undefined;
+  if (!personaMd || !personaMd.trim()) return null;
+  const hash = typeof parsed.hash === 'string' && parsed.hash ? parsed.hash : '';
+  const cognitiveCount =
+    typeof parsed.cognitiveCountAtGeneration === 'number'
+      ? parsed.cognitiveCountAtGeneration
+      : null;
+  const meta = [
+    hash ? `hash ${hash}` : null,
+    cognitiveCount !== null ? `${cognitiveCount} cognitives` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const header = meta
+    ? `### ${prettyLabel('memory_persona')} (${meta})`
+    : `### ${prettyLabel('memory_persona')}`;
+  return `${header}\n${redactText(personaMd.trim())}`;
 }
 
 interface WorkingStepShape {
