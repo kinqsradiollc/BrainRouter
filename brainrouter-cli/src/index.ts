@@ -245,11 +245,16 @@ program
     // Federation Stage 2 (FED-S2-T2/T3): claim a row in the brain's
     // active_sessions registry + heartbeat every 30s. Resolves to null
     // (no-op) when the brain pre-dates Stage 2 — older brains keep
-    // working unchanged.
-    const { attachFederation } = await import('./runtime/federationRegistration.js');
+    // working unchanged. The federation sessionKey is per-workspace
+    // and persisted (NOT the same as agent.sessionKey, which is the
+    // chat session and rotates per-launch) so clean restarts refresh
+    // the registry row instead of stacking ghosts.
+    const { attachFederation, resolveFederationSessionKey } = await import(
+      './runtime/federationRegistration.js'
+    );
     const federation = await attachFederation({
       mcpClient,
-      sessionKey: agent.sessionKey,
+      sessionKey: resolveFederationSessionKey(workspace.workspaceRoot),
       workspaceRoot: workspace.workspaceRoot,
       clientKind: 'brainrouter-cli',
     });
