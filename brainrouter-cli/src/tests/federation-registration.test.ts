@@ -183,3 +183,103 @@ test('attachFederation: stop() returns promptly when the unregister never resolv
   assert.equal(unregistered, 1, 'unregister must be attempted');
   assert.ok(elapsed < 2_500, `stop() must respect the timeout; took ${elapsed}ms`);
 });
+
+test('attachFederation: inbox poller fires session_inbox_read on its own cadence and dispatches text messages', async () => {
+  const recordedCalls: Array<{ name: string; args: any }> = [];
+  const queuedMessages = [
+    [
+      { id: 'm-1', kind: 'text', fromSessionKey: 'peer-a', payload: { text: 'hi' }, createdAt: new Date().toISOString() },
+    ],
+    [], // empty subsequent ticks
+  ];
+  let pollIdx = 0;
+  const client = {
+    async listTools() {
+      return {
+        tools: [
+          { name: 'session_register' },
+          { name: 'session_heartbeat' },
+          { name: 'session_unregister' },
+          { name: 'session_inbox_read' },
+        ],
+      };
+    },
+    async callTool(name: string, args: any) {
+      recordedCalls.push({ name, args });
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: { sessionKey: args.sessionKey } }) }] };
+      }
+      if (name === 'session_heartbeat') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+      }
+      if (name === 'session_inbox_read') {
+        const messages = queuedMessages[pollIdx++] ?? [];
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ messages }) }] };
+      }
+      if (name === 'session_unregister') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ deleted: true }) }] };
+      }
+      return { isError: true, content: [{ type: 'text', text: 'unknown tool' }] };
+    },
+  } as any;
+
+  const dispatched: Array<Array<{ id: string; text: string }>> = [];
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-inbox',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000, // never heartbeat during the test
+    inboxIntervalMs: 10, // poll quickly
+    onInboxText: (messages) => {
+      dispatched.push(messages.map((m) => ({ id: m.id, text: m.text })));
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await handle?.stop();
+
+  const reads = recordedCalls.filter((c) => c.name === 'session_inbox_read');
+  assert.ok(reads.length >= 2, `expected ≥2 inbox polls, got ${reads.length}`);
+  assert.ok(dispatched.length >= 1, 'callback must have fired at least once');
+  assert.deepEqual(dispatched[0], [{ id: 'm-1', text: 'hi' }]);
+});
+
+test('attachFederation: inbox poll is skipped entirely when the brain lacks session_inbox_read', async () => {
+  const recordedCalls: Array<{ name: string; args: any }> = [];
+  const client = {
+    async listTools() {
+      return {
+        tools: [
+          { name: 'session_register' },
+          { name: 'session_heartbeat' },
+          // No session_inbox_read — older brain or partial deployment.
+        ],
+      };
+    },
+    async callTool(name: string, args: any) {
+      recordedCalls.push({ name, args });
+      if (name === 'session_register') {
+        return { isError: false, content: [{ type: 'text', text: JSON.stringify({ session: {} }) }] };
+      }
+      return { isError: false, content: [{ type: 'text', text: JSON.stringify({ updated: true }) }] };
+    },
+  } as any;
+
+  let dispatched = 0;
+  const handle = await attachFederation({
+    mcpClient: client,
+    sessionKey: 'sk-no-inbox',
+    workspaceRoot: '/repos/alpha',
+    intervalMs: 60_000,
+    inboxIntervalMs: 10,
+    onInboxText: () => { dispatched++; },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await handle?.stop();
+  assert.equal(dispatched, 0, 'callback must not fire when the brain lacks the inbox tool');
+  assert.equal(
+    recordedCalls.filter((c) => c.name === 'session_inbox_read').length,
+    0,
+    'no inbox polls when the tool is unavailable',
+  );
+});
+

@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -119,6 +119,37 @@ function activeSessionRowToRecord(row: any, includeUsage: boolean): ActiveSessio
     lastHeartbeatAt: row.last_heartbeat_at,
     metadata: parseJsonObject(row.metadata_json),
     ...(usage !== undefined ? { usage } : {}),
+  };
+}
+
+function inboxRowToRecord(row: {
+  id: string;
+  user_id: string;
+  from_session_key: string;
+  to_session_key: string;
+  kind: string;
+  payload_json: string;
+  created_at: string;
+  delivered_at: string | null;
+}): SessionInboxRecord {
+  let payload: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(row.payload_json);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      payload = parsed;
+    }
+  } catch {
+    payload = {};
+  }
+  return {
+    id: row.id,
+    userId: row.user_id,
+    fromSessionKey: row.from_session_key,
+    toSessionKey: row.to_session_key,
+    kind: row.kind as SessionInboxKind,
+    payload,
+    createdAt: row.created_at,
+    deliveredAt: row.delivered_at,
   };
 }
 
@@ -354,6 +385,29 @@ export class SqliteMemoryStore implements IMemoryStore {
     `);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_active_sessions_user_heartbeat ON active_sessions(user_id, last_heartbeat_at DESC)",
+    );
+
+    // Federation Stage 3 (0.4.0) — cross-CLI inbox. Per-recipient row;
+    // broadcasts are fanned out at send time so each recipient sees a
+    // distinct id and acks independently. Indexed by recipient + read
+    // order so `session_inbox_read` is O(log N + page).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS session_inbox (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        from_session_key TEXT NOT NULL,
+        to_session_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        delivered_at TEXT DEFAULT NULL
+      )
+    `);
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_inbox_recipient ON session_inbox(user_id, to_session_key, created_at)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_inbox_delivered ON session_inbox(delivered_at)",
     );
 
     this.stmtSensoryUpsertMeta = this.db.prepare(`
@@ -1571,6 +1625,150 @@ export class SqliteMemoryStore implements IMemoryStore {
       .prepare("DELETE FROM active_sessions WHERE session_key = ? AND user_id = ?")
       .run(sessionKey, userId);
     return Number(result.changes ?? 0) > 0;
+  }
+
+  // ── Federation Stage 3 (0.4.0): cross-CLI inbox ────────────────────────
+
+  public sendSessionMessage(
+    record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">,
+    options?: { idGenerator?: () => string; now?: string },
+  ): SessionInboxRecord[] {
+    const now = options?.now ?? new Date().toISOString();
+    const idFor = options?.idGenerator ?? (() => randomUUID());
+
+    // Resolve the addressing string into a concrete list of recipient
+    // sessionKeys. Three shapes:
+    //   1. `*`                   → every active peer under user_id
+    //   2. `<clientKind>:*`      → every active peer matching that kind
+    //   3. exact `<sessionKey>`  → singleton (no resolution needed)
+    //
+    // Broadcast forms only fan out to ACTIVE sessions (heartbeat within
+    // the active window). A peer that's currently stale won't receive
+    // the broadcast — by design; addressing into the past has no useful
+    // semantics here.
+    const recipients = this.resolveInboxRecipients(record.userId, record.toSessionKey);
+    if (recipients.length === 0) return [];
+
+    const stmt = this.db.prepare(
+      `INSERT INTO session_inbox (id, user_id, from_session_key, to_session_key, kind, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    const rows: SessionInboxRecord[] = [];
+    for (const recipientSessionKey of recipients) {
+      const id = idFor();
+      stmt.run(
+        id,
+        record.userId,
+        record.fromSessionKey,
+        recipientSessionKey,
+        record.kind,
+        JSON.stringify(record.payload ?? {}),
+        now,
+      );
+      rows.push({
+        id,
+        userId: record.userId,
+        fromSessionKey: record.fromSessionKey,
+        toSessionKey: recipientSessionKey,
+        kind: record.kind,
+        payload: record.payload ?? {},
+        createdAt: now,
+        deliveredAt: null,
+      });
+    }
+    return rows;
+  }
+
+  private resolveInboxRecipients(userId: string, address: string): string[] {
+    if (!address) return [];
+    if (address === "*" || address.toLowerCase() === "broadcast") {
+      return this.activeSessionKeysForUser(userId);
+    }
+    const wildcardMatch = /^([^:]+):\*$/.exec(address);
+    if (wildcardMatch) {
+      const clientKind = wildcardMatch[1];
+      return this.activeSessionKeysForUser(userId, clientKind);
+    }
+    // Exact sessionKey — no need to verify it exists. The recipient
+    // may have just disconnected; the row stays until read or swept.
+    return [address];
+  }
+
+  private activeSessionKeysForUser(userId: string, clientKindFilter?: string): string[] {
+    const activeCutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const rows = clientKindFilter
+      ? (this.db
+          .prepare(
+            `SELECT session_key FROM active_sessions
+             WHERE user_id = ? AND client_kind = ? AND last_heartbeat_at >= ?`,
+          )
+          .all(userId, clientKindFilter, activeCutoff) as Array<{ session_key: string }>)
+      : (this.db
+          .prepare(
+            `SELECT session_key FROM active_sessions
+             WHERE user_id = ? AND last_heartbeat_at >= ?`,
+          )
+          .all(userId, activeCutoff) as Array<{ session_key: string }>);
+    return rows.map((r) => r.session_key);
+  }
+
+  public readSessionInbox(filters: SessionInboxFilters): SessionInboxRecord[] {
+    const limit = filters.limit ?? 50;
+    const includeDelivered = filters.includeDelivered ?? false;
+    const where: string[] = ["user_id = ?", "to_session_key = ?"];
+    const params: (string | number)[] = [filters.userId, filters.toSessionKey];
+    if (!includeDelivered) where.push("delivered_at IS NULL");
+    const rows = this.db
+      .prepare(
+        `SELECT id, user_id, from_session_key, to_session_key, kind, payload_json, created_at, delivered_at
+         FROM session_inbox
+         WHERE ${where.join(" AND ")}
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as Array<{
+        id: string;
+        user_id: string;
+        from_session_key: string;
+        to_session_key: string;
+        kind: string;
+        payload_json: string;
+        created_at: string;
+        delivered_at: string | null;
+      }>;
+    return rows.map(inboxRowToRecord);
+  }
+
+  public ackSessionInbox(
+    userId: string,
+    toSessionKey: string,
+    ids: string[],
+    at: string,
+  ): number {
+    if (ids.length === 0) return 0;
+    // Use a single statement with an IN() clause built from placeholders.
+    // Cap at 500 to avoid hitting SQLite's variable limit; callers
+    // batch into smaller chunks if they need more.
+    const capped = ids.slice(0, 500);
+    const placeholders = capped.map(() => "?").join(",");
+    const result = this.db
+      .prepare(
+        `UPDATE session_inbox
+         SET delivered_at = ?
+         WHERE user_id = ? AND to_session_key = ? AND delivered_at IS NULL
+           AND id IN (${placeholders})`,
+      )
+      .run(at, userId, toSessionKey, ...capped);
+    return Number(result.changes ?? 0);
+  }
+
+  public sweepSessionInbox(olderThanMs: number): number {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const result = this.db
+      .prepare("DELETE FROM session_inbox WHERE delivered_at IS NOT NULL AND delivered_at < ?")
+      .run(cutoff);
+    return Number(result.changes ?? 0);
   }
 
   public sweepActiveSessions(olderThanMs: number): number {

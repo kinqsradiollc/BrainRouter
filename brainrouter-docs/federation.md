@@ -12,7 +12,7 @@ Wiring a host up is covered in [`mcp-install.md`](mcp-install.md). Stage
 is documented inline in [`memory-engine.md`](memory-engine.md) and the
 0.4.0 changelog.
 
-## Stage 2 at a glance — what you get today
+## Stage 2 at a glance — presence + telemetry
 
 | Surface | What it shows |
 |---|---|
@@ -23,11 +23,70 @@ is documented inline in [`memory-engine.md`](memory-engine.md) and the
 | **`/agents --remote --json`** | Pipe-friendly output for `jq` / status bars / CI. |
 | **Live sessions widget** (dashboard Overview page) | Same data, polled every 10 s; tokens/USD column on by default. |
 
-What Stage 2 deliberately **does not do yet**: send messages between
-peers, hand off goals, or route delegated work across vendors. Those
-are Stage 3 (`session_inbox`, `session_send`, broadcast) and Stage 4
-(cross-vendor `delegate_task`), tracked in
-[`FULL_TASKS.MD` §4.3](../FULL_TASKS.MD) and the post-0.4.0 plan.
+## Stage 3 at a glance — cross-CLI messaging
+
+| Surface | What it does |
+|---|---|
+| **`/dm <sessionKey \| prefix> <message>`** | Point-to-point text. Recipient sees a banner (📨) above their next prompt within ~5 s. |
+| **`/broadcast <message>`** | Text to every active peer under your userId. |
+| **`/broadcast <clientKind>:* <message>`** | Pattern broadcast — `/broadcast claude-code:* please pull latest`. |
+| **Incoming banner** | Background poll (5 s) renders incoming `text`-kind messages above the active prompt. No render hook, no chat UI — just visibility. |
+
+What Stage 3 deliberately **does not do yet**:
+
+- **SSE push.** The spec calls for an SSE-fed view; the current
+  implementation is a 5 s poll. Latency: ≤ 5 s instead of ≤ 250 ms.
+  SSE plumbing through the Streamable HTTP MCP transport is a bigger
+  surface than belongs in this stage. Tracked as a 0.4.1 follow-up.
+- **Render non-text kinds.** The schema reserves `tool-result`,
+  `memory-ref`, `goal-handoff`, and `delegate` as `kind` values so
+  Stage 4 (cross-vendor `delegate_task`) and CLI Multi-Agent Phase 2
+  (cross-session goal handoff) can carry structured payloads. Stage
+  3 CLIs only surface `text`; the other kinds sit in the inbox until
+  a consumer ships.
+- **Cross-user messaging.** Inbox rows are scoped by `(userId,
+  toSessionKey)`. A user can only address peers under their own
+  BrainRouter key — federation is intentionally not a chat fabric
+  across the multi-tenant boundary.
+
+## Addressing model — three forms
+
+`session_send` and the CLI surfaces all accept the same three address
+shapes:
+
+| Form | Meaning | Example |
+|---|---|---|
+| Exact `<sessionKey>` (or a 12-char prefix from `/agents --remote`) | Point-to-point. | `/dm abcdef0123ab hi` |
+| `<clientKind>:*` | Broadcast to every active peer of that kind. | `/broadcast codex:* heads up` |
+| `*` (or omit the pattern in `/broadcast`) | Broadcast to every active peer under your userId. | `/broadcast deploying main` |
+
+Broadcast forms **only reach sessions whose last heartbeat is within
+the active window (2 min)**. Sending into the past has no useful
+semantics — a stale peer can't read its inbox while it's swept.
+Point-to-point send writes the row even if the recipient is currently
+inactive, so a message that lands during a momentary blip will still
+be visible when the peer's next heartbeat lands and its inbox poller
+fires.
+
+## Inbox lifecycle
+
+| State | Visibility |
+|---|---|
+| **Undelivered** | Visible to the recipient via `session_inbox_read`. Never swept — survives until the recipient acks it. |
+| **Delivered** | Acked. Hidden from default reads. Surfaced via `includeDelivered: true`. Swept after 1 hour. |
+
+The CLI's inbox poll fires `session_inbox_read` without `peek: true`,
+so reading auto-acks. Callers that need at-least-once-delivery (e.g.
+a recovering CLI replaying its inbox after a crash) call `peek: true`
+and then `session_inbox_ack` only for the ids they've actually
+persisted. The two-step flow is intentional — losing a banner because
+the REPL crashed mid-render is worse UX than seeing it twice.
+
+What Stage 3 deliberately **does not do yet**: send messages between
+peers as a chat UI, hand off goals, or route delegated work across
+vendors. Those are Stage 4 (cross-vendor `delegate_task` over the
+same `kind` enum) and the post-0.4.0 plan in
+[`FULL_TASKS.MD` §4.3](../FULL_TASKS.MD).
 
 ## What it's useful for right now
 
@@ -167,6 +226,184 @@ Stage 3's `session_send` will need to defend against this too —
 sending to a session that died 30 s ago should bounce immediately, not
 hang waiting for the recipient to deliver.
 
+## End-to-end walkthrough — three federated terminals on one project
+
+A 15-minute exercise that exercises every shipped federation surface
+on a real (throwaway) project. Each step lists what to look for so
+you can confirm federation is doing what it says.
+
+### Setup (one-time)
+
+```bash
+# Brain — leave running in its own terminal
+cd /path/to/BrainRouter
+git checkout release/0.4.0 && git pull --ff-only
+cd brainrouter && npm run build && npm run dev:http   # listens on :3747
+
+# CLI — build + link so `brainrouter` is on PATH
+cd ../brainrouter-cli && npm run build && npm link
+
+# Scaffold a real test project
+mkdir -p ~/code/portfolio-demo && cd ~/code/portfolio-demo
+npm init -y >/dev/null
+npm install --save-dev vitest @testing-library/dom jsdom >/dev/null
+mkdir -p src/components tests
+cat > AGENT.md <<'EOF'
+# Portfolio demo
+
+A throwaway project to exercise BrainRouter federation across three
+concurrent terminals.
+
+## Stack
+
+- Plain ESM TypeScript, no framework — a single HTML file with a few
+  imported components.
+- vitest for tests, jsdom for DOM assertions.
+- Accessibility: every section must have a heading and an aria-label.
+
+## Sections
+
+1. Hero (name, tagline, CTA)
+2. Projects (3 cards)
+3. Contact (mailto link, accessible form labels)
+EOF
+```
+
+### Step 1 — Terminal A (planner)
+
+```
+cd ~/code/portfolio-demo && brainrouter
+```
+
+```
+> /goal Build the portfolio landing page per AGENT.md. Plan first; ship Hero, Projects, Contact in that order.
+> Read AGENT.md, propose a file layout, and capture each architectural decision as a separate memory record.
+```
+
+The agent reads `AGENT.md`, proposes a layout, and calls
+`memory_capture_turn` 3–4 times. **Look for** the `💾 Captured N records`
+line in A's output. That's the data the other terminals are about to
+see.
+
+### Step 2 — Terminal B (implementer)
+
+```
+cd ~/code/portfolio-demo && brainrouter
+```
+
+Before typing a prompt:
+
+```
+> /briefing
+```
+
+**Look for** a `memory_recall` row in the source-stats table with 3+
+records. Those are the architecture decisions A just wrote. You did
+not paste them — federation did.
+
+Sanity-check presence:
+
+```
+> /agents --remote
+```
+
+You should see **two** rows: A and B, same workspace path, heartbeat
+< 30 s ago. (If you only see one, the persistent-key collision bug is
+back — file an issue.)
+
+Now implement, leaning on what's in memory:
+
+```
+> Implement src/components/hero.ts following the architecture decisions in memory. Just the Hero this round.
+```
+
+The agent writes `hero.ts` consistent with A's decisions — plain HTML,
+no React, aria-label on the section — without you re-stating any of
+those constraints.
+
+### Step 3 — Terminal C (tester / watcher)
+
+```
+cd ~/code/portfolio-demo && brainrouter
+```
+
+```
+> /goal Watch tests/landing.spec.ts and report failures back to A and B as they happen. Use /dm.
+> Start `npx vitest run` once tests/landing.spec.ts exists; otherwise create a smoke test for the Hero based on the architecture decisions in memory.
+```
+
+C will recall the same decisions and write a vitest spec asserting
+the `<h1>`, the aria-label, etc.
+
+### Step 4 — Send a directed nudge (Stage 3)
+
+In A:
+
+```
+> /agents --remote
+# copy the 12-char prefix of C's session
+
+> /dm <c-prefix> please also add an axe-core a11y test for the Hero and run it once.
+```
+
+**Look for in C** within ~5 s:
+
+```
+┌─ 📨 from <a-prefix>… (3s ago)
+│ please also add an axe-core a11y test for the Hero and run it once.
+└─
+```
+
+The Stage 3 inbox is informational today — C doesn't auto-react. The
+banner is what the user reads to know the message arrived. (Auto-react
+on inbound messages is a CLI Multi-Agent Phase 2 / Stage 4 follow-up.)
+
+### Step 5 — Cost rollup + clean exit
+
+```
+> /agents --remote --usage --include-stale
+```
+
+Three rows, each with its own prompt/completion token counts and USD
+total. If you ever wonder *"why did this 30-minute session cost
+$1.40?"*, the answer is broken out per session.
+
+Then in any terminal:
+
+```
+> /exit
+```
+
+Immediately run `/agents --remote` from one of the surviving terminals.
+The exited session is **gone within a couple of seconds** — graceful
+`session_unregister`, not 5 minutes later via the sweeper. That's the
+per-process identity work.
+
+### Bonus — brain restart recovery
+
+In the brain terminal, Ctrl-C the `npm run dev:http` and immediately
+restart it. From any CLI, run `/agents --remote`. The first call may
+hang briefly while the transport detects the dead session-id; the
+second works. The CLIs re-register transparently within ~30 s.
+
+### What you proved works
+
+| Capability | Step | Stage |
+|---|---|---|
+| Persona auto-injected into every CLI prompt | 1 — agent acts per your captured preferences | Persona (#60) |
+| Memory written in A → recalled in B | 2's `/briefing` showing A's records | Stage 1 (#61) |
+| Multi-terminal presence + per-session cost | 2's `/agents --remote`, 5's `--usage` | Stage 2 (#63) |
+| Per-process identity (no terminal collision) | 2 shows **two** rows, not one | Stage 2 fix |
+| Graceful unregister on `/exit` | 5's "gone within seconds" check | Stage 2 fix |
+| Text wire between peers | 4's banner appearing in C | Stage 3 (#64) |
+| Brain restart recovery | Bonus | Stage 2 fix |
+
+### What's intentionally missing (and where it lands)
+
+- **The recipient doesn't auto-react to a DM.** Stage 3 is a wire, not a workflow. A future change can let the agent loop treat inbound text as a prompt; today the banner is informational.
+- **No `delegate_task("codex", …)`.** Stage 4 + CLI Multi-Agent Phase 2. The inbox `kind` enum already reserves `delegate` so when those land they ride the same wire.
+- **Banner latency ≤ 5 s, not ≤ 250 ms.** SSE push deferred to 0.4.1.
+
 ## Privacy & scope
 
 - **Scoped by `userId`.** A session only sees peers under the same
@@ -186,18 +423,36 @@ hang waiting for the recipient to deliver.
 
 ## Reference
 
-- MCP tools: `session_register`, `session_heartbeat`, `session_list`
+### Stage 2 — presence
+
+- MCP tools: `session_register`, `session_heartbeat`, `session_unregister`, `session_list`
   ([`brainrouter/src/tools/active_sessions.ts`](../brainrouter/src/tools/active_sessions.ts)).
 - REST: `GET /api/sessions`
   ([`brainrouter/src/api/routes/sessions.ts`](../brainrouter/src/api/routes/sessions.ts)).
 - SDK: `BrainRouterClient.getRemoteSessions()`.
 - React hook: `useActiveSessions(client, { includeUsage, pollIntervalMs })`.
-- CLI runtime module:
-  [`brainrouter-cli/src/runtime/federationRegistration.ts`](../brainrouter-cli/src/runtime/federationRegistration.ts).
 - Schema:
   [`brainrouter/src/memory/store/sqlite.ts`](../brainrouter/src/memory/store/sqlite.ts)
   — `active_sessions` table, composite PK `(session_key, user_id)`.
 - Tests:
   [`active-sessions.test.ts`](../brainrouter/src/__tests__/active-sessions.test.ts) (MCP-tool unit),
-  [`active-sessions.node-test.ts`](../brainrouter/src/__tests__/active-sessions.node-test.ts) (store integration),
-  [`federation-registration.test.ts`](../brainrouter-cli/src/tests/federation-registration.test.ts) (CLI lifecycle).
+  [`active-sessions.node-test.ts`](../brainrouter/src/__tests__/active-sessions.node-test.ts) (store integration).
+
+### Stage 3 — messaging
+
+- MCP tools: `session_send`, `session_inbox_read`, `session_inbox_ack`
+  ([`brainrouter/src/tools/session_inbox.ts`](../brainrouter/src/tools/session_inbox.ts)).
+- Schema: `session_inbox` table, indexed by `(user_id, to_session_key, created_at)`
+  and `delivered_at`. Row mapper:
+  [`brainrouter/src/memory/store/sqlite.ts`](../brainrouter/src/memory/store/sqlite.ts).
+- CLI surfaces: `/dm`, `/broadcast`
+  ([`brainrouter-cli/src/cli/commands/orchestration.ts`](../brainrouter-cli/src/cli/commands/orchestration.ts)).
+- Incoming banner renderer:
+  [`brainrouter-cli/src/cli/incomingBanner.ts`](../brainrouter-cli/src/cli/incomingBanner.ts).
+- Inbox poller (5 s cadence, opt-in via `onInboxText`):
+  [`brainrouter-cli/src/runtime/federationRegistration.ts`](../brainrouter-cli/src/runtime/federationRegistration.ts).
+- Tests:
+  [`session-inbox.test.ts`](../brainrouter/src/__tests__/session-inbox.test.ts) (MCP-tool unit),
+  [`session-inbox.node-test.ts`](../brainrouter/src/__tests__/session-inbox.node-test.ts) (store integration with broadcast resolution + sweeper),
+  [`incoming-banner.test.ts`](../brainrouter-cli/src/tests/incoming-banner.test.ts),
+  [`federation-registration.test.ts`](../brainrouter-cli/src/tests/federation-registration.test.ts) (inbox poll lifecycle).

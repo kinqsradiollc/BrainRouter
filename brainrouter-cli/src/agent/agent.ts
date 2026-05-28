@@ -720,6 +720,20 @@ export class Agent {
   private mcpClient: McpClientWrapper;
   private llmConfig: LLMConfig;
   public sessionKey: string;
+  /**
+   * Federation Stage 3 — the per-process key the `attachFederation`
+   * runtime registered against the brain. Used by `/dm` and
+   * `/broadcast` so the recipient sees the sender's federation
+   * identity (which appears in `/agents --remote`) rather than the
+   * agent's per-chat sessionKey (which rotates per `/new`).
+   */
+  private federationSessionKey: string | null = null;
+  public setFederationSessionKey(key: string | null): void {
+    this.federationSessionKey = key;
+  }
+  public getFederationSessionKey(): string | null {
+    return this.federationSessionKey;
+  }
   public workspaceRoot: string;
   public launchCwd: string;
   private chatHistory: any[] = [];

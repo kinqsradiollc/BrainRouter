@@ -89,6 +89,31 @@ foundations, and CLI multi-agent Phase 2. Full notes in
   for the full lifecycle (active / stale / swept / recovered) and the
   privacy boundary.
 
+### Federation Stage 3 (cross-CLI messaging)
+
+- **`/dm <sessionKey> <message>`** — point-to-point text to another
+  federated peer. Recipient sees an `📨` banner above their next
+  prompt within ~5 s.
+- **`/broadcast <message>`** — fans out to every active peer under
+  your userId. `/broadcast <clientKind>:* <message>` narrows to
+  one client kind (e.g. `claude-code:*`).
+- **Three MCP tools.** `session_send` (writes one row per recipient
+  — broadcast addresses are resolved against `active_sessions` at
+  send time so each peer acks independently), `session_inbox_read`
+  (default auto-acks; `peek: true` lets a crashy reader replay
+  safely), `session_inbox_ack` (idempotent batch ack, up to 500
+  ids per call).
+- **`kind` enum** accepts all five values (`text`, `tool-result`,
+  `memory-ref`, `goal-handoff`, `delegate`) so Stage 4 and CLI
+  Multi-Agent Phase 2 can carry structured payloads without a
+  schema migration. Only `text` is rendered by Stage 3 CLIs.
+- **Inbox sweeper** drops delivered rows older than 1 hour
+  (configurable via `BRAINROUTER_INBOX_SWEEP_*`). Undelivered rows
+  never sweep — they survive the recipient's downtime.
+- **SSE push deferred.** Spec calls for SSE-fed notifications; the
+  current implementation is a 5 s poll. Same UX, simpler surface.
+  Tracked as a 0.4.1 follow-up.
+
 ---
 
 ## [0.3.9] - 2026-05-28

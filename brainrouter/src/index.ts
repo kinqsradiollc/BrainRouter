@@ -72,6 +72,14 @@ import {
   sessionListToolSchema,
   handleSessionList,
 } from './tools/active_sessions.js';
+import {
+  sessionSendToolSchema,
+  handleSessionSend,
+  sessionInboxReadToolSchema,
+  handleSessionInboxRead,
+  sessionInboxAckToolSchema,
+  handleSessionInboxAck,
+} from './tools/session_inbox.js';
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
@@ -272,6 +280,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       sessionHeartbeatToolSchema,
       sessionUnregisterToolSchema,
       sessionListToolSchema,
+      sessionSendToolSchema,
+      sessionInboxReadToolSchema,
+      sessionInboxAckToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
@@ -315,6 +326,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, { defaultUserId });
         case 'session_unregister': return await handleSessionUnregister(request.params.arguments, { defaultUserId });
         case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId });
+        case 'session_send': return await handleSessionSend(request.params.arguments, { defaultUserId });
+        case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, { defaultUserId });
+        case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);

@@ -161,6 +161,7 @@ export class MemoryEngine {
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
   private activeSessionSweeperTimer?: NodeJS.Timeout;
+  private sessionInboxSweeperTimer?: NodeJS.Timeout;
   /**
    * Reentrancy guard: setInterval doesn't wait for the previous callback to
    * finish before firing the next tick. If a sweep takes longer than the
@@ -255,6 +256,7 @@ export class MemoryEngine {
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
+    this.startSessionInboxSweeper();
   }
 
   private async ensureSeedAdminUser() {
@@ -748,6 +750,47 @@ export class MemoryEngine {
       }
     }, intervalMs);
     this.activeSessionSweeperTimer.unref?.();
+  }
+
+  /**
+   * Federation Stage 3 (FED-S3) — drop delivered inbox rows older
+   * than the threshold. Undelivered rows are NEVER swept: that would
+   * silently drop messages whose recipient was offline at send time.
+   *
+   * Cadence: 5 min by default (delivered rows don't change shape so
+   * a tight cadence has no payoff). Threshold: 1 hour — long enough
+   * that a CLI checking its inbox after a brief restart still sees
+   * yesterday's "delivered" trail, short enough to keep the table
+   * from growing unbounded under a chatty broadcast load.
+   */
+  private startSessionInboxSweeper(): void {
+    if (process.env.BRAINROUTER_DISABLE_INBOX_SWEEPER === "true") return;
+    const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+    const MIN_INTERVAL_MS = 30 * 1000;
+    const raw = parseInt(
+      process.env.BRAINROUTER_INBOX_SWEEP_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
+      10,
+    );
+    if (!Number.isFinite(raw) || raw <= 0) return;
+    const intervalMs = Math.max(raw, MIN_INTERVAL_MS);
+    const olderThanMs = parseInt(
+      process.env.BRAINROUTER_INBOX_SWEEP_MAX_AGE_MS ?? String(60 * 60 * 1000),
+      10,
+    );
+    this.sessionInboxSweeperTimer = setInterval(() => {
+      try {
+        const removed = this.store.sweepSessionInbox(olderThanMs);
+        if (removed > 0) {
+          console.error(`[BrainRouter] session_inbox sweeper removed ${removed} delivered row(s).`);
+        }
+      } catch (err) {
+        console.error(
+          "[BrainRouter] session_inbox sweeper failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }, intervalMs);
+    this.sessionInboxSweeperTimer.unref?.();
   }
 
   public async sweepUnextractedBacklog() {
