@@ -55,7 +55,9 @@ export interface BriefingSourcePlan {
   /**
    * Pin the brain's distilled Core Identity (`memory_persona`) at the
    * top of the briefing. Long-lived, hash-stable content — belongs in
-   * the cache-stable prefix. Suppressed by `BRAINROUTER_PERSONA_ANCHOR=off`.
+   * the cache-stable prefix. Gated by `cli.personaAnchor` in
+   * `config.json` *and* the per-workspace `personaAnchorEnabled`
+   * preference; both must be on for the section to fire.
    */
   includeCoreIdentity: boolean;
   includeRecall: boolean;
@@ -81,7 +83,7 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   const skippedSources: Array<{ source: string; reason: string }> = [];
   const warnings: string[] = [];
 
-  const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[] }>> = [];
+  const tasks: Array<Promise<{ source: string; text: string | null; records?: RecalledRecord[]; parsed?: any }>> = [];
 
   if (sourcePlan.includeCoreIdentity && hasMcpTool(toolNames, 'memory_persona')) {
     tasks.push(callSafe('memory_persona', {}, mcpClient, maxChars));
@@ -149,7 +151,11 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
     sourcesQueried.push(r.source);
     sourceStats.push({ source: r.source, chars: r.text.length, records: r.records?.length ?? 0 });
     if (r.source === 'memory_persona') {
-      const personaSection = renderCoreIdentitySection(r.text);
+      // Render from the already-parsed payload, not the sliced `text`.
+      // A persona body longer than `briefingMaxCharsPerSource` would
+      // otherwise be chopped mid-JSON and silently fail to parse,
+      // dropping the Core Identity section without warning.
+      const personaSection = renderCoreIdentitySection(r.parsed, r.text);
       if (personaSection) sections.push(personaSection);
       continue;
     }
@@ -316,11 +322,14 @@ async function callSafe(
   mcpClient: McpClientWrapper,
   maxChars: number,
   extractRecordsFn?: (parsed: any) => RecalledRecord[],
-): Promise<{ source: string; text: string | null; records?: RecalledRecord[] }> {
+): Promise<{ source: string; text: string | null; records?: RecalledRecord[]; parsed?: any }> {
   const res = await callMcpTool(mcpClient, toolName, args);
   if (res.isError || !res.text.trim()) return { source: toolName, text: null };
   const records = extractRecordsFn && res.parsed ? extractRecordsFn(res.parsed) : undefined;
-  return { source: toolName, text: res.text.slice(0, maxChars), records };
+  // `text` is sliced for the opaque-dump rendering path; renderers that
+  // need the structured payload (e.g. `renderCoreIdentitySection`) read
+  // `parsed` instead to avoid truncating JSON mid-string.
+  return { source: toolName, text: res.text.slice(0, maxChars), records, parsed: res.parsed };
 }
 
 // (Removed in 0.3.9: callRecallWithFallback wrapper + the two env helpers
@@ -375,16 +384,23 @@ function prettyLabel(toolName: string): string {
  * cache-stable prefix anchored on "who this user is" rather than
  * whatever the latest turn happened to recall.
  *
+ * Prefers the structured `parsed` payload from `callMcpTool`. Falls
+ * back to JSON-parsing the raw text only when `parsed` is missing,
+ * because the raw text path is sliced at `briefingMaxCharsPerSource`
+ * and can be invalid JSON for personas longer than the cap.
+ *
  * Returns null when the tool reported no Core Identity yet — caller
  * skips the section silently so we don't pollute the prefix with empty
  * scaffolding.
  */
-function renderCoreIdentitySection(text: string): string | null {
-  let parsed: any;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
+function renderCoreIdentitySection(parsedPayload: any, rawText?: string | null): string | null {
+  let parsed: any = parsedPayload;
+  if (!parsed && rawText) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      return null;
+    }
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const personaMd: string | undefined =

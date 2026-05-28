@@ -64,7 +64,8 @@ export interface WhereInputs {
   childSessions: ChildSessionRecord[];
   /**
    * Persona anchor state for the `/where` panel. Populated by
-   * `gatherWhereInputs` from preferences + env + the last briefing's
+   * `gatherWhereInputs` from `cli.personaAnchor` (config.json) +
+   * `personaAnchorEnabled` (workspace preference) + the last briefing's
    * source stats. `injectedChars > 0` means the most recent turn
    * actually pinned a Core Identity section.
    */

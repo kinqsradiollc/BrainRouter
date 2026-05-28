@@ -13,6 +13,14 @@ function toolResult(payload: unknown) {
   };
 }
 
+function toolError(toolName: string, err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: `${toolName} failed: ${message}` }],
+  };
+}
+
 export const memoryPersonaToolSchema = {
   name: "memory_persona",
   description:
@@ -33,39 +41,43 @@ const memoryPersonaSchema = z.object({
 });
 
 export async function handleMemoryPersona(args: any, options?: { defaultUserId?: string }) {
-  const { userId } = memoryPersonaSchema.parse(args ?? {});
-  const effectiveUserId = userId ?? options?.defaultUserId ?? "default";
+  try {
+    const { userId } = memoryPersonaSchema.parse(args ?? {});
+    const effectiveUserId = userId ?? options?.defaultUserId ?? "default";
 
-  const persona = memoryEngine.getPersona(effectiveUserId);
-  if (!persona) {
+    const persona = memoryEngine.getPersona(effectiveUserId);
+    if (!persona) {
+      return toolResult({
+        userId: effectiveUserId,
+        personaMd: null,
+        hash: "",
+        cognitiveCountAtGeneration: 0,
+        updatedTime: null,
+        createdTime: null,
+        reason: "no Core Identity yet — call memory_persona_refresh to distill one",
+      });
+    }
+
+    // memoryEngine.getPersona may return either the lightweight cache shape
+    // ({ personaMd }) or the full store record. Coerce to the union shape.
+    const record = persona as {
+      personaMd: string;
+      cognitiveCountAtGeneration?: number;
+      createdTime?: string;
+      updatedTime?: string;
+    };
+
     return toolResult({
       userId: effectiveUserId,
-      personaMd: null,
-      hash: "",
-      cognitiveCountAtGeneration: 0,
-      updatedTime: null,
-      createdTime: null,
-      reason: "no Core Identity yet — call memory_persona_refresh to distill one",
+      personaMd: record.personaMd,
+      hash: personaHash(record.personaMd),
+      cognitiveCountAtGeneration: record.cognitiveCountAtGeneration ?? null,
+      createdTime: record.createdTime ?? null,
+      updatedTime: record.updatedTime ?? null,
     });
+  } catch (err) {
+    return toolError("memory_persona", err);
   }
-
-  // memoryEngine.getPersona may return either the lightweight cache shape
-  // ({ personaMd }) or the full store record. Coerce to the union shape.
-  const record = persona as {
-    personaMd: string;
-    cognitiveCountAtGeneration?: number;
-    createdTime?: string;
-    updatedTime?: string;
-  };
-
-  return toolResult({
-    userId: effectiveUserId,
-    personaMd: record.personaMd,
-    hash: personaHash(record.personaMd),
-    cognitiveCountAtGeneration: record.cognitiveCountAtGeneration ?? null,
-    createdTime: record.createdTime ?? null,
-    updatedTime: record.updatedTime ?? null,
-  });
 }
 
 export const memoryPersonaRefreshToolSchema = {
@@ -88,35 +100,39 @@ const memoryPersonaRefreshSchema = z.object({
 });
 
 export async function handleMemoryPersonaRefresh(args: any, options?: { defaultUserId?: string }) {
-  const { userId } = memoryPersonaRefreshSchema.parse(args ?? {});
-  const effectiveUserId = userId ?? options?.defaultUserId ?? "default";
+  try {
+    const { userId } = memoryPersonaRefreshSchema.parse(args ?? {});
+    const effectiveUserId = userId ?? options?.defaultUserId ?? "default";
 
-  const result = await memoryEngine.distillPersona(effectiveUserId);
-  if (!result.success || !result.personaMd) {
+    const result = await memoryEngine.distillPersona(effectiveUserId);
+    if (!result.success || !result.personaMd) {
+      return toolResult({
+        userId: effectiveUserId,
+        status: "skipped",
+        reason:
+          "distillation did not produce a persona — typically because no persona/instruction cognitives exist yet for this user",
+        personaMd: null,
+        hash: "",
+      });
+    }
+
+    const persona = memoryEngine.getPersona(effectiveUserId) as {
+      personaMd: string;
+      cognitiveCountAtGeneration?: number;
+      createdTime?: string;
+      updatedTime?: string;
+    } | null;
+
     return toolResult({
       userId: effectiveUserId,
-      status: "skipped",
-      reason:
-        "distillation did not produce a persona — typically because no persona/instruction cognitives exist yet for this user",
-      personaMd: null,
-      hash: "",
+      status: "ok",
+      personaMd: result.personaMd,
+      hash: personaHash(result.personaMd),
+      cognitiveCountAtGeneration: persona?.cognitiveCountAtGeneration ?? null,
+      createdTime: persona?.createdTime ?? null,
+      updatedTime: persona?.updatedTime ?? null,
     });
+  } catch (err) {
+    return toolError("memory_persona_refresh", err);
   }
-
-  const persona = memoryEngine.getPersona(effectiveUserId) as {
-    personaMd: string;
-    cognitiveCountAtGeneration?: number;
-    createdTime?: string;
-    updatedTime?: string;
-  } | null;
-
-  return toolResult({
-    userId: effectiveUserId,
-    status: "ok",
-    personaMd: result.personaMd,
-    hash: personaHash(result.personaMd),
-    cognitiveCountAtGeneration: persona?.cognitiveCountAtGeneration ?? null,
-    createdTime: persona?.createdTime ?? null,
-    updatedTime: persona?.updatedTime ?? null,
-  });
 }

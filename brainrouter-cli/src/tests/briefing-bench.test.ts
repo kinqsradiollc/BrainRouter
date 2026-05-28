@@ -257,6 +257,30 @@ test('briefing bench: personaAnchorPreference=false overrides config=on', async 
   assert.equal(plan.includeCoreIdentity, false);
 });
 
+test('briefing bench: persona body longer than maxChars cap renders fully (no JSON truncation)', async () => {
+  // A 10k-char persona is well over the default briefingMaxCharsPerSource of
+  // 4000. The renderer must read the structured `parsed` payload from the MCP
+  // client — not the sliced raw text — or the trailing JSON closing brace
+  // gets chopped and parsing fails silently.
+  const longBody = '# Anh\n' + 'Senior engineer with strong preferences. '.repeat(250);
+  const briefing = await buildMemoryBriefing({
+    mcpClient: makeStubClient({
+      memory_persona: {
+        personaMd: longBody,
+        hash: 'deadbeefcafebabe',
+        cognitiveCountAtGeneration: 99,
+      },
+    }),
+    mcpTools: [{ name: 'memory_persona' }],
+    sessionKey: 'bench',
+    workspaceRoot: '/tmp/bench-ws',
+    query: 'start this task',
+    maxCharsPerSource: 4000,
+  });
+  assert.match(briefing.block, /### Core Identity \(hash deadbeefcafebabe · 99 cognitives\)/);
+  assert.ok(briefing.block.includes(longBody.trim()), 'full persona body must render even when raw text exceeds maxChars');
+});
+
 test('briefing bench: persona body is empty → section is silently skipped', async () => {
   const briefing = await buildMemoryBriefing({
     mcpClient: makeStubClient({

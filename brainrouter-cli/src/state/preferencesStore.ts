@@ -87,8 +87,10 @@ export interface Preferences {
    * When true (default), the brain's distilled Core Identity is pinned
    * into the cache-stable briefing prefix on every turn. `false`
    * suppresses persona injection without deleting the underlying
-   * `core_identity` row. Tied to `/persona on|off` and the
-   * `cli.personaAnchor` config knob.
+   * `core_identity` row. Tied to `/persona on|off`. Layered with the
+   * system-wide `cli.personaAnchor` knob in `config.json`; both must
+   * be on for the anchor to fire. Per the 0.3.9 env→config migration,
+   * no `BRAINROUTER_*` env var is consulted.
    */
   personaAnchorEnabled: boolean;
 }

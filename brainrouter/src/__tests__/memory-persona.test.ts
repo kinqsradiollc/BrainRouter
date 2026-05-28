@@ -55,6 +55,15 @@ describe("memory_persona tool", () => {
     expect(memoryEngine.getPersona).toHaveBeenCalledWith("fallback-user");
   });
 
+  it("returns isError envelope when the engine throws", async () => {
+    vi.mocked(memoryEngine.getPersona).mockImplementation(() => {
+      throw new Error("sqlite gone away");
+    });
+    const result: any = await handleMemoryPersona({});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/memory_persona failed: sqlite gone away/);
+  });
+
   it("produces a different hash when persona content changes", async () => {
     vi.mocked(memoryEngine.getPersona).mockReturnValueOnce({
       personaMd: "v1",
@@ -116,5 +125,12 @@ describe("memory_persona_refresh tool", () => {
     });
     await handleMemoryPersonaRefresh({}, { defaultUserId: "fallback-user" });
     expect(memoryEngine.distillPersona).toHaveBeenCalledWith("fallback-user");
+  });
+
+  it("returns isError envelope when distillation throws", async () => {
+    vi.mocked(memoryEngine.distillPersona).mockRejectedValue(new Error("llm timeout"));
+    const result: any = await handleMemoryPersonaRefresh({});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/memory_persona_refresh failed: llm timeout/);
   });
 });
