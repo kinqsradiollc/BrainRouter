@@ -14,5 +14,5 @@
   "subagents": [],
   "delegateName": "delegate_verifier",
   "tier": "worker",
-  "outputContract": null
+  "outputContract": "verifier"
 }

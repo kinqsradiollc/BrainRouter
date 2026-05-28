@@ -191,6 +191,28 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         return true;
       }
 
+      // MAS-P2-M3: `/agents show <id>` renders the parent-execution
+      // context snapshot persisted on the child's session record. Helps
+      // users (and AI agents debugging spawn issues) see exactly what
+      // the parent handed off to the child.
+      if (args[0] === 'show' && args[1]) {
+        const target = args[1];
+        const sessions = listSessions(agent.workspaceRoot);
+        const match = sessions.find((s) => s.id === target || s.id.startsWith(target));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${target}". Try /agents to list, or pass a full id.\n`));
+          return true;
+        }
+        const { formatSnapshotForHuman } = await import('../../orchestration/parentContext.js');
+        console.log(chalk.bold(`\nChild ${match.id} (${match.role}) — ${match.status}`));
+        if (match.parentContext) {
+          console.log(formatSnapshotForHuman(match.parentContext));
+        } else {
+          console.log(chalk.gray('  No parent context recorded — child was spawned before MAS-P2-M3 landed.'));
+        }
+        console.log();
+        return true;
+      }
       if (args[0] === 'defs') {
         const defs = listAgentDefs(agent.workspaceRoot);
         console.log(chalk.bold('\nAgent Definitions:'));
