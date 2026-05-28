@@ -13,6 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.4.0** | Unreleased (in flight on `release/0.4.0`) | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
 | **0.3.9** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
@@ -20,6 +21,35 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
 this changelog.
+
+---
+
+## [0.4.0] - Unreleased
+
+Persona injection (anchor item — closes the gap where the brain
+distilled a Core Identity but the CLI never injected it), federation
+foundations, and CLI multi-agent Phase 2. Full notes in
+[`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md).
+
+### Added
+
+- **Core Identity in the briefing prefix.** New `### Core Identity`
+  section in every briefing, pinned into the 0.3.9 cache-stable
+  prefix — zero token cost after turn 1, re-anchors only when the
+  persona body changes.
+- **`/persona` slash command.** Show / refresh / on / off the active
+  Core Identity; back-compat `<name>` form preserved.
+- **`memory_persona` + `memory_persona_refresh` MCP tools.** Brain
+  exposes a canonical reader and on-demand distillation trigger,
+  both returning a 16-char content hash.
+- **`cli.personaAnchor` config knob.** System-wide on/off in
+  `~/.config/brainrouter/config.json`. Per-workspace
+  `personaAnchorEnabled` preference layered on top.
+- **`/where` persona line and `/briefing` row.** Both surface anchor
+  state so users can confirm the prefix actually carries it.
+- **`/memories list [query]`.** Per-card precision badge
+  `· cited N · uncited M (P%)` with a `⚠️ noisy` flag below 20% —
+  makes pre-auto-archive memory quality visible.
 
 ---
 
