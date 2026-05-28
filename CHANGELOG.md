@@ -13,7 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
-| **0.4.0** | Unreleased (in flight on `release/0.4.0`) | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
+| **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
 | **0.3.9** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
 | **0.3.7** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.7.md`](brainrouter-changelog/0.3.7.md) |
@@ -24,11 +24,13 @@ this changelog.
 
 ---
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-05-28
 
-Persona injection (anchor item — closes the gap where the brain
+Persona injection (the anchor item — closes the gap where the brain
 distilled a Core Identity but the CLI never injected it), federation
-foundations, and CLI multi-agent Phase 2. Full notes in
+(shared memory + active-session registry + cross-CLI messaging),
+CLI multi-agent Phase 2 (typed delegation), and the brain-side
+design pass. Full notes in
 [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md).
 
 ### Added

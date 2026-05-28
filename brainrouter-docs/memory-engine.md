@@ -179,3 +179,131 @@ $$H_{\text{new}} = \min(H_{\text{max}},\ H_{\text{decayed}} + \Delta_{\text{spik
 with $H_{\text{max}} = 4.0$, $\Delta_{\text{spike}} = 1.0$. Decay follows a
 10-minute half-life. When $H \ge 0.3$ the system pre-warms the skill
 context and injects its directives into the prompt.
+
+## Federation policy decisions (0.4.0)
+
+These are the six open questions
+([`FULL_TASKS.MD` §4.6](../FULL_TASKS.MD))
+the federation work surfaced. Documented here so they don't get
+re-litigated each cycle; cross-link from
+[`federation.md`](federation.md) when relevant.
+
+### OQ-1 — Default memory scope: per-userId share, no per-memory opt-in
+
+**Decision.** Memory is **shared by default across every host attached
+under the same BrainRouter API key.** No per-record opt-in flag.
+
+**Rationale.** The killer scenario (BrainRouter CLI captures a fact,
+Claude Code recalls it 30 s later in another terminal) only works if
+the share is implicit. Asking the user to mark each record "shareable"
+turns the feature into a privacy choreography exercise. Users who want
+isolation use a second API key — that's the policy boundary, not a
+per-record flag.
+
+**Constraint.** Cross-*userId* visibility stays off forever. The
+`active_sessions` registry, the `session_inbox`, and the recall
+pipeline all scope by `user_id`; nothing in 0.4.0 leaks across the
+multi-tenant boundary.
+
+### OQ-2 — Working memory across federated peers: per-session, not cross-readable
+
+**Decision.** Working memory (the `.brainrouter/work/<userId>/...`
+canvas, `memory_working_*` tools) is **per-session and private** to
+the session that wrote it. A federated peer does NOT see another
+session's working memory by default.
+
+**Rationale.** Working memory is essentially scratch state — partial
+plans, in-progress reasoning offloads, mermaid canvases mid-edit.
+Cross-reading it would be louder than helpful (two CLIs hammering on
+each other's half-written thoughts) and the existing
+`memory_working_offload` / `memory_working_context` MCP tools already
+scope by `sessionKey`.
+
+**Escape hatch.** A peer that *wants* to read another session's
+working memory can call `memory_working_context` with the explicit
+target `sessionKey` — same MCP tool, scoped read. The default is just
+"my session's view"; cross-reads are an explicit opt-in.
+
+### OQ-3 — Auth model: per-user federation across many CLIs (not multi-tenant MCP)
+
+**Decision.** The default auth model is **one user, many CLIs**. The
+HTTP MCP server is single-tenant from the perspective of any given
+API key; multi-tenancy is achieved by running multiple users with
+distinct keys.
+
+**Rationale.** Federation Stage 2's `active_sessions` table scopes
+every row by `user_id`; the broadcast / inbox / heartbeat surfaces all
+inherit that scope. This shape composes cleanly with the cloud
+deployment model: each tenant gets their own brain instance, and
+within that brain the federation surface is fully shared. Trying to
+serve multiple tenants from one process would force per-row
+authentication on every query — a larger surface than 0.4.0 should
+carry.
+
+**Future.** A multi-tenant MCP variant (one process, many tenants,
+fine-grained ACLs) is intentionally deferred. When it ships it'll
+ride the existing `user_id` foreign keys, not a new schema.
+
+### OQ-4 — Conflict resolution on simultaneous writes: last-write-wins via `updatedTime`
+
+**Decision.** When two federated CLIs write to the same record
+nearly simultaneously, **the later `updatedTime` wins**. No
+locking, no merge attempt, no CRDT machinery.
+
+**Rationale.** Memory records are append-mostly. Updates are rare,
+and the dominant update pattern is "mark superseded" (one record
+replacing another) rather than "edit in place". For the few in-place
+update paths (`memory_update`, `memory_evidence_add`), the
+last-write-wins semantics match SQLite's natural ordering and don't
+require any client-side coordination.
+
+**Cost.** The losing write's content is lost. We accept this for
+0.4.0 — the cost of building a real merge layer (CRDTs, vector
+clocks, manual conflict resolution UI) is much higher than the
+expected frequency of conflicts. The `operation_log` keeps an audit
+trail so a clobbered update is recoverable manually.
+
+**Future.** A Phase-5 memory-blackboard pipeline naturally tames
+this — concurrent writes both land as `kind=candidate_record`
+items on the blackboard and the dedup / contradiction agents
+arbitrate before either commits. See
+[`brain-agents.md`](brain-agents.md).
+
+### OQ-5 — Heartbeat cost confirmed: zero `operation_log` writes
+
+**Decision.** `session_heartbeat` and `session_inbox` heartbeat-like
+operations **do not write to `operation_log`.** The audit table only
+captures cognitive writes + governance actions.
+
+**Rationale.** 30 s × N peers × 24 h = 2,880 N rows/day just for
+"I'm still here" pings. With N=5 federated CLIs that's 14k rows/day
+of pure noise; over a month the audit table grows by 400k rows that
+carry zero forensic value. The active-session sweeper handles
+absence detection; explicit audit rows would be redundant.
+
+**Asserted by test.** The brain integration suite includes
+`active-sessions.node-test.ts → "heartbeat does NOT write to
+memory_operations (audit volume guard)"` — 10 heartbeats fired
+against a fresh database leave the operation_log row count unchanged.
+
+### OQ-6 — Stdio transport: best-experienced over HTTP MCP, but supported
+
+**Decision.** Federation **works over both stdio and HTTP MCP
+transports.** HTTP is the recommended path; stdio works with two
+caveats.
+
+**Caveats for stdio:**
+
+1. **No live-watch latency benefit.** `/agents --remote --watch`
+   polls every 2 s on stdio (no SSE — that's HTTP-only). Same UX,
+   slightly higher floor on heartbeat-to-render latency.
+2. **One peer per stdio process.** Each stdio MCP child is a single
+   user, single brain instance — you can't multiplex stdio sessions
+   the way you can with the HTTP server. Two terminals using stdio
+   each spawn their own brain child.
+
+**Rationale.** HTTP is the natural transport for federation (one
+brain process, N clients), but stdio is the right default for
+embedded / sandboxed use cases (Claude Code, single-shot
+`brainrouter run`). The federation surface is identical on both;
+only the connection-fan-out story differs.
