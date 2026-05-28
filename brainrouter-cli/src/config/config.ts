@@ -70,6 +70,14 @@ export interface CliKnobs {
   recallMode?: 'always' | 'gated' | 'off';
   /** Default 'on'. Pin first-turn briefing into the cache-stable prefix. */
   prefixMemoryAnchors?: 'on' | 'off';
+  /**
+   * Default 'on'. Pin the brain's distilled Core Identity
+   * (`memory_persona`) into the cache-stable briefing prefix. Set
+   * 'off' to suppress persona injection without deleting the
+   * underlying `core_identity` row. The `/persona on|off` runtime
+   * toggle is a per-workspace preference layered on top of this.
+   */
+  personaAnchor?: 'on' | 'off';
   /** Cap on briefing chars per source. Default 4000. */
   briefingMaxCharsPerSource?: number;
   /** Cap on parallel briefing sources. Default 6. */
@@ -307,6 +315,7 @@ export function saveConfig(config: Config): void {
 export interface ResolvedCliKnobs {
   recallMode: 'always' | 'gated' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
+  personaAnchor: 'on' | 'off';
   briefingMaxCharsPerSource: number;
   briefingMaxSources: number;
   autoCompactTokens: number;
@@ -350,6 +359,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   return {
     recallMode: c.recallMode ?? 'gated',
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
+    personaAnchor: c.personaAnchor ?? 'on',
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
     briefingMaxSources: c.briefingMaxSources ?? 6,
     autoCompactTokens: c.autoCompactTokens ?? 80_000,
