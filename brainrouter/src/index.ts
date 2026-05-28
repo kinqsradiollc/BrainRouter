@@ -67,6 +67,8 @@ import {
   handleSessionRegister,
   sessionHeartbeatToolSchema,
   handleSessionHeartbeat,
+  sessionUnregisterToolSchema,
+  handleSessionUnregister,
   sessionListToolSchema,
   handleSessionList,
 } from './tools/active_sessions.js';
@@ -268,6 +270,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryPersonaRefreshToolSchema,
       sessionRegisterToolSchema,
       sessionHeartbeatToolSchema,
+      sessionUnregisterToolSchema,
       sessionListToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
@@ -310,6 +313,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
         case 'session_register': return await handleSessionRegister(request.params.arguments, { defaultUserId });
         case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, { defaultUserId });
+        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, { defaultUserId });
         case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSessionNotFoundError } from '../runtime/mcpClient.js';
@@ -22,30 +22,37 @@ function freshWorkspace(label: string): { dir: string; cleanup: () => void } {
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test('resolveFederationSessionKey: stable across calls for one workspace', () => {
-  const { dir, cleanup } = freshWorkspace('stable');
+test('resolveFederationSessionKey: per-process — every call mints a fresh UUID', () => {
+  // Previous behaviour persisted to `<workspace>/.brainrouter/cli/federation.json`
+  // and reused the key. That collapsed two concurrent terminals into one
+  // row in `active_sessions` (the brain saw both `register` calls under
+  // the same composite PK). The fix: per-process keys, so two terminals
+  // open in the same directory are two distinct rows.
+  const { dir, cleanup } = freshWorkspace('per-proc');
   try {
     const first = resolveFederationSessionKey(dir);
-    assert.match(first, /^[0-9a-f-]{36}$/, 'first call mints a uuid');
     const second = resolveFederationSessionKey(dir);
-    assert.equal(second, first, 'second call must return the persisted key');
     const third = resolveFederationSessionKey(dir);
-    assert.equal(third, first);
+    assert.match(first, /^[0-9a-f-]{36}$/);
+    assert.notEqual(first, second);
+    assert.notEqual(second, third);
+    assert.notEqual(first, third);
   } finally {
     cleanup();
   }
 });
 
-test('resolveFederationSessionKey: different workspaces get different keys', () => {
-  const a = freshWorkspace('wsA');
-  const b = freshWorkspace('wsB');
+test('resolveFederationSessionKey: leaves no on-disk artifact (no persistence)', () => {
+  const { dir, cleanup } = freshWorkspace('no-disk');
   try {
-    const keyA = resolveFederationSessionKey(a.dir);
-    const keyB = resolveFederationSessionKey(b.dir);
-    assert.notEqual(keyA, keyB);
+    resolveFederationSessionKey(dir);
+    // Was `<workspace>/.brainrouter/cli/federation.json`; that path must
+    // not exist anymore — its presence in a real workspace is what caused
+    // the two-terminal collision bug.
+    const ghostPath = join(dir, '.brainrouter', 'cli', 'federation.json');
+    assert.equal(existsSync(ghostPath), false, `unexpected federation.json at ${ghostPath}`);
   } finally {
-    a.cleanup();
-    b.cleanup();
+    cleanup();
   }
 });
 

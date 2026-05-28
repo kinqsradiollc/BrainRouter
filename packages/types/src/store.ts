@@ -141,6 +141,13 @@ export interface IMemoryStore {
     at: string,
     usage?: ActiveSessionUsage | null,
   ): boolean;
+  /**
+   * Federation Stage 2 follow-up: graceful unregister on clean CLI exit.
+   * Returns `true` when a row was deleted, `false` when no matching row
+   * existed (idempotent — safe to call multiple times). The 5-min
+   * sweeper still acts as the safety net for hard kills.
+   */
+  unregisterActiveSession(userId: string, sessionKey: string): boolean;
   listActiveSessions(filters: ActiveSessionFilters): ActiveSessionRecord[];
   sweepActiveSessions(olderThanMs: number): number;
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;

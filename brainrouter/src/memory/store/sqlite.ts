@@ -1562,6 +1562,17 @@ export class SqliteMemoryStore implements IMemoryStore {
     return rows.map((row) => activeSessionRowToRecord(row, filters.includeUsage ?? false));
   }
 
+  public unregisterActiveSession(userId: string, sessionKey: string): boolean {
+    // Mirror `heartbeatActiveSession` — skip the `operation_log` write.
+    // Federation churn is high-volume and audit value is low: we already
+    // have `started_at` / `last_heartbeat_at` on the row itself, and a
+    // dropped row is just absence-of-row.
+    const result = this.db
+      .prepare("DELETE FROM active_sessions WHERE session_key = ? AND user_id = ?")
+      .run(sessionKey, userId);
+    return Number(result.changes ?? 0) > 0;
+  }
+
   public sweepActiveSessions(olderThanMs: number): number {
     const cutoff = new Date(Date.now() - olderThanMs).toISOString();
     const result = this.db

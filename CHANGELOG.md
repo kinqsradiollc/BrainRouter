@@ -65,14 +65,18 @@ foundations, and CLI multi-agent Phase 2. Full notes in
 
 ### Federation Stage 2 (active-session registry + cross-vendor presence)
 
-- **Live peer presence.** New `session_register` / `session_heartbeat`
-  / `session_list` MCP tools backed by an `active_sessions` table.
-  Every BrainRouter-aware CLI / host (Claude Code, Codex, Cursor,
-  Gemini CLI, …) attached to the same brain shows up as a row.
+- **Live peer presence.** New `session_register` /
+  `session_heartbeat` / `session_unregister` / `session_list` MCP
+  tools backed by an `active_sessions` table. Every
+  BrainRouter-aware CLI / host (Claude Code, Codex, Cursor, Gemini
+  CLI, …) attached to the same brain shows up as a row.
+  Per-process identity: two terminals open in the same workspace
+  show as two distinct sessions.
 - **`/agents --remote`.** Lists peer sessions with `--watch`,
   `--usage`, `--include-stale`, `--json` flags. Auto-registers on
   REPL startup; heartbeats every 30 s; auto-recovers when the brain
-  restarts.
+  restarts; calls `session_unregister` on `/exit` so a clean shutdown
+  removes the row immediately.
 - **Live Sessions widget** on the dashboard Overview page, polling
   the new `/api/sessions` REST route every 10 s.
 - **Per-session telemetry** — tokens / USD snapshot rides

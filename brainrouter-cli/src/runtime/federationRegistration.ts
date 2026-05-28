@@ -15,36 +15,44 @@
 import { randomUUID } from 'node:crypto';
 import type { McpClientPool } from './mcpPool.js';
 import { callMcpTool, hasMcpTool } from './mcpUtils.js';
-import { getCliStateFile, readJsonFile, writeJsonFile } from '../state/cliState.js';
 
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 
 /**
- * Stable federation sessionKey for *this CLI process on this workspace*.
- * Persisted to `<workspace>/.brainrouter/cli/federation.json` so a clean
- * restart re-uses the same key — the brain's idempotent
- * `session_register` refreshes the existing row instead of stacking a
- * new ghost. Without this, every CLI start would mint a fresh UUID and
- * leave a 5-min trail of stale rows in the registry.
+ * Mint a federation sessionKey for *this CLI process*.
  *
- * The agent's *chat* sessionKey is intentionally a separate concept
- * (still random per startup). This is purely the federation identity.
+ * Intentionally per-process, not per-workspace: two terminals open in
+ * the same directory must show as two distinct rows in
+ * `/agents --remote`. We deliberately do NOT persist this anywhere on
+ * disk — file-based persistence collapsed concurrent terminals into
+ * one row, which is the opposite of what federation should surface.
+ *
+ * Restart hygiene comes from the other end of the lifecycle:
+ *   - `FederationHandle.stop()` calls `session_unregister` best-effort
+ *     on clean exit, so a graceful `/exit` removes the row immediately
+ *     and `/agents --remote` doesn't show a 2-min ghost.
+ *   - The brain's stale-session sweeper (5 min) is the safety net for
+ *     hard kills, OOMs, and lost-network scenarios where unregister
+ *     never lands.
+ *
+ * The agent's *chat* sessionKey is a separate concept (also per-launch).
+ * This is purely the federation identity.
  */
-export function resolveFederationSessionKey(workspaceRoot: string): string {
-  const path = getCliStateFile(workspaceRoot, 'federation.json');
-  const stored = readJsonFile<{ sessionKey?: string }>(path, {});
-  if (typeof stored.sessionKey === 'string' && stored.sessionKey.length > 0) {
-    return stored.sessionKey;
-  }
-  const fresh = randomUUID();
-  writeJsonFile(path, { sessionKey: fresh, createdAt: new Date().toISOString() });
-  return fresh;
+export function resolveFederationSessionKey(_workspaceRoot: string): string {
+  return randomUUID();
 }
 
 export interface FederationHandle {
   sessionKey: string;
   clientKind: string;
-  stop(): void;
+  /**
+   * Best-effort graceful shutdown: stops the heartbeat timer AND fires
+   * a one-shot `session_unregister` so the brain drops the row
+   * immediately. Awaits the unregister with a short timeout so a slow
+   * brain can't hang `/exit`. Errors are swallowed — the brain's 5-min
+   * sweeper handles whatever this misses.
+   */
+  stop(): Promise<void>;
 }
 
 export interface FederationOptions {
@@ -97,11 +105,25 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
   return {
     sessionKey: options.sessionKey,
     clientKind,
-    stop() {
+    async stop() {
+      if (stopped) return;
       stopped = true;
       clearInterval(timer);
+      await unregisterOnce(options);
     },
   };
+}
+
+async function unregisterOnce(options: FederationOptions): Promise<void> {
+  // Hard timeout: a slow or dead brain must not block `/exit`. 1.5 s
+  // is generous for a local HTTP MCP and tight enough that a network
+  // partition won't make the user wait visibly.
+  const UNREGISTER_TIMEOUT_MS = 1_500;
+  await Promise.race([
+    callMcpTool(options.mcpClient, 'session_unregister', { sessionKey: options.sessionKey })
+      .catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, UNREGISTER_TIMEOUT_MS)),
+  ]);
 }
 
 async function safeListTools(mcp: McpClientPool): Promise<Array<{ name: string }>> {

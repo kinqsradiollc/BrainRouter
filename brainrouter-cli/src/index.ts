@@ -258,10 +258,19 @@ program
       workspaceRoot: workspace.workspaceRoot,
       clientKind: 'brainrouter-cli',
     });
+    // Hard-kill safety net: Ctrl-C, SIGTERM, and `process.exit` paths
+    // skip the `finally` below. Best-effort unregister on signal so a
+    // mid-tool-call kill doesn't leave a ghost waiting for the brain's
+    // 5-min sweeper. Errors are swallowed by `stop()` itself.
+    const onSignal = () => { void federation?.stop(); };
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
     try {
       await runChat({ agent, mcpClient, config, workspace });
     } finally {
-      federation?.stop();
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+      await federation?.stop();
     }
   });
 

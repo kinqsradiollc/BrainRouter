@@ -223,6 +223,59 @@ test("sweepActiveSessions deletes rows past the threshold and returns the count"
   }
 });
 
+test("unregisterActiveSession deletes the matched row and is idempotent", () => {
+  const { store, cleanup } = freshDb("unregister");
+  try {
+    store.registerActiveSession({
+      sessionKey: "sk-bye",
+      userId: "u1",
+      clientKind: "brainrouter-cli",
+      workspaceRoot: "/repos/alpha",
+      startedAt: iso(),
+      lastHeartbeatAt: iso(),
+      metadata: {},
+    });
+
+    assert.equal(store.unregisterActiveSession("u1", "sk-bye"), true);
+    assert.equal(store.listActiveSessions({ userId: "u1", includeStale: true }).length, 0);
+
+    // Second call must NOT throw.
+    assert.equal(store.unregisterActiveSession("u1", "sk-bye"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("unregister scoped to (sessionKey, userId) — does not touch sibling user's row", () => {
+  const { store, cleanup } = freshDb("unregister-scoped");
+  try {
+    store.registerActiveSession({
+      sessionKey: "shared",
+      userId: "u1",
+      clientKind: "brainrouter-cli",
+      workspaceRoot: "/repos/alpha",
+      startedAt: iso(),
+      lastHeartbeatAt: iso(),
+      metadata: {},
+    });
+    store.registerActiveSession({
+      sessionKey: "shared",
+      userId: "u2",
+      clientKind: "claude-code",
+      workspaceRoot: "/repos/alpha",
+      startedAt: iso(),
+      lastHeartbeatAt: iso(),
+      metadata: {},
+    });
+
+    store.unregisterActiveSession("u1", "shared");
+    assert.equal(store.listActiveSessions({ userId: "u1", includeStale: true }).length, 0);
+    assert.equal(store.listActiveSessions({ userId: "u2", includeStale: true }).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
 test("heartbeat does NOT write to memory_operations (audit volume guard)", () => {
   const { store, cleanup } = freshDb("audit");
   try {

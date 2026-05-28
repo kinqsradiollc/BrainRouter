@@ -5,6 +5,7 @@ vi.mock("../memory/engine.js", () => ({
     store: {
       registerActiveSession: vi.fn(),
       heartbeatActiveSession: vi.fn(),
+      unregisterActiveSession: vi.fn(),
       listActiveSessions: vi.fn(),
       sweepActiveSessions: vi.fn(),
     },
@@ -15,6 +16,7 @@ import { memoryEngine } from "../memory/engine.js";
 import {
   handleSessionRegister,
   handleSessionHeartbeat,
+  handleSessionUnregister,
   handleSessionList,
 } from "../tools/active_sessions.js";
 import type { ActiveSessionRecord } from "@kinqs/brainrouter-types";
@@ -129,6 +131,47 @@ describe("session_heartbeat tool", () => {
     const result: any = await handleSessionHeartbeat({}, { defaultUserId: "u1" });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/session_heartbeat failed/);
+  });
+});
+
+describe("session_unregister tool", () => {
+  beforeEach(() => {
+    vi.mocked(memoryEngine.store.unregisterActiveSession).mockReset();
+  });
+
+  it("returns deleted:true when the row existed", async () => {
+    vi.mocked(memoryEngine.store.unregisterActiveSession).mockReturnValue(true);
+    const res = parseToolText<{ deleted: boolean }>(
+      await handleSessionUnregister({ sessionKey: "sk-1" }, { defaultUserId: "u1" }),
+    );
+    expect(res.deleted).toBe(true);
+    expect(memoryEngine.store.unregisterActiveSession).toHaveBeenCalledWith("u1", "sk-1");
+  });
+
+  it("is idempotent — returns deleted:false when no row exists", async () => {
+    vi.mocked(memoryEngine.store.unregisterActiveSession).mockReturnValue(false);
+    const res = parseToolText<{ deleted: boolean }>(
+      await handleSessionUnregister({ sessionKey: "ghost" }, { defaultUserId: "u1" }),
+    );
+    expect(res.deleted).toBe(false);
+  });
+
+  it("rejects when sessionKey is missing", async () => {
+    const result: any = await handleSessionUnregister({}, { defaultUserId: "u1" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/session_unregister failed/);
+  });
+
+  it("returns isError envelope when the store throws", async () => {
+    vi.mocked(memoryEngine.store.unregisterActiveSession).mockImplementation(() => {
+      throw new Error("db locked");
+    });
+    const result: any = await handleSessionUnregister(
+      { sessionKey: "sk-1" },
+      { defaultUserId: "u1" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/session_unregister failed: db locked/);
   });
 });
 

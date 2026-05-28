@@ -98,29 +98,34 @@ brain side; the CLI heartbeat cadence (`HEARTBEAT_INTERVAL_MS` in
 [`federationRegistration.ts`](../brainrouter-cli/src/runtime/federationRegistration.ts))
 is currently a constant.
 
-### Hard-kill semantics
+### Identity is per-process
 
-There's intentionally **no graceful unregister**. If you Ctrl-C the
-CLI, close the terminal, the laptop sleeps, or the process OOMs:
+Every `brainrouter` launch is its own federation session — a fresh
+UUID minted in memory, never persisted to disk. **Two terminals open
+in the same workspace = two rows in `/agents --remote`.** An earlier
+attempt to persist the key per-workspace collapsed concurrent
+terminals into a single row (the brain's idempotent
+`session_register` saw both calls under the same composite PK and
+treated them as one), so we reverted to per-process identity.
 
-1. Heartbeats stop firing.
-2. The session falls out of the default view after 2 min.
-3. The sweeper deletes the row after 5 min.
+The session also rotates whenever you restart the CLI in the same
+terminal. To stop that from leaving a 5-min ghost on every restart,
+the lifecycle uses two cleanup paths:
 
-This is by design — graceful-shutdown hooks don't fire reliably on
-hard kills anyway, so we treat *every* CLI exit the same way and let
-the heartbeat-or-not signal carry the truth. The cost is a 5-min
-ghost window; the benefit is one code path that's robust to anything.
+1. **Graceful exit (clean `/exit`, REPL EOF, SIGINT, SIGTERM).** The
+   REPL's shutdown handler calls `session_unregister` on the brain,
+   which deletes the row immediately. The call is guarded by a 1.5 s
+   timeout so a slow or dead brain can't hang `/exit`.
+2. **Hard kill (`kill -9`, OOM, machine sleep, network partition).**
+   No unregister fires. Heartbeats stop. The session falls out of
+   the default view after 2 min and the brain's stale-session
+   sweeper drops the row after 5 min.
 
-**Restart deduplication.** The federation `sessionKey` is persisted
-to `<workspace>/.brainrouter/cli/federation.json` per workspace, so a
-clean restart from the same directory **reuses** the existing key.
-The brain's idempotent `session_register` then refreshes the existing
-row instead of stacking a new ghost on top. Without this, every CLI
-launch would mint a fresh UUID and a busy day of restarts would
-accumulate 10+ stale rows before the sweeper cleaned them up. (This
-is a separate identifier from the agent's chat sessionKey — that one
-still rotates per launch.)
+Per-process identity is also why the federation sessionKey is
+independent of the agent's *chat* sessionKey (which also rotates per
+launch). They serve different lifecycles — chat sessions can fork,
+resume, and persist; federation rows are short-lived presence
+markers.
 
 ### Brain restart
 
