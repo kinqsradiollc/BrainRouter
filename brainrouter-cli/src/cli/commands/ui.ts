@@ -646,6 +646,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         accessMode: agent.getAccessMode(),
         recalledRecords: agent.getRecalledRecords(),
         briefingSources: briefing.sources,
+        briefingSourceStats: briefing.sourceStats,
       });
       console.log('\n' + renderWhere(inputs, theme) + '\n');
       return true;

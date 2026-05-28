@@ -11,7 +11,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| Latest shipped | **0.3.9** | Shipped — 2026-05-28 | [`CHANGELOG.md`](CHANGELOG.md#039---2026-05-28) |
+| Latest shipped | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
+| Previous | **0.3.9** | Shipped — 2026-05-28 | [`CHANGELOG.md`](CHANGELOG.md#039---2026-05-28) |
 | Previous | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
 | Previous | **0.3.7** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-26) |
 
@@ -25,8 +26,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
 | **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop (Reasonix-inspired) + CLI knobs → `config.json` | Shipped — 2026-05-28 |
-| **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Federation: many agents, one memory; CLI multi-agent Phase 2 | Designed |
-| **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 3-6, brain-side multi-agent roadmap | Planned |
+| **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
+| **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A5 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Next |
+| **[0.4.x](brainrouter-roadmap/0.4.x.md)** | Post-federation polish, CLI multi-agent Phases 5-6, brain-side multi-agent roadmap | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
 
 ---
@@ -93,8 +95,14 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - Colored per-turn USD cost, session totals, and cache-savings figure
   in the Ink top bar.
 
-### 0.4.0 — Federation + Typed Delegation
+### 0.4.0 — Persona Injection + Federation + Typed Delegation
 
+- **Persona injection (top priority).** The brain already distills a
+  Core Identity but the CLI never injects it into the LLM prompt —
+  `buildDefaultSourcePlan` in `briefing.ts` lists six sources and
+  persona is missing. Land `memory_persona` MCP tool family, pin the
+  persona into the 0.3.9 cache-stable prefix, `/persona` slash
+  command, and `/where` + `/briefing` + `/memories` visibility.
 - Shared memory across BrainRouter CLI, Claude Code, Codex, Cursor,
   Gemini CLI, and other MCP-aware clients.
 - Active-session registry, session heartbeat, and cross-session inbox.

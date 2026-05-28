@@ -56,6 +56,30 @@ import { createSkill, createSkillSchema } from './tools/create_skill.js';
 import { updateSkill, updateSkillSchema } from './tools/update_skill.js';
 import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from './tools/memory_capture_turn.js';
 import { memoryRecallToolSchema, handleMemoryRecall } from './tools/memory_recall.js';
+import {
+  memoryPersonaToolSchema,
+  handleMemoryPersona,
+  memoryPersonaRefreshToolSchema,
+  handleMemoryPersonaRefresh,
+} from './tools/memory_persona.js';
+import {
+  sessionRegisterToolSchema,
+  handleSessionRegister,
+  sessionHeartbeatToolSchema,
+  handleSessionHeartbeat,
+  sessionUnregisterToolSchema,
+  handleSessionUnregister,
+  sessionListToolSchema,
+  handleSessionList,
+} from './tools/active_sessions.js';
+import {
+  sessionSendToolSchema,
+  handleSessionSend,
+  sessionInboxReadToolSchema,
+  handleSessionInboxRead,
+  sessionInboxAckToolSchema,
+  handleSessionInboxAck,
+} from './tools/session_inbox.js';
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
@@ -70,10 +94,12 @@ import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memor
 import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
+import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { usersRouter } from './api/routes/users.js';
 import { memoriesRouter } from './api/routes/memories.js';
 import { scenesRouter } from './api/routes/scenes.js';
 import { personaRouter } from './api/routes/persona.js';
+import { sessionsRouter } from './api/routes/sessions.js';
 import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
 import { graphRouter } from './api/routes/graph.js';
@@ -249,6 +275,15 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       },
       memoryCaptureTurnToolSchema,
       memoryRecallToolSchema,
+      memoryPersonaToolSchema,
+      memoryPersonaRefreshToolSchema,
+      sessionRegisterToolSchema,
+      sessionHeartbeatToolSchema,
+      sessionUnregisterToolSchema,
+      sessionListToolSchema,
+      sessionSendToolSchema,
+      sessionInboxReadToolSchema,
+      sessionInboxAckToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
@@ -286,6 +321,15 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
         case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
         case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
+        case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
+        case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
+        case 'session_register': return await handleSessionRegister(request.params.arguments, { defaultUserId });
+        case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, { defaultUserId });
+        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, { defaultUserId });
+        case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId });
+        case 'session_send': return await handleSessionSend(request.params.arguments, { defaultUserId });
+        case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, { defaultUserId });
+        case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
@@ -354,6 +398,10 @@ if (USE_HTTP) {
   // ── HTTP / Streamable-HTTP transport ────────────────────────────────────────
   // Each client session gets its own Server + Transport instance.
   const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+  // Tracks which User-Agents we've already warned about for missing
+  // `text/event-stream` in their Accept header — one warning per UA
+  // so a chatty client doesn't drown the logs.
+  const warnedUserAgents = new Set<string>();
 
   const app = express();
   
@@ -392,6 +440,7 @@ if (USE_HTTP) {
   app.use("/api/memories", memoriesRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);
+  app.use("/api/sessions", sessionsRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
   app.use("/api/graph", graphRouter);
@@ -405,8 +454,44 @@ if (USE_HTTP) {
   //   GET  /v1/models            — returns the configured upstream model
   app.use("/v1", chatCompletionsRouter);
 
-  // MCP endpoint — handles POST (requests) and GET (SSE stream)
+  // MCP endpoint — handles POST (requests) and GET (SSE stream).
+  //
+  // The Streamable HTTP MCP SDK strictly requires every POST to send
+  // `Accept: application/json, text/event-stream` because the response
+  // could be either a plain JSON body or an SSE stream. Naive clients
+  // (curl, fetch without explicit headers, older MCP SDK builds, some
+  // health-check probes) often send only `application/json` and the
+  // SDK rejects them with a `Not Acceptable` 406 — surfacing as a
+  // noisy error in the brain logs that operators can't easily map
+  // back to the offending client.
+  //
+  // We promote `Accept: application/json` → `Accept: application/json,
+  // text/event-stream` *before* delegating to the SDK so the request
+  // proceeds, then log a one-time warning per User-Agent so the
+  // operator can find and fix the misbehaving client. This is safe:
+  // the SDK only enters SSE mode if the handler explicitly streams,
+  // which never happens for the JSON-only request shapes the naive
+  // clients send.
+  function promoteAcceptHeader(req: Request): void {
+    if (req.method !== 'POST') return;
+    const decision = decideMcpAcceptPromotion(
+      typeof req.headers.accept === 'string' ? req.headers.accept : '',
+    );
+    if (!decision.promote) return;
+    req.headers.accept = decision.value;
+    const ua = (req.headers['user-agent'] as string | undefined) ?? '(no user-agent)';
+    if (!warnedUserAgents.has(ua)) {
+      warnedUserAgents.add(ua);
+      console.error(
+        `[BrainRouter] MCP client missing 'text/event-stream' in Accept header — promoting transparently. ` +
+          `Update the client to send 'Accept: application/json, text/event-stream' on every POST to /mcp. ` +
+          `User-Agent: ${ua}`,
+      );
+    }
+  }
+
   async function handleMcp(req: Request, res: Response) {
+    promoteAcceptHeader(req);
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     const authHeader = req.headers.authorization;
     const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";

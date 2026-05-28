@@ -13,6 +13,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.4.0](0.4.0.md)** | 2026-05-28 | Shipped | Persona injection, federation (Stages 1–3), CLI multi-agent Phase 2, brain-side design pass |
 | **[0.3.9](0.3.9.md)** | 2026-05-28 | Shipped | Memory briefing, cache-first loop, tool repair, cost panel, CLI knobs → `config.json` |
 | **[0.3.8](0.3.8.md)** | 2026-05-26 | Shipped | Delegation reliability, parallel reads, CLI quick wins, briefing prefix fix |
 | **[0.3.7](0.3.7.md)** | 2026-05-26 | Shipped | Ink chat REPL, wizard, `/config`, `/login`, CLI/server env separation |

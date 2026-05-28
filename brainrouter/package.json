@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-mcp-server",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "BrainRouter MCP server — the cognitive memory engine. Exposes recall, capture, focus scenes, persona, contradictions, skills, and graph queries as MCP tools for any MCP-speaking agent.",
   "type": "module",
   "main": "dist/index.js",
@@ -24,7 +24,8 @@
     "dev:http": "tsx watch src/index.ts -- --http --port 3747",
     "start": "node dist/index.js",
     "start:http": "node dist/index.js --http --port 3747",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:integration",
+    "test:integration": "tsc && node --test 'dist/**/*.node-test.js'",
     "setup:mcp": "node scripts/setup-mcp.js",
     "bench:longmemeval": "npx tsx benchmark/longmemeval-bench.ts fts",
     "bench:longmemeval:hybrid": "npx tsx benchmark/longmemeval-bench.ts hybrid",
@@ -38,7 +39,7 @@
     "setup:admin": "node scripts/setup-admin.js"
   },
   "dependencies": {
-    "@kinqs/brainrouter-types": "^0.3.8",
+    "@kinqs/brainrouter-types": "^0.4.0",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",

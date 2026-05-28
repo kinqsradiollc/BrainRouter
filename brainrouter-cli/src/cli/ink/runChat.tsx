@@ -62,10 +62,18 @@ export interface RunChatOptions {
   mcpClient: McpClientWrapper;
   config: Config;
   workspace?: WorkspaceInfo;
+  /**
+   * Optional federation handle from `attachFederation`. When provided,
+   * `runChat` swaps its `onInboxText` to push incoming /dm + broadcast
+   * banners through `controller.push.notice` — so they land in the
+   * persistent scrollback ABOVE the composer instead of as raw stdout
+   * writes that Ink stomps on the next redraw.
+   */
+  federation?: import('../../runtime/federationRegistration.js').FederationHandle | null;
 }
 
 export async function runChat(opts: RunChatOptions): Promise<void> {
-  const { agent, mcpClient, config } = opts;
+  const { agent, mcpClient, config, federation } = opts;
   // Fire user-registered session-start hooks. Previously these were
   // accepted by `/hooks add session-start <cmd>` and persisted to
   // hooks.json but never actually executed — silent dead config. Hooks
@@ -734,6 +742,20 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             showOverlay: ctrl.showOverlay,
             clearOverlay: ctrl.clearOverlay,
           });
+          // Federation Stage 3 — upgrade the inbox renderer from the
+          // stdout-fallback (which Ink stomps on the next redraw) to
+          // controller.push.notice so /dm and /broadcast banners land
+          // in persistent scrollback ABOVE the composer. Any messages
+          // that arrived during the startup gap replay on swap.
+          if (federation) {
+            void import('../incomingBanner.js').then(({ formatIncomingBanner }) => {
+              federation.setOnInboxText((messages) => {
+                for (const m of messages) {
+                  ctrl.push.notice(formatIncomingBanner(m), 'info');
+                }
+              });
+            });
+          }
           refreshFooter();
           armIdleHint();
           startTicker();

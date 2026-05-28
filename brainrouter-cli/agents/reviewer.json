@@ -14,5 +14,5 @@
   "subagents": [],
   "delegateName": "delegate_reviewer",
   "tier": "reasoning",
-  "outputContract": null
+  "outputContract": "reviewer"
 }

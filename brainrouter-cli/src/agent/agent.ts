@@ -27,11 +27,14 @@ import {
   createReadAgentTranscriptTool,
   createCloseAgentTool,
   createRouteAgentTool,
+  createRouteTaskTool,
   executeOrchestrationTool,
   isOrchestrationToolName,
+  synthesizeDelegateTools,
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
+import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -321,6 +324,12 @@ export interface LastBriefingDetails {
   tokensInjected: number;
   charsSaved: number;
   warnings: string[];
+  /**
+   * MAS-P2-M3 — first ~500 chars of the rendered briefing block so
+   * `ParentExecutionContextSnapshot` can carry an excerpt without
+   * holding the full block in memory between turns.
+   */
+  blockExcerpt?: string;
 }
 
 export interface ChatCompletionPayload {
@@ -494,6 +503,7 @@ export const LOCAL_TOOLS = [
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
   createRouteAgentTool(),
+  createRouteTaskTool(),
   {
     name: 'ask_user_choice',
     description:
@@ -720,6 +730,20 @@ export class Agent {
   private mcpClient: McpClientWrapper;
   private llmConfig: LLMConfig;
   public sessionKey: string;
+  /**
+   * Federation Stage 3 — the per-process key the `attachFederation`
+   * runtime registered against the brain. Used by `/dm` and
+   * `/broadcast` so the recipient sees the sender's federation
+   * identity (which appears in `/agents --remote`) rather than the
+   * agent's per-chat sessionKey (which rotates per `/new`).
+   */
+  private federationSessionKey: string | null = null;
+  public setFederationSessionKey(key: string | null): void {
+    this.federationSessionKey = key;
+  }
+  public getFederationSessionKey(): string | null {
+    return this.federationSessionKey;
+  }
   public workspaceRoot: string;
   public launchCwd: string;
   private chatHistory: any[] = [];
@@ -995,8 +1019,15 @@ export class Agent {
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
     const visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
-    const allTools = [...filteredLocalTools, ...visibleMcpTools];
-    callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools and ${mcpTools.length} MCP tools.`);
+    // MAS-P2-M1: synthesize one `delegate_<agentId>` tool per active
+    // agent definition. Rebuilt every turn so a workspace agent JSON
+    // edit or pack swap takes effect immediately. The bare
+    // `delegate_<id>` tools live next to the legacy `spawn_agent` /
+    // `task_agent` / `delegate_agent` so the LLM has a discoverable
+    // typed path AND the escape hatch.
+    const delegateTools = synthesizeDelegateTools(listAgentDefinitions(this.workspaceRoot));
+    const allTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
+    callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools, ${delegateTools.length} delegate tools, and ${mcpTools.length} MCP tools.`);
 
     // Auto-compact pre-turn check.
     //
@@ -1152,6 +1183,30 @@ export class Agent {
       onChildComplete: (event) => {
         callbacks.onChildComplete?.(event);
       },
+      // MAS-P2-M3 — surface parent runtime state so handleSpawn can
+      // build the typed `ParentExecutionContextSnapshot`. Each accessor
+      // reads live state at spawn time; missing data is fine, the
+      // snapshot just omits the field.
+      parentBriefingBlock: () => this.lastBriefingDetails.blockExcerpt ?? null,
+      parentRecalledRecordIds: () => this.getRecalledRecords().map((r) => r.recordId).filter(Boolean),
+      parentGoal: () => {
+        try {
+          const g = readGoal(this.workspaceRoot, this.sessionKey);
+          return g ? { text: g.text, status: g.status } : null;
+        } catch { return null; }
+      },
+      parentPlanText: () => {
+        try {
+          const plan = readPlan(this.workspaceRoot, this.sessionKey);
+          if (!plan || plan.items.length === 0) return null;
+          const explanation = plan.explanation ? `${plan.explanation}\n` : '';
+          const items = plan.items.map((it) => `- [${it.status}] ${it.step}`).join('\n');
+          return `${explanation}${items}`;
+        } catch { return null; }
+      },
+      parentVisibleTools: () => mcpTools.map((t: any) => String(t.name)).filter(Boolean),
+      parentExecutionMode: readPreferences(this.workspaceRoot).executionMode,
+      parentReviewPolicy: readPreferences(this.workspaceRoot).reviewPolicy,
     });
 
     while (loopCount < maxLoops) {
@@ -2716,7 +2771,11 @@ export class Agent {
 
     const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
     const hasActiveGoal = !!(activeGoal?.text && activeGoal.status === 'active');
-    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal);
+    const personaPref = readPreferences(this.workspaceRoot).personaAnchorEnabled;
+    const sourcePlan = buildDefaultSourcePlan(prompt, hasActiveGoal, {
+      personaAnchorConfig: getCliKnobs().personaAnchor,
+      personaAnchorPreference: personaPref,
+    });
     const sourcesPlannedNames = describeSourcePlan(sourcePlan);
     const decision = decideMemoryBriefing({
       prompt,
@@ -2796,6 +2855,7 @@ export class Agent {
       tokensInjected,
       charsSaved: this.memoryMetrics.compactedToolCharsAvoided,
       warnings: briefing.warnings,
+      blockExcerpt: briefing.block ? briefing.block.slice(0, 500) : undefined,
     };
 
     if (briefing.block) {

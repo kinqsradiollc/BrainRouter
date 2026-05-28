@@ -160,6 +160,8 @@ export class MemoryEngine {
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
+  private activeSessionSweeperTimer?: NodeJS.Timeout;
+  private sessionInboxSweeperTimer?: NodeJS.Timeout;
   /**
    * Reentrancy guard: setInterval doesn't wait for the previous callback to
    * finish before firing the next tick. If a sweep takes longer than the
@@ -253,6 +255,8 @@ export class MemoryEngine {
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.startExtractionSweeper();
+    this.startActiveSessionSweeper();
+    this.startSessionInboxSweeper();
   }
 
   private async ensureSeedAdminUser() {
@@ -702,6 +706,91 @@ export class MemoryEngine {
         });
     }, intervalMs);
     this.sweeperTimer.unref?.();
+  }
+
+  /**
+   * Federation Stage 2 (FED-S2-T5) — drop stale active_sessions rows.
+   * Runs alongside the extraction sweeper so we don't add yet another
+   * timer; cadence is configurable via `BRAINROUTER_SESSION_SWEEP_*`.
+   *
+   * Defaults: tick every minute, drop rows whose `lastHeartbeatAt` is
+   * older than 5 minutes. The 5-minute floor matches the spec: clients
+   * heartbeat at 30s, so 5 minutes is "10 missed beats" — enough margin
+   * for transient network blips without leaving ghost sessions in the
+   * registry indefinitely.
+   */
+  private startActiveSessionSweeper(): void {
+    if (process.env.BRAINROUTER_DISABLE_SESSION_SWEEPER === "true") return;
+
+    const DEFAULT_INTERVAL_MS = 60 * 1000; // 1 minute
+    const MIN_INTERVAL_MS = 10 * 1000;
+    const raw = parseInt(
+      process.env.BRAINROUTER_SESSION_SWEEP_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
+      10,
+    );
+    if (!Number.isFinite(raw) || raw <= 0) return;
+    const intervalMs = Math.max(raw, MIN_INTERVAL_MS);
+
+    const olderThanMs = parseInt(
+      process.env.BRAINROUTER_SESSION_SWEEP_MAX_AGE_MS ?? String(5 * 60 * 1000),
+      10,
+    );
+
+    this.activeSessionSweeperTimer = setInterval(() => {
+      try {
+        const removed = this.store.sweepActiveSessions(olderThanMs);
+        if (removed > 0) {
+          console.error(`[BrainRouter] active_sessions sweeper removed ${removed} stale row(s).`);
+        }
+      } catch (err) {
+        console.error(
+          "[BrainRouter] active_sessions sweeper failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }, intervalMs);
+    this.activeSessionSweeperTimer.unref?.();
+  }
+
+  /**
+   * Federation Stage 3 (FED-S3) — drop delivered inbox rows older
+   * than the threshold. Undelivered rows are NEVER swept: that would
+   * silently drop messages whose recipient was offline at send time.
+   *
+   * Cadence: 5 min by default (delivered rows don't change shape so
+   * a tight cadence has no payoff). Threshold: 1 hour — long enough
+   * that a CLI checking its inbox after a brief restart still sees
+   * yesterday's "delivered" trail, short enough to keep the table
+   * from growing unbounded under a chatty broadcast load.
+   */
+  private startSessionInboxSweeper(): void {
+    if (process.env.BRAINROUTER_DISABLE_INBOX_SWEEPER === "true") return;
+    const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+    const MIN_INTERVAL_MS = 30 * 1000;
+    const raw = parseInt(
+      process.env.BRAINROUTER_INBOX_SWEEP_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
+      10,
+    );
+    if (!Number.isFinite(raw) || raw <= 0) return;
+    const intervalMs = Math.max(raw, MIN_INTERVAL_MS);
+    const olderThanMs = parseInt(
+      process.env.BRAINROUTER_INBOX_SWEEP_MAX_AGE_MS ?? String(60 * 60 * 1000),
+      10,
+    );
+    this.sessionInboxSweeperTimer = setInterval(() => {
+      try {
+        const removed = this.store.sweepSessionInbox(olderThanMs);
+        if (removed > 0) {
+          console.error(`[BrainRouter] session_inbox sweeper removed ${removed} delivered row(s).`);
+        }
+      } catch (err) {
+        console.error(
+          "[BrainRouter] session_inbox sweeper failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }, intervalMs);
+    this.sessionInboxSweeperTimer.unref?.();
   }
 
   public async sweepUnextractedBacklog() {

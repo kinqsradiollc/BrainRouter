@@ -14,5 +14,5 @@
   "subagents": [],
   "delegateName": "delegate_explorer",
   "tier": "reasoning",
-  "outputContract": null
+  "outputContract": "explorer"
 }
