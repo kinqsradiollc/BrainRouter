@@ -94,6 +94,7 @@ import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memor
 import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
+import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { usersRouter } from './api/routes/users.js';
 import { memoriesRouter } from './api/routes/memories.js';
 import { scenesRouter } from './api/routes/scenes.js';
@@ -397,6 +398,10 @@ if (USE_HTTP) {
   // ── HTTP / Streamable-HTTP transport ────────────────────────────────────────
   // Each client session gets its own Server + Transport instance.
   const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+  // Tracks which User-Agents we've already warned about for missing
+  // `text/event-stream` in their Accept header — one warning per UA
+  // so a chatty client doesn't drown the logs.
+  const warnedUserAgents = new Set<string>();
 
   const app = express();
   
@@ -449,8 +454,44 @@ if (USE_HTTP) {
   //   GET  /v1/models            — returns the configured upstream model
   app.use("/v1", chatCompletionsRouter);
 
-  // MCP endpoint — handles POST (requests) and GET (SSE stream)
+  // MCP endpoint — handles POST (requests) and GET (SSE stream).
+  //
+  // The Streamable HTTP MCP SDK strictly requires every POST to send
+  // `Accept: application/json, text/event-stream` because the response
+  // could be either a plain JSON body or an SSE stream. Naive clients
+  // (curl, fetch without explicit headers, older MCP SDK builds, some
+  // health-check probes) often send only `application/json` and the
+  // SDK rejects them with a `Not Acceptable` 406 — surfacing as a
+  // noisy error in the brain logs that operators can't easily map
+  // back to the offending client.
+  //
+  // We promote `Accept: application/json` → `Accept: application/json,
+  // text/event-stream` *before* delegating to the SDK so the request
+  // proceeds, then log a one-time warning per User-Agent so the
+  // operator can find and fix the misbehaving client. This is safe:
+  // the SDK only enters SSE mode if the handler explicitly streams,
+  // which never happens for the JSON-only request shapes the naive
+  // clients send.
+  function promoteAcceptHeader(req: Request): void {
+    if (req.method !== 'POST') return;
+    const decision = decideMcpAcceptPromotion(
+      typeof req.headers.accept === 'string' ? req.headers.accept : '',
+    );
+    if (!decision.promote) return;
+    req.headers.accept = decision.value;
+    const ua = (req.headers['user-agent'] as string | undefined) ?? '(no user-agent)';
+    if (!warnedUserAgents.has(ua)) {
+      warnedUserAgents.add(ua);
+      console.error(
+        `[BrainRouter] MCP client missing 'text/event-stream' in Accept header — promoting transparently. ` +
+          `Update the client to send 'Accept: application/json, text/event-stream' on every POST to /mcp. ` +
+          `User-Agent: ${ua}`,
+      );
+    }
+  }
+
   async function handleMcp(req: Request, res: Response) {
+    promoteAcceptHeader(req);
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     const authHeader = req.headers.authorization;
     const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";

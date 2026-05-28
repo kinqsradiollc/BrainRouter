@@ -14,6 +14,49 @@ import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 
+interface DmAddressResolution {
+  to: string;
+  error?: string;
+}
+
+function isLikelyFullSessionKey(target: string): boolean {
+  return target.length >= 32 || target.includes(':child:');
+}
+
+async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], target: string): Promise<DmAddressResolution> {
+  const rawTarget = target.trim();
+  const res = await callMcpTool<{ sessions: Array<{ sessionKey?: string }> }>(
+    mcpClient,
+    'session_list',
+    { includeStale: true },
+  );
+  if (res.isError) {
+    return { to: rawTarget };
+  }
+
+  const sessionKeys = (res.parsed?.sessions ?? [])
+    .map((s) => s.sessionKey)
+    .filter((key): key is string => typeof key === 'string' && key.length > 0);
+  const exact = sessionKeys.find((key) => key === rawTarget);
+  if (exact) return { to: exact };
+
+  const matches = sessionKeys.filter((key) => key.startsWith(rawTarget));
+  if (matches.length === 1) return { to: matches[0] };
+  if (matches.length > 1) {
+    const prefixes = matches.map((key) => key.slice(0, 12)).join(', ');
+    return {
+      to: rawTarget,
+      error: `Ambiguous session prefix "${rawTarget}" matched ${matches.length} sessions (${prefixes}). Use more characters.`,
+    };
+  }
+  if (!isLikelyFullSessionKey(rawTarget)) {
+    return {
+      to: rawTarget,
+      error: `No active or recently-seen session matched prefix "${rawTarget}". Use /agents --remote to copy a session prefix.`,
+    };
+  }
+  return { to: rawTarget };
+}
 
 export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config, rl, repl } = ctx;
@@ -43,10 +86,15 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         return true;
       }
       const fromKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const resolved = await resolveDmAddress(mcpClient, target);
+      if (resolved.error) {
+        console.log(chalk.yellow(`\n${resolved.error}\n`));
+        return true;
+      }
       const res = await callMcpTool<{ delivered: number; ids: string[] }>(
         mcpClient,
         'session_send',
-        { from: fromKey, to: target, kind: 'text', payload: { text: message } },
+        { from: fromKey, to: resolved.to, kind: 'text', payload: { text: message } },
       );
       if (res.isError) {
         console.log(chalk.red(`\nsession_send failed: ${res.text || '(no message)'}\n`));
@@ -54,7 +102,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       }
       const delivered = res.parsed?.delivered ?? 0;
       if (delivered === 0) {
-        console.log(chalk.yellow(`\nNo active session matched "${target}" (heartbeats only within the last 2 min reach the inbox).\n`));
+        console.log(chalk.yellow(`\nNo active session matched "${resolved.to}" (heartbeats only within the last 2 min reach the inbox).\n`));
       } else {
         console.log(chalk.gray(`\nDelivered to ${delivered} session.\n`));
       }

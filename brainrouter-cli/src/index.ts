@@ -276,7 +276,7 @@ program
     process.once('SIGINT', onSignal);
     process.once('SIGTERM', onSignal);
     try {
-      await runChat({ agent, mcpClient, config, workspace });
+      await runChat({ agent, mcpClient, config, workspace, federation });
     } finally {
       process.off('SIGINT', onSignal);
       process.off('SIGTERM', onSignal);
