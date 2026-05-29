@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { BrainAgentStatus } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../memory/engine.js";
-import { listBrainAgents, findBrainAgentById } from "../memory/agents/registry.js";
+import { findBrainAgentById } from "../memory/agents/registry.js";
+import { buildBrainAgentStatuses } from "../memory/agents/status.js";
 
 /**
  * BRAIN-P1-T4 (0.4.1) — `memory_agent_status` (BRAIN-DESIGN-T3).
@@ -37,24 +38,7 @@ export async function handleMemoryAgentStatus(args: any, _options?: { defaultUse
       };
     }
 
-    const aggregates = memoryEngine.store.getMemoryJobKindAggregates();
-    const byKind = new Map(aggregates.map((a) => [a.kind, a]));
-
-    const agents: BrainAgentStatus[] = listBrainAgents()
-      .filter((a) => !params.agentId || a.id === params.agentId)
-      .map((agent) => {
-        const agg = byKind.get(agent.id);
-        return {
-          id: agent.id,
-          description: agent.description,
-          modelClass: agent.modelClass,
-          lastJobStatus: agg?.lastStatus ?? "idle",
-          lastJobCompletedAt: agg?.lastCompletedAt ?? null,
-          successRate24h: agg?.successRate24h ?? null,
-          pendingJobs: agg?.pendingJobs ?? 0,
-        };
-      });
-
+    const agents: BrainAgentStatus[] = buildBrainAgentStatuses(memoryEngine.store, params.agentId);
     return { content: [{ type: "text", text: JSON.stringify({ agents }, null, 2) }] };
   } catch (err: any) {
     return { isError: true, content: [{ type: "text", text: `memory_agent_status failed: ${err.message}` }] };
