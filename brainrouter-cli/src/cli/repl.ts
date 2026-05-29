@@ -75,7 +75,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/fork [label]', desc: 'Fork this chat into a new session, keep prior context' },
       { cmd: '/rename <label>', desc: 'Rename the current session' },
       { cmd: '/resume <id>', desc: 'Resume a previous session by sessionKey' },
-      { cmd: '/rewind [n]', desc: 'Timeline of the last 20 turns; /rewind <n> forks a session truncated to that turn' },
+      { cmd: '/rewind [n] [--files]', desc: 'Timeline of the last 20 turns; /rewind <n> forks a session truncated to that turn; --files also restores workspace files to that turn (preview + confirm)' },
       { cmd: '/sessions', desc: 'List persisted sessions for this workspace' },
       { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
       { cmd: '/init', desc: 'Re-run the onboarding wizard (Theme → Provider → API key → Model → MCP → AGENT.md)' },

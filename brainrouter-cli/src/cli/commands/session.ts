@@ -11,6 +11,7 @@ import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
+import { planRestore, readFileMutations } from '../../state/fileSnapshotStore.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { buildGoalKickoffPrompt } from './_helpers.js';
@@ -128,13 +129,15 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.yellow('\nNothing to rewind — no user turns recorded in this session yet.\n'));
         return true;
       }
-      const arg = (args[0] ?? '').trim();
+      const restoreFiles = args.includes('--files');
+      const arg = (args.find((a) => !a.startsWith('--')) ?? '').trim();
       if (!arg) {
         console.log(chalk.bold(`\n⏪ Rewind — last ${timeline.length} turn${timeline.length === 1 ? '' : 's'} (newest last):`));
         for (const t of timeline) {
           console.log(`  ${chalk.cyan(String(t.turnNumber).padStart(2))}  ${chalk.gray(t.timestamp.slice(11, 19))}  ${t.preview}`);
         }
-        console.log(chalk.gray('\n  /rewind <n> forks a new session truncated to that turn (everything after is dropped).\n'));
+        console.log(chalk.gray('\n  /rewind <n>          forks a new session truncated to that turn (conversation only).'));
+        console.log(chalk.gray('  /rewind <n> --files  also restores workspace files to their turn-<n> state (preview + confirm).\n'));
         return true;
       }
       const n = Number(arg);
@@ -143,6 +146,40 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.red(`\nNo turn "${arg}". Run /rewind to list the available turns.\n`));
         return true;
       }
+
+      // 0.4.x-3b — optional file-restore: revert files mutated after turn n to
+      // their end-of-turn-n state. Previewed + confirmed; never automatic.
+      if (restoreFiles) {
+        const actions = planRestore(readFileMutations(agent.workspaceRoot, agent.sessionKey), chosen.absoluteTurn);
+        if (actions.length === 0) {
+          console.log(chalk.gray(`\n(No file changes recorded after turn ${n} — nothing to restore. Rewinding conversation only.)`));
+        } else {
+          console.log(chalk.bold(`\n⚠️  File restore — ${actions.length} file${actions.length === 1 ? '' : 's'} will change to their turn-${n} state:`));
+          for (const a of actions) {
+            console.log(a.action === 'delete'
+              ? `  ${chalk.red('delete')}  ${a.path}  ${chalk.gray('(was created after this turn)')}`
+              : `  ${chalk.yellow('revert')}  ${a.path}`);
+          }
+          const ok = await askYesNo(chalk.bold('\nApply these file changes? This overwrites current content. (y/N) '), false);
+          if (!ok) {
+            console.log(chalk.gray('\nFile restore cancelled. (Conversation not rewound either — re-run without --files to fork conversation only.)\n'));
+            return true;
+          }
+          let restored = 0;
+          for (const a of actions) {
+            try {
+              const abs = path.resolve(agent.workspaceRoot, a.path);
+              if (a.action === 'delete') { if (fs.existsSync(abs)) fs.rmSync(abs); }
+              else { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, a.content ?? '', 'utf8'); }
+              restored++;
+            } catch (err: any) {
+              console.log(chalk.red(`  ✗ ${a.path}: ${err?.message ?? err}`));
+            }
+          }
+          console.log(chalk.green(`✓ Restored ${restored}/${actions.length} file${actions.length === 1 ? '' : 's'} to their turn-${n} state.`));
+        }
+      }
+
       const kept = truncateAtTurn(entries, chosen.endIndex);
       const previous = agent.sessionKey;
       const newKey = `${agent.sessionKey.split(':')[0]}:rewind:${randomUUID().slice(0, 8)}`;

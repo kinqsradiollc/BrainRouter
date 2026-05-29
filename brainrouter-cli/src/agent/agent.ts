@@ -12,7 +12,8 @@ import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
-import { appendTranscriptEntry, redactText } from '../state/sessionStore.js';
+import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
+import { recordFileMutation } from '../state/fileSnapshotStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -910,6 +911,14 @@ export class Agent {
    */
   private lastSeenPromptTokens: number | undefined;
   /**
+   * 0.4.x-3b (`/rewind --files`) — file-restore undo log state. `snapshotsThisTurn`
+   * is null at turn start; on the first file mutation of a turn we lazily compute
+   * `fileSnapshotTurn` (the user-turn ordinal from the transcript) and capture
+   * each touched file's prior content once. See state/fileSnapshotStore.ts.
+   */
+  private fileSnapshotTurn = 0;
+  private snapshotsThisTurn: Set<string> | null = null;
+  /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
    * fresh recall pull unless a gated trigger fires. `recallNextTurnIsPost-
@@ -1090,6 +1099,8 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // 0.4.x-3b — new turn: re-resolve the file-snapshot ordinal on first mutation.
+    this.snapshotsThisTurn = null;
     this.lastGoalTransition = undefined;
     // 0.3.9 item 11 — clear the storm window for the new user intent.
     // Old repetition state from the previous turn shouldn't suppress a
@@ -2265,6 +2276,7 @@ export class Agent {
         const resolved = resolveHere(args.path, { forWrite: true });
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
+        this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
@@ -2292,6 +2304,7 @@ export class Agent {
         }
 
         const updated = content.replace(target, replacement);
+        this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
         return `Successfully edited ${args.path}`;
       }
@@ -2539,6 +2552,13 @@ export class Agent {
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
         if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
+        // 0.4.x-3b — capture each target file's prior content before the patch
+        // applies (undo log for /rewind --files). Parse the envelope's file
+        // headers (`*** Add/Update/Delete File: <path>`).
+        for (const m of patch.matchAll(/^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+)\s*$/gm)) {
+          const p = m[1].trim();
+          if (p) { try { this.captureFileSnapshot(path.resolve(this.workspaceRoot, p)); } catch { /* noop */ } }
+        }
         return applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
       }
       case 'update_plan': {
@@ -2744,6 +2764,32 @@ export class Agent {
     return this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
       ? this.lastSeenPromptTokens
       : estimateChatHistoryTokens(this.chatHistory as any);
+  }
+
+  /**
+   * 0.4.x-3b (`/rewind --files`) — record a file's prior content the first time
+   * it's mutated this turn, tagged with the user-turn ordinal. Lazily computes
+   * the ordinal from the transcript on the turn's first capture (the user
+   * message is already recorded by then). Best-effort: never throws into a tool.
+   */
+  private captureFileSnapshot(absPath: string): void {
+    try {
+      const rel = path.relative(this.workspaceRoot, absPath);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return; // outside workspace
+      if (this.snapshotsThisTurn === null) {
+        // First mutation of the turn — resolve the turn ordinal once.
+        const users = readTranscriptEntries(this.workspaceRoot, this.sessionKey, Number.MAX_SAFE_INTEGER)
+          .filter((e) => e.role === 'user').length;
+        this.fileSnapshotTurn = users;
+        this.snapshotsThisTurn = new Set();
+      }
+      if (this.snapshotsThisTurn.has(rel)) return; // only the turn's first touch
+      this.snapshotsThisTurn.add(rel);
+      const priorContent = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf8') : null;
+      recordFileMutation(this.workspaceRoot, this.sessionKey, { turn: this.fileSnapshotTurn, path: rel, priorContent });
+    } catch {
+      /* snapshotting must never break a tool call */
+    }
   }
 
   /**
