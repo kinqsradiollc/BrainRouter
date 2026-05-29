@@ -17,6 +17,7 @@ import { listSessions, reconcileStale } from '../../orchestration/orchestrator.j
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
 import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
+import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
@@ -512,6 +513,55 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         '## Step 7: Output',
         `\`write_file\` to \`${reportPath}\`: severity-ordered findings (Critical / Important) with file:line citations and concrete fix suggestions. If no issues survived filtering, the report says "No issues found. Checked for bugs and guideline compliance."`,
         'Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.',
+      ].join('\n'), ctx.repl.runAgentTurn);
+      return true;
+    }
+    case '/review-auto':
+    {
+      // MAS-P5-T1 — confidence-scored review fan-out. Flags: --threshold N
+      // (default 80), --scope <glob>. Spawns the reviewer roster, each
+      // returning findings with a confidence; the parent dedupes by
+      // (file, line-range, root-cause) and filters below threshold.
+      let threshold = DEFAULT_REVIEW_THRESHOLD;
+      const rest: string[] = [];
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--threshold') {
+          const n = Number(args[++i]);
+          if (Number.isFinite(n)) threshold = Math.max(0, Math.min(100, n));
+        } else if (args[i] === '--scope') {
+          rest.push(args[++i] ?? '');
+        } else {
+          rest.push(args[i]);
+        }
+      }
+      const scope = rest.filter(Boolean).join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
+      const meta = createWorkflow(agent.workspaceRoot, { title: `Review-auto: ${scope}`, kind: 'review', sessionKey: agent.sessionKey });
+      const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)} (threshold ${threshold})`));
+      await runSkillCommand(agent, mcpClient, command, scope, [
+        '# Confidence-scored review fan-out',
+        '',
+        `Review: ${scope}. Confidence threshold: **${threshold}** (0-100).`,
+        '',
+        'Memory-first opening: `memory_search` past reviews + `memory_file_history` on touched files; pass relevant record ids to children.',
+        '',
+        `## Fan out (ONE message, parallel \`task_agent\` calls). Reviewers: ${DEFAULT_REVIEW_ROSTER.join(', ')}`,
+        '- **instruction** — AGENT.md/AGENTS.md/CLAUDE.md compliance; quote the exact rule.',
+        '- **bug** — clear bugs / wrong logic in the diff only; no nitpicks.',
+        '- **test** — behavior changes lacking test coverage.',
+        '- **history** — contradictions with recorded decisions or repeated failed_attempts (cite recordId).',
+        '- **simplification** — reuse, dead code, needless complexity in the changed code.',
+        '(If the `pr-review` pack is enabled, its reviewer agents exist by id; otherwise spawn `role=reviewer access=read` with each focus.)',
+        '',
+        '## Every finding MUST be `{ file, line, severity, confidence (0-100), summary, rootCause }`.',
+        'Children do NOT self-filter — below-threshold findings stay in the child transcript for audit.',
+        '',
+        '## Parent synthesis (deterministic)',
+        `Merge duplicates by \`(file, line-range, root-cause)\` — keep the highest confidence, union the reviewers that raised each — then drop confidence < ${threshold}. (Mirrors \`orchestration/reviewSynthesis.ts\` → \`mergeAndFilterFindings\`.)`,
+        '',
+        '## Output',
+        `\`write_file\` to \`${reportPath}\`: severity-ordered survivors (Critical → Low) with \`file:line\`, confidence, and which reviewers flagged each; note how many sub-threshold findings were retained. Do NOT edit reviewed files.`,
+        `Then summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
       ].join('\n'), ctx.repl.runAgentTurn);
       return true;
     }
