@@ -65,6 +65,9 @@ import { computePrefixFingerprint } from '../runtime/contextRegions.js';
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
 import { runExtractResult } from '../runtime/tools/extractResult.js';
+// MAS-P5-T3 part 2: persistent worker threads.
+import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
+import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
@@ -519,6 +522,50 @@ export const LOCAL_TOOLS = [
         maxChars: { type: 'integer', description: 'Cap on returned characters. Default 4000.' }
       },
       required: ['resultRef']
+    }
+  },
+  {
+    name: 'spawn_worker_thread',
+    description: 'Start a persistent background worker thread for a self-contained task. It runs detached (your turn does NOT block), persists its transcript + rolling summary + status under .brainrouter/cli/workers/, and is observable via /workers and read_worker_summary. Returns the worker id. Workers cannot spawn workers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'The self-contained task for the worker.' },
+        role: { type: 'string', description: 'Agent role/persona for the worker (default: worker).' },
+        prompt: { type: 'string', description: 'Task prompt the worker runs; defaults to the goal.' },
+        ownership: { type: 'string', description: 'Glob the worker may write within (MAS-P3); defaults to your own ownership.' }
+      },
+      required: ['goal']
+    }
+  },
+  {
+    name: 'wait_worker',
+    description: 'Block until a worker thread finishes (bounded), then return its status + summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Worker id from spawn_worker_thread.' },
+        timeoutMs: { type: 'number', description: 'Max wait in ms (default 600000).' }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'read_worker_summary',
+    description: "Read a worker thread's rolling summary (summary.md) without waiting for it to finish.",
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Worker id.' } },
+      required: ['id']
+    }
+  },
+  {
+    name: 'close_worker',
+    description: 'Mark a worker thread closed (terminal). Its in-process run, if any, is left to wind down but its result is no longer adopted.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Worker id.' } },
+      required: ['id']
     }
   },
   {
@@ -2400,6 +2447,46 @@ export class Agent {
           this.resultCache,
         );
         return out.returned;
+      }
+      case 'spawn_worker_thread': {
+        if (!canSpawnWorker(this.agentDepth)) {
+          throw new Error('Workers cannot spawn workers (MAX_WORKER_DEPTH=1).');
+        }
+        const goal = String(args.goal ?? '').trim();
+        if (!goal) throw new Error('spawn_worker_thread requires a goal.');
+        const worker = spawnWorkerThread(this.mcpClient, this.llmConfig, {
+          workspaceRoot: this.workspaceRoot,
+          launchCwd: this.launchCwd,
+          role: String(args.role ?? 'worker'),
+          goal,
+          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+          ownership: typeof args.ownership === 'string' ? args.ownership : (this.ownership ?? null),
+          parentSessionKey: this.sessionKey,
+          parentAccessMode: this.accessMode,
+          spawnerDepth: this.agentDepth,
+          effortOverride: this.effortOverride,
+        });
+        return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
+      }
+      case 'wait_worker': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('wait_worker requires an id.');
+        const meta = await waitWorker(this.workspaceRoot, id, typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined);
+        if (!meta) return JSON.stringify({ id, found: false });
+        return JSON.stringify({ id, status: meta.status, summary: readWorkerSummary(this.workspaceRoot, id) ?? null });
+      }
+      case 'read_worker_summary': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('read_worker_summary requires an id.');
+        const meta = readWorkerMeta(this.workspaceRoot, id);
+        if (!meta) return `No worker "${id}".`;
+        return readWorkerSummary(this.workspaceRoot, id) ?? `Worker ${id} (${meta.status}) has no summary yet.`;
+      }
+      case 'close_worker': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('close_worker requires an id.');
+        const meta = closeWorker(this.workspaceRoot, id);
+        return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
       }
       case 'apply_patch': {
         const patch = String(args.patch ?? '');

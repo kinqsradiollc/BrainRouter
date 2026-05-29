@@ -14,6 +14,7 @@ import { isKnownSegment, renderSegments } from '../statusline.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { reconcileStaleWorkers } from '../../state/workerStore.js';
 import { expandMentions } from '../../memory/mentions.js';
 import {
   addGoalTokens,
@@ -222,6 +223,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // only writes the JSON file when there were actual stale entries
       // to flip — subsequent calls are pure reads.
       reconcileStale(agent.workspaceRoot);
+      // MAS-P5-T3: same treatment for worker threads — a `running` worker
+      // from a dead CLI process can't resume mid-turn, so flip it to failed.
+      reconcileStaleWorkers(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
       return sessions.filter((s) => s.status === 'pending' || s.status === 'running').length;
     } catch {
