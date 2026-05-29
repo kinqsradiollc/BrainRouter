@@ -36,6 +36,7 @@ import {
 import { getSession } from '../orchestration/orchestrator.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
 import { ownershipWriteViolation } from '../orchestration/ownership.js';
+import { applyToolScope, rankAndCapTools } from '../orchestration/toolBudget.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -383,6 +384,14 @@ export interface AgentOptions {
    * they can't collide; null/undefined = no boundary (the chat root).
    */
   ownership?: string | null;
+  /**
+   * MAS-P4-T1 — per-agent tool scoping from the agent definition. When set,
+   * the child only sees MCP tools allowed by `toolScope.mcp` (minus
+   * `disallowedTools`). Omitted = no scope filter (sees the full catalog,
+   * still subject to the budget cap).
+   */
+  toolScope?: { local: string[]; mcp: string[] };
+  disallowedTools?: string[];
 }
 
 export const LOCAL_TOOLS = [
@@ -861,6 +870,11 @@ export class Agent {
   public readonly agentDepth: number;
   /** MAS-P3 ownership glob; file writes outside it are refused. Null = no boundary. */
   private ownership: string | null;
+  /** MAS-P4-T1 per-agent tool scope (from the agent def); undefined = no filter. */
+  private toolScope?: { local: string[]; mcp: string[] };
+  private disallowedTools: string[];
+  /** MAS-P4-T1 — MCP tools trimmed by the budget this turn (model-facing names). */
+  private lastBudgetHiddenTools = new Set<string>();
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -886,6 +900,8 @@ export class Agent {
     this.parentTraceId = options.parentTraceId;
     this.parentSpanId = options.parentSpanId;
     this.ownership = options.ownership ?? null;
+    this.toolScope = options.toolScope;
+    this.disallowedTools = options.disallowedTools ?? [];
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
   }
@@ -941,6 +957,19 @@ export class Agent {
     }
     const idx = rest.indexOf('_');
     return idx >= 0 ? rest.slice(0, idx) : undefined;
+  }
+
+  /**
+   * MAS-P4-T1 — the most recent user message text, used to rank MCP tools by
+   * relevance when the catalog exceeds the budget. Empty string when there's
+   * no user turn yet (the cap then keeps the first N in stable order).
+   */
+  private latestUserText(): string {
+    for (let i = this.chatHistory.length - 1; i >= 0; i--) {
+      const m: any = this.chatHistory[i];
+      if (m?.role === 'user' && typeof m.content === 'string') return m.content;
+    }
+    return '';
   }
 
   private allowedToolsForAccess(): Set<string> {
@@ -1030,7 +1059,30 @@ export class Agent {
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
-    const visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
+    let visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
+    // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
+    // (whitelist `toolScope.mcp` + blacklist `disallowedTools`), then cap the
+    // catalog to `cli.agentMcpToolBudget`, keeping the tools most relevant to
+    // the latest user turn. Trimmed tools are remembered so a model call to
+    // one returns a structured "hidden by budget" hint instead of a bare
+    // unknown-tool error.
+    this.lastBudgetHiddenTools = new Set();
+    if (this.toolScope || this.disallowedTools.length > 0) {
+      visibleMcpTools = applyToolScope(visibleMcpTools, {
+        allow: this.toolScope?.mcp,
+        disallow: this.disallowedTools,
+      });
+    }
+    const toolBudget = getCliKnobs().agentMcpToolBudget;
+    if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
+      const taskText = this.latestUserText();
+      const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
+      for (const t of hidden) {
+        this.lastBudgetHiddenTools.add(String(t?.name ?? ''));
+      }
+      visibleMcpTools = kept;
+      callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
+    }
     // MAS-P2-M1: synthesize one `delegate_<agentId>` tool per active
     // agent definition. Rebuilt every turn so a workspace agent JSON
     // edit or pack swap takes effect immediately. The bare
@@ -1754,6 +1806,19 @@ export class Agent {
             if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
               callbacks.onPlanUpdate(args.plan, args.explanation);
             }
+          } else if (this.lastBudgetHiddenTools.has(name)) {
+            // MAS-P4-T1: the model called an MCP tool that was trimmed from
+            // this turn's inventory by the tool budget. It's real and
+            // available — return a structured hint so the next turn can
+            // proceed (the tool re-enters the inventory when the task text
+            // makes it relevant, or raise cli.agentMcpToolBudget).
+            isError = true;
+            resultText = JSON.stringify({
+              ok: false,
+              error: `Tool "${name}" is available but was hidden this turn by the MCP tool budget (cli.agentMcpToolBudget). It will reappear when it's relevant to the task, or raise the budget.`,
+              suggested: Array.from(this.lastBudgetHiddenTools).slice(0, 8),
+            });
+            summary = `tool "${name}" hidden by budget`;
           } else {
             // Federation tools need THIS agent's federation identity, not
             // the chat sessionKey the LLM sees in its prompt. Rewrite the
