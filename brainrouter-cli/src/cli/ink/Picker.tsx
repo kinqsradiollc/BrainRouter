@@ -338,8 +338,7 @@ function PickerRows({ rows, cursor, accentColor, multiSelect, selected, maxVisib
 }
 
 function PickerRowView({ row, selected, accentColor, multiSelect, checked }: { row: PickerRow; selected: boolean; accentColor: string; multiSelect: boolean; checked: boolean }) {
-  // Selected glyph + bold label + right-aligned value, lifted from
-  // openSrc/grok-cli/src/ui/components/SuggestionOverlay.tsx
+  // Selected glyph + bold label + right-aligned value.
   return (
     <Box flexDirection="column">
       <Box>

@@ -1,9 +1,8 @@
 # BrainRouter Roadmap
 
 This is the top-level planning index. Keep it short. Detailed release
-plans live in [`brainrouter-roadmap/`](brainrouter-roadmap/), execution
-tasks live in [`FULL_TASKS.MD`](FULL_TASKS.MD), and shipped changes live
-in [`CHANGELOG.md`](CHANGELOG.md).
+plans live in [`brainrouter-roadmap/`](brainrouter-roadmap/), and shipped
+changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -25,9 +24,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
 | **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
-| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop (Reasonix-inspired) + CLI knobs → `config.json` | Shipped — 2026-05-28 |
+| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop + CLI knobs → `config.json` | Shipped — 2026-05-28 |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
-| **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A5 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Next |
+| **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Next |
 | **[0.4.x](brainrouter-roadmap/0.4.x.md)** (0.4.2–0.4.3) | Federation Stage 5, CLI multi-agent Phases 5-6, brain-side capture/tree/blackboard | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
 
@@ -50,9 +49,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
   `writeFile`/`editFile`/`applyPatch` enforce the glob.
 - **Multi-Agent Phase 4 — budgeting + gates.** Tool-surface budgeting,
   supervisor gates, per-agent accounting, and auto-chaining.
-- **Augmentations A1–A5** (deferred from 0.4.0): project (multi-folder)
-  scope, apply-time memory dedup, modular ranking refactor, pluggable
-  tracing backend (`cli.tracingBackend`), and HTTP gateway hardening.
+- **Augmentations A1–A4** (deferred from 0.4.0): project (multi-folder)
+  scope, apply-time memory dedup, modular ranking refactor, and a
+  pluggable tracing backend (`cli.tracingBackend`).
 - **Brain-side Phase 1 — job queue + agent registry.** `memory_jobs`
   table, a `BrainAgent` registry wrapping the existing pipeline stages,
   and `memory_agent_status` / `memory_agent_run` / `memory_job_retry`
@@ -66,9 +65,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - **Brain-side (MCP server):** token-aware capture (TokenJuice) +
   source chunks + vault mirror (0.4.2); memory tree + blackboard commit
   pipeline (0.4.3).
-- Individual brain tasks: `BRAIN-P2-TN` through `BRAIN-P5-TN` in
-  [`FULL_TASKS.MD`](FULL_TASKS.MD) §6.6–6.7, §7.1–7.2.
-- Full spec: [`FEATURE_OPENHUMAN_BRAINROUTER.md`](FEATURE_OPENHUMAN_BRAINROUTER.md).
+- Individual brain tasks: `BRAIN-P2-TN` through `BRAIN-P5-TN`.
 
 ### 0.5.0 — Power User Surface
 
@@ -76,8 +73,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - Plugin marketplace and trust/signature model.
 - Cross-harness handoff UX on top of federation.
 - **Brain-side Phase 6:** engineering sync providers (Git, GitHub, local docs,
-  terminal logs) and proactive situation reports. Tasks: `BRAIN-P6-TN` in
-  [`FULL_TASKS.MD`](FULL_TASKS.MD) §8.3.
+  terminal logs) and proactive situation reports. Tasks: `BRAIN-P6-TN`.
 
 ---
 
@@ -88,10 +84,6 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 | [`brainrouter-roadmap/README.md`](brainrouter-roadmap/README.md) | Roadmap index and release table |
 | [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) | Pre-0.4 memory, cache, repair, cost, and config plan |
 | [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) | CLI delegation reliability plan |
-| [`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md`](FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md) | CLI multi-agent architecture and rationale |
-| [`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md`](FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md) | CLI multi-agent implementation checklist |
-| [`FEATURE_OPENHUMAN_BRAINROUTER.md`](FEATURE_OPENHUMAN_BRAINROUTER.md) | MCP brain-side memory-agent roadmap |
-| [`FULL_TASKS.MD`](FULL_TASKS.MD) | Master execution queue |
 | [`CHANGELOG.md`](CHANGELOG.md) | Current shipped/in-flight changes |
 | [`brainrouter-changelog/README.md`](brainrouter-changelog/README.md) | Per-version changelog index |
 

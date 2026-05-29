@@ -714,7 +714,7 @@ export interface GraphEdge {
 // ─── Brain-side design pass (0.4.0 — design only, no execution) ──────────
 //
 // The interfaces below capture the brain-agent registry + job-queue
-// surface the OpenHuman-borrows roadmap depends on. They are type
+// surface the brain-side roadmap depends on. They are type
 // stubs — no implementation lives in 0.4.0; Phase 1 (0.4.1) fleshes
 // them out. Lifted here so MCP tool drafts, dashboard surfaces, and
 // CLI consumers can already share the same shape.
@@ -860,10 +860,6 @@ export interface MemoryJobRecord {
  * record before it lands. Phase 5 wires the commit pipeline that
  * walks blackboard items into either `cognitive_records` (committed)
  * or `superseded` (merged into another candidate).
- *
- * Full lifecycle write-up:
- * [`FEATURE_OPENHUMAN_BRAINROUTER.md`](../FEATURE_OPENHUMAN_BRAINROUTER.md)
- * "Phase 5 — Blackboard and Memory Commit Pipeline".
  */
 export type MemoryBlackboardKind =
   | "candidate_record"

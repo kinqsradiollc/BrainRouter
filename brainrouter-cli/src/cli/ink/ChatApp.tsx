@@ -14,7 +14,7 @@ import { formatContextWindow } from '../../runtime/contextWindow.js';
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
  *
- * Layout (matches claude-code's chrome):
+ * Layout:
  *
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  banner (one-time, at top of scrollback)                    │
@@ -144,7 +144,7 @@ export type ScrollbackEntry =
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
   /**
-   * Tool call result row — claude code style:
+   * Tool call result row:
    *   ⏺ Read(src/foo.ts)            (green ⏺ when ok, red when failed)
    *     ⎿ <preview line 1>          (if preview present, with ⎿ connector)
    *       <preview line 2>           (continuation lines plain indent)
@@ -166,7 +166,7 @@ export type ScrollbackEntry =
    * user can read the agent's findings without running /agent transcript.
    */
   | { id: number; kind: 'agent-result'; childId: string; role: string; status: 'completed' | 'failed'; body: string }
-  /** TIER B compaction row — grok-cli parity. */
+  /** TIER B compaction row. */
   | { id: number; kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
   /**
    * Persisted reasoning / chain-of-thought block. Rendered dim-italic
@@ -217,7 +217,7 @@ export interface PushScrollback {
   assistantDeltaEnd(): void;
   /** Streaming reasoning (chain-of-thought) preview. Replaces, not appends. */
   reasoningDelta(chunk: string): void;
-  /** Visible compaction notice — grok-cli parity (§2.1 of IMPLEMENTATION_PLAN.md). */
+  /** Visible compaction notice. */
   compaction(event: { droppedMessages: number; keptMessages: number; summary: string }): void;
   /**
    * Update (or remove) the pinned child-fleet row. Pass an empty array
@@ -835,7 +835,7 @@ export function ChatApp({
       ) : (
         <>
           {/* Active turn spinner. Warms to amber after 10s ("still working"
-              cue lifted from claude-code v2.1.130). Label is the runChat
+              cue). Label is the runChat
               adapter's status text — typically the formatted active tool.
               wrap="truncate" on the label so a long tool call header
               (Bash(...long command...)) doesn't wrap and leave residue. */}
@@ -914,7 +914,7 @@ export function ChatApp({
 // --- Sub-components ---------------------------------------------------
 
 /**
- * Per-entry renderer — every scrollback kind has its own claude-code-style
+ * Per-entry renderer — every scrollback kind has its own
  * layout. Glyph conventions:
  *
  *   ⏺  assistant turn (first line) — green dot
@@ -1359,7 +1359,7 @@ function FooterStatus({
   if (footer.branch) leftSegs.push(footer.branch);
   if (footer.rightExtra) leftSegs.push(footer.rightExtra);
 
-  // Progressive collapse — borrowed from codex's footer.rs:58–86 pattern.
+  // Progressive collapse.
   // Below 80 cols, drop the auxiliary left segments (model · session ·
   // branch). Below 60 cols, drop the right-side hint. Below 40 cols,
   // even the effort glyph collapses to just the access pill — that's

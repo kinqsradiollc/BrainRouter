@@ -183,7 +183,6 @@ context and injects its directives into the prompt.
 ## Federation policy decisions (0.4.0)
 
 These are the six open questions
-([`FULL_TASKS.MD` §4.6](../FULL_TASKS.MD))
 the federation work surfaced. Documented here so they don't get
 re-litigated each cycle; cross-link from
 [`federation.md`](federation.md) when relevant.

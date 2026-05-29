@@ -10,7 +10,7 @@
  * that returns either parsed fields or `{ contractStatus:
  * "unparsed" }`. Strict enforcement (`wait_agent --json` returning
  * the parsed fields, parent synthesis helper, rejecting unparsed)
- * lands in 0.4.1 — see FULL_TASKS §5.4.
+ * lands in 0.4.1.
  *
  * Why markdown sections rather than JSON: the existing role overlays
  * already train the model on headline-first markdown. Asking for JSON

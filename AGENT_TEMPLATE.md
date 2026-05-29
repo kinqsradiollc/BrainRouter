@@ -45,7 +45,7 @@ These are the highest-value habits that immediately improve output quality on an
 
 1. **Resolve session first** — always call `mcp_brainrouter_memory_resolve_session` before doing anything.
 2. **Load, don't guess** — use `mcp_brainrouter_get_skill` instead of implementing from memory.
-3. **Check openSrc/** — if an `openSrc/` directory exists, scan it for reference implementations before writing novel code.
+3. **Check local references** — if a reference-implementations directory exists in the workspace, scan it before writing novel code.
 4. **Cite what you used** — call `mcp_brainrouter_memory_mark_cited` after every response to drive the ACE recall loop.
 5. **Offload large outputs** — call `mcp_brainrouter_memory_working_offload` for any file, log, or diff exceeding 1,000 tokens.
 
@@ -62,7 +62,7 @@ These are the highest-value habits that immediately improve output quality on an
 - **Skill Registration**: When authoring or loading a new skill, register its hints via `mcp_brainrouter_memory_register_skill_hints` or the YAML `hints:` field.
 - **Resolve Contradictions**: At the start of any new task, call `mcp_brainrouter_memory_contradictions` to surface conflicting instructions.
 - **No Shortcuts**: Avoid "this is too small for a skill" or "I'll just quickly fix it" rationalization.
-- **openSrc/ Reference Habit**: If an `openSrc/` directory exists in the workspace, check it for open-source reference implementations before writing novel code. Use it to inform architecture — not to blindly copy.
+- **Local Reference Habit**: If a reference-implementations directory exists in the workspace, check it for open-source reference implementations before writing novel code. Use it to inform architecture — not to blindly copy.
 
 ---
 
@@ -142,7 +142,7 @@ For every request:
 - **`concerns-skill`**: Surface tech debt, known bugs, and security gaps.
 - **`code-structure-cleanup`**: Structural entropy reduction — dead code, duplication, module cohesion.
 
-> **openSrc/ Tip**: If an `openSrc/` directory is present, inspect it for canonical reference implementations relevant to the area being analyzed. Use it to calibrate conventions and code health expectations.
+> **Local Reference Tip**: If a reference-implementations directory is present, inspect it for canonical reference implementations relevant to the area being analyzed. Use it to calibrate conventions and code health expectations.
 
 ## 🧠 Scenario: Agent Methodology & Planning
 *Focus: Metacognition, requirement gathering, and agentic discipline.*

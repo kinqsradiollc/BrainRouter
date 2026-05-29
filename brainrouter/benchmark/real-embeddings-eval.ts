@@ -149,7 +149,7 @@ function getActiveSkill(queryText: string): string | undefined {
   return undefined;
 }
 
-// ── Replicated BM25 class representing agentmemory search index ──
+// ── BM25 baseline search index ──
 class BM25Index {
   private docTerms = new Map<string, Map<string, number>>();
   private docLengths = new Map<string, number>();

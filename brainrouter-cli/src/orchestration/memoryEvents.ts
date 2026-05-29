@@ -18,7 +18,7 @@
  *     `role: "explorer"`) DO emit — they're still "routing decisions",
  *     just without a custom agentId.
  *
- * The structured payload uses the names FULL_TASKS.MD §4.5 MAS-P2-M6
+ * The structured payload uses the field names the orchestrator
  * specifies: `task`, `chosenAgentId`, `parentAgentId`, `ownership?`,
  * `outcome`, `durationMs`, `tokenCost`. Future spec/3.x extensions
  * (e.g. `delegation_decision`) ride the same module.
