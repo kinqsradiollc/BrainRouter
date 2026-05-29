@@ -193,7 +193,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
       { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,goal,plan)' },
       { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
-      { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (hardest tasks)' },
+      { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (alias: max)' },
       { cmd: '/model [name] [--session]', desc: 'Switch model; --session = this session only (not saved). cli.fallbackModel auto-swaps on model-not-found.' },
       { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
       { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },
