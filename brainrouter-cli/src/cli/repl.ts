@@ -179,7 +179,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Observability',
     entries: [
       { cmd: '/tokens', desc: 'Session token usage + memory-savings estimate' },
-      { cmd: '/context [all|current]', desc: 'Token breakdown: total + per-skill + per-briefing + per-tool calls' },
+      { cmd: '/context [all|current]', desc: 'Context-window fill (used/max/%) + token breakdown: per-skill + per-briefing + per-tool calls' },
       { cmd: '/watch', desc: 'Tail trace log (BRAINROUTER_TRACE_LOG required)' },
       { cmd: '/trace save <desc>  /trace search <q>', desc: 'Debug-trace store' },
       { cmd: '/transcript [main|sessionKey]', desc: 'Recent persisted transcript' },

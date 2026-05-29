@@ -5,6 +5,7 @@ import { formatContextReport, type ContextReportInput } from '../runtime/context
 const base: ContextReportInput = {
   scope: 'all',
   currentSkill: null,
+  window: { current: 45000, max: 200000, autoCompactThreshold: 80000 },
   session: { promptTokens: 800, completionTokens: 200, turns: 4, calls: 6 },
   bySkill: [
     { skill: 'chat', promptTokens: 100, completionTokens: 20, turns: 1, calls: 1 },
@@ -19,6 +20,19 @@ const base: ContextReportInput = {
   briefing: { tokensInjected: 3200, recordsConsulted: 7 },
   children: { count: 0, promptTokens: 0, completionTokens: 0, calls: 0 },
 };
+
+test('0.4.x-4b formatContextReport: context-window header with %used + remaining + auto-compact', () => {
+  const out = formatContextReport(base).join('\n');
+  // 45000/200000 = 22.5% → rounds to 23%; 155000 left.
+  assert.match(out, /Context window: ~45,000 \/ 200,000 tokens \(23% used · ~155,000 left\)/);
+  assert.match(out, /Auto-compact fires at: 80,000 tokens/);
+});
+
+test('0.4.x-4b formatContextReport: unknown model window falls back gracefully', () => {
+  const out = formatContextReport({ ...base, window: { current: 12345, max: null, autoCompactThreshold: 80000 } }).join('\n');
+  assert.match(out, /Context window: ~12,345 tokens used \(model window unknown\)/);
+  assert.ok(!out.includes('% used'), 'no percentage when window is unknown');
+});
 
 test('0.4.x-4 formatContextReport: skills sorted by tokens desc, tools by count desc', () => {
   const out = formatContextReport(base);
