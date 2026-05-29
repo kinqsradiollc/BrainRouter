@@ -12,6 +12,8 @@ import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
 import { readPreferences } from '../../state/preferencesStore.js';
+import { resolveSandboxConfig, runShell } from '../../runtime/sandbox.js';
+import { parseBangCommand } from '../../runtime/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { reconcileStaleWorkers } from '../../state/workerStore.js';
@@ -815,6 +817,47 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // advertises it, so make it actually work).
           if (text === '?') {
             await dispatchSlash('/help', [], shim);
+            return;
+          }
+
+          // `! <command>` shell escape (PARITY-B1) — run a shell command
+          // directly from the composer, mirroring Claude Code's bang prefix.
+          // The user typed the command explicitly, so there's no askYesNo
+          // gate (that guards model-initiated commands); the `cli.sandbox`
+          // knob still wraps it for blast-radius control. Output lands in
+          // scrollback as raw monospace text. Synchronous + bounded by the
+          // runShell timeout — a backgrounded variant ships with /bg.
+          const bang = parseBangCommand(text);
+          if (bang.isBang) {
+            if (!bang.command) {
+              push.notice('Usage: ! <shell command>   (e.g.  ! git status)', 'warn');
+              return;
+            }
+            push.notice(`! ${bang.command}`, 'info');
+            try {
+              const prefs = readPreferences(agent.workspaceRoot);
+              const sandboxConfig = resolveSandboxConfig(agent.workspaceRoot, {
+                readPaths: prefs.sandboxReadPaths,
+                writePaths: prefs.sandboxWritePaths,
+              });
+              const result = await runShell(bang.command, sandboxConfig);
+              if (result.notice) push.notice(result.notice, 'warn');
+              const body = [result.stdout, result.stderr]
+                .filter((s) => s && s.trim().length)
+                .join('\n')
+                .replace(/\s+$/, '');
+              if (body.length) {
+                push.raw(body, { noWrap: true });
+              } else if (result.exitCode === 0) {
+                push.notice('(no output)', 'info');
+              }
+              if (result.exitCode !== 0) {
+                const badge = result.sandboxed ? `, sandboxed via ${result.sandboxTool}` : '';
+                push.notice(`(exit ${result.exitCode}${badge})`, 'warn');
+              }
+            } catch (err: any) {
+              push.notice(`✗ shell failed: ${err?.message ?? err}`, 'error');
+            }
             return;
           }
 
