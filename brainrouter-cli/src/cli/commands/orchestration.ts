@@ -13,6 +13,7 @@ import { readTranscriptEntries } from '../../state/sessionStore.js';
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
+import { formatIncomingBanner } from '../incomingBanner.js';
 
 interface DmAddressResolution {
   to: string;
@@ -70,6 +71,46 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log(`  ${chalk.cyan(r.name)} (${chalk.gray(r.defaultAccess)}) - ${r.description}`);
       }
       console.log();
+      return true;
+    }
+    case '/inbox':
+    {
+      // Federation Stage 3 — read THIS session's inbox on demand.
+      //
+      // Why this exists: the background poller only *peeks* the inbox
+      // (peek:true) to render the "you got mail" banner — it never
+      // consumes the row, and an agent has no reliable way to read the
+      // inbox itself (it doesn't know its own federation sessionKey).
+      // `/inbox` is the deterministic read path: it uses the runtime's
+      // known session key and, by default, marks the messages delivered
+      // (so they don't re-surface). `--peek` inspects without consuming;
+      // `--all` also shows already-delivered history.
+      const peek = args.includes('--peek');
+      const includeDelivered = args.includes('--all');
+      const selfKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const res = await callMcpTool<{
+        messages?: Array<{ id: string; fromSessionKey: string; kind: string; payload: any; createdAt: string }>;
+      }>(mcpClient, 'session_inbox_read', { sessionKey: selfKey, peek, includeDelivered });
+      if (res.isError) {
+        console.log(chalk.red(`\nsession_inbox_read failed: ${res.text || '(no message)'}\n`));
+        return true;
+      }
+      const messages = res.parsed?.messages ?? [];
+      if (messages.length === 0) {
+        console.log(chalk.gray('\nInbox empty.'));
+        console.log(chalk.gray(includeDelivered ? '  (no messages at all)\n' : '  (nothing unread — try /inbox --all to see delivered history)\n'));
+        return true;
+      }
+      console.log(chalk.bold(`\nInbox — ${messages.length} message${messages.length === 1 ? '' : 's'}${peek ? ' (peek)' : ''}`));
+      for (const m of messages) {
+        const text = m.kind === 'text' && typeof m.payload?.text === 'string'
+          ? m.payload.text
+          : `(${m.kind} payload)`;
+        console.log(formatIncomingBanner({ id: m.id, fromSessionKey: m.fromSessionKey, text, receivedAt: m.createdAt }));
+      }
+      console.log(peek
+        ? chalk.gray('\n(peek — messages left unread. Run /inbox without --peek to mark them delivered.)\n')
+        : chalk.gray('\n(marked delivered.)\n'));
       return true;
     }
     case '/dm':

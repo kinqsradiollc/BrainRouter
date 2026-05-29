@@ -207,6 +207,14 @@ export interface IMemoryStore {
   getMemoryJob(id: string): MemoryJobRecord | null;
   listMemoryJobs(filters?: MemoryJobListFilters): MemoryJobRecord[];
   claimNextMemoryJob(options?: { now?: string }): MemoryJobRecord | null;
+  /**
+   * Transition a specific `pending` job to `running` (stamps
+   * `lockedAt`). The "I already know the id" variant of
+   * `claimNextMemoryJob` — used by the synchronous capture fast path
+   * that enqueues a job and runs it immediately. Returns null when the
+   * job is missing or not `pending`.
+   */
+  startMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null;
   completeMemoryJob(id: string, output: unknown, options?: { now?: string }): MemoryJobRecord | null;
   failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): MemoryJobRecord | null;
   retryMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null;
