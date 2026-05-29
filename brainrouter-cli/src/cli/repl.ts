@@ -42,7 +42,7 @@ export const SLASH_COMMANDS = [
   '/continue', '/auto-review', '/auto-chain', '/vim', '/statusline', '/quiet', '/release-notes',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
-  '/tokens', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
+  '/tokens', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
@@ -179,6 +179,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Observability',
     entries: [
       { cmd: '/tokens', desc: 'Session token usage + memory-savings estimate' },
+      { cmd: '/context [all|current]', desc: 'Token breakdown: total + per-skill + per-briefing + per-tool calls' },
       { cmd: '/watch', desc: 'Tail trace log (BRAINROUTER_TRACE_LOG required)' },
       { cmd: '/trace save <desc>  /trace search <q>', desc: 'Debug-trace store' },
       { cmd: '/transcript [main|sessionKey]', desc: 'Recent persisted transcript' },
