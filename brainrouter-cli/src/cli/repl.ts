@@ -35,7 +35,7 @@ export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack',
-  '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
+  '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
