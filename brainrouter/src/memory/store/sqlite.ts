@@ -1955,6 +1955,19 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
+  public startMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE memory_jobs
+         SET status = 'running', locked_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'pending'`,
+      )
+      .run(now, now, id);
+    if (Number(result.changes ?? 0) === 0) return null;
+    return this.getMemoryJob(id);
+  }
+
   public completeMemoryJob(
     id: string,
     output: unknown,
