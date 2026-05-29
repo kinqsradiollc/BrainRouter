@@ -420,7 +420,7 @@ provider forwarding heuristic
 | `task_agent` | Run one foreground child and wait for completed output, failure, or timeout. |
 | `delegate_agent` | Start one background child and continue working in the parent turn. |
 | `spawn_agent` | Low-level compatibility primitive for one child; `wait: true` is still supported. |
-| `spawn_agents` | Spawn a batch in one tool call. |
+| `spawn_agents` | Spawn a batch in one tool call. Write/shell entries require an `ownership` glob (see [Ownership boundaries](#ownership-boundaries-041-mas-p3)). |
 | `list_agents` | List active children. |
 | `wait_agent` / `wait_agents` | Block until child(ren) finish. |
 | `read_agent_transcript` | Read child transcript. |
@@ -1098,6 +1098,39 @@ spawn_agents({
 
 wait_agents({ ids: ['agent-...', 'agent-...', 'agent-...'], timeoutMs: 240000 })
 ```
+
+### Ownership boundaries (0.4.1, MAS-P3)
+
+When you fan out **write-capable** children in parallel, each one must
+declare an `ownership` glob so two children can't clobber the same
+files. The rule is enforced at two points:
+
+```ts
+spawn_agents({
+  agents: [
+    { role: 'worker', prompt: 'Build the routes layer.',     ownership: 'src/routes/**' },
+    { role: 'worker', prompt: 'Build the db layer.',          ownership: 'src/db/**' },
+    { role: 'explorer', prompt: 'Map the existing surface.' } // read-only — no ownership needed
+  ]
+})
+```
+
+- **Spawn time.** `spawn_agents` rejects the *whole* batch (before
+  anything spawns) if any `write`/`shell` entry has no `ownership` —
+  unless that entry sets `allowOverlap: true`. Read-only fan-out is
+  allowed and reported under `warnings[]`.
+- **Write time.** A child's `write_file` / `edit_file` / `apply_patch`
+  are refused for any path outside its glob, with a structured error.
+  `apply_patch` validates the entire envelope up front, so a multi-file
+  patch never partially applies before hitting a violation.
+- `wait_agents` result objects include each child's `ownership`.
+
+A child's effective access is the entry's explicit `access` or its
+role default (`worker` = write, `verifier` = shell, the rest read). A
+single `spawn_agent` / `task_agent` / `delegate_*` call is **not**
+gated — ownership applies to parallel `spawn_agents` fan-out, where
+collision risk is real. Set `allowOverlap: true` to opt a write child
+out (its writes are then unbounded).
 
 ### Child output handling
 
