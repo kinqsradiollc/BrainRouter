@@ -295,7 +295,7 @@ export function createSpawnAgentTool() {
         },
         effort: {
           type: 'string',
-          enum: ['low', 'medium', 'high'],
+          enum: ['low', 'medium', 'high', 'xhigh'],
           description: 'Optional reasoning-effort override for this child (otherwise inherits the session /effort).',
         },
       },

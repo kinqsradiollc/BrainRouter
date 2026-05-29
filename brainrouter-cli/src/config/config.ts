@@ -125,7 +125,9 @@ export interface CliKnobs {
   /** Disable streaming (SSE). Default false. */
   disableStream?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. */
-  effort?: 'low' | 'medium' | 'high';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
+  fallbackModel?: string | null;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
@@ -350,7 +352,8 @@ export interface ResolvedCliKnobs {
   llmTimeoutMs: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
-  effort: 'low' | 'medium' | 'high';
+  effort: 'low' | 'medium' | 'high' | 'xhigh';
+  fallbackModel: string | null;
   mcpTimeoutMs: number;
   sandbox: 'off' | 'on';
   sandboxReadPaths: string[];
@@ -400,6 +403,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
     effort: c.effort ?? 'medium',
+    fallbackModel: c.fallbackModel ?? null,
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
     sandbox: c.sandbox ?? 'off',
     sandboxReadPaths: c.sandboxReadPaths ?? [],

@@ -11,7 +11,7 @@ import { getRawCliKnobs } from '../config/config.js';
 
 export type ExecutionMode = 'planning' | 'fast';
 export type ReviewPolicy = 'request' | 'proceed';
-export type EffortLevel = 'low' | 'medium' | 'high';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface Preferences {
   /** When true, every worker spawn is auto-followed by a reviewer pass on the diff. */

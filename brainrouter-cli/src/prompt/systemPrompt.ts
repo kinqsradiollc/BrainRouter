@@ -32,7 +32,7 @@ export interface SystemPromptContext {
    * `medium` is the default and emits no overlay — adding prose for it
    * would silently change behaviour for every existing user on upgrade.
    */
-  effort?: 'low' | 'medium' | 'high';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh';
   /**
    * 0.3.6 item 10b: the set of MCP tool names actually connected this turn.
    * When this list lacks `memory_recall` (i.e. the BrainRouter cloud brain
@@ -108,6 +108,14 @@ function effortOverlay(effort: SystemPromptContext['effort']): string {
     return [
       '## Reasoning depth: high',
       '- Reason step-by-step before acting. Audit your evidence against the goal before each tool call.',
+    ].join('\n');
+  }
+  if (effort === 'xhigh') {
+    return [
+      '## Reasoning depth: xhigh (maximum)',
+      '- This is a hardest-task setting. Exhaust the reasoning before acting: enumerate the candidate approaches, weigh tradeoffs, and pick deliberately.',
+      '- Verify each assumption against evidence (read the code/memory) before every tool call; do not guess.',
+      '- Prefer correctness and completeness over speed — check edge cases and re-read your own work before declaring done.',
     ].join('\n');
   }
   return '';
