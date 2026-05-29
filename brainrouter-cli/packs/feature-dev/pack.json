@@ -1,0 +1,6 @@
+{
+  "name": "feature-dev",
+  "description": "End-to-end feature workflow lead that drives the built-in explorer → architect → worker → reviewer → verifier roster.",
+  "version": "0.1.0",
+  "agentsDir": "agents"
+}

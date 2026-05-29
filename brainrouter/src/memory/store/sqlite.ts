@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -454,6 +454,26 @@ export class SqliteMemoryStore implements IMemoryStore {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_session_inbox_delivered ON session_inbox(delivered_at)",
+    );
+
+    // Federation Stage 5 (0.4.2) — FED-S5-T2 fallback queue for
+    // cross-vendor delegations that had no idle peer at send time.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS pending_delegations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        from_session_key TEXT NOT NULL,
+        to_agent_kind TEXT NOT NULL,
+        to_session_key TEXT DEFAULT NULL,
+        packet_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        claimed_at TEXT DEFAULT NULL
+      )
+    `);
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_pending_delegations_claimable ON pending_delegations(user_id, to_agent_kind, status, created_at)",
     );
 
     // BRAIN-P1 (0.4.1) — brain-agent job queue (BRAIN-DESIGN-T2).
@@ -1878,6 +1898,111 @@ export class SqliteMemoryStore implements IMemoryStore {
       .prepare("DELETE FROM session_inbox WHERE delivered_at IS NOT NULL AND delivered_at < ?")
       .run(cutoff);
     return Number(result.changes ?? 0);
+  }
+
+  // ── FED-S5 (0.4.2): pending_delegations fallback queue ─────────────────
+
+  private rowToPendingDelegation(row: any): PendingDelegationRecord {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      fromSessionKey: row.from_session_key,
+      toAgentKind: row.to_agent_kind,
+      toSessionKey: row.to_session_key ?? null,
+      packet: JSON.parse(row.packet_json || "{}") as DelegationPacket,
+      status: row.status as PendingDelegationStatus,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      claimedAt: row.claimed_at ?? null,
+    };
+  }
+
+  public enqueuePendingDelegation(
+    input: PendingDelegationEnqueueInput,
+    options?: { idGenerator?: () => string; now?: string },
+  ): PendingDelegationRecord {
+    const now = options?.now ?? new Date().toISOString();
+    const id = (options?.idGenerator ?? (() => randomUUID()))();
+    this.db
+      .prepare(
+        `INSERT INTO pending_delegations
+           (id, user_id, from_session_key, to_agent_kind, to_session_key, packet_json, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NULL, ?, 'pending', ?, ?)`,
+      )
+      .run(
+        id,
+        input.userId,
+        input.fromSessionKey,
+        input.toAgentKind,
+        JSON.stringify(input.packet ?? {}),
+        now,
+        now,
+      );
+    return {
+      id,
+      userId: input.userId,
+      fromSessionKey: input.fromSessionKey,
+      toAgentKind: input.toAgentKind,
+      toSessionKey: null,
+      packet: input.packet,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      claimedAt: null,
+    };
+  }
+
+  public listPendingDelegations(filters: PendingDelegationFilters): PendingDelegationRecord[] {
+    const clauses = ["user_id = ?"];
+    const params: string[] = [filters.userId];
+    if (filters.toAgentKind) {
+      clauses.push("to_agent_kind = ?");
+      params.push(filters.toAgentKind);
+    }
+    if (filters.status) {
+      clauses.push("status = ?");
+      params.push(filters.status);
+    }
+    const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM pending_delegations WHERE ${clauses.join(" AND ")} ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(...params, limit) as any[];
+    return rows.map((r) => this.rowToPendingDelegation(r));
+  }
+
+  public claimPendingDelegation(
+    userId: string,
+    toAgentKind: string,
+    toSessionKey: string,
+    at: string,
+  ): PendingDelegationRecord | null {
+    // Pick the oldest pending row of this kind, then flip it to claimed.
+    // SQLite is single-writer so the SELECT→UPDATE is effectively atomic
+    // within one store; distinct concurrent claimers get distinct rows.
+    const row = this.db
+      .prepare(
+        `SELECT * FROM pending_delegations
+           WHERE user_id = ? AND to_agent_kind = ? AND status = 'pending'
+           ORDER BY created_at ASC LIMIT 1`,
+      )
+      .get(userId, toAgentKind) as any;
+    if (!row) return null;
+    this.db
+      .prepare(
+        `UPDATE pending_delegations
+           SET status = 'claimed', to_session_key = ?, claimed_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'pending'`,
+      )
+      .run(toSessionKey, at, at, row.id);
+    return this.rowToPendingDelegation({
+      ...row,
+      status: "claimed",
+      to_session_key: toSessionKey,
+      claimed_at: at,
+      updated_at: at,
+    });
   }
 
   // ── BRAIN-P1 (0.4.1): memory_jobs queue (BRAIN-DESIGN-T2) ──────────────

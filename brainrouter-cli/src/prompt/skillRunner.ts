@@ -35,6 +35,7 @@ export const SLASH_TO_SKILL: Record<string, string> = {
   '/commit-skill': 'git-workflow-skill',
   '/changelog': 'changelog-generator',
   '/refactor': 'code-simplification',
+  '/simplify': 'code-simplification',
   '/test': 'testing-skill',
 };
 
@@ -120,6 +121,7 @@ export function buildSkillPrompt(skill: SkillResolution, options: RunSkillOption
   sections.push([
     '- You may delegate bounded parallel work with `spawn_agent` (roles: explorer, architect, reviewer, worker, verifier).',
     '- Keep the durable plan current with `update_plan`. At most one item should be `in_progress`.',
+    '- Report run progress with `workflow_progress(step, status)` — call it with status="running" as you begin each numbered step and status="done" (or "failed"/"skipped") when it finishes. This drives the live `/workflows` view and makes the run survive a restart.',
     '- Persist meaningful outputs through BrainRouter memory tools (`memory_capture_turn`, `memory_working_offload`) as the skill dictates.',
     '- Always synthesize child outputs in your own words before claiming work is done.',
   ].join('\n'));
