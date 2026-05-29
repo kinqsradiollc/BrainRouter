@@ -656,7 +656,8 @@ tall ones. `/help <category>` drills in.
 | `/kill <id>` | Force-close a child. |
 | `/ps` | Running children snapshot. |
 | `/stop` | Send stop signal to all running children. |
-| `/auto-review` | Spawn a reviewer over current branch / changes. |
+| `/auto-chain [review\|verify\|both\|off]` | After each worker child finishes, auto-chain a reviewer and/or verifier follow-up on its output (capped at `cli.autoChainMaxFollowups`, default 2). |
+| `/auto-review [on\|off]` | Thin alias for `/auto-chain review\|off`. |
 
 ### Guard
 

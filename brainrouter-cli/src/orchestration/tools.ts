@@ -24,6 +24,7 @@ import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/sy
 import { appendTranscriptEntry, readTranscriptEntries } from '../state/sessionStore.js';
 import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
 import { readPreferences } from '../state/preferencesStore.js';
+import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract } from './outputContracts.js';
 import { routeTask } from './router.js';
@@ -1057,23 +1058,51 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
         preview: previewBody,
       });
 
-      // Auto-review: when the user has /auto-review on and a worker just
-      // finished, queue a reviewer agent on the worker's output. This closes
-      // the "agent shipped, did it actually work" loop without the user
-      // having to remember to ask.
+      // Auto-chain (MAS-P4-T4): when a worker finishes, optionally chain a
+      // review and/or verify follow-up on its output — closing the "agent
+      // shipped, did it actually work?" loop without the user remembering
+      // to ask. Only workers chain, and reviewers/verifiers aren't workers,
+      // so a follow-up never triggers another follow-up. `autoChain` is the
+      // canonical mode; legacy `/auto-review on` resolves to `review`.
       if (role.name === 'worker') {
         const prefs = readPreferences(ctx.workspaceRoot);
-        if (prefs.autoReview) {
-          await handleSpawn(
+        const mode = resolveAutoChainMode(prefs);
+        const roles = autoChainRoles(mode, getCliKnobs().autoChainMaxFollowups);
+        const followUps: string[] = [];
+        for (const followRole of roles) {
+          const verb = followRole === 'verifier' ? 'Verify' : 'Review';
+          const detail =
+            followRole === 'verifier'
+              ? 'Run the relevant tests / build and confirm the work is correct.'
+              : 'Review the diff for correctness, regressions, and missed requirements.';
+          const out = await handleSpawn(
             {
-              role: 'reviewer',
-              prompt: `Auto-review the changes made by worker agent ${record.id}.\n\nOriginal task:\n${prompt}\n\nWorker output (or ref):\n${storedOutput}`,
-              label: `auto-review-${record.id}`,
-              access: 'read',
+              role: followRole,
+              prompt: `Auto-${followRole === 'verifier' ? 'verify' : 'review'} the changes made by worker agent ${record.id}. ${detail}\n\nOriginal task:\n${prompt}\n\nWorker output (or ref):\n${storedOutput}`,
+              label: `auto-${followRole}-${record.id}`,
+              access: followRole === 'verifier' ? 'shell' : 'read',
               seedRecordIds: seededIds,
             },
             ctx,
           );
+          try {
+            const id = JSON.parse(out)?.id;
+            if (typeof id === 'string') followUps.push(id);
+          } catch {
+            /* spawn returned a non-JSON string — skip id capture */
+          }
+          void verb;
+        }
+        if (followUps.length > 0) {
+          // Record on the worker so wait/summarize can surface the chain,
+          // and emit a visible note for the live REPL.
+          updateSession(ctx.workspaceRoot, record.id, { autoChainFollowups: roles });
+          ctx.onChildComplete?.({
+            childId: record.id,
+            role: role.name,
+            status: 'completed',
+            preview: `Follow-up agents: ${roles.join(', ')} (auto-chain: ${mode})`,
+          });
         }
       }
     } catch (err: any) {
@@ -1199,6 +1228,8 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     // MAS-P3: surface the child's ownership boundary so the parent can see
     // which files each child was allowed to touch when synthesizing.
     ownership: record.parentContext?.ownership ?? null,
+    // MAS-P4-T4: follow-up agents auto-chained after this worker, if any.
+    followUps: record.autoChainFollowups ?? undefined,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     completedAt: record.completedAt,

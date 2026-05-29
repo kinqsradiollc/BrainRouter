@@ -144,6 +144,8 @@ export interface CliKnobs {
   childDrainTimeoutMs?: number;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
+  /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
+  autoChainMaxFollowups?: number;
 
   // ---- scheduling / tracing / search -----------------------------------
   /** Background ticker interval for /schedule jobs in ms. Default 30000. */
@@ -343,6 +345,7 @@ export interface ResolvedCliKnobs {
   sandboxNetwork: boolean;
   childDrainTimeoutMs: number;
   maxSpawnDepth: number;
+  autoChainMaxFollowups: number;
   scheduleTickMs: number;
   traceLog?: string;
   webSearchEndpoint?: string;
@@ -387,6 +390,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxNetwork: c.sandboxNetwork ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
+    autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
     traceLog: c.traceLog,
     webSearchEndpoint: c.webSearchEndpoint,
