@@ -20,7 +20,7 @@ import { resolveAutoChainMode, isAutoChainMode } from '../../orchestration/autoC
 import { resolveDelegationPolicy, isDelegationPolicy } from '../../orchestration/delegationPolicy.js';
 import { listPacks, packAgentIds } from '../../orchestration/packs.js';
 import { readPackState, isPackEnabled, enablePack, disablePack } from '../../state/packStore.js';
-import { listWorkers, readWorkerMeta, readWorkerSummary, closeWorker, type WorkerStatus } from '../../state/workerStore.js';
+import { listWorkers, readWorkerMeta, readWorkerSummary, readWorkerTranscript, closeWorker, type WorkerStatus } from '../../state/workerStore.js';
 import { parseChildOutput } from '../../orchestration/outputContracts.js';
 
 interface DmAddressResolution {
@@ -113,7 +113,35 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log(w ? chalk.green(`\nWorker ${id} closed.\n`) : chalk.red(`\nNo worker "${id}".\n`));
         return true;
       }
-      console.log(chalk.gray('Usage: /workers [list] | info <id> | close <id>'));
+      if (sub === 'attach') {
+        // Snapshot view of a worker's recent transcript + summary. Workers
+        // run detached and persist to disk, so "attach" is a point-in-time
+        // read; re-run /workers attach to refresh. (No live session is held,
+        // so /workers detach is a no-op acknowledgement.)
+        const id = args[1];
+        const w = id ? readWorkerMeta(ws, id) : null;
+        if (!w) { console.log(chalk.red(`\nNo worker "${id ?? ''}". Try /workers.\n`)); return true; }
+        console.log(chalk.bold(`\nWorker ${chalk.cyan(w.id)} ${chalk.gray(`(${w.role})`)} — ${w.status}`));
+        console.log(chalk.gray(`  goal: ${w.goal}`));
+        const entries = readWorkerTranscript(ws, w.id, 12) as Array<Record<string, any>>;
+        if (entries.length) {
+          console.log(chalk.gray('  --- recent transcript ---'));
+          for (const e of entries) {
+            const tag = e.event ? `${e.role}/${e.event}` : e.role;
+            const body = e.tool ? `${e.tool}${e.summary ? `: ${String(e.summary).slice(0, 80)}` : ''}` : String(e.content ?? e.error ?? '').slice(0, 120);
+            console.log(`  ${chalk.gray(tag)} ${body}`);
+          }
+        }
+        const summary = readWorkerSummary(ws, w.id);
+        if (summary) console.log(chalk.gray('\n  --- summary.md ---\n') + summary.slice(0, 1200));
+        console.log(chalk.gray('\n  (snapshot — re-run to refresh; /workers detach to dismiss)\n'));
+        return true;
+      }
+      if (sub === 'detach') {
+        console.log(chalk.gray('\nDetached. (Workers run in the background; /workers attach <id> to view again.)\n'));
+        return true;
+      }
+      console.log(chalk.gray('Usage: /workers [list] | info <id> | attach <id> | detach | close <id>'));
       return true;
     }
     case '/pack':
