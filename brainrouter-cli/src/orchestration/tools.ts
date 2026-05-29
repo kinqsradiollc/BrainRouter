@@ -26,6 +26,7 @@ import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
 import { resolveDelegationPolicy, evaluateDelegationGate } from './delegationPolicy.js';
+import { aggregateChildUsage } from './childAccounting.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract } from './outputContracts.js';
 import { routeTask } from './router.js';
@@ -790,7 +791,10 @@ async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<st
       return { id, raw: single };
     }
   }));
-  return JSON.stringify({ waited: settled.length, agents: settled }, null, 2);
+  // MAS-P4-T3: roll the children's usage into one total so the parent sees
+  // the cost split (and offload savings) of the whole batch at a glance.
+  const childTotals = aggregateChildUsage(settled);
+  return JSON.stringify({ waited: settled.length, agents: settled, childTotals }, null, 2);
 }
 
 function handleRoute(args: any): string {
@@ -1039,11 +1043,16 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       }
 
       const completedAt = new Date().toISOString();
+      // MAS-P4-T3: per-child accounting — chars kept out of the parent's
+      // context via offload, and wall-clock spawn→complete.
+      const offloadedChars = workingRef ? Math.max(0, output.length - storedOutput.length) : 0;
+      const startedMs = record.startedAt ? Date.parse(record.startedAt) : NaN;
+      const wallClockMs = Number.isFinite(startedMs) ? Math.max(0, Date.parse(completedAt) - startedMs) : undefined;
       updateSession(ctx.workspaceRoot, record.id, {
         status: 'completed',
         completedAt,
         finalOutput: storedOutput,
-        usage: { ...childAgent.sessionUsage },
+        usage: { ...childAgent.sessionUsage, offloadedChars, wallClockMs },
       });
       // MAS-P2-M6: fire-and-forget feedback record. Skipped silently
       // when MCP is offline or memory_capture_turn isn't exposed.
@@ -1264,6 +1273,8 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     ownership: record.parentContext?.ownership ?? null,
     // MAS-P4-T4: follow-up agents auto-chained after this worker, if any.
     followUps: record.autoChainFollowups ?? undefined,
+    // MAS-P4-T3: per-child accounting (tokens, calls, offloaded chars, wall-clock).
+    usage: record.usage ?? undefined,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     completedAt: record.completedAt,
