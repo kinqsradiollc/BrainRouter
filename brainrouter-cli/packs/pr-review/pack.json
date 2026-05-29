@@ -1,0 +1,6 @@
+{
+  "name": "pr-review",
+  "description": "Specialized PR-review fan-out: instruction-compliance, bug-risk, test-coverage, and history-context reviewers.",
+  "version": "0.1.0",
+  "agentsDir": "agents"
+}

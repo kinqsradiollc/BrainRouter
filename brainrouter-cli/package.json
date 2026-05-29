@@ -9,6 +9,7 @@
   },
   "files": [
     "agents",
+    "packs",
     "bin",
     "changelog",
     "config",
