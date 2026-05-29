@@ -26,7 +26,6 @@ import {
   createWaitAgentsTool,
   createReadAgentTranscriptTool,
   createCloseAgentTool,
-  createRouteAgentTool,
   createRouteTaskTool,
   executeOrchestrationTool,
   isOrchestrationToolName,
@@ -525,7 +524,6 @@ export const LOCAL_TOOLS = [
   createWaitAgentsTool(),
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
-  createRouteAgentTool(),
   createRouteTaskTool(),
   {
     name: 'ask_user_choice',
@@ -987,7 +985,7 @@ export class Agent {
     const readOnly = new Set([
       'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
       'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
-      'read_agent_transcript', 'close_agent', 'route_agent',
+      'read_agent_transcript', 'close_agent', 'route_task',
       'goal_complete', 'goal_blocked',
       // ask_user_choice doesn't touch the workspace — it's an interaction
       // primitive, so it stays available in every access mode (and is gated
