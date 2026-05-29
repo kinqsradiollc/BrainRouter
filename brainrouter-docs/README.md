@@ -10,8 +10,11 @@ deep dives.
   blend, extraction robustness.
 - **[cli.md](cli.md)** — the terminal agent: startup banner & statusline,
   `/where` and `/quiet`, tool loop, access modes, `/compact`, hookify
-  rules, multi-agent orchestration, personality overlays, goal state
-  machine, session isolation.
+  rules, multi-agent orchestration (packs + worker threads), durable
+  workflows + the live `/workflows` run viewer, the `!` shell escape,
+  `/effort … xhigh|max`, `/review --fix` + `/simplify`, personality
+  overlays, goal state machine, session isolation. Opens with a
+  **"What's new in 0.4.2"** index.
 - **[hooks.md](hooks.md)** — authoring reference for shell hooks
   (`cli/hooks.json`) and hookify rules (`hooks/*.md`): events, schema,
   three worked examples, debug + limit notes.
@@ -19,17 +22,19 @@ deep dives.
   the brain-side agent registry, `memory_jobs` queue, and three MCP
   tools (`memory_agent_status` / `memory_agent_run` /
   `memory_job_retry`). Type stubs are importable from
-  `@kinqs/brainrouter-types`; the Phase 1 runtime ships in 0.4.1.
-- **[federation.md](federation.md)** — 0.4.0 shared-memory plane:
-  `/agents --remote`, `/dm` and `/broadcast` cross-CLI messaging, the
-  dashboard Live Sessions widget, the active/stale/swept lifecycle,
-  hard-kill + brain-restart recovery, privacy boundary, **plus a
-  15-minute end-to-end walkthrough running three federated terminals
-  on a real test project**.
+  `@kinqs/brainrouter-types`; the Phase 1 runtime shipped in 0.4.1.
+- **[federation.md](federation.md)** — the shared-memory plane:
+  `/dm` and `/broadcast` cross-CLI messaging, the dashboard Live Sessions
+  widget, the active/stale/swept lifecycle, hard-kill + brain-restart
+  recovery, privacy boundary, **Stage 5 cross-vendor delegation
+  (`session_delegate_task` / `/handoff`, 0.4.2)**, plus a 15-minute
+  end-to-end walkthrough running three federated terminals on a real
+  test project.
 - **[configuration.md](configuration.md)** — env-loader priority chain
   (`$BRAINROUTER_ENV_FILE` → `~/.config/brainrouter/server.env` → `./.env`),
   `brainrouter-mcp init`, `~/.config/brainrouter/config.json` as the
-  canonical CLI chat-LLM credential store, stdio vs HTTP transport,
+  canonical CLI store (`llm.*` creds + `cli.*` runtime knobs incl.
+  `fallbackModel` / `notifyBell` / `effort`), stdio vs HTTP transport,
   storage layout, backpressure, diagnostics.
 
 If you're new, read [BRAINROUTER.md](../BRAINROUTER.md) first. If you just
