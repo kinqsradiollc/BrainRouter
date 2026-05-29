@@ -42,6 +42,9 @@ test('0.4.x-3 buildRewindTimeline: windows to the last `max` turns, renumbered f
   assert.equal(tl[0].turnNumber, 1);
   assert.equal(tl[0].preview, 'q5');     // oldest 5 dropped (25 - 20)
   assert.equal(tl[19].preview, 'q24');   // most recent
+  // absoluteTurn is the stable 1-based ordinal among ALL user entries (keys the file-restore log).
+  assert.equal(tl[0].absoluteTurn, 6);   // 6th user turn overall (turnNumber 1 in the window)
+  assert.equal(tl[19].absoluteTurn, 25); // 25th overall
 });
 
 test('0.4.x-3 truncateAtTurn: keeps [0,endIndex), clamped', () => {

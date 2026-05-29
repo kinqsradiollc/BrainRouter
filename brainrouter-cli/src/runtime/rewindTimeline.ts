@@ -13,6 +13,8 @@ import type { TranscriptEntry } from '../state/sessionStore.js';
 export interface RewindTurn {
   /** 1-based number shown in the picker (1 = oldest shown, highest = most recent). */
   turnNumber: number;
+  /** 1-based ordinal among ALL user entries (stable across the window) — keys the file-restore undo log (0.4.x-3b). */
+  absoluteTurn: number;
   /** Index of the user entry that opens this turn. */
   userEntryIndex: number;
   /** Slice end (exclusive): keep `entries.slice(0, endIndex)` to retain this turn's full exchange. */
@@ -46,6 +48,7 @@ export function buildRewindTimeline(entries: TranscriptEntry[], max = 20): Rewin
 
   const turns: RewindTurn[] = userIdx.map((ui, k) => ({
     turnNumber: 0, // assigned after windowing
+    absoluteTurn: k + 1, // 1-based among all user entries — stable undo-log key
     userEntryIndex: ui,
     endIndex: userIdx[k + 1] ?? entries.length, // up to the next user turn (exclusive)
     timestamp: entries[ui].timestamp,
