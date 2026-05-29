@@ -11,7 +11,7 @@ import { spinner as makeSpinner } from '../spinner.js';
 import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool, hasMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { readPreferences, resolveEffort, writePreferences, type EffortLevel } from '../../state/preferencesStore.js';
+import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '../../state/preferencesStore.js';
 import { readPlan } from '../../state/taskStore.js';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher
@@ -447,7 +447,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     case '/effort':
     {
       const arg = (args[0] ?? '').toLowerCase();
-      const valid: ReadonlyArray<EffortLevel> = ['low', 'medium', 'high', 'xhigh'];
+      const valid: ReadonlyArray<string> = ['low', 'medium', 'high', 'xhigh', 'max'];
       if (!arg) {
         const resolved = resolveEffort(agent.workspaceRoot);
         const sourceTag =
@@ -458,26 +458,32 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.gray('  low     — terse, one-paragraph answers; minimal ceremony.'));
         console.log(chalk.gray('  medium  — current default; no overlay, no provider reasoning slot. (default)'));
         console.log(chalk.gray('  high    — step-by-step reasoning; audits evidence before each tool call.'));
+        console.log(chalk.gray('  xhigh   — maximum depth (alias: max); enumerate approaches, verify assumptions, prefer correctness.'));
         console.log(chalk.gray('  When the model supports it (gpt-5, o-series, gpt-oss, DeepSeek R1/V3+, Qwen3,'));
         console.log(chalk.gray('  Magistral, *-reasoning, *-thinking — works on OpenAI, DeepSeek, OpenRouter,'));
         console.log(chalk.gray('  LM Studio 0.3.29+, Ollama), the level is also forwarded as `reasoning_effort`.'));
-        console.log(chalk.gray('  Toggle with: /effort low | /effort medium | /effort high'));
+        console.log(chalk.gray('  Toggle with: /effort low | medium | high | xhigh   (max is an alias for xhigh)'));
         console.log(chalk.gray('  Permanent override: set `cli.effort` in ~/.config/brainrouter/config.json.\n'));
         return true;
       }
-      if (!valid.includes(arg as EffortLevel)) {
-        console.log(chalk.red(`\nUnknown level "${arg}". Choose: ${valid.join(' | ')}\n`));
+      // `max` is an accepted alias for `xhigh`; normalizeEffort canonicalizes
+      // it so only `xhigh` is ever stored. Use it as the single validator too.
+      const canonical = normalizeEffort(arg);
+      if (!canonical) {
+        console.log(chalk.red(`\nUnknown level "${arg}". Choose: ${valid.join(' | ')}  (max == xhigh)\n`));
         return true;
       }
-      writePreferences(agent.workspaceRoot, { effort: arg as EffortLevel });
+      writePreferences(agent.workspaceRoot, { effort: canonical });
       agent.refreshSystemPrompt();
       const after = resolveEffort(agent.workspaceRoot);
+      // Show the alias the user typed alongside the canonical value so `max` isn't silently rewritten.
+      const shown = arg === 'max' ? `${canonical} (max)` : canonical;
       // Surface a friendly nudge when `cli.effort` in `config.json` is still
       // explicitly set and would shadow the workspace preference next boot.
-      if (after.source === 'config' && after.effort !== arg) {
-        console.log(chalk.yellow(`\n✓ Preference saved as ${arg}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
+      if (after.source === 'config' && after.effort !== canonical) {
+        console.log(chalk.yellow(`\n✓ Preference saved as ${shown}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
       } else {
-        console.log(chalk.green(`\n✓ Reasoning depth → ${arg}. Applies on the next turn.\n`));
+        console.log(chalk.green(`\n✓ Reasoning depth → ${shown}. Applies on the next turn.\n`));
       }
       return true;
     }

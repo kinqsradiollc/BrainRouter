@@ -191,9 +191,16 @@ export interface ResolvedEffort {
   source: 'config' | 'preference' | 'default';
 }
 
-function normalizeEffort(raw: unknown): EffortLevel | undefined {
+/**
+ * Normalize a raw effort string to a canonical `EffortLevel`, or undefined if
+ * unrecognized. `max` is an accepted alias for `xhigh` — they mean the same
+ * thing (maximum reasoning depth); we canonicalize to `xhigh` so only one
+ * value is ever stored/forwarded. Case-insensitive. Exported for tests.
+ */
+export function normalizeEffort(raw: unknown): EffortLevel | undefined {
   if (typeof raw !== 'string') return undefined;
   const v = raw.trim().toLowerCase();
+  if (v === 'max' || v === 'xhigh') return 'xhigh';
   return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
 }
 
