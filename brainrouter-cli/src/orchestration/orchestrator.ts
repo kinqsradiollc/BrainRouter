@@ -32,6 +32,8 @@ export interface ChildSessionRecord {
    * entry. See `orchestration/parentContext.ts`.
    */
   parentContext?: import('./parentContext.js').ParentExecutionContextSnapshot;
+  /** MAS-P4-T4 — follow-up roles auto-chained after this worker (e.g. ['reviewer','verifier']). */
+  autoChainFollowups?: string[];
 }
 
 interface SessionsFile {
