@@ -248,17 +248,21 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     // Routed before this case in repl.ts; no fall-through handler needed.
     case '/model':
     {
-      const newModel = args[0];
+      // PARITY-E2 — `--session` (alias `--once`) switches for THIS session
+      // only: update the live agent without persisting to config.json.
+      const sessionOnly = args.includes('--session') || args.includes('--once');
+      const newModel = args.find((a) => !a.startsWith('--'));
       const previous = agent.getModel();
       // Direct-switch form `/model <name>` stays for scripts and muscle
       // memory. No-arg opens the picker (0.3.7).
       if (newModel) {
         agent.setModel(newModel);
-        if (config.llm) {
+        if (!sessionOnly && config.llm) {
           config.llm.model = newModel;
           saveConfig(config);
         }
-        console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}\n`));
+        const scope = sessionOnly ? chalk.gray(' (this session only — not saved)') : '';
+        console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}${scope}\n`));
         return true;
       }
       // No-arg → open the picker. Resolves provider by reading the
@@ -443,7 +447,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     case '/effort':
     {
       const arg = (args[0] ?? '').toLowerCase();
-      const valid: ReadonlyArray<EffortLevel> = ['low', 'medium', 'high'];
+      const valid: ReadonlyArray<EffortLevel> = ['low', 'medium', 'high', 'xhigh'];
       if (!arg) {
         const resolved = resolveEffort(agent.workspaceRoot);
         const sourceTag =
