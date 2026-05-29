@@ -2031,15 +2031,15 @@ export class SqliteMemoryStore implements IMemoryStore {
     return this.getMemoryJob(id);
   }
 
-  public cancelMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null {
+  public cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): MemoryJobRecord | null {
     const now = options?.now ?? new Date().toISOString();
     const result = this.db
       .prepare(
         `UPDATE memory_jobs
-         SET status = 'cancelled', locked_at = NULL, updated_at = ?
+         SET status = 'cancelled', error = COALESCE(?, error), locked_at = NULL, updated_at = ?
          WHERE id = ? AND status IN ('pending', 'running')`,
       )
-      .run(now, id);
+      .run(options?.reason ?? null, now, id);
     if (Number(result.changes ?? 0) === 0) return this.getMemoryJob(id);
     return this.getMemoryJob(id);
   }

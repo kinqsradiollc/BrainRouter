@@ -218,7 +218,7 @@ export interface IMemoryStore {
   completeMemoryJob(id: string, output: unknown, options?: { now?: string }): MemoryJobRecord | null;
   failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): MemoryJobRecord | null;
   retryMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null;
-  cancelMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null;
+  cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): MemoryJobRecord | null;
   sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): number;
   getMemoryJobKindAggregates(options?: { now?: string }): MemoryJobKindAggregate[];
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
