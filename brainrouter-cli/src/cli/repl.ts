@@ -34,7 +34,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast',
+  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
@@ -143,6 +143,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/agents --remote [--watch] [--usage] [--include-stale] [--json]', desc: 'List federated peer CLIs / hosts attached to the same brain (0.4.0 Stage 2).' },
       { cmd: '/dm <sessionKey> <message>', desc: 'Send text to one federated peer; recipient sees a banner above their next prompt (0.4.0 Stage 3).' },
       { cmd: '/broadcast [<clientKind>:*] <message>', desc: 'Send text to every active peer under your userId, or narrow to one clientKind.' },
+      { cmd: '/inbox [--peek] [--all]', desc: 'Read this session’s inbox on demand; marks messages delivered unless --peek (0.4.0 Stage 3).' },
       { cmd: '/agent <id> [--full]', desc: 'Detail + recent transcript of a child' },
       { cmd: '/spawn <role> <prompt>', desc: 'Spawn a child agent' },
       { cmd: '/wait <id> [ms]', desc: 'Wait for a child to finish' },
