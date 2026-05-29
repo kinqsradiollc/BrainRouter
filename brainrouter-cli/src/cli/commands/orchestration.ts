@@ -9,7 +9,9 @@ import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
-import { readTranscriptEntries } from '../../state/sessionStore.js';
+import { readTranscriptEntries, appendTranscriptEntry } from '../../state/sessionStore.js';
+import { readGoal, setGoal, pauseGoal } from '../../state/goalStore.js';
+import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '../../orchestration/handoff.js';
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
@@ -113,6 +115,133 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       console.log(peek
         ? chalk.gray('\n(peek — messages left unread. Run /inbox without --peek to mark them delivered.)\n')
         : chalk.gray('\n(marked delivered.)\n'));
+      return true;
+    }
+    case '/handoff':
+    {
+      // Federation Stage 4 — hand the current goal + context to another
+      // active session. `/handoff <target> [note]` sends; `/handoff list`
+      // shows pending inbound handoffs; `/handoff accept [fromPrefix]`
+      // adopts one as a fresh local goal. Target may be a sessionKey, a
+      // unique prefix, or `<clientKind>:next-idle`.
+      const selfKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      const sub = (args[0] ?? '').toLowerCase();
+
+      if (sub === 'list' || sub === 'accept') {
+        const res = await callMcpTool<{ messages?: Array<{ id: string; fromSessionKey: string; kind: string; payload: any; createdAt: string }> }>(
+          mcpClient,
+          'session_inbox_read',
+          { sessionKey: selfKey, peek: true },
+        );
+        if (res.isError) {
+          console.log(chalk.red(`\nsession_inbox_read failed: ${res.text || '(no message)'}\n`));
+          return true;
+        }
+        const handoffs = (res.parsed?.messages ?? []).filter((m) => m.kind === 'goal-handoff');
+        if (handoffs.length === 0) {
+          console.log(chalk.gray('\nNo pending goal handoffs in your inbox.\n'));
+          return true;
+        }
+        if (sub === 'list') {
+          console.log(chalk.bold(`\nPending handoffs (${handoffs.length})`));
+          for (const m of handoffs) {
+            const p = (m.payload ?? {}) as HandoffPacket;
+            console.log(`  ${chalk.cyan(m.fromSessionKey.slice(0, 12))}…  ${chalk.gray(`(${p.originatingClient ?? 'unknown'})`)}  ${String(p.goal ?? '').slice(0, 80)}`);
+          }
+          console.log(chalk.gray('\n  Adopt one with: /handoff accept [fromPrefix]\n'));
+          return true;
+        }
+        // accept
+        const fromPrefix = args[1];
+        const chosen = fromPrefix
+          ? handoffs.find((m) => m.fromSessionKey.startsWith(fromPrefix))
+          : handoffs[handoffs.length - 1];
+        if (!chosen) {
+          console.log(chalk.yellow(`\nNo pending handoff from "${fromPrefix}". Run /handoff list.\n`));
+          return true;
+        }
+        const packet = (chosen.payload ?? {}) as HandoffPacket;
+        if (!packet.goal) {
+          console.log(chalk.red('\nHandoff packet has no goal text — ignoring.\n'));
+          return true;
+        }
+        try {
+          setGoal(agent.workspaceRoot, packet.goal, agent.sessionKey, { force: true });
+        } catch (err: any) {
+          console.log(chalk.red(`\nFailed to adopt goal: ${err?.message ?? err}\n`));
+          return true;
+        }
+        // Tag the adopted context so the next turn's briefing can use it.
+        appendTranscriptEntry(agent.workspaceRoot, agent.sessionKey, {
+          role: 'system',
+          name: 'handoff-context',
+          content: JSON.stringify({
+            from: chosen.fromSessionKey,
+            originatingClient: packet.originatingClient,
+            originatingWorkspace: packet.originatingWorkspace,
+            note: packet.note,
+            recentTranscript: packet.recentTranscript,
+          }),
+        });
+        await callMcpTool(mcpClient, 'session_inbox_ack', { sessionKey: selfKey, ids: [chosen.id] });
+        console.log(chalk.green(`\n✓ Adopted goal from ${chosen.fromSessionKey.slice(0, 12)}… — “${packet.goal.slice(0, 80)}”.`));
+        console.log(chalk.gray('  Handoff context attached; run /briefing or just continue.\n'));
+        return true;
+      }
+
+      // Default: send a handoff.
+      const target = args[0];
+      const note = args.slice(1).join(' ').trim();
+      if (!target) {
+        console.log(chalk.red('\nUsage: /handoff <sessionKey | prefix | <clientKind>:next-idle> [note]'));
+        console.log(chalk.gray('   or: /handoff list | /handoff accept [fromPrefix]\n'));
+        return true;
+      }
+      const goal = readGoal(agent.workspaceRoot, agent.sessionKey);
+      if (!goal || !goal.text.trim()) {
+        console.log(chalk.yellow('\nNothing to hand off — set a goal first with /goal <text>.\n'));
+        return true;
+      }
+      const listRes = await callMcpTool<{ sessions: any[] }>(mcpClient, 'session_list', { includeStale: false });
+      if (listRes.isError) {
+        console.log(chalk.red(`\nsession_list failed: ${listRes.text || '(no message)'}\n`));
+        return true;
+      }
+      const resolved = resolveHandoffTarget(listRes.parsed?.sessions ?? [], target, selfKey);
+      if (resolved.error || !resolved.to) {
+        console.log(chalk.yellow(`\n${resolved.error ?? 'Could not resolve handoff target.'}\n`));
+        return true;
+      }
+      const transcript = readTranscriptEntries(agent.workspaceRoot, agent.sessionKey, 12)
+        .map((e) => `${e.role}: ${formatTranscriptContent(e.content ?? '')}`)
+        .join('\n');
+      const packet = buildHandoffPacket({
+        goal: goal.text,
+        fromSessionKey: selfKey,
+        originatingClient: 'brainrouter-cli',
+        originatingWorkspace: agent.workspaceRoot,
+        recentTranscript: transcript,
+        note: note || undefined,
+        now: new Date().toISOString(),
+      });
+      const sendRes = await callMcpTool<{ delivered: number }>(mcpClient, 'session_send', {
+        from: selfKey,
+        to: resolved.to,
+        kind: 'goal-handoff',
+        payload: packet,
+      });
+      if (sendRes.isError) {
+        console.log(chalk.red(`\nsession_send failed: ${sendRes.text || '(no message)'}\n`));
+        return true;
+      }
+      if ((sendRes.parsed?.delivered ?? 0) === 0) {
+        console.log(chalk.yellow(`\nNo active session matched "${resolved.to}" (handoffs only reach peers active within 2 min).\n`));
+        return true;
+      }
+      // Sender's goal is now paused — the work has moved.
+      pauseGoal(agent.workspaceRoot, agent.sessionKey);
+      console.log(chalk.green(`\n✓ Handed off to ${resolved.to.slice(0, 12)}… — local goal paused (handed-off-to:${resolved.to.slice(0, 8)}).`));
+      console.log(chalk.gray('  The recipient runs /handoff accept to adopt it.\n'));
       return true;
     }
     case '/dm':
