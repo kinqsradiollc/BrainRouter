@@ -452,16 +452,19 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     case '/review':
     {
       // `--force` accepted but ignored — see /feature-dev for rationale.
-      const parsed = parseForceFlag(args);
+      // `--fix` (PARITY-R1): after the high-signal filter, apply the surviving
+      // fixes in place and re-verify, instead of stopping at the report.
+      const fix = args.includes('--fix');
+      const parsed = parseForceFlag(args.filter((a) => a !== '--fix'));
       const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
-      const reviewTitle = `Review: ${scope}`;
+      const reviewTitle = fix ? `Review+fix: ${scope}` : `Review: ${scope}`;
       const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review', sessionKey: agent.sessionKey });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
-      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
-      // Workflow adapted from claude-code's code-review plugin
-      // Triage → Summary → 4 parallel reviewers (2 conventions + 2 bug-hunters) →
-      // validation pass → HIGH SIGNAL filter → final report.
-      await runSkillCommand(agent, mcpClient, command, scope, [
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${fix ? ' (--fix: will apply + verify surviving fixes)' : ''}`));
+      // Workflow: Triage → Summary → 4 parallel reviewers (2 conventions + 2
+      // bug-hunters) → validation pass → HIGH SIGNAL filter → report (--fix:
+      // apply surviving fixes + re-verify).
+      const reviewSteps = [
         '# Code Review',
         '',
         `Provide a code review for: ${scope}`,
@@ -512,8 +515,22 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         '',
         '## Step 7: Output',
         `\`write_file\` to \`${reportPath}\`: severity-ordered findings (Critical / Important) with file:line citations and concrete fix suggestions. If no issues survived filtering, the report says "No issues found. Checked for bugs and guideline compliance."`,
-        'Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.',
-      ].join('\n'), ctx.repl.runAgentTurn);
+      ];
+      if (fix) {
+        reviewSteps.push(
+          '',
+          '## Step 8: Apply fixes (--fix)',
+          'For each surviving high-signal issue, apply the **minimal** fix that resolves exactly that finding:',
+          '- Edit in place (`write_file`); keep each fix tightly scoped to the cited `file:line`. Do NOT refactor unrelated code, rename things, or fix issues you did not flag.',
+          '- After applying ALL fixes, run the project build + tests via `run_command` (e.g. the workspace `npm run build` / test script) to confirm nothing regressed.',
+          '- If the build/tests break, identify the offending fix, revert just that one edit, and mark it `needs-manual` in the report with the failure reason. Never leave the tree in a broken state.',
+          '',
+          'Then update the report: for each finding, append a `Fixed` / `needs-manual (reason)` status. Summarize ≤ 15 lines in chat: what was fixed, what was left for the human (and why), and the final build/test result.',
+        );
+      } else {
+        reviewSteps.push('Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.');
+      }
+      await runSkillCommand(agent, mcpClient, command, scope, reviewSteps.join('\n'), ctx.repl.runAgentTurn);
       return true;
     }
     case '/review-auto':
@@ -563,6 +580,47 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         `\`write_file\` to \`${reportPath}\`: severity-ordered survivors (Critical → Low) with \`file:line\`, confidence, and which reviewers flagged each; note how many sub-threshold findings were retained. Do NOT edit reviewed files.`,
         `Then summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
       ].join('\n'), ctx.repl.runAgentTurn);
+      return true;
+    }
+    case '/simplify':
+    {
+      // PARITY-R2 — first-class code-simplification pass (skill:
+      // code-simplification). Applies behavior-preserving simplifications to
+      // a scope in place + verifies (default), or proposes-only with
+      // --dry-run/--plan. Distinct from /review --fix: that fixes *bugs*;
+      // this reduces *complexity* without changing behavior.
+      const dryRun = args.includes('--dry-run') || args.includes('--plan');
+      const scope = args.filter((a) => !a.startsWith('--')).join(' ').trim()
+        || 'the current unstaged and staged changes (git diff HEAD)';
+      const meta = createWorkflow(agent.workspaceRoot, { title: `Simplify: ${scope}`, kind: 'simplify', sessionKey: agent.sessionKey });
+      const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'simplify.md');
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${dryRun ? ' (--dry-run: propose only, no edits)' : ''}`));
+      const simplifySteps = [
+        `Simplify: ${scope}.`,
+        '',
+        'Memory-first opening: `memory_search` for prior simplification/refactor notes on these files + `memory_file_history` on the scope; seed any children with relevant record ids.',
+        '',
+        '## Step 1: Map complexity',
+        'Read the scope and list concrete simplification opportunities with `file:line`: dead code, duplicated logic, needless indirection, over-deep nesting, redundant state, comments that should be code. Behavior MUST be preserved — this is a refactor, not a rewrite.',
+        '',
+        '## Step 2: Rank',
+        'Order by (clarity gain ÷ risk). Set aside anything that changes observable behavior, public signatures, or needs a design decision — list those under "out of scope for /simplify" rather than doing them.',
+        '',
+      ];
+      if (dryRun) {
+        simplifySteps.push(
+          '## Step 3: Propose (dry-run)',
+          `\`write_file\` to \`${reportPath}\`: the ranked simplifications with before/after sketches and \`file:line\`. Do NOT edit any source files. Summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
+        );
+      } else {
+        simplifySteps.push(
+          '## Step 3: Apply + verify',
+          'Apply the ranked simplifications in place (`write_file`), smallest-risk first. Keep each edit behavior-preserving and tightly scoped — never bundle a behavior change into a simplification.',
+          'After applying ALL edits, run the project build + tests via `run_command` to prove behavior is unchanged. If anything breaks, revert just the offending edit and record it as skipped.',
+          `\`write_file\` to \`${reportPath}\`: what was simplified (with \`file:line\`), what was skipped (+ reason), and the build/test result. Summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
+        );
+      }
+      await runSkillCommand(agent, mcpClient, command, scope, simplifySteps.join('\n'), ctx.repl.runAgentTurn);
       return true;
     }
     case '/implement-plan':
