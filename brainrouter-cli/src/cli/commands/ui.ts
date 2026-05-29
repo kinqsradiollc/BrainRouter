@@ -649,6 +649,13 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         briefingSourceStats: briefing.sourceStats,
       });
       console.log('\n' + renderWhere(inputs, theme) + '\n');
+      // AUG-A1: surface the active Project (multi-folder scope) if a
+      // `.brainrouter/project.json` marker names one.
+      const { activeProjectName } = await import('../../config/project.js');
+      const project = activeProjectName(agent.workspaceRoot);
+      if (project) {
+        console.log(`  Project: ${project}  ${chalk.gray('(recall can widen to this project with scope:project)')}\n`);
+      }
       return true;
     }
     case '/help': {

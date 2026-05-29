@@ -128,6 +128,14 @@ export interface CognitiveRecord {
    * surfacing across all workspaces until they're re-captured.
    */
   workspaceTag?: string | null;
+  /**
+   * AUG-A1 (0.4.1) — optional Project identifier grouping several
+   * workspaces under one logical project (a `.brainrouter/project.json`
+   * marker names it; `projectTagFromName` hashes that name). NULL means
+   * "no project context" — recall filters are NULL-tolerant so legacy /
+   * untagged records keep surfacing regardless of the active project.
+   */
+  projectTag?: string | null;
 }
 
 import { createHash } from "node:crypto";
@@ -145,6 +153,18 @@ import { createHash } from "node:crypto";
 export function workspaceTagFromPath(workspaceRoot: string | undefined | null): string | null {
   if (!workspaceRoot || workspaceRoot.trim() === "") return null;
   return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
+}
+
+/**
+ * AUG-A1 (0.4.1) — canonical Project tag from a project name (the
+ * `name` field of a `.brainrouter/project.json` marker). A 16-char
+ * hex SHA-256 prefix over the normalized name, so every workspace that
+ * declares the same project name shares one tag. Empty/missing → null.
+ */
+export function projectTagFromName(projectName: string | undefined | null): string | null {
+  const name = projectName?.trim().toLowerCase();
+  if (!name) return null;
+  return createHash("sha256").update(`project:${name}`).digest("hex").slice(0, 16);
 }
 
 /**

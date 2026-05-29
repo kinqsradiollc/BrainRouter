@@ -122,6 +122,8 @@ export interface IMemoryStore {
    * both map to `null` in the returned map.
    */
   getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null>;
+  /** AUG-A1 (0.4.1) — batch project-tag lookup for the recall scope filter. */
+  getProjectTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null>;
 
   /**
    * Federation Stage 2 (0.4.0) — active-session registry surface.

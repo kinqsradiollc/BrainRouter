@@ -104,12 +104,26 @@ export interface RecallFilters {
    * Pass `workspaceTagFromPath(root)` to compute the canonical tag.
    */
   workspaceTag?: string;
+  /**
+   * AUG-A1 (0.4.1) — restrict to records captured under this Project tag
+   * (a `.brainrouter/project.json` name, hashed via `projectTagFromName`).
+   * Same NULL-tolerant semantics as `workspaceTag`: untagged records and a
+   * missing filter both surface. Used when `scope: 'project'`.
+   */
+  projectTag?: string;
+  /**
+   * AUG-A1 — recall scope. `'workspace'` (default) keeps the existing
+   * workspace-tag behaviour; `'project'` widens to the active project
+   * (filtering by `projectTag` instead of `workspaceTag`).
+   */
+  scope?: "project" | "workspace";
 }
 
 export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
   records: T[],
   filters?: RecallFilters,
   workspaceTagLookup?: Map<string, string | null>,
+  projectTagLookup?: Map<string, string | null>,
 ): T[] {
   if (!filters) return records;
   const afterMs = filters.capturedAfter ? new Date(filters.capturedAfter).getTime() : undefined;
@@ -139,6 +153,15 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
         workspaceTagLookup?.get(r.record_id) ??
         null;
       if (tag !== null && tag !== filters.workspaceTag) return false;
+    }
+    if (filters.scope === "project" && filters.projectTag) {
+      // Same NULL-tolerant rule as workspaceTag: untagged records surface
+      // under any project so the rollout is gradual.
+      const ptag =
+        (r as { project_tag?: string | null }).project_tag ??
+        projectTagLookup?.get(r.record_id) ??
+        null;
+      if (ptag !== null && ptag !== filters.projectTag) return false;
     }
     return true;
   });
@@ -196,14 +219,25 @@ export class MemoryRecallPipeline {
         workspaceTagLookup = this.store.getWorkspaceTagsByRecordIds(userId, [...candidateIds]);
       }
     }
+    // AUG-A1 — same pre-fetch for the project tag when scope:'project'.
+    let projectTagLookup: Map<string, string | null> | undefined;
+    if (filters?.scope === "project" && filters?.projectTag) {
+      const candidateIds = new Set<string>();
+      for (const r of ftsResultsRaw) candidateIds.add(r.record_id);
+      for (const r of vecResultsRaw) candidateIds.add(r.record_id);
+      for (const r of filePathResultsRaw) candidateIds.add(r.record_id);
+      if (candidateIds.size > 0) {
+        projectTagLookup = this.store.getProjectTagsByRecordIds(userId, [...candidateIds]);
+      }
+    }
 
     // Filter the three candidate streams BEFORE RRF so the rank is computed
     // on the actually-relevant pool, not a filtered subset of an unfiltered
     // rank (which would bias scores toward records that happen to be in the
     // top-15 globally even if irrelevant to the filter).
-    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup);
-    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup);
-    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup);
+    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup, projectTagLookup);
+    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup, projectTagLookup);
+    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup, projectTagLookup);
 
     if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
       const emptyStrategy = this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty";

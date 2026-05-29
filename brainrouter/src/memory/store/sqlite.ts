@@ -81,6 +81,7 @@ function cognitiveRowToRecord(row: any): CognitiveRecord {
     neverCitedCount: row.never_cited_count ?? 0,
     archived: Boolean(row.archived),
     workspaceTag: row.workspace_tag ?? null,
+    projectTag: row.project_tag ?? null,
   };
 }
 
@@ -541,7 +542,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         repo_paths_json TEXT DEFAULT '[]',
         file_paths_json TEXT DEFAULT '[]',
         commands_json TEXT DEFAULT '[]',
-        workspace_tag TEXT
+        workspace_tag TEXT,
+        project_tag TEXT
       )
     `);
 
@@ -558,6 +560,15 @@ export class SqliteMemoryStore implements IMemoryStore {
       if (!/duplicate column name/i.test(msg)) throw e;
     }
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_workspace_tag ON cognitive_records(user_id, workspace_tag)");
+
+    // AUG-A1 (0.4.1) — same idempotent migration for `project_tag`.
+    try {
+      this.db.exec("ALTER TABLE cognitive_records ADD COLUMN project_tag TEXT");
+    } catch (e) {
+      const msg = (e as Error).message || "";
+      if (!/duplicate column name/i.test(msg)) throw e;
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_project_tag ON cognitive_records(user_id, project_tag)");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_evidence (
@@ -609,8 +620,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
-        repo_paths_json, file_paths_json, commands_json, workspace_tag
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        repo_paths_json, file_paths_json, commands_json, workspace_tag, project_tag
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -632,7 +643,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         repo_paths_json=excluded.repo_paths_json,
         file_paths_json=excluded.file_paths_json,
         commands_json=excluded.commands_json,
-        workspace_tag=COALESCE(excluded.workspace_tag, cognitive_records.workspace_tag)
+        workspace_tag=COALESCE(excluded.workspace_tag, cognitive_records.workspace_tag),
+        project_tag=COALESCE(excluded.project_tag, cognitive_records.project_tag)
     `);
 
     this.stmtCognitiveGetMeta = this.db.prepare(`
@@ -875,7 +887,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null
         );
 
         // FTS5 Insert
@@ -925,7 +937,7 @@ export class SqliteMemoryStore implements IMemoryStore {
         record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
         record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
         JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-        JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
+        JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null
       );
 
       // FTS5 Insert (delete old first if it exists to emulate UPSERT)
@@ -1172,7 +1184,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata ?? {}), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null
         );
         this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
         this.stmtCognitiveFtsInsert.run(
@@ -1599,6 +1611,23 @@ export class SqliteMemoryStore implements IMemoryStore {
       .all(userId, ...recordIds) as Array<{ record_id: string; workspace_tag: string | null }>;
     for (const row of rows) {
       result.set(row.record_id, row.workspace_tag ?? null);
+    }
+    return result;
+  }
+
+  // AUG-A1 (0.4.1) — project-tag twin of getWorkspaceTagsByRecordIds.
+  public getProjectTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null> {
+    const result = new Map<string, string | null>();
+    if (recordIds.length === 0) return result;
+    for (const id of recordIds) result.set(id, null);
+    const placeholders = recordIds.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT record_id, project_tag FROM cognitive_records WHERE user_id = ? AND record_id IN (${placeholders})`,
+      )
+      .all(userId, ...recordIds) as Array<{ record_id: string; project_tag: string | null }>;
+    for (const row of rows) {
+      result.set(row.record_id, row.project_tag ?? null);
     }
     return result;
   }
