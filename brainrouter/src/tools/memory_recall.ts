@@ -33,7 +33,9 @@ export const memoryRecallToolSchema = {
           capturedBefore: { type: "string", description: "ISO 8601 upper bound on created_time." },
           minPriority: { type: "number", description: "Drop records whose stored priority is below this threshold (0-100)." },
           skillTag: { type: "string", description: "Restrict to records produced under this skill tag." },
-          workspaceTag: { type: "string", description: "Federation Stage 1 (0.4.0) — restrict to records captured in this workspace (16-char hash from workspaceTagFromPath). NULL-tolerant: records without a tag (legacy / pre-migration) surface in every workspace." }
+          workspaceTag: { type: "string", description: "Federation Stage 1 (0.4.0) — restrict to records captured in this workspace (16-char hash from workspaceTagFromPath). NULL-tolerant: records without a tag (legacy / pre-migration) surface in every workspace." },
+          projectTag: { type: "string", description: "AUG-A1 (0.4.1) — restrict to records under this Project tag (16-char hash from projectTagFromName). Applied only when scope='project'. NULL-tolerant like workspaceTag." },
+          scope: { type: "string", enum: ["project", "workspace"], description: "AUG-A1 — 'workspace' (default) keeps workspace-tag scoping; 'project' widens recall to the active project via projectTag." }
         }
       }
     },
@@ -55,6 +57,8 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
       minPriority: z.number().optional(),
       skillTag: z.string().optional(),
       workspaceTag: z.string().optional(),
+      projectTag: z.string().optional(),
+      scope: z.enum(["project", "workspace"]).optional(),
     }).optional()
   }).parse(args);
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
