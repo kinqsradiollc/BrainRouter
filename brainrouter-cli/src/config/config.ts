@@ -154,6 +154,17 @@ export interface CliKnobs {
   scheduleTickMs?: number;
   /** Path to the OTEL-flavored JSONL trace file. Unset = no tracing. */
   traceLog?: string;
+  /**
+   * AUG-A4: where trace events go. `stdout-jsonl` (default) appends to
+   * `traceLog`; `otel` / `langsmith` / `langfuse` best-effort POST each
+   * event (vendor-shaped) to `tracingEndpoint`. config.json only — never
+   * an env var (0.3.9 knob policy).
+   */
+  tracingBackend?: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
+  /** AUG-A4: ingest URL for non-jsonl tracing backends. */
+  tracingEndpoint?: string;
+  /** AUG-A4: bearer/API key for the tracing backend (if it needs one). */
+  tracingApiKey?: string;
   /** Override the web_search tool's endpoint URL (when not using the brain default). */
   webSearchEndpoint?: string;
 
@@ -351,6 +362,9 @@ export interface ResolvedCliKnobs {
   agentMcpToolBudget: number;
   scheduleTickMs: number;
   traceLog?: string;
+  tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
+  tracingEndpoint?: string;
+  tracingApiKey?: string;
   webSearchEndpoint?: string;
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
@@ -397,6 +411,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
     traceLog: c.traceLog,
+    tracingBackend: c.tracingBackend ?? 'stdout-jsonl',
+    tracingEndpoint: c.tracingEndpoint,
+    tracingApiKey: c.tracingApiKey,
     webSearchEndpoint: c.webSearchEndpoint,
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
