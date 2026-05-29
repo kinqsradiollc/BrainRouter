@@ -34,7 +34,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff',
+  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
