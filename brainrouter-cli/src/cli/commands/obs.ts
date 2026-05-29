@@ -9,6 +9,7 @@ import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { listSessions } from '../../orchestration/orchestrator.js';
 import { formatContextReport } from '../../runtime/contextReport.js';
+import { contextWindowFor } from '../../runtime/contextWindow.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
 import { getCliStateFile } from '../../state/cliState.js';
@@ -229,6 +230,11 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       const lines = formatContextReport({
         scope,
         currentSkill: agent.activeSkill ?? null,
+        window: {
+          current: agent.getCurrentContextTokens(),
+          max: contextWindowFor(agent.getModel()) ?? null,
+          autoCompactThreshold: getCliKnobs().autoCompactTokens,
+        },
         session: {
           promptTokens: session.promptTokens,
           completionTokens: session.completionTokens,

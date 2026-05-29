@@ -20,6 +20,12 @@ export interface ContextReportInput {
   scope: 'all' | 'current';
   /** Active skill this turn, or null → treated as the `chat` bucket. */
   currentSkill: string | null;
+  /**
+   * 0.4.x-4b — current context-window fill. `current` ≈ tokens in the live
+   * context; `max` is the model's window (null when unknown);
+   * `autoCompactThreshold` is the token count at which auto-compact fires.
+   */
+  window: { current: number; max: number | null; autoCompactThreshold: number };
   session: { promptTokens: number; completionTokens: number; turns: number; calls: number };
   bySkill: SkillUsageRow[];
   byTool: Array<{ tool: string; count: number }>;
@@ -33,6 +39,19 @@ function tokens(u: { promptTokens: number; completionTokens: number }): number {
 
 export function formatContextReport(input: ContextReportInput): string[] {
   const lines: string[] = [];
+
+  // ── Context-window fill (0.4.x-4b) — the headline ───────────────────────
+  const w = input.window;
+  if (w.max && w.max > 0) {
+    const pct = Math.round((w.current / w.max) * 100);
+    const remaining = Math.max(0, w.max - w.current);
+    lines.push(`Context window: ~${w.current.toLocaleString()} / ${w.max.toLocaleString()} tokens (${pct}% used · ~${remaining.toLocaleString()} left)`);
+  } else {
+    lines.push(`Context window: ~${w.current.toLocaleString()} tokens used (model window unknown)`);
+  }
+  lines.push(`Auto-compact fires at: ${w.autoCompactThreshold.toLocaleString()} tokens`);
+  lines.push('');
+
   const sessionTotal = tokens(input.session);
   const childTotal = input.children.promptTokens + input.children.completionTokens;
   const grand = sessionTotal + childTotal;

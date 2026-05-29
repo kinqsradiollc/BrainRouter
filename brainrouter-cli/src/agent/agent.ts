@@ -2734,6 +2734,19 @@ export class Agent {
   }
 
   /**
+   * 0.4.x-4b (`/context`) — best estimate of the CURRENT context-window fill
+   * in tokens. Prefers the provider's last `usage.prompt_tokens` (the truest
+   * count); falls back to the content-aware estimate of `chatHistory` for
+   * turn 1 / silent runs. This is the exact signal auto-compact triggers on,
+   * so `/context` and the auto-compact threshold agree.
+   */
+  public getCurrentContextTokens(): number {
+    return this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
+      ? this.lastSeenPromptTokens
+      : estimateChatHistoryTokens(this.chatHistory as any);
+  }
+
+  /**
    * 0.3.9 item 13 — read-only snapshot of the active LLM config for
    * slash commands that need the provider id (e.g. `/tier`).
    */
