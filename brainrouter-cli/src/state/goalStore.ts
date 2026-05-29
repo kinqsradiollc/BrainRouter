@@ -165,9 +165,9 @@ function normalize(raw: Partial<Goal> | null | undefined): Goal | null {
 }
 
 /**
- * Where the agent's goal lives RIGHT NOW. The priority chain — adapted from
- * openSrc/agentmemory's fallback-provider walk (guard clauses that early-
- * return per layer rather than a single flat loop) — is:
+ * Where the agent's goal lives RIGHT NOW. The priority chain — a
+ * fallback-provider walk (guard clauses that early-return per layer
+ * rather than a single flat loop) — is:
  *
  *   1. workflow scope — a workflow is bound via `current-workflow.json`
  *      (the per-user CLI pointer). Goal lives at `<workflow>/goal.json`

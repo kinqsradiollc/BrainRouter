@@ -122,12 +122,17 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.bold('\nToken usage — this session'));
       console.log(`  Parent: ${chalk.cyan(session.promptTokens.toLocaleString())}↑  ${chalk.cyan(session.completionTokens.toLocaleString())}↓  ${chalk.gray(`(${session.turns} turn${session.turns === 1 ? '' : 's'}, ${session.calls} LLM call${session.calls === 1 ? '' : 's'})`)}`);
       if (children.length > 0) {
-        console.log(`  Children (${children.length}): ${chalk.cyan(childPrompt.toLocaleString())}↑  ${chalk.cyan(childCompletion.toLocaleString())}↓  ${chalk.gray(`(${childCalls} LLM call${childCalls === 1 ? '' : 's'})`)}`);
+        const childOffloaded = children.reduce((acc, c) => acc + (c.usage?.offloadedChars ?? 0), 0);
+        const offloadNote = childOffloaded > 0 ? chalk.gray(`, ${childOffloaded.toLocaleString()} chars offloaded`) : '';
+        console.log(`  Children (${children.length}): ${chalk.cyan(childPrompt.toLocaleString())}↑  ${chalk.cyan(childCompletion.toLocaleString())}↓  ${chalk.gray(`(${childCalls} LLM call${childCalls === 1 ? '' : 's'}${offloadNote ? '' : ''})`)}${offloadNote}`);
+        // MAS-P4-T3 "By child": per-child tokens + offloaded chars + wall-clock.
         for (const c of children.slice(0, 5)) {
           const u = c.usage!;
-          console.log(chalk.gray(`    · ${c.id} (${c.role}): ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓`));
+          const off = (u.offloadedChars ?? 0) > 0 ? chalk.gray(` · ${(u.offloadedChars ?? 0).toLocaleString()}c offloaded`) : '';
+          const wall = u.wallClockMs ? chalk.gray(` · ${(u.wallClockMs / 1000).toFixed(1)}s`) : '';
+          console.log(chalk.gray(`    · ${c.id} (${c.role}): ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓`) + off + wall);
         }
-        if (children.length > 5) console.log(chalk.gray(`    …and ${children.length - 5} more (see /agents)`));
+        if (children.length > 5) console.log(chalk.gray(`    …and ${children.length - 5} more (see /agents --json)`));
       }
       console.log(`  Total this session: ${chalk.bold.cyan(totalSpent.toLocaleString())} tokens`);
 

@@ -13,6 +13,7 @@ import { tryHandleMemoryCommand } from './commands/memory.js';
 import { tryHandleUiCommand } from './commands/ui.js';
 import { tryHandleWorkflowCommand } from './commands/workflow.js';
 import { tryHandleObsCommand } from './commands/obs.js';
+import { tryHandleBrainCommand } from './commands/brain.js';
 import { tryHandleOrchestrationCommand } from './commands/orchestration.js';
 import { tryHandleSessionCommand } from './commands/session.js';
 import { tryHandleGuardCommand } from './commands/guard.js';
@@ -33,12 +34,12 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast',
+  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
-  '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget',
+  '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
-  '/continue', '/auto-review', '/vim', '/statusline', '/quiet', '/release-notes',
+  '/continue', '/auto-review', '/auto-chain', '/vim', '/statusline', '/quiet', '/release-notes',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
   '/tokens', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
@@ -93,6 +94,9 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/working reset confirm', desc: 'Clear the canvas' },
       { cmd: '/forget <recordId>', desc: 'Archive a memory record by ID' },
       { cmd: '/memories', desc: 'Manage memory pipeline + consolidate to filesystem' },
+      { cmd: '/brain [agents]', desc: 'Brain-agent health: per-agent status, 24h success rate, pending jobs' },
+      { cmd: '/brain run <agentId>', desc: 'Manually enqueue a brain-agent run' },
+      { cmd: '/brain retry <jobId>', desc: 'Re-arm a failed/cancelled brain job' },
       { cmd: '/handover', desc: 'Generate continuation note for next session' },
       { cmd: '/explain <query>', desc: 'Why recall returned what it did' },
       { cmd: '/failed [area]', desc: 'Past failed attempts for a problem area' },
@@ -139,11 +143,16 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/agents --remote [--watch] [--usage] [--include-stale] [--json]', desc: 'List federated peer CLIs / hosts attached to the same brain (0.4.0 Stage 2).' },
       { cmd: '/dm <sessionKey> <message>', desc: 'Send text to one federated peer; recipient sees a banner above their next prompt (0.4.0 Stage 3).' },
       { cmd: '/broadcast [<clientKind>:*] <message>', desc: 'Send text to every active peer under your userId, or narrow to one clientKind.' },
+      { cmd: '/inbox [--peek] [--all]', desc: 'Read this session’s inbox on demand; marks messages delivered unless --peek (0.4.0 Stage 3).' },
+      { cmd: '/handoff <target|<kind>:next-idle> [note]', desc: 'Hand your current goal + context to another session (0.4.1 Stage 4).' },
+      { cmd: '/handoff list | accept [fromPrefix]', desc: 'List / adopt an inbound goal handoff.' },
       { cmd: '/agent <id> [--full]', desc: 'Detail + recent transcript of a child' },
       { cmd: '/spawn <role> <prompt>', desc: 'Spawn a child agent' },
       { cmd: '/wait <id> [ms]', desc: 'Wait for a child to finish' },
       { cmd: '/kill <agent-id>', desc: 'Stop a running child' },
-      { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker' },
+      { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker (alias for /auto-chain review|off)' },
+      { cmd: '/auto-chain [review|verify|both|off]', desc: 'Auto-chain review/verify follow-ups after every worker' },
+      { cmd: '/delegation-policy [auto|ask-before-spawn|ask-before-write-child|no-children]', desc: 'Gate whether/when the agent may spawn child agents' },
       { cmd: '/ps', desc: 'List background tasks (loop + running children)' },
       { cmd: '/stop', desc: 'Stop the running loop, mark stale children' },
     ],
@@ -295,6 +304,7 @@ export async function handleSlashCommand(
   if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;
+  if (await tryHandleBrainCommand(cmdCtx)) return;
   if (await tryHandleOrchestrationCommand(cmdCtx)) return;
   if (await tryHandleSessionCommand(cmdCtx)) return;
   if (await tryHandleGuardCommand(cmdCtx)) return;

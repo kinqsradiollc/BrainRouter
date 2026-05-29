@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -81,6 +81,7 @@ function cognitiveRowToRecord(row: any): CognitiveRecord {
     neverCitedCount: row.never_cited_count ?? 0,
     archived: Boolean(row.archived),
     workspaceTag: row.workspace_tag ?? null,
+    projectTag: row.project_tag ?? null,
   };
 }
 
@@ -152,6 +153,51 @@ function inboxRowToRecord(row: {
     deliveredAt: row.delivered_at,
   };
 }
+
+function jobRowToRecord(row: {
+  id: string;
+  kind: string;
+  status: string;
+  priority: number;
+  attempts: number;
+  max_attempts: number;
+  run_after: string;
+  locked_at: string | null;
+  parent_job_id: string | null;
+  input_json: string;
+  output_json: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}): MemoryJobRecord {
+  const parse = (raw: string | null): unknown => {
+    if (raw == null) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+  return {
+    id: row.id,
+    kind: row.kind,
+    status: row.status as MemoryJobStatus,
+    priority: row.priority,
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    runAfter: row.run_after,
+    lockedAt: row.locked_at,
+    parentJobId: row.parent_job_id,
+    input: parse(row.input_json),
+    output: parse(row.output_json),
+    error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const JOB_COLUMNS =
+  "id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, error, created_at, updated_at";
 
 function operationRowToRecord(row: any): MemoryOperation {
   return {
@@ -410,6 +456,41 @@ export class SqliteMemoryStore implements IMemoryStore {
       "CREATE INDEX IF NOT EXISTS idx_session_inbox_delivered ON session_inbox(delivered_at)",
     );
 
+    // BRAIN-P1 (0.4.1) — brain-agent job queue (BRAIN-DESIGN-T2).
+    // Global to the brain instance (single-tenant per API key — OQ-3);
+    // per-user routing lives in input_json, never a column. Every
+    // brain-side action becomes a row so it is observable + retryable.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_jobs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        priority INTEGER NOT NULL DEFAULT 50,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        run_after TEXT NOT NULL,
+        locked_at TEXT,
+        parent_job_id TEXT,
+        input_json TEXT NOT NULL DEFAULT '{}',
+        output_json TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_memory_jobs_eligible
+         ON memory_jobs(status, priority DESC, run_after)
+         WHERE status = 'pending'`,
+    );
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_memory_jobs_running
+         ON memory_jobs(locked_at) WHERE locked_at IS NOT NULL`,
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_memory_jobs_kind ON memory_jobs(kind, updated_at)",
+    );
+
     this.stmtSensoryUpsertMeta = this.db.prepare(`
       INSERT INTO sensory_stream (
         record_id, user_id, session_key, session_id, role, message_text, recorded_at, timestamp, skill_tag
@@ -461,7 +542,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         repo_paths_json TEXT DEFAULT '[]',
         file_paths_json TEXT DEFAULT '[]',
         commands_json TEXT DEFAULT '[]',
-        workspace_tag TEXT
+        workspace_tag TEXT,
+        project_tag TEXT
       )
     `);
 
@@ -478,6 +560,15 @@ export class SqliteMemoryStore implements IMemoryStore {
       if (!/duplicate column name/i.test(msg)) throw e;
     }
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_workspace_tag ON cognitive_records(user_id, workspace_tag)");
+
+    // AUG-A1 (0.4.1) — same idempotent migration for `project_tag`.
+    try {
+      this.db.exec("ALTER TABLE cognitive_records ADD COLUMN project_tag TEXT");
+    } catch (e) {
+      const msg = (e as Error).message || "";
+      if (!/duplicate column name/i.test(msg)) throw e;
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_project_tag ON cognitive_records(user_id, project_tag)");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_evidence (
@@ -529,8 +620,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
-        repo_paths_json, file_paths_json, commands_json, workspace_tag
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        repo_paths_json, file_paths_json, commands_json, workspace_tag, project_tag
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -552,7 +643,8 @@ export class SqliteMemoryStore implements IMemoryStore {
         repo_paths_json=excluded.repo_paths_json,
         file_paths_json=excluded.file_paths_json,
         commands_json=excluded.commands_json,
-        workspace_tag=COALESCE(excluded.workspace_tag, cognitive_records.workspace_tag)
+        workspace_tag=COALESCE(excluded.workspace_tag, cognitive_records.workspace_tag),
+        project_tag=COALESCE(excluded.project_tag, cognitive_records.project_tag)
     `);
 
     this.stmtCognitiveGetMeta = this.db.prepare(`
@@ -795,7 +887,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null
         );
 
         // FTS5 Insert
@@ -845,7 +937,7 @@ export class SqliteMemoryStore implements IMemoryStore {
         record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
         record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
         JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-        JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
+        JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null
       );
 
       // FTS5 Insert (delete old first if it exists to emulate UPSERT)
@@ -1092,7 +1184,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           record.updatedTime, JSON.stringify(record.metadata ?? {}), record.confidence ?? 0.65,
           record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
           JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null
+          JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null
         );
         this.db.prepare("DELETE FROM cognitive_fts WHERE record_id = ? AND user_id = ?").run(record.id, userId);
         this.stmtCognitiveFtsInsert.run(
@@ -1523,6 +1615,23 @@ export class SqliteMemoryStore implements IMemoryStore {
     return result;
   }
 
+  // AUG-A1 (0.4.1) — project-tag twin of getWorkspaceTagsByRecordIds.
+  public getProjectTagsByRecordIds(userId: string, recordIds: string[]): Map<string, string | null> {
+    const result = new Map<string, string | null>();
+    if (recordIds.length === 0) return result;
+    for (const id of recordIds) result.set(id, null);
+    const placeholders = recordIds.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT record_id, project_tag FROM cognitive_records WHERE user_id = ? AND record_id IN (${placeholders})`,
+      )
+      .all(userId, ...recordIds) as Array<{ record_id: string; project_tag: string | null }>;
+    for (const row of rows) {
+      result.set(row.record_id, row.project_tag ?? null);
+    }
+    return result;
+  }
+
   // ── Federation Stage 2 (0.4.0): active session registry ────────────────
 
   public registerActiveSession(record: ActiveSessionRecord): ActiveSessionRecord {
@@ -1769,6 +1878,259 @@ export class SqliteMemoryStore implements IMemoryStore {
       .prepare("DELETE FROM session_inbox WHERE delivered_at IS NOT NULL AND delivered_at < ?")
       .run(cutoff);
     return Number(result.changes ?? 0);
+  }
+
+  // ── BRAIN-P1 (0.4.1): memory_jobs queue (BRAIN-DESIGN-T2) ──────────────
+
+  public enqueueMemoryJob(
+    input: MemoryJobEnqueueInput,
+    options?: { idGenerator?: () => string; now?: string },
+  ): MemoryJobRecord {
+    const now = options?.now ?? new Date().toISOString();
+    const id = (options?.idGenerator ?? (() => randomUUID()))();
+    const runAfter = input.runAfter ?? now;
+    const priority = input.priority ?? 50;
+    const maxAttempts = input.maxAttempts ?? 3;
+    this.db
+      .prepare(
+        `INSERT INTO memory_jobs
+           (id, kind, status, priority, attempts, max_attempts, run_after, locked_at,
+            parent_job_id, input_json, output_json, error, created_at, updated_at)
+         VALUES (?, ?, 'pending', ?, 0, ?, ?, NULL, ?, ?, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        id,
+        input.kind,
+        priority,
+        maxAttempts,
+        runAfter,
+        input.parentJobId ?? null,
+        JSON.stringify(input.input ?? {}),
+        now,
+        now,
+      );
+    return this.getMemoryJob(id)!;
+  }
+
+  public getMemoryJob(id: string): MemoryJobRecord | null {
+    const row = this.db
+      .prepare(`SELECT ${JOB_COLUMNS} FROM memory_jobs WHERE id = ?`)
+      .get(id) as any;
+    return row ? jobRowToRecord(row) : null;
+  }
+
+  public listMemoryJobs(filters?: MemoryJobListFilters): MemoryJobRecord[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filters?.kind) {
+      where.push("kind = ?");
+      params.push(filters.kind);
+    }
+    if (filters?.status) {
+      const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
+      if (statuses.length > 0) {
+        where.push(`status IN (${statuses.map(() => "?").join(",")})`);
+        params.push(...statuses);
+      }
+    }
+    const limit = filters?.limit ?? 100;
+    const rows = this.db
+      .prepare(
+        `SELECT ${JOB_COLUMNS} FROM memory_jobs
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+         ORDER BY priority DESC, created_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as any[];
+    return rows.map(jobRowToRecord);
+  }
+
+  public claimNextMemoryJob(options?: { now?: string }): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    // BEGIN IMMEDIATE takes the write lock up front so two federated
+    // brain processes can't both claim the same row. The select-then-
+    // update is one transaction; under WAL a second claimant blocks on
+    // the write lock (busy_timeout) rather than racing.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const candidate = this.db
+        .prepare(
+          `SELECT id FROM memory_jobs
+           WHERE status = 'pending' AND run_after <= ?
+           ORDER BY priority DESC, run_after ASC, id ASC
+           LIMIT 1`,
+        )
+        .get(now) as { id: string } | undefined;
+      if (!candidate) {
+        this.db.exec("COMMIT");
+        return null;
+      }
+      this.db
+        .prepare(
+          `UPDATE memory_jobs
+           SET status = 'running', locked_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'pending'`,
+        )
+        .run(now, now, candidate.id);
+      this.db.exec("COMMIT");
+      return this.getMemoryJob(candidate.id);
+    } catch (e) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* already rolled back */
+      }
+      throw e;
+    }
+  }
+
+  public startMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE memory_jobs
+         SET status = 'running', locked_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'pending'`,
+      )
+      .run(now, now, id);
+    if (Number(result.changes ?? 0) === 0) return null;
+    return this.getMemoryJob(id);
+  }
+
+  public completeMemoryJob(
+    id: string,
+    output: unknown,
+    options?: { now?: string },
+  ): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE memory_jobs
+         SET status = 'done', output_json = ?, error = NULL, locked_at = NULL, updated_at = ?
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(JSON.stringify(output ?? null), now, id);
+    if (Number(result.changes ?? 0) === 0) return null;
+    return this.getMemoryJob(id);
+  }
+
+  public failMemoryJob(
+    id: string,
+    error: string,
+    options?: { now?: string; backoffMs?: number },
+  ): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    const job = this.getMemoryJob(id);
+    if (!job || job.status !== "running") return null;
+    const attempts = job.attempts + 1;
+    if (attempts < job.maxAttempts) {
+      const runAfter = new Date(Date.parse(now) + (options?.backoffMs ?? 0)).toISOString();
+      this.db
+        .prepare(
+          `UPDATE memory_jobs
+           SET status = 'pending', attempts = ?, error = ?, run_after = ?, locked_at = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(attempts, error, runAfter, now, id);
+    } else {
+      this.db
+        .prepare(
+          `UPDATE memory_jobs
+           SET status = 'failed', attempts = ?, error = ?, locked_at = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(attempts, error, now, id);
+    }
+    return this.getMemoryJob(id);
+  }
+
+  public retryMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE memory_jobs
+         SET status = 'pending', attempts = 0, run_after = ?, locked_at = NULL, error = NULL, updated_at = ?
+         WHERE id = ? AND status IN ('failed', 'cancelled')`,
+      )
+      .run(now, now, id);
+    if (Number(result.changes ?? 0) === 0) {
+      // No-op for pending/running/done — return the current row if it exists.
+      return this.getMemoryJob(id);
+    }
+    return this.getMemoryJob(id);
+  }
+
+  public cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): MemoryJobRecord | null {
+    const now = options?.now ?? new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE memory_jobs
+         SET status = 'cancelled', error = COALESCE(?, error), locked_at = NULL, updated_at = ?
+         WHERE id = ? AND status IN ('pending', 'running')`,
+      )
+      .run(options?.reason ?? null, now, id);
+    if (Number(result.changes ?? 0) === 0) return this.getMemoryJob(id);
+    return this.getMemoryJob(id);
+  }
+
+  public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): number {
+    const now = options?.now ?? new Date().toISOString();
+    const cutoff = new Date(Date.parse(now) - stuckMs).toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE memory_jobs
+         SET status = 'cancelled', error = 'swept: lock expired', locked_at = NULL, updated_at = ?
+         WHERE status = 'running' AND locked_at IS NOT NULL AND locked_at < ?`,
+      )
+      .run(now, cutoff);
+    return Number(result.changes ?? 0);
+  }
+
+  public getMemoryJobKindAggregates(options?: { now?: string }): MemoryJobKindAggregate[] {
+    const now = options?.now ?? new Date().toISOString();
+    const since24h = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString();
+    const kinds = (
+      this.db.prepare("SELECT DISTINCT kind FROM memory_jobs ORDER BY kind ASC").all() as Array<{
+        kind: string;
+      }>
+    ).map((r) => r.kind);
+
+    return kinds.map((kind) => {
+      const latest = this.db
+        .prepare(
+          `SELECT status, updated_at FROM memory_jobs
+           WHERE kind = ? ORDER BY updated_at DESC, id DESC LIMIT 1`,
+        )
+        .get(kind) as { status: string; updated_at: string } | undefined;
+      const lastCompleted = this.db
+        .prepare(
+          `SELECT updated_at FROM memory_jobs
+           WHERE kind = ? AND status = 'done' ORDER BY updated_at DESC LIMIT 1`,
+        )
+        .get(kind) as { updated_at: string } | undefined;
+      const pending = this.db
+        .prepare("SELECT COUNT(*) AS n FROM memory_jobs WHERE kind = ? AND status = 'pending'")
+        .get(kind) as { n: number };
+      const terminal = this.db
+        .prepare(
+          `SELECT
+             SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
+             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+           FROM memory_jobs
+           WHERE kind = ? AND updated_at >= ? AND status IN ('done', 'failed')`,
+        )
+        .get(kind, since24h) as { done: number | null; failed: number | null };
+      const done = Number(terminal.done ?? 0);
+      const failed = Number(terminal.failed ?? 0);
+      const total = done + failed;
+      return {
+        kind,
+        lastStatus: (latest?.status ?? "pending") as MemoryJobStatus,
+        lastCompletedAt: lastCompleted?.updated_at ?? null,
+        pendingJobs: Number(pending.n ?? 0),
+        successRate24h: total > 0 ? done / total : null,
+      };
+    });
   }
 
   public sweepActiveSessions(olderThanMs: number): number {

@@ -164,9 +164,6 @@ export function validateApiKey(
  * displayed (Done step summary, `/config` panel, `/where` workspace
  * block). Always keeps a fixed-width tail so two keys with different
  * lengths align in the panel.
- *
- * Borrowed from `openSrc/DeepSeek-TUI/crates/tui/src/tui/onboarding/api_key.rs:77`
- * (`mask_key()`).
  */
 export function maskApiKey(raw: string): string {
   const key = raw.trim();

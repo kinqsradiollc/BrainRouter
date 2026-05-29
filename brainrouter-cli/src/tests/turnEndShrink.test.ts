@@ -95,6 +95,6 @@ test('shouldProactivelyShrink returns false below the ratio', () => {
   assert.equal(shouldProactivelyShrink(history, 100_000), false);
 });
 
-test('TURN_END_RESULT_CAP_TOKENS default matches Reasonix (3000)', () => {
+test('TURN_END_RESULT_CAP_TOKENS default is 3000', () => {
   assert.equal(TURN_END_RESULT_CAP_TOKENS, 3000);
 });

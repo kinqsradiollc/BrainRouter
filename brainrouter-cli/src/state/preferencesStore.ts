@@ -16,6 +16,18 @@ export type EffortLevel = 'low' | 'medium' | 'high';
 export interface Preferences {
   /** When true, every worker spawn is auto-followed by a reviewer pass on the diff. */
   autoReview: boolean;
+  /**
+   * MAS-P4-T4 auto-chain mode. Canonical successor to `autoReview`:
+   * after a worker finishes, chain `review` / `verify` / `both` follow-ups
+   * (or `off`). Omitted = derive from `autoReview` for back-compat.
+   */
+  autoChain?: 'off' | 'review' | 'verify' | 'both';
+  /**
+   * MAS-P4-T2 supervisor gate. Controls whether/when the agent may spawn
+   * child agents: auto | ask-before-spawn | ask-before-write-child |
+   * no-children. Omitted = auto.
+   */
+  delegationPolicy?: 'auto' | 'ask-before-spawn' | 'ask-before-write-child' | 'no-children';
   /** Editor mode for the readline composer. */
   editorMode: 'emacs' | 'vi';
   /** Status-line layout: comma-separated segments from {mode,branch,dirty,model,tokens,session}. */

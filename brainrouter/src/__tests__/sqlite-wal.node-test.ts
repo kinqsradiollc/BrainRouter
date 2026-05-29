@@ -10,7 +10,7 @@
  *   here and run via `node --test dist/__tests__/*.node-test.js` from
  *   the `test:integration` npm script.
  *
- * What it verifies (per FULL_TASKS §4.1 FED-S1-T1):
+ * What it verifies (federation Stage 1 — WAL concurrency):
  *   1. SqliteMemoryStore reports journal_mode=wal after construction.
  *   2. Two store instances pointed at the same file can read AND write
  *      concurrently — the federation guarantee that one CLI's

@@ -6,7 +6,7 @@ hints:
   - Utilize specific section parameters in get_template_doc to read target content efficiently.
   - Load reference guidelines (e.g. security-checklist, testing-patterns) using get_reference to respect engineering checklists.
   - Restrict actions to read-only when interacting with documentation via MCP to avoid modifying architectural blueprints.
-  - Fall back to checking openSrc/ or standard project directories (e.g., docs/, doc/) if MCP tools are not available.
+  - Fall back to checking standard project directories (e.g., docs/, doc/) if MCP tools are not available.
 ---
 
 # Doc Management Skill

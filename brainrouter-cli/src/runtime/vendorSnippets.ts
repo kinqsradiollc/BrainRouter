@@ -1,10 +1,8 @@
 /**
  * Per-vendor MCP install snippets (0.3.8-I5 / roadmap §9).
  *
- * Pattern adapted from semble's per-agent install docs
- * (openSrc/semble/src/semble/agents/*.md) — one focused entry per vendor
- * with the exact JSON shape and config file path. Where semble ships
- * markdown, we ship structured templates so the CLI can substitute the
+ * One focused entry per vendor with the exact JSON shape and config
+ * file path. We ship structured templates so the CLI can substitute the
  * user's live profile URL + API key on the fly.
  *
  * Notes

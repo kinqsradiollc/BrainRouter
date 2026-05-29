@@ -17,8 +17,6 @@
  * If the repaired text parses cleanly, we hand it on to the tool. If
  * it still doesn't parse, we surface a `TRUNCATION UNRECOVERABLE` note
  * so the caller can synthesize a re-issue prompt with the model.
- *
- * Adapted from openSrc/DeepSeek-Reasonix/src/repair/truncation.ts.
  */
 
 export interface TruncationRepairResult {

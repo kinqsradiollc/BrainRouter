@@ -1,8 +1,7 @@
 /**
  * Cache-first context partitioning (0.3.9 item 8).
  *
- * Adapted from openSrc/DeepSeek-Reasonix/src/memory/runtime.ts — the
- * `ImmutablePrefix` / `AppendOnlyLog` / `VolatileScratch` split that
+ * An `ImmutablePrefix` / `AppendOnlyLog` / `VolatileScratch` split that
  * keeps prefix-cache hit rate above 95% across long sessions instead of
  * the <20% generic agent loops get.
  *
@@ -214,9 +213,7 @@ export class ImmutablePrefix {
   /**
    * Dev/test only. Throws when the cached fingerprint diverges from a
    * fresh computation — that always means a code path mutated the
-   * prefix without going through one of the public setters. Reasonix's
-   * equivalent `verifyFingerprint()` catches the same drift; we keep
-   * the same shape for parity.
+   * prefix without going through one of the public setters.
    */
   verifyFingerprint(): string {
     const fresh = this.computeFingerprint();
@@ -265,7 +262,7 @@ export class AppendOnlyLog {
   /**
    * Replace the entire log with a fresh content list. Reserved for
    * `/compact` and recovery — every call is a hard cache miss on the
-   * append region. Mirrors Reasonix's `compactInPlace`.
+   * append region. This is the in-place compaction.
    */
   compactInPlace(replacement: readonly ChatMessage[]): void {
     this._entries = replacement.map(m => ({ ...m }));

@@ -230,7 +230,7 @@ test('systemPrompt: token budget — base prompt fits in ~4,500 tokens (9a)', ()
   // tool-mechanics prose, orchestration paragraphs, and anti-hallucination
   // repetition the model could derive from tool descriptions and a few
   // sharp rules. Target was originally ~1,800 tokens; 0.3.9 intentionally
-  // re-added an OpenCode-style "Autonomy and persistence" block + examples
+  // re-added an "Autonomy and persistence" block + examples
   // + Task-tool orchestration section to push weaker OS models off the
   // "please clarify" default. The new cap (~3,200) still guards against
   // unbounded lecturing while accommodating that tradeoff.

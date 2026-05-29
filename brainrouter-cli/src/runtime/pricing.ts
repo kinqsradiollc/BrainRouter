@@ -98,8 +98,7 @@ export function cacheSavingsUsd(modelId: string, cachedTokens: number): number {
  *   - yellow $0.05–0.20
  *   - red    ≥$0.20
  *
- * The threshold ratios match the Reasonix `StatsPanel` colouring (the
- * session band is 10× the turn band; callers pick which).
+ * The session band is 10× the turn band; callers pick which.
  */
 export interface CostBadge {
   text: string;

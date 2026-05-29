@@ -10,9 +10,7 @@ import chalk from 'chalk';
  *      sometimes wrap a whole response in (or wrap a table in to
  *      get it past their own safety filters). Without unwrapping,
  *      the entire content renders as a yellow code block instead of
- *      formatted markdown. Pattern lifted from
- *      `openSrc/codex/codex-rs/tui/src/markdown.rs:86–123`
- *      (`unwrap_markdown_fences`).
+ *      formatted markdown.
  *
  *   2. **Disables marked-terminal's internal wrapping** so Ink owns
  *      reflow. marked-terminal's `width` wrap doesn't understand the

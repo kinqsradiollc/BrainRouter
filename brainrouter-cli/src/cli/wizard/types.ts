@@ -14,10 +14,9 @@
  *   2. **The runner is testable.** Driving the reducer with synthetic
  *      events (`pick`, `back`, `abort`) lets us assert the wizard ends
  *      in a known terminal state without simulating a real TTY.
- *   3. **The shape lifts straight from peer references.**
- *      `openSrc/codex/codex-rs/tui/src/onboarding/onboarding_screen.rs`
- *      uses the same Step enum + per-step state pattern; we copy the
- *      pattern, not the code.
+ *   3. **The shape is a well-worn pattern.** A Step enum + per-step
+ *      state is a standard onboarding-screen shape; we adopt the
+ *      pattern, not anyone's code.
  */
 
 import type { ThemeMode } from '../theme.js';

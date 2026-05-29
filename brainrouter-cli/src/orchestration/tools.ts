@@ -18,13 +18,17 @@ import {
   type ChildSessionRecord,
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { appendTranscriptEntry, readTranscriptEntries } from '../state/sessionStore.js';
 import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
 import { readPreferences } from '../state/preferencesStore.js';
+import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
+import { resolveDelegationPolicy, evaluateDelegationGate } from './delegationPolicy.js';
+import { aggregateChildUsage } from './childAccounting.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
-import { getOutputContract } from './outputContracts.js';
+import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, type RouteOutcome } from './memoryEvents.js';
 
@@ -71,6 +75,14 @@ export interface OrchestrationContext {
    * instead of seeing tool events and then silence.
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  /**
+   * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
+   * `handleSpawn` calls this to ask the user (returns true to allow).
+   * Wired only for an interactive parent; absent in headless runs, where
+   * an `ask-*` policy fails closed. May throw a clear error when no
+   * terminal is attached.
+   */
+  confirmDelegation?: (info: { role: string; access: AccessMode; prompt: string }) => Promise<boolean>;
   // MAS-P2-M3 parent-context accessors. Each returns the parent's
   // runtime state at spawn time — all optional so callers can adopt
   // incrementally. When omitted, the snapshot field stays undefined
@@ -154,14 +166,13 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
   'wait_agents',
   'read_agent_transcript',
   'close_agent',
-  'route_agent',
   'route_task',
 ]);
 
 /**
  * Heuristic auto-router. Maps a free-text task to the best role based on
- * leading verbs and intent keywords. Pure text-classification — callers can
- * opt in via `route_agent` without first spending an LLM turn.
+ * leading verbs and intent keywords. Pure text-classification — used by
+ * `route_task` and the batch-spawn role inference, no LLM turn required.
  */
 export function inferRoleFromTask(task: string): 'explorer' | 'architect' | 'reviewer' | 'worker' | 'verifier' {
   const t = task.trim().toLowerCase();
@@ -275,6 +286,15 @@ export function createSpawnAgentTool() {
           items: { type: 'string' },
           description: 'Optional BrainRouter memory record IDs that the parent already recalled. The child agent is told to build on these instead of re-discovering them.',
         },
+        overlay: {
+          type: 'string',
+          description: 'Optional one-off instruction overlay (≤4000 chars) appended to the child\'s role prompt — the escape hatch for a bespoke contractor the preset roles don\'t cover (e.g. "only touch the CSS, match the existing design tokens"). The child is marked synthetic.',
+        },
+        effort: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: 'Optional reasoning-effort override for this child (otherwise inherits the session /effort).',
+        },
       },
       required: ['prompt'],
     },
@@ -301,7 +321,7 @@ export function createTaskAgentTool() {
       '- If the user says run agents "in parallel", you MUST send one message with multiple task_agent tool_calls.\n' +
       '- For background fire-and-forget when you have parent-side work to do, use delegate_agent instead and call wait_agent when the result is needed.\n\n' +
       'Writing the prompt: brief the child like a smart colleague who just walked in. Explain what you\'re accomplishing and why, what you\'ve already learned or ruled out, enough context for judgment calls. Include file paths and line numbers. **Never delegate understanding** — don\'t write "based on your findings, fix the bug"; that pushes synthesis onto the child. Terse command-style prompts produce shallow generic work.\n\n' +
-      '**Trust but verify:** a child\'s returned summary describes what it INTENDED to do, not necessarily what it actually did. When a child writes or edits code, read the actual changes (git diff, read_file) before reporting work as done. Adapted from Claude Code\'s Agent-tool guidance.',
+      '**Trust but verify:** a child\'s returned summary describes what it INTENDED to do, not necessarily what it actually did. When a child writes or edits code, read the actual changes (git diff, read_file) before reporting work as done.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -408,7 +428,8 @@ export function createSpawnAgentsTool() {
     name: 'spawn_agents',
     description:
       'Spawn multiple child agents in parallel with one tool call. Returns all child ids immediately. ' +
-      'Use this for batched fan-out (e.g. 3 explorers covering different parts of the codebase) instead of N back-to-back spawn_agent calls.',
+      'Use this for batched fan-out (e.g. 3 explorers covering different parts of the codebase) instead of N back-to-back spawn_agent calls. ' +
+      'Write/shell children MUST declare an `ownership` glob so parallel writers cannot collide — or pass `allowOverlap: true` on the entry to opt out.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -424,6 +445,8 @@ export function createSpawnAgentsTool() {
               access: { type: 'string', enum: ['read', 'write', 'shell'] },
               workdir: { type: 'string' },
               seedRecordIds: { type: 'array', items: { type: 'string' } },
+              ownership: { type: 'string', description: 'File glob this child may write within (e.g. "src/payments/**"). Required for write/shell access unless allowOverlap is set. Enforced on write_file / edit_file / apply_patch.' },
+              allowOverlap: { type: 'boolean', description: 'Opt out of the ownership requirement for this entry (writes are then unbounded). Default false.' },
             },
             required: ['prompt'],
           },
@@ -447,19 +470,6 @@ export function createWaitAgentsTool() {
         timeoutMs: { type: 'integer', description: 'Maximum total wait. Default 240000.' },
       },
       required: ['ids'],
-    },
-  };
-}
-
-export function createRouteAgentTool() {
-  return {
-    name: 'route_agent',
-    description:
-      'DEPRECATED — use `route_task` (MAS-P2-M2). Recommend a role (explorer/architect/reviewer/worker/verifier) for a task without spawning. The new tool returns a richer 4-tier policy decision (answer-direct / direct-tool / spawn-inline / spawn-worker) plus confidence + memory evidence.',
-    inputSchema: {
-      type: 'object',
-      properties: { task: { type: 'string' } },
-      required: ['task'],
     },
   };
 }
@@ -623,8 +633,6 @@ export async function executeOrchestrationTool(
       return handleReadTranscript(args, ctx);
     case 'close_agent':
       return handleClose(args, ctx);
-    case 'route_agent':
-      return handleRoute(args);
     case 'route_task':
       return await handleRouteTask(args, ctx);
     default:
@@ -718,20 +726,50 @@ async function handleDelegateAgent(args: any, ctx: OrchestrationContext): Promis
 async function handleSpawnBatch(args: any, ctx: OrchestrationContext): Promise<string> {
   const list = Array.isArray(args?.agents) ? args.agents : [];
   if (list.length === 0) throw new Error('spawn_agents requires at least one entry in `agents`.');
+
+  // MAS-P3 — ownership gate. Resolve each entry's effective access and
+  // refuse write/shell fan-out that declared no ownership glob (parallel
+  // writers would otherwise be free to clobber each other's files). This
+  // runs BEFORE any child is spawned, so a bad batch fails atomically
+  // rather than half-spawning. Read-only fan-out is allowed but noted.
+  const roleNames = list.map((entry: any) => entry.role ?? inferRoleFromTask(String(entry.prompt ?? '')));
+  const warnings: string[] = [];
+  list.forEach((entry: any, i: number) => {
+    let effectiveAccess: AccessMode;
+    if (entry.access === 'read' || entry.access === 'write' || entry.access === 'shell') {
+      effectiveAccess = entry.access;
+    } else {
+      try {
+        effectiveAccess = resolveRole(roleNames[i]).defaultAccess;
+      } catch {
+        effectiveAccess = 'read';
+      }
+    }
+    const err = ownershipRequirementError(effectiveAccess, entry.ownership, entry.allowOverlap);
+    if (err) {
+      const who = entry.label ? `"${entry.label}"` : `agents[${i}] (${roleNames[i]})`;
+      throw new Error(`spawn_agents: ${who} — ${err}`);
+    }
+    if (effectiveAccess === 'read' && !entry.ownership) {
+      warnings.push(`agents[${i}] (${roleNames[i]}) is read-only with no ownership — fine for reads, but it cannot write.`);
+    }
+  });
+
   const results: Array<Record<string, unknown>> = [];
   // Spawn sequentially so each gets a unique session id and createSession's
   // write isn't racy. The CHILDREN themselves still run in parallel — handleSpawn
   // kicks off the runTurn detached via runningPromises.set, then returns.
-  for (const entry of list) {
-    const role = entry.role ?? inferRoleFromTask(String(entry.prompt ?? ''));
-    const out = await handleSpawn({ ...entry, role }, ctx);
+  for (let i = 0; i < list.length; i++) {
+    const out = await handleSpawn({ ...list[i], role: roleNames[i] }, ctx);
     try {
       results.push(JSON.parse(out));
     } catch {
       results.push({ raw: out });
     }
   }
-  return JSON.stringify({ spawned: results.length, agents: results }, null, 2);
+  const payload: Record<string, unknown> = { spawned: results.length, agents: results };
+  if (warnings.length > 0) payload.warnings = warnings;
+  return JSON.stringify(payload, null, 2);
 }
 
 async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<string> {
@@ -746,31 +784,19 @@ async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<st
       return { id, raw: single };
     }
   }));
-  return JSON.stringify({ waited: settled.length, agents: settled }, null, 2);
-}
-
-function handleRoute(args: any): string {
-  const task = String(args?.task ?? '');
-  if (!task.trim()) throw new Error('route_agent requires `task`.');
-  const role = inferRoleFromTask(task);
-  const rationale = explainRoute(task, role);
-  return JSON.stringify({ task: task.slice(0, 200), role, rationale }, null, 2);
-}
-
-function explainRoute(task: string, role: string): string {
-  switch (role) {
-    case 'explorer': return 'Verbs like "investigate / explore / map / find" → read-only investigation child.';
-    case 'architect': return 'Verbs like "design / propose / plan / outline" → architect proposes ≥2 design alternatives.';
-    case 'reviewer': return 'Verbs like "review / critique / evaluate" → reviewer reads diff, returns severity-ordered findings.';
-    case 'verifier': return 'Verbs like "test / verify / typecheck" → verifier runs the suite and reports PASS/FAIL.';
-    default: return 'Default → worker (write access for implementation).';
-  }
+  // MAS-P4-T3: roll the children's usage into one total so the parent sees
+  // the cost split (and offload savings) of the whole batch at a glance.
+  const childTotals = aggregateChildUsage(settled);
+  return JSON.stringify({ waited: settled.length, agents: settled, childTotals }, null, 2);
 }
 
 async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string> {
   // Resolve agent definition via agentId (registry) or role (legacy).
   let role: ReturnType<typeof resolveRole>;
   let childTier: Tier | undefined;
+  // MAS-P4-T1: an agent def may scope which MCP tools its children see.
+  let childToolScope: { local: string[]; mcp: string[] } | undefined;
+  let childDisallowedTools: string[] | undefined;
 
   if (typeof args.agentId === 'string' && args.agentId.trim()) {
     const loaded = findById(args.agentId.trim(), ctx.workspaceRoot);
@@ -785,6 +811,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       promptOverlay: loaded.def.prompt,
     };
     childTier = loaded.def.tier;
+    childToolScope = loaded.def.toolScope;
+    childDisallowedTools = loaded.def.disallowedTools;
   } else {
     const roleName = String(args.role ?? '');
     if (!roleName.trim()) throw new Error('spawn_agent requires either "agentId" or "role".');
@@ -813,6 +841,31 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
   const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
+
+  // MAS-P4-T2 — supervisor gate. Consult the delegation policy before
+  // creating the session. `no-children` denies outright; `ask-*` policies
+  // prompt the interactive parent (and fail closed in headless runs).
+  const delegationPolicy = resolveDelegationPolicy(readPreferences(ctx.workspaceRoot));
+  const gate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
+  if (gate === 'deny') {
+    throw new Error(
+      `Delegation is disabled (policy "no-children"). The agent may not spawn child agents. ` +
+        `Change it with /delegation-policy auto.`,
+    );
+  }
+  if (gate === 'ask') {
+    if (!ctx.confirmDelegation) {
+      throw new Error(
+        `Delegation policy "${delegationPolicy}" requires approval, but no interactive terminal is attached. ` +
+          `Run interactively, or set /delegation-policy auto to spawn non-interactively.`,
+      );
+    }
+    const approved = await ctx.confirmDelegation({ role: role.name, access, prompt: String(args.prompt ?? '') });
+    if (!approved) {
+      throw new Error(`Spawn of "${role.name}" (${access}) declined under delegation policy "${delegationPolicy}".`);
+    }
+  }
+
   const childLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
   const childTimeoutMs = childTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
@@ -879,6 +932,19 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       `The parent agent already recalled these memory record IDs: ${seededIds.join(', ')}. ` +
       `Call memory_recall (or memory_search) with the same intent before doing duplicate exploration, and prefer building on these records over re-deriving them.`;
   }
+  // 0.4.x-1: operator overlay — a one-off instruction block (≤4000 chars,
+  // same cap as /goal) appended to the role prompt. The escape hatch for a
+  // bespoke contractor the five preset roles don't cover. A child with an
+  // overlay is marked `synthetic` so /agents and recall can tell it apart
+  // from a vanilla role spawn.
+  const overlay = typeof args.overlay === 'string' ? args.overlay.trim().slice(0, 4000) : '';
+  if (overlay) {
+    systemPromptOverride += `\n\n## Operator overlay (one-off instructions for this run)\n${overlay}`;
+    updateSession(ctx.workspaceRoot, record.id, { synthetic: true });
+  }
+  // 0.4.x-5: per-child reasoning-effort override (otherwise inherits /effort).
+  const effortOverride =
+    args.effort === 'low' || args.effort === 'medium' || args.effort === 'high' ? args.effort : undefined;
 
   const childAgent = new Agent(ctx.mcpClient, ctx.llmConfig, {
     workspaceRoot: ctx.workspaceRoot,
@@ -902,6 +968,13 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     // Propagate tier and depth so grandchildren can enforce hierarchy caps.
     tier: childTier,
     agentDepth: currentDepth + 1,
+    // MAS-P3: the ownership glob gates this child's file writes.
+    ownership,
+    // MAS-P4-T1: the agent def's tool scope limits the child's MCP surface.
+    toolScope: childToolScope,
+    disallowedTools: childDisallowedTools,
+    // 0.4.x-5: per-child reasoning-effort override.
+    effortOverride,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
@@ -912,8 +985,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Track per-tool start times so the paired onChildToolEnd carries a
       // real duration — the REPL renders this on the child's end row.
       const childToolStarts = new Map<string, number>();
-      // Inspired by deer-flow's synthetic dangling-tool-call recovery:
-      // every child must resolve to an explicit result instead of leaving
+      // Synthetic dangling-tool-call recovery: every child must resolve to
+      // an explicit result instead of leaving
       // the session running forever when an LLM/MCP call hangs.
       const output = await withChildDeadline(childAgent.runTurn(prompt, {
         onStatusUpdate: () => {},
@@ -968,11 +1041,16 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       }
 
       const completedAt = new Date().toISOString();
+      // MAS-P4-T3: per-child accounting — chars kept out of the parent's
+      // context via offload, and wall-clock spawn→complete.
+      const offloadedChars = workingRef ? Math.max(0, output.length - storedOutput.length) : 0;
+      const startedMs = record.startedAt ? Date.parse(record.startedAt) : NaN;
+      const wallClockMs = Number.isFinite(startedMs) ? Math.max(0, Date.parse(completedAt) - startedMs) : undefined;
       updateSession(ctx.workspaceRoot, record.id, {
         status: 'completed',
         completedAt,
         finalOutput: storedOutput,
-        usage: { ...childAgent.sessionUsage },
+        usage: { ...childAgent.sessionUsage, offloadedChars, wallClockMs },
       });
       // MAS-P2-M6: fire-and-forget feedback record. Skipped silently
       // when MCP is offline or memory_capture_turn isn't exposed.
@@ -1021,23 +1099,51 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
         preview: previewBody,
       });
 
-      // Auto-review: when the user has /auto-review on and a worker just
-      // finished, queue a reviewer agent on the worker's output. This closes
-      // the "agent shipped, did it actually work" loop without the user
-      // having to remember to ask.
+      // Auto-chain (MAS-P4-T4): when a worker finishes, optionally chain a
+      // review and/or verify follow-up on its output — closing the "agent
+      // shipped, did it actually work?" loop without the user remembering
+      // to ask. Only workers chain, and reviewers/verifiers aren't workers,
+      // so a follow-up never triggers another follow-up. `autoChain` is the
+      // canonical mode; legacy `/auto-review on` resolves to `review`.
       if (role.name === 'worker') {
         const prefs = readPreferences(ctx.workspaceRoot);
-        if (prefs.autoReview) {
-          await handleSpawn(
+        const mode = resolveAutoChainMode(prefs);
+        const roles = autoChainRoles(mode, getCliKnobs().autoChainMaxFollowups);
+        const followUps: string[] = [];
+        for (const followRole of roles) {
+          const verb = followRole === 'verifier' ? 'Verify' : 'Review';
+          const detail =
+            followRole === 'verifier'
+              ? 'Run the relevant tests / build and confirm the work is correct.'
+              : 'Review the diff for correctness, regressions, and missed requirements.';
+          const out = await handleSpawn(
             {
-              role: 'reviewer',
-              prompt: `Auto-review the changes made by worker agent ${record.id}.\n\nOriginal task:\n${prompt}\n\nWorker output (or ref):\n${storedOutput}`,
-              label: `auto-review-${record.id}`,
-              access: 'read',
+              role: followRole,
+              prompt: `Auto-${followRole === 'verifier' ? 'verify' : 'review'} the changes made by worker agent ${record.id}. ${detail}\n\nOriginal task:\n${prompt}\n\nWorker output (or ref):\n${storedOutput}`,
+              label: `auto-${followRole}-${record.id}`,
+              access: followRole === 'verifier' ? 'shell' : 'read',
               seedRecordIds: seededIds,
             },
             ctx,
           );
+          try {
+            const id = JSON.parse(out)?.id;
+            if (typeof id === 'string') followUps.push(id);
+          } catch {
+            /* spawn returned a non-JSON string — skip id capture */
+          }
+          void verb;
+        }
+        if (followUps.length > 0) {
+          // Record on the worker so wait/summarize can surface the chain,
+          // and emit a visible note for the live REPL.
+          updateSession(ctx.workspaceRoot, record.id, { autoChainFollowups: roles });
+          ctx.onChildComplete?.({
+            childId: record.id,
+            role: role.name,
+            status: 'completed',
+            preview: `Follow-up agents: ${roles.join(', ')} (auto-chain: ${mode})`,
+          });
         }
       }
     } catch (err: any) {
@@ -1160,6 +1266,13 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     status: record.status,
     access: record.access,
     label: record.label,
+    // MAS-P3: surface the child's ownership boundary so the parent can see
+    // which files each child was allowed to touch when synthesizing.
+    ownership: record.parentContext?.ownership ?? null,
+    // MAS-P4-T4: follow-up agents auto-chained after this worker, if any.
+    followUps: record.autoChainFollowups ?? undefined,
+    // MAS-P4-T3: per-child accounting (tokens, calls, offloaded chars, wall-clock).
+    usage: record.usage ?? undefined,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     completedAt: record.completedAt,
@@ -1168,6 +1281,11 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
   if (includeOutput) {
     if (record.finalOutput) base.finalOutput = record.finalOutput;
     if (record.error) base.error = record.error;
+    // MAS-P3-P3.2: when the role has an output contract, surface the parsed
+    // fields (or the unparsed/missing signal) so `wait_agent --json` /
+    // `wait_agents --json` callers get structured output, not just prose.
+    const parsed = parseChildOutput(record.role, record.finalOutput);
+    if (parsed) base.contract = parsed;
   }
   return base;
 }

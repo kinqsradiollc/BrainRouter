@@ -440,8 +440,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
         // TIER A live streaming hooks. The agent calls these as SSE
-        // frames arrive so the chat shows text character-by-character
-        // (grok-cli parity). assistantDeltaEnd() clears the transient
+        // frames arrive so the chat shows text character-by-character.
+        // assistantDeltaEnd() clears the transient
         // row; the final scrollback entry is pushed below.
         onAssistantTurnStart: () => {
           controller!.push.assistantDeltaStart();

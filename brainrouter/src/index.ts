@@ -92,6 +92,9 @@ import { memoryExplainToolSchema, handleMemoryExplainRecall } from './tools/memo
 import { memoryHookToolSchemas, handleMemoryHookTool } from './tools/memory-hooks.js';
 import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memory-working.js';
 import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
+import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/memory_agent_status.js';
+import { memoryAgentRunToolSchema, handleMemoryAgentRun } from './tools/memory_agent_run.js';
+import { memoryJobRetryToolSchema, handleMemoryJobRetry } from './tools/memory_job_retry.js';
 import { memoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
@@ -102,6 +105,7 @@ import { personaRouter } from './api/routes/persona.js';
 import { sessionsRouter } from './api/routes/sessions.js';
 import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
+import { brainRouter } from './api/routes/brain.js';
 import { graphRouter } from './api/routes/graph.js';
 import { authRouter } from './api/routes/auth.js';
 import { chatCompletionsRouter } from './api/routes/chat-completions.js';
@@ -296,6 +300,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       ...memoryHookToolSchemas,
       ...memoryWorkingToolSchemas,
       memoryConsolidateToolSchema,
+      memoryAgentStatusToolSchema,
+      memoryAgentRunToolSchema,
+      memoryJobRetryToolSchema,
     ],
   }));
 
@@ -366,6 +373,12 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
         case 'memory_consolidate':
           return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
+        case 'memory_agent_status':
+          return await handleMemoryAgentStatus(request.params.arguments, { defaultUserId });
+        case 'memory_agent_run':
+          return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
+        case 'memory_job_retry':
+          return await handleMemoryJobRetry(request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
@@ -443,6 +456,7 @@ if (USE_HTTP) {
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
+  app.use("/api/brain", brainRouter);
   app.use("/api/graph", graphRouter);
   app.use("/api", governanceRouter);
   app.use("/api/evidence", evidenceRouter);

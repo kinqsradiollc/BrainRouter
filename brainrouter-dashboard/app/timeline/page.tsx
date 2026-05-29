@@ -8,9 +8,8 @@ import { EmptyState } from "../../components/EmptyState";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { PageHeader } from "../../components/PageHeader";
 import { FilterBar } from "../../components/FilterBar";
+import { FilterSelect } from "../../components/FilterSelect";
 import { PremiumButton } from "../../components/PremiumButton";
-
-const OP_TYPES = ["all", "recall", "l1_upsert", "memory_update", "archive", "export", "import", "memory_governance_delete", "contradiction_resolve"];
 
 function formatTime(value: string) {
   return value ? new Date(value).toLocaleString() : "Unknown";
@@ -18,15 +17,24 @@ function formatTime(value: string) {
 
 export default function TimelinePage() {
   const client = useMemo(() => getClient(), []);
-  const [operation, setOperation] = useState("all");
+  const [operation, setOperation] = useState("");
   const [sessionKey, setSessionKey] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const filters = useMemo(() => ({
     limit: 50,
-    operation: operation === "all" ? undefined : operation,
+    operation: operation || undefined,
     sessionKey: sessionKey.trim() || undefined,
   }), [operation, sessionKey]);
   const { operations, error, refresh, loadMore, hasMore, isFetchingMore, isLoading } = useOperations(client, filters);
+
+  // Derive the operation-filter options from the data actually present
+  // (plus the current selection) — no hardcoded list to drift out of sync
+  // with what the brain logs.
+  const opOptions = useMemo(() => {
+    const set = new Set<string>(operations.map((o) => o.operation).filter(Boolean));
+    if (operation) set.add(operation);
+    return [...set].sort().map((v) => ({ value: v, label: v.replace(/_/g, " ") }));
+  }, [operations, operation]);
 
   return (
     <AuthGuard>
@@ -55,16 +63,13 @@ export default function TimelinePage() {
             </FilterBar.Row>
           )}
           <FilterBar.Row>
-            {OP_TYPES.map((item) => (
-              <PremiumButton
-                key={item}
-                size="small"
-                variant={operation === item ? "primary" : "ghost"}
-                onClick={() => setOperation(item)}
-              >
-                {item === "all" ? "All" : item.replace(/_/g, " ")}
-              </PremiumButton>
-            ))}
+            <FilterSelect
+              ariaLabel="Filter by operation"
+              value={operation}
+              onChange={setOperation}
+              allLabel="All operations"
+              options={opOptions}
+            />
           </FilterBar.Row>
         </FilterBar>
 

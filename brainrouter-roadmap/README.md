@@ -42,9 +42,5 @@ Latest shipped: **[0.4.0](0.4.0.md)** on 2026-05-28.
 
 | File | Purpose |
 |---|---|
-| [`../FULL_TASKS.MD`](../FULL_TASKS.MD) | Master implementation queue |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | Current shipped/in-flight changelog |
 | [`../brainrouter-changelog/README.md`](../brainrouter-changelog/README.md) | Per-version shipped history |
-| [`../FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md`](../FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT.md) | CLI multi-agent architecture |
-| [`../FEATURE_OPENHUMAN_BRAINROUTER.md`](../FEATURE_OPENHUMAN_BRAINROUTER.md) | MCP brain-agent architecture |
-| [`../openSrc/REFERENCES.md`](../openSrc/REFERENCES.md) | Vendored reference-project router |

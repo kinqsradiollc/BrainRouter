@@ -6,7 +6,7 @@ hints:
   - Apply Chesterton's Fence: understand why the original code was written before simplifying it.
   - Prioritize comprehension speed and readability over clever tricks or extreme line count reduction.
   - Verify every simplification step immediately by running the unit test suite or the build system.
-  - Review openSrc/ or existing patterns for idiomatic simplification examples in the target language.
+  - Review existing project patterns for idiomatic simplification examples in the target language.
 ---
 
 # Code Simplification

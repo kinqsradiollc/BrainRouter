@@ -195,8 +195,8 @@ function baselineRoute(task: string): BaselineRoute {
 
   // Tier 3 — spawn-inline. Any agent verb (investigation / design /
   // review / verify) or implementation verb routes to a specialized
-  // agent. Reuses `inferRoleFromTask` for the role mapping so the
-  // legacy `route_agent` decisions stay consistent.
+  // agent. Reuses `inferRoleFromTask` for the role mapping so role
+  // selection stays consistent across route_task + batch spawns.
   if (hasAgentVerb || hasImplementVerb) {
     const role = inferRoleFromTask(task);
     return {

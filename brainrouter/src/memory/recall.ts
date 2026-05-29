@@ -9,6 +9,15 @@ import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./m
 import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { isExternalTimeoutError } from "./llm-response.js";
+import {
+  effectivePriorityScore,
+  baseScoreFromRrf,
+  normalizePriority,
+  blendBaseAndPriority,
+  intentBoost,
+  citationBoost,
+  SKILL_BOOST,
+} from "./reranker/index.js";
 
 /**
  * Recall pipeline limit knobs. Each stage of the pipeline has a width
@@ -59,21 +68,14 @@ export function readRecallLimits(): RecallLimits {
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
-  const ageMs = Date.now() - new Date(memory.created_time).getTime();
-  const ageDays = ageMs / 86_400_000;
-
-  let base = memory.priority;
-  if (halfLife) {
-    const decayFactor = Math.pow(0.5, ageDays / halfLife);
-    base = memory.priority * decayFactor;
-  }
-
-  const citationBoost = Math.min((memory.citation_count ?? 0) * 0.05, 0.30);
-  // Freshness boost: anything captured in the last 24h gets a small lift so
-  // brand-new facts surface even before they've been cited. Linear ramp from
-  // 1.15× at age 0 to 1.0× at age 1d.
-  const freshness = ageDays <= 1 ? 1 + 0.15 * (1 - ageDays) : 1;
-  return base * (1 + citationBoost) * freshness;
+  const ageDays = (Date.now() - new Date(memory.created_time).getTime()) / 86_400_000;
+  // AUG-A3 — score-composition math lives in the modular `reranker/` package.
+  return effectivePriorityScore({
+    priority: memory.priority,
+    ageDays,
+    halfLifeDays: halfLife,
+    citationCount: memory.citation_count,
+  });
 }
 
 /**
@@ -104,12 +106,26 @@ export interface RecallFilters {
    * Pass `workspaceTagFromPath(root)` to compute the canonical tag.
    */
   workspaceTag?: string;
+  /**
+   * AUG-A1 (0.4.1) — restrict to records captured under this Project tag
+   * (a `.brainrouter/project.json` name, hashed via `projectTagFromName`).
+   * Same NULL-tolerant semantics as `workspaceTag`: untagged records and a
+   * missing filter both surface. Used when `scope: 'project'`.
+   */
+  projectTag?: string;
+  /**
+   * AUG-A1 — recall scope. `'workspace'` (default) keeps the existing
+   * workspace-tag behaviour; `'project'` widens to the active project
+   * (filtering by `projectTag` instead of `workspaceTag`).
+   */
+  scope?: "project" | "workspace";
 }
 
 export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
   records: T[],
   filters?: RecallFilters,
   workspaceTagLookup?: Map<string, string | null>,
+  projectTagLookup?: Map<string, string | null>,
 ): T[] {
   if (!filters) return records;
   const afterMs = filters.capturedAfter ? new Date(filters.capturedAfter).getTime() : undefined;
@@ -139,6 +155,15 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
         workspaceTagLookup?.get(r.record_id) ??
         null;
       if (tag !== null && tag !== filters.workspaceTag) return false;
+    }
+    if (filters.scope === "project" && filters.projectTag) {
+      // Same NULL-tolerant rule as workspaceTag: untagged records surface
+      // under any project so the rollout is gradual.
+      const ptag =
+        (r as { project_tag?: string | null }).project_tag ??
+        projectTagLookup?.get(r.record_id) ??
+        null;
+      if (ptag !== null && ptag !== filters.projectTag) return false;
     }
     return true;
   });
@@ -196,14 +221,25 @@ export class MemoryRecallPipeline {
         workspaceTagLookup = this.store.getWorkspaceTagsByRecordIds(userId, [...candidateIds]);
       }
     }
+    // AUG-A1 — same pre-fetch for the project tag when scope:'project'.
+    let projectTagLookup: Map<string, string | null> | undefined;
+    if (filters?.scope === "project" && filters?.projectTag) {
+      const candidateIds = new Set<string>();
+      for (const r of ftsResultsRaw) candidateIds.add(r.record_id);
+      for (const r of vecResultsRaw) candidateIds.add(r.record_id);
+      for (const r of filePathResultsRaw) candidateIds.add(r.record_id);
+      if (candidateIds.size > 0) {
+        projectTagLookup = this.store.getProjectTagsByRecordIds(userId, [...candidateIds]);
+      }
+    }
 
     // Filter the three candidate streams BEFORE RRF so the rank is computed
     // on the actually-relevant pool, not a filtered subset of an unfiltered
     // rank (which would bias scores toward records that happen to be in the
     // top-15 globally even if irrelevant to the filter).
-    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup);
-    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup);
-    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup);
+    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup, projectTagLookup);
+    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup, projectTagLookup);
+    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup, projectTagLookup);
 
     if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
       const emptyStrategy = this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty";
@@ -268,23 +304,24 @@ export class MemoryRecallPipeline {
     let skillBoostApplied = false;
 
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
-      const baseScore = rrfScore * 30;
-      const priorityScore = (effectivePriority(record as CognitiveFtsResult) / 100);
-      let finalScore = (baseScore * 0.7) + (priorityScore * 0.3);
+      // AUG-A3 — weighting / boosting helpers from the modular `reranker/`.
+      const baseScore = baseScoreFromRrf(rrfScore);
+      const priorityScore = normalizePriority(effectivePriority(record as CognitiveFtsResult));
+      let finalScore = blendBaseAndPriority(baseScore, priorityScore);
 
       if (activeSkill && record.skill_tag === activeSkill) {
-        finalScore *= 1.2;
+        finalScore *= SKILL_BOOST;
         skillBoostApplied = true;
       }
 
-      const intentMultiplier = getMemoryTypeConfig(record.type).intentAffinity[intent] ?? 1;
+      const intentMultiplier = intentBoost(getMemoryTypeConfig(record.type).intentAffinity[intent]);
       if (intentMultiplier !== 1) {
         typeBoosts[record.type] = intentMultiplier;
       }
       finalScore *= intentMultiplier;
 
       const citationCount = (record as CognitiveFtsResult).citation_count ?? 0;
-      const citBoost = Math.min(citationCount * 0.05, 0.30);
+      const citBoost = citationBoost(citationCount);
       if (citBoost > 0) {
         citationBoosts[record.record_id] = citBoost;
       }
