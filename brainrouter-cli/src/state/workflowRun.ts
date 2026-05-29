@@ -152,6 +152,35 @@ export function applyStepTransition(
   return next;
 }
 
+/** Pure: single glyph per step status, for the compact `/workflows` viewer (W2). */
+export function stepGlyph(status: RunStepStatus): string {
+  switch (status) {
+    case 'done': return '✓';
+    case 'running': return '▶';
+    case 'failed': return '✗';
+    case 'skipped': return '⊘';
+    default: return '·';
+  }
+}
+
+/** Pure: the step-status glyph strip, e.g. `✓✓▶····`. */
+export function formatRunGlyphs(run: WorkflowRun): string {
+  return run.steps.map((s) => stepGlyph(s.status)).join('');
+}
+
+/** Pure: human-friendly elapsed duration between two ISO timestamps (e.g. `1m 12s`, `3h 5m`). */
+export function formatDuration(startIso: string | undefined, endIso: string | undefined): string {
+  if (!startIso || !endIso) return '—';
+  const ms = Date.parse(endIso) - Date.parse(startIso);
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 /** Pure: compact progress summary for the viewer (done/total + current step title). */
 export function summarizeRun(run: WorkflowRun): { done: number; total: number; current: string | null } {
   const total = run.steps.length;

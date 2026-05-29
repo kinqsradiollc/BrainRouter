@@ -15,6 +15,7 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
+import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns } from '../../state/workflowRun.js';
 import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
@@ -788,27 +789,70 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/workflows':
     {
+      // PARITY-W2 — live run viewer. Reconcile first so a run left `running`
+      // by a crashed process reads as `interrupted` here too (not just at
+      // startup). Colour the run status by state.
+      reconcileStaleRuns(agent.workspaceRoot);
+      const runStatusColor = (s: string): string => {
+        switch (s) {
+          case 'completed': return chalk.green(s);
+          case 'failed': return chalk.red(s);
+          case 'interrupted': return chalk.yellow(s);
+          default: return chalk.cyan(s); // running
+        }
+      };
+
+      // `/workflows <slug>` → detailed per-step timeline drill-in.
+      const target = args[0]?.trim();
+      if (target) {
+        const slug = slugify(target);
+        if (!workflowExists(agent.workspaceRoot, slug)) {
+          console.log(chalk.red(`\nNo workflow "${target}". Run /workflows to list them.\n`));
+          return true;
+        }
+        const meta = listWorkflows(agent.workspaceRoot).find((w) => w.slug === slug);
+        const run = readRun(agent.workspaceRoot, slug);
+        console.log(chalk.bold(`\nWorkflow ${chalk.cyan(slug)}`) + (meta ? chalk.gray(`  ${meta.kind} · ${meta.status}`) : ''));
+        if (meta) console.log(`  ${meta.title}`);
+        if (!run) {
+          console.log(chalk.gray('  (no run ledger yet — the agent reports progress via workflow_progress as it executes steps)'));
+        } else {
+          const { done, total } = summarizeRun(run);
+          console.log(chalk.gray(`  run: ${runStatusColor(run.status)}${chalk.gray(`  ${done}/${total} steps`)}`));
+          for (const s of run.steps) {
+            const dur = s.startedAt ? chalk.gray(`  (${formatDuration(s.startedAt, s.endedAt ?? run.updatedAt)})`) : '';
+            const note = s.note ? chalk.gray(` — ${s.note}`) : '';
+            console.log(`    ${stepGlyph(s.status)} ${s.title}${dur}${note}`);
+          }
+        }
+        console.log();
+        return true;
+      }
+
       const workflows = listWorkflows(agent.workspaceRoot);
-      console.log(chalk.bold('\nDurable Workflows'));
+      console.log(chalk.bold('\nDurable Workflows') + chalk.gray('  (/workflows <slug> for the step timeline)'));
       if (workflows.length === 0) {
         console.log(chalk.yellow('  (none yet — try /spec or /feature-dev)'));
       } else {
         const currentSlug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
         for (const w of workflows) {
-          // Subtask 4: current-pointer marker is now ★ (the spec's chosen
-          // glyph). Existing column structure on the first/second lines
-          // preserved so script readers don't break — the new goal column
-          // lands at the right of the artifact-markers line. The ★
-          // reflects THIS session's binding (9d-bugfix), so two CLIs in
+          // The ★ marks THIS session's binding (9d-bugfix), so two CLIs in
           // the same workspace can each see their own bound workflow.
           const marker = w.slug === currentSlug ? chalk.green(' ★') : '';
           console.log(`  ${chalk.cyan(w.slug)} [${chalk.gray(w.status)}] ${chalk.gray(w.kind)}${marker}`);
           console.log(`    ${w.title}`);
+          // PARITY-W2: live run line when a run ledger exists for this workflow.
+          const run = readRun(agent.workspaceRoot, w.slug);
+          if (run) {
+            const { done, total, current } = summarizeRun(run);
+            const cur = current ? chalk.gray(` · ${current}`) : '';
+            console.log(
+              `    ${chalk.gray('run:')} ${runStatusColor(run.status)} ${chalk.gray(formatRunGlyphs(run))} ${chalk.gray(`${done}/${total}`)}${cur}`,
+            );
+          }
           const hasSpec = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.spec);
           const hasTasks = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.tasks);
           const hasWalk = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.walkthrough);
-          // Workflows are pure artifact folders now — no goal column.
-          // Goal state lives at session scope only; see goalStore.ts.
           console.log(
             chalk.gray(
               `    spec.md:${hasSpec ? '✓' : '·'}  tasks.md:${hasTasks ? '✓' : '·'}  walkthrough.md:${hasWalk ? '✓' : '·'}`,
