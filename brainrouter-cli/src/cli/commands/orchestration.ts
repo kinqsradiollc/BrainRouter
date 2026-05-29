@@ -15,6 +15,7 @@ import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 import { formatIncomingBanner } from '../incomingBanner.js';
 import { resolveAutoChainMode, isAutoChainMode } from '../../orchestration/autoChain.js';
+import { resolveDelegationPolicy, isDelegationPolicy } from '../../orchestration/delegationPolicy.js';
 
 interface DmAddressResolution {
   to: string;
@@ -466,6 +467,29 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       ctx.repl.runAgentTurn(
         `Use the wait_agent tool with id="${id}" and timeoutMs=${ms}. Then summarize the child output for me.`,
       );
+      return true;
+    }
+    case '/delegation-policy':
+    {
+      const prefs = readPreferences(agent.workspaceRoot);
+      const arg = (args[0] ?? '').toLowerCase();
+      const current = resolveDelegationPolicy(prefs);
+      if (!arg) {
+        console.log(chalk.bold(`\nDelegation policy: ${current === 'auto' ? chalk.gray('auto') : chalk.green(current)}`));
+        console.log(chalk.gray('  Controls whether/when the agent may spawn child agents:'));
+        console.log(chalk.gray('    auto                    — spawn freely (default)'));
+        console.log(chalk.gray('    ask-before-spawn        — confirm before any top-level spawn'));
+        console.log(chalk.gray('    ask-before-write-child  — confirm before a write/shell child'));
+        console.log(chalk.gray('    no-children             — never spawn'));
+        console.log(chalk.gray('  Set with: /delegation-policy auto | ask-before-spawn | ask-before-write-child | no-children\n'));
+        return true;
+      }
+      if (!isDelegationPolicy(arg)) {
+        console.log(chalk.yellow(`\nUnknown policy "${arg}". Use: auto | ask-before-spawn | ask-before-write-child | no-children\n`));
+        return true;
+      }
+      writePreferences(agent.workspaceRoot, { delegationPolicy: arg });
+      console.log(chalk.green(`\n✓ Delegation policy set to ${arg}.\n`));
       return true;
     }
     case '/auto-chain':

@@ -25,6 +25,7 @@ import { appendTranscriptEntry, readTranscriptEntries } from '../state/sessionSt
 import { callMcpTool, childSessionKey } from '../runtime/mcpUtils.js';
 import { readPreferences } from '../state/preferencesStore.js';
 import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
+import { resolveDelegationPolicy, evaluateDelegationGate } from './delegationPolicy.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract } from './outputContracts.js';
 import { routeTask } from './router.js';
@@ -73,6 +74,14 @@ export interface OrchestrationContext {
    * instead of seeing tool events and then silence.
    */
   onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  /**
+   * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
+   * `handleSpawn` calls this to ask the user (returns true to allow).
+   * Wired only for an interactive parent; absent in headless runs, where
+   * an `ask-*` policy fails closed. May throw a clear error when no
+   * terminal is attached.
+   */
+  confirmDelegation?: (info: { role: string; access: AccessMode; prompt: string }) => Promise<boolean>;
   // MAS-P2-M3 parent-context accessors. Each returns the parent's
   // runtime state at spawn time — all optional so callers can adopt
   // incrementally. When omitted, the snapshot field stays undefined
@@ -848,6 +857,31 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
   const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
+
+  // MAS-P4-T2 — supervisor gate. Consult the delegation policy before
+  // creating the session. `no-children` denies outright; `ask-*` policies
+  // prompt the interactive parent (and fail closed in headless runs).
+  const delegationPolicy = resolveDelegationPolicy(readPreferences(ctx.workspaceRoot));
+  const gate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
+  if (gate === 'deny') {
+    throw new Error(
+      `Delegation is disabled (policy "no-children"). The agent may not spawn child agents. ` +
+        `Change it with /delegation-policy auto.`,
+    );
+  }
+  if (gate === 'ask') {
+    if (!ctx.confirmDelegation) {
+      throw new Error(
+        `Delegation policy "${delegationPolicy}" requires approval, but no interactive terminal is attached. ` +
+          `Run interactively, or set /delegation-policy auto to spawn non-interactively.`,
+      );
+    }
+    const approved = await ctx.confirmDelegation({ role: role.name, access, prompt: String(args.prompt ?? '') });
+    if (!approved) {
+      throw new Error(`Spawn of "${role.name}" (${access}) declined under delegation policy "${delegationPolicy}".`);
+    }
+  }
+
   const childLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
   const childTimeoutMs = childTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
