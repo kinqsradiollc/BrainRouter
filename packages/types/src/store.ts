@@ -5,6 +5,9 @@ import type {
   SessionInboxFilters,
   SessionInboxKind,
   SessionInboxRecord,
+  PendingDelegationRecord,
+  PendingDelegationEnqueueInput,
+  PendingDelegationFilters,
   MemoryJobRecord,
   MemoryJobEnqueueInput,
   MemoryJobListFilters,
@@ -181,6 +184,20 @@ export interface IMemoryStore {
   readSessionInbox(filters: SessionInboxFilters): SessionInboxRecord[];
   ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): number;
   sweepSessionInbox(olderThanMs: number): number;
+
+  /**
+   * Federation Stage 5 (0.4.2) — FED-S5-T2 fallback queue. When
+   * `delegate_task` finds no idle peer of the requested kind, the packet
+   * is parked here as `pending` until a matching peer claims it.
+   * - `enqueuePendingDelegation` parks a packet (status `pending`).
+   * - `listPendingDelegations` lists by kind/status for a claimer.
+   * - `claimPendingDelegation` atomically flips the oldest matching
+   *   `pending` row to `claimed` for `toSessionKey` and returns it (or
+   *   null if none). Idempotent racing claimers get distinct rows.
+   */
+  enqueuePendingDelegation(input: PendingDelegationEnqueueInput, options?: { idGenerator?: () => string; now?: string }): PendingDelegationRecord;
+  listPendingDelegations(filters: PendingDelegationFilters): PendingDelegationRecord[];
+  claimPendingDelegation(userId: string, toAgentKind: string, toSessionKey: string, at: string): PendingDelegationRecord | null;
 
   /**
    * BRAIN-P1 (0.4.1) — `memory_jobs` queue (BRAIN-DESIGN-T2). These

@@ -24,8 +24,8 @@
  * Pure + side-effect free so it unit-tests without a live brain.
  */
 
-const FED_READ_TOOLS = ["session_inbox_read", "session_inbox_ack"];
-const FED_SEND_TOOLS = ["session_send"];
+const FED_READ_TOOLS = ["session_inbox_read", "session_inbox_ack", "session_delegations"];
+const FED_SEND_TOOLS = ["session_send", "session_delegate_task"];
 
 /**
  * The MCP pool may normalise a tool name to `mcp_<server>_<tool>`, so
