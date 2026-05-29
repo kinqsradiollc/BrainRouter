@@ -13,6 +13,7 @@ import { tryHandleMemoryCommand } from './commands/memory.js';
 import { tryHandleUiCommand } from './commands/ui.js';
 import { tryHandleWorkflowCommand } from './commands/workflow.js';
 import { tryHandleObsCommand } from './commands/obs.js';
+import { tryHandleBrainCommand } from './commands/brain.js';
 import { tryHandleOrchestrationCommand } from './commands/orchestration.js';
 import { tryHandleSessionCommand } from './commands/session.js';
 import { tryHandleGuardCommand } from './commands/guard.js';
@@ -35,7 +36,7 @@ export const SLASH_COMMANDS = [
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
-  '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget',
+  '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
   '/continue', '/auto-review', '/vim', '/statusline', '/quiet', '/release-notes',
@@ -93,6 +94,9 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/working reset confirm', desc: 'Clear the canvas' },
       { cmd: '/forget <recordId>', desc: 'Archive a memory record by ID' },
       { cmd: '/memories', desc: 'Manage memory pipeline + consolidate to filesystem' },
+      { cmd: '/brain [agents]', desc: 'Brain-agent health: per-agent status, 24h success rate, pending jobs' },
+      { cmd: '/brain run <agentId>', desc: 'Manually enqueue a brain-agent run' },
+      { cmd: '/brain retry <jobId>', desc: 'Re-arm a failed/cancelled brain job' },
       { cmd: '/handover', desc: 'Generate continuation note for next session' },
       { cmd: '/explain <query>', desc: 'Why recall returned what it did' },
       { cmd: '/failed [area]', desc: 'Past failed attempts for a problem area' },
@@ -295,6 +299,7 @@ export async function handleSlashCommand(
   if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;
+  if (await tryHandleBrainCommand(cmdCtx)) return;
   if (await tryHandleOrchestrationCommand(cmdCtx)) return;
   if (await tryHandleSessionCommand(cmdCtx)) return;
   if (await tryHandleGuardCommand(cmdCtx)) return;
