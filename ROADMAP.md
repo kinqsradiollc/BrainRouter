@@ -28,35 +28,16 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop + CLI knobs → `config.json` | Shipped — 2026-05-28 |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Merged — 2026-05-29 · publish pending |
-| **[0.4.x](brainrouter-roadmap/0.4.x.md)** (0.4.2–0.4.3) | Federation Stage 5, CLI multi-agent Phases 5-6, brain-side capture/tree/blackboard | Planned |
-| **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI and plugin marketplace | Sketched |
+| **[0.4.x](brainrouter-roadmap/0.4.x.md)** (0.4.2–0.4.3) | Federation Stage 5, CLI multi-agent Phases 5-6, brain-side capture/tree/blackboard, **CLI parity (workflows / review / effort / background)** | Planned |
+| **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
 
 ## What Each Upcoming Release Means
 
-> Shipped releases (0.3.x, 0.4.0) live in [`CHANGELOG.md`](CHANGELOG.md)
+> Shipped releases (0.3.x, 0.4.0, 0.4.1) live in [`CHANGELOG.md`](CHANGELOG.md)
 > and `brainrouter-changelog/`. This section only describes work that is
 > still ahead.
-
-### 0.4.1 — Federation Handoff + Ownership + Brain Job Queue *(Next)*
-
-- **Federation Stage 4 — work handoff.** `/handoff <target>` packet
-  (reuses the multi-agent `ParentExecutionContextSnapshot`),
-  `<clientKind>:next-idle` resolution, accept/decline on the receiver,
-  and a `memory_recall` fallback for non-BrainRouter receivers.
-- **Multi-Agent Phase 3 — ownership.** `spawn_agents` gains
-  `ownership` globs; write/shell fan-out is refused without one;
-  `writeFile`/`editFile`/`applyPatch` enforce the glob.
-- **Multi-Agent Phase 4 — budgeting + gates.** Tool-surface budgeting,
-  supervisor gates, per-agent accounting, and auto-chaining.
-- **Augmentations A1–A4** (deferred from 0.4.0): project (multi-folder)
-  scope, apply-time memory dedup, modular ranking refactor, and a
-  pluggable tracing backend (`cli.tracingBackend`).
-- **Brain-side Phase 1 — job queue + agent registry.** `memory_jobs`
-  table, a `BrainAgent` registry wrapping the existing pipeline stages,
-  and `memory_agent_status` / `memory_agent_run` / `memory_job_retry`
-  MCP tools with a dashboard/CLI health surface.
 
 ### 0.4.x (0.4.2–0.4.3) — Durable Orchestration and Brain Agents
 
@@ -75,6 +56,32 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 - Cross-harness handoff UX on top of federation.
 - **Brain-side Phase 6:** engineering sync providers (Git, GitHub, local docs,
   terminal logs) and proactive situation reports. Tasks: `BRAIN-P6-TN`.
+
+### CLI Parity (rolling — 0.4.2 → 0.5.0)
+
+Bringing the CLI up to the leading agentic-CLI feature bar. Grouped by
+area; each item lands in the version noted.
+
+- **Workflows & orchestration (0.4.2).** A durable workflow engine that
+  drives many child agents as one managed, persisted background run; a
+  `/workflows` view that shows live run status/output (not just artifact
+  folders); and proactive notifications when a background run finishes
+  while you're idle.
+- **Review & quality (0.4.2).** `/review --fix` to apply review findings to
+  the working tree, and a first-class `/simplify` command (cleanup-only:
+  reuse / simplification / efficiency).
+- **Effort & model (0.4.2).** An extra-high `/effort xhigh` level; a
+  `/model` "this session only" option (vs set-as-default); and a runtime
+  fallback model when the primary is unavailable.
+- **Background & shell UX (0.4.2–0.4.3).** A `!` shell escape from the
+  composer (with a backgrounded variant) and `/bg` to push the current
+  response to the background.
+- **Extensibility polish (0.5.0).** `/reload-skills`; `disallowed-tools` in
+  skill/command frontmatter; a message-display hook; first-use approval for
+  third-party MCP servers; and real modal vim editing in the composer.
+
+*Out of scope:* remote control / mobile push and first-party browser
+control (would arrive only via an external MCP server, not core).
 
 ---
 
