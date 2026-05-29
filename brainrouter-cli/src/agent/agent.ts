@@ -1901,6 +1901,8 @@ export class Agent {
           if (!allowed.has(name) && isLocal) {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
+          // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
+          this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           if (isOrchestrationToolName(name)) {
             resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
             summary = getToolSummary(name, args, resultText);
@@ -2188,6 +2190,16 @@ export class Agent {
     // 0.3.9 item 10 — roll cache stats into session totals.
     this.sessionUsage.cachedTokens += this.lastTurnUsage.cachedTokens;
     this.sessionUsage.missedTokens += this.lastTurnUsage.missedTokens;
+    // 0.4.x-4 (`/context`) — bucket this turn's usage by the skill in effect.
+    {
+      const skillKey = this.activeSkill ?? 'chat';
+      const b = this.usageBySkill.get(skillKey) ?? { promptTokens: 0, completionTokens: 0, turns: 0, calls: 0 };
+      b.promptTokens += this.lastTurnUsage.promptTokens;
+      b.completionTokens += this.lastTurnUsage.completionTokens;
+      b.calls += this.lastTurnUsage.calls;
+      b.turns += 1;
+      this.usageBySkill.set(skillKey, b);
+    }
 
     // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
     // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
@@ -2826,6 +2838,16 @@ export class Agent {
     compactedToolCharsAvoided: 0,
   };
 
+  /**
+   * 0.4.x-4 (`/context`) — per-skill token accounting. Each completed turn's
+   * usage is bucketed by the `activeSkill` in effect that turn (or `chat`
+   * when none), so `/context` can show where the session's tokens went.
+   */
+  public usageBySkill: Map<string, { promptTokens: number; completionTokens: number; turns: number; calls: number }> = new Map();
+
+  /** 0.4.x-4 (`/context`) — per-tool call counts (which tools ran, how often). */
+  public toolCallCounts: Map<string, number> = new Map();
+
   /** Last assistant message of the most recent turn — used by `/copy`. */
   public lastAnswer = '';
 
@@ -2895,6 +2917,9 @@ export class Agent {
       recallRecordsConsulted: 0,
       compactedToolCharsAvoided: 0,
     };
+    // 0.4.x-4 — per-skill + per-tool accounting is session-scoped too.
+    this.usageBySkill = new Map();
+    this.toolCallCounts = new Map();
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;

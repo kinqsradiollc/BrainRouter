@@ -8,6 +8,7 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { listSessions } from '../../orchestration/orchestrator.js';
+import { formatContextReport } from '../../runtime/contextReport.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
 import { getCliStateFile } from '../../state/cliState.js';
@@ -203,6 +204,47 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       if (cost.sessionCacheSavedUsd > 0) {
         console.log(`  Cache saved: ${chalk.green(`$${cost.sessionCacheSavedUsd.toFixed(4)}`)} ${chalk.gray('this session vs. no-cache baseline.')}`);
       }
+      console.log();
+      return true;
+    }
+    case '/context':
+    {
+      // 0.4.x-4 — where did this session's tokens go? Total + per-skill
+      // (bucketed at each turn by activeSkill) + per-briefing + per-tool
+      // (call counts). `/context current` narrows to the active skill.
+      const scope: 'all' | 'current' = (args[0] ?? '').toLowerCase() === 'current' ? 'current' : 'all';
+      const session = agent.sessionUsage;
+      const children = listSessions(agent.workspaceRoot).filter(
+        (s) => s.usage && s.parentSessionKey === agent.sessionKey,
+      );
+      const childAgg = children.reduce(
+        (acc, c) => ({
+          count: acc.count + 1,
+          promptTokens: acc.promptTokens + (c.usage?.promptTokens ?? 0),
+          completionTokens: acc.completionTokens + (c.usage?.completionTokens ?? 0),
+          calls: acc.calls + (c.usage?.calls ?? 0),
+        }),
+        { count: 0, promptTokens: 0, completionTokens: 0, calls: 0 },
+      );
+      const lines = formatContextReport({
+        scope,
+        currentSkill: agent.activeSkill ?? null,
+        session: {
+          promptTokens: session.promptTokens,
+          completionTokens: session.completionTokens,
+          turns: session.turns,
+          calls: session.calls,
+        },
+        bySkill: Array.from(agent.usageBySkill.entries()).map(([skill, u]) => ({ skill, ...u })),
+        byTool: Array.from(agent.toolCallCounts.entries()).map(([tool, count]) => ({ tool, count })),
+        briefing: {
+          tokensInjected: agent.memoryMetrics.briefingTokensInjected,
+          recordsConsulted: agent.memoryMetrics.recallRecordsConsulted,
+        },
+        children: childAgg,
+      });
+      console.log(chalk.bold(`\n📊 Context — token breakdown (${scope})`));
+      for (const line of lines) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
       console.log();
       return true;
     }
