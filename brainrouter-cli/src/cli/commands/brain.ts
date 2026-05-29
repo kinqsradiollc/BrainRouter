@@ -136,9 +136,44 @@ export async function tryHandleBrainCommand(ctx: CommandContext): Promise<boolea
       console.log(chalk.green(`\nJob ${jobId} → ${res.parsed?.status}.\n`));
       return true;
     }
+    case 'why': {
+      // MAS-P6-T2 — provenance trail for a memory record. Read-only.
+      const memoryId = args[1];
+      if (!memoryId) {
+        console.log(chalk.yellow('\nUsage: /brain why <memoryId>\n'));
+        return true;
+      }
+      const res = await callMcpTool<any>(mcpClient, 'memory_provenance', { memoryId });
+      if (res.isError) {
+        console.log(chalk.red(`\nmemory_provenance failed: ${res.text || '(no message)'}\n`));
+        return true;
+      }
+      const p = res.parsed;
+      if (!p?.found) {
+        console.log(chalk.yellow(`\nNo memory record found for "${memoryId}".\n`));
+        return true;
+      }
+      console.log(chalk.bold(`\nProvenance — ${chalk.cyan(p.recordId)}`));
+      console.log(`  ${chalk.gray('type:')} ${p.type ?? '?'}   ${chalk.gray('status:')} ${p.active ? chalk.green('active') : chalk.gray(p.status ?? '?')}`);
+      if (p.sourceKind) console.log(`  ${chalk.gray('source:')} ${p.sourceKind}`);
+      if (p.verificationStatus) console.log(`  ${chalk.gray('verification:')} ${p.verificationStatus}`);
+      console.log(`  ${chalk.gray('confidence:')} ${p.confidence ?? '?'}   ${chalk.gray('cited:')} ${p.citationCount ?? 0}×   ${chalk.gray('created:')} ${p.createdTime ?? '?'}`);
+      if (p.contentPreview) console.log(`  ${chalk.gray('content:')} ${p.contentPreview}`);
+      if (Array.isArray(p.evidence) && p.evidence.length) {
+        console.log(chalk.gray('  evidence:'));
+        for (const e of p.evidence) console.log(`    - ${e.kind}: ${e.ref}`);
+      } else {
+        console.log(chalk.gray('  evidence: (none)'));
+      }
+      if (p.supersededBy) {
+        console.log(chalk.yellow(`  superseded by ${p.supersededBy.recordId}: ${p.supersededBy.preview}`));
+      }
+      console.log();
+      return true;
+    }
     default: {
       console.log(chalk.yellow(`\nUnknown /brain subcommand: ${sub}`));
-      console.log(chalk.gray('  /brain agents · /brain run <agentId> · /brain retry <jobId>\n'));
+      console.log(chalk.gray('  /brain agents · /brain run <agentId> · /brain retry <jobId> · /brain why <memoryId>\n'));
       return true;
     }
   }
