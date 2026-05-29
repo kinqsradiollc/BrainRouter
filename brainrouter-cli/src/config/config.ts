@@ -142,6 +142,8 @@ export interface CliKnobs {
   sandboxWritePaths?: string[];
   /** Allow outbound network from the sandbox. Default false. */
   sandboxNetwork?: boolean;
+  /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
+  notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
   childDrainTimeoutMs?: number;
   /** Maximum spawn depth. Default 3. */
@@ -359,6 +361,7 @@ export interface ResolvedCliKnobs {
   sandboxReadPaths: string[];
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
+  notifyBell: boolean;
   childDrainTimeoutMs: number;
   maxSpawnDepth: number;
   autoChainMaxFollowups: number;
@@ -409,6 +412,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxReadPaths: c.sandboxReadPaths ?? [],
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
+    notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
