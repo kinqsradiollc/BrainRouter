@@ -68,6 +68,11 @@ export type MemoryType =
   | "file_history"
   | "command_knowledge";
 
+// The runtime list of every cognitive `MemoryType` lives in the
+// crypto-free `./memory-type-list.ts` so browser bundles (the dashboard
+// `/memories` filter) can import it without pulling `node:crypto`, which
+// the hash helpers below use. Re-exported from the package index.
+
 export type MemoryStatus = "active" | "superseded" | "archived" | "needs_verification";
 
 export type MemorySourceKind =
@@ -128,6 +133,14 @@ export interface CognitiveRecord {
    * surfacing across all workspaces until they're re-captured.
    */
   workspaceTag?: string | null;
+  /**
+   * AUG-A1 (0.4.1) — optional Project identifier grouping several
+   * workspaces under one logical project (a `.brainrouter/project.json`
+   * marker names it; `projectTagFromName` hashes that name). NULL means
+   * "no project context" — recall filters are NULL-tolerant so legacy /
+   * untagged records keep surfacing regardless of the active project.
+   */
+  projectTag?: string | null;
 }
 
 import { createHash } from "node:crypto";
@@ -145,6 +158,18 @@ import { createHash } from "node:crypto";
 export function workspaceTagFromPath(workspaceRoot: string | undefined | null): string | null {
   if (!workspaceRoot || workspaceRoot.trim() === "") return null;
   return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
+}
+
+/**
+ * AUG-A1 (0.4.1) — canonical Project tag from a project name (the
+ * `name` field of a `.brainrouter/project.json` marker). A 16-char
+ * hex SHA-256 prefix over the normalized name, so every workspace that
+ * declares the same project name shares one tag. Empty/missing → null.
+ */
+export function projectTagFromName(projectName: string | undefined | null): string | null {
+  const name = projectName?.trim().toLowerCase();
+  if (!name) return null;
+  return createHash("sha256").update(`project:${name}`).digest("hex").slice(0, 16);
 }
 
 /**
@@ -689,7 +714,7 @@ export interface GraphEdge {
 // ─── Brain-side design pass (0.4.0 — design only, no execution) ──────────
 //
 // The interfaces below capture the brain-agent registry + job-queue
-// surface the OpenHuman-borrows roadmap depends on. They are type
+// surface the brain-side roadmap depends on. They are type
 // stubs — no implementation lives in 0.4.0; Phase 1 (0.4.1) fleshes
 // them out. Lifted here so MCP tool drafts, dashboard surfaces, and
 // CLI consumers can already share the same shape.
@@ -835,10 +860,6 @@ export interface MemoryJobRecord {
  * record before it lands. Phase 5 wires the commit pipeline that
  * walks blackboard items into either `cognitive_records` (committed)
  * or `superseded` (merged into another candidate).
- *
- * Full lifecycle write-up:
- * [`FEATURE_OPENHUMAN_BRAINROUTER.md`](../FEATURE_OPENHUMAN_BRAINROUTER.md)
- * "Phase 5 — Blackboard and Memory Commit Pipeline".
  */
 export type MemoryBlackboardKind =
   | "candidate_record"
@@ -875,4 +896,57 @@ export interface MemoryBlackboardItem {
   createdAt: string;
   /** ISO timestamp when the item left `pending`. NULL while still pending. */
   decidedAt: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// BRAIN-P1 (0.4.1) — job-queue store surface.
+//
+// The `memory_jobs` table (BRAIN-DESIGN-T2) is global to a brain
+// instance (single-tenant per API key — OQ-3). Per-user routing lives
+// in `MemoryJobRecord.input`, never in a table column. These helper
+// types describe the store's CRUD surface; the scheduler layer
+// (`brainrouter/src/memory/scheduler/`) owns idempotency dedup + backoff.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** New-job parameters for `enqueueMemoryJob`. `kind` is a brain-agent id. */
+export interface MemoryJobEnqueueInput {
+  kind: string;
+  input: unknown;
+  /** Higher runs sooner. Defaults to 50. */
+  priority?: number;
+  /** Per-job override of the agent's `maxAttempts`. Defaults to 3. */
+  maxAttempts?: number;
+  /** ISO timestamp; job is ineligible until past this. Defaults to now. */
+  runAfter?: string;
+  /** Parent job id when spawned by another job's chain. */
+  parentJobId?: string | null;
+}
+
+/** Filters for `listMemoryJobs`. */
+export interface MemoryJobListFilters {
+  /** Restrict to a single brain-agent id. */
+  kind?: string;
+  /** One or more lifecycle states. */
+  status?: MemoryJobStatus | MemoryJobStatus[];
+  /** Max rows. Defaults to 100. */
+  limit?: number;
+}
+
+/**
+ * Per-kind rollup the `memory_agent_status` tool joins against the
+ * registry. One row per distinct `kind` that has at least one job.
+ */
+export interface MemoryJobKindAggregate {
+  kind: string;
+  /** Most recent job's status by `updatedAt`. */
+  lastStatus: MemoryJobStatus;
+  /** `updatedAt` of the most recent `done` job, else null. */
+  lastCompletedAt: string | null;
+  /** Count of `pending` jobs for this kind. */
+  pendingJobs: number;
+  /**
+   * done / (done + failed) over jobs updated in the last 24h. `null`
+   * when no terminal jobs landed in the window.
+   */
+  successRate24h: number | null;
 }

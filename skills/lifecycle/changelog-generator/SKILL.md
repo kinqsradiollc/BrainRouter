@@ -2,7 +2,7 @@
 name: changelog-generator
 description: Automatically creates user-facing changelogs from git commits by analyzing commit history, categorizing changes, and transforming technical commits into clear, customer-friendly release notes. Turns hours of manual changelog writing into minutes of automated generation.
 hints:
-  - Check openSrc/ or existing project files for CHANGELOG.md patterns and formats if available.
+  - Check existing project files for CHANGELOG.md patterns and formats if available.
   - Exclude developer-only noise (e.g. chore, simple refactoring, config updates) from user-facing logs.
   - Group additions into cohesive, standard categories: Features, Improvements, Bug Fixes, Breaking Changes, Security.
   - Translate technical implementation terms (e.g., class names, SQL keys) into user-facing benefits and actions.

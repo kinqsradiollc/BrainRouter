@@ -2,7 +2,7 @@
 name: shipping-skill
 description: Prepares production launches. Use when preparing to deploy to production. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy.
 hints:
-  - Check openSrc/ or existing project templates for launch/deployment procedures if available.
+  - Check existing project templates for launch/deployment procedures if available.
   - Structure releases using feature flags to decouple code deployment from functional release.
   - Implement a concrete, verified rollback script for codebase versions and database structures.
   - Evaluate pre-launch checklists covering performance targets, accessibility, and security standards.

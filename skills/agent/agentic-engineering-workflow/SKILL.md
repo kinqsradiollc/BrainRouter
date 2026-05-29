@@ -4,7 +4,7 @@ description: Provides an end-to-end operating system for building software with 
 hints: |
   - Keep each task small and PR-sized — one feature or fix at a time.
   - Build the minimal working version first, then run a cleanup pass.
-  - Never guess APIs — reference official docs or the openSrc/ folder (if present) before coding.
+  - Never guess APIs — reference official docs or local reference implementations (if present) before coding.
   - Run a review-fix loop after every PR until tests pass and review is clean.
   - Launch earlier than feels comfortable. Feedback beats perfection.
 ---
@@ -19,7 +19,7 @@ A repeatable operating system for building software with AI coding agents. The h
 
 - You are building an MVP, feature, internal tool, or AI-assisted product.
 - You want a repeatable AI coding workflow instead of random prompting.
-- You are using Cursor, Claude Code, Codex, Hermes, or another coding harness.
+- You are using any AI coding harness or agent.
 
 **When NOT to use:** One-off tiny edits where a normal direct prompt is sufficient.
 
@@ -33,7 +33,7 @@ HARNESS → SMALL TASK → SOURCE CONTEXT → BUILD MINIMAL → CLEANUP → REVI
 
 2. **Keep the task small.** Ask for one feature, one fix, or one reviewable unit at a time. If a plan is too large, ask the agent to split it into smaller PR-sized chunks.
 
-3. **Give source code as context when docs are not enough.** If you are using a package, SDK, framework, or open-source tool, tell the agent to search it before coding. If an `openSrc/` folder is present in the workspace, check its reference repositories for high-quality implementation examples. See `source-driven-skill` for the full pattern.
+3. **Give source code as context when docs are not enough.** If you are using a package, SDK, framework, or open-source tool, tell the agent to search it before coding. If local reference repositories are present in the workspace, check them for high-quality implementation examples. See `source-driven-skill` for the full pattern.
 
 4. **Build the minimal feature first.** Do not refactor the whole app while building the feature. Get the smallest working version running.
 

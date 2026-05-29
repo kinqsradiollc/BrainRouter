@@ -172,6 +172,48 @@ test('applyPatchEnvelope rejects malformed envelopes and ambiguous context', () 
   });
 });
 
+test('applyPatchEnvelope (MAS-P3) refuses writes outside the ownership glob, atomically', () => {
+  withTempWorkspace((ws) => {
+    fs.mkdirSync('src/owned', { recursive: true });
+    fs.writeFileSync('src/owned/a.txt', 'old\n');
+    // A patch that touches an in-bounds file AND an out-of-bounds file.
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/owned/a.txt',
+      '-old',
+      '+new',
+      '*** Add File: src/other/c.txt',
+      '+sneaky',
+      '*** End Patch',
+    ].join('\n');
+    assert.throws(
+      () => applyPatchEnvelope(patch, ws, 'src/owned/**'),
+      /ownership boundary "src\/owned\/\*\*"/,
+    );
+    // Atomic: the in-bounds file must NOT have been modified, and the
+    // out-of-bounds add must NOT exist — the whole patch is rejected up front.
+    assert.equal(fs.readFileSync('src/owned/a.txt', 'utf8'), 'old\n');
+    assert.equal(fs.existsSync('src/other/c.txt'), false);
+  });
+});
+
+test('applyPatchEnvelope (MAS-P3) allows writes inside the ownership glob', () => {
+  withTempWorkspace((ws) => {
+    fs.mkdirSync('src/owned', { recursive: true });
+    fs.writeFileSync('src/owned/a.txt', 'old\n');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/owned/a.txt',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const parsed = JSON.parse(applyPatchEnvelope(patch, ws, 'src/owned/**'));
+    assert.equal(parsed.applied.length, 1);
+    assert.equal(fs.readFileSync('src/owned/a.txt', 'utf8'), 'new\n');
+  });
+});
+
 test('findWorkspaceRoot promotes BrainRouter package cwd to parent monorepo', () => {
   withTempWorkspace((workspace) => {
     fs.writeFileSync('AGENT.md', '# Root instructions\n');

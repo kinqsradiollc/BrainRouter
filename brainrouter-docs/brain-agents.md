@@ -12,11 +12,6 @@ today (the type stubs in `packages/types/src/memory.ts` are
 importable now) and the implementer has a single source of
 truth tomorrow.
 
-Roadmap context: [`FEATURE_OPENHUMAN_BRAINROUTER.md`](../FEATURE_OPENHUMAN_BRAINROUTER.md)
-is the long-form rationale; [`FULL_TASKS.MD` §4.7](../FULL_TASKS.MD)
-tracks each `BRAIN-DESIGN-T*` item; the Phase 1 implementation
-plan lives in `§5.5` of the same file.
-
 ## What ships in 0.4.0
 
 **Design artefacts only.** Specifically:
@@ -37,8 +32,8 @@ What does **not** ship in 0.4.0:
   MCP handlers — the tools are doc-only until Phase 1.
 
 The boundary keeps the 0.4.0 cycle tight while letting downstream
-consumers (CLI `/brain` commands, dashboard widgets, the OpenHuman
-borrows) build against the contract early.
+consumers (CLI `/brain` commands, dashboard widgets) build against the
+contract early.
 
 ## Why we need brain agents at all
 
@@ -310,10 +305,6 @@ Three properties this gets us:
 - **Pluggable.** Adding a new "critique" agent in Phase 6 doesn't
   touch the committer — it just writes more `kind=critique` rows.
 
-The full lifecycle write-up lives in
-[`FEATURE_OPENHUMAN_BRAINROUTER.md`](../FEATURE_OPENHUMAN_BRAINROUTER.md)
-under "Phase 5 — Blackboard and Memory Commit Pipeline".
-
 ## Where the implementation will live (Phase 1, 0.4.1)
 
 For implementer reference — these paths don't exist yet:
@@ -346,6 +337,4 @@ brainrouter/src/api/routes/
 
 The CLI's `/brain agents` / `/brain jobs` / `/brain retry <id>` /
 `/brain why <memoryId>` commands (CLI Multi-Agent Phase 6) are also
-gated on this surface — see
-[`FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md`](../FEATURE_CLI_MULTI_AGENTS_LOGIC_ENHANCEMENT_TASKS.md)
-§19.
+gated on this surface.

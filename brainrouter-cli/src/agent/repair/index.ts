@@ -11,8 +11,6 @@
  * per-turn — see `agent/repair/flatten.ts` and the registration site
  * in `orchestration/tools.ts`.
  *
- * Adapted from openSrc/DeepSeek-Reasonix/src/repair/index.ts.
- *
  * The agent calls `ToolCallRepair.process(declaredCalls, reasoning,
  * content)` between LLM response and tool dispatch. The return shape
  * carries both the surviving call list AND a `RepairReport` the

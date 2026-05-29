@@ -1,5 +1,5 @@
 /**
- * Quality Evaluation Benchmark for BrainRouter Memory Engine vs agentmemory
+ * Quality Evaluation Benchmark for BrainRouter Memory Engine vs a BM25 baseline
  * 
  * Run with: npm run bench:quality
  */
@@ -156,7 +156,7 @@ function getActiveSkill(queryText: string): string | undefined {
   return undefined;
 }
 
-// ── Replicated BM25 class representing agentmemory search index ──
+// ── BM25 baseline search index ──
 class BM25Index {
   private docTerms = new Map<string, Map<string, number>>();
   private docLengths = new Map<string, number>();
@@ -216,7 +216,7 @@ class BM25Index {
   }
 }
 
-// ── Replicated agentmemory baseline runs ──
+// ── Baseline runs ──
 async function evalBuiltinMemory(observations: CompressedObservation[], queries: LabeledQuery[]): Promise<SystemMetrics> {
   const allText = observations.map(o =>
     `## ${o.title}\n${o.narrative}\nConcepts: ${o.concepts.join(", ")}\nFiles: ${o.files.join(", ")}`
@@ -337,7 +337,7 @@ async function evalBuiltinMemoryTruncated(observations: CompressedObservation[],
   };
 }
 
-async function evalAgentMemoryBM25(observations: CompressedObservation[], queries: LabeledQuery[]): Promise<SystemMetrics> {
+async function evalBaselineBM25(observations: CompressedObservation[], queries: LabeledQuery[]): Promise<SystemMetrics> {
   const index = new BM25Index();
   for (const obs of observations) {
     const text = [obs.title, obs.narrative, ...obs.concepts, ...obs.facts].join(" ");
@@ -369,7 +369,7 @@ async function evalAgentMemoryBM25(observations: CompressedObservation[], querie
   }
 
   return {
-    system: "agentmemory BM25-only",
+    system: "BM25-only baseline",
     avg_recall_at_5: avg(perQuery.map(q => q.recall_at_5)),
     avg_recall_at_10: avg(perQuery.map(q => q.recall_at_10)),
     avg_recall_at_20: avg(perQuery.map(q => q.recall_at_20)),
@@ -383,7 +383,7 @@ async function evalAgentMemoryBM25(observations: CompressedObservation[], querie
   };
 }
 
-async function evalAgentMemoryTriple(
+async function evalBaselineTriple(
   observations: CompressedObservation[],
   queries: LabeledQuery[],
   embeddings: Map<string, Float32Array>
@@ -394,7 +394,7 @@ async function evalAgentMemoryTriple(
     bm25.add(obs.id, text);
   }
 
-  // Build the mock Graph index representing agentmemory's Knowledge Graph
+  // Build the mock Graph index representing the baseline Knowledge Graph
   const conceptToNodes = new Map<string, string[]>(); // concept -> obsIds[]
   for (const obs of observations) {
     for (const concept of obs.concepts) {
@@ -448,7 +448,7 @@ async function evalAgentMemoryTriple(
     }
     const graphResults = Array.from(graphResultsMap.entries()).map(([id, score]) => ({ id, score }));
 
-    // 4. Blend using agentmemory Triple-stream RRF formula
+    // 4. Blend using the Triple-stream RRF formula
     const scores = new Map<string, { bmRank: number; vecRank: number; graphRank: number }>();
     bm25Results.forEach((r, idx) => {
       scores.set(r.id, { bmRank: idx + 1, vecRank: Infinity, graphRank: Infinity });
@@ -505,7 +505,7 @@ async function evalAgentMemoryTriple(
   }
 
   return {
-    system: "agentmemory Triple-stream",
+    system: "Triple-stream baseline",
     avg_recall_at_5: avg(perQuery.map(q => q.recall_at_5)),
     avg_recall_at_10: avg(perQuery.map(q => q.recall_at_10)),
     avg_recall_at_20: avg(perQuery.map(q => q.recall_at_20)),

@@ -2,7 +2,7 @@
 name: incremental-skill
 description: Delivers changes incrementally. Use when implementing any feature or change that touches more than one file. Use when you're about to write a large amount of code at once, or when a task feels too big to land in one step.
 hints:
-  - Check openSrc/ or existing project layouts for modular folder structures if available.
+  - Check existing project layouts for modular folder structures if available.
   - Implement code in thin vertical slices (e.g. database schema first, then api route, then frontend UI components).
   - Verify every single micro-slice immediately after implementation via test runner or build suites.
   - Wrap incomplete code blocks behind feature flags before merging to the main branch.

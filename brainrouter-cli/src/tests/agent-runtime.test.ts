@@ -1296,7 +1296,7 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
   for (const name of [
     'write_file', 'edit_file', 'apply_patch', 'run_command',
     'spawn_agent', 'spawn_agents',
-    'wait_agent', 'wait_agents', 'close_agent', 'route_agent',
+    'wait_agent', 'wait_agents', 'close_agent', 'route_task',
     'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice',
     'list_agents', 'read_agent_transcript',
   ]) {
@@ -1686,7 +1686,7 @@ test('runTurn: child tool events propagate to parent onChildToolStart / onChildT
 });
 
 // ---------------------------------------------------------------------------
-// 0.3.8-I4 — Strict tool-call recovery end-to-end (deer-flow pattern).
+// 0.3.8-I4 — Strict tool-call recovery end-to-end.
 // Pure-function helpers live in tool-call-recovery.test.ts; these exercise
 // the agent.ts integration: dedupe → parse-args recovery → orphan synthesis
 // → unknown-tool "did you mean" hint.

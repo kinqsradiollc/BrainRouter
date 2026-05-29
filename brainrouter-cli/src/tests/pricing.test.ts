@@ -38,9 +38,9 @@ test('pricingFor returns undefined on empty input', () => {
   assert.equal(pricingFor(undefined), undefined);
 });
 
-test('costUsd matches Reasonix telemetry math (deepseek-v4-flash example)', () => {
-  // From openSrc/DeepSeek-Reasonix/benchmarks/real-world-cache: 435M
-  // cached, 767K missed, 180K output. Cost should be ~$1.38.
+test('costUsd computes telemetry math correctly (deepseek-v4-flash example)', () => {
+  // Real-world cache benchmark: 435M cached, 767K missed, 180K output.
+  // Cost should be ~$1.38.
   const cost = costUsd('deepseek-v4-flash', {
     cachedTokens: 435_033_856,
     missedTokens: 767_616,

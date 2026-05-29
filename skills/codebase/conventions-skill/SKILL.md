@@ -3,7 +3,7 @@ name: conventions-skill
 description: Naming patterns, formatting rules, import order, and module design standards for modern software codebases.
 hints:
   - Inspect project root configuration files (e.g. .prettierrc, eslint.config.js) to align with existing styling tools.
-  - Check openSrc/ or existing project files for naming patterns and module architecture styles.
+  - Check existing project files for naming patterns and module architecture styles.
   - Follow kebab-case for system files and PascalCase for UI components (e.g. React components).
   - Keep functions focused and under 50 lines; extract complex logic into small, reusable helpers.
   - Eliminate console.log statements before committing, substituting appropriate logging utilities.

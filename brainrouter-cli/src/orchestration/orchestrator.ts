@@ -23,8 +23,19 @@ export interface ChildSessionRecord {
   tier?: Tier;
   /** Nesting depth in the spawn chain; 0 = direct child of the chat root. */
   depth?: number;
-  /** LLM usage attributable to this child (filled when the child completes). */
-  usage?: { promptTokens: number; completionTokens: number; calls: number; turns: number };
+  /**
+   * LLM usage attributable to this child (filled when the child completes).
+   * MAS-P4-T3 adds `offloadedChars` (output chars kept out of the parent's
+   * context via working-memory offload) and `wallClockMs` (spawn→complete).
+   */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    calls: number;
+    turns: number;
+    offloadedChars?: number;
+    wallClockMs?: number;
+  };
   /**
    * MAS-P2-M3 — typed snapshot of the parent's runtime state at the
    * moment of spawn. Persisted so `/agents show <id>` can render it
@@ -32,6 +43,10 @@ export interface ChildSessionRecord {
    * entry. See `orchestration/parentContext.ts`.
    */
   parentContext?: import('./parentContext.js').ParentExecutionContextSnapshot;
+  /** MAS-P4-T4 — follow-up roles auto-chained after this worker (e.g. ['reviewer','verifier']). */
+  autoChainFollowups?: string[];
+  /** 0.4.x-1 — true when spawned with an operator overlay (a bespoke one-off agent). */
+  synthetic?: boolean;
 }
 
 interface SessionsFile {

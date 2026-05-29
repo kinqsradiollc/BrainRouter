@@ -8,8 +8,6 @@
  * pairs, and `nestArguments()` re-nests at dispatch time before the
  * tool implementation sees the args.
  *
- * Adapted from openSrc/DeepSeek-Reasonix/src/repair/flatten.ts.
- *
  * Why these thresholds:
  *   - leaves >10  — empirically the breaking point for arg-dropping.
  *   - depth >2    — small models conflate a.b.c with a_b_c and lose

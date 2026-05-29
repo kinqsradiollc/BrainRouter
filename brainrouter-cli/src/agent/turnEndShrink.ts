@@ -20,10 +20,6 @@
  * results (those live in the append-only log per item 8). Shrinking
  * a log entry produces exactly one cache miss on the affected
  * message, then re-warms on every subsequent turn. Net win.
- *
- * Adapted from openSrc/DeepSeek-Reasonix/src/loop/shrink.ts
- * (`shrinkOversizedToolResultsByTokens`) and `src/context-manager.ts`
- * (HISTORY_FOLD_THRESHOLD).
  */
 
 import { compactToolOutput } from '../prompt/toolCompaction.js';

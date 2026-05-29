@@ -5,8 +5,6 @@
  * with identical arguments. Without intervention, we burn tokens and
  * rate-limit headroom while the model thrashes.
  *
- * Adapted from openSrc/DeepSeek-Reasonix/src/repair/storm.ts.
- *
  * Subtleties:
  *
  *   - Mutating calls (`write_file`, `edit_file`, `run_command --apply`)

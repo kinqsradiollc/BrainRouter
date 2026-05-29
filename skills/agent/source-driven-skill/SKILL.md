@@ -4,7 +4,7 @@ description: Grounds every implementation decision in official documentation or 
 hints: |
   - Read package.json (or equivalent) to detect exact versions before fetching docs.
   - Fetch the specific doc page for the feature — not the homepage, not the full docs.
-  - If an openSrc/ directory is present in the workspace, inspect its contents for reference implementations before writing code.
+  - If a local reference-repositories folder is present in the workspace, inspect its contents for reference implementations before writing code.
   - Cite every framework-specific decision with a full URL in code comments.
   - Flag anything that could not be verified as UNVERIFIED — never silently guess.
 ---
@@ -90,16 +90,16 @@ GOOD: Fetch docs.djangoproject.com/en/6.0/topics/auth/
 
 #### Option B — Local Source & Open Source References (when docs are weak or missing)
 
-If reference repositories or libraries are available locally in the workspace (for example, in an `openSrc/` folder or a `reference/repos/` folder), search them directly. This is the most current and practical source possible to discover working API usage patterns and connection/error-handling structures.
+If reference repositories or libraries are available locally in the workspace (for example, in a `reference/repos/` folder), search them directly. This is the most current and practical source possible to discover working API usage patterns and connection/error-handling structures.
 
 **Setup / Discovery:**
-1. Check if an `openSrc/` folder exists at the workspace root. If present, list its directories to see what reference repositories (such as `claude-code`, `agentmemory`, `openai-node`, etc.) are available.
-2. Place or look for local reference repos under: `openSrc/` or `reference/repos/github.com/company/project`
+1. Check if a local reference-repositories folder exists at the workspace root. If present, list its directories to see what reference repositories (your local reference repos) are available.
+2. Place or look for local reference repos under: `reference/repos/github.com/company/project`
 3. Add a note to your `AGENT.md` or `CLAUDE.md`:
 
 ```md
 When working with <library/tool>, reference the local open-source repos under:
-`openSrc/<repo-name>` or `reference/repos/<repo-name>`.
+`reference/repos/<repo-name>`.
 Do not guess API signatures. Search the source first, then implement.
 ```
 
@@ -109,7 +109,7 @@ Do not guess API signatures. Search the source first, then implement.
 Build <feature>. We use <library/tool>.
 
 Before coding:
-1. If available, search the `openSrc/` directory or `reference/repos/` for reference implementation examples of this library.
+1. If available, search the `reference/repos/` folder for reference implementation examples of this library.
 2. Identify the specific files/functions/patterns you are using as a model.
 3. Implement only the minimal service function and one calling component.
 4. Keep the diff small and clean.

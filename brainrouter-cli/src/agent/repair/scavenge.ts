@@ -8,8 +8,6 @@
  * to populate the standard `tool_calls` field. Without this pass, the
  * call is lost — the next turn re-asks for the same work.
  *
- * Adapted from openSrc/DeepSeek-Reasonix/src/repair/scavenge.ts.
- *
  * Three JSON shapes are accepted (mirroring real-world drift):
  *
  *   1. `{ name, arguments }`            (free-form)

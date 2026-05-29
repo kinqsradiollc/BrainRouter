@@ -26,7 +26,6 @@ import {
   createWaitAgentsTool,
   createReadAgentTranscriptTool,
   createCloseAgentTool,
-  createRouteAgentTool,
   createRouteTaskTool,
   executeOrchestrationTool,
   isOrchestrationToolName,
@@ -35,6 +34,8 @@ import {
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
+import { ownershipWriteViolation } from '../orchestration/ownership.js';
+import { applyToolScope, rankAndCapTools } from '../orchestration/toolBudget.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -44,6 +45,7 @@ import {
   type BriefingDecision,
 } from '../memory/briefingTriggers.js';
 import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
+import { applyFederationIdentity } from '../runtime/federationIdentity.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
 import { runHooks } from '../state/hooksStore.js';
@@ -62,7 +64,7 @@ import { computePrefixFingerprint } from '../runtime/contextRegions.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
-// truncation / storm). Adapted from openSrc/DeepSeek-Reasonix/src/repair/.
+// truncation / storm).
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
 // 0.3.9 token-tally rework: content-aware estimator. The compaction
 // threshold itself stays a single `BRAINROUTER_AUTO_COMPACT_TOKENS`
@@ -265,7 +267,7 @@ export interface RunTurnCallbacks {
   /**
    * TIER A streaming hooks — when any of these are provided, the agent
    * switches to a streaming LLM call (SSE) so the UI sees text appear
-   * character-by-character (grok-cli parity). When omitted (silent /
+   * character-by-character. When omitted (silent /
    * child agents / tests), the original non-streaming path is used.
    * Firing order per assistant turn:
    *   onAssistantTurnStart → onAssistantDelta* (and/or onReasoningDelta*)
@@ -374,6 +376,26 @@ export interface AgentOptions {
   tier?: 'chat' | 'reasoning' | 'worker';
   /** Nesting depth in the spawn chain; 0 = direct child of the chat root (default). */
   agentDepth?: number;
+  /**
+   * MAS-P3 ownership glob (e.g. `src/feature/**`). When set, this agent's
+   * file writes (`write_file` / `edit_file` / `apply_patch`) are refused
+   * outside the glob. Set by `spawn_agents` for parallel write-children so
+   * they can't collide; null/undefined = no boundary (the chat root).
+   */
+  ownership?: string | null;
+  /**
+   * MAS-P4-T1 — per-agent tool scoping from the agent definition. When set,
+   * the child only sees MCP tools allowed by `toolScope.mcp` (minus
+   * `disallowedTools`). Omitted = no scope filter (sees the full catalog,
+   * still subject to the budget cap).
+   */
+  toolScope?: { local: string[]; mcp: string[] };
+  disallowedTools?: string[];
+  /**
+   * 0.4.x-5 — per-child reasoning-effort override. When set, the child uses
+   * this instead of the session-resolved `/effort` for its turns.
+   */
+  effortOverride?: EffortLevel;
 }
 
 export const LOCAL_TOOLS = [
@@ -502,7 +524,6 @@ export const LOCAL_TOOLS = [
   createWaitAgentsTool(),
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
-  createRouteAgentTool(),
   createRouteTaskTool(),
   {
     name: 'ask_user_choice',
@@ -578,7 +599,7 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `openSrc/`, `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -850,6 +871,15 @@ export class Agent {
   public readonly tier?: 'chat' | 'reasoning' | 'worker';
   /** Spawn-chain depth (0 = direct chat-root child). Forwarded to hierarchy checks. */
   public readonly agentDepth: number;
+  /** MAS-P3 ownership glob; file writes outside it are refused. Null = no boundary. */
+  private ownership: string | null;
+  /** MAS-P4-T1 per-agent tool scope (from the agent def); undefined = no filter. */
+  private toolScope?: { local: string[]; mcp: string[] };
+  private disallowedTools: string[];
+  /** MAS-P4-T1 — MCP tools trimmed by the budget this turn (model-facing names). */
+  private lastBudgetHiddenTools = new Set<string>();
+  /** 0.4.x-5 — per-child reasoning-effort override; falls back to session /effort. */
+  private effortOverride?: EffortLevel;
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -874,6 +904,10 @@ export class Agent {
     this.systemPromptOverride = options.systemPromptOverride;
     this.parentTraceId = options.parentTraceId;
     this.parentSpanId = options.parentSpanId;
+    this.ownership = options.ownership ?? null;
+    this.toolScope = options.toolScope;
+    this.disallowedTools = options.disallowedTools ?? [];
+    this.effortOverride = options.effortOverride;
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
   }
@@ -931,6 +965,19 @@ export class Agent {
     return idx >= 0 ? rest.slice(0, idx) : undefined;
   }
 
+  /**
+   * MAS-P4-T1 — the most recent user message text, used to rank MCP tools by
+   * relevance when the catalog exceeds the budget. Empty string when there's
+   * no user turn yet (the cap then keeps the first N in stable order).
+   */
+  private latestUserText(): string {
+    for (let i = this.chatHistory.length - 1; i >= 0; i--) {
+      const m: any = this.chatHistory[i];
+      if (m?.role === 'user' && typeof m.content === 'string') return m.content;
+    }
+    return '';
+  }
+
   private allowedToolsForAccess(): Set<string> {
     // Lifecycle / inspection tools are always available regardless of access
     // mode — they don't touch the workspace and the agent needs them to end
@@ -938,7 +985,7 @@ export class Agent {
     const readOnly = new Set([
       'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
       'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
-      'read_agent_transcript', 'close_agent', 'route_agent',
+      'read_agent_transcript', 'close_agent', 'route_task',
       'goal_complete', 'goal_blocked',
       // ask_user_choice doesn't touch the workspace — it's an interaction
       // primitive, so it stays available in every access mode (and is gated
@@ -1003,13 +1050,13 @@ export class Agent {
     }
 
     const allowed = this.allowedToolsForAccess();
-    // OpenCode parity: collapse the orchestration surface the LLM sees onto
+    // Collapse the orchestration surface the LLM sees onto
     // task_agent (foreground) + delegate_agent (background). spawn_agent /
     // spawn_agents stay registered and executable (workflow.ts slash commands
     // still call them, and `executeOrchestrationTool` dispatches them) but
     // we don't advertise them to the model — that's what made the model
     // pick four overlapping tools at random instead of consistently using
-    // task_agent the way OpenCode users see Task get picked.
+    // task_agent.
     const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
     const filteredLocalTools = LOCAL_TOOLS.filter(
       (t) => allowed.has(t.name) && !MODEL_HIDDEN_TOOLS.has(t.name),
@@ -1018,7 +1065,30 @@ export class Agent {
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
-    const visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
+    let visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
+    // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
+    // (whitelist `toolScope.mcp` + blacklist `disallowedTools`), then cap the
+    // catalog to `cli.agentMcpToolBudget`, keeping the tools most relevant to
+    // the latest user turn. Trimmed tools are remembered so a model call to
+    // one returns a structured "hidden by budget" hint instead of a bare
+    // unknown-tool error.
+    this.lastBudgetHiddenTools = new Set();
+    if (this.toolScope || this.disallowedTools.length > 0) {
+      visibleMcpTools = applyToolScope(visibleMcpTools, {
+        allow: this.toolScope?.mcp,
+        disallow: this.disallowedTools,
+      });
+    }
+    const toolBudget = getCliKnobs().agentMcpToolBudget;
+    if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
+      const taskText = this.latestUserText();
+      const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
+      for (const t of hidden) {
+        this.lastBudgetHiddenTools.add(String(t?.name ?? ''));
+      }
+      visibleMcpTools = kept;
+      callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
+    }
     // MAS-P2-M1: synthesize one `delegate_<agentId>` tool per active
     // agent definition. Rebuilt every turn so a workspace agent JSON
     // edit or pack swap takes effect immediately. The bare
@@ -1150,9 +1220,9 @@ export class Agent {
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
     const REPEAT_GUARD_LIMIT = 3;
-    // OpenCode calls this class of failure a "doom loop": the same tool
+    // This class of failure is a "doom loop": the same tool
     // pattern repeats even if the arguments keep changing. Keep BrainRouter's
-    // threshold higher than OpenCode's identical-input approval guard so
+    // threshold higher than a strict identical-input approval guard so
     // normal multi-file exploration still works, but stop 20+ Read(...) spins.
     const recentToolSequences: string[] = [];
     const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
@@ -1183,6 +1253,29 @@ export class Agent {
       onChildComplete: (event) => {
         callbacks.onChildComplete?.(event);
       },
+      // MAS-P4-T2 — interactive delegation gate. Only the user-facing
+      // (non-silent) parent prompts; silent children leave this unset, so
+      // an `ask-*` policy fails closed for them (and the gate only asks at
+      // depth 0 anyway). askYesNo throws NoTTYError in headless runs, which
+      // we convert to a clear "no terminal" spawn error.
+      confirmDelegation: this.silent
+        ? undefined
+        : async (info) => {
+            const q =
+              `Delegation policy gate — allow spawning a ${info.role} agent (${info.access})?\n` +
+              `  Task: ${info.prompt.slice(0, 160)}${info.prompt.length > 160 ? '…' : ''}`;
+            try {
+              return await askYesNo(q, false);
+            } catch (err) {
+              if (err instanceof NoTTYError) {
+                throw new Error(
+                  'Delegation policy requires approval but no interactive terminal is attached. ' +
+                    'Set /delegation-policy auto to spawn non-interactively.',
+                );
+              }
+              throw err;
+            }
+          },
       // MAS-P2-M3 — surface parent runtime state so handleSpawn can
       // build the typed `ParentExecutionContextSnapshot`. Each accessor
       // reads live state at spawn time; missing data is fine, the
@@ -1217,8 +1310,9 @@ export class Agent {
       const invokeLlm = async () => {
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
-        // request's reasoning_effort slot — no restart needed.
-        const effort = resolveEffort(this.workspaceRoot).effort;
+        // request's reasoning_effort slot — no restart needed. A spawned
+        // child with a per-run effort override (0.4.x-5) uses that instead.
+        const effort = this.effortOverride ?? resolveEffort(this.workspaceRoot).effort;
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
         // callback is supplied — silent mode / children / tests stay on
@@ -1262,8 +1356,7 @@ export class Agent {
       try {
         response = await invokeLlm();
       } catch (err: any) {
-        // Layered LLM recovery — adapted from claude-code's queryLoop in
-        // openSrc/claude-code-openSource/src/query.ts. We detect context-
+        // Layered LLM recovery. We detect context-
         // window-exceeded errors (the single failure mode where a fresh
         // request is guaranteed to fail the same way) and trigger a
         // reactive compaction before retrying ONCE. Other errors propagate
@@ -1360,9 +1453,8 @@ export class Agent {
       // because one of the duplicates has no paired tool_result. Dedupe
       // before pushing the assistant message — last occurrence wins (closest
       // to the model's final intent).
-      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
-      //   middlewares/dangling_tool_call_middleware.py — same well-formed
-      //   history invariant, applied per-response instead of pre-request.
+      // Enforces the same well-formed history invariant as the pre-request
+      //   dangling-tool-call recovery, applied per-response instead.
       if (response.toolCalls && response.toolCalls.length > 0) {
         const deduped = dedupeToolCalls(response.toolCalls, (id) => {
           callbacks.onStatusUpdate(`Recovery: dropped duplicate tool_call id "${id}" (last occurrence wins).`);
@@ -1370,7 +1462,7 @@ export class Agent {
         response.toolCalls = deduped;
       }
 
-      // 0.3.9 item 11 — run the Reasonix-style repair pipeline on the
+      // 0.3.9 item 11 — run the repair pipeline on the
       // assistant's tool_calls before they reach dispatch:
       //   • scavenge — recover calls leaked into the content channel;
       //   • truncation — rebalance JSON in arguments cut off by
@@ -1527,7 +1619,7 @@ export class Agent {
         // with that preamble as the final answer — leaving the user staring
         // at an announcement of work the model never did. This is the most
         // common Gemma 2B / free-tier OS-model failure mode after we started
-        // teaching them OpenCode's "send a preamble before tool batches"
+        // teaching them to "send a preamble before tool batches"
         // pattern.
         //
         // Fire only when:
@@ -1719,8 +1811,27 @@ export class Agent {
             if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
               callbacks.onPlanUpdate(args.plan, args.explanation);
             }
+          } else if (this.lastBudgetHiddenTools.has(name)) {
+            // MAS-P4-T1: the model called an MCP tool that was trimmed from
+            // this turn's inventory by the tool budget. It's real and
+            // available — return a structured hint so the next turn can
+            // proceed (the tool re-enters the inventory when the task text
+            // makes it relevant, or raise cli.agentMcpToolBudget).
+            isError = true;
+            resultText = JSON.stringify({
+              ok: false,
+              error: `Tool "${name}" is available but was hidden this turn by the MCP tool budget (cli.agentMcpToolBudget). It will reappear when it's relevant to the task, or raise the budget.`,
+              suggested: Array.from(this.lastBudgetHiddenTools).slice(0, 8),
+            });
+            summary = `tool "${name}" hidden by budget`;
           } else {
-            const mcpRes = await this.mcpClient.callTool(name, args);
+            // Federation tools need THIS agent's federation identity, not
+            // the chat sessionKey the LLM sees in its prompt. Rewrite the
+            // identity fields at the boundary so "check my inbox" reads the
+            // key the poller/registry actually used (otherwise the read
+            // misses the federation-key inbox and comes back empty).
+            const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
+            const mcpRes = await this.mcpClient.callTool(name, mcpArgs);
             if (mcpRes.isError) {
               isError = true;
             }
@@ -1898,8 +2009,6 @@ export class Agent {
       // undefined and we don't accidentally claim a child was spawned.
       // Synthetics do NOT bump lastTurnToolCalls — they aren't real
       // dispatches, just a well-formed-history fix.
-      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
-      //   middlewares/dangling_tool_call_middleware.py.
       const producedResults = processed.filter((p): p is NonNullable<typeof p> => !!p).map((p) => p.toolMsg);
       const orphans = synthesizeOrphanResults(toolCalls, producedResults);
       for (const synthetic of orphans) {
@@ -2032,6 +2141,8 @@ export class Agent {
       }
       case 'write_file': {
         const resolved = resolveHere(args.path, { forWrite: true });
+        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
+        if (ownErr) throw new Error(ownErr);
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
@@ -2041,6 +2152,8 @@ export class Agent {
       }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
+        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
+        if (ownErr) throw new Error(ownErr);
         if (!fs.existsSync(resolved)) {
           throw new Error(`File not found: ${args.path}`);
         }
@@ -2251,7 +2364,7 @@ export class Agent {
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
         if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
-        return applyPatchEnvelope(patch, this.workspaceRoot);
+        return applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
       }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
@@ -2703,7 +2816,7 @@ export class Agent {
       activeSkill: this.activeSkill,
       executionMode: prefs.executionMode,
       reviewPolicy: prefs.reviewPolicy,
-      effort: resolveEffort(this.workspaceRoot).effort,
+      effort: this.effortOverride ?? resolveEffort(this.workspaceRoot).effort,
       connectedMcpTools,
       // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
       // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)
@@ -3112,7 +3225,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
  * Returns a JSON summary of operations performed; throws on a malformed envelope
  * or when an Update fails to match its context block uniquely.
  */
-export function applyPatchEnvelope(patch: string, workspaceRoot?: string): string {
+export function applyPatchEnvelope(patch: string, workspaceRoot?: string, ownership?: string | null): string {
   const text = patch.replace(/\r\n/g, '\n').trim();
   if (!text.startsWith('*** Begin Patch')) {
     throw new Error('apply_patch: missing "*** Begin Patch" header.');
@@ -3185,6 +3298,15 @@ export function applyPatchEnvelope(patch: string, workspaceRoot?: string): strin
 
   const applied: Array<{ kind: string; file: string }> = [];
   const wsRoot = workspaceRoot ?? fs.realpathSync(process.cwd());
+  // MAS-P3: validate EVERY op against the ownership boundary up front, so a
+  // multi-file patch never partially applies before hitting a violation.
+  if (ownership) {
+    for (const op of ops) {
+      const resolved = resolveWorkspacePath(wsRoot, op.file, { forWrite: op.kind !== 'delete' });
+      const ownErr = ownershipWriteViolation(ownership, wsRoot, resolved);
+      if (ownErr) throw new Error(`apply_patch: ${ownErr}`);
+    }
+  }
   for (const op of ops) {
     const resolved = resolveWorkspacePath(wsRoot, op.file, { forWrite: op.kind !== 'delete' });
     if (op.kind === 'add') {
@@ -3446,8 +3568,7 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  * `gpt-oss-20b` served from localhost via LM Studio gets the same
  * treatment as `gpt-5` on `api.openai.com`.
  *
- * Borrowed shape from openai-node's `ReasoningEffort` enum
- * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
+ * The `low|medium|high` values map
  * straight through to the provider field across OpenAI, DeepSeek,
  * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic-native
  * support was removed in 0.3.9; Claude models can still be reached

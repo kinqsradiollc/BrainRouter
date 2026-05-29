@@ -4,7 +4,7 @@ description: Breaks work into ordered tasks. Use when you have a spec or clear r
 hints: |
   - Always write the plan to a markdown file (e.g. IMPLEMENTATION_PLAN.md) before coding.
   - Break tasks into XS, S, or M sizes; never start an L or XL task without decomposing it further.
-  - If available, search the openSrc/ directory for open-source reference architectures to guide planning.
+  - If available, search local reference implementations for open-source reference architectures to guide planning.
   - Identify a clear verification step and acceptance criteria for every single task.
   - STOP and wait for human approval of the implementation plan before starting code changes.
 ---
@@ -33,7 +33,7 @@ Before writing any code, operate in read-only mode:
 
 - Run `list_template_docs` to see what structural constraints and project conventions exist.
 - Run `get_template_doc` to retrieve any project-specific constraints from the `docs/` folder (such as design themes, API structures, or schemas).
-- If an `openSrc/` directory is present in the workspace, inspect its reference repositories for high-quality architectural models or library integrations to guide your design.
+- If local reference repositories are present in the workspace, inspect them for high-quality architectural models or library integrations to guide your design.
 - Read the spec and relevant codebase sections
 - Identify existing patterns and conventions
 - Map dependencies between components
