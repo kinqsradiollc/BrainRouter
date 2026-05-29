@@ -392,6 +392,11 @@ export interface AgentOptions {
    */
   toolScope?: { local: string[]; mcp: string[] };
   disallowedTools?: string[];
+  /**
+   * 0.4.x-5 — per-child reasoning-effort override. When set, the child uses
+   * this instead of the session-resolved `/effort` for its turns.
+   */
+  effortOverride?: EffortLevel;
 }
 
 export const LOCAL_TOOLS = [
@@ -875,6 +880,8 @@ export class Agent {
   private disallowedTools: string[];
   /** MAS-P4-T1 — MCP tools trimmed by the budget this turn (model-facing names). */
   private lastBudgetHiddenTools = new Set<string>();
+  /** 0.4.x-5 — per-child reasoning-effort override; falls back to session /effort. */
+  private effortOverride?: EffortLevel;
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -902,6 +909,7 @@ export class Agent {
     this.ownership = options.ownership ?? null;
     this.toolScope = options.toolScope;
     this.disallowedTools = options.disallowedTools ?? [];
+    this.effortOverride = options.effortOverride;
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
   }
@@ -1304,8 +1312,9 @@ export class Agent {
       const invokeLlm = async () => {
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
-        // request's reasoning_effort slot — no restart needed.
-        const effort = resolveEffort(this.workspaceRoot).effort;
+        // request's reasoning_effort slot — no restart needed. A spawned
+        // child with a per-run effort override (0.4.x-5) uses that instead.
+        const effort = this.effortOverride ?? resolveEffort(this.workspaceRoot).effort;
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
         // callback is supplied — silent mode / children / tests stay on
@@ -2813,7 +2822,7 @@ export class Agent {
       activeSkill: this.activeSkill,
       executionMode: prefs.executionMode,
       reviewPolicy: prefs.reviewPolicy,
-      effort: resolveEffort(this.workspaceRoot).effort,
+      effort: this.effortOverride ?? resolveEffort(this.workspaceRoot).effort,
       connectedMcpTools,
       // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
       // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)
