@@ -35,6 +35,7 @@ import {
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
+import { ownershipWriteViolation } from '../orchestration/ownership.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -375,6 +376,13 @@ export interface AgentOptions {
   tier?: 'chat' | 'reasoning' | 'worker';
   /** Nesting depth in the spawn chain; 0 = direct child of the chat root (default). */
   agentDepth?: number;
+  /**
+   * MAS-P3 ownership glob (e.g. `src/feature/**`). When set, this agent's
+   * file writes (`write_file` / `edit_file` / `apply_patch`) are refused
+   * outside the glob. Set by `spawn_agents` for parallel write-children so
+   * they can't collide; null/undefined = no boundary (the chat root).
+   */
+  ownership?: string | null;
 }
 
 export const LOCAL_TOOLS = [
@@ -851,6 +859,8 @@ export class Agent {
   public readonly tier?: 'chat' | 'reasoning' | 'worker';
   /** Spawn-chain depth (0 = direct chat-root child). Forwarded to hierarchy checks. */
   public readonly agentDepth: number;
+  /** MAS-P3 ownership glob; file writes outside it are refused. Null = no boundary. */
+  private ownership: string | null;
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -875,6 +885,7 @@ export class Agent {
     this.systemPromptOverride = options.systemPromptOverride;
     this.parentTraceId = options.parentTraceId;
     this.parentSpanId = options.parentSpanId;
+    this.ownership = options.ownership ?? null;
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
   }
@@ -2039,6 +2050,8 @@ export class Agent {
       }
       case 'write_file': {
         const resolved = resolveHere(args.path, { forWrite: true });
+        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
+        if (ownErr) throw new Error(ownErr);
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
@@ -2048,6 +2061,8 @@ export class Agent {
       }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
+        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
+        if (ownErr) throw new Error(ownErr);
         if (!fs.existsSync(resolved)) {
           throw new Error(`File not found: ${args.path}`);
         }
@@ -2258,7 +2273,7 @@ export class Agent {
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
         if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
-        return applyPatchEnvelope(patch, this.workspaceRoot);
+        return applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
       }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
@@ -3119,7 +3134,7 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
  * Returns a JSON summary of operations performed; throws on a malformed envelope
  * or when an Update fails to match its context block uniquely.
  */
-export function applyPatchEnvelope(patch: string, workspaceRoot?: string): string {
+export function applyPatchEnvelope(patch: string, workspaceRoot?: string, ownership?: string | null): string {
   const text = patch.replace(/\r\n/g, '\n').trim();
   if (!text.startsWith('*** Begin Patch')) {
     throw new Error('apply_patch: missing "*** Begin Patch" header.');
@@ -3192,6 +3207,15 @@ export function applyPatchEnvelope(patch: string, workspaceRoot?: string): strin
 
   const applied: Array<{ kind: string; file: string }> = [];
   const wsRoot = workspaceRoot ?? fs.realpathSync(process.cwd());
+  // MAS-P3: validate EVERY op against the ownership boundary up front, so a
+  // multi-file patch never partially applies before hitting a violation.
+  if (ownership) {
+    for (const op of ops) {
+      const resolved = resolveWorkspacePath(wsRoot, op.file, { forWrite: op.kind !== 'delete' });
+      const ownErr = ownershipWriteViolation(ownership, wsRoot, resolved);
+      if (ownErr) throw new Error(`apply_patch: ${ownErr}`);
+    }
+  }
   for (const op of ops) {
     const resolved = resolveWorkspacePath(wsRoot, op.file, { forWrite: op.kind !== 'delete' });
     if (op.kind === 'add') {
