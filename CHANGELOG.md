@@ -13,6 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.4.1** | In flight | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
 | **0.3.9** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
@@ -21,6 +22,24 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
 this changelog.
+
+---
+
+## [0.4.1] - Unreleased
+
+In flight. Full notes accrue in
+[`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md).
+
+### Added
+
+- **Brain-side job queue + agent registry (BRAIN-P1, partial).** The
+  `memory_jobs` table makes every brain-side action a durable,
+  retryable row; the eight existing pipeline stages are formalised as a
+  data-driven `BrainAgent` registry; and three read/observe MCP tools
+  (`memory_agent_status`, `memory_agent_run`, `memory_job_retry`) let
+  the CLI/dashboard inspect and re-arm brain work. Wiring the live
+  pipeline onto each agent's `execute()` + runner loop (BRAIN-P1-T3) and
+  the health surface (BRAIN-P1-T5) land in follow-ups.
 
 ---
 
