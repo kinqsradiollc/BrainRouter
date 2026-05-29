@@ -11,6 +11,7 @@ import { PremiumModal } from "../../components/PremiumModal";
 import { InfiniteScrollSentinel } from "../../components/InfiniteScrollSentinel";
 import { MemoryCard } from "../../components/MemoryCard";
 import { FilterBar } from "../../components/FilterBar";
+import { FilterSelect } from "../../components/FilterSelect";
 import { useAuth } from "../../components/AuthProvider";
 
 // All cognitive memory types. Mirrors `COGNITIVE_MEMORY_TYPES` in
@@ -135,12 +136,13 @@ export default function MemoriesPage() {
         <FilterBar>
           <FilterBar.Row align="between">
             <FilterBar.Row>
-              <PremiumButton size="small" variant={!typeFilter ? "primary" : "ghost"} onClick={() => setTypeFilter("")}>All types</PremiumButton>
-              {TYPES.map((type) => (
-                <PremiumButton key={type} size="small" variant={typeFilter === type ? "primary" : "ghost"} onClick={() => setTypeFilter(type)}>
-                  {type}
-                </PremiumButton>
-              ))}
+              <FilterSelect
+                ariaLabel="Filter by memory type"
+                value={typeFilter}
+                onChange={setTypeFilter}
+                allLabel="All types"
+                options={TYPES.map((t) => ({ value: t, label: t.replace(/_/g, " ") }))}
+              />
             </FilterBar.Row>
             <FilterBar.Row>
               <PremiumButton size="small" variant={statusFilter === "active" ? "primary" : "ghost"} onClick={() => setStatusFilter("active")}>Active</PremiumButton>
