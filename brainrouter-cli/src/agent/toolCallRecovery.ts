@@ -1,9 +1,8 @@
 // Strict tool-call recovery helpers (0.3.8-I4 / roadmap §8).
 //
-// Adapted from deer-flow/backend/packages/harness/deerflow/agents/middlewares/
-//   dangling_tool_call_middleware.py — same pattern: detect tool_calls that
-//   never received a paired tool_result and inject synthetic placeholders so
-//   strict OpenAI-compatible validators don't reject the next request.
+// Detect tool_calls that never received a paired tool_result and inject
+//   synthetic placeholders so strict OpenAI-compatible validators don't
+//   reject the next request.
 //
 // These helpers are intentionally pure (no agent.ts imports) so they can be
 // unit-tested in isolation and reused if another runtime grows similar needs.
@@ -134,8 +133,8 @@ export function synthesizeOrphanResults<T extends ToolCallLike>(
  * Detect "stalled preamble" responses — short content that announces an
  * action ("I'll start by…", "Let me…", "Now I'll…") but isn't followed by
  * any tool_calls in the same assistant message. Smaller / weaker models
- * (Gemma 2B, free-tier OS) hit this often: they write the preamble that
- * Codex / OpenCode taught them to write but then forget to emit the actual
+ * (Gemma 2B, free-tier OS) hit this often: they write the preamble but
+ * then forget to emit the actual
  * tool_calls before yielding the turn, leaving the user staring at "I'll
  * start by exploring…" with no follow-through.
  *
@@ -155,8 +154,7 @@ export function looksLikeStalledPreamble(content: string | null | undefined): bo
   if (trimmed.length === 0) return false;
   if (trimmed.length > 400) return false;
 
-  // Common preamble starters lifted from OpenCode's beast.txt examples
-  // (`openSrc/opencode/packages/opencode/src/session/prompt/beast.txt:99-105`):
+  // Common preamble starters observed in the wild:
   // "Let me fetch the URL…", "Now, I will search…", "OK! Now let's…",
   // "I need to update several files here…". Anchored at start of string —
   // a sentence that begins this way and is short is overwhelmingly a
@@ -180,8 +178,8 @@ export function looksLikeStalledPreamble(content: string | null | undefined): bo
     /^Standby\b/i,
     /^Stand by\b/i,
     /^OK[!,.]?\s+(?:Now|Let)/i,
-    // Additional claude-code-observed preamble forms (open-source models
-    // trained on Claude Code transcripts emit these). Anchored at start of
+    // Additional preamble forms commonly emitted by open-source models.
+    // Anchored at start of
     // string so legitimate mid-sentence uses don't false-positive.
     /^Looking at\b/i,
     /^Checking\b/i,

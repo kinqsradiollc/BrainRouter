@@ -16,8 +16,7 @@ import { useTerminalSize } from './useTerminalSize.js';
  *      /logout       Clear API keys from the active profile
  *      ↑/↓ select  ·  ↵ confirm  ·  tab autocomplete  ·  esc cancel
  *
- * Filter ranking (lifted from openSrc/grok-cli/src/ui/slash-menu.ts +
- * openSrc/codex/codex-rs/tui/src/bottom_pane/command_popup.rs:143):
+ * Filter ranking:
  *
  *   0  command body starts with query  (best — same-prefix match)
  *   1  command body contains query

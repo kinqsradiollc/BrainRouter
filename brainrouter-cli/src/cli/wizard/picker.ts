@@ -23,9 +23,8 @@ import { buildTheme, type Theme, type ThemeMode } from '../theme.js';
  *   2. The picker owns its rendered region for its lifetime. NO call
  *      site may write to stdout while the picker is active — preview
  *      lines are returned from `onCursorChange` as a string[] that the
- *      picker splices into its own frame. (Pattern lifted from
- *      `openSrc/codex/codex-rs/tui/src/theme_picker.rs` — preview never
- *      writes; the redraw owns the change.)
+ *      picker splices into its own frame. (Preview never writes; the
+ *      redraw owns the change.)
  *   3. Redraw uses `\x1b[<N>F` (cursor up + col 0) + `\x1b[J` (erase to
  *      end of screen) to nuke the previous frame, then writes the new
  *      one. No `text + '\n'` off-by-one because we count the actual
@@ -294,7 +293,7 @@ interface FormattedRow {
 }
 
 function formatBodyRow(t: Theme, row: PickerRow, isSelected: boolean, valueColWidth: number, inner: number): string[] {
-  // Selected glyph: `›` lifted from openSrc/grok-cli/src/ui/components/SuggestionOverlay.tsx
+  // Selected glyph: `›`
   // (we use ▶ in the LLM-tool picker; switch to › for the internal picker
   // because it reads cleaner against the chalk gray + bold combo).
   const marker = isSelected ? t.primary('›') : ' ';

@@ -334,8 +334,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       } catch (err: any) {
         console.log(chalk.yellow(`Plan setup warning: ${err.message}`));
       }
-      // Workflow adapted from claude-code's feature-dev plugin
-      // (openSrc/claude-code/plugins/feature-dev/commands/feature-dev.md):
+      // Feature-development workflow:
       // 7 phases — Discovery → Codebase Exploration (parallel explorers) →
       // Clarifying Questions → Architecture (parallel architects) →
       // Implementation (HARD APPROVAL GATE) → Quality Review (parallel
