@@ -16,8 +16,9 @@ import { resolveSandboxConfig, runShell } from '../../runtime/sandbox.js';
 import { parseBangCommand } from '../../runtime/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { reconcileStaleWorkers } from '../../state/workerStore.js';
-import { reconcileStaleRuns } from '../../state/workflowRun.js';
+import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
+import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
+import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';
 import { expandMentions } from '../../memory/mentions.js';
 import {
   addGoalTokens,
@@ -238,6 +239,58 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       return 0;
     }
   };
+
+  // PARITY-W3 — idle background-completion notifications. Each tick we diff the
+  // set of terminal background actors (child agents, workers, workflow runs)
+  // against what we've already announced; anything new is surfaced as a
+  // print-above-prompt notice when the composer is idle. Seeded at startup so
+  // we never dump history on the first tick.
+  const notifiedCompletions = new Set<string>();
+  const getRunningWorkerCount = (): number => {
+    try { return listWorkers(agent.workspaceRoot).filter((w) => w.status === 'running').length; }
+    catch { return 0; }
+  };
+  const collectTerminalCompletions = (): CompletionItem[] => {
+    const items: CompletionItem[] = [];
+    try {
+      for (const s of listSessions(agent.workspaceRoot)) {
+        if (s.status === 'completed' || s.status === 'failed') {
+          const label = s.label ? `"${s.label}"` : s.id;
+          items.push({ id: `agent:${s.id}`, label: `agent ${label} ${s.status}`, ok: s.status === 'completed' });
+        }
+      }
+    } catch { /* ignore */ }
+    try {
+      for (const w of listWorkers(agent.workspaceRoot)) {
+        if (w.status === 'completed' || w.status === 'failed') {
+          items.push({ id: `wkr:${w.id}`, label: `worker ${w.id} (${w.role}) ${w.status}`, ok: w.status === 'completed' });
+        }
+      }
+    } catch { /* ignore */ }
+    try {
+      for (const r of listRuns(agent.workspaceRoot)) {
+        if (r.status === 'completed' || r.status === 'failed' || r.status === 'interrupted') {
+          items.push({ id: `run:${r.slug}`, label: `workflow ${r.slug} ${r.status}`, ok: r.status === 'completed' });
+        }
+      }
+    } catch { /* ignore */ }
+    return items;
+  };
+  const notifyIdleCompletions = (): void => {
+    const fresh = newlyTerminal(notifiedCompletions, collectTerminalCompletions());
+    for (const item of fresh) {
+      // Only announce (and mark seen) when idle — a completion observed
+      // mid-turn stays unseen so it surfaces once the user is back at the
+      // prompt rather than scrolling past under the active turn.
+      if (isProcessing || pendingContinuation || exited || !controller) continue;
+      notifiedCompletions.add(item.id);
+      controller.push.notice(formatCompletionNotice(item), item.ok ? 'info' : 'warn');
+      try { if (getCliKnobs().notifyBell && process.stdout.isTTY) process.stdout.write(''); } catch { /* bell is best-effort */ }
+    }
+  };
+  // Establish the baseline of already-terminal actors so only completions that
+  // happen AFTER this session opened are announced.
+  try { for (const item of collectTerminalCompletions()) notifiedCompletions.add(item.id); } catch { /* noop */ }
 
   // gh-PR detector cache — same 30s TTL as the readline REPL so the
   // statusline doesn't pay 300ms per prompt redraw.
@@ -657,6 +710,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // count decrements when they finish — without this the "· N working"
       // pill would stick until the user types something.
       ensureChildRefreshTimer();
+      // PARITY-W3: now that the turn is over (isProcessing=false), surface any
+      // background actor that finished WHILE the turn was running — those were
+      // held back so they didn't scroll past under the active turn.
+      notifyIdleCompletions();
       armIdleHint();
     }
   };
@@ -671,19 +728,23 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   let childRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let lastChildCount = 0;
   const tickChildRefresh = () => {
+    // PARITY-W3: announce any background actor that finished since last tick.
+    notifyIdleCompletions();
     const count = getRunningChildCount();
     if (count !== lastChildCount) {
       lastChildCount = count;
       refreshFooter();
     }
-    if (count === 0 && childRefreshTimer) {
+    // Keep ticking while ANY background actor (child session or worker) is
+    // live, so a lone worker finishing while idle is still caught.
+    if (count === 0 && getRunningWorkerCount() === 0 && childRefreshTimer) {
       clearInterval(childRefreshTimer);
       childRefreshTimer = null;
     }
   };
   const ensureChildRefreshTimer = () => {
     if (childRefreshTimer) return;
-    if (getRunningChildCount() === 0) return;
+    if (getRunningChildCount() === 0 && getRunningWorkerCount() === 0) return;
     childRefreshTimer = setInterval(tickChildRefresh, 3000);
   };
 
