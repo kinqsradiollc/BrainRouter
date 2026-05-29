@@ -819,6 +819,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   // Resolve agent definition via agentId (registry) or role (legacy).
   let role: ReturnType<typeof resolveRole>;
   let childTier: Tier | undefined;
+  // MAS-P4-T1: an agent def may scope which MCP tools its children see.
+  let childToolScope: { local: string[]; mcp: string[] } | undefined;
+  let childDisallowedTools: string[] | undefined;
 
   if (typeof args.agentId === 'string' && args.agentId.trim()) {
     const loaded = findById(args.agentId.trim(), ctx.workspaceRoot);
@@ -833,6 +836,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       promptOverlay: loaded.def.prompt,
     };
     childTier = loaded.def.tier;
+    childToolScope = loaded.def.toolScope;
+    childDisallowedTools = loaded.def.disallowedTools;
   } else {
     const roleName = String(args.role ?? '');
     if (!roleName.trim()) throw new Error('spawn_agent requires either "agentId" or "role".');
@@ -977,6 +982,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     agentDepth: currentDepth + 1,
     // MAS-P3: the ownership glob gates this child's file writes.
     ownership,
+    // MAS-P4-T1: the agent def's tool scope limits the child's MCP surface.
+    toolScope: childToolScope,
+    disallowedTools: childDisallowedTools,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
