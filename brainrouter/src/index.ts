@@ -105,6 +105,7 @@ import { personaRouter } from './api/routes/persona.js';
 import { sessionsRouter } from './api/routes/sessions.js';
 import { contradictionsRouter } from './api/routes/contradictions.js';
 import { statsRouter } from './api/routes/stats.js';
+import { brainRouter } from './api/routes/brain.js';
 import { graphRouter } from './api/routes/graph.js';
 import { authRouter } from './api/routes/auth.js';
 import { chatCompletionsRouter } from './api/routes/chat-completions.js';
@@ -455,6 +456,7 @@ if (USE_HTTP) {
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
+  app.use("/api/brain", brainRouter);
   app.use("/api/graph", graphRouter);
   app.use("/api", governanceRouter);
   app.use("/api/evidence", evidenceRouter);

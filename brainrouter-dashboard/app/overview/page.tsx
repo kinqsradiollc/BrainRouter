@@ -10,6 +10,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { LiveSessionsPanel } from "../../components/LiveSessionsPanel";
+import { BrainAgentsPanel } from "../../components/BrainAgentsPanel";
 import { useAuth } from "../../components/AuthProvider";
 
 const containerVariants = {
@@ -112,6 +113,11 @@ export default function Page() {
         {/* Federation Stage 2 (FED-S2-T7): live peer sessions */}
         <motion.div variants={itemVariants}>
           <LiveSessionsPanel client={client} />
+        </motion.div>
+
+        {/* BRAIN-P1-T5 (0.4.1): brain-agent health */}
+        <motion.div variants={itemVariants}>
+          <BrainAgentsPanel />
         </motion.div>
 
         {/* Asymmetric Bento Grid Details */}
