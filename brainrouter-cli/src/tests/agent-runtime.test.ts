@@ -1296,7 +1296,7 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
   for (const name of [
     'write_file', 'edit_file', 'apply_patch', 'run_command',
     'spawn_agent', 'spawn_agents',
-    'wait_agent', 'wait_agents', 'close_agent', 'route_agent',
+    'wait_agent', 'wait_agents', 'close_agent', 'route_task',
     'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice',
     'list_agents', 'read_agent_transcript',
   ]) {

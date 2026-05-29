@@ -166,14 +166,13 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
   'wait_agents',
   'read_agent_transcript',
   'close_agent',
-  'route_agent',
   'route_task',
 ]);
 
 /**
  * Heuristic auto-router. Maps a free-text task to the best role based on
- * leading verbs and intent keywords. Pure text-classification — callers can
- * opt in via `route_agent` without first spending an LLM turn.
+ * leading verbs and intent keywords. Pure text-classification — used by
+ * `route_task` and the batch-spawn role inference, no LLM turn required.
  */
 export function inferRoleFromTask(task: string): 'explorer' | 'architect' | 'reviewer' | 'worker' | 'verifier' {
   const t = task.trim().toLowerCase();
@@ -475,19 +474,6 @@ export function createWaitAgentsTool() {
   };
 }
 
-export function createRouteAgentTool() {
-  return {
-    name: 'route_agent',
-    description:
-      'DEPRECATED — use `route_task` (MAS-P2-M2). Recommend a role (explorer/architect/reviewer/worker/verifier) for a task without spawning. The new tool returns a richer 4-tier policy decision (answer-direct / direct-tool / spawn-inline / spawn-worker) plus confidence + memory evidence.',
-    inputSchema: {
-      type: 'object',
-      properties: { task: { type: 'string' } },
-      required: ['task'],
-    },
-  };
-}
-
 /**
  * MAS-P2-M2 — `route_task` tool. Returns a typed 4-tier policy
  * decision (answer-direct / direct-tool / spawn-inline / spawn-worker)
@@ -647,8 +633,6 @@ export async function executeOrchestrationTool(
       return handleReadTranscript(args, ctx);
     case 'close_agent':
       return handleClose(args, ctx);
-    case 'route_agent':
-      return handleRoute(args);
     case 'route_task':
       return await handleRouteTask(args, ctx);
     default:
@@ -804,24 +788,6 @@ async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<st
   // the cost split (and offload savings) of the whole batch at a glance.
   const childTotals = aggregateChildUsage(settled);
   return JSON.stringify({ waited: settled.length, agents: settled, childTotals }, null, 2);
-}
-
-function handleRoute(args: any): string {
-  const task = String(args?.task ?? '');
-  if (!task.trim()) throw new Error('route_agent requires `task`.');
-  const role = inferRoleFromTask(task);
-  const rationale = explainRoute(task, role);
-  return JSON.stringify({ task: task.slice(0, 200), role, rationale }, null, 2);
-}
-
-function explainRoute(task: string, role: string): string {
-  switch (role) {
-    case 'explorer': return 'Verbs like "investigate / explore / map / find" → read-only investigation child.';
-    case 'architect': return 'Verbs like "design / propose / plan / outline" → architect proposes ≥2 design alternatives.';
-    case 'reviewer': return 'Verbs like "review / critique / evaluate" → reviewer reads diff, returns severity-ordered findings.';
-    case 'verifier': return 'Verbs like "test / verify / typecheck" → verifier runs the suite and reports PASS/FAIL.';
-    default: return 'Default → worker (write access for implementation).';
-  }
 }
 
 async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string> {
