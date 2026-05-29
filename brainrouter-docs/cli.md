@@ -658,6 +658,7 @@ tall ones. `/help <category>` drills in.
 | `/stop` | Send stop signal to all running children. |
 | `/auto-chain [review\|verify\|both\|off]` | After each worker child finishes, auto-chain a reviewer and/or verifier follow-up on its output (capped at `cli.autoChainMaxFollowups`, default 2). |
 | `/auto-review [on\|off]` | Thin alias for `/auto-chain review\|off`. |
+| `/delegation-policy [auto\|ask-before-spawn\|ask-before-write-child\|no-children]` | Gate whether/when the agent may spawn child agents. `ask-*` prompts before a top-level spawn (interactive only — fails closed headless); `no-children` blocks all spawns. Persisted per workspace. |
 
 ### Guard
 
