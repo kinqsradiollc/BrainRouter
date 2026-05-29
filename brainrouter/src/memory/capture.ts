@@ -9,6 +9,7 @@ import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { detectFocusShift } from "./pipeline/focus-direction-shift.js";
 import { shouldRunFocusDistill, shouldRunIdentityDistill } from "./scheduler.js";
 import { runAsJob } from "./scheduler/runner.js";
+import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "./pipeline/apply-dedup.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -153,10 +154,30 @@ export class MemoryCapturePipeline {
         }),
       { summarize: (r) => ({ unique: r.uniqueRecords.length, dropped: r.droppedCount }) },
     );
-    const { uniqueRecords, droppedCount } = dedupResult;
+    let uniqueRecords = dedupResult.uniqueRecords;
+    const droppedCount = dedupResult.droppedCount;
 
     if (droppedCount > 0) {
       console.log(`[BrainRouter] Dropped ${droppedCount} duplicate cognitive memories.`);
+    }
+
+    // AUG-A2 — apply-time dedup guard. Default `off` → no-op (this branch is
+    // skipped entirely). `strict`/`fuzzy` drop exact-/near-duplicate records
+    // the LLM dedup may have missed, deterministically, before they land.
+    const dedupMode = resolveDedupMode();
+    if (dedupMode !== "off") {
+      const kept: DedupCandidate[] = [];
+      const guarded = uniqueRecords.filter((r) => {
+        const candidate: DedupCandidate = { hash: contentHash(r.content) };
+        if (isDuplicate(dedupMode, candidate, kept)) return false;
+        kept.push(candidate);
+        return true;
+      });
+      const applyDropped = uniqueRecords.length - guarded.length;
+      if (applyDropped > 0) {
+        console.log(`[BrainRouter] apply-dedup (${dedupMode}) dropped ${applyDropped} duplicate record(s).`);
+      }
+      uniqueRecords = guarded;
     }
 
     // Write to store
