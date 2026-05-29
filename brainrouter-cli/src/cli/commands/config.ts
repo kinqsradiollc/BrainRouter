@@ -900,7 +900,7 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
     get: (ctx) => `${resolveEffort(ctx.agent.workspaceRoot).effort} (${resolveEffort(ctx.agent.workspaceRoot).source})`,
     set: (ctx, value) => {
       const v = value.toLowerCase();
-      if (!['low', 'medium', 'high'].includes(v)) return { ok: false, reason: `effort must be low|medium|high (got "${value}")` };
+      if (!['low', 'medium', 'high', 'xhigh'].includes(v)) return { ok: false, reason: `effort must be low|medium|high|xhigh (got "${value}")` };
       writePreferences(ctx.agent.workspaceRoot, { effort: v as EffortLevel });
       return { ok: true, message: `effort → ${v}` };
     },

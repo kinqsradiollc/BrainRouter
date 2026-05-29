@@ -6,11 +6,11 @@ import path from 'node:path';
 import { createSpawnAgentTool } from '../orchestration/tools.js';
 import { createSession, updateSession, listSessions } from '../orchestration/orchestrator.js';
 
-test('spawn_agent schema exposes overlay (string) + effort (low|medium|high)', () => {
+test('spawn_agent schema exposes overlay (string) + effort (low|medium|high|xhigh)', () => {
   const props = (createSpawnAgentTool().inputSchema as any).properties;
   assert.equal(props.overlay?.type, 'string');
   assert.equal(props.effort?.type, 'string');
-  assert.deepEqual(props.effort?.enum, ['low', 'medium', 'high']);
+  assert.deepEqual(props.effort?.enum, ['low', 'medium', 'high', 'xhigh']);
   // overlay description mentions the cap so the model knows the bound.
   assert.match(String(props.overlay?.description ?? ''), /4000/);
 });

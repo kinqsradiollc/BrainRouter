@@ -68,6 +68,8 @@ import { runExtractResult } from '../runtime/tools/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
+// PARITY-E3: runtime model fallback on model-not-found.
+import { isModelNotFoundError, shouldFallbackModel } from '../runtime/modelFallback.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
@@ -834,6 +836,8 @@ export class Agent {
   private chatHistory: any[] = [];
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
   private readonly resultCache = new ResultCache();
+  /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
+  private triedModelFallback = false;
   private initialized = false;
   private recalledRecordIds: string[] = [];
   private recalledRecords: RecalledRecord[] = [];
@@ -1445,6 +1449,23 @@ export class Agent {
             response = await invokeLlm();
           } catch (retryErr: any) {
             throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
+          }
+        } else if (
+          isModelNotFoundError(message) &&
+          shouldFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModel, this.triedModelFallback)
+        ) {
+          // PARITY-E3: the primary model isn't available at this endpoint.
+          // Switch to cli.fallbackModel for the rest of the session and
+          // retry ONCE (the triedModelFallback flag prevents a loop).
+          const from = this.llmConfig.model;
+          const fallback = getCliKnobs().fallbackModel as string;
+          this.triedModelFallback = true;
+          this.setModel(fallback);
+          callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
+          try {
+            response = await invokeLlm();
+          } catch (retryErr: any) {
+            throw new Error(`LLM Execution failed after model fallback (${from} → ${fallback}): ${retryErr?.message ?? retryErr}`);
           }
         } else {
           throw new Error(`LLM Execution failed: ${message}`);
@@ -3814,7 +3835,11 @@ export function buildChatCompletionPayload(
   // CLI default and forwarding it would change every existing user's
   // request shape on upgrade for no behavioural gain.
   if (options.effort && options.effort !== 'medium' && supportsReasoningEffortField(config)) {
-    body.reasoning_effort = options.effort;
+    // `xhigh` is a CLI-level "maximum" that maps to the provider's highest
+    // accepted reasoning_effort ('high') — sending 'xhigh' on the wire would
+    // 400 on most OpenAI-compatible providers. The extra depth for xhigh
+    // comes from its stronger system-prompt overlay, not the wire field.
+    body.reasoning_effort = options.effort === 'xhigh' ? 'high' : options.effort;
   }
 
   return body;
