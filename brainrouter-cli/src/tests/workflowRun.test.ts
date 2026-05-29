@@ -9,6 +9,9 @@ import {
   computeRunStatus,
   applyStepTransition,
   summarizeRun,
+  stepGlyph,
+  formatRunGlyphs,
+  formatDuration,
   staleRunSlugs,
   ensureRun,
   advanceRunStep,
@@ -72,6 +75,24 @@ test('PARITY-W1 summarizeRun + staleRunSlugs', () => {
     staleRunSlugs([run, { ...run, slug: 'alive', pid: 42 }], (pid) => pid === 42),
     ['s'],
   );
+});
+
+test('PARITY-W2 stepGlyph + formatRunGlyphs + formatDuration (pure viewer helpers)', () => {
+  assert.equal(stepGlyph('done'), '✓');
+  assert.equal(stepGlyph('running'), '▶');
+  assert.equal(stepGlyph('failed'), '✗');
+  assert.equal(stepGlyph('skipped'), '⊘');
+  assert.equal(stepGlyph('pending'), '·');
+  const run = {
+    slug: 's', kind: 'simplify', status: 'running' as const, sessionKey: null, pid: 1,
+    startedAt: 'x', updatedAt: 'x', currentStepId: null,
+    steps: steps(['a', 'done'], ['b', 'running'], ['c', 'pending']),
+  };
+  assert.equal(formatRunGlyphs(run), '✓▶·');
+  assert.equal(formatDuration('2026-01-01T00:00:00Z', '2026-01-01T00:00:45Z'), '45s');
+  assert.equal(formatDuration('2026-01-01T00:00:00Z', '2026-01-01T00:02:05Z'), '2m 5s');
+  assert.equal(formatDuration('2026-01-01T00:00:00Z', '2026-01-01T03:05:00Z'), '3h 5m');
+  assert.equal(formatDuration(undefined, 'x'), '—');
 });
 
 // ── File-backed store ─────────────────────────────────────────────────────────

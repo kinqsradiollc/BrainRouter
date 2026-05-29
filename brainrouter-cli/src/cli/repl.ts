@@ -121,7 +121,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/simplify [scope] [--dry-run]', desc: 'Behavior-preserving code-simplification pass; --dry-run proposes only' },
       { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
       { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
-      { cmd: '/workflows', desc: 'List durable workflow folders' },
+      { cmd: '/workflows [slug]', desc: 'List durable workflows with live run progress; <slug> drills into the step timeline' },
       { cmd: '/workflow switch <slug>', desc: 'Refocus on an existing workflow (migrates any session goal into the target)' },
       { cmd: '/workflow pause', desc: 'Pause the current workflow\'s goal' },
       { cmd: '/workflow resume <slug>', desc: 'Switch to <slug> AND resume its goal in one shot' },
