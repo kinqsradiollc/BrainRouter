@@ -2,6 +2,7 @@ import { SqliteMemoryStore } from "./store/sqlite.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
+import { MemoryJobRunner } from "./scheduler/runner.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
@@ -162,6 +163,7 @@ export class MemoryEngine {
   private sweeperTimer?: NodeJS.Timeout;
   private activeSessionSweeperTimer?: NodeJS.Timeout;
   private sessionInboxSweeperTimer?: NodeJS.Timeout;
+  private jobRunner?: MemoryJobRunner;
   /**
    * Reentrancy guard: setInterval doesn't wait for the previous callback to
    * finish before firing the next tick. If a sweep takes longer than the
@@ -257,6 +259,29 @@ export class MemoryEngine {
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
     this.startSessionInboxSweeper();
+    this.startJobRunner();
+  }
+
+  /**
+   * BRAIN-P1 (0.4.1) — start the async job runner that drains
+   * out-of-band `memory_jobs` (enqueued via `memory_agent_run` /
+   * `/brain run`). Synthesis distillers use the synthesis runner. The
+   * runner's timer is unref'd, so it never holds the process open on its
+   * own. Disable with `BRAINROUTER_JOB_RUNNER=off` (e.g. in tests that
+   * drive ticks manually).
+   */
+  private startJobRunner() {
+    if (process.env.BRAINROUTER_JOB_RUNNER === "off") return;
+    this.jobRunner = new MemoryJobRunner(
+      this.store,
+      { store: this.store, llmRunner: this.synthesisRunner },
+      {
+        intervalMs: process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS
+          ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS, 10)
+          : undefined,
+      },
+    );
+    this.jobRunner.start();
   }
 
   private async ensureSeedAdminUser() {
