@@ -9,6 +9,15 @@ import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./m
 import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { isExternalTimeoutError } from "./llm-response.js";
+import {
+  effectivePriorityScore,
+  baseScoreFromRrf,
+  normalizePriority,
+  blendBaseAndPriority,
+  intentBoost,
+  citationBoost,
+  SKILL_BOOST,
+} from "./reranker/index.js";
 
 /**
  * Recall pipeline limit knobs. Each stage of the pipeline has a width
@@ -59,21 +68,14 @@ export function readRecallLimits(): RecallLimits {
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
   const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
-  const ageMs = Date.now() - new Date(memory.created_time).getTime();
-  const ageDays = ageMs / 86_400_000;
-
-  let base = memory.priority;
-  if (halfLife) {
-    const decayFactor = Math.pow(0.5, ageDays / halfLife);
-    base = memory.priority * decayFactor;
-  }
-
-  const citationBoost = Math.min((memory.citation_count ?? 0) * 0.05, 0.30);
-  // Freshness boost: anything captured in the last 24h gets a small lift so
-  // brand-new facts surface even before they've been cited. Linear ramp from
-  // 1.15× at age 0 to 1.0× at age 1d.
-  const freshness = ageDays <= 1 ? 1 + 0.15 * (1 - ageDays) : 1;
-  return base * (1 + citationBoost) * freshness;
+  const ageDays = (Date.now() - new Date(memory.created_time).getTime()) / 86_400_000;
+  // AUG-A3 — score-composition math lives in the modular `reranker/` package.
+  return effectivePriorityScore({
+    priority: memory.priority,
+    ageDays,
+    halfLifeDays: halfLife,
+    citationCount: memory.citation_count,
+  });
 }
 
 /**
@@ -302,23 +304,24 @@ export class MemoryRecallPipeline {
     let skillBoostApplied = false;
 
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
-      const baseScore = rrfScore * 30;
-      const priorityScore = (effectivePriority(record as CognitiveFtsResult) / 100);
-      let finalScore = (baseScore * 0.7) + (priorityScore * 0.3);
+      // AUG-A3 — weighting / boosting helpers from the modular `reranker/`.
+      const baseScore = baseScoreFromRrf(rrfScore);
+      const priorityScore = normalizePriority(effectivePriority(record as CognitiveFtsResult));
+      let finalScore = blendBaseAndPriority(baseScore, priorityScore);
 
       if (activeSkill && record.skill_tag === activeSkill) {
-        finalScore *= 1.2;
+        finalScore *= SKILL_BOOST;
         skillBoostApplied = true;
       }
 
-      const intentMultiplier = getMemoryTypeConfig(record.type).intentAffinity[intent] ?? 1;
+      const intentMultiplier = intentBoost(getMemoryTypeConfig(record.type).intentAffinity[intent]);
       if (intentMultiplier !== 1) {
         typeBoosts[record.type] = intentMultiplier;
       }
       finalScore *= intentMultiplier;
 
       const citationCount = (record as CognitiveFtsResult).citation_count ?? 0;
-      const citBoost = Math.min(citationCount * 0.05, 0.30);
+      const citBoost = citationBoost(citationCount);
       if (citBoost > 0) {
         citationBoosts[record.record_id] = citBoost;
       }
