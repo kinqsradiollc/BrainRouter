@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { MemoryListItem } from "@kinqs/brainrouter-types";
+import type { MemoryListItem, MemoryType } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
@@ -13,7 +13,27 @@ import { MemoryCard } from "../../components/MemoryCard";
 import { FilterBar } from "../../components/FilterBar";
 import { useAuth } from "../../components/AuthProvider";
 
-const TYPES = ["instruction", "codebase_fact", "architecture_decision", "tool_preference", "task_state", "security_policy"];
+// All cognitive memory types. Mirrors `COGNITIVE_MEMORY_TYPES` in
+// @kinqs/brainrouter-types — defined locally (not imported) because that
+// module's package transitively pulls `node:crypto`, which the browser
+// bundle can't take. Drift is caught at COMPILE time by the exhaustiveness
+// guard below: add a MemoryType and this page won't build until it's listed.
+const TYPES = [
+  "persona", "episodic", "instruction", "skill_context", "tool_preference",
+  "codebase_fact", "api_contract", "data_model", "dependency_constraint",
+  "environment_constraint", "architecture_decision", "implementation_decision",
+  "design_constraint", "security_policy", "performance_baseline", "bug_finding",
+  "debug_trace", "fix_summary", "verification_result", "failed_attempt",
+  "regression_risk", "task_state", "handover_note", "blocked_reason",
+  "review_comment", "release_note", "source_evidence", "artifact_reference",
+  "file_history", "command_knowledge",
+] as const satisfies readonly MemoryType[];
+
+// Compile-time exhaustiveness: if a new MemoryType is added upstream and not
+// listed in TYPES, `_MissingType` is a non-`never` union and this errors.
+type _MissingType = Exclude<MemoryType, (typeof TYPES)[number]>;
+const _typesAreExhaustive: _MissingType extends never ? true : ["missing memory types in TYPES:", _MissingType] = true;
+void _typesAreExhaustive;
 
 export default function MemoriesPage() {
   const client = useMemo(() => getClient(), []);

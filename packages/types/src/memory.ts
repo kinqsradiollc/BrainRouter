@@ -68,6 +68,11 @@ export type MemoryType =
   | "file_history"
   | "command_knowledge";
 
+// The runtime list of every cognitive `MemoryType` lives in the
+// crypto-free `./memory-type-list.ts` so browser bundles (the dashboard
+// `/memories` filter) can import it without pulling `node:crypto`, which
+// the hash helpers below use. Re-exported from the package index.
+
 export type MemoryStatus = "active" | "superseded" | "archived" | "needs_verification";
 
 export type MemorySourceKind =
