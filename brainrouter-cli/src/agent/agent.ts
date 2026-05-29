@@ -44,6 +44,7 @@ import {
   type BriefingDecision,
 } from '../memory/briefingTriggers.js';
 import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
+import { applyFederationIdentity } from '../runtime/federationIdentity.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
 import { runHooks } from '../state/hooksStore.js';
@@ -1720,7 +1721,13 @@ export class Agent {
               callbacks.onPlanUpdate(args.plan, args.explanation);
             }
           } else {
-            const mcpRes = await this.mcpClient.callTool(name, args);
+            // Federation tools need THIS agent's federation identity, not
+            // the chat sessionKey the LLM sees in its prompt. Rewrite the
+            // identity fields at the boundary so "check my inbox" reads the
+            // key the poller/registry actually used (otherwise the read
+            // misses the federation-key inbox and comes back empty).
+            const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
+            const mcpRes = await this.mcpClient.callTool(name, mcpArgs);
             if (mcpRes.isError) {
               isError = true;
             }
