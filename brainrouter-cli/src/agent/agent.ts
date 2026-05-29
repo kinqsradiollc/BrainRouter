@@ -61,6 +61,10 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+// MAS-P5-T2: progressive result handoff — large tool results become a
+// preview + resultRef the model expands via extract_result.
+import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
+import { runExtractResult } from '../runtime/tools/extractResult.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
@@ -505,6 +509,19 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'extract_result',
+    description: 'Expand a large tool result that was handed off (you hold a `resultRef` instead of the full output). With no `query`, returns the head of the result; with a `query`, returns the matching lines plus surrounding context. Use this instead of re-running the original tool when you only need a slice of a big output.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resultRef: { type: 'string', description: 'The resultRef from a handed-off tool result.' },
+        query: { type: 'string', description: 'Optional case-insensitive substring to search the full result for.' },
+        maxChars: { type: 'integer', description: 'Cap on returned characters. Default 4000.' }
+      },
+      required: ['resultRef']
+    }
+  },
+  {
     name: 'apply_patch',
     description: 'Apply a multi-file patch using the Begin/End envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). Lets you make several coordinated edits across files in one tool call.',
     inputSchema: {
@@ -768,6 +785,8 @@ export class Agent {
   public workspaceRoot: string;
   public launchCwd: string;
   private chatHistory: any[] = [];
+  /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
+  private readonly resultCache = new ResultCache();
   private initialized = false;
   private recalledRecordIds: string[] = [];
   private recalledRecords: RecalledRecord[] = [];
@@ -1907,10 +1926,18 @@ export class Agent {
         }
         const llmVisibleResult = compaction.inlineText;
         const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
-        const clampedContent = llmVisibleResult.length > MAX_TOOL_RESULT_CHARS
-          ? llmVisibleResult.slice(0, MAX_TOOL_RESULT_CHARS) +
-            `\n…[truncated ${llmVisibleResult.length - MAX_TOOL_RESULT_CHARS} chars after ${compaction.ruleId} compaction — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
-          : llmVisibleResult;
+        let clampedContent = llmVisibleResult;
+        if (llmVisibleResult.length > MAX_TOOL_RESULT_CHARS) {
+          // MAS-P5-T2: progressive result handoff. Rather than hard-
+          // truncating (and losing the tail), park the full result in the
+          // session cache and show the model a preview + resultRef it can
+          // expand on demand via extract_result. Full text still lands in
+          // the transcript via recordTranscript below.
+          const { handoff, full } = makeResultHandoff(llmVisibleResult, { previewChars: MAX_TOOL_RESULT_CHARS });
+          this.resultCache.put(handoff.resultRef, full);
+          this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
+          clampedContent = formatHandoffForModel(handoff, { label: name });
+        }
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
@@ -2360,6 +2387,19 @@ export class Agent {
         if (!query) throw new Error('web_search requires a non-empty query.');
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
         return await runWebSearch(query, maxResults);
+      }
+      case 'extract_result': {
+        const resultRef = String(args.resultRef ?? '').trim();
+        if (!resultRef) throw new Error('extract_result requires a resultRef.');
+        const out = runExtractResult(
+          {
+            resultRef,
+            query: typeof args.query === 'string' ? args.query : undefined,
+            maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
+          },
+          this.resultCache,
+        );
+        return out.returned;
       }
       case 'apply_patch': {
         const patch = String(args.patch ?? '');

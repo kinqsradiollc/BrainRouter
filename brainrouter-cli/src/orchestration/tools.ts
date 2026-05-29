@@ -9,6 +9,9 @@ import path from 'node:path';
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
+// MAS-P5-T2: the child-output offload thresholds are now the shared
+// result-handoff constants (single source of truth in runtime/resultHandoff).
+import { RESULT_HANDOFF_THRESHOLD_CHARS, RESULT_PREVIEW_CHARS } from '../runtime/resultHandoff.js';
 import {
   createSession,
   formatSessionSummary,
@@ -100,8 +103,8 @@ export interface OrchestrationContext {
 // BrainRouter working-memory canvas rather than embedded directly in the
 // parent's context. ~6k chars ≈ 1.5k tokens — enough room for short reports
 // in-line, big enough that a 20k-char architecture analysis goes out-of-band.
-const OFFLOAD_THRESHOLD_CHARS = 6000;
-const OFFLOAD_PREVIEW_CHARS = 800;
+const OFFLOAD_THRESHOLD_CHARS = RESULT_HANDOFF_THRESHOLD_CHARS;
+const OFFLOAD_PREVIEW_CHARS = RESULT_PREVIEW_CHARS;
 
 /**
  * Order the three access modes by power so spawn_agent can refuse to grant
