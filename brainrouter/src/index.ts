@@ -80,6 +80,12 @@ import {
   sessionInboxAckToolSchema,
   handleSessionInboxAck,
 } from './tools/session_inbox.js';
+import {
+  sessionDelegateTaskToolSchema,
+  handleSessionDelegateTask,
+  sessionDelegationsToolSchema,
+  handleSessionDelegations,
+} from './tools/session_delegate_task.js';
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
@@ -288,6 +294,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       sessionSendToolSchema,
       sessionInboxReadToolSchema,
       sessionInboxAckToolSchema,
+      sessionDelegateTaskToolSchema,
+      sessionDelegationsToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
@@ -337,6 +345,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'session_send': return await handleSessionSend(request.params.arguments, { defaultUserId });
         case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, { defaultUserId });
         case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, { defaultUserId });
+        case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
+        case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);

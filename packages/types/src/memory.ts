@@ -278,6 +278,71 @@ export interface ActiveSessionFilters {
   includeUsage?: boolean;
 }
 
+/**
+ * Federation Stage 5 (0.4.2) — FED-S5-T1. Normalized cross-vendor
+ * delegation payload. A `delegate_task` packages a self-contained unit of
+ * work that any peer (BrainRouter CLI, Claude Code, Codex, …) can pick up,
+ * independent of the originating vendor. Carried on the `delegate` inbox
+ * kind, or persisted as a `pending_delegation` row when no peer is idle.
+ */
+export interface DelegationPacket {
+  /** The task to perform. */
+  goal: string;
+  /** Sender's federation sessionKey. */
+  fromSessionKey: string;
+  /** Sender's clientKind (e.g. `brainrouter-cli`, `codex`). */
+  originatingClient: string;
+  /** Sender's workspace root. */
+  originatingWorkspace: string;
+  /** Files the task concerns (paths relative to the receiver's workspace). */
+  files: string[];
+  /** Free-form constraint lines ("don't touch the public API", "TS strict"). */
+  constraints: string[];
+  /** Model-preference hints ("prefer:reasoning", "avoid:nano"). Advisory. */
+  modelHints: string[];
+  /** Optional budget ceiling. */
+  budget: { tokens?: number; usd?: number } | null;
+  /** Optional ISO deadline. */
+  deadline: string | null;
+  /** Optional free-text note. */
+  note?: string;
+  /** ISO timestamp. */
+  createdAt: string;
+}
+
+export type PendingDelegationStatus = "pending" | "claimed" | "cancelled" | "expired";
+
+/** One row in the brain's `pending_delegations` table (FED-S5-T2 fallback). */
+export interface PendingDelegationRecord {
+  id: string;
+  userId: string;
+  fromSessionKey: string;
+  /** The requested vendor/agent kind (e.g. `codex`, `claude-code`). */
+  toAgentKind: string;
+  /** Concrete recipient once claimed; NULL while pending. */
+  toSessionKey: string | null;
+  packet: DelegationPacket;
+  status: PendingDelegationStatus;
+  createdAt: string;
+  updatedAt: string;
+  claimedAt: string | null;
+}
+
+export interface PendingDelegationEnqueueInput {
+  userId: string;
+  fromSessionKey: string;
+  toAgentKind: string;
+  packet: DelegationPacket;
+}
+
+export interface PendingDelegationFilters {
+  userId: string;
+  /** Restrict to delegations addressed at this agent kind. */
+  toAgentKind?: string;
+  status?: PendingDelegationStatus;
+  limit?: number;
+}
+
 export interface MemoryEvidence {
   id: string;
   userId: string;
