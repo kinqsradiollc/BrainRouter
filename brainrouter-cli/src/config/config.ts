@@ -146,6 +146,8 @@ export interface CliKnobs {
   maxSpawnDepth?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
   autoChainMaxFollowups?: number;
+  /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 40. */
+  agentMcpToolBudget?: number;
 
   // ---- scheduling / tracing / search -----------------------------------
   /** Background ticker interval for /schedule jobs in ms. Default 30000. */
@@ -346,6 +348,7 @@ export interface ResolvedCliKnobs {
   childDrainTimeoutMs: number;
   maxSpawnDepth: number;
   autoChainMaxFollowups: number;
+  agentMcpToolBudget: number;
   scheduleTickMs: number;
   traceLog?: string;
   webSearchEndpoint?: string;
@@ -391,6 +394,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
+    agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
     traceLog: c.traceLog,
     webSearchEndpoint: c.webSearchEndpoint,
