@@ -155,3 +155,44 @@ export function readWorkerSummary(workspaceRoot: string, id: string): string | n
 export function closeWorker(workspaceRoot: string, id: string): WorkerMeta | null {
   return updateWorkerMeta(workspaceRoot, id, { status: 'closed' });
 }
+
+/** Read the last `limit` transcript entries (newest-last), tolerant of bad lines. */
+export function readWorkerTranscript(workspaceRoot: string, id: string, limit = 20): unknown[] {
+  try {
+    const raw = fs.readFileSync(path.join(workerDir(workspaceRoot, id), 'transcript.jsonl'), 'utf-8');
+    const lines = raw.split('\n').filter((l) => l.trim());
+    return lines
+      .slice(-limit)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return { raw: l };
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pure: the ids of workers that should be reconciled to a terminal state —
+ * `running` workers whose owning pid is no longer this process (an
+ * in-process worker dies with its CLI). A null pid counts as dead.
+ */
+export function staleWorkerIds(workers: WorkerMeta[], isAlive: (pid: number | null) => boolean): string[] {
+  return workers.filter((w) => w.status === 'running' && !isAlive(w.pid)).map((w) => w.id);
+}
+
+/**
+ * On CLI startup, flip `running` workers left over from a dead process to
+ * `failed` (their in-process run is gone — see resumability note below).
+ * Returns how many were reconciled.
+ */
+export function reconcileStaleWorkers(workspaceRoot: string, currentPid: number = process.pid): number {
+  const ids = staleWorkerIds(listWorkers(workspaceRoot), (pid) => pid === currentPid);
+  for (const id of ids) {
+    updateWorkerMeta(workspaceRoot, id, { status: 'failed' });
+  }
+  return ids.length;
+}
