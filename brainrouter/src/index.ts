@@ -43,6 +43,7 @@ import fs from "node:fs";
 
 import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
+import { VERSION } from './version.js';
 
 // Import tools
 import { listSkills, listSkillsSchema } from './tools/list_skills.js';
@@ -80,6 +81,12 @@ import {
   sessionInboxAckToolSchema,
   handleSessionInboxAck,
 } from './tools/session_inbox.js';
+import {
+  sessionDelegateTaskToolSchema,
+  handleSessionDelegateTask,
+  sessionDelegationsToolSchema,
+  handleSessionDelegations,
+} from './tools/session_delegate_task.js';
 import { memorySearchToolSchema, handleMemorySearch } from './tools/memory_search.js';
 import { memoryContradictionsToolSchema, handleMemoryContradictions } from './tools/memory_contradictions.js';
 import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from './tools/memory_register_skill_hints.js';
@@ -93,6 +100,7 @@ import { memoryHookToolSchemas, handleMemoryHookTool } from './tools/memory-hook
 import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memory-working.js';
 import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
 import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/memory_agent_status.js';
+import { memoryProvenanceToolSchema, handleMemoryProvenance } from './tools/memory_provenance.js';
 import { memoryAgentRunToolSchema, handleMemoryAgentRun } from './tools/memory_agent_run.js';
 import { memoryJobRetryToolSchema, handleMemoryJobRetry } from './tools/memory_job_retry.js';
 import { memoryEngine } from './memory/engine.js';
@@ -147,7 +155,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
   const server = new Server(
-    { name: 'brainrouter-mcp-server', version: '0.3.8' },
+    { name: 'brainrouter-mcp-server', version: VERSION },
     { capabilities: { tools: {} } }
   );
 
@@ -288,6 +296,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       sessionSendToolSchema,
       sessionInboxReadToolSchema,
       sessionInboxAckToolSchema,
+      sessionDelegateTaskToolSchema,
+      sessionDelegationsToolSchema,
       memorySearchToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
@@ -301,6 +311,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       ...memoryWorkingToolSchemas,
       memoryConsolidateToolSchema,
       memoryAgentStatusToolSchema,
+      memoryProvenanceToolSchema,
       memoryAgentRunToolSchema,
       memoryJobRetryToolSchema,
     ],
@@ -337,6 +348,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'session_send': return await handleSessionSend(request.params.arguments, { defaultUserId });
         case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, { defaultUserId });
         case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, { defaultUserId });
+        case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
+        case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
@@ -375,6 +388,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
         case 'memory_agent_status':
           return await handleMemoryAgentStatus(request.params.arguments, { defaultUserId });
+        case 'memory_provenance':
+          return await handleMemoryProvenance(request.params.arguments, { defaultUserId });
         case 'memory_agent_run':
           return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
         case 'memory_job_retry':

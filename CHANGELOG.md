@@ -13,7 +13,8 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
-| **0.4.1** | In flight | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
+| **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
+| **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
 | **0.3.9** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.3.9.md`](brainrouter-changelog/0.3.9.md) |
 | **0.3.8** | Shipped — 2026-05-26 | [`brainrouter-changelog/0.3.8.md`](brainrouter-changelog/0.3.8.md) |
@@ -25,9 +26,18 @@ this changelog.
 
 ---
 
-## [0.4.1] - Unreleased
+## [0.4.2] - 2026-05-30
 
-In flight. Full notes accrue in
+Cross-vendor federation (Stage 5), CLI multi-agent Phases 5-6, durable
+workflow run engine + live `/workflows` viewer, the full CLI-parity batch
+(`/review --fix`, `/simplify`, `/effort xhigh|max`, `/model --session`,
+`cli.fallbackModel`, `!` shell escape, `/rewind`, `/context`), version
+centralization, and a docs refresh with an MCP API reference. Full notes:
+[`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md).
+
+## [0.4.1] - 2026-05-29
+
+Shipped. Full notes in
 [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md).
 
 ### Added

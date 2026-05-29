@@ -61,6 +61,17 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+// MAS-P5-T2: progressive result handoff — large tool results become a
+// preview + resultRef the model expands via extract_result.
+import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
+import { runExtractResult } from '../runtime/tools/extractResult.js';
+// MAS-P5-T3 part 2: persistent worker threads.
+import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
+import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
+import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
+import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
+// PARITY-E3: runtime model fallback on model-not-found.
+import { isModelNotFoundError, shouldFallbackModel } from '../runtime/modelFallback.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
@@ -505,6 +516,63 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'extract_result',
+    description: 'Expand a large tool result that was handed off (you hold a `resultRef` instead of the full output). With no `query`, returns the head of the result; with a `query`, returns the matching lines plus surrounding context. Use this instead of re-running the original tool when you only need a slice of a big output.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resultRef: { type: 'string', description: 'The resultRef from a handed-off tool result.' },
+        query: { type: 'string', description: 'Optional case-insensitive substring to search the full result for.' },
+        maxChars: { type: 'integer', description: 'Cap on returned characters. Default 4000.' }
+      },
+      required: ['resultRef']
+    }
+  },
+  {
+    name: 'spawn_worker_thread',
+    description: 'Start a persistent background worker thread for a self-contained task. It runs detached (your turn does NOT block), persists its transcript + rolling summary + status under .brainrouter/cli/workers/, and is observable via /workers and read_worker_summary. Returns the worker id. Workers cannot spawn workers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'The self-contained task for the worker.' },
+        role: { type: 'string', description: 'Agent role/persona for the worker (default: worker).' },
+        prompt: { type: 'string', description: 'Task prompt the worker runs; defaults to the goal.' },
+        ownership: { type: 'string', description: 'Glob the worker may write within (MAS-P3); defaults to your own ownership.' }
+      },
+      required: ['goal']
+    }
+  },
+  {
+    name: 'wait_worker',
+    description: 'Block until a worker thread finishes (bounded), then return its status + summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Worker id from spawn_worker_thread.' },
+        timeoutMs: { type: 'number', description: 'Max wait in ms (default 600000).' }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'read_worker_summary',
+    description: "Read a worker thread's rolling summary (summary.md) without waiting for it to finish.",
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Worker id.' } },
+      required: ['id']
+    }
+  },
+  {
+    name: 'close_worker',
+    description: 'Mark a worker thread closed (terminal). Its in-process run, if any, is left to wind down but its result is no longer adopted.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Worker id.' } },
+      required: ['id']
+    }
+  },
+  {
     name: 'apply_patch',
     description: 'Apply a multi-file patch using the Begin/End envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). Lets you make several coordinated edits across files in one tool call.',
     inputSchema: {
@@ -583,6 +651,19 @@ export const LOCAL_TOOLS = [
       },
       required: ['plan']
     }
+  },
+  {
+    name: 'workflow_progress',
+    description: 'Report progress on the active durable workflow run (PARITY-W1) so `/workflows` shows live status and progress survives a restart. Call with status="running" when you START a numbered step and status="done" (or "failed"/"skipped") when you finish it. `step` is a short id matching the step you are on (e.g. "triage", "review", "implement", "verify", "apply"). Safe no-op when no workflow is active — only the multi-agent commands (/review, /simplify, /feature-dev, /spec, /implement-plan) bind one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        step: { type: 'string', description: 'Short step id, e.g. "triage", "implement", "verify".' },
+        status: { type: 'string', enum: ['running', 'done', 'failed', 'skipped'], description: 'New status for the step.' },
+        note: { type: 'string', description: 'Optional one-line detail (what was done, or why it failed/was skipped).' },
+      },
+      required: ['step', 'status'],
+    },
   },
   {
     name: 'goal_complete',
@@ -768,6 +849,10 @@ export class Agent {
   public workspaceRoot: string;
   public launchCwd: string;
   private chatHistory: any[] = [];
+  /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
+  private readonly resultCache = new ResultCache();
+  /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
+  private triedModelFallback = false;
   private initialized = false;
   private recalledRecordIds: string[] = [];
   private recalledRecords: RecalledRecord[] = [];
@@ -1380,6 +1465,23 @@ export class Agent {
           } catch (retryErr: any) {
             throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
           }
+        } else if (
+          isModelNotFoundError(message) &&
+          shouldFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModel, this.triedModelFallback)
+        ) {
+          // PARITY-E3: the primary model isn't available at this endpoint.
+          // Switch to cli.fallbackModel for the rest of the session and
+          // retry ONCE (the triedModelFallback flag prevents a loop).
+          const from = this.llmConfig.model;
+          const fallback = getCliKnobs().fallbackModel as string;
+          this.triedModelFallback = true;
+          this.setModel(fallback);
+          callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
+          try {
+            response = await invokeLlm();
+          } catch (retryErr: any) {
+            throw new Error(`LLM Execution failed after model fallback (${from} → ${fallback}): ${retryErr?.message ?? retryErr}`);
+          }
         } else {
           throw new Error(`LLM Execution failed: ${message}`);
         }
@@ -1799,6 +1901,8 @@ export class Agent {
           if (!allowed.has(name) && isLocal) {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
+          // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
+          this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           if (isOrchestrationToolName(name)) {
             resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
             summary = getToolSummary(name, args, resultText);
@@ -1907,10 +2011,18 @@ export class Agent {
         }
         const llmVisibleResult = compaction.inlineText;
         const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
-        const clampedContent = llmVisibleResult.length > MAX_TOOL_RESULT_CHARS
-          ? llmVisibleResult.slice(0, MAX_TOOL_RESULT_CHARS) +
-            `\n…[truncated ${llmVisibleResult.length - MAX_TOOL_RESULT_CHARS} chars after ${compaction.ruleId} compaction — full output recorded in transcript; call memory_working_offload or re-read with a narrower scope]`
-          : llmVisibleResult;
+        let clampedContent = llmVisibleResult;
+        if (llmVisibleResult.length > MAX_TOOL_RESULT_CHARS) {
+          // MAS-P5-T2: progressive result handoff. Rather than hard-
+          // truncating (and losing the tail), park the full result in the
+          // session cache and show the model a preview + resultRef it can
+          // expand on demand via extract_result. Full text still lands in
+          // the transcript via recordTranscript below.
+          const { handoff, full } = makeResultHandoff(llmVisibleResult, { previewChars: MAX_TOOL_RESULT_CHARS });
+          this.resultCache.put(handoff.resultRef, full);
+          this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
+          clampedContent = formatHandoffForModel(handoff, { label: name });
+        }
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
@@ -2078,6 +2190,16 @@ export class Agent {
     // 0.3.9 item 10 — roll cache stats into session totals.
     this.sessionUsage.cachedTokens += this.lastTurnUsage.cachedTokens;
     this.sessionUsage.missedTokens += this.lastTurnUsage.missedTokens;
+    // 0.4.x-4 (`/context`) — bucket this turn's usage by the skill in effect.
+    {
+      const skillKey = this.activeSkill ?? 'chat';
+      const b = this.usageBySkill.get(skillKey) ?? { promptTokens: 0, completionTokens: 0, turns: 0, calls: 0 };
+      b.promptTokens += this.lastTurnUsage.promptTokens;
+      b.completionTokens += this.lastTurnUsage.completionTokens;
+      b.calls += this.lastTurnUsage.calls;
+      b.turns += 1;
+      this.usageBySkill.set(skillKey, b);
+    }
 
     // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
     // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
@@ -2361,6 +2483,59 @@ export class Agent {
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
         return await runWebSearch(query, maxResults);
       }
+      case 'extract_result': {
+        const resultRef = String(args.resultRef ?? '').trim();
+        if (!resultRef) throw new Error('extract_result requires a resultRef.');
+        const out = runExtractResult(
+          {
+            resultRef,
+            query: typeof args.query === 'string' ? args.query : undefined,
+            maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
+          },
+          this.resultCache,
+        );
+        return out.returned;
+      }
+      case 'spawn_worker_thread': {
+        if (!canSpawnWorker(this.agentDepth)) {
+          throw new Error('Workers cannot spawn workers (MAX_WORKER_DEPTH=1).');
+        }
+        const goal = String(args.goal ?? '').trim();
+        if (!goal) throw new Error('spawn_worker_thread requires a goal.');
+        const worker = spawnWorkerThread(this.mcpClient, this.llmConfig, {
+          workspaceRoot: this.workspaceRoot,
+          launchCwd: this.launchCwd,
+          role: String(args.role ?? 'worker'),
+          goal,
+          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+          ownership: typeof args.ownership === 'string' ? args.ownership : (this.ownership ?? null),
+          parentSessionKey: this.sessionKey,
+          parentAccessMode: this.accessMode,
+          spawnerDepth: this.agentDepth,
+          effortOverride: this.effortOverride,
+        });
+        return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
+      }
+      case 'wait_worker': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('wait_worker requires an id.');
+        const meta = await waitWorker(this.workspaceRoot, id, typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined);
+        if (!meta) return JSON.stringify({ id, found: false });
+        return JSON.stringify({ id, status: meta.status, summary: readWorkerSummary(this.workspaceRoot, id) ?? null });
+      }
+      case 'read_worker_summary': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('read_worker_summary requires an id.');
+        const meta = readWorkerMeta(this.workspaceRoot, id);
+        if (!meta) return `No worker "${id}".`;
+        return readWorkerSummary(this.workspaceRoot, id) ?? `Worker ${id} (${meta.status}) has no summary yet.`;
+      }
+      case 'close_worker': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('close_worker requires an id.');
+        const meta = closeWorker(this.workspaceRoot, id);
+        return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
+      }
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
         if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
@@ -2372,6 +2547,25 @@ export class Agent {
           plan: args.plan,
         }, this.sessionKey);
         return formatPlan(state);
+      }
+      case 'workflow_progress': {
+        const slug = getCurrentWorkflow(this.workspaceRoot, this.sessionKey);
+        if (!slug) {
+          return 'No active workflow — nothing to track. (Bind one with /review, /simplify, /feature-dev, /spec, or /implement-plan.)';
+        }
+        const step = String(args.step ?? '').trim();
+        const status = String(args.status ?? '').trim() as 'running' | 'done' | 'failed' | 'skipped';
+        if (!step) throw new Error('workflow_progress requires a non-empty `step` id.');
+        if (!['running', 'done', 'failed', 'skipped'].includes(status)) {
+          throw new Error(`workflow_progress: status must be running|done|failed|skipped (got "${status}").`);
+        }
+        const run = advanceRunStep(this.workspaceRoot, slug, step, status, {
+          note: args.note ? String(args.note) : undefined,
+          sessionKey: this.sessionKey,
+          pid: process.pid,
+        });
+        const { done, total } = summarizeRun(run);
+        return `Workflow "${slug}": step "${step}" → ${status} (${done}/${total} done, run ${run.status}).`;
       }
       case 'ask_user_choice': {
         const question = String(args.question ?? '').trim();
@@ -2644,6 +2838,16 @@ export class Agent {
     compactedToolCharsAvoided: 0,
   };
 
+  /**
+   * 0.4.x-4 (`/context`) — per-skill token accounting. Each completed turn's
+   * usage is bucketed by the `activeSkill` in effect that turn (or `chat`
+   * when none), so `/context` can show where the session's tokens went.
+   */
+  public usageBySkill: Map<string, { promptTokens: number; completionTokens: number; turns: number; calls: number }> = new Map();
+
+  /** 0.4.x-4 (`/context`) — per-tool call counts (which tools ran, how often). */
+  public toolCallCounts: Map<string, number> = new Map();
+
   /** Last assistant message of the most recent turn — used by `/copy`. */
   public lastAnswer = '';
 
@@ -2713,6 +2917,9 @@ export class Agent {
       recallRecordsConsulted: 0,
       compactedToolCharsAvoided: 0,
     };
+    // 0.4.x-4 — per-skill + per-tool accounting is session-scoped too.
+    this.usageBySkill = new Map();
+    this.toolCallCounts = new Map();
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;
@@ -3687,7 +3894,11 @@ export function buildChatCompletionPayload(
   // CLI default and forwarding it would change every existing user's
   // request shape on upgrade for no behavioural gain.
   if (options.effort && options.effort !== 'medium' && supportsReasoningEffortField(config)) {
-    body.reasoning_effort = options.effort;
+    // `xhigh` is a CLI-level "maximum" that maps to the provider's highest
+    // accepted reasoning_effort ('high') — sending 'xhigh' on the wire would
+    // 400 on most OpenAI-compatible providers. The extra depth for xhigh
+    // comes from its stronger system-prompt overlay, not the wire field.
+    body.reasoning_effort = options.effort === 'xhigh' ? 'high' : options.effort;
   }
 
   return body;

@@ -7,7 +7,7 @@ import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactTe
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../state/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../state/hooksStore.js';
-import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../state/preferencesStore.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../state/preferencesStore.js';
 import { withTempWorkspace } from './_helpers.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
@@ -294,6 +294,21 @@ test('preferencesStore: effort defaults to medium and round-trips through write+
     writePreferences(workspace, { effort: 'low' });
     assert.equal(readPreferences(workspace).effort, 'low');
   });
+});
+
+test('normalizeEffort: canonical levels pass through; max aliases xhigh; case-insensitive', () => {
+  assert.equal(normalizeEffort('low'), 'low');
+  assert.equal(normalizeEffort('medium'), 'medium');
+  assert.equal(normalizeEffort('high'), 'high');
+  // xhigh must pass through (previously dropped to undefined → resolveEffort fell back to medium).
+  assert.equal(normalizeEffort('xhigh'), 'xhigh');
+  // max is an alias for xhigh — canonicalized so only one value is ever stored.
+  assert.equal(normalizeEffort('max'), 'xhigh');
+  assert.equal(normalizeEffort('  MAX  '), 'xhigh');
+  assert.equal(normalizeEffort('XHigh'), 'xhigh');
+  // unknown / non-string → undefined
+  assert.equal(normalizeEffort('turbo'), undefined);
+  assert.equal(normalizeEffort(42), undefined);
 });
 
 test('resolveEffort: cli.effort > preference > default', async () => {

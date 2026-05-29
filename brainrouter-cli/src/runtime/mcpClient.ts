@@ -5,6 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { LLMConfig, ServerConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
+import { VERSION } from '../version.js';
 
 /**
  * Match the Streamable HTTP session-expiry error so `callTool` can
@@ -52,7 +53,7 @@ export class McpClientWrapper {
 
   constructor() {
     this.client = new Client(
-      { name: 'brainrouter-cli', version: '0.3.8' },
+      { name: 'brainrouter-cli', version: VERSION },
       { capabilities: {} }
     );
   }
@@ -345,7 +346,7 @@ export class McpClientWrapper {
     // Rebuild the underlying Client too — the SDK caches transport
     // state on the Client instance and won't accept a second connect.
     this.client = new Client(
-      { name: 'brainrouter-cli', version: '0.3.8' },
+      { name: 'brainrouter-cli', version: VERSION },
       { capabilities: {} },
     );
     await this._connect(this.lastServerConfig!, this.lastLlmConfig);

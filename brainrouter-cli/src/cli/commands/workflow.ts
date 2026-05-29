@@ -15,8 +15,10 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
+import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns } from '../../state/workflowRun.js';
 import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
+import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
@@ -451,16 +453,19 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     case '/review':
     {
       // `--force` accepted but ignored — see /feature-dev for rationale.
-      const parsed = parseForceFlag(args);
+      // `--fix` (PARITY-R1): after the high-signal filter, apply the surviving
+      // fixes in place and re-verify, instead of stopping at the report.
+      const fix = args.includes('--fix');
+      const parsed = parseForceFlag(args.filter((a) => a !== '--fix'));
       const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
-      const reviewTitle = `Review: ${scope}`;
+      const reviewTitle = fix ? `Review+fix: ${scope}` : `Review: ${scope}`;
       const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review', sessionKey: agent.sessionKey });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
-      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}`));
-      // Workflow adapted from claude-code's code-review plugin
-      // Triage → Summary → 4 parallel reviewers (2 conventions + 2 bug-hunters) →
-      // validation pass → HIGH SIGNAL filter → final report.
-      await runSkillCommand(agent, mcpClient, command, scope, [
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${fix ? ' (--fix: will apply + verify surviving fixes)' : ''}`));
+      // Workflow: Triage → Summary → 4 parallel reviewers (2 conventions + 2
+      // bug-hunters) → validation pass → HIGH SIGNAL filter → report (--fix:
+      // apply surviving fixes + re-verify).
+      const reviewSteps = [
         '# Code Review',
         '',
         `Provide a code review for: ${scope}`,
@@ -511,8 +516,112 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         '',
         '## Step 7: Output',
         `\`write_file\` to \`${reportPath}\`: severity-ordered findings (Critical / Important) with file:line citations and concrete fix suggestions. If no issues survived filtering, the report says "No issues found. Checked for bugs and guideline compliance."`,
-        'Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.',
+      ];
+      if (fix) {
+        reviewSteps.push(
+          '',
+          '## Step 8: Apply fixes (--fix)',
+          'For each surviving high-signal issue, apply the **minimal** fix that resolves exactly that finding:',
+          '- Edit in place (`write_file`); keep each fix tightly scoped to the cited `file:line`. Do NOT refactor unrelated code, rename things, or fix issues you did not flag.',
+          '- After applying ALL fixes, run the project build + tests via `run_command` (e.g. the workspace `npm run build` / test script) to confirm nothing regressed.',
+          '- If the build/tests break, identify the offending fix, revert just that one edit, and mark it `needs-manual` in the report with the failure reason. Never leave the tree in a broken state.',
+          '',
+          'Then update the report: for each finding, append a `Fixed` / `needs-manual (reason)` status. Summarize ≤ 15 lines in chat: what was fixed, what was left for the human (and why), and the final build/test result.',
+        );
+      } else {
+        reviewSteps.push('Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.');
+      }
+      await runSkillCommand(agent, mcpClient, command, scope, reviewSteps.join('\n'), ctx.repl.runAgentTurn);
+      return true;
+    }
+    case '/review-auto':
+    {
+      // MAS-P5-T1 — confidence-scored review fan-out. Flags: --threshold N
+      // (default 80), --scope <glob>. Spawns the reviewer roster, each
+      // returning findings with a confidence; the parent dedupes by
+      // (file, line-range, root-cause) and filters below threshold.
+      let threshold = DEFAULT_REVIEW_THRESHOLD;
+      const rest: string[] = [];
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--threshold') {
+          const n = Number(args[++i]);
+          if (Number.isFinite(n)) threshold = Math.max(0, Math.min(100, n));
+        } else if (args[i] === '--scope') {
+          rest.push(args[++i] ?? '');
+        } else {
+          rest.push(args[i]);
+        }
+      }
+      const scope = rest.filter(Boolean).join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
+      const meta = createWorkflow(agent.workspaceRoot, { title: `Review-auto: ${scope}`, kind: 'review', sessionKey: agent.sessionKey });
+      const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)} (threshold ${threshold})`));
+      await runSkillCommand(agent, mcpClient, command, scope, [
+        '# Confidence-scored review fan-out',
+        '',
+        `Review: ${scope}. Confidence threshold: **${threshold}** (0-100).`,
+        '',
+        'Memory-first opening: `memory_search` past reviews + `memory_file_history` on touched files; pass relevant record ids to children.',
+        '',
+        `## Fan out (ONE message, parallel \`task_agent\` calls). Reviewers: ${DEFAULT_REVIEW_ROSTER.join(', ')}`,
+        '- **instruction** — AGENT.md/AGENTS.md/CLAUDE.md compliance; quote the exact rule.',
+        '- **bug** — clear bugs / wrong logic in the diff only; no nitpicks.',
+        '- **test** — behavior changes lacking test coverage.',
+        '- **history** — contradictions with recorded decisions or repeated failed_attempts (cite recordId).',
+        '- **simplification** — reuse, dead code, needless complexity in the changed code.',
+        '(If the `pr-review` pack is enabled, its reviewer agents exist by id; otherwise spawn `role=reviewer access=read` with each focus.)',
+        '',
+        '## Every finding MUST be `{ file, line, severity, confidence (0-100), summary, rootCause }`.',
+        'Children do NOT self-filter — below-threshold findings stay in the child transcript for audit.',
+        '',
+        '## Parent synthesis (deterministic)',
+        `Merge duplicates by \`(file, line-range, root-cause)\` — keep the highest confidence, union the reviewers that raised each — then drop confidence < ${threshold}. (Mirrors \`orchestration/reviewSynthesis.ts\` → \`mergeAndFilterFindings\`.)`,
+        '',
+        '## Output',
+        `\`write_file\` to \`${reportPath}\`: severity-ordered survivors (Critical → Low) with \`file:line\`, confidence, and which reviewers flagged each; note how many sub-threshold findings were retained. Do NOT edit reviewed files.`,
+        `Then summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
       ].join('\n'), ctx.repl.runAgentTurn);
+      return true;
+    }
+    case '/simplify':
+    {
+      // PARITY-R2 — first-class code-simplification pass (skill:
+      // code-simplification). Applies behavior-preserving simplifications to
+      // a scope in place + verifies (default), or proposes-only with
+      // --dry-run/--plan. Distinct from /review --fix: that fixes *bugs*;
+      // this reduces *complexity* without changing behavior.
+      const dryRun = args.includes('--dry-run') || args.includes('--plan');
+      const scope = args.filter((a) => !a.startsWith('--')).join(' ').trim()
+        || 'the current unstaged and staged changes (git diff HEAD)';
+      const meta = createWorkflow(agent.workspaceRoot, { title: `Simplify: ${scope}`, kind: 'simplify', sessionKey: agent.sessionKey });
+      const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'simplify.md');
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${dryRun ? ' (--dry-run: propose only, no edits)' : ''}`));
+      const simplifySteps = [
+        `Simplify: ${scope}.`,
+        '',
+        'Memory-first opening: `memory_search` for prior simplification/refactor notes on these files + `memory_file_history` on the scope; seed any children with relevant record ids.',
+        '',
+        '## Step 1: Map complexity',
+        'Read the scope and list concrete simplification opportunities with `file:line`: dead code, duplicated logic, needless indirection, over-deep nesting, redundant state, comments that should be code. Behavior MUST be preserved — this is a refactor, not a rewrite.',
+        '',
+        '## Step 2: Rank',
+        'Order by (clarity gain ÷ risk). Set aside anything that changes observable behavior, public signatures, or needs a design decision — list those under "out of scope for /simplify" rather than doing them.',
+        '',
+      ];
+      if (dryRun) {
+        simplifySteps.push(
+          '## Step 3: Propose (dry-run)',
+          `\`write_file\` to \`${reportPath}\`: the ranked simplifications with before/after sketches and \`file:line\`. Do NOT edit any source files. Summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
+        );
+      } else {
+        simplifySteps.push(
+          '## Step 3: Apply + verify',
+          'Apply the ranked simplifications in place (`write_file`), smallest-risk first. Keep each edit behavior-preserving and tightly scoped — never bundle a behavior change into a simplification.',
+          'After applying ALL edits, run the project build + tests via `run_command` to prove behavior is unchanged. If anything breaks, revert just the offending edit and record it as skipped.',
+          `\`write_file\` to \`${reportPath}\`: what was simplified (with \`file:line\`), what was skipped (+ reason), and the build/test result. Summarize ≤ 12 lines in chat. Workflow slug: \`${meta.slug}\`.`,
+        );
+      }
+      await runSkillCommand(agent, mcpClient, command, scope, simplifySteps.join('\n'), ctx.repl.runAgentTurn);
       return true;
     }
     case '/implement-plan':
@@ -680,27 +789,70 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     }
     case '/workflows':
     {
+      // PARITY-W2 — live run viewer. Reconcile first so a run left `running`
+      // by a crashed process reads as `interrupted` here too (not just at
+      // startup). Colour the run status by state.
+      reconcileStaleRuns(agent.workspaceRoot);
+      const runStatusColor = (s: string): string => {
+        switch (s) {
+          case 'completed': return chalk.green(s);
+          case 'failed': return chalk.red(s);
+          case 'interrupted': return chalk.yellow(s);
+          default: return chalk.cyan(s); // running
+        }
+      };
+
+      // `/workflows <slug>` → detailed per-step timeline drill-in.
+      const target = args[0]?.trim();
+      if (target) {
+        const slug = slugify(target);
+        if (!workflowExists(agent.workspaceRoot, slug)) {
+          console.log(chalk.red(`\nNo workflow "${target}". Run /workflows to list them.\n`));
+          return true;
+        }
+        const meta = listWorkflows(agent.workspaceRoot).find((w) => w.slug === slug);
+        const run = readRun(agent.workspaceRoot, slug);
+        console.log(chalk.bold(`\nWorkflow ${chalk.cyan(slug)}`) + (meta ? chalk.gray(`  ${meta.kind} · ${meta.status}`) : ''));
+        if (meta) console.log(`  ${meta.title}`);
+        if (!run) {
+          console.log(chalk.gray('  (no run ledger yet — the agent reports progress via workflow_progress as it executes steps)'));
+        } else {
+          const { done, total } = summarizeRun(run);
+          console.log(chalk.gray(`  run: ${runStatusColor(run.status)}${chalk.gray(`  ${done}/${total} steps`)}`));
+          for (const s of run.steps) {
+            const dur = s.startedAt ? chalk.gray(`  (${formatDuration(s.startedAt, s.endedAt ?? run.updatedAt)})`) : '';
+            const note = s.note ? chalk.gray(` — ${s.note}`) : '';
+            console.log(`    ${stepGlyph(s.status)} ${s.title}${dur}${note}`);
+          }
+        }
+        console.log();
+        return true;
+      }
+
       const workflows = listWorkflows(agent.workspaceRoot);
-      console.log(chalk.bold('\nDurable Workflows'));
+      console.log(chalk.bold('\nDurable Workflows') + chalk.gray('  (/workflows <slug> for the step timeline)'));
       if (workflows.length === 0) {
         console.log(chalk.yellow('  (none yet — try /spec or /feature-dev)'));
       } else {
         const currentSlug = getCurrentWorkflow(agent.workspaceRoot, agent.sessionKey);
         for (const w of workflows) {
-          // Subtask 4: current-pointer marker is now ★ (the spec's chosen
-          // glyph). Existing column structure on the first/second lines
-          // preserved so script readers don't break — the new goal column
-          // lands at the right of the artifact-markers line. The ★
-          // reflects THIS session's binding (9d-bugfix), so two CLIs in
+          // The ★ marks THIS session's binding (9d-bugfix), so two CLIs in
           // the same workspace can each see their own bound workflow.
           const marker = w.slug === currentSlug ? chalk.green(' ★') : '';
           console.log(`  ${chalk.cyan(w.slug)} [${chalk.gray(w.status)}] ${chalk.gray(w.kind)}${marker}`);
           console.log(`    ${w.title}`);
+          // PARITY-W2: live run line when a run ledger exists for this workflow.
+          const run = readRun(agent.workspaceRoot, w.slug);
+          if (run) {
+            const { done, total, current } = summarizeRun(run);
+            const cur = current ? chalk.gray(` · ${current}`) : '';
+            console.log(
+              `    ${chalk.gray('run:')} ${runStatusColor(run.status)} ${chalk.gray(formatRunGlyphs(run))} ${chalk.gray(`${done}/${total}`)}${cur}`,
+            );
+          }
           const hasSpec = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.spec);
           const hasTasks = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.tasks);
           const hasWalk = !!readArtifact(agent.workspaceRoot, w.slug, ARTIFACT.walkthrough);
-          // Workflows are pure artifact folders now — no goal column.
-          // Goal state lives at session scope only; see goalStore.ts.
           console.log(
             chalk.gray(
               `    spec.md:${hasSpec ? '✓' : '·'}  tasks.md:${hasTasks ? '✓' : '·'}  walkthrough.md:${hasWalk ? '✓' : '·'}`,

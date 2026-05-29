@@ -91,6 +91,7 @@ if (getCliKnobs().debugExit) {
 }
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
+import { VERSION } from './version.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from './config/config.js';
 import { Agent } from './agent/agent.js';
@@ -112,7 +113,7 @@ const program = new Command();
 program
   .name('brainrouter')
   .description('BrainRouter CLI — Premium interactive terminal-based agent client.')
-  .version('0.3.8');
+  .version(VERSION);
 
 // Chat Command (default)
 program

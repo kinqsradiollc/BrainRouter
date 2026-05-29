@@ -9,6 +9,9 @@ import path from 'node:path';
 import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
+// MAS-P5-T2: the child-output offload thresholds are now the shared
+// result-handoff constants (single source of truth in runtime/resultHandoff).
+import { RESULT_HANDOFF_THRESHOLD_CHARS, RESULT_PREVIEW_CHARS } from '../runtime/resultHandoff.js';
 import {
   createSession,
   formatSessionSummary,
@@ -30,7 +33,7 @@ import { aggregateChildUsage } from './childAccounting.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
-import { emitAgentRouteFeedback, type RouteOutcome } from './memoryEvents.js';
+import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -100,8 +103,8 @@ export interface OrchestrationContext {
 // BrainRouter working-memory canvas rather than embedded directly in the
 // parent's context. ~6k chars ≈ 1.5k tokens — enough room for short reports
 // in-line, big enough that a 20k-char architecture analysis goes out-of-band.
-const OFFLOAD_THRESHOLD_CHARS = 6000;
-const OFFLOAD_PREVIEW_CHARS = 800;
+const OFFLOAD_THRESHOLD_CHARS = RESULT_HANDOFF_THRESHOLD_CHARS;
+const OFFLOAD_PREVIEW_CHARS = RESULT_PREVIEW_CHARS;
 
 /**
  * Order the three access modes by power so spawn_agent can refuse to grant
@@ -292,7 +295,7 @@ export function createSpawnAgentTool() {
         },
         effort: {
           type: 'string',
-          enum: ['low', 'medium', 'high'],
+          enum: ['low', 'medium', 'high', 'xhigh'],
           description: 'Optional reasoning-effort override for this child (otherwise inherits the session /effort).',
         },
       },
@@ -664,17 +667,28 @@ async function emitRouteFeedback(
     Number.isFinite(startedMs) && Number.isFinite(completedMs)
       ? Math.max(0, completedMs - startedMs)
       : undefined;
-  await emitAgentRouteFeedback(
-    { mcpClient: ctx.mcpClient, sessionKey: ctx.parentSessionKey },
-    {
+  const emitCtx = { mcpClient: ctx.mcpClient, sessionKey: ctx.parentSessionKey };
+  await emitAgentRouteFeedback(emitCtx, {
+    task: args.task,
+    chosenAgentId: args.chosenAgentId,
+    parentAgentId: args.parentAgentId,
+    ownership: args.ownership,
+    outcome: args.outcome,
+    durationMs,
+    tokenCost: args.tokenCost,
+  });
+  // MAS-P6-T1: also capture the delegation-aware `agent_output` event
+  // (best-effort; piggybacks the same MCP capture path).
+  await emitAgentEvent(
+    emitCtx,
+    agentOutputEvent({
+      agentId: args.chosenAgentId,
       task: args.task,
-      chosenAgentId: args.chosenAgentId,
-      parentAgentId: args.parentAgentId,
-      ownership: args.ownership,
       outcome: args.outcome,
       durationMs,
       tokenCost: args.tokenCost,
-    },
+      preview: typeof args.record.finalOutput === 'string' ? args.record.finalOutput : undefined,
+    }),
   );
 }
 

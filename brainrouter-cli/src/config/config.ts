@@ -125,7 +125,9 @@ export interface CliKnobs {
   /** Disable streaming (SSE). Default false. */
   disableStream?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. */
-  effort?: 'low' | 'medium' | 'high';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
+  fallbackModel?: string | null;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
@@ -140,6 +142,8 @@ export interface CliKnobs {
   sandboxWritePaths?: string[];
   /** Allow outbound network from the sandbox. Default false. */
   sandboxNetwork?: boolean;
+  /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
+  notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
   childDrainTimeoutMs?: number;
   /** Maximum spawn depth. Default 3. */
@@ -350,12 +354,14 @@ export interface ResolvedCliKnobs {
   llmTimeoutMs: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
-  effort: 'low' | 'medium' | 'high';
+  effort: 'low' | 'medium' | 'high' | 'xhigh';
+  fallbackModel: string | null;
   mcpTimeoutMs: number;
   sandbox: 'off' | 'on';
   sandboxReadPaths: string[];
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
+  notifyBell: boolean;
   childDrainTimeoutMs: number;
   maxSpawnDepth: number;
   autoChainMaxFollowups: number;
@@ -400,11 +406,13 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
     effort: c.effort ?? 'medium',
+    fallbackModel: c.fallbackModel ?? null,
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
     sandbox: c.sandbox ?? 'off',
     sandboxReadPaths: c.sandboxReadPaths ?? [],
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
+    notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,

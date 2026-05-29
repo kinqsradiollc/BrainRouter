@@ -108,6 +108,8 @@ test('SLASH_TO_SKILL maps the documented commands to skill names', () => {
   assert.equal(SLASH_TO_SKILL['/feature-dev'], 'agentic-engineering-workflow');
   assert.equal(SLASH_TO_SKILL['/review'], 'code-review-and-quality');
   assert.equal(SLASH_TO_SKILL['/implement-plan'], 'incremental-skill');
+  // PARITY-R2 — /simplify is a first-class command backed by code-simplification.
+  assert.equal(SLASH_TO_SKILL['/simplify'], 'code-simplification');
 });
 
 test('resolveSkill falls back to filesystem when MCP is unavailable', async () => {

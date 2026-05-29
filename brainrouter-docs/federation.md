@@ -402,8 +402,18 @@ second works. The CLIs re-register transparently within ~30 s.
 ### What's intentionally missing (and where it lands)
 
 - **The recipient doesn't auto-react to a DM.** Stage 3 is a wire, not a workflow. A future change can let the agent loop treat inbound text as a prompt; today the banner is informational.
-- **No `delegate_task("codex", …)`.** Stage 4 + CLI Multi-Agent Phase 2. The inbox `kind` enum already reserves `delegate` so when those land they ride the same wire.
-- **Banner latency ≤ 5 s, not ≤ 250 ms.** SSE push deferred to 0.4.1.
+- **Banner latency ≤ 5 s, not ≤ 250 ms.** SSE push deferred.
+
+## Stage 5 — cross-vendor delegation (0.4.2)
+
+`delegate_task` shipped (FED-S5). The `session_delegate_task` MCP tool hands a
+task to another CLI/vendor on the same brain — addressed directly or by
+`<clientKind>:next-idle` (e.g. `codex:next-idle`) so the brain routes it to
+the next idle peer of that kind. If no matching peer is live, the task is
+durably queued in the `pending_delegations` table and delivered when one
+registers; `session_delegations` reads tasks addressed to the current session.
+The CLI surfaces this as **`/handoff <text>`**. It rides the `delegate` inbox
+`kind` reserved back in Stage 3.
 
 ## Privacy & scope
 
