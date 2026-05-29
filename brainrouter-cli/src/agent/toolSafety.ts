@@ -27,7 +27,7 @@ import { getCliKnobs } from '../config/config.js';
  *     caution; the model usually drives spawns through task_agent /
  *     delegate_agent anyway).
  *   - wait_agent / wait_agents / close_agent / read_agent_transcript /
- *     route_agent  — child-drain guardrail tracks observations one-by-one.
+ *     route_task  — child-drain guardrail tracks observations one-by-one.
  *   - update_plan / goal_complete / goal_blocked  — session state mutation.
  *   - ask_user_choice  — interactive picker; must not interleave with other UI.
  *   - list_agents  — reads orchestration state but cheap and rarely batched.
