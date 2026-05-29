@@ -321,7 +321,7 @@ export function createTaskAgentTool() {
       '- If the user says run agents "in parallel", you MUST send one message with multiple task_agent tool_calls.\n' +
       '- For background fire-and-forget when you have parent-side work to do, use delegate_agent instead and call wait_agent when the result is needed.\n\n' +
       'Writing the prompt: brief the child like a smart colleague who just walked in. Explain what you\'re accomplishing and why, what you\'ve already learned or ruled out, enough context for judgment calls. Include file paths and line numbers. **Never delegate understanding** — don\'t write "based on your findings, fix the bug"; that pushes synthesis onto the child. Terse command-style prompts produce shallow generic work.\n\n' +
-      '**Trust but verify:** a child\'s returned summary describes what it INTENDED to do, not necessarily what it actually did. When a child writes or edits code, read the actual changes (git diff, read_file) before reporting work as done. Adapted from Claude Code\'s Agent-tool guidance.',
+      '**Trust but verify:** a child\'s returned summary describes what it INTENDED to do, not necessarily what it actually did. When a child writes or edits code, read the actual changes (git diff, read_file) before reporting work as done.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -985,8 +985,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Track per-tool start times so the paired onChildToolEnd carries a
       // real duration — the REPL renders this on the child's end row.
       const childToolStarts = new Map<string, number>();
-      // Inspired by deer-flow's synthetic dangling-tool-call recovery:
-      // every child must resolve to an explicit result instead of leaving
+      // Synthetic dangling-tool-call recovery: every child must resolve to
+      // an explicit result instead of leaving
       // the session running forever when an LLM/MCP call hangs.
       const output = await withChildDeadline(childAgent.runTurn(prompt, {
         onStatusUpdate: () => {},

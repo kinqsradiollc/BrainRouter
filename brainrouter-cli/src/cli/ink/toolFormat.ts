@@ -13,10 +13,6 @@
  * mapping for our built-in LOCAL_TOOLS (cli/../agent/agent.ts) + MCP
  * tool names (which carry an `mcp_<server>_` namespace prefix that
  * the user doesn't care about).
- *
- * Reference for the convention: claude-code transcripts (see
- * openSrc/claude-code/CHANGELOG.md mentions throughout; the format is
- * not formally documented but used in every claude-code session).
  */
 
 /**

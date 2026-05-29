@@ -2,7 +2,7 @@
 name: docker-skill
 description: Containerize applications using Docker. Enforce production-grade security, multi-stage builds, and optimized resource allocation.
 hints:
-  - Check openSrc/ or existing project files for Dockerfiles or docker-compose.yml files if available.
+  - Check existing project files for Dockerfiles or docker-compose.yml files if available.
   - Employ multi-stage builds and slim/alpine base images to produce compact, secure final images.
   - Order Dockerfile instructions strategically: install dependencies before copying source files to optimize cache hits.
   - Implement security best practices by defining a non-root USER and mounting secrets securely rather than embedding them.

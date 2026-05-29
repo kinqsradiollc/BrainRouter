@@ -2,7 +2,7 @@
 name: concerns-skill
 description: Framework for surfacing and tracking tech debt, known bugs, and security gaps in software codebases.
 hints:
-  - Check openSrc/ or docs for existing tech debt registers and known bugs if available.
+  - Check existing project docs for tech debt registers and known bugs if available.
   - Formulate codebase concern reports with specific file paths, line numbers, and factual impact.
   - Avoid emotional adjectives; use precise engineering terms (e.g. N+1 queries, race conditions).
   - Provide a clear, actionable fix or mitigation approach for every logged concern.

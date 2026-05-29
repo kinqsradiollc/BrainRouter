@@ -87,8 +87,7 @@ persisted or processed.
 What Stage 3 deliberately **does not do yet**: send messages between
 peers as a chat UI, hand off goals, or route delegated work across
 vendors. Those are Stage 4 (cross-vendor `delegate_task` over the
-same `kind` enum) and the post-0.4.0 plan in
-[`FULL_TASKS.MD` §4.3](../FULL_TASKS.MD).
+same `kind` enum).
 
 ## What it's useful for right now
 

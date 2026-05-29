@@ -2,7 +2,7 @@
 name: ci-cd-skill
 description: Automates CI/CD pipeline setup. Use when setting up or modifying build and deployment pipelines. Use when you need to automate quality gates, configure test runners in CI, or establish deployment strategies.
 hints:
-  - Check openSrc/ or existing workflows (e.g., .github/workflows/, .gitlab-ci.yml) for pipeline patterns if available.
+  - Check existing workflows (e.g., .github/workflows/, .gitlab-ci.yml) for pipeline patterns if available.
   - Structure CI pipelines to run checks in parallel (lint, typecheck, test, build) to reduce feedback loop times.
   - Implement package manager caching (e.g. actions/setup-node cache option) to optimize dependency installs.
   - Avoid hardcoding credentials or configuration secrets; mandate repository/environment secret variables instead.

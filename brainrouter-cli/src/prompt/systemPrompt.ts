@@ -47,9 +47,7 @@ export interface SystemPromptContext {
    * "nemotron-3-super-free", "kimi-k2", "qwen3-coder"). Used by
    * `modelFamilyOverlay` to attach a Beast-mode reinforcement block when
    * the model is a smaller / OS / free-tier model that needs aggressive
-   * repetition to behave agentically (adapted from OpenCode's per-model-
-   * family prompt scheme in `openSrc/opencode/packages/opencode/src/
-   * session/system.ts`). Strong models (claude-*, gpt-4/4o/5/5.x,
+   * repetition to behave agentically. Strong models (claude-*, gpt-4/4o/5/5.x,
    * o1/o3/o4, gemini-2.5-*) get no overlay — they're trained well enough
    * that extra hand-holding just costs tokens.
    */
@@ -116,10 +114,9 @@ function effortOverlay(effort: SystemPromptContext['effort']): string {
 }
 
 /**
- * Adapted from OpenCode's `provider(model)` switch in
- * `openSrc/opencode/packages/opencode/src/session/system.ts`. OpenCode ships
- * an entirely different prompt per family (anthropic/gpt/beast/codex/kimi/
- * default); we keep one base prompt (so BrainRouter-specific guidance for
+ * Per-model-family prompt strategy. Rather than shipping an entirely
+ * different prompt per family (anthropic/gpt/beast/codex/kimi/
+ * default), we keep one base prompt (so BrainRouter-specific guidance for
  * memory, multi-agent, skills, workflows stays) and only attach an EXTRA
  * Beast-mode-style overlay for weaker / OS / free-tier models. The overlay
  * is empty for strong models that don't need it.
@@ -131,7 +128,7 @@ function effortOverlay(effort: SystemPromptContext['effort']): string {
  *
  * Everything else (nemotron, kimi, llama, qwen, mistral/magistral, gpt-oss,
  * deepseek, gemma, phi, command-r, glm, yi, unknown) gets the overlay.
- * Inspired by OpenCode's beast.txt — aggressive repetition is what makes the
+ * Aggressive repetition is what makes the
  * difference for these models.
  */
 function modelFamilyOverlay(model: string | undefined): string {
@@ -209,7 +206,7 @@ function memoryFirstSection(): string {
     '# Memory-First Workflow (the BrainRouter differentiator — non-negotiable)',
     'BrainRouter is a cognitive memory engine first. Treat memory as a primary tool **alongside the filesystem, not instead of it**.',
     '- A `## BrainRouter Memory Briefing` system message is auto-injected with recalled memories, persona, and recent context. Read it before reasoning. When thin/empty, call `memory_search` / `memory_recall` yourself — do not assume the user is new.',
-    '- **Memory-empty ≠ unknown.** If memory has no record of a name, term, file, or concept the user mentioned, the next step is **filesystem exploration**, not `goal_blocked`. Run `list_dir(.)`, `glob_files` for the term, and `read_file` on `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` — these typically reference workspace folders (including gitignored ones like `openSrc/`, `vendor/`, `third_party/`) that contain the answer. Only block after BOTH memory AND filesystem exploration come up empty, and the block reason must cite which directories you actually checked.',
+    '- **Memory-empty ≠ unknown.** If memory has no record of a name, term, file, or concept the user mentioned, the next step is **filesystem exploration**, not `goal_blocked`. Run `list_dir(.)`, `glob_files` for the term, and `read_file` on `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` — these typically reference workspace folders (including gitignored ones like `vendor/`, `third_party/`) that contain the answer. Only block after BOTH memory AND filesystem exploration come up empty, and the block reason must cite which directories you actually checked.',
     '- For non-trivial work, call `memory_recall` with sessionKey + the request as the query. When you pivot mid-turn or need deeper signal, re-call: `memory_file_history` for file-specific past changes, `memory_graph_query` for related entities (2-hop), `memory_explain_recall` for ranking signals, `memory_failed_attempts` for prior dead-ends. Call `memory_resolve_session` first when you don\'t yet have a sessionKey.',
     '- Quote record IDs inline like `[rec_xxx]` so the user sees what you used.',
     '- For payloads >~1,000 tokens, call `memory_working_offload` and reference back by its ref-node id instead of pasting again.',
@@ -235,10 +232,8 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
   // clarification" when a request is vague, even when tools are attached and
   // tool_choice='auto'. Burying the autonomy directive under tool-mechanics
   // and memory-first sections meant the model never reached it before
-  // committing to a passive reply. Codex's prompt
-  // (openSrc/codex/codex-rs/core/prompt_with_apply_patch_instructions.md
-  // §"Task execution") puts the "keep going until resolved" rule above all
-  // tool guidance — we mirror that ordering here.
+  // committing to a passive reply. We put the "keep going until resolved"
+  // rule above all tool guidance — proven prompt schemes order it that way.
   return [
     'You are BrainRouter CLI, an autonomous software engineering agent running in a terminal — direct, tool-driven, memory-aware. You are an interactive agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.',
     '',
@@ -254,7 +249,7 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     '# Doing tasks',
     '- The user will primarily request software engineering tasks (bugs, features, refactors, explanations). When given a vague instruction, interpret it in the context of the current working directory — do not ask "which project?" when one workspace is present.',
     '- You are highly capable. Defer to user judgment about whether a task is too large, but otherwise drive it to completion.',
-    '- **For exploratory questions ("analyze X", "tell me about Y", "what does Z do"), your first turn MUST start with parallel filesystem reads, not memory-only lookups.** Giving up after `memory_search` returns nothing is broken — fall through to `list_dir(.)`, `glob_files`, `read_file` on `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md`. Workspace docs typically point at gitignored peer folders (e.g. `openSrc/`, `vendor/`, `third_party/`) where the answer lives.',
+    '- **For exploratory questions ("analyze X", "tell me about Y", "what does Z do"), your first turn MUST start with parallel filesystem reads, not memory-only lookups.** Giving up after `memory_search` returns nothing is broken — fall through to `list_dir(.)`, `glob_files`, `read_file` on `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md`. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) where the answer lives.',
     '- Do not propose changes to code you haven\'t read. Read it first.',
     '- Do not create files unless absolutely necessary. Prefer editing an existing file over creating a new one.',
     '- Avoid giving time estimates or predictions for how long tasks will take.',

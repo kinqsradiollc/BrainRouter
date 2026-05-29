@@ -1686,7 +1686,7 @@ test('runTurn: child tool events propagate to parent onChildToolStart / onChildT
 });
 
 // ---------------------------------------------------------------------------
-// 0.3.8-I4 — Strict tool-call recovery end-to-end (deer-flow pattern).
+// 0.3.8-I4 — Strict tool-call recovery end-to-end.
 // Pure-function helpers live in tool-call-recovery.test.ts; these exercise
 // the agent.ts integration: dedupe → parse-args recovery → orphan synthesis
 // → unknown-tool "did you mean" hint.

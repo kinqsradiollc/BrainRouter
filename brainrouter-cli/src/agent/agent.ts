@@ -64,7 +64,7 @@ import { computePrefixFingerprint } from '../runtime/contextRegions.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../runtime/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
-// truncation / storm). Adapted from openSrc/DeepSeek-Reasonix/src/repair/.
+// truncation / storm).
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
 // 0.3.9 token-tally rework: content-aware estimator. The compaction
 // threshold itself stays a single `BRAINROUTER_AUTO_COMPACT_TOKENS`
@@ -267,7 +267,7 @@ export interface RunTurnCallbacks {
   /**
    * TIER A streaming hooks — when any of these are provided, the agent
    * switches to a streaming LLM call (SSE) so the UI sees text appear
-   * character-by-character (grok-cli parity). When omitted (silent /
+   * character-by-character. When omitted (silent /
    * child agents / tests), the original non-streaming path is used.
    * Firing order per assistant turn:
    *   onAssistantTurnStart → onAssistantDelta* (and/or onReasoningDelta*)
@@ -599,7 +599,7 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `openSrc/`, `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1050,13 +1050,13 @@ export class Agent {
     }
 
     const allowed = this.allowedToolsForAccess();
-    // OpenCode parity: collapse the orchestration surface the LLM sees onto
+    // Collapse the orchestration surface the LLM sees onto
     // task_agent (foreground) + delegate_agent (background). spawn_agent /
     // spawn_agents stay registered and executable (workflow.ts slash commands
     // still call them, and `executeOrchestrationTool` dispatches them) but
     // we don't advertise them to the model — that's what made the model
     // pick four overlapping tools at random instead of consistently using
-    // task_agent the way OpenCode users see Task get picked.
+    // task_agent.
     const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
     const filteredLocalTools = LOCAL_TOOLS.filter(
       (t) => allowed.has(t.name) && !MODEL_HIDDEN_TOOLS.has(t.name),
@@ -1220,9 +1220,9 @@ export class Agent {
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
     const REPEAT_GUARD_LIMIT = 3;
-    // OpenCode calls this class of failure a "doom loop": the same tool
+    // This class of failure is a "doom loop": the same tool
     // pattern repeats even if the arguments keep changing. Keep BrainRouter's
-    // threshold higher than OpenCode's identical-input approval guard so
+    // threshold higher than a strict identical-input approval guard so
     // normal multi-file exploration still works, but stop 20+ Read(...) spins.
     const recentToolSequences: string[] = [];
     const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
@@ -1356,8 +1356,7 @@ export class Agent {
       try {
         response = await invokeLlm();
       } catch (err: any) {
-        // Layered LLM recovery — adapted from claude-code's queryLoop in
-        // openSrc/claude-code-openSource/src/query.ts. We detect context-
+        // Layered LLM recovery. We detect context-
         // window-exceeded errors (the single failure mode where a fresh
         // request is guaranteed to fail the same way) and trigger a
         // reactive compaction before retrying ONCE. Other errors propagate
@@ -1454,9 +1453,8 @@ export class Agent {
       // because one of the duplicates has no paired tool_result. Dedupe
       // before pushing the assistant message — last occurrence wins (closest
       // to the model's final intent).
-      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
-      //   middlewares/dangling_tool_call_middleware.py — same well-formed
-      //   history invariant, applied per-response instead of pre-request.
+      // Enforces the same well-formed history invariant as the pre-request
+      //   dangling-tool-call recovery, applied per-response instead.
       if (response.toolCalls && response.toolCalls.length > 0) {
         const deduped = dedupeToolCalls(response.toolCalls, (id) => {
           callbacks.onStatusUpdate(`Recovery: dropped duplicate tool_call id "${id}" (last occurrence wins).`);
@@ -1464,7 +1462,7 @@ export class Agent {
         response.toolCalls = deduped;
       }
 
-      // 0.3.9 item 11 — run the Reasonix-style repair pipeline on the
+      // 0.3.9 item 11 — run the repair pipeline on the
       // assistant's tool_calls before they reach dispatch:
       //   • scavenge — recover calls leaked into the content channel;
       //   • truncation — rebalance JSON in arguments cut off by
@@ -1621,7 +1619,7 @@ export class Agent {
         // with that preamble as the final answer — leaving the user staring
         // at an announcement of work the model never did. This is the most
         // common Gemma 2B / free-tier OS-model failure mode after we started
-        // teaching them OpenCode's "send a preamble before tool batches"
+        // teaching them to "send a preamble before tool batches"
         // pattern.
         //
         // Fire only when:
@@ -2011,8 +2009,6 @@ export class Agent {
       // undefined and we don't accidentally claim a child was spawned.
       // Synthetics do NOT bump lastTurnToolCalls — they aren't real
       // dispatches, just a well-formed-history fix.
-      // Adapted from deer-flow/backend/packages/harness/deerflow/agents/
-      //   middlewares/dangling_tool_call_middleware.py.
       const producedResults = processed.filter((p): p is NonNullable<typeof p> => !!p).map((p) => p.toolMsg);
       const orphans = synthesizeOrphanResults(toolCalls, producedResults);
       for (const synthetic of orphans) {
@@ -3572,8 +3568,7 @@ const TAG_MARKER_RE = /^<!--brainrouter:[a-z0-9-]+-->\n/;
  * `gpt-oss-20b` served from localhost via LM Studio gets the same
  * treatment as `gpt-5` on `api.openai.com`.
  *
- * Borrowed shape from openai-node's `ReasoningEffort` enum
- * (openSrc/openai-node/src/resources/shared.ts) — `low|medium|high` map
+ * The `low|medium|high` values map
  * straight through to the provider field across OpenAI, DeepSeek,
  * LM Studio, Ollama, and OpenRouter's pass-through. Anthropic-native
  * support was removed in 0.3.9; Claude models can still be reached

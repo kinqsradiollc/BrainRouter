@@ -2,7 +2,7 @@
 name: migration-skill
 description: Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when deciding whether to maintain or sunset existing code.
 hints:
-  - Check openSrc/ or existing project files for deprecated systems or migration patterns if available.
+  - Check existing project files for deprecated systems or migration patterns if available.
   - Rely on backward-compatible adapter interfaces to let old consumers interact with new systems smoothly.
   - Use the Strangler Pattern to route traffic incrementally from old code paths to new ones.
   - Confirm active usage has dropped to absolute zero via logs/metrics before completely deleting code.

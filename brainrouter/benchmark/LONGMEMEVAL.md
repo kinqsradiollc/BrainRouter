@@ -62,7 +62,7 @@ npm run bench:scale
 # Run the Real Embeddings Quality Suite (uses local TransformersEmbedder)
 npm run bench:real-embeddings
 
-# Run the 100k Concurrency Load Test (matches agentmemory seed)
+# Run the 100k Concurrency Load Test
 npm run bench:load
 
 # Run the End-to-End integration benchmark

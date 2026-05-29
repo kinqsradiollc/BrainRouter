@@ -314,7 +314,7 @@ async function measureMemoriesLatestDirect(
   ops: number
 ): Promise<CellResult> {
   const { latencies, errors, wallMs } = await driveLoad(C, ops, async () => {
-    // Replicates GET /agentmemory/memories?latest=true query
+    // Replicates a GET /memories?latest=true style query
     const results = (store as any).db
       .prepare("SELECT * FROM l1_records WHERE user_id = ? AND archived = 0 ORDER BY created_time DESC LIMIT 10")
       .all("load_user");

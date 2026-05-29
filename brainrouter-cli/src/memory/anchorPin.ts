@@ -1,7 +1,7 @@
 /**
  * Prefix-pinned memory briefing (0.3.9 item 9).
  *
- * BrainRouter's unique contribution to the Reasonix cache-first loop:
+ * BrainRouter's unique contribution to the cache-first loop:
  * memory cards live inside the immutable prefix instead of being
  * rewritten as a tagged system message every turn.
  *
@@ -100,8 +100,7 @@ export function hashBriefingContent(block: string): string {
  * `replaceTaggedSystemMessage` machinery still find and replace it
  * when `/refresh-memory` fires.
  *
- * Reasonix's ImmutablePrefix uses a synthetic assistant message for
- * its anchors; we use a system message so the change is invisible to
+ * We use a system message for the anchor so the change is invisible to
  * the rest of the agent (the chatHistory already treats tagged system
  * messages as cache-stable). The wire shape isn't load-bearing here —
  * the byte-stability across turns is what matters for the prefix
