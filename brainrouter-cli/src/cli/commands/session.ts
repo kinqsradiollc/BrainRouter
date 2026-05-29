@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
+import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { buildGoalKickoffPrompt } from './_helpers.js';
@@ -114,6 +115,44 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       console.log(chalk.gray(`  Parent : ${previous}`));
       console.log(chalk.gray(`  New    : ${newKey}`));
       console.log(chalk.gray('  Your next message starts a new transcript while keeping prior context.\n'));
+      return true;
+    }
+    case '/rewind':
+    {
+      // 0.4.x-3 — interactive timeline. `/rewind` lists the last 20 turns;
+      // `/rewind <n>` forks a new session truncated to keep turns 1..n and
+      // drop everything after, so you can branch from an earlier point.
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      const timeline = buildRewindTimeline(entries, 20);
+      if (timeline.length === 0) {
+        console.log(chalk.yellow('\nNothing to rewind — no user turns recorded in this session yet.\n'));
+        return true;
+      }
+      const arg = (args[0] ?? '').trim();
+      if (!arg) {
+        console.log(chalk.bold(`\n⏪ Rewind — last ${timeline.length} turn${timeline.length === 1 ? '' : 's'} (newest last):`));
+        for (const t of timeline) {
+          console.log(`  ${chalk.cyan(String(t.turnNumber).padStart(2))}  ${chalk.gray(t.timestamp.slice(11, 19))}  ${t.preview}`);
+        }
+        console.log(chalk.gray('\n  /rewind <n> forks a new session truncated to that turn (everything after is dropped).\n'));
+        return true;
+      }
+      const n = Number(arg);
+      const chosen = timeline.find((t) => t.turnNumber === n);
+      if (!Number.isInteger(n) || !chosen) {
+        console.log(chalk.red(`\nNo turn "${arg}". Run /rewind to list the available turns.\n`));
+        return true;
+      }
+      const kept = truncateAtTurn(entries, chosen.endIndex);
+      const previous = agent.sessionKey;
+      const newKey = `${agent.sessionKey.split(':')[0]}:rewind:${randomUUID().slice(0, 8)}`;
+      agent.fork(newKey);
+      const loaded = agent.loadHistory(kept);
+      agent.refreshSystemPrompt();
+      console.log(chalk.green(`\n✓ Rewound to turn ${n} in a new session.`));
+      console.log(chalk.gray(`  Parent : ${previous}`));
+      console.log(chalk.gray(`  New    : ${newKey}`));
+      console.log(chalk.gray(`  Kept ${loaded} message${loaded === 1 ? '' : 's'} (turn ${n} preserved; everything after dropped). Your next message continues from here.\n`));
       return true;
     }
     case '/rename':
