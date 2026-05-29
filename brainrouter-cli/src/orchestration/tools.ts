@@ -287,6 +287,15 @@ export function createSpawnAgentTool() {
           items: { type: 'string' },
           description: 'Optional BrainRouter memory record IDs that the parent already recalled. The child agent is told to build on these instead of re-discovering them.',
         },
+        overlay: {
+          type: 'string',
+          description: 'Optional one-off instruction overlay (≤4000 chars) appended to the child\'s role prompt — the escape hatch for a bespoke contractor the preset roles don\'t cover (e.g. "only touch the CSS, match the existing design tokens"). The child is marked synthetic.',
+        },
+        effort: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: 'Optional reasoning-effort override for this child (otherwise inherits the session /effort).',
+        },
       },
       required: ['prompt'],
     },
@@ -957,6 +966,19 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       `The parent agent already recalled these memory record IDs: ${seededIds.join(', ')}. ` +
       `Call memory_recall (or memory_search) with the same intent before doing duplicate exploration, and prefer building on these records over re-deriving them.`;
   }
+  // 0.4.x-1: operator overlay — a one-off instruction block (≤4000 chars,
+  // same cap as /goal) appended to the role prompt. The escape hatch for a
+  // bespoke contractor the five preset roles don't cover. A child with an
+  // overlay is marked `synthetic` so /agents and recall can tell it apart
+  // from a vanilla role spawn.
+  const overlay = typeof args.overlay === 'string' ? args.overlay.trim().slice(0, 4000) : '';
+  if (overlay) {
+    systemPromptOverride += `\n\n## Operator overlay (one-off instructions for this run)\n${overlay}`;
+    updateSession(ctx.workspaceRoot, record.id, { synthetic: true });
+  }
+  // 0.4.x-5: per-child reasoning-effort override (otherwise inherits /effort).
+  const effortOverride =
+    args.effort === 'low' || args.effort === 'medium' || args.effort === 'high' ? args.effort : undefined;
 
   const childAgent = new Agent(ctx.mcpClient, ctx.llmConfig, {
     workspaceRoot: ctx.workspaceRoot,
@@ -985,6 +1007,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     // MAS-P4-T1: the agent def's tool scope limits the child's MCP surface.
     toolScope: childToolScope,
     disallowedTools: childDisallowedTools,
+    // 0.4.x-5: per-child reasoning-effort override.
+    effortOverride,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
