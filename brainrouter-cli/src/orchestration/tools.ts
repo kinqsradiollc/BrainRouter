@@ -18,6 +18,7 @@ import {
   type ChildSessionRecord,
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { appendTranscriptEntry, readTranscriptEntries } from '../state/sessionStore.js';
@@ -408,7 +409,8 @@ export function createSpawnAgentsTool() {
     name: 'spawn_agents',
     description:
       'Spawn multiple child agents in parallel with one tool call. Returns all child ids immediately. ' +
-      'Use this for batched fan-out (e.g. 3 explorers covering different parts of the codebase) instead of N back-to-back spawn_agent calls.',
+      'Use this for batched fan-out (e.g. 3 explorers covering different parts of the codebase) instead of N back-to-back spawn_agent calls. ' +
+      'Write/shell children MUST declare an `ownership` glob so parallel writers cannot collide — or pass `allowOverlap: true` on the entry to opt out.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -424,6 +426,8 @@ export function createSpawnAgentsTool() {
               access: { type: 'string', enum: ['read', 'write', 'shell'] },
               workdir: { type: 'string' },
               seedRecordIds: { type: 'array', items: { type: 'string' } },
+              ownership: { type: 'string', description: 'File glob this child may write within (e.g. "src/payments/**"). Required for write/shell access unless allowOverlap is set. Enforced on write_file / edit_file / apply_patch.' },
+              allowOverlap: { type: 'boolean', description: 'Opt out of the ownership requirement for this entry (writes are then unbounded). Default false.' },
             },
             required: ['prompt'],
           },
@@ -718,20 +722,50 @@ async function handleDelegateAgent(args: any, ctx: OrchestrationContext): Promis
 async function handleSpawnBatch(args: any, ctx: OrchestrationContext): Promise<string> {
   const list = Array.isArray(args?.agents) ? args.agents : [];
   if (list.length === 0) throw new Error('spawn_agents requires at least one entry in `agents`.');
+
+  // MAS-P3 — ownership gate. Resolve each entry's effective access and
+  // refuse write/shell fan-out that declared no ownership glob (parallel
+  // writers would otherwise be free to clobber each other's files). This
+  // runs BEFORE any child is spawned, so a bad batch fails atomically
+  // rather than half-spawning. Read-only fan-out is allowed but noted.
+  const roleNames = list.map((entry: any) => entry.role ?? inferRoleFromTask(String(entry.prompt ?? '')));
+  const warnings: string[] = [];
+  list.forEach((entry: any, i: number) => {
+    let effectiveAccess: AccessMode;
+    if (entry.access === 'read' || entry.access === 'write' || entry.access === 'shell') {
+      effectiveAccess = entry.access;
+    } else {
+      try {
+        effectiveAccess = resolveRole(roleNames[i]).defaultAccess;
+      } catch {
+        effectiveAccess = 'read';
+      }
+    }
+    const err = ownershipRequirementError(effectiveAccess, entry.ownership, entry.allowOverlap);
+    if (err) {
+      const who = entry.label ? `"${entry.label}"` : `agents[${i}] (${roleNames[i]})`;
+      throw new Error(`spawn_agents: ${who} — ${err}`);
+    }
+    if (effectiveAccess === 'read' && !entry.ownership) {
+      warnings.push(`agents[${i}] (${roleNames[i]}) is read-only with no ownership — fine for reads, but it cannot write.`);
+    }
+  });
+
   const results: Array<Record<string, unknown>> = [];
   // Spawn sequentially so each gets a unique session id and createSession's
   // write isn't racy. The CHILDREN themselves still run in parallel — handleSpawn
   // kicks off the runTurn detached via runningPromises.set, then returns.
-  for (const entry of list) {
-    const role = entry.role ?? inferRoleFromTask(String(entry.prompt ?? ''));
-    const out = await handleSpawn({ ...entry, role }, ctx);
+  for (let i = 0; i < list.length; i++) {
+    const out = await handleSpawn({ ...list[i], role: roleNames[i] }, ctx);
     try {
       results.push(JSON.parse(out));
     } catch {
       results.push({ raw: out });
     }
   }
-  return JSON.stringify({ spawned: results.length, agents: results }, null, 2);
+  const payload: Record<string, unknown> = { spawned: results.length, agents: results };
+  if (warnings.length > 0) payload.warnings = warnings;
+  return JSON.stringify(payload, null, 2);
 }
 
 async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<string> {
@@ -902,6 +936,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     // Propagate tier and depth so grandchildren can enforce hierarchy caps.
     tier: childTier,
     agentDepth: currentDepth + 1,
+    // MAS-P3: the ownership glob gates this child's file writes.
+    ownership,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
@@ -1160,6 +1196,9 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     status: record.status,
     access: record.access,
     label: record.label,
+    // MAS-P3: surface the child's ownership boundary so the parent can see
+    // which files each child was allowed to touch when synthesizing.
+    ownership: record.parentContext?.ownership ?? null,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     completedAt: record.completedAt,
