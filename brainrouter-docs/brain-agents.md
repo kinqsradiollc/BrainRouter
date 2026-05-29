@@ -2,9 +2,14 @@
 
 This document is the **0.4.0 design freeze** for the brain-side
 agent registry, job queue, and the three MCP tools the CLI /
-dashboard will call. Nothing here is implemented yet — Phase 1
-(0.4.1) ships the runtime; this is the interface contract the
-runtime must satisfy.
+dashboard call. It's the interface contract the runtime satisfies.
+
+> **Status (0.4.2).** Shipped. The Phase 1 runtime (async job runner +
+> on-demand executors) landed in 0.4.1; `memory_agent_status` /
+> `memory_agent_run` / `memory_job_retry` are live, the CLI surfaces them
+> via `/brain`, and 0.4.2 added `memory_provenance` (the "why is this memory
+> here?" trail behind `/brain why`). The contract below held — read it as
+> "how it works," not "how it will work."
 
 It lives next to the existing dev docs ([memory-engine.md](memory-engine.md),
 [federation.md](federation.md)) so consumers can build against it

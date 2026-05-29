@@ -373,11 +373,12 @@ Each section header tags which file the vars belong in.
 
 | Var | Purpose |
 | --- | --- |
-| `BRAINROUTER_LLM_API_KEY` | LLM credential. Falls back to `OPENAI_API_KEY`. Set in both `brainrouter/.env` (extractor) and `brainrouter-cli/.env` (chat agent) — they can be different values. |
+| `BRAINROUTER_LLM_API_KEY` | **Server-side** LLM credential (the cognitive extractor). Falls back to `OPENAI_API_KEY`. Set in `brainrouter/.env` / `~/.config/brainrouter/server.env`. The **CLI** chat agent's credential is unrelated — it lives in `config.json` `llm.apiKey`, never an env var. |
 
-### LLM core — `brainrouter/.env` and `brainrouter-cli/.env`
+### LLM core — server `.env` (`brainrouter/.env`)
 
-Same var names, two files. The MCP's LLM is the cognitive extractor; the
+These configure the **MCP server's** cognitive extractor. The CLI chat agent
+is configured separately in `config.json` `llm.*` (see above). The
 CLI's LLM is the chat agent.
 
 | Var | Default | Purpose |
@@ -449,24 +450,35 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_SKILL_PREWARM_THRESHOLD` | `0.3` | Threshold for context injection. |
 | `BRAINROUTER_SKILL_MIN_TURN_DECAY` | `0.05` | Minimum heat decay per turn. |
 
-### CLI runtime — shell env
+### CLI runtime knobs — `cli.*` in `config.json`
 
-Set these in your shell profile (`export BRAINROUTER_*=…`) or pass them inline (`BRAINROUTER_QUIET=1 brainrouter`). The CLI reads no `.env` file; these never propagate to the MCP child.
+Every CLI behaviour knob lives under the `cli.*` block of
+`~/.config/brainrouter/config.json`. **The CLI reads no `BRAINROUTER_*` env
+var** (retired in the 0.3.9 env→config migration) and no `.env` file — edit
+`config.json`, or use `/config <key> <value>` in-session (`/config` bare opens
+an arrow-key panel; `/config raw` dumps the scrubbed JSON). The complete,
+authoritative list is the `CliKnobs` interface in
+[`brainrouter-cli/src/config/config.ts`](../brainrouter-cli/src/config/config.ts);
+the load-bearing ones:
 
-| Var | Default | Purpose |
+| `cli.*` key | Default | Purpose |
 | --- | --- | --- |
-| `BRAINROUTER_MCP_TIMEOUT_MS` | `60000` | Per-tool MCP timeout. |
-| `BRAINROUTER_MAX_TOOL_RESULT_CHARS` | `8000` | Clamp on tool-result body sent back to the LLM. |
-| `BRAINROUTER_AUTO_COMPACT_TOKENS` | `80000` | Auto-`/compact` trigger threshold. |
-| `BRAINROUTER_MAX_TOOL_LOOPS` | `60` | Hard cap on tool iterations per turn. |
-| `BRAINROUTER_TRACE_LOG` | _(unset)_ | Path for OTEL-style JSONL turn traces. |
-| `BRAINROUTER_WEB_SEARCH_ENDPOINT` | _(falls back to DuckDuckGo)_ | Custom search backend. |
-| `BRAINROUTER_WORKSPACE` | _(auto-detected)_ | Override CLI workspace root. |
-| `BRAINROUTER_THEME` | `dark` | Banner / prompt / accent color scheme. `dark`, `light`, `mono`. `auto` falls through to `dark`. Workspace preferences can override. |
-| `BRAINROUTER_QUIET` | _(unset)_ | Set to `1` to suppress recall tables, briefing dumps, and tool-completion previews. Toggle in-session with `/quiet`. The `--quiet` flag sets this for the process. |
-| `BRAINROUTER_EFFORT` | _(unset)_ | Reasoning-depth override (`low` / `medium` / `high`). Beats the per-workspace preference set by `/effort`; surfaces in `/where` with an `(env)` tag. See [cli.md → Reasoning depth — `/effort`](cli.md#reasoning-depth--effort). |
-| `BRAINROUTER_RECALL_MODE` | `gated` | Memory-recall gating set in 0.3.6 item 9b. `gated` (default) fires the briefing only on turn 1, post-compaction, or when the user message names ≥2 entity-shaped tokens. `always` preserves pre-0.3.6 every-turn behaviour. `off` skips recall entirely. Garbled values fall through to `gated`. See [cli.md → Recall gating](cli.md#recall-gating-brainrouter_recall_mode). |
-| `BRAINROUTER_OFFLINE_LOCAL_RECALL` | _(unset)_ | _Planned for 0.3.7 — item 10d._ When the BrainRouter MCP is offline, setting this to `1` will fall back to a compressed view of the last few transcript entries as the briefing. Not active yet; reserved here so callers can pin behaviour now. |
+| `mcpTimeoutMs` | `60000` | Per-tool MCP timeout. |
+| `maxToolResultChars` | `8000` | Clamp on tool-result body sent back to the LLM. |
+| `autoCompactTokens` | `80000` | Auto-`/compact` trigger threshold. |
+| `maxToolLoops` | `60` | Hard cap on tool iterations per turn. |
+| `traceLog` | _(unset)_ | Path for OTEL-style JSONL turn traces. |
+| `effort` | `medium` | Reasoning depth `low` / `medium` / `high` / `xhigh` (alias `max`). Pins across sessions; beats the `/effort` workspace preference. |
+| `fallbackModel` | `null` | Model to switch to + retry once when the primary model is unavailable (PARITY-E3). |
+| `notifyBell` | `false` | Ring the terminal bell on an idle background-completion notice (PARITY-W3). |
+| `recallMode` | `gated` | Memory-recall gating: `gated` (turn 1 / post-compaction / ≥2 entity tokens) · `always` · `off`. |
+| `theme` | `auto` | Banner / prompt accent: `dark` / `light` / `mono` / `auto`. |
+| `quiet` | `false` | Suppress recall tables, briefing dumps, tool-completion previews. |
+| `sandbox` | `off` | `on` wraps `run_command` (and the `!` shell escape) in the platform sandbox. |
+| `sandboxNetwork` | `false` | Allow outbound network from the sandbox. |
+| `autoChainMaxFollowups` | `2` | Cap on auto-chained review/verify follow-ups per worker. |
+| `agentMcpToolBudget` | `40` | Cap on MCP tools shown to a child agent per turn (0 = no cap). |
+| `workspaceOverride` | _(auto)_ | Override the CLI workspace root. |
 
 ### Sandboxing — shell env
 
