@@ -1195,6 +1195,29 @@ export class Agent {
       onChildComplete: (event) => {
         callbacks.onChildComplete?.(event);
       },
+      // MAS-P4-T2 — interactive delegation gate. Only the user-facing
+      // (non-silent) parent prompts; silent children leave this unset, so
+      // an `ask-*` policy fails closed for them (and the gate only asks at
+      // depth 0 anyway). askYesNo throws NoTTYError in headless runs, which
+      // we convert to a clear "no terminal" spawn error.
+      confirmDelegation: this.silent
+        ? undefined
+        : async (info) => {
+            const q =
+              `Delegation policy gate — allow spawning a ${info.role} agent (${info.access})?\n` +
+              `  Task: ${info.prompt.slice(0, 160)}${info.prompt.length > 160 ? '…' : ''}`;
+            try {
+              return await askYesNo(q, false);
+            } catch (err) {
+              if (err instanceof NoTTYError) {
+                throw new Error(
+                  'Delegation policy requires approval but no interactive terminal is attached. ' +
+                    'Set /delegation-policy auto to spawn non-interactively.',
+                );
+              }
+              throw err;
+            }
+          },
       // MAS-P2-M3 — surface parent runtime state so handleSpawn can
       // build the typed `ParentExecutionContextSnapshot`. Each accessor
       // reads live state at spawn time; missing data is fine, the

@@ -34,7 +34,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox',
+  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy',
   '/spec', '/feature-dev', '/grill-me', '/review', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/model', '/mcp',
@@ -150,6 +150,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/kill <agent-id>', desc: 'Stop a running child' },
       { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker (alias for /auto-chain review|off)' },
       { cmd: '/auto-chain [review|verify|both|off]', desc: 'Auto-chain review/verify follow-ups after every worker' },
+      { cmd: '/delegation-policy [auto|ask-before-spawn|ask-before-write-child|no-children]', desc: 'Gate whether/when the agent may spawn child agents' },
       { cmd: '/ps', desc: 'List background tasks (loop + running children)' },
       { cmd: '/stop', desc: 'Stop the running loop, mark stale children' },
     ],
