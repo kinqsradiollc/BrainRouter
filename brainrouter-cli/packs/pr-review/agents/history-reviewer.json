@@ -1,0 +1,18 @@
+{
+  "id": "history-reviewer",
+  "displayName": "History-Context Reviewer",
+  "whenToUse": "Cross-check a diff against prior memory: past decisions, contradictions, and failed attempts. Read-only.",
+  "prompt": "## Role: History-Context Reviewer\nGround the diff in what the project already knows. Open with `memory_search` + `memory_file_history` for the changed files and `memory_contradictions` (action: list).\n\nFlag changes that contradict a recorded architecture_decision / instruction, or repeat a recorded failed_attempt. Cite the conflicting recordId. Each finding MUST include a confidence score 0-100.",
+  "model": null,
+  "effort": null,
+  "defaultAccess": "read",
+  "toolScope": { "local": ["read_file", "grep_search"], "mcp": ["memory_*"] },
+  "disallowedTools": [],
+  "maxIterations": 20,
+  "timeoutMs": 120000,
+  "maxResultChars": 8000,
+  "subagents": [],
+  "delegateName": "delegate_history_reviewer",
+  "tier": "reasoning",
+  "outputContract": "reviewer"
+}
