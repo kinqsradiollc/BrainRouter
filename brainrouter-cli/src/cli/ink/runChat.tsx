@@ -17,6 +17,7 @@ import { parseBangCommand } from '../../runtime/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { reconcileStaleWorkers } from '../../state/workerStore.js';
+import { reconcileStaleRuns } from '../../state/workflowRun.js';
 import { expandMentions } from '../../memory/mentions.js';
 import {
   addGoalTokens,
@@ -228,6 +229,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // MAS-P5-T3: same treatment for worker threads — a `running` worker
       // from a dead CLI process can't resume mid-turn, so flip it to failed.
       reconcileStaleWorkers(agent.workspaceRoot);
+      // PARITY-W1: durable workflow runs left `running` by a dead process are
+      // flipped to `interrupted` so the /workflows viewer is honest on restart.
+      reconcileStaleRuns(agent.workspaceRoot);
       const sessions = listSessions(agent.workspaceRoot);
       return sessions.filter((s) => s.status === 'pending' || s.status === 'running').length;
     } catch {

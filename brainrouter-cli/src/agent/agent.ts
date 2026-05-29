@@ -67,6 +67,8 @@ import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtim
 import { runExtractResult } from '../runtime/tools/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
+import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
+import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../runtime/modelFallback.js';
@@ -649,6 +651,19 @@ export const LOCAL_TOOLS = [
       },
       required: ['plan']
     }
+  },
+  {
+    name: 'workflow_progress',
+    description: 'Report progress on the active durable workflow run (PARITY-W1) so `/workflows` shows live status and progress survives a restart. Call with status="running" when you START a numbered step and status="done" (or "failed"/"skipped") when you finish it. `step` is a short id matching the step you are on (e.g. "triage", "review", "implement", "verify", "apply"). Safe no-op when no workflow is active — only the multi-agent commands (/review, /simplify, /feature-dev, /spec, /implement-plan) bind one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        step: { type: 'string', description: 'Short step id, e.g. "triage", "implement", "verify".' },
+        status: { type: 'string', enum: ['running', 'done', 'failed', 'skipped'], description: 'New status for the step.' },
+        note: { type: 'string', description: 'Optional one-line detail (what was done, or why it failed/was skipped).' },
+      },
+      required: ['step', 'status'],
+    },
   },
   {
     name: 'goal_complete',
@@ -2520,6 +2535,25 @@ export class Agent {
           plan: args.plan,
         }, this.sessionKey);
         return formatPlan(state);
+      }
+      case 'workflow_progress': {
+        const slug = getCurrentWorkflow(this.workspaceRoot, this.sessionKey);
+        if (!slug) {
+          return 'No active workflow — nothing to track. (Bind one with /review, /simplify, /feature-dev, /spec, or /implement-plan.)';
+        }
+        const step = String(args.step ?? '').trim();
+        const status = String(args.status ?? '').trim() as 'running' | 'done' | 'failed' | 'skipped';
+        if (!step) throw new Error('workflow_progress requires a non-empty `step` id.');
+        if (!['running', 'done', 'failed', 'skipped'].includes(status)) {
+          throw new Error(`workflow_progress: status must be running|done|failed|skipped (got "${status}").`);
+        }
+        const run = advanceRunStep(this.workspaceRoot, slug, step, status, {
+          note: args.note ? String(args.note) : undefined,
+          sessionKey: this.sessionKey,
+          pid: process.pid,
+        });
+        const { done, total } = summarizeRun(run);
+        return `Workflow "${slug}": step "${step}" → ${status} (${done}/${total} done, run ${run.status}).`;
       }
       case 'ask_user_choice': {
         const question = String(args.question ?? '').trim();
