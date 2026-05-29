@@ -33,7 +33,7 @@ import { aggregateChildUsage } from './childAccounting.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
-import { emitAgentRouteFeedback, type RouteOutcome } from './memoryEvents.js';
+import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -667,17 +667,28 @@ async function emitRouteFeedback(
     Number.isFinite(startedMs) && Number.isFinite(completedMs)
       ? Math.max(0, completedMs - startedMs)
       : undefined;
-  await emitAgentRouteFeedback(
-    { mcpClient: ctx.mcpClient, sessionKey: ctx.parentSessionKey },
-    {
+  const emitCtx = { mcpClient: ctx.mcpClient, sessionKey: ctx.parentSessionKey };
+  await emitAgentRouteFeedback(emitCtx, {
+    task: args.task,
+    chosenAgentId: args.chosenAgentId,
+    parentAgentId: args.parentAgentId,
+    ownership: args.ownership,
+    outcome: args.outcome,
+    durationMs,
+    tokenCost: args.tokenCost,
+  });
+  // MAS-P6-T1: also capture the delegation-aware `agent_output` event
+  // (best-effort; piggybacks the same MCP capture path).
+  await emitAgentEvent(
+    emitCtx,
+    agentOutputEvent({
+      agentId: args.chosenAgentId,
       task: args.task,
-      chosenAgentId: args.chosenAgentId,
-      parentAgentId: args.parentAgentId,
-      ownership: args.ownership,
       outcome: args.outcome,
       durationMs,
       tokenCost: args.tokenCost,
-    },
+      preview: typeof args.record.finalOutput === 'string' ? args.record.finalOutput : undefined,
+    }),
   );
 }
 
