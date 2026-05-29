@@ -876,3 +876,56 @@ export interface MemoryBlackboardItem {
   /** ISO timestamp when the item left `pending`. NULL while still pending. */
   decidedAt: string | null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// BRAIN-P1 (0.4.1) — job-queue store surface.
+//
+// The `memory_jobs` table (BRAIN-DESIGN-T2) is global to a brain
+// instance (single-tenant per API key — OQ-3). Per-user routing lives
+// in `MemoryJobRecord.input`, never in a table column. These helper
+// types describe the store's CRUD surface; the scheduler layer
+// (`brainrouter/src/memory/scheduler/`) owns idempotency dedup + backoff.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** New-job parameters for `enqueueMemoryJob`. `kind` is a brain-agent id. */
+export interface MemoryJobEnqueueInput {
+  kind: string;
+  input: unknown;
+  /** Higher runs sooner. Defaults to 50. */
+  priority?: number;
+  /** Per-job override of the agent's `maxAttempts`. Defaults to 3. */
+  maxAttempts?: number;
+  /** ISO timestamp; job is ineligible until past this. Defaults to now. */
+  runAfter?: string;
+  /** Parent job id when spawned by another job's chain. */
+  parentJobId?: string | null;
+}
+
+/** Filters for `listMemoryJobs`. */
+export interface MemoryJobListFilters {
+  /** Restrict to a single brain-agent id. */
+  kind?: string;
+  /** One or more lifecycle states. */
+  status?: MemoryJobStatus | MemoryJobStatus[];
+  /** Max rows. Defaults to 100. */
+  limit?: number;
+}
+
+/**
+ * Per-kind rollup the `memory_agent_status` tool joins against the
+ * registry. One row per distinct `kind` that has at least one job.
+ */
+export interface MemoryJobKindAggregate {
+  kind: string;
+  /** Most recent job's status by `updatedAt`. */
+  lastStatus: MemoryJobStatus;
+  /** `updatedAt` of the most recent `done` job, else null. */
+  lastCompletedAt: string | null;
+  /** Count of `pending` jobs for this kind. */
+  pendingJobs: number;
+  /**
+   * done / (done + failed) over jobs updated in the last 24h. `null`
+   * when no terminal jobs landed in the window.
+   */
+  successRate24h: number | null;
+}

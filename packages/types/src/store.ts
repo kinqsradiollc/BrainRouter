@@ -5,6 +5,10 @@ import type {
   SessionInboxFilters,
   SessionInboxKind,
   SessionInboxRecord,
+  MemoryJobRecord,
+  MemoryJobEnqueueInput,
+  MemoryJobListFilters,
+  MemoryJobKindAggregate,
   GraphEdge,
   GraphNode,
   ContradictionRecord,
@@ -175,6 +179,40 @@ export interface IMemoryStore {
   readSessionInbox(filters: SessionInboxFilters): SessionInboxRecord[];
   ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): number;
   sweepSessionInbox(olderThanMs: number): number;
+
+  /**
+   * BRAIN-P1 (0.4.1) — `memory_jobs` queue (BRAIN-DESIGN-T2). These
+   * are raw persistence primitives; the scheduler layer
+   * (`brainrouter/src/memory/scheduler/`) layers idempotency dedup +
+   * exponential backoff on top.
+   *
+   * - `enqueueMemoryJob` inserts a `pending` row and returns it.
+   * - `claimNextMemoryJob` atomically (BEGIN IMMEDIATE — cross-process
+   *   safe under WAL) picks the highest-priority eligible `pending`
+   *   job whose `runAfter` is past, flips it to `running`, stamps
+   *   `lockedAt`, and returns it (or null when none are eligible).
+   * - `completeMemoryJob` moves a `running` job to `done` with output.
+   * - `failMemoryJob` increments `attempts`; re-arms to `pending` with
+   *   `runAfter = now + backoffMs` while `attempts < maxAttempts`,
+   *   else moves to `failed`.
+   * - `retryMemoryJob` re-arms a `failed`/`cancelled` job (attempts→0,
+   *   status→pending, runAfter→now). No-op for pending/running/done.
+   * - `cancelMemoryJob` forces a job to `cancelled`.
+   * - `sweepStuckMemoryJobs` cancels `running` jobs whose `lockedAt`
+   *   is older than the cutoff (orphaned by a crashed runner).
+   * - `getMemoryJobKindAggregates` rolls jobs up per `kind` for the
+   *   `memory_agent_status` tool.
+   */
+  enqueueMemoryJob(input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): MemoryJobRecord;
+  getMemoryJob(id: string): MemoryJobRecord | null;
+  listMemoryJobs(filters?: MemoryJobListFilters): MemoryJobRecord[];
+  claimNextMemoryJob(options?: { now?: string }): MemoryJobRecord | null;
+  completeMemoryJob(id: string, output: unknown, options?: { now?: string }): MemoryJobRecord | null;
+  failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): MemoryJobRecord | null;
+  retryMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null;
+  cancelMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null;
+  sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): number;
+  getMemoryJobKindAggregates(options?: { now?: string }): MemoryJobKindAggregate[];
   upsertCognitiveVec(recordId: string, embedding: Float32Array): void;
   searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): VectorSearchResult[];
   upsertContradiction(data: {
