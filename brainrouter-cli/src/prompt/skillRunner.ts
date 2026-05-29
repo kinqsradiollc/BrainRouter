@@ -35,6 +35,7 @@ export const SLASH_TO_SKILL: Record<string, string> = {
   '/commit-skill': 'git-workflow-skill',
   '/changelog': 'changelog-generator',
   '/refactor': 'code-simplification',
+  '/simplify': 'code-simplification',
   '/test': 'testing-skill',
 };
 
