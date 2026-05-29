@@ -10,7 +10,8 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| Latest | **0.4.1** | Merged to `main` — 2026-05-29 · publish pending | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
+| Latest | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
+| Shipped | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | Shipped | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
 | Previous | **0.3.9** | Shipped — 2026-05-28 | [`CHANGELOG.md`](CHANGELOG.md#039---2026-05-28) |
 | Previous | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
@@ -27,8 +28,9 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
 | **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop + CLI knobs → `config.json` | Shipped — 2026-05-28 |
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
-| **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Merged — 2026-05-29 · publish pending |
-| **[0.4.x](brainrouter-roadmap/0.4.x.md)** (0.4.2–0.4.3) | Federation Stage 5, CLI multi-agent Phases 5-6, brain-side capture/tree/blackboard, **CLI parity (workflows / review / effort / background)** | Planned |
+| **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
+| **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
+| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | Finish `/rewind` + `/context` first, then agent transcript debugger + Brain Phases 2-5 (capture / source chunks / memory tree) + worktree isolation / AST chunking / benchmark harness | Planned |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -39,15 +41,18 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 > and `brainrouter-changelog/`. This section only describes work that is
 > still ahead.
 
-### 0.4.x (0.4.2–0.4.3) — Durable Orchestration and Brain Agents
+### 0.4.3 — Finish /rewind & /context, then Brain Phases 2–5
 
-- Federation Stage 5 (cross-vendor delegation), multi-agent Phases 5–6
-  (review fan-out, result handoff, worker threads, packs, memory
-  capture + brain awareness), and the agent transcript debugger.
-- **Brain-side (MCP server):** token-aware capture (TokenJuice) +
-  source chunks + vault mirror (0.4.2); memory tree + blackboard commit
-  pipeline (0.4.3).
-- Individual brain tasks: `BRAIN-P2-TN` through `BRAIN-P5-TN`.
+- **First:** fully complete the two 0.4.2 ergonomics commands — `/rewind`
+  gains an optional file-restore mode (pairs with worktree isolation), and
+  `/context` gains a context-window fill header (current ≈N / max M, % used,
+  remaining) on top of today's cumulative breakdown.
+- Agent transcript debugger (`/agents tree` / `why` / `replay`).
+- **Brain-side (MCP server):** token-aware capture (TokenJuice) + source
+  chunks + vault mirror (Phases 2–3, carried from 0.4.2); memory tree +
+  blackboard commit pipeline (Phases 4–5). Tasks: `BRAIN-P2-TN`–`BRAIN-P5-TN`.
+- Carried 0.4.x infra: git-worktree session isolation, AST-aware recall
+  chunking, the retrieval benchmark harness.
 
 ### 0.5.0 — Power User Surface
 
@@ -62,20 +67,21 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 Bringing the CLI up to the leading agentic-CLI feature bar. Grouped by
 area; each item lands in the version noted.
 
-- **Workflows & orchestration (0.4.2).** A durable workflow engine that
-  drives many child agents as one managed, persisted background run; a
-  `/workflows` view that shows live run status/output (not just artifact
-  folders); and proactive notifications when a background run finishes
-  while you're idle.
-- **Review & quality (0.4.2).** `/review --fix` to apply review findings to
-  the working tree, and a first-class `/simplify` command (cleanup-only:
-  reuse / simplification / efficiency).
-- **Effort & model (0.4.2).** An extra-high `/effort xhigh` level; a
-  `/model` "this session only" option (vs set-as-default); and a runtime
-  fallback model when the primary is unavailable.
-- **Background & shell UX (0.4.2–0.4.3).** A `!` shell escape from the
-  composer (with a backgrounded variant) and `/bg` to push the current
-  response to the background.
+- **Workflows & orchestration (0.4.2 — shipped).** Durable workflow run
+  engine (per-step `run.json` ledger); a `/workflows` viewer showing live run
+  status + step timeline (not just artifact folders); and above-prompt
+  notifications when a background run finishes while you're idle.
+- **Review & quality (0.4.2 — shipped).** `/review --fix` applies + verifies
+  the surviving findings; first-class `/simplify` (behavior-preserving
+  cleanup).
+- **Effort & model (0.4.2 — shipped).** `/effort xhigh` (alias `max`);
+  `/model --session` (this-session-only switch); `cli.fallbackModel` runtime
+  fallback on model-not-found.
+- **Timeline & context (0.4.2 — shipped).** `/rewind` to fork from an earlier
+  turn; `/context` token breakdown (per-skill / per-tool / per-briefing).
+- **Background & shell UX (0.4.2 shipped `!`; `/bg` → 0.4.3).** The `!` shell
+  escape from the composer shipped in 0.4.2; `/bg` (push the in-flight
+  response to the background) needs turn-detachment infra and moves to 0.4.3.
 - **Extensibility polish (0.5.0).** `/reload-skills`; `disallowed-tools` in
   skill/command frontmatter; a message-display hook; first-use approval for
   third-party MCP servers; and real modal vim editing in the composer.
