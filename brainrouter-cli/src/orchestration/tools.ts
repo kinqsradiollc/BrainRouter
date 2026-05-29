@@ -28,7 +28,7 @@ import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
 import { resolveDelegationPolicy, evaluateDelegationGate } from './delegationPolicy.js';
 import { aggregateChildUsage } from './childAccounting.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
-import { getOutputContract } from './outputContracts.js';
+import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, type RouteOutcome } from './memoryEvents.js';
 
@@ -1281,6 +1281,11 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
   if (includeOutput) {
     if (record.finalOutput) base.finalOutput = record.finalOutput;
     if (record.error) base.error = record.error;
+    // MAS-P3-P3.2: when the role has an output contract, surface the parsed
+    // fields (or the unparsed/missing signal) so `wait_agent --json` /
+    // `wait_agents --json` callers get structured output, not just prose.
+    const parsed = parseChildOutput(record.role, record.finalOutput);
+    if (parsed) base.contract = parsed;
   }
   return base;
 }

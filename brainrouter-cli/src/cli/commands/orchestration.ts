@@ -18,6 +18,7 @@ import { formatTranscriptContent } from './_helpers.js';
 import { formatIncomingBanner } from '../incomingBanner.js';
 import { resolveAutoChainMode, isAutoChainMode } from '../../orchestration/autoChain.js';
 import { resolveDelegationPolicy, isDelegationPolicy } from '../../orchestration/delegationPolicy.js';
+import { parseChildOutput } from '../../orchestration/outputContracts.js';
 
 interface DmAddressResolution {
   to: string;
@@ -550,6 +551,19 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       console.log(`  Prompt:  ${chalk.gray(s.prompt.slice(0, 240))}`);
       if (s.usage) {
         console.log(`  Tokens:  ${chalk.cyan(s.usage.promptTokens.toLocaleString())}↑  ${chalk.cyan(s.usage.completionTokens.toLocaleString())}↓  ${chalk.gray(`(${s.usage.calls} LLM call${s.usage.calls === 1 ? '' : 's'}, ${s.usage.turns} turn${s.usage.turns === 1 ? '' : 's'})`)}`);
+      }
+      // MAS-P3-P3.2: render the parsed output contract (field-labelled) when
+      // the role has one and the child honoured it.
+      if (s.finalOutput) {
+        const parsed = parseChildOutput(s.role, s.finalOutput);
+        if (parsed && parsed.contractStatus === 'parsed') {
+          console.log(`\n${chalk.bold('Contract output:')}`);
+          for (const [field, value] of Object.entries(parsed.fields)) {
+            console.log(`  ${chalk.cyan(field)}: ${chalk.gray(value.replace(/\n+/g, ' ').slice(0, 200))}`);
+          }
+        } else if (parsed && parsed.missing.length > 0) {
+          console.log(`\n${chalk.yellow('Contract unparsed')} ${chalk.gray(`(missing: ${parsed.missing.join(', ')})`)}`);
+        }
       }
       if (s.finalOutput) console.log(`\n${chalk.bold('Final output:')}\n${s.finalOutput}`);
       if (s.error) console.log(`\n${chalk.red('Error:')} ${s.error}`);
