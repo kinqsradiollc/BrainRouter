@@ -4,6 +4,34 @@ A memory-native terminal agent at [`brainrouter-cli/`](../brainrouter-cli/).
 Treats the BrainRouter MCP as a first-class tool — cognitive memory shapes
 every turn instead of being a sidecar.
 
+## What's new in 0.4.2
+
+Quick index of the surface added since 0.4.0 (deep sections below may still
+describe earlier behaviour — this list is authoritative for the current cut):
+
+- **Reasoning** — `/effort` gains **`xhigh`** (alias **`max`**) above `high`.
+  `/model <name> --session` switches the live model without persisting;
+  `cli.fallbackModel` auto-swaps + retries once on a model-not-found error.
+- **Shell** — `! <command>` runs a shell command straight from the composer
+  (sandboxed when `cli.sandbox=on`; no approval gate — you typed it).
+- **Review & cleanup** — `/review --fix` applies + verifies the surviving
+  high-signal fixes; `/simplify [--dry-run]` is a behavior-preserving
+  code-simplification pass.
+- **Workflows** — a durable per-step **run ledger** (`run.json`) tracks each
+  workflow; **`/workflows [slug]`** shows live run progress + a step timeline;
+  background completions notify above the prompt when you're idle
+  (`cli.notifyBell` rings the terminal bell).
+- **Multi-agent** — **`/pack`** enables reusable agent-definition bundles;
+  **`/workers`** manages detached, file-backed background worker threads;
+  per-agent budgets + auto-chain review/verify.
+- **Federation** — `/dm`, `/broadcast`, `/inbox`, `/handoff`, and
+  `session_delegate_task` let CLIs sharing one brain hand work across
+  vendor/CLI boundaries.
+- **Config** — every CLI knob lives under `cli.*` in
+  `~/.config/brainrouter/config.json`; the CLI reads **no** `BRAINROUTER_*`
+  env vars (0.3.9 migration). LLM dispatch is OpenAI-compatible only — reach
+  Claude via an OpenAI-compatible gateway.
+
 ## Run
 
 ```bash
@@ -301,30 +329,31 @@ there's nobody to answer the y/N.
 
 ### Reasoning depth — `/effort`
 
-`/effort low|medium|high` is a session-wide knob for "how hard should
+`/effort low|medium|high|xhigh` is a session-wide knob for "how hard should
 the model think." It's **orthogonal to `/mode`** — fast-execute +
-deep-thinking is a legitimate combo.
+deep-thinking is a legitimate combo. `max` is an accepted alias for `xhigh`
+and is canonicalized to it, so only one value is ever stored or forwarded.
 
 | Level | System-prompt overlay | Provider `reasoning_effort` |
 | --- | --- | --- |
 | `low` | "Be terse. Skip ceremony. One-paragraph answers when the question fits in one paragraph." | `low` |
 | `medium` (default) | _no overlay — current behaviour_ | _omitted_ |
 | `high` | "Reason step-by-step before acting. Audit your evidence against the goal before each tool call." | `high` |
+| `xhigh` (alias `max`) | "Maximum depth: enumerate approaches, verify assumptions, prefer correctness over speed." | `high` — `xhigh` is a CLI concept; the depth comes from the overlay, and sending `xhigh` on the wire 400s most providers |
 
 `medium` is the default and emits no overlay — upgrades are silent for
 users who never touch the command. Bare `/effort` prints the current
-level + source (`(env)` / `(preference)` / `(default)`) + a description
+level + source (`(config)` / `(preference)` / `(default)`) + a description
 of each level + the list of provider/model combos the level forwards
 to.
 
-**Env override.** `BRAINROUTER_EFFORT=low|medium|high` beats the
-persisted preference for the lifetime of the process. Matches the
-precedence pattern from `BRAINROUTER_THEME` and `BRAINROUTER_QUIET`:
-**env > preference > default**. Garbled values fall through to the
-preference rather than crash. When env is shadowing a saved
-preference, the in-session `/effort` write surfaces a yellow warning:
-"preference saved but BRAINROUTER_EFFORT is still active this process —
-env wins."
+**Config override.** Set `cli.effort` in `~/.config/brainrouter/config.json`
+to pin the level across sessions; it beats the per-workspace preference.
+Precedence is **config > preference > default** (same shape as `cli.theme` /
+`cli.quiet`). Per the 0.3.9 env→config migration there is **no
+`BRAINROUTER_EFFORT` env var** — every CLI knob lives under `cli.*`. When
+`cli.effort` shadows a workspace preference, the in-session `/effort` write
+surfaces a yellow note that config still wins this process.
 
 **Provider forwarding.** When the model name matches a known
 reasoning-model family, the level is forwarded as `reasoning_effort` in
@@ -349,27 +378,13 @@ Vendor prefixes (`openai/gpt-oss-20b`) and tag suffixes
 models (`gpt-4o-mini`, `qwen2.5-coder`, …) skip the field on every
 server — sending it would be a no-op at best.
 
-Anthropic native (`claude-*` on `/v1/messages`) **is** covered as of
-0.3.8 via a dedicated adapter (`runtime/anthropicAdapter.ts`). Set
-`config.llm.provider: 'anthropic'` with `endpoint:
-'https://api.anthropic.com/v1'` and the dispatch layer routes to
-`POST /v1/messages` automatically. Two opt-in env vars on this path:
-
-- `BRAINROUTER_ANTHROPIC_CACHE=1` — adds `cache_control:
-  { type: 'ephemeral' }` to the system prompt and the last assistant
-  message at each turn, enabling Anthropic prompt caching. Default OFF
-  for the safer rollout; flip it on once you've watched a few sessions.
-- `BRAINROUTER_ANTHROPIC_NATIVE=1` — force the native path for
-  vended / reverse-proxied endpoints whose hostname isn't
-  `api.anthropic.com` but which speak the native shape.
-
-Extended thinking on Anthropic is gated by `/effort high` AND a Sonnet 4
-or Opus 4 model name — it sends `thinking: { type: 'enabled',
-budget_tokens: 8000 }`. Thinking output streams past via the existing
-status channel; it is NOT stored in `chatHistory` (re-sending CoT on
-every turn would balloon the bill). Streaming responses (SSE) are
-deliberately out of scope for the 0.3.8 cut — the loop still polls
-non-streaming.
+> **Claude models.** As of 0.3.9 the only supported wire format is
+> OpenAI-compatible `/v1/chat/completions` — the native Anthropic
+> `/v1/messages` adapter was removed. Reach Claude through an
+> OpenAI-compatible gateway (OpenRouter / Together / Fireworks / a vended
+> proxy) by pointing `config.llm.endpoint` at the gateway base URL; set
+> `provider` to the catalog label for tier-ladder lookups. `reasoning_effort`
+> forwarding works the same across every such endpoint.
 
 **Surfacing.**
 
@@ -425,7 +440,6 @@ provider forwarding heuristic
 | `wait_agent` / `wait_agents` | Block until child(ren) finish. |
 | `read_agent_transcript` | Read child transcript. |
 | `close_agent` | Close a finished child. |
-| `route_agent` | Dry-run role inference without spawning. |
 
 ### MCP tools (selected)
 
@@ -632,10 +646,13 @@ tall ones. `/help <category>` drills in.
 | `/spec <title>` | Scaffold a spec workflow folder. |
 | `/feature-dev <title>` | Full spec → tasks → implement workflow. |
 | `/grill-me [--force] <task>` | Pause the agent for 2–5 clarifying questions before any file edit. See [Clarify before implementing](#clarify-before-implementing--grill-me). |
-| `/review [target]` | Reviewer pass. |
+| `/review [target] [--fix]` | Multi-agent reviewer pass → `review.md`. `--fix` applies the surviving high-signal fixes in place + runs build/tests, reverting any regression. |
+| `/simplify [target] [--dry-run]` | Behavior-preserving code-simplification pass (skill: `code-simplification`); applies + verifies, or `--dry-run` proposes only. |
 | `/implement-plan` | Execute the current `tasks.md`. |
 | `/approve` | Mark workflow complete; write `walkthrough.md`. |
-| `/workflows` | List workflows in `.brainrouter/workflows/` with artifact markers. |
+| `/workflows [slug]` | List workflows with **live run progress** (status + step glyph strip + done/total). `/workflows <slug>` drills into the per-step timeline (glyph, title, duration, note). |
+| `/workers` | Manage detached background worker threads (list / inspect / stop); stale workers from a dead process are reconciled to `failed`. |
+| `/pack [list\|enable\|disable] <name>` | Enable/disable agent-definition packs (reusable role bundles, e.g. `pr-review`, `feature-dev`). |
 | `/workflow switch <slug>` | Pure navigation — bind this session to a workflow folder so future artifact writes land there. Doesn't touch goal state (goals are session-scoped, workflows are storage). |
 | `/workflow pause` | Alias for `/goal pause` — pauses the session goal. |
 | `/workflow resume <slug>` | `/workflow switch <slug>` + `/goal resume` if the session has a paused goal. |
@@ -659,6 +676,17 @@ tall ones. `/help <category>` drills in.
 | `/auto-chain [review\|verify\|both\|off]` | After each worker child finishes, auto-chain a reviewer and/or verifier follow-up on its output (capped at `cli.autoChainMaxFollowups`, default 2). |
 | `/auto-review [on\|off]` | Thin alias for `/auto-chain review\|off`. |
 | `/delegation-policy [auto\|ask-before-spawn\|ask-before-write-child\|no-children]` | Gate whether/when the agent may spawn child agents. `ask-*` prompts before a top-level spawn (interactive only — fails closed headless); `no-children` blocks all spawns. Persisted per workspace. |
+
+### Federation (cross-CLI, one shared brain)
+
+| Command | Purpose |
+| --- | --- |
+| `/inbox` | Read direct messages + broadcasts addressed to this session. |
+| `/dm <session> <text>` | Send a direct message to a peer session on the same brain. |
+| `/broadcast <text>` | Message every live peer session. |
+| `/handoff <text>` | Hand work to the next idle peer (cross-vendor) via `session_delegate_task`; queues to `pending_delegations` if no peer is live. |
+
+See [federation.md](federation.md) for presence, messaging, and cross-vendor delegation.
 
 ### Guard
 
@@ -696,13 +724,13 @@ tall ones. `/help <category>` drills in.
 | `/workspace` | Show / change workspace root. |
 | `/config` | Settings home panel (0.3.7+). Bare opens an arrow-key picker over every CLI knob, including a multi-profile MCP editor; `/config <key>` shows; `/config <key> <value>` sets; `/config raw` dumps the scrubbed JSON. |
 | `/init` | Re-run the onboarding wizard. `/init agentmd` keeps the old AGENT.md-only scaffold. |
-| `/model [name]` | No-arg opens an Ink picker populated by the active endpoint's `/v1/models` (5s timeout; static catalog fallback). With `<name>` it switches directly and persists to `config.llm.model` — no restart. |
+| `/model [name] [--session]` | No-arg opens an Ink picker populated by the active endpoint's `/v1/models` (5s timeout; static catalog fallback). With `<name>` it switches directly and persists to `config.llm.model` — no restart. Add `--session` (alias `--once`) to switch for this session only without persisting. `cli.fallbackModel` auto-swaps + retries once if the model is unavailable. |
 | `/mcp [list\|connect\|disconnect\|reconnect\|tools]` | Manage MCP connections. `list` shows every configured profile with identity tag, transport, status, and tool count; `★` marks the active brain. `connect <name>` brings a new profile into the running pool; `disconnect <name>` tears one down; `reconnect [name]` re-probes (bare reconnects the active brain). `tools [server]` renders the namespace-grouped tool surface, optionally filtered by `serverId`. See [MCP profiles, identity, and offline mode](#mcp-profiles-identity-and-offline-mode). |
 | `/copy` | Copy the last assistant message to clipboard. |
 | `/theme [auto\|light\|dark\|mono]` | Set color theme. |
 | `/title <text>` | Set a custom terminal title. |
 | `/personality [concise\|standard\|detailed\|pair-programmer]` | Communication overlay. |
-| `/effort [low\|medium\|high]` | Reasoning depth: `low` = terse / `medium` = default / `high` = step-by-step. Forwards as `reasoning_effort` to providers that accept it. See [Reasoning depth — `/effort`](#reasoning-depth--effort). Env override: `BRAINROUTER_EFFORT`. |
+| `/effort [low\|medium\|high\|xhigh]` | Reasoning depth: `low` = terse / `medium` = default / `high` = step-by-step / `xhigh` = maximum (alias `max`). Forwards as `reasoning_effort` to providers that accept it. See [Reasoning depth — `/effort`](#reasoning-depth--effort). Pin across sessions with `cli.effort` in `config.json`. |
 | `/raw [on\|off]` | Toggle raw scrollback (skip markdown rendering). |
 | `/vim` | Toggle vim keybindings for the REPL prompt. |
 | `/keymap` | Show current keybinding overlay. |
@@ -1066,8 +1094,10 @@ picks one from the leading verb / intent:
 | test / verify / typecheck / "build passes" | `verifier` |
 | _(default)_ | `worker` |
 
-`route_agent({ task })` returns the inferred role + rationale without
-spawning. Useful for sanity-checking a costly fan-out.
+The inferred role is also exposed in `spawn_agents` results so you can
+sanity-check a costly fan-out before the children do real work. (The old
+`route_agent` dry-run tool was removed in 0.4.1 — role inference now happens
+inline at spawn time.)
 
 ### Foreground and background children
 
