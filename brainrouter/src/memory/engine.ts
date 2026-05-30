@@ -8,6 +8,7 @@ import { chunkSource } from "./source/chunker.js";
 import { chunkCode } from "./source/code-chunker.js";
 import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
+import { readTreePolicy, treeAutobuildEnabled, parentDomain, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
@@ -351,20 +352,15 @@ export class MemoryEngine {
       // unsealed leaves fills, enqueue tree_sealer to seal it into a parent.
       const tree = this.autobuildSceneTree(userId);
       if (tree.sealableBucket) {
-        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: "global" });
+        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
         enqueued.tree_sealer++;
       }
     }
     return { enqueued };
   }
 
-  // 0.4.3 (MEM-10) — scene-tree autobuild thresholds.
-  private static readonly TREE_MIN_SCENE_RECORDS = 3; // don't leaf a trivial scene
-  private static readonly TREE_LEAF_PER_PASS = 5;     // bound work per maintenance tick
-  private static readonly TREE_SEAL_THRESHOLD = 6;    // unsealed scene-leaves → seal
-
   /**
-   * 0.4.3 (MEM-10) — the tree_sealer auto-trigger source. Builds a DURABLE
+   * 0.4.3 (MEM-10) / MEM-20 (0.4.4) — the tree_sealer auto-trigger source. Builds a DURABLE
    * memory-summary tree over COGNITIVE RECORDS grouped by scene (deliberately
    * NOT over transcripts — those churn and get pruned, which would orphan tree
    * leaves). Appends one level-0 leaf per mature, not-yet-leafed scene (a
@@ -376,7 +372,7 @@ export class MemoryEngine {
    * BRAINROUTER_TREE_AUTOBUILD=off.
    */
   public autobuildSceneTree(userId: string): { leafed: number; sealableBucket: string[] | null } {
-    if (process.env.BRAINROUTER_TREE_AUTOBUILD === "off") return { leafed: 0, sealableBucket: null };
+    if (!treeAutobuildEnabled()) return { leafed: 0, sealableBucket: null };
     const store = this.store as any;
     if (
       typeof store.getDistinctScenes !== "function" ||
@@ -387,16 +383,17 @@ export class MemoryEngine {
       return { leafed: 0, sealableBucket: null };
     }
 
+    const policy = readTreePolicy();
     const leafedKeys = new Set<string>(store.getSceneLeafKeys(userId));
     const scenes = store.getDistinctScenes(userId) as Array<{ sceneName: string; recordCount: number }>;
     let leafed = 0;
     for (const sc of scenes) {
-      if (leafed >= MemoryEngine.TREE_LEAF_PER_PASS) break;
-      if (!sc.sceneName || sc.recordCount < MemoryEngine.TREE_MIN_SCENE_RECORDS || leafedKeys.has(sc.sceneName)) continue;
+      if (leafed >= policy.leafPerPass) break;
+      if (!sc.sceneName || sc.recordCount < policy.minSceneRecords || leafedKeys.has(sc.sceneName)) continue;
       const contents = store.getSceneRecordContents(userId, sc.sceneName, 8) as string[];
       const digest = contents.map((c) => `- ${redactSensitiveMemoryText(c).replace(/\s+/g, " ").slice(0, 160)}`).join("\n");
       store.appendTreeNode(userId, {
-        kind: "topic",
+        kind: SCENE_LEAF_DOMAIN, // MEM-20 — scene leaves are topic-domain
         level: 0,
         summaryMd: `Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
         sceneKey: sc.sceneName,
@@ -404,8 +401,8 @@ export class MemoryEngine {
       leafed++;
     }
 
-    const unsealed = store.getUnsealedSceneLeaves(userId, MemoryEngine.TREE_SEAL_THRESHOLD) as Array<{ id: string }>;
-    const sealableBucket = unsealed.length >= MemoryEngine.TREE_SEAL_THRESHOLD ? unsealed.map((n) => n.id) : null;
+    const unsealed = store.getUnsealedSceneLeaves(userId, policy.sealThreshold) as Array<{ id: string }>;
+    const sealableBucket = unsealed.length >= policy.sealThreshold ? unsealed.map((n) => n.id) : null;
     return { leafed, sealableBucket };
   }
 
