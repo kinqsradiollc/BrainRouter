@@ -871,6 +871,35 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_doc ON source_chunks(document_id, ordinal)");
+
+    // MEM-29 (0.4.4) — lexical index over source chunks so `find_related` can
+    // retrieve nearest code-chunk neighbours by symbol/identifier overlap. The
+    // record vector index only covers chunks that were distilled into a memory;
+    // code recall needs every chunk reachable, so we index chunk content +
+    // symbol directly here. Kept in sync by triggers (chunks are insert/replace-
+    // only, never updated in place), so addSourceChunks / replaceSourceChunks /
+    // document-delete cascades all stay consistent without per-method wiring.
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS source_chunks_fts USING fts5(
+        content,
+        symbol,
+        chunk_id UNINDEXED,
+        user_id UNINDEXED,
+        document_id UNINDEXED,
+        file_path UNINDEXED
+      )
+    `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS source_chunks_fts_ai AFTER INSERT ON source_chunks BEGIN
+        INSERT INTO source_chunks_fts (content, symbol, chunk_id, user_id, document_id, file_path)
+        VALUES (new.content, COALESCE(new.symbol, ''), new.id, COALESCE(new.user_id, ''), new.document_id, COALESCE(new.file_path, ''));
+      END
+    `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS source_chunks_fts_ad AFTER DELETE ON source_chunks BEGIN
+        DELETE FROM source_chunks_fts WHERE chunk_id = old.id;
+      END
+    `);
     // MEM-3 — batch-level provenance: which source chunks a cognitive record
     // was distilled from. user_id carried for RBAC-readiness (MEM-14).
     this.db.exec(`
@@ -947,6 +976,27 @@ export class SqliteMemoryStore implements IMemoryStore {
     // the tree autobuilder keep one leaf per scene without a content scan.
     this.ensureColumn("memory_tree_nodes", "scene_key", "TEXT DEFAULT NULL");
     this.ensureColumn("vault_exports", "workspace_tag", "TEXT DEFAULT NULL");
+
+    // MEM-29 — one-time backfill of the chunk FTS for stores created before this
+    // index existed. Triggers keep it in sync going forward; this only fires on
+    // the first boot after upgrade (when the new FTS table is empty but chunks
+    // already exist). Bounded by the workspace's chunk count.
+    try {
+      const ftsCount = (this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks_fts").get() as any)?.n ?? 0;
+      if (ftsCount === 0) {
+        const chunkCount = (this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks").get() as any)?.n ?? 0;
+        if (chunkCount > 0) {
+          this.db.exec(`
+            INSERT INTO source_chunks_fts (content, symbol, chunk_id, user_id, document_id, file_path)
+            SELECT content, COALESCE(symbol, ''), id, COALESCE(user_id, ''), document_id, COALESCE(file_path, '')
+            FROM source_chunks
+          `);
+        }
+      }
+    } catch {
+      // FTS5 unavailable or backfill race — non-fatal; find_related degrades to
+      // empty results rather than blocking store init.
+    }
   }
 
   /** MEM-14 — idempotently add a column to a table (no-op if it already exists). */
@@ -1119,6 +1169,70 @@ export class SqliteMemoryStore implements IMemoryStore {
   public getSourceChunksByDocument(documentId: string): SourceChunk[] {
     const rows = this.db.prepare("SELECT * FROM source_chunks WHERE document_id = ? ORDER BY ordinal ASC").all(documentId) as any[];
     return rows.map((r) => this.rowToSourceChunk(r));
+  }
+
+  /**
+   * MEM-29 — resolve a `file:line` seed to the chunk whose [start_line,end_line]
+   * span contains the line (the smallest such span wins when chunks nest). Scoped
+   * to the caller. Matches file_path by suffix so callers can pass a workspace-
+   * relative or absolute path. Returns null when nothing covers the line.
+   */
+  public getSourceChunkByFileLine(userId: string, filePath: string, line: number): SourceChunk | null {
+    const needle = filePath.replace(/^\.\//, "");
+    const row = this.db.prepare(
+      `SELECT * FROM source_chunks
+        WHERE user_id = ?
+          AND file_path IS NOT NULL
+          AND (file_path = ? OR file_path LIKE ?)
+          AND start_line IS NOT NULL AND end_line IS NOT NULL
+          AND start_line <= ? AND end_line >= ?
+        ORDER BY (end_line - start_line) ASC
+        LIMIT 1`,
+    ).get(userId, needle, `%${needle}`, line, line) as any;
+    return row ? this.rowToSourceChunk(row) : null;
+  }
+
+  /**
+   * MEM-29 — lexical nearest-neighbour search over the chunk FTS. `query` is a
+   * free-text bag of symbols/identifiers (built from a seed chunk); results are
+   * ranked by FTS5 `rank` (more negative = better, so ascending). Scoped to the
+   * caller; optional excludes/scope let `find_related` drop the seed itself, its
+   * own document, and other-language files. `ftsRank` is surfaced so the
+   * code-aware reranker (MEM-26/27) can refine ordering.
+   */
+  public searchSourceChunksFts(
+    userId: string,
+    query: string,
+    limit: number,
+    opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
+  ): Array<SourceChunk & { ftsRank: number }> {
+    const ftsQuery = buildFtsQuery(query);
+    if (!ftsQuery) return [];
+    const cap = Math.max(1, Math.min(200, limit));
+    // Over-fetch a little so post-filters (exclude seed/doc, language scope)
+    // still leave `limit` candidates for the reranker.
+    const fetch = Math.min(200, cap * 4);
+    const rows = this.db.prepare(
+      `SELECT sc.*, f.rank AS fts_rank
+         FROM source_chunks_fts f
+         JOIN source_chunks sc ON sc.id = f.chunk_id
+        WHERE f.user_id = ? AND source_chunks_fts MATCH ?
+        ORDER BY f.rank
+        LIMIT ?`,
+    ).all(userId, ftsQuery, fetch) as any[];
+    const exts = opts?.filePathLike;
+    const out: Array<SourceChunk & { ftsRank: number }> = [];
+    for (const r of rows) {
+      if (opts?.excludeChunkId && r.id === opts.excludeChunkId) continue;
+      if (opts?.excludeDocumentId && r.document_id === opts.excludeDocumentId) continue;
+      if (exts && exts.length > 0) {
+        const fp: string = r.file_path ?? "";
+        if (!exts.some((e) => fp.endsWith(e))) continue;
+      }
+      out.push({ ...this.rowToSourceChunk(r), ftsRank: typeof r.fts_rank === "number" ? r.fts_rank : 0 });
+      if (out.length >= cap) break;
+    }
+    return out;
   }
 
   /**

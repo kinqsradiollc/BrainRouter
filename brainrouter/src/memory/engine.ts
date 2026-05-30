@@ -32,7 +32,8 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit } from "@kinqs/brainrouter-types";
+import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks } from "./code-retrieval.js";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -1222,6 +1223,66 @@ export class MemoryEngine {
         .filter((c) => c.id !== chunk.id && Math.abs(c.ordinal - chunk.ordinal) <= neighbors);
     }
     return { chunk, document, neighbors: neighborChunks };
+  }
+
+  /**
+   * MEM-29 (0.4.4) — `find_related`: exploration-driven code recall. Seed from a
+   * chunk id or a `file:line`, then retrieve the nearest code-chunk neighbours by
+   * symbol/identifier overlap over the chunk FTS — language-scoped, seed
+   * excluded. Unlike `fetchSourceChunk` (positional ±N within one document), this
+   * crosses files to surface callers/callees/similar definitions. Read-only;
+   * returns `found:false` when the store lacks the capability or the seed is
+   * unknown / not owned by the caller. Ranking (MEM-26/27) lives in
+   * `rankRelatedChunks` so the scoring stays pure + testable.
+   */
+  public findRelatedChunks(
+    userId: string,
+    seed: { chunkId?: string; filePath?: string; line?: number },
+    opts?: { limit?: number; sameLanguage?: boolean },
+  ): { found: boolean; seed?: { chunkId: string; filePath: string | null; symbol: string | null }; related: RelatedChunkHit[] } {
+    const store = this.store as Partial<{
+      getSourceChunk(id: string): SourceChunk | null;
+      getSourceChunkByFileLine(userId: string, filePath: string, line: number): SourceChunk | null;
+      searchSourceChunksFts(
+        userId: string,
+        query: string,
+        limit: number,
+        opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
+      ): Array<SourceChunk & { ftsRank: number }>;
+      getSourceDocument(id: string): SourceDocument | null;
+    }>;
+    if (typeof store.searchSourceChunksFts !== "function") return { found: false, related: [] };
+
+    // Resolve the seed chunk (by id, or by file:line span).
+    let seedChunk: SourceChunk | null = null;
+    if (seed.chunkId && typeof store.getSourceChunk === "function") {
+      seedChunk = store.getSourceChunk(seed.chunkId);
+    } else if (seed.filePath && typeof seed.line === "number" && typeof store.getSourceChunkByFileLine === "function") {
+      seedChunk = store.getSourceChunkByFileLine(userId, seed.filePath, seed.line);
+    }
+    if (!seedChunk) return { found: false, related: [] };
+
+    // Ownership gate — mirror fetchSourceChunk: the seed's parent document must
+    // belong to the caller (the FTS search is already user-scoped for results).
+    const doc = typeof store.getSourceDocument === "function" ? store.getSourceDocument(seedChunk.documentId) : null;
+    if (!doc || doc.userId !== userId) return { found: false, related: [] };
+
+    const query = extractChunkQueryTerms(seedChunk);
+    if (!query) return { found: true, seed: { chunkId: seedChunk.id, filePath: seedChunk.filePath, symbol: seedChunk.symbol }, related: [] };
+    const limit = Math.max(1, Math.min(50, opts?.limit ?? 10));
+    const scope = opts?.sameLanguage === false ? [] : languageScopeFor(seedChunk.filePath);
+
+    const hits = store.searchSourceChunksFts(userId, query, limit, {
+      excludeChunkId: seedChunk.id,
+      filePathLike: scope.length ? scope : undefined,
+    });
+    const related = rankRelatedChunks(seedChunk, hits, limit);
+
+    return {
+      found: true,
+      seed: { chunkId: seedChunk.id, filePath: seedChunk.filePath, symbol: seedChunk.symbol },
+      related,
+    };
   }
 
   public getOperationLog(
