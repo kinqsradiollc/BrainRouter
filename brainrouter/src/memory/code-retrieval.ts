@@ -283,6 +283,46 @@ export function rankRelatedChunks(
   return kept.slice(0, cap);
 }
 
+/**
+ * MEM-28 (0.4.4) — intra-file call/reference edges. Given all the chunks of one
+ * document, return edges `from → to` where chunk `from`'s body references a
+ * top-level symbol DEFINED by chunk `to` in the same file (a callee). The
+ * reverse direction (callers) is just the same edges read backwards.
+ *
+ * Deliberately conservative + deterministic: exact symbol-name match only, no
+ * scope analysis; an ambiguous symbol (defined by two chunks) is dropped rather
+ * than guessed; self-edges excluded. Cross-file import edges + dynamic dispatch
+ * are a Phase-2 follow-up (resolution is order-dependent across documents).
+ */
+export function extractIntraFileCallEdges(
+  chunks: Array<{ id: string; symbol: string | null; content: string }>,
+): Array<{ fromChunkId: string; toChunkId: string }> {
+  const symbolToChunk = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const c of chunks) {
+    if (!c.symbol) continue;
+    if (symbolToChunk.has(c.symbol)) ambiguous.add(c.symbol);
+    else symbolToChunk.set(c.symbol, c.id);
+  }
+  for (const a of ambiguous) symbolToChunk.delete(a); // ambiguous → skip, don't guess
+  if (symbolToChunk.size === 0) return [];
+
+  const edges: Array<{ fromChunkId: string; toChunkId: string }> = [];
+  const seen = new Set<string>();
+  for (const c of chunks) {
+    const ids = new Set(c.content.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? []);
+    for (const id of ids) {
+      const target = symbolToChunk.get(id);
+      if (!target || target === c.id) continue;
+      const key = `${c.id} ${target}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ fromChunkId: c.id, toChunkId: target });
+    }
+  }
+  return edges;
+}
+
 /** Language families keyed by extension — used to scope find_related to one language. */
 const LANGUAGE_FAMILIES: string[][] = [
   [".ts", ".tsx", ".mts", ".cts"],
