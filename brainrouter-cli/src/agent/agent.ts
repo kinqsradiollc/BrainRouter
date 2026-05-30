@@ -62,7 +62,7 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
-import { decideExecutionPolicy } from '../runtime/execPolicy.js';
+import { decideExecutionPolicy, resolveToolPolicy, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -944,6 +944,8 @@ export class Agent {
   private recentToolFailure?: string;
   private roleOverlay?: string;
   private accessMode: AccessMode;
+  /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
+  private policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
   private silent: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
@@ -1983,8 +1985,31 @@ export class Agent {
           if (blockedByHook) {
             throw new Error(`Blocked by pre-tool hook: ${blockedByHook}`);
           }
-          if (!allowed.has(name) && isLocal) {
-            throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
+          // POLICY-1 — route every LOCAL tool through the unified execution
+          // policy (not just the shell): mutating actions emit an audit event,
+          // a deny throws with the policy's reason, and an 'ask' that can't be
+          // answered (silent child) fails closed. Defense-in-depth: a tool
+          // outside the access-mode inventory (e.g. scope/budget-filtered) is
+          // still blocked even when its action kind would be allowed.
+          if (isLocal) {
+            const policy = resolveToolPolicy(name, this.accessMode);
+            if (policy.mutating) {
+              this.policyAudit.push({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
+              traceEvent(
+                'policy.decision',
+                { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey },
+                { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId },
+              );
+            }
+            if (policy.decision === 'deny') {
+              throw new Error(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
+            }
+            if (policy.decision === 'ask' && this.silent) {
+              throw new Error(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
+            }
+            if (!allowed.has(name)) {
+              throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
+            }
           }
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
@@ -2943,6 +2968,12 @@ export class Agent {
   }
   public setAccessMode(mode: AccessMode): void {
     this.accessMode = mode;
+  }
+
+  /** POLICY-1 — the session's execution-policy audit trail (mutating-tool
+   * decisions). Read-only snapshot for observability / tests. */
+  public getPolicyAudit(): ReadonlyArray<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> {
+    return this.policyAudit;
   }
 
   /**
