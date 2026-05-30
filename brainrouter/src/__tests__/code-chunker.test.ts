@@ -17,8 +17,9 @@ describe("chunkCode (MEM-6)", () => {
     const chunks = chunkCode(src, { language: "ts", filePath: "a.ts" });
     expect(chunks.map((c) => c.symbol)).toEqual([null, "alpha", "Beta"]);
     expect(chunks.every((c) => c.filePath === "a.ts")).toBe(true);
-    // alpha runs lines 3..6 (its trailing blank), Beta 7..9.
-    expect({ s: chunks[1].startLine, e: chunks[1].endLine }).toEqual({ s: 3, e: 6 });
+    // MEM-18: alpha ends at its closing brace (line 5), not the trailing blank
+    // (the inter-symbol blank is dropped rather than absorbed). Beta 7..9.
+    expect({ s: chunks[1].startLine, e: chunks[1].endLine }).toEqual({ s: 3, e: 5 });
     expect({ s: chunks[2].startLine, e: chunks[2].endLine }).toEqual({ s: 7, e: 9 });
   });
 
@@ -91,5 +92,64 @@ describe("chunkCode (MEM-6)", () => {
   it("empty / whitespace-only input yields no chunks", () => {
     expect(chunkCode("", { language: "ts" })).toEqual([]);
     expect(chunkCode("   \n\n  ", { language: "ts" })).toEqual([]);
+  });
+});
+
+describe("chunkCode structural scan (MEM-18)", () => {
+  it("ends a symbol at its closing brace and isolates top-level code between symbols", () => {
+    const src = [
+      "function a() {",               // 1
+      "  return 1;",                  // 2
+      "}",                            // 3
+      "const TABLE = buildTable();",  // 4  top-level statement between symbols
+      "function b() {",               // 5
+      "  return 2;",                  // 6
+      "}",                            // 7
+    ].join("\n");
+    const chunks = chunkCode(src, { language: "ts" });
+    // a (1-3), the statement as its own unlabelled region (4), b (5-7). The
+    // regex heuristic would have absorbed line 4 into `a` (no real end).
+    expect(chunks.map((c) => c.symbol)).toEqual(["a", null, "b"]);
+    expect({ s: chunks[0].startLine, e: chunks[0].endLine }).toEqual({ s: 1, e: 3 });
+    expect(chunks[1].content).toContain("const TABLE");
+    expect({ s: chunks[2].startLine, e: chunks[2].endLine }).toEqual({ s: 5, e: 7 });
+  });
+
+  it("is not fooled by braces inside strings or comments", () => {
+    const src = [
+      "function tricky() {",            // 1
+      "  const s = '} not the end {';", // 2
+      "  // } also not the end",        // 3
+      "  return s;",                    // 4
+      "}",                              // 5
+      "function after() { return 0; }", // 6
+    ].join("\n");
+    const chunks = chunkCode(src, { language: "ts" });
+    expect(chunks.map((c) => c.symbol)).toEqual(["tricky", "after"]);
+    expect(chunks[0].endLine).toBe(5); // the real brace, not the ones in the string/comment
+  });
+
+  it("ends a brace-less declaration at its semicolon", () => {
+    const src = [
+      "export type Id = string;",       // 1
+      "export function use(id: Id) {",  // 2
+      "  return id;",                   // 3
+      "}",                              // 4
+    ].join("\n");
+    const chunks = chunkCode(src, { language: "ts" });
+    expect(chunks.map((c) => c.symbol)).toEqual(["Id", "use"]);
+    expect({ s: chunks[0].startLine, e: chunks[0].endLine }).toEqual({ s: 1, e: 1 });
+  });
+
+  it("Rust: a unit struct ends at its semicolon, an impl at its brace", () => {
+    const src = [
+      "pub struct Unit;", // 1
+      "impl Unit {",      // 2
+      "    fn n() {}",    // 3
+      "}",                // 4
+    ].join("\n");
+    const chunks = chunkCode(src, { language: "rs" });
+    expect(chunks.map((c) => c.symbol)).toEqual(["Unit", "Unit"]);
+    expect(chunks[0].endLine).toBe(1); // unit struct is one line
   });
 });
