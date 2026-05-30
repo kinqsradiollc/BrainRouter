@@ -10,7 +10,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| In flight | **0.4.4** | **Feature-complete** on `release/0.4.4` (unreleased) — memory pipeline tightening (exact provenance, blackboard-default admission, recall refs, parser-backed code chunks, benchmark modes, tree policy) + unified exec policy + offload reclaimer + redaction fixtures + `/reload-skills` | [`brainrouter-changelog/0.4.4.md`](brainrouter-changelog/0.4.4.md) |
+| In flight | **0.4.4** | **Feature-complete, version-bumped to 0.4.4, unreleased** (on `release/0.4.4`) — memory pipeline tightening + unified exec policy (POLICY-1/2) + offload reclaimer + redaction fixtures + `/reload-skills`, plus the 2026-05-31 competitive follow-ups (parser-backed AST chunks, code-recall benchmark, tree topic-routing/global rollup). No publish/tag/merge yet | [`brainrouter-changelog/0.4.4.md`](brainrouter-changelog/0.4.4.md) |
 | Latest | **0.4.3** | Shipped — 2026-05-30 — memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
 | Previous | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
 | Shipped | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
@@ -33,7 +33,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
 | **[0.4.3](brainrouter-roadmap/0.4.x.md)** | **Feature-complete.** Memory depth MEM-1…14 (capture→provenance→drill-down, blackboard, tree, vault, AST chunker, benchmark gate, job kinds, governance, redaction, RBAC schema) ✓; CLI-1…15 ✓ (`/rewind`, transcript debugger, `/context` memory/offloads/prefix, headless JSONL, cost segment, `/verify detect`+`run`, exec-policy gate, `/agents create`, grouped `/inbox`+`--watch`, `/bg`). Depth-only follow-ups (LSP diagnostics, full policy routing, interactive wizard, in-flight detach) → 0.4.4. CLI-16 packaging → P3 | Shipped — 2026-05-30 |
-| **[0.4.4](brainrouter-roadmap/0.4.x.md)** | **Memory pipeline tightening** — exact chunk-level provenance, blackboard-default admission, recall expansion refs, parser-backed code chunks, benchmark tree/AST modes, tree source/topic/global policy split — plus **unified exec-policy rollout** and small CLI ergonomics | Feature-complete (unreleased) |
+| **[0.4.4](brainrouter-roadmap/0.4.x.md)** | **Memory pipeline tightening** — exact chunk-level provenance, blackboard-default admission, recall expansion refs, parser-backed code chunks, benchmark tree/AST modes, tree source/topic/global policy split — plus **unified exec-policy rollout** (POLICY-1/2), AST code chunks + code-recall benchmark, tree topic-routing/global rollup, and small CLI ergonomics | v0.4.4 bumped — unreleased |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
