@@ -33,6 +33,7 @@ export interface JobEngineOps {
   commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string };
   summarizeBucket(userId: string, childIds: string[], kind: string): { id: string } | null;
   rechunkSources(userId: string, documentIds: string[]): { rechunked: number; skipped: number; chunksWritten: number };
+  runRetrievalBenchmark(userId: string, opts?: { sampleSize?: number; baseDir?: string }): Promise<{ summaryPath: string | null; statsByMode: Record<string, unknown>; sampled: number; passed: boolean }>;
 }
 
 export interface JobExecContext {
@@ -106,6 +107,10 @@ const EXECUTORS: Record<string, JobExecutor> = {
     const documentIds: string[] = Array.isArray(input?.documentIds) ? input.documentIds.map(String) : [];
     if (documentIds.length === 0) return { rechunked: 0, skipped: 0, chunksWritten: 0, reason: "no documentIds supplied" };
     return requireEngine(ctx).rechunkSources(userIdOf(input), documentIds);
+  },
+  benchmark_eval: async (input, ctx) => {
+    const sampleSize = typeof input?.sampleSize === "number" ? input.sampleSize : undefined;
+    return requireEngine(ctx).runRetrievalBenchmark(userIdOf(input), sampleSize !== undefined ? { sampleSize } : undefined);
   },
 };
 

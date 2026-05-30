@@ -6,6 +6,8 @@ import { MemoryJobRunner } from "./scheduler/runner.js";
 import { enqueueAgentJob } from "./scheduler/jobs.js";
 import { chunkSource } from "./source/chunker.js";
 import { chunkCode } from "./source/code-chunker.js";
+import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
+import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
@@ -857,6 +859,68 @@ export class MemoryEngine {
   }
 
   // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
+  /**
+   * 0.4.3 (MEM-9) — benchmark_eval job: a self-retrieval regression benchmark
+   * over the user's OWN records (no synthetic corpus / labels). Samples records,
+   * derives a partial query from each, and runs recall in two modes — `baseline`
+   * (diversity off) vs `lexmmr` (the 0.4.3 lexical+MMR selection) — measuring
+   * whether the source record resurfaces and at what rank. Writes a markdown
+   * mode-comparison summary and returns per-mode ModeStats + a pass/fail against
+   * a sane recall floor. Read-only w.r.t. memory (only writes the summary file);
+   * temporarily raises BRAINROUTER_RECALL_TOP_RESULTS to 20 for @20 coverage and
+   * restores it. Returns insufficient (empty stats) when < 3 records exist.
+   */
+  public async runRetrievalBenchmark(
+    userId: string,
+    opts?: { sampleSize?: number; baseDir?: string },
+  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean }> {
+    const sampleSize = Math.max(1, Math.min(opts?.sampleSize ?? 20, 100));
+    const sample = this.store.listMemories(userId, { archived: false }).slice(0, sampleSize);
+    if (sample.length < 3) {
+      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true };
+    }
+
+    const modes: Array<{ name: string; diversity: string }> = [
+      { name: "baseline", diversity: "off" },
+      { name: "lexmmr", diversity: "on" },
+    ];
+    const statsByMode: Record<string, ModeStats> = {};
+    const prevTop = process.env.BRAINROUTER_RECALL_TOP_RESULTS;
+    const prevDiv = process.env.BRAINROUTER_RECALL_DIVERSITY;
+    process.env.BRAINROUTER_RECALL_TOP_RESULTS = "20"; // recall reads env per-call, so this scopes the bench
+    try {
+      for (const mode of modes) {
+        process.env.BRAINROUTER_RECALL_DIVERSITY = mode.diversity;
+        const ranks: number[] = [];
+        for (const rec of sample) {
+          const query = deriveBenchQuery(rec.content);
+          if (!query) { ranks.push(-1); continue; }
+          const result = await this.recall({ userId, sessionKey: "benchmark", query });
+          const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
+          ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
+        }
+        statsByMode[mode.name] = aggregateRanks(ranks);
+      }
+    } finally {
+      if (prevTop === undefined) delete process.env.BRAINROUTER_RECALL_TOP_RESULTS; else process.env.BRAINROUTER_RECALL_TOP_RESULTS = prevTop;
+      if (prevDiv === undefined) delete process.env.BRAINROUTER_RECALL_DIVERSITY; else process.env.BRAINROUTER_RECALL_DIVERSITY = prevDiv;
+    }
+
+    let summaryPath: string | null = null;
+    try {
+      const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench", userId);
+      fs.mkdirSync(dir, { recursive: true });
+      summaryPath = path.join(dir, `bench-${Date.now()}.md`);
+      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode), "utf8");
+    } catch {
+      summaryPath = null;
+    }
+    // Sane regression floor: the lexmmr mode should resurface ≥50% of sampled
+    // records within the top 10. A bar for the CI gate, not a hard guarantee.
+    const { passed } = checkThresholds(statsByMode, { lexmmr: { recall_any_at_10: 0.5 } });
+    return { summaryPath, statsByMode, sampled: sample.length, passed };
+  }
+
   /**
    * 0.4.3 (MEM-10) — source_chunker job: re-chunk source documents with the
    * CURRENT chunker (kind-aware: AST chunker for file/code, text chunker

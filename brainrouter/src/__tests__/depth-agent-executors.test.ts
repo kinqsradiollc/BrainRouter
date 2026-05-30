@@ -14,10 +14,20 @@ function ctxWith(engine: unknown): JobExecContext {
 describe("depth-agent executors", () => {
   it("registers the depth agents as on-demand runnable", () => {
     const ids = onDemandRunnableAgentIds();
-    for (const id of ["vault_exporter", "blackboard_reconciler", "tree_sealer", "source_chunker"]) {
+    for (const id of ["vault_exporter", "blackboard_reconciler", "tree_sealer", "source_chunker", "benchmark_eval"]) {
       expect(ids, id).toContain(id);
       expect(getJobExecutor(id)).toBeTypeOf("function");
     }
+  });
+
+  it("benchmark_eval delegates to engine.runRetrievalBenchmark", async () => {
+    let calledWith: { u: string; opts: unknown } | null = null;
+    const engine = {
+      runRetrievalBenchmark: async (u: string, opts: unknown) => { calledWith = { u, opts }; return { summaryPath: "/b.md", statsByMode: { lexmmr: {} }, sampled: 5, passed: true }; },
+    };
+    const out = await getJobExecutor("benchmark_eval")!({ userId: "u1", sampleSize: 7 }, ctxWith(engine));
+    expect(calledWith).toEqual({ u: "u1", opts: { sampleSize: 7 } });
+    expect(out).toMatchObject({ sampled: 5, passed: true });
   });
 
   it("vault_exporter calls engine.exportVault(userId) and returns the ledger summary", async () => {
