@@ -9,6 +9,7 @@ import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { listSessions } from '../../orchestration/orchestrator.js';
 import { formatContextReport } from '../../runtime/contextReport.js';
+import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
 import { contextWindowFor } from '../../runtime/contextWindow.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
@@ -213,6 +214,25 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // 0.4.x-4 — where did this session's tokens go? Total + per-skill
       // (bucketed at each turn by activeSkill) + per-briefing + per-tool
       // (call counts). `/context current` narrows to the active skill.
+      // CLI-6 — `/context memory` shows the last turn's memory-decision view.
+      if ((args[0] ?? '').toLowerCase() === 'memory') {
+        const b = agent.getLastBriefing();
+        const lines = formatMemoryDecisions({
+          decision: b.decision,
+          reasons: b.reasons,
+          sources: b.sources,
+          sourcesPlanned: b.sourcesPlanned,
+          skippedSources: b.skippedSources,
+          recordCount: b.recordCount,
+          tokensInjected: b.tokensInjected,
+          charsSaved: b.charsSaved,
+          recalled: agent.getRecalledRecords().map((r) => ({ recordId: r.recordId, type: r.type, priority: r.priority, content: r.content })),
+        });
+        console.log(chalk.bold('\n🧠 Context — memory decisions (last turn)'));
+        for (const line of lines) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
+        console.log();
+        return true;
+      }
       const scope: 'all' | 'current' = (args[0] ?? '').toLowerCase() === 'current' ? 'current' : 'all';
       const session = agent.sessionUsage;
       const children = listSessions(agent.workspaceRoot).filter(
