@@ -195,6 +195,11 @@ export interface CliKnobs {
   /** Per-host outbound allowlist for fetch_url / web_search ([] = unrestricted). */
   egressAllowlist?: string[];
 
+  // ---- edit→verify loop (CLI-18) ----------------------------------------
+  /** Command run after a file write; failures are fed back to the model.
+   *  `{file}` is substituted with the edited path. Empty = off. */
+  postEditCheck?: string;
+
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
   childAgentTimeoutMs?: number;
@@ -443,6 +448,7 @@ export interface ResolvedCliKnobs {
   updateCheck: boolean;
   externalDirWrites: ExternalDirMode;
   egressAllowlist: string[];
+  postEditCheck: string;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -506,6 +512,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     updateCheck: c.updateCheck ?? true,
     externalDirWrites: c.externalDirWrites ?? 'ask',
     egressAllowlist: Array.isArray(c.egressAllowlist) ? c.egressAllowlist : [],
+    postEditCheck: c.postEditCheck ?? '',
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
