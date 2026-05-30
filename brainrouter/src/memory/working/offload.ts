@@ -254,6 +254,57 @@ export function resetWorkingMemory(workspacePath: string | undefined, userId: st
   return { deleted, workDir };
 }
 
+export interface ReclaimResult {
+  /** Ref files present before the sweep. */
+  scannedRefs: number;
+  /** Orphan refs deleted. */
+  reclaimed: number;
+  /** Refs kept because they're still referenced by the live step log. */
+  keptActive: number;
+  bytesFreed: number;
+  reclaimedNodeIds: string[];
+}
+
+/**
+ * MEM-12 (0.4.3) — offload reclaimer. Sweeps orphan ref files (offloaded
+ * payloads no longer referenced by the live step log, e.g. after the log was
+ * compressed) while PROTECTING active refs. `maxAgeMs` (with an injectable
+ * `now` for tests) restricts the sweep to orphans older than the retention
+ * window; omit it to reclaim all orphans. Returns stats. Never throws — a
+ * cleanup pass must not break a turn.
+ */
+export function reclaimWorkingMemory(
+  workspacePath: string | undefined,
+  userId: string,
+  sessionKey: string,
+  opts?: { maxAgeMs?: number; now?: number },
+): ReclaimResult {
+  const result: ReclaimResult = { scannedRefs: 0, reclaimed: 0, keptActive: 0, bytesFreed: 0, reclaimedNodeIds: [] };
+  const workDir = getWorkingMemoryDir(workspacePath, userId, sessionKey);
+  const refsDir = path.join(workDir, "refs");
+  if (!fs.existsSync(refsDir)) return result;
+  try {
+    const active = new Set(readWorkingSteps(workDir).map((s) => s.nodeId));
+    const now = opts?.now ?? Date.now();
+    for (const file of fs.readdirSync(refsDir)) {
+      if (!file.endsWith(".md")) continue;
+      result.scannedRefs += 1;
+      const nodeId = file.slice(0, -3);
+      if (active.has(nodeId)) { result.keptActive += 1; continue; } // protect active refs
+      const abs = path.join(refsDir, file);
+      const stat = fs.statSync(abs);
+      if (opts?.maxAgeMs != null && now - new Date(stat.mtime).getTime() < opts.maxAgeMs) continue; // orphan but within retention
+      fs.rmSync(abs, { force: true });
+      result.reclaimed += 1;
+      result.bytesFreed += stat.size;
+      result.reclaimedNodeIds.push(nodeId);
+    }
+  } catch (err: any) {
+    console.error("[BrainRouter] MEM-12 offload reclaim failed:", err?.message ?? err);
+  }
+  return result;
+}
+
 export interface ActiveSessionInfo {
   sessionKey: string;
   workspaceId: string;
