@@ -907,6 +907,22 @@ test('P1.2: worker tier cannot delegate', async () => {
   });
 });
 
+test('ORCH-FIX: wait_agents on unknown/missing children resolves per-child, never throws (no main-loop hang)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const ctx = makeStubOrchCtx(workspace);
+    // No running promises + no session records on disk. Before ORCH-FIX,
+    // handleWait threw on a missing record and Promise.all rejected the whole
+    // batch → wait_agents surfaced as a tool failure (and could wedge the parent
+    // turn). Now it must resolve with a per-child value.
+    const raw = await executeOrchestrationTool('wait_agents', { ids: ['ghost-1', 'ghost-2'], timeoutMs: 200 }, ctx);
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.agents.length, 2, 'both children reported back');
+    for (const a of parsed.agents) {
+      assert.ok(a.status === 'gone' || a.status === 'error', `expected a value status, got ${JSON.stringify(a)}`);
+    }
+  });
+});
+
 test('P1.2: reasoning tier cannot spawn another reasoning agent', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const ctx = makeStubOrchCtx(workspace, { parentTier: 'reasoning' });

@@ -71,8 +71,13 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 process.on('unhandledRejection', (reason: any) => {
-  process.stderr.write(`\n[brainrouter] Unhandled promise rejection killed the process:\n${reason?.stack ?? reason}\n`);
-  process.exit(1);
+  // ORCH-FIX — a stray async rejection (e.g. a detached child agent that failed
+  // after the parent stopped awaiting it) must NOT kill an interactive session.
+  // Log it loudly and keep the CLI alive; genuinely-unstable SYNC throws are
+  // still fatal via uncaughtException above. Child promises are additionally
+  // guarded at the source (orchestration/tools.ts), so this is a last-resort
+  // logger rather than the common path.
+  process.stderr.write(`\n[brainrouter] Unhandled promise rejection (continuing):\n${reason?.stack ?? reason}\n`);
 });
 
 import fs from 'node:fs';
