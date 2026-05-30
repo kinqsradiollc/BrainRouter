@@ -46,9 +46,12 @@ export function _resetPricingCache(): void {
 }
 
 /**
- * Resolve pricing for a model. Strips vendor prefixes; falls back to a
- * zero-cost row when no entry is found so callers don't divide-by-
- * undefined. Returns `undefined` ONLY when the model id is empty/invalid.
+ * Resolve pricing for a model. Strips vendor prefixes, then resolves in the
+ * SAME order as `contextWindowFor()`: user override → exact entry →
+ * `familyFallbacks` regex → zero-cost row. The family-fallback walk is what
+ * lets a new dot-versioned SKU (e.g. `gpt-5.3-codex`, absent from models.json)
+ * resolve to its family's pricing instead of silently zeroing to "$0.00".
+ * Returns `undefined` ONLY when the model id is empty/invalid.
  */
 export function pricingFor(modelId: string | undefined | null): ModelPricing | undefined {
   if (!modelId || typeof modelId !== 'string') return undefined;
@@ -60,6 +63,15 @@ export function pricingFor(modelId: string | undefined | null): ModelPricing | u
   const cfg = loadModelsConfig();
   const entry = cfg.models[stripped];
   if (entry?.pricing) return entry.pricing;
+  // Family fallback — mirror contextWindowFor() so pricing survives a new SKU
+  // id the same way the context window does. Without this, ranking-correct
+  // context resolution and $0 pricing diverge for every unlisted variant.
+  for (const fb of cfg.familyFallbacks) {
+    if (fb.pattern.test(stripped)) {
+      const target = cfg.models[fb.fallbackTo];
+      if (target?.pricing) return target.pricing;
+    }
+  }
   return { inputCacheHit: 0, inputCacheMiss: 0, output: 0 };
 }
 
@@ -74,7 +86,7 @@ export function costUsd(modelId: string, usage: UsageLike): number {
   const p = pricingFor(modelId);
   if (!p) return 0;
   return (
-    (usage.cachedTokens * p.inputCacheHit +
+    (usage.cachedTokens * (p.inputCacheHit ?? 0) +
       usage.missedTokens * p.inputCacheMiss +
       usage.completionTokens * p.output) /
     1_000_000
@@ -89,7 +101,7 @@ export function cacheSavingsUsd(modelId: string, cachedTokens: number): number {
   if (cachedTokens <= 0) return 0;
   const p = pricingFor(modelId);
   if (!p) return 0;
-  return (cachedTokens * (p.inputCacheMiss - p.inputCacheHit)) / 1_000_000;
+  return (cachedTokens * (p.inputCacheMiss - (p.inputCacheHit ?? 0))) / 1_000_000;
 }
 
 /**
