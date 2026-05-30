@@ -1990,3 +1990,84 @@ test('runTurn loop-limit turn still rolls usage into session totals + counts the
     }
   });
 });
+
+test('runTurn plan-sync guardrail: nudges once when a turn works but advances no plan item (stale-plan bug)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { updatePlan } = await import('../state/taskStore.js');
+    const sessionKey = 'session:plansync';
+    // The exact /where state: an in_progress item, nothing completed.
+    updatePlan(workspace, { plan: [
+      { step: 'Audit auth routes', status: 'in_progress' },
+      { step: 'Summarize findings', status: 'pending' },
+    ] }, sessionKey);
+
+    const originalFetch = globalThis.fetch;
+    const statuses: string[] = [];
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls === 1) {
+        // Turn does real work: one tool call (no update_plan).
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_dir', arguments: '{"path":"."}' } }] } }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // Conclude with prose, NO tool calls, NO update_plan — the bug shape.
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Findings: auth routes leak the API key.' } }],
+        usage: { prompt_tokens: 30, completion_tokens: 8 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true, sessionKey,
+      });
+      const answer = await agent.runTurn('audit the api', { onStatusUpdate: (s) => statuses.push(s), onToolStart: () => {}, onToolEnd: () => {} });
+      // Guard added exactly one extra iteration: toolcall → answer → [nudge] → answer.
+      assert.equal(llmCalls, 3, `expected 3 LLM calls from the plan-sync re-prompt, got ${llmCalls}`);
+      assert.ok(statuses.some((s) => /plan not advanced/i.test(s)), 'plan-sync nudge status should fire');
+      assert.match(answer, /findings/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn plan-sync guardrail: does NOT fire when the turn completes a plan item', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { updatePlan } = await import('../state/taskStore.js');
+    const sessionKey = 'session:plansync2';
+    updatePlan(workspace, { plan: [{ step: 'Audit auth routes', status: 'in_progress' }] }, sessionKey);
+
+    const originalFetch = globalThis.fetch;
+    const statuses: string[] = [];
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls === 1) {
+        // The model marks the item completed via update_plan.
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'update_plan', arguments: JSON.stringify({ plan: [{ step: 'Audit auth routes', status: 'completed' }] }) } }] } }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Done — audit complete.' } }],
+        usage: { prompt_tokens: 30, completion_tokens: 8 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true, sessionKey,
+      });
+      await agent.runTurn('audit the api', { onStatusUpdate: (s) => statuses.push(s), onToolStart: () => {}, onToolEnd: () => {} });
+      assert.equal(llmCalls, 2, 'no extra iteration when the plan advanced');
+      assert.ok(!statuses.some((s) => /plan not advanced/i.test(s)), 'no nudge when an item was completed this turn');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
