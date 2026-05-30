@@ -236,6 +236,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
           autoCompactThreshold: getCliKnobs().autoCompactTokens,
         },
         cache: { cachedTokens: session.cachedTokens, missedTokens: session.missedTokens },
+        repair: agent.getRepairTotals(),
         session: {
           promptTokens: session.promptTokens,
           completionTokens: session.completionTokens,
