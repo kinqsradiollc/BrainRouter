@@ -850,6 +850,9 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_docs_user_hash ON source_documents(user_id, hash)");
+    // 0.4.3 — the /sources view + transcript retention both query newest-first
+    // per user; without this index that's a filesort once transcripts pile up.
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_docs_user_created ON source_documents(user_id, created_at)");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS source_chunks (
         id TEXT PRIMARY KEY,
@@ -1003,6 +1006,40 @@ export class SqliteMemoryStore implements IMemoryStore {
         LIMIT ?`,
     ).all(userId, limit) as any[];
     return rows.map((r) => ({ ...this.rowToSourceDocument(r), chunkCount: (r.chunk_count as number) ?? 0 }));
+  }
+
+  /**
+   * 0.4.3 — provenance-safe transcript retention. Every `/sources` row is an
+   * auto-ingested per-turn transcript and there was no retention, so they grow
+   * unbounded. This deletes `transcript` documents older than `beforeIso`
+   * EXCEPT any whose chunks are still referenced by a cognitive_source_link
+   * (i.e. a live memory was distilled from them) — so memory_verify /
+   * provenance drill-down never breaks. Scoped by user_id (MEM-14).
+   *
+   * FK cascade is declared but NOT enforced in this store (no
+   * `PRAGMA foreign_keys = ON`), so chunks are deleted explicitly. Returns the
+   * counts removed. Non-transcript kinds are never touched.
+   */
+  public pruneTranscriptSources(userId: string, beforeIso: string): { prunedDocs: number; prunedChunks: number } {
+    const doomed = this.db.prepare(
+      `SELECT d.id FROM source_documents d
+        WHERE d.user_id = ? AND d.kind = 'transcript' AND d.created_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM source_chunks c
+            JOIN cognitive_source_links l ON l.chunk_id = c.id
+            WHERE c.document_id = d.id
+          )`,
+    ).all(userId, beforeIso) as Array<{ id: string }>;
+    if (doomed.length === 0) return { prunedDocs: 0, prunedChunks: 0 };
+
+    const delChunks = this.db.prepare("DELETE FROM source_chunks WHERE document_id = ?");
+    const delDoc = this.db.prepare("DELETE FROM source_documents WHERE id = ? AND user_id = ?");
+    let prunedChunks = 0;
+    for (const { id } of doomed) {
+      prunedChunks += Number((delChunks.run(id) as { changes?: number }).changes ?? 0);
+      delDoc.run(id, userId);
+    }
+    return { prunedDocs: doomed.length, prunedChunks };
   }
 
   /**
