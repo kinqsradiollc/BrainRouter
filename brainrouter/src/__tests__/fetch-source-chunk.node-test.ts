@@ -28,12 +28,14 @@ test("MEM-8 fetchSourceChunk: full chunk + parent document, no neighbors by defa
   try {
     const { chunks } = seed(store);
     const engine = new MemoryEngine(store);
-    const r = engine.fetchSourceChunk(chunks[1].id);
+    const r = engine.fetchSourceChunk("u1", chunks[1].id);
     assert.ok(r);
     assert.equal(r!.chunk.content, "BBB");
     assert.equal(r!.document?.uri, "src/a.ts");
     assert.equal(r!.document?.kind, "file");
     assert.deepEqual(r!.neighbors, []);
+    // user-scoped: another user cannot fetch u1's chunk (cross-tenant guard)
+    assert.equal(engine.fetchSourceChunk("other", chunks[1].id), null);
   } finally { cleanup(); }
 });
 
@@ -42,7 +44,7 @@ test("MEM-8 fetchSourceChunk: ±N neighbours from the same document, excluding s
   try {
     const { chunks } = seed(store);
     const engine = new MemoryEngine(store);
-    const r = engine.fetchSourceChunk(chunks[1].id, 1);
+    const r = engine.fetchSourceChunk("u1", chunks[1].id, 1);
     assert.ok(r);
     assert.deepEqual(r!.neighbors.map((c) => c.content), ["AAA", "CCC"]);
   } finally { cleanup(); }
@@ -52,6 +54,6 @@ test("MEM-8 fetchSourceChunk: unknown id → null", () => {
   const { store, cleanup } = fresh("missing");
   try {
     const engine = new MemoryEngine(store);
-    assert.equal(engine.fetchSourceChunk("does-not-exist"), null);
+    assert.equal(engine.fetchSourceChunk("u1", "does-not-exist"), null);
   } finally { cleanup(); }
 });

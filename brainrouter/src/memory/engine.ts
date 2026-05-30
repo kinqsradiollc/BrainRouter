@@ -843,7 +843,7 @@ export class MemoryEngine {
    * from, as compact excerpts (for `memory_verify`). Returns [] when the store
    * lacks the source-link capability or the record cites no sources.
    */
-  public getRecordProvenance(recordId: string): Array<{
+  public getRecordProvenance(userId: string, recordId: string): Array<{
     chunkId: string;
     documentId: string;
     excerpt: string;
@@ -852,9 +852,9 @@ export class MemoryEngine {
     startLine: number | null;
     endLine: number | null;
   }> {
-    const store = this.store as Partial<{ getRecordSourceChunks(id: string): SourceChunk[] }>;
+    const store = this.store as Partial<{ getRecordSourceChunks(userId: string, id: string): SourceChunk[] }>;
     if (typeof store.getRecordSourceChunks !== "function") return [];
-    return store.getRecordSourceChunks(recordId).map((c) => ({
+    return store.getRecordSourceChunks(userId, recordId).map((c) => ({
       chunkId: c.id,
       documentId: c.documentId,
       excerpt: c.content.length > 280 ? `${c.content.slice(0, 280)}…` : c.content,
@@ -873,6 +873,7 @@ export class MemoryEngine {
    * unknown.
    */
   public fetchSourceChunk(
+    userId: string,
     chunkId: string,
     neighbors = 0,
   ): { chunk: SourceChunk; document: SourceDocument | null; neighbors: SourceChunk[] } | null {
@@ -886,6 +887,10 @@ export class MemoryEngine {
     if (!chunk) return null;
     const document =
       typeof store.getSourceDocument === "function" ? store.getSourceDocument(chunk.documentId) : null;
+    // Ownership gate: the chunk's parent document must belong to the caller.
+    // (source_chunks/source_documents carry user_id per MEM-14.) Without this a
+    // user could fetch any chunk by id — cross-tenant leak.
+    if (!document || document.userId !== userId) return null;
     let neighborChunks: SourceChunk[] = [];
     if (neighbors > 0 && typeof store.getSourceChunksByDocument === "function") {
       neighborChunks = store

@@ -51,9 +51,19 @@ brainRouter.get("/sources", (req: AuthedRequest, res) => {
   }
 });
 
-brainRouter.get("/sources/:id/chunks", (req, res) => {
+brainRouter.get("/sources/:id/chunks", (req: AuthedRequest, res) => {
   try {
-    const store = memoryEngine.store as Partial<{ getSourceChunksByDocument(documentId: string): unknown[] }>;
+    const store = memoryEngine.store as Partial<{
+      getSourceDocument(id: string): { userId: string } | null;
+      getSourceChunksByDocument(documentId: string): unknown[];
+    }>;
+    // Ownership gate: only the document's owner may read its chunks (cross-user
+    // IDOR otherwise — the chunk query isn't user-scoped on its own).
+    const doc = typeof store.getSourceDocument === "function" ? store.getSourceDocument(String(req.params.id)) : null;
+    if (!doc || doc.userId !== req.userId) {
+      res.status(404).json({ error: "source document not found" });
+      return;
+    }
     const chunks = typeof store.getSourceChunksByDocument === "function" ? store.getSourceChunksByDocument(String(req.params.id)) : [];
     res.json({ chunks });
   } catch (err: any) {
@@ -85,9 +95,18 @@ brainRouter.get("/tree", (req: AuthedRequest, res) => {
   }
 });
 
-brainRouter.get("/tree/:id/children", (req, res) => {
+brainRouter.get("/tree/:id/children", (req: AuthedRequest, res) => {
   try {
-    const store = memoryEngine.store as Partial<{ getTreeChildren(parentId: string): unknown[] }>;
+    const store = memoryEngine.store as Partial<{
+      getTreeNode(id: string): { userId: string } | null;
+      getTreeChildren(parentId: string): unknown[];
+    }>;
+    // Ownership gate: only the node's owner may drill its children.
+    const node = typeof store.getTreeNode === "function" ? store.getTreeNode(String(req.params.id)) : null;
+    if (!node || node.userId !== req.userId) {
+      res.status(404).json({ error: "tree node not found" });
+      return;
+    }
     const children = typeof store.getTreeChildren === "function" ? store.getTreeChildren(String(req.params.id)) : [];
     res.json({ children });
   } catch (err: any) {

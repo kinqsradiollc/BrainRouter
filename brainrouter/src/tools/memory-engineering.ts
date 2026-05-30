@@ -291,7 +291,7 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
           })
         : memoryEngine.getMemoryById(uid, params.recordId);
       // MEM-3 — the source chunks this record was distilled from.
-      return toolResult({ record, sources: memoryEngine.getRecordProvenance(params.recordId) });
+      return toolResult({ record, sources: memoryEngine.getRecordProvenance(uid, params.recordId) });
     }
     default:
       throw new Error(`Unknown engineering memory tool: ${name}`);

@@ -24,9 +24,11 @@ test("MEM-3 store: link + fetch record→chunks (ordered, idempotent)", () => {
     const ids = chunks.map((c) => c.id);
     store.linkRecordSources("u1", "rec1", ids);
     store.linkRecordSources("u1", "rec1", ids); // re-extraction must not duplicate
-    const got = store.getRecordSourceChunks("rec1");
+    const got = store.getRecordSourceChunks("u1", "rec1");
     assert.deepEqual(got.map((c) => c.content), ["first chunk content", "second chunk content"]);
     assert.equal(got.length, 2, "idempotent — no duplicate links");
+    // user-scoped: another user must NOT see u1's provenance (cross-tenant guard)
+    assert.deepEqual(store.getRecordSourceChunks("other", "rec1"), []);
   } finally { cleanup(); }
 });
 
@@ -34,8 +36,8 @@ test("MEM-3 store: empty link is a no-op; unknown record → []", () => {
   const { store, cleanup } = fresh("empty");
   try {
     store.linkRecordSources("u1", "recX", []);
-    assert.deepEqual(store.getRecordSourceChunks("recX"), []);
-    assert.deepEqual(store.getRecordSourceChunks("nope"), []);
+    assert.deepEqual(store.getRecordSourceChunks("u1", "recX"), []);
+    assert.deepEqual(store.getRecordSourceChunks("u1", "nope"), []);
   } finally { cleanup(); }
 });
 
@@ -48,13 +50,14 @@ test("MEM-3 engine.getRecordProvenance: excerpts (truncated >280) + empty when u
     store.linkRecordSources("u1", "recE", [c.id]);
 
     const engine = new MemoryEngine(store);
-    const prov = engine.getRecordProvenance("recE");
+    const prov = engine.getRecordProvenance("u1", "recE");
     assert.equal(prov.length, 1);
     assert.equal(prov[0].filePath, "src/a.ts");
     assert.equal(prov[0].symbol, "fnA");
     assert.equal(prov[0].startLine, 1);
     assert.equal(prov[0].excerpt.length, 281, "280 chars + a single ellipsis");
     assert.ok(prov[0].excerpt.endsWith("…"));
-    assert.deepEqual(engine.getRecordProvenance("unlinked"), [], "no links → no provenance");
+    assert.deepEqual(engine.getRecordProvenance("u1", "unlinked"), [], "no links → no provenance");
+    assert.deepEqual(engine.getRecordProvenance("other", "recE"), [], "another user sees no provenance");
   } finally { cleanup(); }
 });
