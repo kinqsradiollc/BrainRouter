@@ -379,6 +379,64 @@ export function computePrefixFingerprint(
   return createHash('sha256').update(blob).digest('hex').slice(0, 16);
 }
 
+/**
+ * CLI-5 (0.4.3) — per-component prefix fingerprint. The single fingerprint
+ * above tells you THAT the cache-stable prefix changed; this breaks it into
+ * the regions (system message, tool list, pinned memory anchors) so a drift
+ * view can say WHICH part changed (i.e. the cache-miss cause).
+ */
+export interface PrefixComponents {
+  systemHash: string;
+  toolsHash: string;
+  anchorsHash: string;
+  toolNames: string[];
+  anchorCount: number;
+}
+
+export function computePrefixComponents(
+  messages: readonly ChatMessage[],
+  tools: readonly ToolSpec[] | readonly { name: string; description?: string; inputSchema?: unknown }[] | undefined,
+): PrefixComponents {
+  let systemContent = '';
+  const anchors: string[] = [];
+  let sawSystem = false;
+  for (const m of messages) {
+    if (!sawSystem && m.role === 'system') { systemContent = m.content; sawSystem = true; continue; }
+    if (m.meta && (m.meta as any).pinned === true) anchors.push(m.content);
+  }
+  const normalisedTools = Array.isArray(tools) ? tools.map((t: any) =>
+    ('function' in t && t.function) ? { name: t.function.name, params: t.function.parameters } : { name: t.name, params: t.inputSchema },
+  ) : [];
+  const h = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+  return {
+    systemHash: h(systemContent),
+    toolsHash: h(JSON.stringify(normalisedTools)),
+    anchorsHash: h(JSON.stringify(anchors)),
+    toolNames: normalisedTools.map((t) => t.name).filter(Boolean),
+    anchorCount: anchors.length,
+  };
+}
+
+export interface PrefixDrift {
+  changed: boolean;
+  /** Human labels: which region drifted (the cache-miss cause), or "stable". */
+  labels: string[];
+}
+
+export function diffPrefixComponents(prev: PrefixComponents | null, curr: PrefixComponents): PrefixDrift {
+  if (!prev) return { changed: false, labels: ['first turn — prefix pinned'] };
+  const labels: string[] = [];
+  if (prev.systemHash !== curr.systemHash) labels.push('system prompt changed');
+  if (prev.toolsHash !== curr.toolsHash) {
+    const added = curr.toolNames.filter((n) => !prev.toolNames.includes(n)).length;
+    const removed = prev.toolNames.filter((n) => !curr.toolNames.includes(n)).length;
+    const delta = [added ? `+${added}` : '', removed ? `-${removed}` : ''].filter(Boolean).join(' ');
+    labels.push(`tool-list changed${delta ? ` (${delta})` : ''}`);
+  }
+  if (prev.anchorsHash !== curr.anchorsHash) labels.push(`memory anchors changed (${prev.anchorCount}→${curr.anchorCount})`);
+  return labels.length ? { changed: true, labels } : { changed: false, labels: ['prefix stable — cache should hit'] };
+}
+
 // ---- internals --------------------------------------------------------
 
 function toolSpecsEqual(a: readonly ToolSpec[], b: readonly ToolSpec[]): boolean {
