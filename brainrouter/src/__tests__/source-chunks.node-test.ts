@@ -60,3 +60,22 @@ test("0.4.3 source_chunks: append assigns ordinals + sha1 hash; fetch ordered", 
     cleanup();
   }
 });
+
+test("0.4.3 getSourceDocuments: lists a user's docs newest-first with chunk counts (dashboard Sources)", () => {
+  const { store, cleanup } = freshDb("list");
+  try {
+    const d1 = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "h1", title: "first" });
+    store.addSourceChunks(d1.id, [{ content: "a", tokenCount: 1 }, { content: "b", tokenCount: 1 }]);
+    const d2 = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "x.ts", hash: "h2", title: "second" });
+    store.createSourceDocument({ userId: "u2", workspaceTag: null, kind: "file", uri: "y.ts", hash: "h3", title: "other-user" });
+
+    const docs = store.getSourceDocuments("u1");
+    assert.equal(docs.length, 2, "only u1's docs (user-scoped, u2 excluded)");
+    assert.deepEqual(docs.map((d) => d.id).sort(), [d1.id, d2.id].sort());
+    assert.ok(docs.every((d) => d.userId === "u1"));
+    assert.equal(docs.find((d) => d.id === d1.id)!.chunkCount, 2);
+    assert.equal(docs.find((d) => d.id === d2.id)!.chunkCount, 0);
+  } finally {
+    cleanup();
+  }
+});
