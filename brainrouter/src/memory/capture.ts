@@ -13,7 +13,14 @@ import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from 
 import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
+import { ingestSource, type SourceIngestStore } from "./source/ingest.js";
 import crypto from "node:crypto";
+
+/**
+ * MEM-2′ — minimum redacted-char length for a turn message to be worth
+ * persisting as a source document (skips greetings / acks). ~30 tokens.
+ */
+const MIN_SOURCE_CHARS = 120;
 
 export class MemoryCapturePipeline {
   constructor(
@@ -55,6 +62,12 @@ export class MemoryCapturePipeline {
       sensoryRecords.push(record);
     }
 
+    // 1b. MEM-2′ — token-aware source capture. Persist each substantial turn
+    // message as a source document + chunks so the raw content stays
+    // retrievable and citable (record→chunk provenance lands in MEM-3).
+    // Best-effort + idempotent; never blocks the rest of the turn.
+    this.ingestTurnSources(userId, sessionKey, messages);
+
     // 2. Decide if we should trigger Cognitive extraction
     const unextractedCount = this.store.getUnextractedSensoryCount(userId, sessionKey);
 
@@ -78,6 +91,59 @@ export class MemoryCapturePipeline {
       cognitiveExtractionStatus,
       cognitiveExtractionError,
     };
+  }
+
+  /**
+   * MEM-2′ — narrow the store to the source-ingest capability. These methods
+   * live on the concrete SqliteMemoryStore, not the IMemoryStore interface, so
+   * detect them at runtime and skip gracefully on a store that lacks them
+   * (e.g. a partial test mock) rather than widening the shared contract.
+   */
+  private asSourceStore(): SourceIngestStore | null {
+    const s = this.store as Partial<SourceIngestStore>;
+    return typeof s.createSourceDocument === "function" &&
+      typeof s.getSourceChunksByDocument === "function" &&
+      typeof s.addSourceChunks === "function"
+      ? (s as SourceIngestStore)
+      : null;
+  }
+
+  /**
+   * MEM-2′ — persist substantial turn messages as source documents + chunks.
+   * Synchronous but cheap (redact + hash + chunk + local inserts; no LLM or
+   * network) and fully best-effort: any failure is logged, never thrown into
+   * the turn. Idempotent via createSourceDocument's (user, hash) dedup, so
+   * re-capturing identical content reuses the existing doc + chunks.
+   */
+  private ingestTurnSources(
+    userId: string,
+    sessionKey: string,
+    messages: { role: string; content: string; timestamp: number }[],
+  ): void {
+    const sourceStore = this.asSourceStore();
+    if (!sourceStore) return;
+    for (const msg of messages) {
+      const text = redactSensitiveMemoryText(msg.content ?? "");
+      if (text.trim().length < MIN_SOURCE_CHARS) continue;
+      try {
+        ingestSource(
+          sourceStore,
+          {
+            userId,
+            // Turn transcripts are workspace-agnostic for now; MEM-14 plumbs scope later.
+            workspaceTag: null,
+            kind: "transcript",
+            uri: null,
+            hash: contentHash(text),
+            title: `${msg.role} turn @ ${new Date(msg.timestamp).toISOString()}`,
+            metadata: { sessionKey, role: msg.role },
+          },
+          text,
+        );
+      } catch (err: any) {
+        console.error("[BrainRouter] MEM-2′ source ingest failed:", err?.message ?? err);
+      }
+    }
   }
 
   public async processBacklog(params: {
