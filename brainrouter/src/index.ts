@@ -102,6 +102,7 @@ import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/me
 import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/memory_agent_status.js';
 import { memoryProvenanceToolSchema, handleMemoryProvenance } from './tools/memory_provenance.js';
 import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from './tools/memory_fetch_source_chunk.js';
+import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from './tools/memory_find_related.js';
 import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from './tools/memory_blackboard.js';
 import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from './tools/memory_tree_walk.js';
 import { memoryVaultExportToolSchema, handleMemoryVaultExport } from './tools/memory_vault_export.js';
@@ -318,6 +319,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryAgentStatusToolSchema,
       memoryProvenanceToolSchema,
       memoryFetchSourceChunkToolSchema,
+      memoryFindRelatedToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -402,6 +404,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryProvenance(request.params.arguments, { defaultUserId });
         case 'memory_fetch_source_chunk':
           return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
+        case 'memory_find_related':
+          return await handleMemoryFindRelated(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':
