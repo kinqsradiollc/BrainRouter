@@ -14,7 +14,8 @@
     "references",
     "docs",
     "README.md",
-    ".env.example"
+    ".env.example",
+    "server.json"
   ],
   "scripts": {
     "prepack": "node scripts/prepack.mjs",
