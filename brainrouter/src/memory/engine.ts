@@ -9,7 +9,7 @@ import { chunkCode } from "./source/code-chunker.js";
 import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
 import { benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd, type CodeRecallResult } from "./bench/code-recall.js";
-import { readTreePolicy, treeAutobuildEnabled, parentDomain, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
+import { readTreePolicy, treeAutobuildEnabled, parentDomain, topicKeyForScene, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
@@ -356,6 +356,12 @@ export class MemoryEngine {
         enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
         enqueued.tree_sealer++;
       }
+      // BRAIN-P4-T5 — roll accumulated global roots into a higher global digest.
+      try {
+        if (this.rollupGlobalTree(userId)) enqueued.global_rollup = (enqueued.global_rollup ?? 0) + 1;
+      } catch (err: any) {
+        console.error("[BrainRouter] global rollup failed:", err?.message ?? err);
+      }
     }
     return { enqueued };
   }
@@ -396,7 +402,7 @@ export class MemoryEngine {
       store.appendTreeNode(userId, {
         kind: SCENE_LEAF_DOMAIN, // MEM-20 — scene leaves are topic-domain
         level: 0,
-        summaryMd: `Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
+        summaryMd: `Topic: ${topicKeyForScene(sc.sceneName)} · Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
         sceneKey: sc.sceneName,
       });
       leafed++;
@@ -920,6 +926,23 @@ export class MemoryEngine {
     store.setTreeParent(childIds, parent.id);
     for (const c of children) store.sealTreeNode(c.id);
     return parent;
+  }
+
+  /**
+   * BRAIN-P4-T5 — global rollup digest. Scene autobuild seals topic leaves into
+   * GLOBAL roots; once enough unsealed global roots accumulate
+   * (`BRAINROUTER_TREE_GLOBAL_ROLLUP`, default 3) this rolls them up into ONE
+   * higher global digest — the periodic "what happened across topics" summary
+   * that matures the source → topic → global hierarchy beyond scene autobuild.
+   * Reuses summarizeBucket; gated like the autobuild; returns the rollup or null.
+   */
+  public rollupGlobalTree(userId: string): MemoryTreeNode | null {
+    if (!treeAutobuildEnabled()) return null;
+    const store = this.store as any;
+    if (typeof store.getTreeRoots !== "function") return null;
+    const roots = (store.getTreeRoots(userId, "global") as MemoryTreeNode[]).filter((n) => !n.sealedAt);
+    if (roots.length < readTreePolicy().globalRollupThreshold) return null;
+    return this.summarizeBucket(userId, roots.map((n) => n.id), "global");
   }
 
   /** MEM-5 / MEM-8 — walk the tree: a node + its children, or the roots of a kind. */
