@@ -40,7 +40,7 @@ test("MEM-4 stage → reconcile → commit → cognitive record + provenance lin
     const committed = engine.reviewBlackboard("u1", "committed");
     assert.equal(committed[0].committedRecordId, result.recordId);
     assert.ok(store.getMemoryById("u1", result.recordId!), "cognitive record was created");
-    assert.equal(store.getRecordSourceChunks(result.recordId!)[0]?.id, chunk.id, "provenance linked on commit");
+    assert.equal(store.getRecordSourceChunks("u1", result.recordId!)[0]?.id, chunk.id, "provenance linked on commit");
   } finally { cleanup(); }
 });
 
