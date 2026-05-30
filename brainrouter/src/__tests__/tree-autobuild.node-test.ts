@@ -14,10 +14,24 @@ import { MemoryEngine } from "../memory/engine.js";
  * how the test seeds distinct scenes.)
  */
 
+// MEM-20: the engine imports `dotenv/config`, so a developer's local
+// brainrouter/.env (which may set BRAINROUTER_TREE_AUTOBUILD=off, custom
+// thresholds, etc.) is loaded into process.env before these tests run and would
+// otherwise make the autobuild a no-op. Neutralize the tree knobs per test so we
+// exercise the documented defaults regardless of the environment.
+const TREE_ENV = [
+  "BRAINROUTER_TREE_AUTOBUILD",
+  "BRAINROUTER_TREE_MIN_SCENE_RECORDS",
+  "BRAINROUTER_TREE_LEAF_PER_PASS",
+  "BRAINROUTER_TREE_SEAL_THRESHOLD",
+];
+
 function fresh(label: string) {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-tree-${label}-`));
   const prevRunner = process.env.BRAINROUTER_JOB_RUNNER;
   process.env.BRAINROUTER_JOB_RUNNER = "off";
+  const prevTree = TREE_ENV.map((k) => [k, process.env[k]] as const);
+  for (const k of TREE_ENV) delete process.env[k];
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
   const engine = new MemoryEngine(store);
@@ -26,6 +40,7 @@ function fresh(label: string) {
     cleanup: () => {
       if (prevRunner === undefined) delete process.env.BRAINROUTER_JOB_RUNNER;
       else process.env.BRAINROUTER_JOB_RUNNER = prevRunner;
+      for (const [k, v] of prevTree) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
       rmSync(dir, { recursive: true, force: true });
     },
   };
