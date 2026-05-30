@@ -18,6 +18,7 @@ import { readPlan } from '../../state/taskStore.js';
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
 import { getConfigPath, saveConfig, setCliKnobOverride } from '../../config/config.js';
+import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
@@ -36,14 +37,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     case '/status':
     {
       console.log(chalk.bold('\n🖥️  BrainRouter Status:'));
-      const activeServerName = config.activeServer;
-      const server = config.servers[activeServerName];
-      console.log(`  Active Server: ${chalk.green(activeServerName)} (Type: ${chalk.cyan(server.type)})`);
-      if (server.type === 'http') {
-        console.log(`  Endpoint URL:  ${chalk.blue(server.url)}`);
-      } else {
-        console.log(`  Command:       ${chalk.blue(server.command)} ${server.args?.join(' ') || ''}`);
-      }
+      for (const line of describeActiveServer(config)) console.log(line);
 
       const llm = config.llm;
       if (llm) {
