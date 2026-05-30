@@ -898,6 +898,14 @@ export class Agent {
   private toolCallRepair: ToolCallRepair | null = null;
   /** 0.3.9 item 11 — last repair report, surfaced via /briefing debug. */
   private lastRepairReport: RepairReport | null = null;
+  /**
+   * 0.4.3 (CLI-8) — session-cumulative repair telemetry. The per-turn report
+   * is reset every intent; these totals persist across the session (reset only
+   * by `resetSessionCounters()`) so `/context` can show how often the
+   * tool-call repair pipeline had to intervene — a health signal for the
+   * model/transport pairing.
+   */
+  private repairTotals = { scavenged: 0, truncationsFixed: 0, truncationsUnrecoverable: 0, stormsBroken: 0, turnsWithRepair: 0 };
   /** 0.3.9 item 13 — count of NEEDS_HIGH escalations this turn, bounded so a marker loop can't churn. */
   private tierEscalationsThisTurn = 0;
   /**
@@ -1613,6 +1621,16 @@ export class Agent {
         typeof response.content === 'string' ? response.content : null,
       );
       this.lastRepairReport = repaired.report;
+      // CLI-8 — fold this turn's report into the session totals.
+      const rr = repaired.report;
+      const touched = rr.scavenged > 0 || rr.truncationsFixed > 0 || rr.truncationsUnrecoverable > 0 || rr.stormsBroken > 0;
+      if (touched) {
+        this.repairTotals.scavenged += rr.scavenged;
+        this.repairTotals.truncationsFixed += rr.truncationsFixed;
+        this.repairTotals.truncationsUnrecoverable += rr.truncationsUnrecoverable;
+        this.repairTotals.stormsBroken += rr.stormsBroken;
+        this.repairTotals.turnsWithRepair += 1;
+      }
       for (const c of repaired.calls) if (c.id) survivingIds.add(c.id);
       if (repaired.report.scavenged > 0 || repaired.report.truncationsFixed > 0 || repaired.report.stormsBroken > 0) {
         traceEvent('tool_call.repair', {
@@ -2767,6 +2785,14 @@ export class Agent {
   }
 
   /**
+   * 0.4.3 (CLI-8) — session-cumulative tool-call repair telemetry, surfaced by
+   * `/context`. Returns a copy so callers can't mutate the running totals.
+   */
+  public getRepairTotals(): { scavenged: number; truncationsFixed: number; truncationsUnrecoverable: number; stormsBroken: number; turnsWithRepair: number } {
+    return { ...this.repairTotals };
+  }
+
+  /**
    * 0.4.x-3b (`/rewind --files`) — record a file's prior content the first time
    * it's mutated this turn, tagged with the user-turn ordinal. Lazily computes
    * the ordinal from the transcript on the turn's first capture (the user
@@ -2970,6 +2996,7 @@ export class Agent {
    */
   public resetSessionCounters(): void {
     this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
+    this.repairTotals = { scavenged: 0, truncationsFixed: 0, truncationsUnrecoverable: 0, stormsBroken: 0, turnsWithRepair: 0 };
     this.memoryMetrics = {
       briefingTokensInjected: 0,
       offloadCharsAvoided: 0,

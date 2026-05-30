@@ -46,6 +46,24 @@ test('CLI-5 formatContextReport: cache line suppressed when absent or zero', () 
   assert.ok(!zero.includes('Prompt cache:'), 'zero prompt tokens → no line (avoids divide-by-zero)');
 });
 
+test('CLI-8 formatContextReport: repair line lists only non-zero interventions', () => {
+  const out = formatContextReport({
+    ...base,
+    repair: { scavenged: 2, truncationsFixed: 0, truncationsUnrecoverable: 1, stormsBroken: 3, turnsWithRepair: 4 },
+  }).join('\n');
+  assert.match(out, /Tool-call repair: 4 turns \(2 scavenged, 1 unrecoverable, 3 storms broken\)/);
+  assert.ok(!out.includes('truncation'), 'zero-count categories are omitted');
+});
+
+test('CLI-8 formatContextReport: repair line suppressed when clean or absent', () => {
+  assert.ok(!formatContextReport(base).join('\n').includes('Tool-call repair:'), 'no repair field → no line');
+  const clean = formatContextReport({
+    ...base,
+    repair: { scavenged: 0, truncationsFixed: 0, truncationsUnrecoverable: 0, stormsBroken: 0, turnsWithRepair: 0 },
+  }).join('\n');
+  assert.ok(!clean.includes('Tool-call repair:'), 'no interventions → no line (no noise on a healthy session)');
+});
+
 test('0.4.x-4 formatContextReport: skills sorted by tokens desc, tools by count desc', () => {
   const out = formatContextReport(base);
   const text = out.join('\n');
