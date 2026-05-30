@@ -14,7 +14,7 @@ import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
-import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
+import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance-plan.js";
 import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
 import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
@@ -780,6 +780,20 @@ export class MemoryEngine {
   public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
     const items = this.store.listMemories(userId, { type: filters.type, archived: false });
     return planGovernance(items, filters, Date.now());
+  }
+
+  /**
+   * MEM-21 — storage-governance dry-run across the 0.4.3 depth tables (source
+   * chunks / documents / tree nodes / vault exports) with per-class reclaim
+   * estimates. Read-only; capability-detected so a partial store mock degrades
+   * to an empty plan.
+   */
+  public governanceStoragePlan(userId: string): StorageGovernanceResult {
+    const store = this.store as Partial<{ getStorageGovernanceStats(u: string): StorageGovernanceStats }>;
+    if (typeof store.getStorageGovernanceStats !== "function") {
+      return { classes: [], totalEstimatedChars: 0, totalReclaimableChars: 0 };
+    }
+    return planStorageGovernance(store.getStorageGovernanceStats(userId));
   }
 
   // ── Blackboard commit pipeline (MEM-4) ──────────────────────────────────

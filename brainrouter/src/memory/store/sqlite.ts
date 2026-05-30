@@ -1166,6 +1166,42 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
+  /**
+   * MEM-21 — read-only storage stats for the governance dry-run across the
+   * 0.4.3 depth tables. Orphan source chunks = chunks NOT cited by any live
+   * memory's provenance (the only ones safe to prune). All user-scoped.
+   */
+  public getStorageGovernanceStats(userId: string): {
+    sourceDocuments: number;
+    sourceChunks: { count: number; chars: number; orphanCount: number; orphanChars: number };
+    treeNodes: { count: number; chars: number };
+    vaultExports: number;
+  } {
+    const num = (v: any): number => Number(v ?? 0) || 0;
+    const docs = this.db.prepare("SELECT COUNT(*) AS n FROM source_documents WHERE user_id = ?").get(userId) as any;
+    const chunks = this.db
+      .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS chars FROM source_chunks WHERE user_id = ?")
+      .get(userId) as any;
+    const orphans = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS chars
+           FROM source_chunks
+          WHERE user_id = ?
+            AND id NOT IN (SELECT chunk_id FROM cognitive_source_links WHERE user_id = ?)`,
+      )
+      .get(userId, userId) as any;
+    const tree = this.db
+      .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(summary_md)), 0) AS chars FROM memory_tree_nodes WHERE user_id = ?")
+      .get(userId) as any;
+    const vault = this.db.prepare("SELECT COUNT(*) AS n FROM vault_exports WHERE user_id = ?").get(userId) as any;
+    return {
+      sourceDocuments: num(docs?.n),
+      sourceChunks: { count: num(chunks?.n), chars: num(chunks?.chars), orphanCount: num(orphans?.n), orphanChars: num(orphans?.chars) },
+      treeNodes: { count: num(tree?.n), chars: num(tree?.chars) },
+      vaultExports: num(vault?.n),
+    };
+  }
+
   /** MEM-3 — the source chunks a cognitive record cites, ordered by document + position. */
   public getRecordSourceChunks(userId: string, recordId: string): SourceChunk[] {
     const rows = this.db.prepare(
