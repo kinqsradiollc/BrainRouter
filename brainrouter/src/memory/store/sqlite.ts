@@ -943,6 +943,9 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.ensureColumn("cognitive_source_links", "workspace_tag", "TEXT DEFAULT NULL");
     this.ensureColumn("memory_blackboard_items", "workspace_tag", "TEXT DEFAULT NULL");
     this.ensureColumn("memory_tree_nodes", "workspace_tag", "TEXT DEFAULT NULL");
+    // 0.4.3 (MEM-10) — the cognitive scene a scene-derived leaf summarizes; lets
+    // the tree autobuilder keep one leaf per scene without a content scan.
+    this.ensureColumn("memory_tree_nodes", "scene_key", "TEXT DEFAULT NULL");
     this.ensureColumn("vault_exports", "workspace_tag", "TEXT DEFAULT NULL");
   }
 
@@ -1280,10 +1283,52 @@ export class SqliteMemoryStore implements IMemoryStore {
       createdAt: new Date().toISOString(),
     };
     this.db.prepare(
-      `INSERT INTO memory_tree_nodes (id, user_id, kind, parent_id, level, summary_md, source_chunk_ids_json, sealed_at, heat_score, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-    ).run(node.id, userId, node.kind, node.parentId, node.level, node.summaryMd, JSON.stringify(node.sourceChunkIds), node.heatScore, node.createdAt);
+      `INSERT INTO memory_tree_nodes (id, user_id, kind, parent_id, level, summary_md, source_chunk_ids_json, sealed_at, heat_score, created_at, scene_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+    ).run(node.id, userId, node.kind, node.parentId, node.level, node.summaryMd, JSON.stringify(node.sourceChunkIds), node.heatScore, node.createdAt, input.sceneKey ?? null);
     return node;
+  }
+
+  // ── 0.4.3 (MEM-10) — scene-tree autobuild support ────────────────────────
+
+  /** Distinct cognitive scenes for a user (non-archived, named), with counts. */
+  public getDistinctScenes(userId: string): Array<{ sceneName: string; recordCount: number }> {
+    const rows = this.db.prepare(
+      `SELECT scene_name AS sceneName, COUNT(*) AS recordCount
+         FROM cognitive_records
+        WHERE user_id = ? AND archived = 0 AND scene_name IS NOT NULL AND scene_name != ''
+        GROUP BY scene_name
+        ORDER BY recordCount DESC`,
+    ).all(userId) as Array<{ sceneName: string; recordCount: number }>;
+    return rows.map((r) => ({ sceneName: r.sceneName, recordCount: Number(r.recordCount) }));
+  }
+
+  /** Scene keys that already have a tree leaf (so the autobuilder doesn't re-leaf). */
+  public getSceneLeafKeys(userId: string): string[] {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT scene_key FROM memory_tree_nodes WHERE user_id = ? AND scene_key IS NOT NULL",
+    ).all(userId) as Array<{ scene_key: string }>;
+    return rows.map((r) => r.scene_key);
+  }
+
+  /** Recent record contents for a scene — fodder for a deterministic leaf summary. */
+  public getSceneRecordContents(userId: string, sceneName: string, limit = 8): string[] {
+    const rows = this.db.prepare(
+      `SELECT content FROM cognitive_records
+        WHERE user_id = ? AND scene_name = ? AND archived = 0
+        ORDER BY created_time DESC LIMIT ?`,
+    ).all(userId, sceneName, limit) as Array<{ content: string }>;
+    return rows.map((r) => r.content);
+  }
+
+  /** Unsealed, un-parented scene leaves (level 0) oldest-first — the seal bucket. */
+  public getUnsealedSceneLeaves(userId: string, limit = 50): MemoryTreeNode[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM memory_tree_nodes
+        WHERE user_id = ? AND scene_key IS NOT NULL AND level = 0 AND sealed_at IS NULL AND parent_id IS NULL
+        ORDER BY created_at ASC LIMIT ?`,
+    ).all(userId, limit) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
   }
 
   public getTreeNode(id: string): MemoryTreeNode | null {

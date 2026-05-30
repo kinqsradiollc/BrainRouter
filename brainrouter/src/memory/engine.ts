@@ -328,7 +328,7 @@ export class MemoryEngine {
     this.maintenanceLastAt = now;
     const pass = this.maintenancePass++;
 
-    const enqueued: Record<string, number> = { blackboard_reconciler: 0, vault_exporter: 0 };
+    const enqueued: Record<string, number> = { blackboard_reconciler: 0, vault_exporter: 0, tree_sealer: 0 };
     const bb = this.blackboardStore();
     let users: { userId: string }[] = [];
     try { users = this.store.listUsers(); } catch { users = []; }
@@ -342,8 +342,66 @@ export class MemoryEngine {
         enqueueAgentJob(this.store, "vault_exporter", { userId });
         enqueued.vault_exporter++;
       }
+      // 0.4.3 — grow the scene-tree (leaf per mature scene); when a bucket of
+      // unsealed leaves fills, enqueue tree_sealer to seal it into a parent.
+      const tree = this.autobuildSceneTree(userId);
+      if (tree.sealableBucket) {
+        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: "global" });
+        enqueued.tree_sealer++;
+      }
     }
     return { enqueued };
+  }
+
+  // 0.4.3 (MEM-10) — scene-tree autobuild thresholds.
+  private static readonly TREE_MIN_SCENE_RECORDS = 3; // don't leaf a trivial scene
+  private static readonly TREE_LEAF_PER_PASS = 5;     // bound work per maintenance tick
+  private static readonly TREE_SEAL_THRESHOLD = 6;    // unsealed scene-leaves → seal
+
+  /**
+   * 0.4.3 (MEM-10) — the tree_sealer auto-trigger source. Builds a DURABLE
+   * memory-summary tree over COGNITIVE RECORDS grouped by scene (deliberately
+   * NOT over transcripts — those churn and get pruned, which would orphan tree
+   * leaves). Appends one level-0 leaf per mature, not-yet-leafed scene (a
+   * deterministic, redacted digest of its records — the LLM re-summary is
+   * tree_digest's job, deferred), bounded per pass. Once enough unsealed
+   * scene-leaves accumulate it returns their ids so the maintenance pass can
+   * enqueue tree_sealer to seal them into a `global` parent. Idempotent (one
+   * leaf per scene_key); capability-detected; gated by
+   * BRAINROUTER_TREE_AUTOBUILD=off.
+   */
+  public autobuildSceneTree(userId: string): { leafed: number; sealableBucket: string[] | null } {
+    if (process.env.BRAINROUTER_TREE_AUTOBUILD === "off") return { leafed: 0, sealableBucket: null };
+    const store = this.store as any;
+    if (
+      typeof store.getDistinctScenes !== "function" ||
+      typeof store.getSceneLeafKeys !== "function" ||
+      typeof store.appendTreeNode !== "function" ||
+      typeof store.getUnsealedSceneLeaves !== "function"
+    ) {
+      return { leafed: 0, sealableBucket: null };
+    }
+
+    const leafedKeys = new Set<string>(store.getSceneLeafKeys(userId));
+    const scenes = store.getDistinctScenes(userId) as Array<{ sceneName: string; recordCount: number }>;
+    let leafed = 0;
+    for (const sc of scenes) {
+      if (leafed >= MemoryEngine.TREE_LEAF_PER_PASS) break;
+      if (!sc.sceneName || sc.recordCount < MemoryEngine.TREE_MIN_SCENE_RECORDS || leafedKeys.has(sc.sceneName)) continue;
+      const contents = store.getSceneRecordContents(userId, sc.sceneName, 8) as string[];
+      const digest = contents.map((c) => `- ${redactSensitiveMemoryText(c).replace(/\s+/g, " ").slice(0, 160)}`).join("\n");
+      store.appendTreeNode(userId, {
+        kind: "topic",
+        level: 0,
+        summaryMd: `Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
+        sceneKey: sc.sceneName,
+      });
+      leafed++;
+    }
+
+    const unsealed = store.getUnsealedSceneLeaves(userId, MemoryEngine.TREE_SEAL_THRESHOLD) as Array<{ id: string }>;
+    const sealableBucket = unsealed.length >= MemoryEngine.TREE_SEAL_THRESHOLD ? unsealed.map((n) => n.id) : null;
+    return { leafed, sealableBucket };
   }
 
   private async ensureSeedAdminUser() {

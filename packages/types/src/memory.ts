@@ -1149,6 +1149,12 @@ export interface MemoryTreeNodeInput {
   summaryMd: string;
   sourceChunkIds?: string[];
   heatScore?: number;
+  /**
+   * 0.4.3 (MEM-10) — for scene-derived leaves: the cognitive scene this leaf
+   * summarizes. Lets the tree autobuilder dedupe (one leaf per scene) without a
+   * content scan. Null for non-scene nodes (sealed parents, source leaves).
+   */
+  sceneKey?: string | null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
