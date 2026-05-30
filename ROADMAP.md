@@ -31,7 +31,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
-| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | `/rewind --files`, `/context` header, transcript debugger, source chunks→capture→provenance→drill-down, blackboard pipeline, AST chunker, governance dry-run ✓; next: memory tree → vault → benchmark + CLI ops (`/bg`, prefix-drift, memory-decision view, headless JSONL, unified policy) | In flight |
+| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | Memory depth complete — capture→provenance→drill-down, blackboard, tree, vault, AST chunker, governance dry-run, RBAC-ready schema ✓; CLI: transcript debugger, headless JSONL, cost segment, repair telemetry, registry guard ✓; next: benchmark + job kinds + offload reclaimer; `/bg`, prefix-drift, memory-decision view, verify, unified policy | In flight |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -63,11 +63,11 @@ drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
   memory-decision view (which prompt regions were stable, which memories were
   injected vs skipped, and why); repair telemetry ✓ (scavenged / truncation /
   storm counts, surfaced in `/context`).
-- **Cost:** an opt-in per-turn footer (model · effort/tier · cost · cache hit ·
-  offloaded + child tokens). *(Prompt-cache hit ratio ✓ in `/context`; footer next.)*
-- **Headless:** `brainrouter run --format jsonl` — a stable event stream
-  (turn / text / tool / child / memory / offload / cost / error) for CI and
-  external orchestrators.
+- **Cost ✓:** opt-in `cost` status segment (turn USD + cache-hit %) + a
+  `/context` prompt-cache hit-ratio line. *(offloaded/child fields can extend it.)*
+- **Headless ✓:** `brainrouter run --format jsonl` — a versioned, stable
+  per-event stream (turn_start / status / tool / child / text / turn_end+cost /
+  error) for CI and external orchestrators.
 - **Safety:** a unified execution-policy module — one allow/ask/deny (+ reason)
   behind shell, file edits, child writes, network, and `/bg`.
 - **Verification:** `/verify detect` recipe cache (Node/Python/Rust/web) +
@@ -88,13 +88,15 @@ drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
 - **Blackboard commit pipeline ✓:** stage extraction candidates → reconcile /
   conflict-check → commit to cognitive records with an audit trail.
   *(Pipeline + `memory_blackboard_review` tool; live-extraction rerouting later.)*
-- **Memory tree:** durable source/topic/global summary hierarchy (append leaf →
-  seal bucket → summarize parent → walk/drill), generic mechanics kept separate
-  from policy.
+- **Memory tree ✓:** durable source/topic/global summary hierarchy (append leaf
+  → seal bucket → summarize parent → walk/drill via `memory_tree_walk`), generic
+  mechanics in `tree/tree.ts` kept separate from policy. *(deterministic
+  summarizer; LLM summaries + auto-build later.)*
 - **AST-aware code chunking ✓** (TS/JS/Python/Rust, line-based fallback) and a
-  read-only **vault mirror** (markdown export + hash ledger; DB authoritative).
-- **Recall drill-down (partial):** `memory_fetch_source_chunk` ✓ (full chunk +
-  parent doc + neighbours); `memory_tree_walk` half lands with the tree.
+  read-only **vault mirror ✓** (`memory_vault_export` — markdown + hash ledger,
+  idempotent, redacted; DB authoritative).
+- **Recall drill-down ✓:** `memory_fetch_source_chunk` (full chunk + parent doc
+  + neighbours) **and** `memory_tree_walk` (walk roots / drill a node).
 - **Retrieval benchmark harness:** one command, fixed datasets, FTS / hybrid /
   rerank / tree / AST modes, JSON + markdown summary, regression thresholds,
   CI-friendly.
@@ -102,11 +104,12 @@ drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
   seal/digest, vault export, and benchmark eval.
 - **Governance & hygiene:** a governance dry-run ✓ (`memory_governance_plan` —
   preview what would archive/delete by filter); an offload reclaimer (retention
-  + orphan cleanup); uniform redaction across source chunks, vault sync,
-  blackboard candidates, and offload previews.
+  + orphan cleanup); uniform redaction ✓ across source chunks, blackboard
+  candidates, offload previews, and vault exports.
 
-Cross-cutting: new tables carry user + workspace scope columns so team/RBAC can
-arrive later without migration; 0.4.3 stays local-first. Carried infra:
+Cross-cutting ✓: every new table carries `user_id` + `workspace_tag` scope
+columns so team/RBAC can arrive later without migration; 0.4.3 stays
+local-first (columns NULL until federation populates them). Carried infra:
 git-worktree session isolation.
 
 ### 0.5.0 — Power User Surface
