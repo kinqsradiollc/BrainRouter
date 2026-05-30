@@ -5,6 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { isForeignAbsolutePath, resolveRegistryConfig } from "../../resolver.js";
 import { appendWorkingStep, compressStepLog, readWorkingSteps, type WorkingStep } from "./step-log.js";
 import { buildAnnotatedCanvas, readWorkingCanvas, writeWorkingCanvas } from "./canvas.js";
+import { redactSensitiveMemoryText } from "../redaction.js";
 
 export type TokenPressureLevel = "none" | "mild" | "aggressive";
 
@@ -200,7 +201,8 @@ export function offloadWorkingPayload(input: WorkingOffloadInput): WorkingOffloa
   appendWorkingStep(workDir, {
     nodeId,
     title: input.title ?? "Working payload offloaded",
-    summary: input.summary ?? input.payload.slice(0, 240),
+    // MEM-13 — redact the inline preview before it persists to the step log.
+    summary: redactSensitiveMemoryText(input.summary ?? input.payload.slice(0, 240)),
     kind: input.kind ?? "tool_output",
     createdAt: observedAt,
     refPath: relativeRefPath,
