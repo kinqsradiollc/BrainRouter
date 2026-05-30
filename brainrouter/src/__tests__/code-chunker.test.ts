@@ -153,3 +153,30 @@ describe("chunkCode structural scan (MEM-18)", () => {
     expect(chunks[0].endLine).toBe(1); // unit struct is one line
   });
 });
+
+describe("chunkCode AST adapter (MEM-24)", () => {
+  it("uses the real parser: an unmatched brace inside a regex literal doesn't end the symbol early", () => {
+    const src = [
+      "function f() {",             // 1
+      "  const re = /^}/;",         // 2  the `}` in this regex would fool a brace counter
+      "  return re.test('x');",     // 3
+      "}",                          // 4
+      "function g() { return 2; }", // 5
+    ].join("\n");
+    const chunks = chunkCode(src, { language: "ts" });
+    expect(chunks.map((c) => c.symbol)).toEqual(["f", "g"]);
+    expect(chunks[0].endLine).toBe(4); // AST ends f at its real closing brace, not the regex's
+  });
+
+  it("parses TSX + decorators (constructs the structural scanner doesn't model)", () => {
+    const src = [
+      "@Component({ selector: 'app' })", // 1  decorator
+      "export class Widget {",           // 2
+      "  render() { return <div>{1}</div>; }", // 3  JSX with braces
+      "}",                               // 4
+      "export const Hello = () => <h1>{'hi'}</h1>;", // 5  arrow returning JSX
+    ].join("\n");
+    const chunks = chunkCode(src, { language: "tsx" });
+    expect(chunks.map((c) => c.symbol)).toEqual(["Widget", "Hello"]);
+  });
+});
