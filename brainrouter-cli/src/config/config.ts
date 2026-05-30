@@ -238,8 +238,15 @@ export function loadConfig(): Config {
     console.error(`Fix the file by hand, or delete it and run \`brainrouter config\` to recreate.`);
     process.exit(1);
   }
-  if (!parsed.servers) parsed.servers = {};
-  if (!parsed.activeServer) parsed.activeServer = '';
+  // Self-heal structural gaps IN-MEMORY only. Fixes the #59 class of crash
+  // (config.servers[activeServer] === undefined when activeServer is '' but
+  // profiles exist → reading `.type` throws) for this process, without ever
+  // writing to disk as a side effect of a read. An earlier draft persisted the
+  // heal here; it mutated the user's real config.json during unrelated
+  // commands/tests, and persisting knob defaults also collapses the
+  // config > preference > default layering. `/config` is the explicit,
+  // user-initiated way to durably repair the file.
+  parsed = selfHealConfig(parsed).config;
 
   // The default config writes `llm.apiKey: ''` so it never appears as a
   // secret in the committed file. Backfill from the standard env vars at
@@ -321,6 +328,55 @@ export function saveConfig(config: Config): void {
   } catch (error) {
     console.error(`Error: Failed to save config to ${CONFIG_FILE}:`, error instanceof Error ? error.message : error);
   }
+}
+
+/**
+ * Self-heal structural gaps in a parsed config. Pure (no I/O — the caller
+ * persists when `changed`), so it's unit-testable in isolation. Ensures
+ * `servers`/`activeServer` exist, and when `activeServer` is empty or names a
+ * deleted profile WHILE profiles exist, picks a sane one — preferring an
+ * `identity: 'brainrouter'` profile, then a `brainrouter`-prefixed name, then
+ * the first key.
+ *
+ * This is the root fix for the #59 `/status` crash: a real config had
+ * `activeServer: ""` with populated `servers`, so `config.servers[""]` was
+ * `undefined` and reading `.type` off it threw
+ * "Cannot read properties of undefined (reading 'type')".
+ *
+ * It deliberately does NOT backfill `cli.*` defaults into the file. Several
+ * knobs (`effort`, `theme`, …) layer config > workspace-preference > default,
+ * so an ABSENT knob is meaningful — writing its default value would make the
+ * `/effort` and `/theme` preferences a silent no-op (and freeze the knob at
+ * today's default if we ever change it). Knob discoverability lives in
+ * `/debug-config` (effective values), not in a polluted file.
+ *
+ * Returns `changed: true` iff something was repaired.
+ */
+export function selfHealConfig(parsed: Config): { config: Config; changed: boolean } {
+  let changed = false;
+  if (!parsed.servers || typeof parsed.servers !== 'object') {
+    parsed.servers = {};
+    changed = true;
+  }
+  if (typeof parsed.activeServer !== 'string') {
+    parsed.activeServer = '';
+    changed = true;
+  }
+
+  // Self-heal a dangling/empty activeServer when profiles exist.
+  const serverIds = Object.keys(parsed.servers);
+  const activeResolves = parsed.activeServer && parsed.servers[parsed.activeServer];
+  if (!activeResolves && serverIds.length > 0) {
+    const byIdentity = serverIds.find((id) => parsed.servers[id]?.identity === 'brainrouter');
+    const byName = serverIds.find((id) => id.toLowerCase().startsWith('brainrouter'));
+    const picked = byIdentity ?? byName ?? serverIds[0];
+    if (parsed.activeServer !== picked) {
+      parsed.activeServer = picked;
+      changed = true;
+    }
+  }
+
+  return { config: parsed, changed };
 }
 
 /**
