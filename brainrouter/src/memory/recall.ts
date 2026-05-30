@@ -640,6 +640,7 @@ export class MemoryRecallPipeline {
       typeBoosts,
       skillBoostApplied,
       rerankerUsed: usedReranker,
+      diversityApplied: usedLexicalSelection,
       judgeUsed,
       judgeApproved,
       judgeRejected,
