@@ -109,6 +109,7 @@ import {
   synthesizeOrphanResults,
   suggestSimilarToolName,
   looksLikeStalledPreamble,
+  looksLikeDeferredToolPromise,
 } from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
@@ -1765,10 +1766,16 @@ export class Agent {
         // Inject a corrective user message and continue one more iteration.
         // The model either delivers the substantive answer or, on the next
         // pass, writes a real reply that escapes the preamble heuristic.
+        // Fire when it's a stalled preamble AND either (a) the model already
+        // called tools this turn then stalled, OR (b) it opened with a
+        // confident "I'll run/check/spawn X" promise but emitted ZERO tools
+        // (the "narrated intent, never acted" turn — gpt-5.3-codex's
+        // "Absolutely — I'll run the full deep sweep now" stall). Without (b)
+        // a turn that promises work and does nothing slips straight through.
         if (
           preambleGuardFired < PREAMBLE_GUARD_MAX &&
-          this.lastTurnToolCalls > 0 &&
-          looksLikeStalledPreamble(response.content)
+          looksLikeStalledPreamble(response.content) &&
+          (this.lastTurnToolCalls > 0 || looksLikeDeferredToolPromise(response.content))
         ) {
           preambleGuardFired += 1;
           const preview = response.content.trim().slice(0, 140);
