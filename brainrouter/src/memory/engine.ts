@@ -167,6 +167,9 @@ export class MemoryEngine {
   public readonly store: IMemoryStore;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
+  /** MEM-19 — kept to query reranker/judge readiness when picking benchmark modes. */
+  private rerankerService!: RerankerService;
+  private relevanceJudge!: RelevanceJudgeService;
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
@@ -265,6 +268,8 @@ export class MemoryEngine {
     
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
+    this.rerankerService = rerankerService; // MEM-19 — readiness drives benchmark mode selection
+    this.relevanceJudge = relevanceJudge;
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
     this.startSessionInboxSweeper();
@@ -918,50 +923,82 @@ export class MemoryEngine {
 
   // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
   /**
-   * 0.4.3 (MEM-9) — benchmark_eval job: a self-retrieval regression benchmark
-   * over the user's OWN records (no synthetic corpus / labels). Samples records,
-   * derives a partial query from each, and runs recall in two modes — `baseline`
-   * (diversity off) vs `lexmmr` (the 0.4.3 lexical+MMR selection) — measuring
-   * whether the source record resurfaces and at what rank. Writes a markdown
-   * mode-comparison summary and returns per-mode ModeStats + a pass/fail against
-   * a sane recall floor. Read-only w.r.t. memory (only writes the summary file);
-   * temporarily raises BRAINROUTER_RECALL_TOP_RESULTS to 20 for @20 coverage and
-   * restores it. Returns insufficient (empty stats) when < 3 records exist.
+   * 0.4.3 (MEM-9) / MEM-19 (0.4.4) — benchmark_eval job: a self-retrieval
+   * regression benchmark over the user's OWN records (no synthetic corpus /
+   * labels). Samples records, derives a partial query from each, and runs recall
+   * in several MODES (recall configurations), measuring whether the source
+   * record resurfaces and at what rank:
+   *   - baseline — RRF + priority only (no diversity, reranker, or judge)
+   *   - lexmmr   — + local lexical-relevance + MMR-diversity selection
+   *   - rerank   — + cross-encoder reranker  (only when one is configured)
+   *   - judge    — + LLM relevance judge      (only when enabled)
+   * rerank/judge are SKIPPED — and reported in `skippedModes`, not silently
+   * equated to baseline — when their service isn't configured. MEM-19 passes
+   * each mode's config to recall PER-CALL (`limitsOverride` / `selectionOverride`
+   * / `disableReranker` / `disableJudge`) instead of mutating process.env, so
+   * runs are deterministic and concurrency-safe (the old env-toggle approach
+   * leaked global state across runs). Writes a markdown summary; returns per-mode
+   * ModeStats + a pass/fail recall floor. Insufficient (empty) when < 3 records.
+   *
+   * Scope: this harness scores cognitive-record self-retrieval. Chunk/tree
+   * ("AST") retrieval is a separate fixture and is not measured here.
    */
   public async runRetrievalBenchmark(
     userId: string,
     opts?: { sampleSize?: number; baseDir?: string },
-  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean }> {
+  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean; skippedModes: string[] }> {
     const sampleSize = Math.max(1, Math.min(opts?.sampleSize ?? 20, 100));
     const sample = this.store.listMemories(userId, { archived: false }).slice(0, sampleSize);
     if (sample.length < 3) {
-      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true };
+      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true, skippedModes: [] };
     }
 
-    const modes: Array<{ name: string; diversity: string }> = [
-      { name: "baseline", diversity: "off" },
-      { name: "lexmmr", diversity: "on" },
+    interface BenchMode {
+      name: string;
+      selection: { diversity: boolean };
+      disableReranker: boolean;
+      disableJudge: boolean;
+    }
+    const modes: BenchMode[] = [
+      { name: "baseline", selection: { diversity: false }, disableReranker: true, disableJudge: true },
+      { name: "lexmmr", selection: { diversity: true }, disableReranker: true, disableJudge: true },
     ];
+    const skippedModes: string[] = [];
+    // Augmentation modes run only when their service is actually configured —
+    // otherwise they'd duplicate baseline and overstate coverage.
+    if (this.rerankerService.isReady()) {
+      modes.push({ name: "rerank", selection: { diversity: true }, disableReranker: false, disableJudge: true });
+    } else {
+      skippedModes.push("rerank (no reranker configured)");
+    }
+    if (this.relevanceJudge.isReady()) {
+      modes.push({ name: "judge", selection: { diversity: true }, disableReranker: false, disableJudge: false });
+    } else {
+      skippedModes.push("judge (relevance judge disabled)");
+    }
+
     const statsByMode: Record<string, ModeStats> = {};
-    const prevTop = process.env.BRAINROUTER_RECALL_TOP_RESULTS;
-    const prevDiv = process.env.BRAINROUTER_RECALL_DIVERSITY;
-    process.env.BRAINROUTER_RECALL_TOP_RESULTS = "20"; // recall reads env per-call, so this scopes the bench
-    try {
-      for (const mode of modes) {
-        process.env.BRAINROUTER_RECALL_DIVERSITY = mode.diversity;
-        const ranks: number[] = [];
-        for (const rec of sample) {
-          const query = deriveBenchQuery(rec.content);
-          if (!query) { ranks.push(-1); continue; }
-          const result = await this.recall({ userId, sessionKey: "benchmark", query });
-          const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
-          ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
-        }
-        statsByMode[mode.name] = aggregateRanks(ranks);
+    for (const mode of modes) {
+      const ranks: number[] = [];
+      for (const rec of sample) {
+        const query = deriveBenchQuery(rec.content);
+        if (!query) { ranks.push(-1); continue; }
+        const result = await this.recall({
+          userId,
+          sessionKey: "benchmark",
+          query,
+          limitsOverride: { topResults: 20 }, // @20 coverage, per-call (no env mutation)
+          selectionOverride: mode.selection,
+          disableReranker: mode.disableReranker,
+          disableJudge: mode.disableJudge,
+        });
+        const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
+        ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
       }
-    } finally {
-      if (prevTop === undefined) delete process.env.BRAINROUTER_RECALL_TOP_RESULTS; else process.env.BRAINROUTER_RECALL_TOP_RESULTS = prevTop;
-      if (prevDiv === undefined) delete process.env.BRAINROUTER_RECALL_DIVERSITY; else process.env.BRAINROUTER_RECALL_DIVERSITY = prevDiv;
+      statsByMode[mode.name] = aggregateRanks(ranks);
+    }
+    if (skippedModes.length > 0) {
+      console.error(`[BrainRouter] benchmark skipped modes: ${skippedModes.join(", ")}`);
     }
 
     let summaryPath: string | null = null;
@@ -969,14 +1006,15 @@ export class MemoryEngine {
       const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench", userId);
       fs.mkdirSync(dir, { recursive: true });
       summaryPath = path.join(dir, `bench-${Date.now()}.md`);
-      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode), "utf8");
+      const skippedNote = skippedModes.length > 0 ? `\n_Skipped: ${skippedModes.join("; ")}._\n` : "";
+      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode) + skippedNote, "utf8");
     } catch {
       summaryPath = null;
     }
     // Sane regression floor: the lexmmr mode should resurface ≥50% of sampled
     // records within the top 10. A bar for the CI gate, not a hard guarantee.
     const { passed } = checkThresholds(statsByMode, { lexmmr: { recall_any_at_10: 0.5 } });
-    return { summaryPath, statsByMode, sampled: sample.length, passed };
+    return { summaryPath, statsByMode, sampled: sample.length, passed, skippedModes };
   }
 
   /**
