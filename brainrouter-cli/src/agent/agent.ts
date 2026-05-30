@@ -853,7 +853,8 @@ export class Agent {
   public launchCwd: string;
   private chatHistory: any[] = [];
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
-  private readonly resultCache = new ResultCache();
+  // MEM-22 — retention is configurable via cli.offloadRetentionMs / cli.offloadMaxEntries.
+  private readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   private triedModelFallback = false;
   private initialized = false;
