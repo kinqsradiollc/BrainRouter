@@ -1316,7 +1316,7 @@ export class SqliteMemoryStore implements IMemoryStore {
       .prepare(
         `SELECT id FROM memory_tree_nodes
           WHERE user_id = ? AND source_chunk_ids_json LIKE ? ESCAPE '\\'
-          ORDER BY created_at DESC LIMIT 1`,
+          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       )
       .get(userId, needle) as any;
     return row?.id ?? null;
