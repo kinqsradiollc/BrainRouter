@@ -63,6 +63,14 @@ and a local **lexical-relevance + MMR-diversity** selection on the no-reranker
 path (zero added latency); and **provenance-safe transcript retention**
 (`memory_prune_sources`) with the `/sources` view hiding transcripts by default.
 
+**Brain agents fully wired (BRAIN-P1 follow-through):** the six "idle · never"
+depth agents now have real executors (on-demand via `memory_agent_run`) — vault
+export, blackboard reconcile+commit, tree seal, source re-chunk, and a
+self-retrieval `benchmark_eval`. A throttled maintenance pass on the job runner
+auto-schedules vault export, blackboard reconcile, and `tree_sealer` (fed by a
+**scene-tree autobuild over cognitive records**). Deferred: `tree_digest`'s LLM
+re-summarizer.
+
 **CLI — full set**
 
 - **Background & detachment ✓:** `/bg <prompt>` runs a detached background

@@ -35,7 +35,10 @@ hardening batch: the cost-telemetry `$0.00` fix (pricing family-fallback +
 recall-quality overhaul (correct security-intent detection, type-aware priority
 caps, and a local no-latency lexical-relevance + MMR-diversity selection), and
 provenance-safe transcript retention (`memory_prune_sources`) with the
-`/sources` view hiding transcripts by default. Full notes accrue in
+`/sources` view hiding transcripts by default. Also wires the six previously
+"idle · never" brain agents (vault export, blackboard reconcile, tree seal,
+source re-chunk, self-retrieval `benchmark_eval`) with real executors +
+auto-scheduling. Full notes accrue in
 [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md).
 
 ## [0.4.2] - 2026-05-30
