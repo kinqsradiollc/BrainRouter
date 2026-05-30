@@ -213,9 +213,27 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       // known session key and, by default, marks the messages delivered
       // (so they don't re-surface). `--peek` inspects without consuming;
       // `--all` also shows already-delivered history.
+      const selfKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      // CLI-15 — `/inbox --watch`: live grouped pane, re-polled until Ctrl+C
+      // (modeled on /watch's SIGINT loop). Always peeks (never consumes).
+      if (args.includes('--watch')) {
+        const renderOnce = async () => {
+          const r = await callMcpTool<{ messages?: Array<{ id: string; fromSessionKey: string; kind: string; payload: any; createdAt: string }> }>(
+            mcpClient, 'session_inbox_read', { sessionKey: selfKey, peek: true },
+          );
+          console.log(chalk.bold(`\n📥 Inbox — watch (Ctrl+C to stop)`));
+          for (const line of formatInboxPane(r.parsed?.messages ?? [])) {
+            console.log(line.startsWith('  ') ? chalk.gray(line) : chalk.cyan(line));
+          }
+        };
+        await renderOnce();
+        const interval = setInterval(() => { renderOnce().catch(() => { /* transient */ }); }, 4000);
+        const onInterrupt = () => { clearInterval(interval); rl.off('SIGINT', onInterrupt); console.log(chalk.gray('\nwatch ended.\n')); rl.prompt(); };
+        rl.once('SIGINT', onInterrupt);
+        return true;
+      }
       const peek = args.includes('--peek');
       const includeDelivered = args.includes('--all');
-      const selfKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
       const res = await callMcpTool<{
         messages?: Array<{ id: string; fromSessionKey: string; kind: string; payload: any; createdAt: string }>;
       }>(mcpClient, 'session_inbox_read', { sessionKey: selfKey, peek, includeDelivered });
@@ -234,6 +252,25 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       console.log(chalk.bold(`\n📥 Inbox${peek ? ' (peek)' : ''}`));
       for (const line of formatInboxPane(messages)) {
         console.log(line.startsWith('  ') ? chalk.gray(line) : chalk.cyan(line));
+      }
+      // CLI-15 — inline handoff acceptance: if a goal-handoff is waiting, offer
+      // to adopt it on the spot (same adopt path as /handoff accept).
+      const pendingHandoffs = messages.filter((m) => m.kind === 'goal-handoff');
+      if (pendingHandoffs.length > 0) {
+        const chosen = pendingHandoffs[pendingHandoffs.length - 1];
+        const goalText = (chosen.payload as { goal?: string } | null)?.goal;
+        if (goalText) {
+          const ans = await new Promise<string>((resolve) => rl.question(chalk.cyan(`\nAccept handoff “${goalText.slice(0, 60)}…” as your goal? (y/N) `), resolve));
+          if (ans.trim().toLowerCase() === 'y') {
+            try {
+              setGoal(agent.workspaceRoot, goalText, agent.sessionKey, { force: true });
+              await callMcpTool(mcpClient, 'session_inbox_ack', { sessionKey: selfKey, ids: [chosen.id] });
+              console.log(chalk.green(`✓ Adopted goal from ${chosen.fromSessionKey.slice(0, 12)}… — continue or /briefing.`));
+            } catch (err: any) {
+              console.log(chalk.red(`Failed to adopt handoff: ${err?.message ?? err}`));
+            }
+          }
+        }
       }
       console.log(peek
         ? chalk.gray('\n(peek — messages left unread. Run /inbox without --peek to mark them delivered.)\n')
