@@ -64,6 +64,7 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
 import { isPathWithinRoots } from '../runtime/pathPolicy.js';
+import { runPostEditCheck } from '../runtime/postEditCheck.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -2404,7 +2405,7 @@ export class Agent {
           fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(resolved, args.content, 'utf8');
-        return `Successfully wrote file: ${args.path}`;
+        return `Successfully wrote file: ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
       }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
@@ -2428,7 +2429,7 @@ export class Agent {
         const updated = content.replace(target, replacement);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
-        return `Successfully edited ${args.path}`;
+        return `Successfully edited ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
       }
       case 'list_dir': {
         const targetDir = resolveHere(args.path || '.');
@@ -2689,7 +2690,12 @@ export class Agent {
           const p = m[1].trim();
           if (p) { try { this.captureFileSnapshot(path.resolve(this.workspaceRoot, p)); } catch { /* noop */ } }
         }
-        return applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
+        {
+          const result = applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
+          const firstFile = patch.match(/^\*\*\*\s+(?:Add|Update) File:\s*(.+)\s*$/m)?.[1]?.trim();
+          const checkFile = firstFile ? path.resolve(this.workspaceRoot, firstFile) : this.workspaceRoot;
+          return result + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
+        }
       }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
