@@ -29,8 +29,13 @@ this changelog.
 
 ## [0.4.3] - Unreleased
 
-In flight. Brain Phases 2-5 + carried CLI/infra work; `/rewind --files` +
-`/context` window header have landed so far. Full notes accrue in
+Feature-complete (memory depth MEM-1…14 + CLI-1…15), plus a post-investigation
+hardening batch: the cost-telemetry `$0.00` fix (pricing family-fallback +
+`inputCacheHit` NaN), the `/status` crash (#59) + in-memory config self-heal, a
+recall-quality overhaul (correct security-intent detection, type-aware priority
+caps, and a local no-latency lexical-relevance + MMR-diversity selection), and
+provenance-safe transcript retention (`memory_prune_sources`) with the
+`/sources` view hiding transcripts by default. Full notes accrue in
 [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md).
 
 ## [0.4.2] - 2026-05-30
