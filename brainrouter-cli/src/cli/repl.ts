@@ -33,7 +33,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
  */
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
-  '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
+  '/doctor', '/policy', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
@@ -67,6 +67,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
       { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
       { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
+      { cmd: '/policy [name]', desc: 'Show or apply a policy profile (readonly / workspace / trusted)' },
       { cmd: '/config [key] [value]', desc: 'Settings panel; `/config theme dark` to set; `/config raw` for JSON dump' },
       { cmd: '/login', desc: 'In-REPL MCP profile editor (transport → fields → probe → save)' },
       { cmd: '/clear', desc: 'Clear chat history for the active session' },

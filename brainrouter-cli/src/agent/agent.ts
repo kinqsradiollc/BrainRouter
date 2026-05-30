@@ -62,7 +62,8 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
-import { decideExecutionPolicy, resolveToolPolicy, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
+import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
+import { isPathWithinRoots } from '../runtime/pathPolicy.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -2008,6 +2009,20 @@ export class Agent {
             if (policy.decision === 'ask' && this.silent) {
               throw new Error(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
             }
+            // POLICY-3 — external-directory gate: a file write whose target
+            // escapes the workspace is governed by the profile's
+            // `externalDirWrites` mode (deny / ask / allow). Independent of the
+            // access-mode decision above.
+            if (policy.action === 'file_edit' && typeof args?.path === 'string' && args.path) {
+              const target = path.resolve(this.workspaceRoot, args.path);
+              const ext = externalDirectoryDecision(target, this.workspaceRoot, getCliKnobs().externalDirWrites, isPathWithinRoots);
+              if (ext.decision === 'deny') {
+                throw new Error(`Tool "${name}" denied: ${ext.reason}.`);
+              }
+              if (ext.decision === 'ask' && this.silent) {
+                throw new Error(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
+              }
+            }
           }
           // Defense-in-depth: a LOCAL tool outside the access-mode inventory
           // (scope/budget-filtered) is still blocked even when its action kind
@@ -2576,6 +2591,11 @@ export class Agent {
       }
       case 'fetch_url': {
         const url = args.url;
+        // POLICY-3 — per-host egress allowlist (empty = unrestricted).
+        const egress = egressDecision(url, getCliKnobs().egressAllowlist);
+        if (egress.decision === 'deny') {
+          return `fetch_url blocked by egress policy: ${egress.reason}.`;
+        }
         try {
           const res = await fetch(url, {
             headers: {
