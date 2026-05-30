@@ -866,6 +866,19 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_doc ON source_chunks(document_id, ordinal)");
+    // MEM-3 — batch-level provenance: which source chunks a cognitive record
+    // was distilled from. user_id carried for RBAC-readiness (MEM-14).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cognitive_source_links (
+        user_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        chunk_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (record_id, chunk_id),
+        FOREIGN KEY (chunk_id) REFERENCES source_chunks(id) ON DELETE CASCADE
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cog_source_links_record ON cognitive_source_links(record_id)");
   }
 
   // ============================
@@ -981,6 +994,38 @@ export class SqliteMemoryStore implements IMemoryStore {
 
   public getSourceChunksByDocument(documentId: string): SourceChunk[] {
     const rows = this.db.prepare("SELECT * FROM source_chunks WHERE document_id = ? ORDER BY ordinal ASC").all(documentId) as any[];
+    return rows.map((r) => this.rowToSourceChunk(r));
+  }
+
+  /**
+   * MEM-3 — link a cognitive record to the source chunks it was distilled
+   * from (batch-level provenance). Idempotent (INSERT OR IGNORE on the
+   * (record_id, chunk_id) primary key), so re-extraction doesn't duplicate.
+   */
+  public linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void {
+    if (chunkIds.length === 0) return;
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      "INSERT OR IGNORE INTO cognitive_source_links (user_id, record_id, chunk_id, created_at) VALUES (?, ?, ?, ?)",
+    );
+    this.db.exec("BEGIN");
+    try {
+      for (const chunkId of chunkIds) stmt.run(userId, recordId, chunkId, now);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /** MEM-3 — the source chunks a cognitive record cites, ordered by document + position. */
+  public getRecordSourceChunks(recordId: string): SourceChunk[] {
+    const rows = this.db.prepare(
+      `SELECT sc.* FROM cognitive_source_links l
+         JOIN source_chunks sc ON sc.id = l.chunk_id
+        WHERE l.record_id = ?
+        ORDER BY sc.document_id ASC, sc.ordinal ASC`,
+    ).all(recordId) as any[];
     return rows.map((r) => this.rowToSourceChunk(r));
   }
 
