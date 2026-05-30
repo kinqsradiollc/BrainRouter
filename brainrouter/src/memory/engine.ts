@@ -32,6 +32,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit } from "@kinqs/brainrouter-types";
 import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks } from "./code-retrieval.js";
 import { hashPassword } from "../api/auth/crypto.js";
@@ -1309,6 +1310,60 @@ export class MemoryEngine {
     }
 
     return { found: true, seed: seedInfo, related: merged };
+  }
+
+  /**
+   * MEM-30 (0.4.4) — incremental code-index freshness. Re-index a code file by
+   * content hash: a no-op when the indexed content is unchanged; on drift the
+   * prior document(s) for that path are marked stale (kept for provenance,
+   * excluded from `find_related`) and the fresh content is re-chunked. Reverting
+   * to an exact prior version revives that document instead of duplicating.
+   * Callers can cheaply gate this with a size/mtime stat before passing content.
+   */
+  public reindexCodeSource(
+    userId: string,
+    input: { filePath: string; content: string; language?: string; title?: string },
+  ): { status: "fresh" | "reindexed" | "unsupported"; documentId?: string; staleMarked: number; chunks: number } {
+    const store = this.store as Partial<{
+      lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null;
+      markSourceDocumentsStaleByPath(userId: string, uri: string): number;
+      reviveSourceDocument(documentId: string): void;
+      createSourceDocument(input: any): SourceDocument;
+      addSourceChunks(documentId: string, chunks: any[]): SourceChunk[];
+    }>;
+    if (
+      typeof store.lookupDocumentByPathHash !== "function" ||
+      typeof store.createSourceDocument !== "function" ||
+      typeof store.addSourceChunks !== "function"
+    ) {
+      return { status: "unsupported", staleMarked: 0, chunks: 0 };
+    }
+
+    const hash = createHash("sha1").update(input.content ?? "").digest("hex");
+    const existing = store.lookupDocumentByPathHash(userId, input.filePath, hash);
+    if (existing && !existing.stale) {
+      return { status: "fresh", documentId: existing.id, staleMarked: 0, chunks: 0 };
+    }
+
+    const staleMarked = store.markSourceDocumentsStaleByPath?.(userId, input.filePath) ?? 0;
+
+    // Revert case — this exact content was indexed before (now staled). Revive
+    // it rather than duplicate; its chunks + edges are still intact.
+    if (existing) {
+      store.reviveSourceDocument?.(existing.id);
+      return { status: "reindexed", documentId: existing.id, staleMarked, chunks: 0 };
+    }
+
+    const doc = store.createSourceDocument({
+      userId,
+      workspaceTag: null,
+      kind: "file",
+      uri: input.filePath,
+      hash,
+      title: input.title ?? input.filePath,
+    });
+    const stored = store.addSourceChunks(doc.id, chunkCode(input.content ?? "", { filePath: input.filePath, language: input.language }));
+    return { status: "reindexed", documentId: doc.id, staleMarked, chunks: stored.length };
   }
 
   public getOperationLog(
