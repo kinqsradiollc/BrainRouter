@@ -44,6 +44,10 @@ export const memoryFindRelatedToolSchema = {
         type: "number",
         description: "Max chunks any single file may contribute, for result diversity (default 2).",
       },
+      includeEdges: {
+        type: "boolean",
+        description: "Lead results with the seed's direct callers/callees (intra-file symbol graph). Default true.",
+      },
     },
   },
 } as const;
@@ -57,6 +61,7 @@ const schema = z
     limit: z.number().int().min(1).max(50).optional(),
     sameLanguage: z.boolean().optional(),
     maxPerFile: z.number().int().min(1).max(20).optional(),
+    includeEdges: z.boolean().optional(),
   })
   .refine((v) => !!v.chunkId || (!!v.file && typeof v.line === "number"), {
     message: "provide either `chunkId` or both `file` and `line`",
@@ -74,7 +79,7 @@ export async function handleMemoryFindRelated(args: any, options?: { defaultUser
     const result = memoryEngine.findRelatedChunks(
       userId,
       { chunkId: params.chunkId, filePath: params.file, line: params.line },
-      { limit: params.limit, sameLanguage: params.sameLanguage, maxPerFile: params.maxPerFile },
+      { limit: params.limit, sameLanguage: params.sameLanguage, maxPerFile: params.maxPerFile, includeEdges: params.includeEdges },
     );
     if (!result.found) return toolResult({ found: false });
     return toolResult({
