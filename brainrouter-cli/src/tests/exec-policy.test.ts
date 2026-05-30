@@ -65,3 +65,19 @@ test('POLICY-1 resolveToolPolicy unifies name → action → decision + mutating
     assert.equal(r.mutating, false);
   }
 });
+
+test('POLICY-2 orchestration / worker spawns gate as child_write; observers + MCP are read-only', () => {
+  for (const t of ['spawn_agent', 'spawn_agents', 'spawn_worker_thread', 'task_agent', 'delegate_agent', 'delegate_reviewer']) {
+    assert.equal(actionKindForTool(t), 'child_write', `${t} should be child_write`);
+  }
+  // Observation / planning orchestration tools + MCP reads are read-only (allowed everywhere).
+  for (const t of ['wait_agent', 'wait_agents', 'list_agents', 'route_task', 'read_agent_transcript', 'wait_worker', 'memory_recall']) {
+    assert.equal(actionKindForTool(t), 'read_only', `${t} should be read_only`);
+  }
+  // Child spawns/delegations: denied in read mode, allowed (and audited) once writing.
+  assert.equal(resolveToolPolicy('spawn_agents', 'read').decision, 'deny');
+  const del = resolveToolPolicy('delegate_reviewer', 'write');
+  assert.equal(del.decision, 'allow');
+  assert.equal(del.action, 'child_write');
+  assert.equal(del.mutating, true);
+});

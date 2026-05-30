@@ -50,13 +50,16 @@ export function decideExecutionPolicy(action: ActionKind, mode: AccessMode): Pol
 }
 
 /**
- * POLICY-1 (0.4.4) — map a built-in tool name to the execution ActionKind it
- * represents, so the agent can route EVERY mutating tool (not just the shell)
- * through `decideExecutionPolicy`. Anything not listed is treated as read-only
- * (the safe default — read-only is always permitted, so an unrecognised tool is
- * never wrongly allowed to mutate).
+ * POLICY-1 / POLICY-2 (0.4.4) — map a built-in tool name to the execution
+ * ActionKind it represents, so the agent can route EVERY tool (local AND
+ * orchestration / worker / MCP — POLICY-2) through `decideExecutionPolicy`.
+ * Anything not listed is treated as read-only (the safe default — read-only is
+ * always permitted, so an unrecognised tool is never wrongly allowed to mutate;
+ * MCP `memory_*`/etc. land here and are allowed in every mode).
  */
 export function actionKindForTool(name: string): ActionKind {
+  // POLICY-2 — synthesized `delegate_<id>` tools spawn a child agent.
+  if (name.startsWith('delegate_')) return 'child_write';
   switch (name) {
     case 'run_command':
       return 'shell';
@@ -64,13 +67,19 @@ export function actionKindForTool(name: string): ActionKind {
     case 'edit_file':
     case 'apply_patch':
       return 'file_edit';
+    // Child-spawning / delegation (orchestration + worker tools) all create a
+    // potentially-writing child, so they gate as child_write (denied in read mode).
     case 'spawn_agent':
     case 'spawn_agents':
     case 'spawn_worker_thread':
+    case 'task_agent':
+    case 'delegate_agent':
       return 'child_write';
     case 'fetch_url':
       return 'network';
     default:
+      // Observation / planning orchestration tools (wait_*, list_agents,
+      // route_task, read_agent_transcript, close_*) + MCP reads → read-only.
       return 'read_only';
   }
 }
