@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getCliKnobs } from '../config/config.js';
+import { redactText } from '../state/sessionStore.js';
 
 /**
  * Lightweight tracing in OTEL-flavored JSONL.
@@ -149,7 +150,10 @@ function emit(evt: TraceEvent): void {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify(formatTraceForBackend(evt, backend)),
+      // MEM-36 — scrub secret-shaped values from span attributes (tool args,
+      // prompts, env-like strings) before they leave the process for an
+      // external tracing backend. Reuses the transcript redactor.
+      body: redactText(JSON.stringify(formatTraceForBackend(evt, backend))),
       signal: AbortSignal.timeout(3000),
     }).catch(() => { /* best-effort */ });
   } catch { /* never throw */ }
