@@ -60,3 +60,48 @@ brainRouter.get("/sources/:id/chunks", (req, res) => {
     res.status(500).json({ error: `brain source chunks failed: ${err?.message ?? err}` });
   }
 });
+
+// 0.4.3 — blackboard staging area (candidates pending commit to cognitive records).
+brainRouter.get("/blackboard", (req: AuthedRequest, res) => {
+  try {
+    const store = memoryEngine.store as Partial<{ getBlackboardItems(userId: string, status?: string): unknown[] }>;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const items = typeof store.getBlackboardItems === "function" ? store.getBlackboardItems(req.userId!, status) : [];
+    res.json({ items });
+  } catch (err: any) {
+    res.status(500).json({ error: `brain blackboard failed: ${err?.message ?? err}` });
+  }
+});
+
+// 0.4.3 — memory tree (summary hierarchy). Roots, then drill children by id.
+brainRouter.get("/tree", (req: AuthedRequest, res) => {
+  try {
+    const store = memoryEngine.store as Partial<{ getTreeRoots(userId: string, kind?: string): unknown[] }>;
+    const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
+    const roots = typeof store.getTreeRoots === "function" ? store.getTreeRoots(req.userId!, kind) : [];
+    res.json({ roots });
+  } catch (err: any) {
+    res.status(500).json({ error: `brain tree failed: ${err?.message ?? err}` });
+  }
+});
+
+brainRouter.get("/tree/:id/children", (req, res) => {
+  try {
+    const store = memoryEngine.store as Partial<{ getTreeChildren(parentId: string): unknown[] }>;
+    const children = typeof store.getTreeChildren === "function" ? store.getTreeChildren(String(req.params.id)) : [];
+    res.json({ children });
+  } catch (err: any) {
+    res.status(500).json({ error: `brain tree children failed: ${err?.message ?? err}` });
+  }
+});
+
+// 0.4.3 — vault export ledger (read-only markdown mirror of records + tree).
+brainRouter.get("/vault", (req: AuthedRequest, res) => {
+  try {
+    const store = memoryEngine.store as Partial<{ getVaultExports(userId: string): unknown[] }>;
+    const exports = typeof store.getVaultExports === "function" ? store.getVaultExports(req.userId!) : [];
+    res.json({ exports });
+  } catch (err: any) {
+    res.status(500).json({ error: `brain vault failed: ${err?.message ?? err}` });
+  }
+});
