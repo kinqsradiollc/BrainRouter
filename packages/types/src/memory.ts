@@ -466,6 +466,17 @@ export interface RecalledMemory {
   type: string;
   recordId: string;
   skillTag?: string;
+  /**
+   * MEM-17 — source chunk ids this record was distilled from (precise post
+   * MEM-15). Drill in with `memory_fetch_source_chunk`. Omitted when the record
+   * has no linked provenance.
+   */
+  sourceChunkIds?: string[];
+  /**
+   * MEM-17 — a memory-tree node whose sealed bucket covers this record's source,
+   * when known. Walk it with `memory_tree_walk`. Omitted when none.
+   */
+  treeNodeId?: string | null;
 }
 
 export type MemoryTaskIntent =

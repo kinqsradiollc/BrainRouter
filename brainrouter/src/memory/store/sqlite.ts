@@ -1268,6 +1268,24 @@ export class SqliteMemoryStore implements IMemoryStore {
     };
   }
 
+  /**
+   * MEM-17 — the most recent tree node whose source-chunk set includes this
+   * chunk, for recall drill-down (recall hits expose a `treeNodeId` handle).
+   * Cheap LIKE scan (tree nodes are few); underscores/percent in the chunk id
+   * are escaped so the match is exact. Returns null when no node covers it.
+   */
+  public getTreeNodeIdByChunkId(userId: string, chunkId: string): string | null {
+    const needle = `%"${chunkId.replace(/[\\%_]/g, (c) => "\\" + c)}"%`;
+    const row = this.db
+      .prepare(
+        `SELECT id FROM memory_tree_nodes
+          WHERE user_id = ? AND source_chunk_ids_json LIKE ? ESCAPE '\\'
+          ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(userId, needle) as any;
+    return row?.id ?? null;
+  }
+
   /** MEM-5 — append a tree node (leaf or parent). */
   public appendTreeNode(userId: string, input: MemoryTreeNodeInput): MemoryTreeNode {
     const node: MemoryTreeNode = {
