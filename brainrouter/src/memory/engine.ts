@@ -33,9 +33,10 @@ import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
 import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks } from "./code-retrieval.js";
 import { buildSkillExtractionPrompt, parseSkillResponse } from "./skill-extract.js";
+import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "./graph-analytics.js";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -572,6 +573,56 @@ export class MemoryEngine {
     const node = this.store.getGraphNodeByEntity(userId, entity);
     if (!node) return { nodes: [], edges: [] };
     return this.store.getGraphNeighbors(userId, node.id, skillTag, maxHops);
+  }
+
+  /**
+   * DASH-1 (0.4.4) — graph analytics lenses over the user's GraphRAG store:
+   * PageRank centrality (most load-bearing entities), articulation points
+   * (broker/bridge entities), a namespace overview (counts by entity type), and
+   * an optional shortest connection path between two entities ("how is A related
+   * to B"). Pure compute (graph-analytics.ts); read-only.
+   */
+  public graphAnalytics(
+    userId: string,
+    opts?: { topN?: number; from?: string; to?: string },
+  ): {
+    nodeCount: number;
+    edgeCount: number;
+    topCentral: Array<{ entity: string; entityType: string; score: number }>;
+    bridges: Array<{ entity: string; entityType: string }>;
+    namespaces: Record<string, number>;
+    path?: { from: string; to: string; found: boolean; entities: string[] };
+  } {
+    const store = this.store as Partial<{
+      getAllGraphNodes(u: string): GraphNode[];
+      getAllGraphEdges(u: string): GraphEdge[];
+    }>;
+    const nodes = typeof store.getAllGraphNodes === "function" ? store.getAllGraphNodes(userId) : [];
+    const edges = typeof store.getAllGraphEdges === "function" ? store.getAllGraphEdges(userId) : [];
+    const nodeIds = nodes.map((n) => n.id);
+    const liteEdges = edges.map((e) => ({ from: e.fromNodeId, to: e.toNodeId }));
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const topN = Math.max(1, Math.min(50, opts?.topN ?? 10));
+
+    const pr = pageRank(nodeIds, liteEdges);
+    const topCentral = [...pr.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, topN)
+      .map(([id, score]) => ({ entity: byId.get(id)?.entity ?? id, entityType: byId.get(id)?.entityType ?? "unknown", score: Math.round(score * 1e4) / 1e4 }));
+    const bridges = articulationPoints(nodeIds, liteEdges)
+      .slice(0, topN)
+      .map((id) => ({ entity: byId.get(id)?.entity ?? id, entityType: byId.get(id)?.entityType ?? "unknown" }));
+    const namespaces = namespaceOverview(nodes);
+
+    let path: { from: string; to: string; found: boolean; entities: string[] } | undefined;
+    if (opts?.from && opts?.to) {
+      const fromId = nodes.find((n) => n.entity.toLowerCase() === opts.from!.toLowerCase())?.id;
+      const toId = nodes.find((n) => n.entity.toLowerCase() === opts.to!.toLowerCase())?.id;
+      const ids = fromId && toId ? shortestPath(nodeIds, liteEdges, fromId, toId) : null;
+      path = { from: opts.from, to: opts.to, found: !!ids, entities: (ids ?? []).map((id) => byId.get(id)?.entity ?? id) };
+    }
+
+    return { nodeCount: nodes.length, edgeCount: edges.length, topCentral, bridges, namespaces, ...(path ? { path } : {}) };
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {

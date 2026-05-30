@@ -3288,6 +3288,18 @@ export class SqliteMemoryStore implements IMemoryStore {
     }));
   }
 
+  /** DASH-1 — all of a user's graph edges (for whole-graph analytics). */
+  public getAllGraphEdges(userId: string): GraphEdge[] {
+    const rows = this.db.prepare(
+      "SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time FROM graph_edges WHERE user_id = ?",
+    ).all(userId) as any[];
+    return rows.map(r => ({
+      id: r.id, userId: r.user_id, fromNodeId: r.from_node_id, toNodeId: r.to_node_id,
+      relation: r.relation, skillTag: r.skill_tag, confidence: r.confidence,
+      sourceRecordId: r.source_record_id, createdTime: r.created_time,
+    }));
+  }
+
   public upsertGraphNode(node: GraphNode) {
     const stmt = this.db.prepare(`
       INSERT INTO graph_nodes (id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time)
