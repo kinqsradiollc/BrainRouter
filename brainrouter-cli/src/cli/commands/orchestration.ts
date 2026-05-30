@@ -3,11 +3,17 @@
  * Hand-tune imports if the compiler complains.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
+import { formatInboxPane } from '../../runtime/inboxView.js';
+import { validateAgentDefinition, buildAgentDefinition } from '../../orchestration/agentDefValidation.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
+import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries, appendTranscriptEntry } from '../../state/sessionStore.js';
 import { readGoal, setGoal, pauseGoal } from '../../state/goalStore.js';
@@ -15,7 +21,6 @@ import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '..
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
-import { formatIncomingBanner } from '../incomingBanner.js';
 import { resolveAutoChainMode, isAutoChainMode } from '../../orchestration/autoChain.js';
 import { resolveDelegationPolicy, isDelegationPolicy } from '../../orchestration/delegationPolicy.js';
 import { listPacks, packAgentIds } from '../../orchestration/packs.js';
@@ -211,9 +216,27 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       // known session key and, by default, marks the messages delivered
       // (so they don't re-surface). `--peek` inspects without consuming;
       // `--all` also shows already-delivered history.
+      const selfKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
+      // CLI-15 — `/inbox --watch`: live grouped pane, re-polled until Ctrl+C
+      // (modeled on /watch's SIGINT loop). Always peeks (never consumes).
+      if (args.includes('--watch')) {
+        const renderOnce = async () => {
+          const r = await callMcpTool<{ messages?: Array<{ id: string; fromSessionKey: string; kind: string; payload: any; createdAt: string }> }>(
+            mcpClient, 'session_inbox_read', { sessionKey: selfKey, peek: true },
+          );
+          console.log(chalk.bold(`\n📥 Inbox — watch (Ctrl+C to stop)`));
+          for (const line of formatInboxPane(r.parsed?.messages ?? [])) {
+            console.log(line.startsWith('  ') ? chalk.gray(line) : chalk.cyan(line));
+          }
+        };
+        await renderOnce();
+        const interval = setInterval(() => { renderOnce().catch(() => { /* transient */ }); }, 4000);
+        const onInterrupt = () => { clearInterval(interval); rl.off('SIGINT', onInterrupt); console.log(chalk.gray('\nwatch ended.\n')); rl.prompt(); };
+        rl.once('SIGINT', onInterrupt);
+        return true;
+      }
       const peek = args.includes('--peek');
       const includeDelivered = args.includes('--all');
-      const selfKey = agent.getFederationSessionKey?.() ?? agent.sessionKey;
       const res = await callMcpTool<{
         messages?: Array<{ id: string; fromSessionKey: string; kind: string; payload: any; createdAt: string }>;
       }>(mcpClient, 'session_inbox_read', { sessionKey: selfKey, peek, includeDelivered });
@@ -227,12 +250,30 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log(chalk.gray(includeDelivered ? '  (no messages at all)\n' : '  (nothing unread — try /inbox --all to see delivered history)\n'));
         return true;
       }
-      console.log(chalk.bold(`\nInbox — ${messages.length} message${messages.length === 1 ? '' : 's'}${peek ? ' (peek)' : ''}`));
-      for (const m of messages) {
-        const text = m.kind === 'text' && typeof m.payload?.text === 'string'
-          ? m.payload.text
-          : `(${m.kind} payload)`;
-        console.log(formatIncomingBanner({ id: m.id, fromSessionKey: m.fromSessionKey, text, receivedAt: m.createdAt }));
+      // CLI-15 — compact pane grouped by kind (text / goal-handoff / memory-ref
+      // / tool-result / delegate) so what's waiting is legible at a glance.
+      console.log(chalk.bold(`\n📥 Inbox${peek ? ' (peek)' : ''}`));
+      for (const line of formatInboxPane(messages)) {
+        console.log(line.startsWith('  ') ? chalk.gray(line) : chalk.cyan(line));
+      }
+      // CLI-15 — inline handoff acceptance: if a goal-handoff is waiting, offer
+      // to adopt it on the spot (same adopt path as /handoff accept).
+      const pendingHandoffs = messages.filter((m) => m.kind === 'goal-handoff');
+      if (pendingHandoffs.length > 0) {
+        const chosen = pendingHandoffs[pendingHandoffs.length - 1];
+        const goalText = (chosen.payload as { goal?: string } | null)?.goal;
+        if (goalText) {
+          const ans = await new Promise<string>((resolve) => rl.question(chalk.cyan(`\nAccept handoff “${goalText.slice(0, 60)}…” as your goal? (y/N) `), resolve));
+          if (ans.trim().toLowerCase() === 'y') {
+            try {
+              setGoal(agent.workspaceRoot, goalText, agent.sessionKey, { force: true });
+              await callMcpTool(mcpClient, 'session_inbox_ack', { sessionKey: selfKey, ids: [chosen.id] });
+              console.log(chalk.green(`✓ Adopted goal from ${chosen.fromSessionKey.slice(0, 12)}… — continue or /briefing.`));
+            } catch (err: any) {
+              console.log(chalk.red(`Failed to adopt handoff: ${err?.message ?? err}`));
+            }
+          }
+        }
       }
       console.log(peek
         ? chalk.gray('\n(peek — messages left unread. Run /inbox without --peek to mark them delivered.)\n')
@@ -440,6 +481,47 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     }
     case '/agents':
     {
+      // CLI-13 — `/agents create <id>` writes a scoped agent definition.
+      // Non-interactive (flags → validate → write) to avoid a readline
+      // conflict with the live REPL prompt; an interactive wizard can layer on.
+      if (args[0] === 'create') {
+        const id = args[1];
+        const flag = (name: string): string | undefined => {
+          const i = args.indexOf(`--${name}`);
+          return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
+        };
+        const toolsCsv = flag('tools');
+        const draft = {
+          id,
+          displayName: flag('display'),
+          whenToUse: flag('when'),
+          prompt: flag('prompt'),
+          defaultAccess: flag('access') ?? 'read',
+          toolScope: { local: toolsCsv ? toolsCsv.split(',').map((s) => s.trim()).filter(Boolean) : [], mcp: [] },
+        };
+        const v = validateAgentDefinition(draft);
+        if (!v.valid) {
+          console.log(chalk.red('\nInvalid agent definition:'));
+          for (const e of v.errors) console.log(chalk.gray(`  - ${e}`));
+          console.log(chalk.gray('\nUsage: /agents create <id> --display "Name" --when "..." --prompt "..." --access read|write|shell [--tools a,b] [--force]\n'));
+          return true;
+        }
+        const dir = path.join(agent.workspaceRoot, '.brainrouter', 'agents');
+        const file = path.join(dir, `${id}.json`);
+        if (fs.existsSync(file) && !args.includes('--force')) {
+          console.log(chalk.yellow(`\n${id}.json already exists — pass --force to overwrite.\n`));
+          return true;
+        }
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(file, JSON.stringify(buildAgentDefinition(draft), null, 2), 'utf8');
+          console.log(chalk.green(`\n✓ Wrote agent definition: ${path.relative(agent.workspaceRoot, file)}`));
+          console.log(chalk.gray('  Loads on next /agents (workspace tier).\n'));
+        } catch (err: any) {
+          console.log(chalk.red(`\nFailed to write: ${err?.message ?? err}\n`));
+        }
+        return true;
+      }
       // `--remote` (FED-S2-T6): list peers attached to the same BrainRouter
       // brain via `session_list`. Local-child output stays the default —
       // `--remote` is opt-in. `--watch` flips to a live re-poll, `--json`
@@ -530,6 +612,69 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
             }
           }, intervalMs);
         });
+        return true;
+      }
+
+      // MAS-P5-T5 (§6.5): `/agents tree` renders the spawn hierarchy
+      // (parent → children → workers) so you can see who spawned what.
+      if (args[0] === 'tree') {
+        const sessions = listSessions(agent.workspaceRoot);
+        if (sessions.length === 0) {
+          console.log(chalk.gray('\nNo child agents in this workspace yet.\n'));
+          return true;
+        }
+        console.log(chalk.bold('\n🌳 Agent tree'));
+        for (const line of formatAgentForest(buildAgentForest(sessions))) console.log(`  ${line}`);
+        console.log(chalk.gray(`\n  ${sessions.length} agent${sessions.length === 1 ? '' : 's'} total. /agents why <id> for one's rationale; /agents transcript <id> for its run.\n`));
+        return true;
+      }
+
+      // MAS-P5-T6 (§6.5): `/agents why <id>` — why this agent exists (role,
+      // task, spawner, usage) so a fan-out can be debugged after the fact.
+      if (args[0] === 'why' && args[1]) {
+        const sessions = listSessions(agent.workspaceRoot);
+        const match = sessions.find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list, or pass a full id.\n`));
+          return true;
+        }
+        console.log(chalk.bold('\n🔎 Why this agent'));
+        for (const line of formatAgentWhy(match, sessions)) console.log(line.startsWith('  ') ? chalk.gray(line) : `  ${line}`);
+        console.log();
+        return true;
+      }
+
+      // MAS-P5-T7 (§6.5): `/agents transcript <id> [--tools] [--errors]` —
+      // dump a child's transcript, optionally filtered to tool calls / errors.
+      if (args[0] === 'transcript' && args[1]) {
+        const match = listSessions(agent.workspaceRoot).find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list.\n`));
+          return true;
+        }
+        const childKey = childSessionKey(match.parentSessionKey, match.id);
+        const entries = readTranscriptEntries(agent.workspaceRoot, childKey, Number.MAX_SAFE_INTEGER);
+        const opts = { tools: args.includes('--tools'), errors: args.includes('--errors') };
+        const filterNote = opts.tools || opts.errors ? ` (${[opts.tools && 'tools', opts.errors && 'errors'].filter(Boolean).join(' + ')})` : '';
+        console.log(chalk.bold(`\n📜 Transcript — ${match.id} (${match.role})${filterNote}`));
+        for (const line of formatAgentTranscript(entries as any, opts)) console.log(`  ${line}`);
+        console.log();
+        return true;
+      }
+
+      // MAS-P5-T8 (§6.5): `/agents replay <id>` — numbered, read-only
+      // step-through of a child's run in order.
+      if (args[0] === 'replay' && args[1]) {
+        const match = listSessions(agent.workspaceRoot).find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list.\n`));
+          return true;
+        }
+        const childKey = childSessionKey(match.parentSessionKey, match.id);
+        const entries = readTranscriptEntries(agent.workspaceRoot, childKey, Number.MAX_SAFE_INTEGER);
+        console.log(chalk.bold(`\n⏯  Replay — ${match.id} (${match.role}) · ${match.status} · read-only`));
+        for (const line of formatAgentReplay(entries as any)) console.log(`  ${chalk.gray(line)}`);
+        console.log();
         return true;
       }
 
@@ -701,6 +846,26 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         }
       }
       console.log();
+      return true;
+    }
+    case '/bg':
+    {
+      // CLI-4 — run a prompt as a detached background worker. Reuses the proven
+      // worker-thread infra (separate Agent, on-disk transcript) — no
+      // foreground turn-state hazard. Manage with /workers or /ps.
+      const prompt = args.join(' ').trim();
+      if (!prompt) {
+        console.log(chalk.red('\nUsage: /bg <prompt> — run a prompt in a detached background worker.'));
+        console.log(chalk.gray('  Then: /workers attach <id> to view · /workers close <id> to stop · /ps to list.\n'));
+        return true;
+      }
+      try {
+        const w = agent.spawnBackgroundWorker(prompt);
+        console.log(chalk.green(`\n✓ Detached background worker ${chalk.cyan(w.id)} started.`));
+        console.log(chalk.gray(`  View: /workers attach ${w.id}  ·  Stop: /workers close ${w.id}  ·  All: /ps\n`));
+      } catch (err: any) {
+        console.log(chalk.red(`\nFailed to start background worker: ${err?.message ?? err}\n`));
+      }
       return true;
     }
     case '/spawn':

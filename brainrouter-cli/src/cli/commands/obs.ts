@@ -9,6 +9,9 @@ import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { listSessions } from '../../orchestration/orchestrator.js';
 import { formatContextReport } from '../../runtime/contextReport.js';
+import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
+import { formatOffloadList, type OffloadStep } from '../../runtime/offloadView.js';
+import { contextWindowFor } from '../../runtime/contextWindow.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
 import { getCliStateFile } from '../../state/cliState.js';
@@ -212,6 +215,68 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // 0.4.x-4 — where did this session's tokens go? Total + per-skill
       // (bucketed at each turn by activeSkill) + per-briefing + per-tool
       // (call counts). `/context current` narrows to the active skill.
+      // CLI-6 — `/context memory` shows the last turn's memory-decision view.
+      if ((args[0] ?? '').toLowerCase() === 'memory') {
+        const b = agent.getLastBriefing();
+        const lines = formatMemoryDecisions({
+          decision: b.decision,
+          reasons: b.reasons,
+          sources: b.sources,
+          sourcesPlanned: b.sourcesPlanned,
+          skippedSources: b.skippedSources,
+          recordCount: b.recordCount,
+          tokensInjected: b.tokensInjected,
+          charsSaved: b.charsSaved,
+          recalled: agent.getRecalledRecords().map((r) => ({ recordId: r.recordId, type: r.type, priority: r.priority, content: r.content })),
+        });
+        console.log(chalk.bold('\n🧠 Context — memory decisions (last turn)'));
+        for (const line of lines) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
+        console.log();
+        return true;
+      }
+      // CLI-14 — `/context offloads` lists working-memory offloads (durable
+      // refs pushed out of context) with their tool, token savings, and ref id.
+      if ((args[0] ?? '').toLowerCase() === 'offloads') {
+        let steps: OffloadStep[] = [];
+        try {
+          const res = await mcpClient.callTool('memory_working_context', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot });
+          const text = (res as any)?.content?.[0]?.text;
+          const parsed = text ? JSON.parse(text) : {};
+          if (Array.isArray(parsed?.steps)) {
+            steps = parsed.steps.map((s: any) => ({
+              nodeId: s.nodeId, title: s.title, summary: s.summary, kind: s.kind,
+              refPath: s.refPath, tokenEstimate: s.tokenEstimate, createdAt: s.createdAt,
+            }));
+          }
+        } catch (err: any) {
+          console.log(chalk.yellow(`\nCould not read working memory: ${err?.message ?? err}\n`));
+          return true;
+        }
+        console.log(chalk.bold('\n📦 Context — offloads'));
+        for (const line of formatOffloadList(steps)) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
+        console.log();
+        return true;
+      }
+      // CLI-5 — `/context prefix`: the cache-stable region's components + drift
+      // (system / memory-anchor) since the last check, diffed against a
+      // CLI-state snapshot. Read-only; no change to the turn loop.
+      if ((args[0] ?? '').toLowerCase() === 'prefix') {
+        const { diffPrefixComponents } = await import('../../runtime/contextRegions.js');
+        const curr = agent.getPrefixComponents();
+        const snapFile = getCliStateFile(agent.workspaceRoot, 'prefix-snapshot.json');
+        let prev: ReturnType<typeof agent.getPrefixComponents> | null = null;
+        try { if (fs.existsSync(snapFile)) prev = JSON.parse(fs.readFileSync(snapFile, 'utf8')); } catch { /* first run */ }
+        const drift = diffPrefixComponents(prev, curr);
+        console.log(chalk.bold('\n🔌 Context — prefix (cache-stable region)'));
+        console.log(chalk.gray(`  system hash:    ${curr.systemHash}`));
+        console.log(chalk.gray(`  memory anchors: ${curr.anchorCount} (hash ${curr.anchorsHash})`));
+        const labels = drift.labels.join('; ');
+        console.log(`  drift since last check: ${drift.changed ? chalk.yellow(labels) : chalk.green(labels)}`);
+        console.log(chalk.gray('  (tool-list drift not tracked in this view yet — needs per-turn tool capture)'));
+        try { fs.writeFileSync(snapFile, JSON.stringify(curr), 'utf8'); } catch { /* best-effort */ }
+        console.log();
+        return true;
+      }
       const scope: 'all' | 'current' = (args[0] ?? '').toLowerCase() === 'current' ? 'current' : 'all';
       const session = agent.sessionUsage;
       const children = listSessions(agent.workspaceRoot).filter(
@@ -229,6 +294,13 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       const lines = formatContextReport({
         scope,
         currentSkill: agent.activeSkill ?? null,
+        window: {
+          current: agent.getCurrentContextTokens(),
+          max: contextWindowFor(agent.getModel()) ?? null,
+          autoCompactThreshold: getCliKnobs().autoCompactTokens,
+        },
+        cache: { cachedTokens: session.cachedTokens, missedTokens: session.missedTokens },
+        repair: agent.getRepairTotals(),
         session: {
           promptTokens: session.promptTokens,
           completionTokens: session.completionTokens,
@@ -297,13 +369,26 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.bold('\nConfig layers (in order of precedence)'));
       console.log(`  Workspace: ${chalk.cyan(agent.workspaceRoot)}`);
       console.log(`  CLI state: ${chalk.cyan(path.join(agent.workspaceRoot, '.brainrouter/cli'))}`);
-      console.log(`  Profile:   ${chalk.cyan(config.activeServer)}`);
-      console.log(`  Server:    ${chalk.cyan(JSON.stringify(config.servers[config.activeServer], null, 2).split('\n').map((l) => '             ' + l).join('\n').trim())}`);
-      console.log(chalk.bold('\nEnvironment'));
-      const flags = ['BRAINROUTER_SANDBOX', 'BRAINROUTER_SANDBOX_READ_PATHS', 'BRAINROUTER_SANDBOX_WRITE_PATHS', 'BRAINROUTER_SANDBOX_NETWORK', 'BRAINROUTER_TRACE_LOG', 'BRAINROUTER_MAX_TOOL_LOOPS', 'BRAINROUTER_LLM_TIMEOUT_MS', 'BRAINROUTER_WORKSPACE'];
-      for (const f of flags) {
-        const v = process.env[f];
-        if (v) console.log(`  ${chalk.cyan(f)} = ${v}`);
+      console.log(`  Profile:   ${chalk.cyan(config.activeServer || '(none configured)')}`);
+      const activeProfile = config.servers?.[config.activeServer];
+      // Guard the same #59-class deref: JSON.stringify(undefined) is `undefined`
+      // (not a string), so .split('\n') would throw when no profile resolves.
+      console.log(`  Server:    ${activeProfile
+        ? chalk.cyan(JSON.stringify(activeProfile, null, 2).split('\n').map((l) => '             ' + l).join('\n').trim())
+        : chalk.yellow('(none configured)')}`);
+      // Resolved CLI knobs — the live, effective values (config.cli > workspace
+      // preference > default). This is the non-destructive "show me all the
+      // variables" view: config.json only needs to carry what you've CHANGED;
+      // absent knobs fall through to the defaults printed here, so the file
+      // stays minimal and the config > preference > default layering survives.
+      // (Replaces the old hardcoded BRAINROUTER_* list — those CLI env vars
+      // were retired in the 0.3.9 knob migration and are no longer consulted.)
+      console.log(chalk.bold('\nResolved CLI knobs (effective — config.cli > preference > default)'));
+      const knobs = getCliKnobs() as unknown as Record<string, unknown>;
+      for (const key of Object.keys(knobs).sort()) {
+        const v = knobs[key];
+        if (v === undefined) continue;
+        console.log(`  ${chalk.cyan(key)} = ${chalk.white(JSON.stringify(v))}`);
       }
       console.log(chalk.bold('\nPreferences'));
       console.log(chalk.gray(JSON.stringify(readPreferences(agent.workspaceRoot), null, 2)));

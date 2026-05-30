@@ -72,6 +72,10 @@ export default function RecallInspectorPage() {
                 ["File hits", explanation.filePathHits],
                 ["Intent", explanation.intentDetected],
                 ["Reranker", explanation.rerankerUsed ? "on" : "off"],
+                // 0.4.3 — which selection stage chose the final top-K: the
+                // cross-encoder (key set), the local lexical+MMR diversity pass
+                // (default, no key), or plain composite score (diversity off).
+                ["Selection", explanation.rerankerUsed ? "reranker" : explanation.diversityApplied ? "lexical + MMR" : "score-only"],
                 ["Duration", `${explanation.durationMs}ms`],
               ].map(([label, value]) => (
                 <div key={label} className="card" style={{ padding: "14px" }}>

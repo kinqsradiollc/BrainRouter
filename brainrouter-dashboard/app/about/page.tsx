@@ -190,6 +190,14 @@ export default function AboutPage() {
               Plug into any MCP host, or call the HTTP chat-completions route directly — every client inherits the same memory stack.
             </p>
           </div>
+
+          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>MEMORY DEPTH · 0.4.3</span>
+            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>Source-Grounded Recall</h3>
+            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
+              Turns are captured as <Link href="/sources" style={{ color: "var(--color-golden-accent)" }}>source chunks</Link>, every memory cites the chunks it was distilled from, and recall drills from a compact hit down to the original source — with a staged blackboard, a summary tree, and a read-only vault mirror behind it.
+            </p>
+          </div>
         </motion.div>
       </motion.section>
 

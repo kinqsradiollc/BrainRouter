@@ -504,6 +504,14 @@ export interface RecallExplanation {
   skillBoostApplied: boolean;
   /** Whether the neural reranker was used in Stage 3. */
   rerankerUsed: boolean;
+  /**
+   * 0.4.3 — whether the local lexical-relevance + MMR-diversity selection ran
+   * (Stage 3b). True on the default no-cross-encoder path when
+   * BRAINROUTER_RECALL_DIVERSITY is on: off-topic boilerplate is demoted and
+   * near-duplicate records are collapsed before the final top-K. Mutually
+   * exclusive with `rerankerUsed` (the cross-encoder path wins when a key is set).
+   */
+  diversityApplied?: boolean;
   /** Whether the LLM relevance judge was used in Stage 4. */
   judgeUsed?: boolean;
   /** How many candidates the judge approved as relevant. */
@@ -1014,4 +1022,164 @@ export interface MemoryJobKindAggregate {
    * when no terminal jobs landed in the window.
    */
   successRate24h: number | null;
+}
+
+// ── 0.4.3 Brain Phase 2/3 — source documents + chunks ──────────────────────
+// First-class raw-source identity + token-aware chunk boundary, so extracted
+// cognitive records can cite exact source chunks (provenance, AST code recall,
+// vault mirror, and the memory tree all build on these). User/workspace scope
+// columns are present from the start so team/RBAC can arrive without migration.
+
+export type SourceDocumentKind = "transcript" | "file" | "tool_output" | "imported_doc";
+
+export interface SourceDocument {
+  id: string;
+  userId: string;
+  /** 16-char workspace hash (NULL-tolerant, like cognitive records). */
+  workspaceTag: string | null;
+  kind: SourceDocumentKind;
+  /** File path, tool name, or doc URI — null for free-floating transcript turns. */
+  uri: string | null;
+  /** Content hash; lets re-ingest of the same source be idempotent. */
+  hash: string;
+  title: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SourceChunk {
+  id: string;
+  documentId: string;
+  /** 0-based position within the document. */
+  ordinal: number;
+  content: string;
+  tokenCount: number;
+  /** Set for file/code chunks; null otherwise. */
+  filePath: string | null;
+  /** AST symbol (function/class/etc.) when known — populated by the AST chunker. */
+  symbol: string | null;
+  startLine: number | null;
+  endLine: number | null;
+  hash: string;
+}
+
+/** Input shape for `addSourceChunks` — ordinal + id + hash are assigned by the store. */
+export interface SourceChunkInput {
+  content: string;
+  tokenCount: number;
+  filePath?: string | null;
+  symbol?: string | null;
+  startLine?: number | null;
+  endLine?: number | null;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Blackboard commit pipeline (MEM-4, 0.4.3) — extracted memory candidates are
+// STAGED here, reconciled (dedup / score / conflict-check), then committed to
+// cognitive records with an audit trail. Keeps low-quality extraction out of
+// long-term memory until it's been reviewed.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type BlackboardStatus =
+  | "pending"     // freshly staged, not yet reconciled
+  | "reconciled"  // survived reconcile, ready to commit
+  | "duplicate"   // a higher-scored sibling already covers it
+  | "committed"   // promoted to a cognitive record
+  | "rejected";   // dropped (below threshold or by review)
+
+/** The memory a candidate proposes — a subset of a CognitiveRecord. */
+export interface BlackboardCandidate {
+  content: string;
+  type: MemoryType;
+  priority?: number;
+  sceneName?: string;
+  confidence?: number;
+}
+
+export interface BlackboardItem {
+  id: string;
+  userId: string;
+  /** The source chunk this candidate was extracted from, when known. */
+  sourceChunkId: string | null;
+  candidate: BlackboardCandidate;
+  score: number;
+  status: BlackboardStatus;
+  /** Ids of sibling items this one duplicates / conflicts with. */
+  conflictIds: string[];
+  createdAt: string;
+  /** Set once committed — the cognitive record id this produced. */
+  committedRecordId: string | null;
+}
+
+/** Input shape for staging — id/status/createdAt assigned by the store. */
+export interface BlackboardItemInput {
+  sourceChunkId?: string | null;
+  candidate: BlackboardCandidate;
+  score?: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Memory tree (MEM-5, 0.4.3) — durable hierarchical summary over source/topic/
+// global scope. Generic mechanics (append leaf → seal bucket → summarize
+// parent → walk) are kept separate from policy. Level 0 = leaf.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type MemoryTreeKind = "source" | "topic" | "global";
+
+export interface MemoryTreeNode {
+  id: string;
+  userId: string;
+  kind: MemoryTreeKind;
+  parentId: string | null;
+  level: number;
+  summaryMd: string;
+  /** Source chunks this node summarizes (leaves cite directly; parents aggregate). */
+  sourceChunkIds: string[];
+  /** Set once the bucket is sealed (no more leaves appended). */
+  sealedAt: string | null;
+  heatScore: number;
+  createdAt: string;
+}
+
+/** Input shape for appending a node — id/createdAt/sealedAt assigned by the store. */
+export interface MemoryTreeNodeInput {
+  kind: MemoryTreeKind;
+  parentId?: string | null;
+  level?: number;
+  summaryMd: string;
+  sourceChunkIds?: string[];
+  heatScore?: number;
+  /**
+   * 0.4.3 (MEM-10) — for scene-derived leaves: the cognitive scene this leaf
+   * summarizes. Lets the tree autobuilder dedupe (one leaf per scene) without a
+   * content scan. Null for non-scene nodes (sealed parents, source leaves).
+   */
+  sceneKey?: string | null;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Vault mirror (MEM-7, 0.4.3) — a read-only markdown export of records + tree
+// nodes, with a hash ledger so re-running only rewrites what changed. The DB
+// stays authoritative; the vault is a human-inspectable mirror.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type VaultExportKind = "record" | "tree";
+
+export interface VaultExportEntry {
+  userId: string;
+  /** Vault-relative path, e.g. "records/<id>.md". */
+  path: string;
+  /** sha256 of the rendered markdown — drives idempotent re-export. */
+  hash: string;
+  kind: VaultExportKind;
+  /** The record / tree-node id this file mirrors. */
+  refId: string;
+  exportedAt: string;
+}
+
+export interface VaultExportInput {
+  path: string;
+  hash: string;
+  kind: VaultExportKind;
+  refId: string;
 }

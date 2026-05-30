@@ -34,7 +34,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
+  '/roles', '/agents', '/agent', '/spawn', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain',
   '/init', '/login', '/sessions', '/resume', '/rewind', '/model', '/mcp',
@@ -58,7 +58,7 @@ export const SLASH_COMMANDS = [
 interface HelpEntry { cmd: string; desc: string; }
 interface HelpCategory { key: string; title: string; entries: HelpEntry[]; }
 
-const HELP_CATEGORIES: HelpCategory[] = [
+export const HELP_CATEGORIES: HelpCategory[] = [
   {
     key: 'session',
     title: 'Session & State',
@@ -75,7 +75,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/fork [label]', desc: 'Fork this chat into a new session, keep prior context' },
       { cmd: '/rename <label>', desc: 'Rename the current session' },
       { cmd: '/resume <id>', desc: 'Resume a previous session by sessionKey' },
-      { cmd: '/rewind [n]', desc: 'Timeline of the last 20 turns; /rewind <n> forks a session truncated to that turn' },
+      { cmd: '/rewind [n] [--files]', desc: 'Timeline of the last 20 turns; /rewind <n> forks a session truncated to that turn; --files also restores workspace files to that turn (preview + confirm)' },
       { cmd: '/sessions', desc: 'List persisted sessions for this workspace' },
       { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
       { cmd: '/init', desc: 'Re-run the onboarding wizard (Theme → Provider → API key → Model → MCP → AGENT.md)' },
@@ -143,6 +143,10 @@ const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/roles', desc: 'List available agent roles' },
       { cmd: '/agents [--json]', desc: 'List local child-agent sessions in this CLI.' },
+      { cmd: '/agents tree', desc: 'Spawn hierarchy (parent → children) with role + status glyphs.' },
+      { cmd: '/agents why <id>', desc: 'Why a child exists: role, task, spawner, usage.' },
+      { cmd: '/agents transcript <id> [--tools] [--errors]', desc: "A child's transcript, optionally filtered to tool calls / errors." },
+      { cmd: '/agents replay <id>', desc: "Numbered, read-only step-through of a child's run." },
       { cmd: '/agents --remote [--watch] [--usage] [--include-stale] [--json]', desc: 'List federated peer CLIs / hosts attached to the same brain (0.4.0 Stage 2).' },
       { cmd: '/dm <sessionKey> <message>', desc: 'Send text to one federated peer; recipient sees a banner above their next prompt (0.4.0 Stage 3).' },
       { cmd: '/broadcast [<clientKind>:*] <message>', desc: 'Send text to every active peer under your userId, or narrow to one clientKind.' },
@@ -156,6 +160,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker (alias for /auto-chain review|off)' },
       { cmd: '/auto-chain [review|verify|both|off]', desc: 'Auto-chain review/verify follow-ups after every worker' },
       { cmd: '/delegation-policy [auto|ask-before-spawn|ask-before-write-child|no-children]', desc: 'Gate whether/when the agent may spawn child agents' },
+      { cmd: '/bg <prompt>', desc: 'Run a prompt in a detached background worker (manage via /workers, /ps)' },
       { cmd: '/ps', desc: 'List background tasks (loop + running children)' },
       { cmd: '/stop', desc: 'Stop the running loop, mark stale children' },
     ],
@@ -179,7 +184,7 @@ const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Observability',
     entries: [
       { cmd: '/tokens', desc: 'Session token usage + memory-savings estimate' },
-      { cmd: '/context [all|current]', desc: 'Token breakdown: total + per-skill + per-briefing + per-tool calls' },
+      { cmd: '/context [all|current]', desc: 'Context-window fill (used/max/%) + token breakdown: per-skill + per-briefing + per-tool calls' },
       { cmd: '/watch', desc: 'Tail trace log (BRAINROUTER_TRACE_LOG required)' },
       { cmd: '/trace save <desc>  /trace search <q>', desc: 'Debug-trace store' },
       { cmd: '/transcript [main|sessionKey]', desc: 'Recent persisted transcript' },
@@ -203,7 +208,6 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/keymap [json]', desc: 'Show built-in bindings and set overrides' },
       { cmd: '/copy', desc: 'Copy last assistant response to clipboard' },
       { cmd: '/mention [partial]', desc: 'Suggest files for @ mentions' },
-      { cmd: '/model <name>', desc: 'Switch the LLM model in-session' },
       { cmd: '/mcp [list|reconnect|tools]', desc: 'MCP profiles, identity tags, online/offline status, reconnect, tool namespaces' },
       { cmd: '/ide', desc: 'Show detected IDE host' },
       { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },

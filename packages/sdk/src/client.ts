@@ -37,6 +37,11 @@ import {
   ActiveSessionRecord,
   CoreIdentityRecord,
   SkillActivationsResponse,
+  SourceDocument,
+  SourceChunk,
+  BlackboardItem,
+  MemoryTreeNode,
+  VaultExportEntry,
 } from "@kinqs/brainrouter-types";
 
 export class BrainRouterApiError extends Error {
@@ -161,6 +166,14 @@ export class BrainRouterClient {
 
   // Telemetry & L1/L2 Memory Operations
   getStats() { return this.get<MemoryStatsResponse>("/api/stats"); }
+  // 0.4.3 — source documents + chunks (the captured, citable source layer).
+  getSources(params?: { limit?: number }) { return this.get<{ documents: Array<SourceDocument & { chunkCount: number }> }>("/api/brain/sources", params); }
+  getSourceChunks(documentId: string) { return this.get<{ chunks: SourceChunk[] }>(`/api/brain/sources/${documentId}/chunks`); }
+  // 0.4.3 — blackboard / memory tree / vault layers.
+  getBlackboard(params?: { status?: string }) { return this.get<{ items: BlackboardItem[] }>("/api/brain/blackboard", params); }
+  getTreeRoots(params?: { kind?: string }) { return this.get<{ roots: MemoryTreeNode[] }>("/api/brain/tree", params); }
+  getTreeChildren(nodeId: string) { return this.get<{ children: MemoryTreeNode[] }>(`/api/brain/tree/${nodeId}/children`); }
+  getVaultExports() { return this.get<{ exports: VaultExportEntry[] }>("/api/brain/vault"); }
   getSkillActivations() { return this.get<SkillActivationsResponse>("/api/skills/activations"); }
   getDiagnostics(userId?: string) { return this.get<DiagnosticsBundle>("/api/governance/diagnostics", { userId }); }
   getMemories(params?: CursorPaginationParams & { query?: string; type?: string; scene?: string; skill?: string; archived?: boolean }) {

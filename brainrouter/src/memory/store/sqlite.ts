@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import { randomUUID, createHash } from "node:crypto";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, VaultExportEntry, VaultExportInput } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -831,6 +831,570 @@ export class SqliteMemoryStore implements IMemoryStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_conn_user_src ON cognitive_connections(user_id, source_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_conn_user_tgt ON cognitive_connections(user_id, target_id)");
+
+    // 0.4.3 Brain Phase 2/3 — source documents + token-aware chunks. Additive
+    // tables: every extracted cognitive record will cite chunk ids. user_id +
+    // workspace_tag are present now so team/RBAC can arrive without migration;
+    // `hash` makes re-ingest of the same source idempotent.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS source_documents (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        kind TEXT NOT NULL,
+        uri TEXT DEFAULT NULL,
+        hash TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_docs_user_hash ON source_documents(user_id, hash)");
+    // 0.4.3 — the /sources view + transcript retention both query newest-first
+    // per user; without this index that's a filesort once transcripts pile up.
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_docs_user_created ON source_documents(user_id, created_at)");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS source_chunks (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        user_id TEXT DEFAULT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        ordinal INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        token_count INTEGER NOT NULL DEFAULT 0,
+        file_path TEXT DEFAULT NULL,
+        symbol TEXT DEFAULT NULL,
+        start_line INTEGER DEFAULT NULL,
+        end_line INTEGER DEFAULT NULL,
+        hash TEXT NOT NULL,
+        FOREIGN KEY (document_id) REFERENCES source_documents(id) ON DELETE CASCADE
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_doc ON source_chunks(document_id, ordinal)");
+    // MEM-3 — batch-level provenance: which source chunks a cognitive record
+    // was distilled from. user_id carried for RBAC-readiness (MEM-14).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cognitive_source_links (
+        user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        record_id TEXT NOT NULL,
+        chunk_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (record_id, chunk_id),
+        FOREIGN KEY (chunk_id) REFERENCES source_chunks(id) ON DELETE CASCADE
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_cog_source_links_record ON cognitive_source_links(record_id)");
+    // MEM-4 — blackboard: extracted candidates staged here before committing to
+    // cognitive records. user_id for RBAC-readiness (MEM-14).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_blackboard_items (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        source_chunk_id TEXT DEFAULT NULL,
+        candidate_json TEXT NOT NULL,
+        score REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        conflict_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        committed_record_id TEXT DEFAULT NULL
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_blackboard_user_status ON memory_blackboard_items(user_id, status)");
+    // MEM-5 — durable hierarchical summary tree (source/topic/global). user_id
+    // for RBAC-readiness (MEM-14). level 0 = leaf.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_tree_nodes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        kind TEXT NOT NULL,
+        parent_id TEXT DEFAULT NULL,
+        level INTEGER NOT NULL DEFAULT 0,
+        summary_md TEXT NOT NULL DEFAULT '',
+        source_chunk_ids_json TEXT NOT NULL DEFAULT '[]',
+        sealed_at TEXT DEFAULT NULL,
+        heat_score REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_tree_user_kind ON memory_tree_nodes(user_id, kind, parent_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_tree_parent ON memory_tree_nodes(parent_id)");
+    // MEM-7 — vault export ledger (path → content hash) for idempotent re-export.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS vault_exports (
+        user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        path TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        exported_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, path)
+      )
+    `);
+    // MEM-14 — RBAC-ready schema. The CREATE statements above carry user_id +
+    // workspace_tag on fresh DBs; for DBs created earlier in 0.4.3 dev, add the
+    // columns idempotently so every new table is scope-ready without a future
+    // migration. Local-first: columns stay NULL until federation populates them.
+    this.ensureColumn("source_chunks", "user_id", "TEXT DEFAULT NULL");
+    this.ensureColumn("source_chunks", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("cognitive_source_links", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("memory_blackboard_items", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("memory_tree_nodes", "workspace_tag", "TEXT DEFAULT NULL");
+    // 0.4.3 (MEM-10) — the cognitive scene a scene-derived leaf summarizes; lets
+    // the tree autobuilder keep one leaf per scene without a content scan.
+    this.ensureColumn("memory_tree_nodes", "scene_key", "TEXT DEFAULT NULL");
+    this.ensureColumn("vault_exports", "workspace_tag", "TEXT DEFAULT NULL");
+  }
+
+  /** MEM-14 — idempotently add a column to a table (no-op if it already exists). */
+  private ensureColumn(table: string, column: string, ddl: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (cols.some((c) => c.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  }
+
+  // ============================
+  // Source Documents & Chunks (0.4.3 Brain Phase 2/3)
+  // ============================
+
+  private rowToSourceDocument(row: any): SourceDocument {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      workspaceTag: row.workspace_tag ?? null,
+      kind: row.kind,
+      uri: row.uri ?? null,
+      hash: row.hash,
+      title: row.title ?? "",
+      createdAt: row.created_at,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : {},
+    };
+  }
+
+  private rowToSourceChunk(row: any): SourceChunk {
+    return {
+      id: row.id,
+      documentId: row.document_id,
+      ordinal: row.ordinal,
+      content: row.content,
+      tokenCount: row.token_count,
+      filePath: row.file_path ?? null,
+      symbol: row.symbol ?? null,
+      startLine: row.start_line ?? null,
+      endLine: row.end_line ?? null,
+      hash: row.hash,
+    };
+  }
+
+  public getSourceDocumentByHash(userId: string, hash: string): SourceDocument | null {
+    const row = this.db.prepare("SELECT * FROM source_documents WHERE user_id = ? AND hash = ? LIMIT 1").get(userId, hash) as any;
+    return row ? this.rowToSourceDocument(row) : null;
+  }
+
+  public getSourceDocument(id: string): SourceDocument | null {
+    const row = this.db.prepare("SELECT * FROM source_documents WHERE id = ?").get(id) as any;
+    return row ? this.rowToSourceDocument(row) : null;
+  }
+
+  /** List a user's source documents (newest first) + their chunk counts — powers the dashboard Sources view. */
+  public getSourceDocuments(userId: string, limit = 100): Array<SourceDocument & { chunkCount: number }> {
+    const rows = this.db.prepare(
+      `SELECT d.*, (SELECT COUNT(*) FROM source_chunks c WHERE c.document_id = d.id) AS chunk_count
+         FROM source_documents d
+        WHERE d.user_id = ?
+        ORDER BY d.created_at DESC
+        LIMIT ?`,
+    ).all(userId, limit) as any[];
+    return rows.map((r) => ({ ...this.rowToSourceDocument(r), chunkCount: (r.chunk_count as number) ?? 0 }));
+  }
+
+  /**
+   * 0.4.3 — provenance-safe transcript retention. Every `/sources` row is an
+   * auto-ingested per-turn transcript and there was no retention, so they grow
+   * unbounded. This deletes `transcript` documents older than `beforeIso`
+   * EXCEPT any whose chunks are still referenced by a cognitive_source_link
+   * (i.e. a live memory was distilled from them) — so memory_verify /
+   * provenance drill-down never breaks. Scoped by user_id (MEM-14).
+   *
+   * FK cascade is declared but NOT enforced in this store (no
+   * `PRAGMA foreign_keys = ON`), so chunks are deleted explicitly. Returns the
+   * counts removed. Non-transcript kinds are never touched.
+   */
+  public pruneTranscriptSources(userId: string, beforeIso: string): { prunedDocs: number; prunedChunks: number } {
+    const doomed = this.db.prepare(
+      `SELECT d.id FROM source_documents d
+        WHERE d.user_id = ? AND d.kind = 'transcript' AND d.created_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM source_chunks c
+            JOIN cognitive_source_links l ON l.chunk_id = c.id
+            WHERE c.document_id = d.id
+          )`,
+    ).all(userId, beforeIso) as Array<{ id: string }>;
+    if (doomed.length === 0) return { prunedDocs: 0, prunedChunks: 0 };
+
+    const delChunks = this.db.prepare("DELETE FROM source_chunks WHERE document_id = ?");
+    const delDoc = this.db.prepare("DELETE FROM source_documents WHERE id = ? AND user_id = ?");
+    let prunedChunks = 0;
+    for (const { id } of doomed) {
+      prunedChunks += Number((delChunks.run(id) as { changes?: number }).changes ?? 0);
+      delDoc.run(id, userId);
+    }
+    return { prunedDocs: doomed.length, prunedChunks };
+  }
+
+  /**
+   * Insert a source document, or return the existing one with the same
+   * (user_id, hash) — re-ingesting identical content is idempotent.
+   */
+  public createSourceDocument(
+    input: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string },
+  ): SourceDocument {
+    const existing = this.getSourceDocumentByHash(input.userId, input.hash);
+    if (existing) return existing;
+    const doc: SourceDocument = {
+      id: input.id ?? randomUUID(),
+      userId: input.userId,
+      workspaceTag: input.workspaceTag ?? null,
+      kind: input.kind,
+      uri: input.uri ?? null,
+      hash: input.hash,
+      title: input.title ?? "",
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      metadata: input.metadata,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO source_documents (id, user_id, workspace_tag, kind, uri, hash, title, created_at, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(doc.id, doc.userId, doc.workspaceTag, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {}));
+    return doc;
+  }
+
+  /** Append chunks to a document; ordinals continue from the current count. Chunk hash = sha1(content). */
+  public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
+    const startOrdinal = ((this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = ?").get(documentId) as any)?.n ?? 0) as number;
+    // MEM-14 — denormalize the parent doc's scope onto each chunk so chunk-level
+    // queries stay scoped without a join.
+    const parent = this.db.prepare("SELECT user_id, workspace_tag FROM source_documents WHERE id = ?").get(documentId) as { user_id?: string; workspace_tag?: string } | undefined;
+    const stmt = this.db.prepare(
+      `INSERT INTO source_chunks (id, document_id, user_id, workspace_tag, ordinal, content, token_count, file_path, symbol, start_line, end_line, hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const out: SourceChunk[] = [];
+    this.db.exec("BEGIN");
+    try {
+      chunks.forEach((c, i) => {
+        const chunk: SourceChunk = {
+          id: randomUUID(),
+          documentId,
+          ordinal: startOrdinal + i,
+          content: c.content,
+          tokenCount: c.tokenCount,
+          filePath: c.filePath ?? null,
+          symbol: c.symbol ?? null,
+          startLine: c.startLine ?? null,
+          endLine: c.endLine ?? null,
+          hash: createHash("sha1").update(c.content).digest("hex"),
+        };
+        stmt.run(chunk.id, chunk.documentId, parent?.user_id ?? null, parent?.workspace_tag ?? null, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash);
+        out.push(chunk);
+      });
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return out;
+  }
+
+  public getSourceChunk(id: string): SourceChunk | null {
+    const row = this.db.prepare("SELECT * FROM source_chunks WHERE id = ?").get(id) as any;
+    return row ? this.rowToSourceChunk(row) : null;
+  }
+
+  public getSourceChunksByDocument(documentId: string): SourceChunk[] {
+    const rows = this.db.prepare("SELECT * FROM source_chunks WHERE document_id = ? ORDER BY ordinal ASC").all(documentId) as any[];
+    return rows.map((r) => this.rowToSourceChunk(r));
+  }
+
+  /**
+   * 0.4.3 — true if any chunk of this document is cited by a live memory's
+   * provenance (cognitive_source_links). The source_chunker re-chunk job must
+   * skip such docs: re-chunking changes chunk ids and would orphan the links.
+   */
+  public isSourceDocumentReferenced(documentId: string): boolean {
+    const row = this.db.prepare(
+      "SELECT 1 FROM source_chunks c JOIN cognitive_source_links l ON l.chunk_id = c.id WHERE c.document_id = ? LIMIT 1",
+    ).get(documentId);
+    return !!row;
+  }
+
+  /**
+   * 0.4.3 — replace a document's chunks (delete then re-add via addSourceChunks,
+   * which restarts ordinals from 0 once the old rows are gone). Used by the
+   * source_chunker re-chunk job; callers MUST guard provenance with
+   * `isSourceDocumentReferenced` first (FK cascade is declared but not enforced
+   * here, so the explicit delete is required).
+   */
+  public replaceSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
+    this.db.prepare("DELETE FROM source_chunks WHERE document_id = ?").run(documentId);
+    return this.addSourceChunks(documentId, chunks);
+  }
+
+  /**
+   * MEM-3 — link a cognitive record to the source chunks it was distilled
+   * from (batch-level provenance). Idempotent (INSERT OR IGNORE on the
+   * (record_id, chunk_id) primary key), so re-extraction doesn't duplicate.
+   */
+  public linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void {
+    if (chunkIds.length === 0) return;
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      "INSERT OR IGNORE INTO cognitive_source_links (user_id, record_id, chunk_id, created_at) VALUES (?, ?, ?, ?)",
+    );
+    this.db.exec("BEGIN");
+    try {
+      for (const chunkId of chunkIds) stmt.run(userId, recordId, chunkId, now);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /** MEM-3 — the source chunks a cognitive record cites, ordered by document + position. */
+  public getRecordSourceChunks(userId: string, recordId: string): SourceChunk[] {
+    const rows = this.db.prepare(
+      `SELECT sc.* FROM cognitive_source_links l
+         JOIN source_chunks sc ON sc.id = l.chunk_id
+        WHERE l.record_id = ? AND l.user_id = ?
+        ORDER BY sc.document_id ASC, sc.ordinal ASC`,
+    ).all(recordId, userId) as any[];
+    return rows.map((r) => this.rowToSourceChunk(r));
+  }
+
+  // ============================
+  // Blackboard Items (MEM-4)
+  // ============================
+
+  private rowToBlackboardItem(row: any): BlackboardItem {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      sourceChunkId: row.source_chunk_id ?? null,
+      candidate: JSON.parse(row.candidate_json),
+      score: row.score,
+      status: row.status,
+      conflictIds: row.conflict_ids_json ? JSON.parse(row.conflict_ids_json) : [],
+      createdAt: row.created_at,
+      committedRecordId: row.committed_record_id ?? null,
+    };
+  }
+
+  /** MEM-4 — stage extracted candidates as `pending` blackboard items. */
+  public stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      `INSERT INTO memory_blackboard_items (id, user_id, source_chunk_id, candidate_json, score, status, conflict_ids_json, created_at, committed_record_id)
+       VALUES (?, ?, ?, ?, ?, 'pending', '[]', ?, NULL)`,
+    );
+    const staged: BlackboardItem[] = [];
+    this.db.exec("BEGIN");
+    try {
+      for (const input of items) {
+        const id = `bb_${randomUUID()}`;
+        stmt.run(id, userId, input.sourceChunkId ?? null, JSON.stringify(input.candidate), input.score ?? 0, now);
+        staged.push({
+          id, userId, sourceChunkId: input.sourceChunkId ?? null, candidate: input.candidate,
+          score: input.score ?? 0, status: "pending", conflictIds: [], createdAt: now, committedRecordId: null,
+        });
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return staged;
+  }
+
+  public getBlackboardItem(id: string): BlackboardItem | null {
+    const row = this.db.prepare("SELECT * FROM memory_blackboard_items WHERE id = ? LIMIT 1").get(id) as any;
+    return row ? this.rowToBlackboardItem(row) : null;
+  }
+
+  public getBlackboardItems(userId: string, status?: BlackboardStatus): BlackboardItem[] {
+    const rows = (status
+      ? this.db.prepare("SELECT * FROM memory_blackboard_items WHERE user_id = ? AND status = ? ORDER BY score DESC, created_at ASC").all(userId, status)
+      : this.db.prepare("SELECT * FROM memory_blackboard_items WHERE user_id = ? ORDER BY created_at ASC").all(userId)) as any[];
+    return rows.map((r) => this.rowToBlackboardItem(r));
+  }
+
+  /** MEM-4 — patch a blackboard item's reconcile/commit state. */
+  public updateBlackboardItem(
+    id: string,
+    patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null },
+  ): void {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    if (patch.status !== undefined) { sets.push("status = ?"); vals.push(patch.status); }
+    if (patch.score !== undefined) { sets.push("score = ?"); vals.push(patch.score); }
+    if (patch.conflictIds !== undefined) { sets.push("conflict_ids_json = ?"); vals.push(JSON.stringify(patch.conflictIds)); }
+    if (patch.committedRecordId !== undefined) { sets.push("committed_record_id = ?"); vals.push(patch.committedRecordId); }
+    if (sets.length === 0) return;
+    vals.push(id);
+    this.db.prepare(`UPDATE memory_blackboard_items SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  }
+
+  // ============================
+  // Memory Tree (MEM-5)
+  // ============================
+
+  private rowToTreeNode(row: any): MemoryTreeNode {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      kind: row.kind,
+      parentId: row.parent_id ?? null,
+      level: row.level,
+      summaryMd: row.summary_md ?? "",
+      sourceChunkIds: row.source_chunk_ids_json ? JSON.parse(row.source_chunk_ids_json) : [],
+      sealedAt: row.sealed_at ?? null,
+      heatScore: row.heat_score ?? 0,
+      createdAt: row.created_at,
+    };
+  }
+
+  /** MEM-5 — append a tree node (leaf or parent). */
+  public appendTreeNode(userId: string, input: MemoryTreeNodeInput): MemoryTreeNode {
+    const node: MemoryTreeNode = {
+      id: `tree_${randomUUID()}`,
+      userId,
+      kind: input.kind,
+      parentId: input.parentId ?? null,
+      level: input.level ?? 0,
+      summaryMd: input.summaryMd,
+      sourceChunkIds: input.sourceChunkIds ?? [],
+      sealedAt: null,
+      heatScore: input.heatScore ?? 0,
+      createdAt: new Date().toISOString(),
+    };
+    this.db.prepare(
+      `INSERT INTO memory_tree_nodes (id, user_id, kind, parent_id, level, summary_md, source_chunk_ids_json, sealed_at, heat_score, created_at, scene_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+    ).run(node.id, userId, node.kind, node.parentId, node.level, node.summaryMd, JSON.stringify(node.sourceChunkIds), node.heatScore, node.createdAt, input.sceneKey ?? null);
+    return node;
+  }
+
+  // ── 0.4.3 (MEM-10) — scene-tree autobuild support ────────────────────────
+
+  /** Distinct cognitive scenes for a user (non-archived, named), with counts. */
+  public getDistinctScenes(userId: string): Array<{ sceneName: string; recordCount: number }> {
+    const rows = this.db.prepare(
+      `SELECT scene_name AS sceneName, COUNT(*) AS recordCount
+         FROM cognitive_records
+        WHERE user_id = ? AND archived = 0 AND scene_name IS NOT NULL AND scene_name != ''
+        GROUP BY scene_name
+        ORDER BY recordCount DESC`,
+    ).all(userId) as Array<{ sceneName: string; recordCount: number }>;
+    return rows.map((r) => ({ sceneName: r.sceneName, recordCount: Number(r.recordCount) }));
+  }
+
+  /** Scene keys that already have a tree leaf (so the autobuilder doesn't re-leaf). */
+  public getSceneLeafKeys(userId: string): string[] {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT scene_key FROM memory_tree_nodes WHERE user_id = ? AND scene_key IS NOT NULL",
+    ).all(userId) as Array<{ scene_key: string }>;
+    return rows.map((r) => r.scene_key);
+  }
+
+  /** Recent record contents for a scene — fodder for a deterministic leaf summary. */
+  public getSceneRecordContents(userId: string, sceneName: string, limit = 8): string[] {
+    const rows = this.db.prepare(
+      `SELECT content FROM cognitive_records
+        WHERE user_id = ? AND scene_name = ? AND archived = 0
+        ORDER BY created_time DESC LIMIT ?`,
+    ).all(userId, sceneName, limit) as Array<{ content: string }>;
+    return rows.map((r) => r.content);
+  }
+
+  /** Unsealed, un-parented scene leaves (level 0) oldest-first — the seal bucket. */
+  public getUnsealedSceneLeaves(userId: string, limit = 50): MemoryTreeNode[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM memory_tree_nodes
+        WHERE user_id = ? AND scene_key IS NOT NULL AND level = 0 AND sealed_at IS NULL AND parent_id IS NULL
+        ORDER BY created_at ASC LIMIT ?`,
+    ).all(userId, limit) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  public getTreeNode(id: string): MemoryTreeNode | null {
+    const row = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE id = ? LIMIT 1").get(id) as any;
+    return row ? this.rowToTreeNode(row) : null;
+  }
+
+  public getTreeChildren(parentId: string): MemoryTreeNode[] {
+    const rows = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE parent_id = ? ORDER BY created_at ASC").all(parentId) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  /** Top-level nodes (no parent), optionally filtered by kind. */
+  public getTreeRoots(userId: string, kind?: MemoryTreeKind): MemoryTreeNode[] {
+    const rows = (kind
+      ? this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? AND parent_id IS NULL AND kind = ? ORDER BY heat_score DESC, created_at ASC").all(userId, kind)
+      : this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? AND parent_id IS NULL ORDER BY heat_score DESC, created_at ASC").all(userId)) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  /** Re-parent a set of nodes under a freshly created parent (used when summarizing a bucket). */
+  public setTreeParent(childIds: string[], parentId: string): void {
+    if (childIds.length === 0) return;
+    const stmt = this.db.prepare("UPDATE memory_tree_nodes SET parent_id = ? WHERE id = ?");
+    this.db.exec("BEGIN");
+    try {
+      for (const id of childIds) stmt.run(parentId, id);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /** MEM-5 — seal a bucket: no more leaves append under it. */
+  public sealTreeNode(id: string): void {
+    this.db.prepare("UPDATE memory_tree_nodes SET sealed_at = ? WHERE id = ? AND sealed_at IS NULL").run(new Date().toISOString(), id);
+  }
+
+  /** 0.4.3 (MEM-10) — replace a node's summary (tree_digest's LLM re-summary
+   *  refines the deterministic summary tree_sealer wrote). */
+  public updateTreeNodeSummary(id: string, summaryMd: string): void {
+    this.db.prepare("UPDATE memory_tree_nodes SET summary_md = ? WHERE id = ?").run(summaryMd, id);
+  }
+
+  /** MEM-7 — all tree nodes for a user (vault export reads the whole tree). */
+  public getAllTreeNodes(userId: string): MemoryTreeNode[] {
+    const rows = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? ORDER BY level ASC, created_at ASC").all(userId) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  // ============================
+  // Vault Export Ledger (MEM-7)
+  // ============================
+
+  public upsertVaultExport(userId: string, input: VaultExportInput): void {
+    this.db.prepare(
+      `INSERT INTO vault_exports (user_id, path, hash, kind, ref_id, exported_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, path) DO UPDATE SET hash = excluded.hash, kind = excluded.kind, ref_id = excluded.ref_id, exported_at = excluded.exported_at`,
+    ).run(userId, input.path, input.hash, input.kind, input.refId, new Date().toISOString());
+  }
+
+  public getVaultExports(userId: string): VaultExportEntry[] {
+    const rows = this.db.prepare("SELECT * FROM vault_exports WHERE user_id = ? ORDER BY path ASC").all(userId) as any[];
+    return rows.map((r) => ({ userId: r.user_id, path: r.path, hash: r.hash, kind: r.kind, refId: r.ref_id, exportedAt: r.exported_at }));
   }
 
   // ============================

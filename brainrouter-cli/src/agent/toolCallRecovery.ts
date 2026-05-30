@@ -148,9 +148,22 @@ export function synthesizeOrphanResults<T extends ToolCallLike>(
  * substance, and the regex anchors on the START of the trimmed content so
  * legitimate replies that contain "I'll" mid-sentence aren't false-positive.
  */
+/**
+ * Strip a leading acknowledgement / filler so the preamble detector isn't
+ * defeated by it. Real-world models open with "Absolutely — I'll run…",
+ * "Sure, let me…", "Got it! Now I'll…" — the ack hides the preamble starter
+ * from a `^`-anchored test. We peel one short ack token + its separator.
+ */
+export function stripLeadingAck(s: string): string {
+  return s.replace(
+    /^(?:absolutely|sure|ok|okay|alright|all right|got it|of course|certainly|great|gotcha|understood|sounds good|will do|on it|yep|yes|right|perfect|cool)\b[\s,!.:—–-]*/i,
+    '',
+  ).trimStart();
+}
+
 export function looksLikeStalledPreamble(content: string | null | undefined): boolean {
   if (typeof content !== 'string') return false;
-  const trimmed = content.trim();
+  const trimmed = stripLeadingAck(content.trim());
   if (trimmed.length === 0) return false;
   if (trimmed.length > 400) return false;
 
@@ -193,6 +206,38 @@ export function looksLikeStalledPreamble(content: string | null | undefined): bo
     /^Will (?:read|check|search|run|look|explore|investigate|examine|grep|find)\b/i,
   ];
   return preambleStarters.some((re) => re.test(trimmed));
+}
+
+/**
+ * Higher-precision variant: the message both (a) opens with a future-action
+ * intent AND (b) names tool-like WORK (run / search / spawn / audit …). This
+ * is the "I'll run the deep sweep now" / "Let me check the codebase" shape —
+ * it promised to DO something that requires tool calls, then emitted none.
+ *
+ * Used to fire the preamble guard even on a turn with ZERO prior tool calls
+ * (a turn that opens with a promise and never acts). Kept narrow — a prose
+ * answer like "I'll explain how X works" has no tool-action verb, so it does
+ * NOT match and legitimate prose answers are never force-looped.
+ */
+export function looksLikeDeferredToolPromise(content: string | null | undefined): boolean {
+  if (typeof content !== 'string') return false;
+  const trimmed = stripLeadingAck(content.trim());
+  if (trimmed.length === 0 || trimmed.length > 500) return false;
+  // A future-intent opener IMMEDIATELY followed (allowing light filler) by a
+  // tool-action verb. Adjacency is the point: the verb must be the PROMISED
+  // ACTION, not a tool-ish word buried later in a prose answer — so
+  // "I'll summarize: the function reads the config" or "Let me clarify — the
+  // test passes" do NOT match (their opener verb is summarize/clarify), while
+  // "I'll run the sweep" / "Let me check the repo" / "Now I will grep …" do.
+  const opener =
+    "(?:I['’]?ll|I will|I['’]?m going to|I['’]?m about to|Let me|Let['’]?s|Now,?\\s+(?:I['’]?ll|I will|let['’]?s)|Next,?\\s+I['’]?ll|First,?\\s+I['’]?ll|Going to|About to|Will)";
+  const filler = "(?:just |now |quickly |also |then |go ahead and |start by |begin by |proceed to )*";
+  // Verb stems so -ing/-ed forms match too (explor→exploring, trac→tracing;
+  // the e-dropping verbs investigat/examin/analyz/diagnos/delegat are stemmed
+  // the same way). run/check/search/etc. need no stemming.
+  const toolVerb =
+    "(?:run|check|search|look|explor|investigat|examin|scan|spawn|delegat|inspect|audit|build|test|grep|find|read|fetch|analyz|review|sweep|verif|lint|diagnos|kick off|fire off|dig into|trac)";
+  return new RegExp(`^${opener}\\s+${filler}${toolVerb}`, 'i').test(trimmed);
 }
 
 /**

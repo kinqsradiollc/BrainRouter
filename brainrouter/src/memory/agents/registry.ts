@@ -166,6 +166,107 @@ const relevanceJudge: BrainAgent = {
   dependsOn: [],
 };
 
+// ── 0.4.3 (MEM-10) — depth-pipeline agents ────────────────────────────────
+// Data-driven rows so the scheduler / status / dashboard know these job kinds.
+// Execute-wiring onto the live operations (chunker, reconcile, tree, vault,
+// benchmark) is a separate slice, mirroring BRAIN-P1-T3.
+
+const sourceChunker: BrainAgent = {
+  id: "source_chunker",
+  description: "Chunks captured sources (transcripts/files) into retrievable, citable source chunks.",
+  inputSchema: { type: "object", properties: { documentIds: { type: "array", items: { type: "string" } } } },
+  outputSchema: { type: "object", properties: { chunkIds: { type: "array", items: { type: "string" } } } },
+  modelClass: "none",
+  maxAttempts: 3,
+  timeoutMs: 60_000,
+  batchSize: 16,
+  idempotencyKey: idKeyFromIds("chunk", "documentIds"),
+  reads: ["source_documents"],
+  writes: ["source_chunks"],
+  emits: ["MemoryChunkStored"],
+  dependsOn: [],
+};
+
+const blackboardReconciler: BrainAgent = {
+  id: "blackboard_reconciler",
+  description: "Dedups/scores staged blackboard candidates before they commit to cognitive records.",
+  inputSchema: { type: "object", properties: { userId: { type: "string" } } },
+  outputSchema: { type: "object", properties: { reconciled: { type: "number" }, rejected: { type: "number" } } },
+  modelClass: "none",
+  maxAttempts: 3,
+  timeoutMs: 60_000,
+  batchSize: 1,
+  idempotencyKey: idKeyFromUser("reconcile"),
+  reads: ["memory_blackboard_items"],
+  writes: ["memory_blackboard_items", "cognitive_records"],
+  emits: [],
+  dependsOn: [],
+};
+
+const treeSealer: BrainAgent = {
+  id: "tree_sealer",
+  description: "Seals a bucket of memory-tree leaves into a summarized parent node.",
+  inputSchema: { type: "object", properties: { childIds: { type: "array", items: { type: "string" } } } },
+  outputSchema: { type: "object", properties: { parentId: { type: "string" } } },
+  modelClass: "none",
+  maxAttempts: 3,
+  timeoutMs: 60_000,
+  batchSize: 1,
+  idempotencyKey: idKeyFromIds("seal", "childIds"),
+  reads: ["memory_tree_nodes"],
+  writes: ["memory_tree_nodes"],
+  emits: [],
+  dependsOn: [],
+};
+
+const treeDigest: BrainAgent = {
+  id: "tree_digest",
+  description: "Re-summarizes a memory-tree parent from its children (LLM digest).",
+  inputSchema: { type: "object", properties: { nodeIds: { type: "array", items: { type: "string" } } } },
+  outputSchema: { type: "object", properties: { summarized: { type: "array", items: { type: "string" } } } },
+  modelClass: "synthesis",
+  maxAttempts: 3,
+  timeoutMs: 90_000,
+  batchSize: 4,
+  idempotencyKey: idKeyFromIds("digest", "nodeIds"),
+  reads: ["memory_tree_nodes", "source_chunks"],
+  writes: ["memory_tree_nodes"],
+  emits: [],
+  dependsOn: ["tree_sealer"],
+};
+
+const vaultExporter: BrainAgent = {
+  id: "vault_exporter",
+  description: "Exports records + tree nodes to the read-only markdown vault mirror (idempotent via ledger).",
+  inputSchema: { type: "object", properties: { userId: { type: "string" } } },
+  outputSchema: { type: "object", properties: { written: { type: "number" }, unchanged: { type: "number" } } },
+  modelClass: "none",
+  maxAttempts: 2,
+  timeoutMs: 120_000,
+  batchSize: 1,
+  idempotencyKey: idKeyFromUser("vault"),
+  reads: ["cognitive_records", "memory_tree_nodes"],
+  writes: ["vault_exports"],
+  emits: [],
+  dependsOn: [],
+};
+
+const benchmarkEval: BrainAgent = {
+  id: "benchmark_eval",
+  description: "Runs the retrieval benchmark harness (FTS/hybrid/rerank/tree/AST) and records scores.",
+  inputSchema: { type: "object", properties: { userId: { type: "string" }, dataset: { type: "string" } } },
+  outputSchema: { type: "object", properties: { summaryPath: { type: "string" } } },
+  modelClass: "none",
+  maxAttempts: 1,
+  timeoutMs: 300_000,
+  batchSize: 1,
+  idempotencyKey: idKeyFromUser("bench"),
+  reads: ["cognitive_records", "source_chunks"],
+  writes: [],
+  emits: [],
+  dependsOn: [],
+};
+
 const BUILT_IN_AGENTS: readonly BrainAgent[] = Object.freeze([
   cognitiveExtractor,
   memoryDeduper,
@@ -175,6 +276,12 @@ const BUILT_IN_AGENTS: readonly BrainAgent[] = Object.freeze([
   focusDistiller,
   identityDistiller,
   relevanceJudge,
+  sourceChunker,
+  blackboardReconciler,
+  treeSealer,
+  treeDigest,
+  vaultExporter,
+  benchmarkEval,
 ]);
 
 const BY_ID: ReadonlyMap<string, BrainAgent> = new Map(BUILT_IN_AGENTS.map((a) => [a.id, a]));

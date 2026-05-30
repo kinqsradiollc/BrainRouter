@@ -5,6 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { isForeignAbsolutePath, resolveRegistryConfig } from "../../resolver.js";
 import { appendWorkingStep, compressStepLog, readWorkingSteps, type WorkingStep } from "./step-log.js";
 import { buildAnnotatedCanvas, readWorkingCanvas, writeWorkingCanvas } from "./canvas.js";
+import { redactSensitiveMemoryText } from "../redaction.js";
 
 export type TokenPressureLevel = "none" | "mild" | "aggressive";
 
@@ -200,7 +201,8 @@ export function offloadWorkingPayload(input: WorkingOffloadInput): WorkingOffloa
   appendWorkingStep(workDir, {
     nodeId,
     title: input.title ?? "Working payload offloaded",
-    summary: input.summary ?? input.payload.slice(0, 240),
+    // MEM-13 — redact the inline preview before it persists to the step log.
+    summary: redactSensitiveMemoryText(input.summary ?? input.payload.slice(0, 240)),
     kind: input.kind ?? "tool_output",
     createdAt: observedAt,
     refPath: relativeRefPath,
@@ -250,6 +252,57 @@ export function resetWorkingMemory(workspacePath: string | undefined, userId: st
   const deleted = fs.existsSync(workDir);
   fs.rmSync(workDir, { recursive: true, force: true });
   return { deleted, workDir };
+}
+
+export interface ReclaimResult {
+  /** Ref files present before the sweep. */
+  scannedRefs: number;
+  /** Orphan refs deleted. */
+  reclaimed: number;
+  /** Refs kept because they're still referenced by the live step log. */
+  keptActive: number;
+  bytesFreed: number;
+  reclaimedNodeIds: string[];
+}
+
+/**
+ * MEM-12 (0.4.3) — offload reclaimer. Sweeps orphan ref files (offloaded
+ * payloads no longer referenced by the live step log, e.g. after the log was
+ * compressed) while PROTECTING active refs. `maxAgeMs` (with an injectable
+ * `now` for tests) restricts the sweep to orphans older than the retention
+ * window; omit it to reclaim all orphans. Returns stats. Never throws — a
+ * cleanup pass must not break a turn.
+ */
+export function reclaimWorkingMemory(
+  workspacePath: string | undefined,
+  userId: string,
+  sessionKey: string,
+  opts?: { maxAgeMs?: number; now?: number },
+): ReclaimResult {
+  const result: ReclaimResult = { scannedRefs: 0, reclaimed: 0, keptActive: 0, bytesFreed: 0, reclaimedNodeIds: [] };
+  const workDir = getWorkingMemoryDir(workspacePath, userId, sessionKey);
+  const refsDir = path.join(workDir, "refs");
+  if (!fs.existsSync(refsDir)) return result;
+  try {
+    const active = new Set(readWorkingSteps(workDir).map((s) => s.nodeId));
+    const now = opts?.now ?? Date.now();
+    for (const file of fs.readdirSync(refsDir)) {
+      if (!file.endsWith(".md")) continue;
+      result.scannedRefs += 1;
+      const nodeId = file.slice(0, -3);
+      if (active.has(nodeId)) { result.keptActive += 1; continue; } // protect active refs
+      const abs = path.join(refsDir, file);
+      const stat = fs.statSync(abs);
+      if (opts?.maxAgeMs != null && now - new Date(stat.mtime).getTime() < opts.maxAgeMs) continue; // orphan but within retention
+      fs.rmSync(abs, { force: true });
+      result.reclaimed += 1;
+      result.bytesFreed += stat.size;
+      result.reclaimedNodeIds.push(nodeId);
+    }
+  } catch (err: any) {
+    console.error("[BrainRouter] MEM-12 offload reclaim failed:", err?.message ?? err);
+  }
+  return result;
 }
 
 export interface ActiveSessionInfo {
