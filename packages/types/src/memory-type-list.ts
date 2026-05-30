@@ -41,4 +41,5 @@ export const COGNITIVE_MEMORY_TYPES = [
   "artifact_reference",
   "file_history",
   "command_knowledge",
+  "lesson",
 ] as const satisfies readonly MemoryType[];
