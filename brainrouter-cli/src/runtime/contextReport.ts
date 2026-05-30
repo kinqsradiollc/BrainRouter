@@ -32,6 +32,12 @@ export interface ContextReportInput {
    * to be (re)processed. Omitted/zero → the cache line is suppressed.
    */
   cache?: { cachedTokens: number; missedTokens: number };
+  /**
+   * 0.4.3 (CLI-8) — session-cumulative tool-call repair telemetry. Omitted, or
+   * present with no interventions → the repair line is suppressed (the healthy
+   * case shouldn't add noise).
+   */
+  repair?: { scavenged: number; truncationsFixed: number; truncationsUnrecoverable: number; stormsBroken: number; turnsWithRepair: number };
   session: { promptTokens: number; completionTokens: number; turns: number; calls: number };
   bySkill: SkillUsageRow[];
   byTool: Array<{ tool: string; count: number }>;
@@ -67,6 +73,22 @@ export function formatContextReport(input: ContextReportInput): string[] {
     if (totalPrompt > 0) {
       const hit = Math.round((cachedTokens / totalPrompt) * 100);
       lines.push(`Prompt cache: ${cachedTokens.toLocaleString()} cached / ${missedTokens.toLocaleString()} missed (${hit}% hit this session)`);
+    }
+  }
+
+  // ── Tool-call repair telemetry (CLI-8) ──────────────────────────────────
+  // How often the repair pipeline had to fix the model's tool calls this
+  // session. Silent when nothing needed repair — only surfaces when there's a
+  // health signal worth seeing.
+  if (input.repair) {
+    const r = input.repair;
+    if (r.turnsWithRepair > 0) {
+      const parts: string[] = [];
+      if (r.scavenged > 0) parts.push(`${r.scavenged} scavenged`);
+      if (r.truncationsFixed > 0) parts.push(`${r.truncationsFixed} truncation${r.truncationsFixed === 1 ? '' : 's'} fixed`);
+      if (r.truncationsUnrecoverable > 0) parts.push(`${r.truncationsUnrecoverable} unrecoverable`);
+      if (r.stormsBroken > 0) parts.push(`${r.stormsBroken} storm${r.stormsBroken === 1 ? '' : 's'} broken`);
+      lines.push(`Tool-call repair: ${r.turnsWithRepair} turn${r.turnsWithRepair === 1 ? '' : 's'} (${parts.join(', ')})`);
     }
   }
   lines.push('');
