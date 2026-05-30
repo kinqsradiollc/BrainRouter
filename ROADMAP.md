@@ -54,6 +54,15 @@ drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
 **repair telemetry** + a **prompt-cache hit line** in `/context`, and the
 **command-registry taxonomy guard**.
 
+**Post feature-complete hardening (investigation batch):** cost-telemetry
+`$0.00` fix (pricing **family-fallback** resolution + `inputCacheHit` NaN); the
+**`/status` crash (#59)** + in-memory config self-heal (no read-time writes);
+a **recall-quality overhaul** — correct security-intent detection, per-type
+**priority caps** so never-decaying boilerplate can't out-rank fresh findings,
+and a local **lexical-relevance + MMR-diversity** selection on the no-reranker
+path (zero added latency); and **provenance-safe transcript retention**
+(`memory_prune_sources`) with the `/sources` view hiding transcripts by default.
+
 **CLI — full set**
 
 - **Background & detachment ✓:** `/bg <prompt>` runs a detached background
