@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
-import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks } from "../memory/code-retrieval.js";
+import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost } from "../memory/code-retrieval.js";
 import type { SourceChunk } from "@kinqs/brainrouter-types";
 
 function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
@@ -142,6 +142,37 @@ test("MEM-27 per-file saturation: one file cannot dominate the top-k", () => {
   const fromBig = ranked.filter((r) => r.chunk.filePath === "src/big.ts").length;
   assert.equal(fromBig, 2, "big.ts capped at 2");
   assert.ok(ranked.some((r) => r.chunk.filePath === "src/other.ts"), "other.ts gets a slot");
+});
+
+test("MEM-26 definition-boost: a chunk that DEFINES a referenced identifier beats a mere mention", () => {
+  const seed = { symbol: "loadConfig", content: "const cfg = applyConfig(raw); validate(cfg);", filePath: "src/config.ts" };
+  const hits = [
+    chunk({ id: "def", filePath: "src/apply.ts", symbol: "applyConfig", content: "export function applyConfig(raw){ return parse(raw); }", ftsRank: -3 }),
+    chunk({ id: "mention", filePath: "src/other.ts", symbol: "helper", content: "const v = applyConfig(input);", ftsRank: -3 }),
+  ];
+  const ranked = rankRelatedChunks(seed, hits, 10);
+  assert.equal(ranked[0].chunk.id, "def", "the definer outranks the mention at equal lexical strength");
+  assert.ok(ranked[0].reason.includes("+def"));
+});
+
+test("MEM-26 file-coherence: same-file neighbour gets a coherence boost over an equal other-file hit", () => {
+  const seed = { symbol: "alpha", content: "alpha(); beta();", filePath: "src/mod.ts" };
+  const hits = [
+    chunk({ id: "same", filePath: "src/mod.ts", symbol: "gamma", content: "function gamma(){}", ftsRank: -3 }),
+    chunk({ id: "far", filePath: "lib/elsewhere.ts", symbol: "gamma2", content: "function gamma2(){}", ftsRank: -3 }),
+  ];
+  const ranked = rankRelatedChunks(seed, hits, 10);
+  assert.equal(ranked[0].chunk.id, "same");
+  assert.ok(ranked[0].reason.includes("+samefile"));
+});
+
+test("MEM-26 helpers: definedIdentifiers / deriveSeedIdentifiers / codeRerankBoost", () => {
+  const defs = definedIdentifiers("export function parseConfig(x){}\nclass Loader {}\nconst KEY = 1;");
+  assert.ok(defs.has("parseconfig") && defs.has("loader") && defs.has("key"));
+  const ids = deriveSeedIdentifiers({ symbol: "parseConfig", content: "applyConfig(raw)" });
+  assert.ok(ids.has("parseconfig") && ids.has("parse") && ids.has("applyconfig") && ids.has("raw"));
+  const b = codeRerankBoost(ids, "src/a.ts", { symbol: "applyConfig", content: "function applyConfig(){}", filePath: "src/a.ts" });
+  assert.ok(b.boost > 0 && b.reasons.includes("+def") && b.reasons.includes("+samefile"));
 });
 
 test("MEM-29 helpers: splitIdentifier / fileExtension / languageScopeFor / extractChunkQueryTerms", () => {
