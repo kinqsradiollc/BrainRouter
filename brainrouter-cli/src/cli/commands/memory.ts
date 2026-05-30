@@ -155,7 +155,20 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
     }
     case '/verify': {
       const id = args[0];
-      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]\n')); return true; }
+      // CLI-10 — `/verify detect` reports the project profile + the verify
+      // recipe it would run (read-only; sandbox-run + LSP diagnostics later).
+      if (id === 'detect') {
+        const { detectProjectProfile, formatProjectProfiles } = await import('../../runtime/projectProfile.js');
+        let entries: string[] = [];
+        try { entries = fs.readdirSync(agent.workspaceRoot); } catch { /* ignore */ }
+        console.log(chalk.bold('\n🔎 Verify — project profile'));
+        for (const line of formatProjectProfiles(detectProjectProfile(entries))) {
+          console.log(line.startsWith('  ') ? chalk.gray(line) : chalk.cyan(line));
+        }
+        console.log();
+        return true;
+      }
+      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect (project profile)\n')); return true; }
       const status = args[1] || 'verified';
       const confidence = args[2] ? Number(args[2]) : 0.9;
       await printMcpCall(mcpClient, 'memory_verify', { recordId: id, verificationStatus: status, confidence }, `Verify ${id}`);
