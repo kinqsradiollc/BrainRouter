@@ -1,0 +1,12 @@
+{
+  "name": "brainrouter",
+  "description": "Memory-first MCP server + skills: durable recall, capture, focus scenes, persona, contradictions, code-aware retrieval (find_related + symbol graph), and a cognitive graph for any agent. Bundles the BrainRouter MCP server and the engineering skill library.",
+  "version": "0.4.4",
+  "author": { "name": "Kinqs Radio LLC" },
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter",
+  "repository": "https://github.com/kinqsradiollc/BrainRouter",
+  "license": "SEE LICENSE IN LICENSE",
+  "keywords": ["memory", "mcp", "recall", "rag", "knowledge-graph", "agent", "code-search"],
+  "mcpServers": ".claude-plugin/.mcp.json",
+  "skills": "./skills"
+}
