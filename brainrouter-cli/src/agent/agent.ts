@@ -2799,6 +2799,26 @@ export class Agent {
   }
 
   /**
+   * CLI-4 — `/bg`: run a prompt as a DETACHED background worker. Reuses the
+   * proven worker-thread infra (a separate in-process Agent + on-disk
+   * transcript/status), so there's no concurrency hazard with the foreground
+   * turn's chat history. Manage via `/workers` (list / attach / close) or `/ps`.
+   */
+  public spawnBackgroundWorker(goal: string): { id: string; status: string; goal: string } {
+    const worker = spawnWorkerThread(this.mcpClient, this.llmConfig, {
+      workspaceRoot: this.workspaceRoot,
+      launchCwd: this.launchCwd,
+      role: 'worker',
+      goal,
+      parentSessionKey: this.sessionKey,
+      parentAccessMode: this.accessMode,
+      spawnerDepth: this.agentDepth,
+      effortOverride: this.effortOverride,
+    });
+    return { id: worker.id, status: worker.status, goal: worker.goal };
+  }
+
+  /**
    * 0.4.3 (CLI-8) — session-cumulative tool-call repair telemetry, surfaced by
    * `/context`. Returns a copy so callers can't mutate the running totals.
    */

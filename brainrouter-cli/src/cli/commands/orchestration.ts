@@ -848,6 +848,26 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       console.log();
       return true;
     }
+    case '/bg':
+    {
+      // CLI-4 — run a prompt as a detached background worker. Reuses the proven
+      // worker-thread infra (separate Agent, on-disk transcript) — no
+      // foreground turn-state hazard. Manage with /workers or /ps.
+      const prompt = args.join(' ').trim();
+      if (!prompt) {
+        console.log(chalk.red('\nUsage: /bg <prompt> — run a prompt in a detached background worker.'));
+        console.log(chalk.gray('  Then: /workers attach <id> to view · /workers close <id> to stop · /ps to list.\n'));
+        return true;
+      }
+      try {
+        const w = agent.spawnBackgroundWorker(prompt);
+        console.log(chalk.green(`\n✓ Detached background worker ${chalk.cyan(w.id)} started.`));
+        console.log(chalk.gray(`  View: /workers attach ${w.id}  ·  Stop: /workers close ${w.id}  ·  All: /ps\n`));
+      } catch (err: any) {
+        console.log(chalk.red(`\nFailed to start background worker: ${err?.message ?? err}\n`));
+      }
+      return true;
+    }
     case '/spawn':
     {
       const role = args[0];
