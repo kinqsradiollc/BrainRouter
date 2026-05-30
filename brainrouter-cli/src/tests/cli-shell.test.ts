@@ -435,7 +435,7 @@ test('statusline: cost segment shows USD + cache-hit % when calls > 0 (CLI-9)', 
     workspaceRoot: '/tmp', sessionKey: 'a', accessMode: 'read', model: 'unknown-model',
     lastTurnUsage: { calls: 1, promptTokens: 1000, completionTokens: 100, cachedTokens: 750, missedTokens: 250 },
   });
-  assert.equal(seg, '$0.0000 75%¢');
+  assert.equal(seg, '$0.0000 75% cached');
 });
 
 test('statusline: SEGMENT_NAMES includes cost (CLI-9)', () => {
