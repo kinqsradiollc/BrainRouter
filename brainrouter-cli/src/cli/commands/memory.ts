@@ -168,7 +168,35 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log();
         return true;
       }
-      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect (project profile)\n')); return true; }
+      // CLI-10 — `/verify run [build|test|lint]` runs the detected recipe step
+      // in the workspace and reports pass/fail + tail output.
+      if (id === 'run') {
+        const { detectProjectProfile } = await import('../../runtime/projectProfile.js');
+        const { runVerifyRecipe, formatRecipeResult } = await import('../../runtime/verifyRunner.js');
+        const cp = await import('node:child_process');
+        const step = ((args[1] as 'build' | 'test' | 'lint') || 'test');
+        let entries: string[] = [];
+        try { entries = fs.readdirSync(agent.workspaceRoot); } catch { /* ignore */ }
+        const profiles = detectProjectProfile(entries);
+        if (profiles.length === 0) { console.log(chalk.yellow('\nNo known project profile to run a recipe for. Try /verify detect.\n')); return true; }
+        const exec = (command: string, cwd: string): { exitCode: number; output: string } => {
+          try {
+            const out = cp.execSync(command, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+            return { exitCode: 0, output: out };
+          } catch (e: any) {
+            return { exitCode: typeof e?.status === 'number' ? e.status : 1, output: `${e?.stdout ?? ''}${e?.stderr ?? ''}` || String(e?.message ?? e) };
+          }
+        };
+        console.log(chalk.bold(`\n🔎 Verify — run ${step} (${profiles[0].name})`));
+        const result = runVerifyRecipe(profiles[0].recipe, step, agent.workspaceRoot, exec);
+        if ('error' in result) { console.log(chalk.yellow(`  ${result.error}`)); console.log(); return true; }
+        for (const line of formatRecipeResult(result)) {
+          console.log(line.startsWith('  ') ? chalk.gray(line) : (result.ok ? chalk.green(line) : chalk.red(line)));
+        }
+        console.log();
+        return true;
+      }
+      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect  ·  /verify run [build|test|lint]\n')); return true; }
       const status = args[1] || 'verified';
       const confidence = args[2] ? Number(args[2]) : 0.9;
       await printMcpCall(mcpClient, 'memory_verify', { recordId: id, verificationStatus: status, confidence }, `Verify ${id}`);
