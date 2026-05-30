@@ -62,6 +62,7 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+import { decideExecutionPolicy } from '../runtime/execPolicy.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -2392,8 +2393,11 @@ export class Agent {
       }
       case 'run_command': {
         const cmd = args.command;
-        if (this.accessMode !== 'shell') {
-          return `Command execution denied: agent access mode is "${this.accessMode}".`;
+        // CLI-11 — route the shell gate through the unified execution policy
+        // (same outcome as the previous `accessMode !== 'shell'` check).
+        const shellPolicy = decideExecutionPolicy('shell', this.accessMode);
+        if (shellPolicy.decision === 'deny') {
+          return `Command execution denied: ${shellPolicy.reason}.`;
         }
         // Approval gating routes through the pure resolver in
         // runtime/dangerousCommand.ts. Three outcomes:
