@@ -14,6 +14,7 @@ import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
 import { ingestSource, type SourceIngestStore } from "./source/ingest.js";
+import { attributeRecordToChunks, readProvenanceConfig, type AttributableChunk } from "./source/attribution.js";
 import crypto from "node:crypto";
 
 /**
@@ -29,7 +30,7 @@ const MIN_SOURCE_CHARS = 120;
  */
 interface ProvenanceStore {
   getSourceDocumentByHash(userId: string, hash: string): { id: string } | null;
-  getSourceChunksByDocument(documentId: string): { id: string }[];
+  getSourceChunksByDocument(documentId: string): { id: string; content: string }[];
   linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void;
 }
 
@@ -168,33 +169,44 @@ export class MemoryCapturePipeline {
   }
 
   /**
-   * MEM-3 — batch-level provenance. Collect every source chunk id for the
-   * messages in this extraction window (matched to their source docs by the
-   * same redacted-content hash MEM-2′ ingests under), then link each newly
-   * written record to that set. Coarse but deterministic and zero-LLM-cost;
-   * per-record attribution can refine it later. Best-effort + non-fatal.
+   * MEM-15 — exact chunk-level provenance. Gather the candidate source chunks
+   * for this extraction window (the chunks of the window messages' source docs,
+   * matched by the same redacted-content hash MEM-2′ ingests under), then link
+   * EACH record only to the chunk(s) it actually derives from — attributed by
+   * salient-token overlap (`attributeRecordToChunks`). Replaces 0.4.3's
+   * batch-level "link every record to every chunk" linking, which over-attributed
+   * evidence. Deterministic, zero-LLM-cost; best-effort + non-fatal.
    */
-  private linkBatchProvenance(
+  private linkRecordProvenance(
     userId: string,
     windowSensory: SensoryRecord[],
-    records: { id: string }[],
+    records: { id: string; content: string }[],
   ): void {
     const store = this.asProvenanceStore();
     if (!store || records.length === 0) return;
     try {
-      const chunkIds = new Set<string>();
+      // Candidate chunks {id, content} from the window's source docs (deduped).
+      const chunks: AttributableChunk[] = [];
+      const seen = new Set<string>();
       for (const s of windowSensory) {
         const text = s.messageText ?? "";
         if (text.trim().length < MIN_SOURCE_CHARS) continue;
         const doc = store.getSourceDocumentByHash(userId, contentHash(text));
         if (!doc) continue;
-        for (const c of store.getSourceChunksByDocument(doc.id)) chunkIds.add(c.id);
+        for (const c of store.getSourceChunksByDocument(doc.id)) {
+          if (seen.has(c.id)) continue;
+          seen.add(c.id);
+          chunks.push({ id: c.id, content: c.content });
+        }
       }
-      if (chunkIds.size === 0) return;
-      const ids = [...chunkIds];
-      for (const r of records) store.linkRecordSources(userId, r.id, ids);
+      if (chunks.length === 0) return;
+      const config = readProvenanceConfig();
+      for (const r of records) {
+        const chunkIds = attributeRecordToChunks(r.content, chunks, config);
+        if (chunkIds.length > 0) store.linkRecordSources(userId, r.id, chunkIds);
+      }
     } catch (err: any) {
-      console.error("[BrainRouter] MEM-3 provenance link failed:", err?.message ?? err);
+      console.error("[BrainRouter] MEM-15 provenance link failed:", err?.message ?? err);
     }
   }
 
@@ -367,8 +379,8 @@ export class MemoryCapturePipeline {
       }
     }
 
-    // MEM-3 — link this batch's records to the source chunks of its window.
-    this.linkBatchProvenance(userId, recentSensory, uniqueRecords);
+    // MEM-15 — link each record to the source chunk(s) it actually derives from.
+    this.linkRecordProvenance(userId, recentSensory, uniqueRecords);
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {
