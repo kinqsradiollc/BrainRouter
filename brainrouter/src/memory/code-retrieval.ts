@@ -91,6 +91,90 @@ function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
+function dirOf(filePath: string): string {
+  const i = filePath.lastIndexOf("/");
+  return i >= 0 ? filePath.slice(0, i) : "";
+}
+
+/**
+ * MEM-26 — the set of identifiers a chunk *defines* (declaration-keyword
+ * prefixed: function/class/def/const/type/fn/…). Lowercased. Used for the
+ * definition-boost: a candidate that defines an identifier the seed references
+ * (a callee / base class) is far more useful than one that merely mentions it.
+ */
+const DEFINITION_RE = /\b(?:function|func|fn|class|interface|type|enum|struct|trait|impl|def|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
+export function definedIdentifiers(content: string | null | undefined): Set<string> {
+  const out = new Set<string>();
+  if (!content) return out;
+  DEFINITION_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = DEFINITION_RE.exec(content)) !== null) {
+    if (m[1].length >= 2) out.add(m[1].toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * MEM-26 — the seed's referenced identifiers (symbol + its stems + salient body
+ * identifiers), lowercased. This is what candidates are scored against for the
+ * definition / symbol / stem boosts. Identifier-stem matching falls out for free
+ * because `splitIdentifier` adds `parse`/`config` for a `parseConfig` symbol.
+ */
+export function deriveSeedIdentifiers(seed: { symbol?: string | null; content?: string | null }): Set<string> {
+  const set = new Set<string>();
+  if (seed.symbol) {
+    set.add(seed.symbol.toLowerCase());
+    for (const p of splitIdentifier(seed.symbol)) set.add(p.toLowerCase());
+  }
+  const ids = (seed.content ?? "").match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [];
+  for (const id of ids) {
+    const key = id.toLowerCase();
+    if (id.length >= 3 && !BOILERPLATE.has(key)) set.add(key);
+  }
+  return set;
+}
+
+/**
+ * MEM-26 — code-aware boost for one candidate against the seed's identifiers.
+ * Returns an additive boost (bounded) + reason tags. Signals:
+ *   +def       candidate defines an identifier the seed references (strongest),
+ *   +sym       candidate's symbol stems overlap the seed (weaker),
+ *   +samefile  candidate is another chunk of the seed's own file (coherence),
+ *   +samedir   candidate sits in the same directory.
+ * Pure; the caller folds the boost in *before* the path penalty so a penalty
+ * still dominates (a test that defines the symbol stays below real source).
+ */
+export function codeRerankBoost(
+  seedIds: Set<string>,
+  seedFilePath: string | null | undefined,
+  candidate: { symbol?: string | null; content?: string | null; filePath?: string | null },
+): { boost: number; reasons: string[] } {
+  let boost = 0;
+  const reasons: string[] = [];
+
+  let defines = false;
+  if (candidate.symbol && seedIds.has(candidate.symbol.toLowerCase())) defines = true;
+  if (!defines) {
+    for (const d of definedIdentifiers(candidate.content)) {
+      if (seedIds.has(d)) { defines = true; break; }
+    }
+  }
+  if (defines) { boost += 0.3; reasons.push("+def"); }
+
+  if (candidate.symbol && !defines) {
+    const parts = [candidate.symbol.toLowerCase(), ...splitIdentifier(candidate.symbol).map((s) => s.toLowerCase())];
+    const overlap = parts.filter((p) => seedIds.has(p)).length;
+    if (overlap > 0) { boost += Math.min(0.15, 0.06 * overlap); reasons.push("+sym"); }
+  }
+
+  if (seedFilePath && candidate.filePath) {
+    if (candidate.filePath === seedFilePath) { boost += 0.12; reasons.push("+samefile"); }
+    else if (dirOf(candidate.filePath) === dirOf(seedFilePath)) { boost += 0.06; reasons.push("+samedir"); }
+  }
+
+  return { boost: Math.min(0.5, boost), reasons };
+}
+
 /**
  * MEM-27 — path-prior penalty. A relevance multiplier in (0,1] that down-ranks
  * chunks from files you rarely want as the *definition* of a symbol: vendored
@@ -143,7 +227,7 @@ export function pathPriorPenalty(
  * pure function keeps the engine method thin and the scoring unit-testable.
  */
 export function rankRelatedChunks(
-  seed: { symbol?: string | null; filePath?: string | null },
+  seed: { symbol?: string | null; filePath?: string | null; content?: string | null },
   hits: Array<SourceChunk & { ftsRank: number }>,
   limit: number,
   opts?: { maxPerFile?: number },
@@ -153,17 +237,26 @@ export function rankRelatedChunks(
   const maxPerFile = Math.max(1, opts?.maxPerFile ?? 2);
   const bases = hits.map((h) => -(h.ftsRank ?? 0));
   const max = Math.max(...bases, 1e-6);
+  const seedIds = deriveSeedIdentifiers(seed);
 
   const scored = hits.map((h, i) => {
     const { ftsRank: _omit, ...chunk } = h;
     const reasons: string[] = ["lexical"];
     const base = clamp01(bases[i] / max);
+    // MEM-26 — code-aware boosts: definition / symbol-match / file-coherence.
+    const { boost, reasons: boostReasons } = codeRerankBoost(seedIds, seed.filePath ?? null, chunk);
+    reasons.push(...boostReasons);
     // MEM-27 — path-prior penalty: de-prioritize vendored/generated/test/barrel
-    // chunks so a real definition outranks its test or its .d.ts stub.
+    // chunks so a real definition outranks its test or its .d.ts stub. Applied
+    // to the boosted score so a penalty stays dominant (a test that defines the
+    // symbol still ranks below real source).
     const { multiplier, tag } = pathPriorPenalty(chunk.filePath, chunk.content);
     if (tag) reasons.push(`-${tag}`);
-    // ── MEM-26 extension point: definition / symbol-match / coherence boosts ──
-    const score = clamp01(base * multiplier);
+    // Weight the raw lexical base below 1 so the code-aware boosts (≤0.5) can
+    // reorder comparably-matched hits — a definition should beat a mention of
+    // similar lexical strength — without letting a single signal override a
+    // hit that matched far more strongly.
+    const score = clamp01((base * 0.7 + boost) * multiplier);
     return { chunk: chunk as SourceChunk, score, reason: reasons.join("+") };
   });
 
