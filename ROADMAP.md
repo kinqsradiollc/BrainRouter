@@ -31,7 +31,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
-| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | `/rewind --files`, `/context` header, agent transcript debugger ✓; next: memory depth (source chunks → blackboard → tree → vault + benchmark) + CLI ops (`/bg`, prefix-drift, headless JSONL, unified policy) | In flight |
+| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | `/rewind --files`, `/context` header, transcript debugger, source chunks→capture→provenance→drill-down, blackboard pipeline, AST chunker, governance dry-run ✓; next: memory tree → vault → benchmark + CLI ops (`/bg`, prefix-drift, memory-decision view, headless JSONL, unified policy) | In flight |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -46,7 +46,13 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 Shipped so far: `/rewind --files` file restore, `/context` window-fill header,
 the agent transcript debugger (`/agents tree` / `why` / `transcript` /
-`replay`), and the `source_documents` + `source_chunks` foundation.
+`replay`), the `source_documents` + `source_chunks` foundation, **token-aware
+capture wired into the turn pipeline → batch-level provenance** (records cite
+their source chunks; `memory_verify` returns excerpts) **→ `memory_fetch_source_chunk`
+drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
+**AST-aware code chunking**, a **governance dry-run** (`memory_governance_plan`),
+**repair telemetry** + a **prompt-cache hit line** in `/context`, and the
+**command-registry taxonomy guard**.
 
 **CLI — full set**
 
@@ -55,10 +61,10 @@ the agent transcript debugger (`/agents tree` / `why` / `transcript` /
 - **Debugging & explainability:** `/context prefix` drift labels (pinned hash,
   changed region, tool-list / memory-anchor delta, last cache-miss cause); a
   memory-decision view (which prompt regions were stable, which memories were
-  injected vs skipped, and why); repair telemetry (scavenged / truncation /
-  storm counts + tool-name suggestions) in `/tokens` + `/diagnostics`.
+  injected vs skipped, and why); repair telemetry ✓ (scavenged / truncation /
+  storm counts, surfaced in `/context`).
 - **Cost:** an opt-in per-turn footer (model · effort/tier · cost · cache hit ·
-  offloaded + child tokens).
+  offloaded + child tokens). *(Prompt-cache hit ratio ✓ in `/context`; footer next.)*
 - **Headless:** `brainrouter run --format jsonl` — a stable event stream
   (turn / text / tool / child / memory / offload / cost / error) for CI and
   external orchestrators.
@@ -66,37 +72,38 @@ the agent transcript debugger (`/agents tree` / `why` / `transcript` /
   behind shell, file edits, child writes, network, and `/bg`.
 - **Verification:** `/verify detect` recipe cache (Node/Python/Rust/web) +
   post-edit language diagnostics after write/edit/apply_patch.
-- **Ergonomics:** command-registry cleanup (one source drives help + palette,
-  no duplicate rows, filterable "workflow mode" palettes); `/agents create` /
-  `/pack create` wizard; a `/context offloads` browser; inline handoff-accept +
-  `/inbox --watch`.
+- **Ergonomics:** command-registry cleanup ✓ (help + palette in lockstep, no
+  duplicate rows, taxonomy guard; filterable "workflow mode" palettes next);
+  `/agents create` / `/pack create` wizard; a `/context offloads` browser;
+  inline handoff-accept + `/inbox --watch`.
 - **Packaging (after 0.4.3 stabilizes):** shell completions, Homebrew tap,
   one-line installer.
 
 **Brain-side memory — full set** *(depth before breadth)*
 
-- **Source layer (done):** `source_documents` + `source_chunks` tables + store.
-- **Token-aware capture:** chunk sources before extraction; every extracted
-  record cites its source-chunk ids; `memory_verify` returns source excerpts +
-  a confidence trail.
-- **Blackboard commit pipeline:** stage extraction candidates → reconcile /
+- **Source layer ✓:** `source_documents` + `source_chunks` tables + store.
+- **Token-aware capture ✓:** chunk sources on every turn; extracted records
+  cite their source-chunk ids; `memory_verify` returns source excerpts.
+  *(Batch-level provenance; per-record attribution refines later.)*
+- **Blackboard commit pipeline ✓:** stage extraction candidates → reconcile /
   conflict-check → commit to cognitive records with an audit trail.
+  *(Pipeline + `memory_blackboard_review` tool; live-extraction rerouting later.)*
 - **Memory tree:** durable source/topic/global summary hierarchy (append leaf →
   seal bucket → summarize parent → walk/drill), generic mechanics kept separate
   from policy.
-- **AST-aware code chunking** (TS/JS/Python/Rust) and a read-only **vault
-  mirror** (markdown export + hash ledger; the DB stays authoritative).
-- **Recall drill-down:** compact hit first, then fetch the original source
-  chunk / walk the tree.
+- **AST-aware code chunking ✓** (TS/JS/Python/Rust, line-based fallback) and a
+  read-only **vault mirror** (markdown export + hash ledger; DB authoritative).
+- **Recall drill-down (partial):** `memory_fetch_source_chunk` ✓ (full chunk +
+  parent doc + neighbours); `memory_tree_walk` half lands with the tree.
 - **Retrieval benchmark harness:** one command, fixed datasets, FTS / hybrid /
   rerank / tree / AST modes, JSON + markdown summary, regression thresholds,
   CI-friendly.
 - **Brain jobs:** new kinds for chunking, blackboard reconcile, tree
   seal/digest, vault export, and benchmark eval.
-- **Governance & hygiene:** a governance dry-run (preview what would
-  archive/delete by filter); an offload reclaimer (retention + orphan cleanup);
-  uniform redaction across source chunks, vault sync, blackboard candidates, and
-  offload previews.
+- **Governance & hygiene:** a governance dry-run ✓ (`memory_governance_plan` —
+  preview what would archive/delete by filter); an offload reclaimer (retention
+  + orphan cleanup); uniform redaction across source chunks, vault sync,
+  blackboard candidates, and offload previews.
 
 Cross-cutting: new tables carry user + workspace scope columns so team/RBAC can
 arrive later without migration; 0.4.3 stays local-first. Carried infra:
