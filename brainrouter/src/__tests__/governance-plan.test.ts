@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planGovernance } from "../memory/governance-plan.js";
+import { planGovernance, planStorageGovernance } from "../memory/governance-plan.js";
 import type { MemoryListItem } from "@kinqs/brainrouter-types";
 
 const NOW = Date.parse("2026-05-30T00:00:00Z");
@@ -53,5 +53,46 @@ describe("planGovernance (MEM-11)", () => {
     expect(r.matched).toBe(30);
     expect(r.sampleRecordIds.length).toBe(20);
     expect(r.filters).toEqual({ olderThanDays: 1 });
+  });
+});
+
+describe("planStorageGovernance (MEM-21)", () => {
+  const stats = {
+    sourceDocuments: 4,
+    sourceChunks: { count: 10, chars: 5000, orphanCount: 3, orphanChars: 1200 },
+    treeNodes: { count: 2, chars: 800 },
+    vaultExports: 6,
+  };
+
+  it("reports a class per depth table with counts + chars", () => {
+    const r = planStorageGovernance(stats);
+    const byClass = Object.fromEntries(r.classes.map((c) => [c.class, c]));
+    expect(byClass.source_chunks.count).toBe(10);
+    expect(byClass.source_chunks.estimatedChars).toBe(5000);
+    expect(byClass.tree_nodes.count).toBe(2);
+    expect(byClass.vault_exports.count).toBe(6);
+    expect(byClass.source_documents.count).toBe(4);
+  });
+
+  it("only orphaned source chunks are reclaimable; tree/vault are not auto-reclaimed", () => {
+    const r = planStorageGovernance(stats);
+    const byClass = Object.fromEntries(r.classes.map((c) => [c.class, c]));
+    expect(byClass.source_chunks.reclaimableChars).toBe(1200); // orphanChars only
+    expect(byClass.tree_nodes.reclaimableChars).toBe(0);
+    expect(byClass.vault_exports.reclaimableChars).toBe(0);
+    expect(r.totalReclaimableChars).toBe(1200);
+    expect(r.totalEstimatedChars).toBe(5800); // 5000 chunks + 800 tree
+  });
+
+  it("zeroes cleanly for an empty store", () => {
+    const r = planStorageGovernance({
+      sourceDocuments: 0,
+      sourceChunks: { count: 0, chars: 0, orphanCount: 0, orphanChars: 0 },
+      treeNodes: { count: 0, chars: 0 },
+      vaultExports: 0,
+    });
+    expect(r.totalEstimatedChars).toBe(0);
+    expect(r.totalReclaimableChars).toBe(0);
+    expect(r.classes).toHaveLength(4);
   });
 });
