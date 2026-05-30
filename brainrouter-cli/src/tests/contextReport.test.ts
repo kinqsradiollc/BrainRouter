@@ -34,6 +34,18 @@ test('0.4.x-4b formatContextReport: unknown model window falls back gracefully',
   assert.ok(!out.includes('% used'), 'no percentage when window is unknown');
 });
 
+test('CLI-5 formatContextReport: prompt-cache line shows hit ratio when cache provided', () => {
+  const out = formatContextReport({ ...base, cache: { cachedTokens: 6000, missedTokens: 2000 } }).join('\n');
+  // 6000 / (6000 + 2000) = 75%.
+  assert.match(out, /Prompt cache: 6,000 cached \/ 2,000 missed \(75% hit this session\)/);
+});
+
+test('CLI-5 formatContextReport: cache line suppressed when absent or zero', () => {
+  assert.ok(!formatContextReport(base).join('\n').includes('Prompt cache:'), 'no cache field → no line');
+  const zero = formatContextReport({ ...base, cache: { cachedTokens: 0, missedTokens: 0 } }).join('\n');
+  assert.ok(!zero.includes('Prompt cache:'), 'zero prompt tokens → no line (avoids divide-by-zero)');
+});
+
 test('0.4.x-4 formatContextReport: skills sorted by tokens desc, tools by count desc', () => {
   const out = formatContextReport(base);
   const text = out.join('\n');
