@@ -32,6 +32,7 @@ export interface JobEngineOps {
   reconcilePendingBlackboard(userId: string): { reconciled: number; duplicate: number; rejected: number; items: Array<{ id: string; status: string }> };
   commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string };
   summarizeBucket(userId: string, childIds: string[], kind: string): { id: string } | null;
+  rechunkSources(userId: string, documentIds: string[]): { rechunked: number; skipped: number; chunksWritten: number };
 }
 
 export interface JobExecContext {
@@ -96,6 +97,15 @@ const EXECUTORS: Record<string, JobExecutor> = {
     const kind = typeof input?.kind === "string" ? input.kind : "topic";
     const parent = requireEngine(ctx).summarizeBucket(userIdOf(input), childIds, kind);
     return { parentId: parent?.id ?? null, sealed: parent ? childIds.length : 0 };
+  },
+  source_chunker: async (input, ctx) => {
+    // Re-chunk specific documents with the current chunker (provenance-safe;
+    // referenced docs are skipped by the engine). Requires explicit
+    // documentIds — there's no "chunk everything" sweep (chunking already runs
+    // inline on ingest, so a blind re-chunk would needlessly churn the store).
+    const documentIds: string[] = Array.isArray(input?.documentIds) ? input.documentIds.map(String) : [];
+    if (documentIds.length === 0) return { rechunked: 0, skipped: 0, chunksWritten: 0, reason: "no documentIds supplied" };
+    return requireEngine(ctx).rechunkSources(userIdOf(input), documentIds);
   },
 };
 

@@ -4,6 +4,8 @@ import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
 import { enqueueAgentJob } from "./scheduler/jobs.js";
+import { chunkSource } from "./source/chunker.js";
+import { chunkCode } from "./source/code-chunker.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
@@ -855,6 +857,38 @@ export class MemoryEngine {
   }
 
   // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
+  /**
+   * 0.4.3 (MEM-10) — source_chunker job: re-chunk source documents with the
+   * CURRENT chunker (kind-aware: AST chunker for file/code, text chunker
+   * otherwise). PROVENANCE-SAFE — skips any doc whose chunks are already cited
+   * by a live memory, because re-chunking mints new chunk ids and would orphan
+   * the cognitive_source_links (memory_verify / provenance would break). Text is
+   * reassembled from the existing ordered chunks. user-scoped. Returns counts.
+   */
+  public rechunkSources(userId: string, documentIds: string[]): { rechunked: number; skipped: number; chunksWritten: number } {
+    const store = this.store as any;
+    if (typeof store.getSourceChunksByDocument !== "function" || typeof store.replaceSourceChunks !== "function") {
+      return { rechunked: 0, skipped: 0, chunksWritten: 0 };
+    }
+    let rechunked = 0;
+    let skipped = 0;
+    let chunksWritten = 0;
+    for (const docId of documentIds) {
+      const doc = store.getSourceDocument?.(docId);
+      if (!doc || doc.userId !== userId) { skipped++; continue; }          // ownership (MEM-14)
+      if (store.isSourceDocumentReferenced(docId)) { skipped++; continue; } // provenance-safe
+      const chunks = store.getSourceChunksByDocument(docId) as SourceChunk[];
+      if (chunks.length === 0) { skipped++; continue; }
+      const text = [...chunks].sort((a, b) => a.ordinal - b.ordinal).map((c) => c.content).join("\n");
+      const isCode = doc.kind === "file" || doc.kind === "code";
+      const fresh = isCode ? chunkCode(text) : chunkSource(text);
+      const written = store.replaceSourceChunks(docId, fresh) as SourceChunk[];
+      rechunked++;
+      chunksWritten += written.length;
+    }
+    return { rechunked, skipped, chunksWritten };
+  }
+
   /**
    * 0.4.3 — provenance-safe transcript retention. Delete `transcript` source
    * documents older than `olderThanDays` whose chunks are NOT referenced by a
