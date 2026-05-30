@@ -13,6 +13,7 @@ import {
   effectivePriorityScore,
   baseScoreFromRrf,
   normalizePriority,
+  capPriority,
   blendBaseAndPriority,
   intentBoost,
   citationBoost,
@@ -306,7 +307,14 @@ export class MemoryRecallPipeline {
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // AUG-A3 — weighting / boosting helpers from the modular `reranker/`.
       const baseScore = baseScoreFromRrf(rrfScore);
-      const priorityScore = normalizePriority(effectivePriority(record as CognitiveFtsResult));
+      // 0.4.3 — clamp the priority term for generic long-lived types
+      // (instruction / architecture_decision / task_state) so never-decaying
+      // boilerplate can't out-rank fresh, on-topic findings. No-op for the
+      // task-specific types (no recallPriorityCap set).
+      const priorityScore = capPriority(
+        normalizePriority(effectivePriority(record as CognitiveFtsResult)),
+        getMemoryTypeConfig(record.type).recallPriorityCap,
+      );
       let finalScore = blendBaseAndPriority(baseScore, priorityScore);
 
       if (activeSkill && record.skill_tag === activeSkill) {
