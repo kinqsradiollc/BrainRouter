@@ -45,7 +45,13 @@ const CONFIG_DIR = path.resolve(HERE, '..', '..', 'config');
 // ---- shapes ------------------------------------------------------------
 
 export interface ModelPricing {
-  inputCacheHit: number;
+  /**
+   * Per-1M cache-HIT input price. Optional: some vendor rows (e.g. gpt-5-pro,
+   * gpt-4o-mini) don't publish a separate cache-hit rate. Consumers MUST
+   * coerce `?? 0` — a bare `undefined * tokens` is NaN, which silently
+   * renders as "$0.00" and hides real cost.
+   */
+  inputCacheHit?: number;
   inputCacheMiss: number;
   output: number;
 }

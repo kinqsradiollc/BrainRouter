@@ -25,12 +25,44 @@ test('pricingFor strips vendor prefix (openrouter / openai)', () => {
   assert.deepEqual(a, b);
 });
 
-test('pricingFor returns a zero-cost row for unknown models', () => {
+test('pricingFor returns a zero-cost row for TRULY unknown models (no family match)', () => {
+  // "some-future-model-id" matches none of the familyFallbacks regexes, so it
+  // is genuinely unknown and correctly zeroes. (A dot-versioned gpt-5 id WOULD
+  // match a fallback — see the next test.)
   const p = pricingFor('some-future-model-id');
   assert.ok(p);
   assert.equal(p!.inputCacheHit, 0);
   assert.equal(p!.inputCacheMiss, 0);
   assert.equal(p!.output, 0);
+});
+
+test('pricingFor resolves a dot-versioned SKU via familyFallbacks (the $0.00 bug)', () => {
+  // gpt-5.3-codex is NOT a key in models.json, but the `^gpt-5.*codex`
+  // fallback must route it to gpt-5-codex pricing instead of the zero row.
+  const codex = pricingFor('gpt-5.3-codex');
+  const base = pricingFor('gpt-5-codex');
+  assert.ok(codex, 'gpt-5.3-codex should resolve, not be undefined');
+  assert.ok(codex!.output > 0, `expected non-zero output price, got ${codex!.output}`);
+  assert.deepEqual(codex, base, 'gpt-5.3-codex should price as gpt-5-codex');
+  // codex-max + plain dot-versioned gpt-5 also resolve (regression guard).
+  assert.ok((pricingFor('gpt-5-codex-max')?.output ?? 0) > 0);
+  assert.equal(pricingFor('gpt-5.1')?.output, pricingFor('gpt-5')?.output);
+});
+
+test('costUsd is finite (not NaN) when a model omits inputCacheHit', () => {
+  // gpt-5-pro + gpt-4o-mini ship pricing WITHOUT inputCacheHit. With cached
+  // tokens > 0, an un-coerced `undefined * tokens` would be NaN → "$0.00".
+  for (const model of ['gpt-5-pro', 'gpt-4o-mini']) {
+    const cost = costUsd(model, { cachedTokens: 100_000, missedTokens: 50_000, completionTokens: 10_000 });
+    assert.ok(Number.isFinite(cost), `${model} cost must be finite, got ${cost}`);
+    assert.ok(cost > 0, `${model} cost must be > 0 from miss+output, got ${cost}`);
+  }
+});
+
+test('costUsd for gpt-5.3-codex is non-zero (end-to-end /tokens repro)', () => {
+  // The exact symptom the user reported: $0.00 on gpt-5.3-codex.
+  const cost = costUsd('gpt-5.3-codex', { cachedTokens: 15_872, missedTokens: 520_806, completionTokens: 10_048 });
+  assert.ok(cost > 0, `gpt-5.3-codex turn cost must be > 0, got $${cost.toFixed(4)}`);
 });
 
 test('pricingFor returns undefined on empty input', () => {
