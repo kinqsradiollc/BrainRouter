@@ -684,7 +684,14 @@ export class MemoryEngine {
   /** MEM-4 — stage extracted candidates for review before they become memory. */
   public stageBlackboardCandidates(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
     const store = this.blackboardStore();
-    return store ? store.stageBlackboardItems(userId, items) : [];
+    if (!store) return [];
+    // MEM-13 — redact candidate content at the staging boundary, before it
+    // persists, so secrets never land in the blackboard.
+    const redacted = items.map((i) => ({
+      ...i,
+      candidate: { ...i.candidate, content: redactSensitiveMemoryText(i.candidate.content) },
+    }));
+    return store.stageBlackboardItems(userId, redacted);
   }
 
   /** MEM-4 — reconcile all pending items (dedup/score/threshold) and persist the verdicts. */
