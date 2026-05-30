@@ -3,6 +3,7 @@ import { formatBudget, readGoal } from '../state/goalStore.js';
 import { readPlan } from '../state/taskStore.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
+import { costUsd } from '../runtime/pricing.js';
 
 /**
  * Status-line segment renderers. Each segment is a pure-ish function from
@@ -20,6 +21,7 @@ import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
  *   - `effort`   — reasoning depth (low / high); hidden when medium (the default)
  *   - `model`    — chat-LLM model name
  *   - `tokens`   — last turn's input/output tokens, only when calls > 0
+ *   - `cost`     — last turn's USD cost + cache-hit %, only when calls > 0 (CLI-9)
  *   - `session`  — first ~22 chars of the sessionKey
  *   - `branch`   — git branch, only when in a git repo
  *   - `dirty`    — `*` when the working tree has uncommitted changes
@@ -41,6 +43,7 @@ export const SEGMENT_NAMES = [
   'effort',
   'model',
   'tokens',
+  'cost',
   'session',
   'branch',
   'dirty',
@@ -58,7 +61,7 @@ export interface SegmentInputs {
   sessionKey: string;
   accessMode: string;
   model: string;
-  lastTurnUsage: { calls: number; promptTokens: number; completionTokens: number };
+  lastTurnUsage: { calls: number; promptTokens: number; completionTokens: number; cachedTokens?: number; missedTokens?: number };
   /** Optional GitHub PR identifier (e.g. "#42"). REPL caches the gh shell-out, so this is precomputed. */
   prDetector?: () => string | null;
   /**
@@ -113,6 +116,18 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       const u = inputs.lastTurnUsage;
       if (u.calls <= 0) return undefined;
       return `${u.promptTokens}↑${u.completionTokens}↓`;
+    }
+    case 'cost': {
+      // CLI-9 — last turn's USD cost (+ cache-hit % when known). Hidden before
+      // the first turn; opt-in via the user's `statusline` preference.
+      const u = inputs.lastTurnUsage;
+      if (u.calls <= 0) return undefined;
+      const cached = u.cachedTokens ?? 0;
+      const missed = u.missedTokens ?? Math.max(0, u.promptTokens - cached);
+      const usd = costUsd(inputs.model, { cachedTokens: cached, missedTokens: missed, completionTokens: u.completionTokens });
+      const base = `$${usd.toFixed(4)}`;
+      const totalPrompt = cached + missed;
+      return totalPrompt > 0 ? `${base} ${Math.round((cached / totalPrompt) * 100)}% cached` : base;
     }
     case 'session': {
       const k = inputs.sessionKey;

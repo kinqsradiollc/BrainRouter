@@ -13,10 +13,16 @@ import {
   effectivePriorityScore,
   baseScoreFromRrf,
   normalizePriority,
+  capPriority,
   blendBaseAndPriority,
   intentBoost,
   citationBoost,
   SKILL_BOOST,
+  tokenSet,
+  lexicalOverlap,
+  selectMMR,
+  LEXICAL_SCORE_FLOOR,
+  type MmrCandidate,
 } from "./reranker/index.js";
 
 /**
@@ -64,6 +70,25 @@ export function readRecallLimits(): RecallLimits {
     rerankPool: recallLimit('BRAINROUTER_RECALL_RERANK_POOL', RECALL_LIMITS_DEFAULT.rerankPool),
     topResults: recallLimit('BRAINROUTER_RECALL_TOP_RESULTS', RECALL_LIMITS_DEFAULT.topResults),
   };
+}
+
+/**
+ * 0.4.3 — selection-stage config for the no-cross-encoder (default) path:
+ * lexical relevance demotion + MMR diversity. Both ON by default; tune via
+ *   BRAINROUTER_RECALL_DIVERSITY        on|off  (default on)
+ *   BRAINROUTER_RECALL_DIVERSITY_LAMBDA 0..1    (default 0.7 — relevance-leaning)
+ * No effect when a cross-encoder reranker key is configured (that path wins).
+ */
+export interface RecallSelection {
+  diversity: boolean;
+  lambda: number;
+}
+
+export function readRecallSelection(env: NodeJS.ProcessEnv = process.env): RecallSelection {
+  const diversity = env.BRAINROUTER_RECALL_DIVERSITY?.trim().toLowerCase() !== 'off';
+  const rawLambda = Number.parseFloat(env.BRAINROUTER_RECALL_DIVERSITY_LAMBDA ?? '');
+  const lambda = Number.isFinite(rawLambda) && rawLambda >= 0 && rawLambda <= 1 ? rawLambda : 0.7;
+  return { diversity, lambda };
 }
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
@@ -189,6 +214,7 @@ export class MemoryRecallPipeline {
     const { userId, sessionKey, query, activeSkill, filters } = params;
     const intent = detectTaskIntent(query);
     const limits = readRecallLimits();
+    const selection = readRecallSelection();
 
     // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
     const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
@@ -306,7 +332,14 @@ export class MemoryRecallPipeline {
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // AUG-A3 — weighting / boosting helpers from the modular `reranker/`.
       const baseScore = baseScoreFromRrf(rrfScore);
-      const priorityScore = normalizePriority(effectivePriority(record as CognitiveFtsResult));
+      // 0.4.3 — clamp the priority term for generic long-lived types
+      // (instruction / architecture_decision / task_state) so never-decaying
+      // boilerplate can't out-rank fresh, on-topic findings. No-op for the
+      // task-specific types (no recallPriorityCap set).
+      const priorityScore = capPriority(
+        normalizePriority(effectivePriority(record as CognitiveFtsResult)),
+        getMemoryTypeConfig(record.type).recallPriorityCap,
+      );
       let finalScore = blendBaseAndPriority(baseScore, priorityScore);
 
       if (activeSkill && record.skill_tag === activeSkill) {
@@ -440,7 +473,8 @@ export class MemoryRecallPipeline {
     // configurable).
     const rerankCandidates = sparkScoredResults.slice(0, limits.rerankPool);
     let usedReranker = false;
-    
+    let usedLexicalSelection = false;
+
     if (this.rerankerService.isReady()) {
       try {
         const documents = rerankCandidates.map(r => r.record.content);
@@ -455,6 +489,24 @@ export class MemoryRecallPipeline {
       } catch (e) {
         console.error("[BrainRouter] Reranker failed during recall, falling back to RRF:", (e as Error).message);
       }
+    }
+
+    // Stage 3b (0.4.3) — no cross-encoder configured (the default install):
+    // run a local, no-network selection over the candidate pool. Demote
+    // records that share few salient tokens with the query (generic boilerplate
+    // → ~0 overlap), then MMR-select for diversity — which also collapses
+    // near-duplicate records (5× "BrainRouter is an autonomous agent" → 1) so
+    // they can't fill the top-K. Zero added latency (token-set math only).
+    if (!usedReranker && selection.diversity) {
+      const qTokens = tokenSet(query);
+      const mmrCandidates: MmrCandidate<typeof rerankCandidates[number]>[] = rerankCandidates.map((r) => {
+        const docTokens = tokenSet(String(r.record.content ?? ""));
+        const lex = lexicalOverlap(qTokens, docTokens);
+        const adjusted = r.score * (LEXICAL_SCORE_FLOOR + (1 - LEXICAL_SCORE_FLOOR) * lex);
+        return { item: r, score: adjusted, tokens: docTokens };
+      });
+      topResults = selectMMR(mmrCandidates, limits.topResults, selection.lambda);
+      usedLexicalSelection = true;
     }
 
     // Stage 4 — LLM Relevance Judge (semantic approve/reject gate)
@@ -572,7 +624,10 @@ export class MemoryRecallPipeline {
     const baseStrategy = vecResults.length > 0
       ? (usedReranker ? "hybrid+rerank" : "hybrid")
       : (usedReranker ? "keyword+rerank" : (filePathResults.length > 0 ? "keyword+file" : "keyword"));
-    const recallStrategy = judgeUsed ? `${baseStrategy}+judge` : baseStrategy;
+    // Surface the 0.4.3 local selection stage in the strategy label (no shared-
+    // type change): "+lexmmr" = lexical-relevance demotion + MMR diversity ran.
+    const selectStrategy = usedLexicalSelection ? `${baseStrategy}+lexmmr` : baseStrategy;
+    const recallStrategy = judgeUsed ? `${selectStrategy}+judge` : selectStrategy;
 
     const durationMs = Date.now() - startTime;
 
@@ -585,6 +640,7 @@ export class MemoryRecallPipeline {
       typeBoosts,
       skillBoostApplied,
       rerankerUsed: usedReranker,
+      diversityApplied: usedLexicalSelection,
       judgeUsed,
       judgeApproved,
       judgeRejected,

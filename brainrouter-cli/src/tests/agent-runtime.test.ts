@@ -1932,3 +1932,142 @@ test('runTurn recovery: synthetic orphan results do NOT trigger the R1 child-dra
 // and task_agent child spawn under the native adapter. Equivalent
 // coverage on the OpenAI-compat path is upstream in this file (see the
 // `runTurn` block of tests starting at the top).
+
+test('runTurn loop-limit turn still rolls usage into session totals + counts the turn (P2a regression)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    // Distinct dirs so every forced tool call differs (dodges the repeat
+    // guards) and actually succeeds against the real fs.
+    for (let i = 0; i < 8; i++) fs.mkdirSync(path.join(workspace, `d${i}`));
+    const originalFetch = globalThis.fetch;
+    // maxToolLoops:1 → maxLoops floors to 5 (fast); keep the repeat guard out
+    // of the way so we reach the loop limit rather than a guard break.
+    setCliKnobOverride({ repeatToolSequenceLimit: 999, maxToolLoops: 1 });
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      // ALWAYS request another tool call → never a clean exit → loop limit.
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: '',
+            tool_calls: [{
+              id: `call_${llmCalls}`,
+              type: 'function',
+              function: { name: 'list_dir', arguments: JSON.stringify({ path: `d${llmCalls % 8}` }) },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('keep going', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      // Sanity: we really hit the loop limit (not a clean exit).
+      assert.equal(agent.lastTurnHitLoopLimit, true);
+      assert.match(answer, /tool-call loop limit/);
+      // The regression itself: a `return` used to fire on the loop-limit path
+      // BEFORE these accumulated, so the most expensive turns vanished from
+      // session totals. maxLoops=5 → ≥5 LLM calls at 10 prompt tokens each.
+      assert.ok(
+        agent.sessionUsage.promptTokens >= 50,
+        `loop-limit turn must accumulate session prompt tokens, got ${agent.sessionUsage.promptTokens}`,
+      );
+      assert.equal(agent.sessionUsage.turns, 1);
+      assert.ok(agent.sessionUsage.completionTokens >= 10);
+    } finally {
+      globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
+    }
+  });
+});
+
+test('runTurn plan-sync guardrail: nudges once when a turn works but advances no plan item (stale-plan bug)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { updatePlan } = await import('../state/taskStore.js');
+    const sessionKey = 'session:plansync';
+    // The exact /where state: an in_progress item, nothing completed.
+    updatePlan(workspace, { plan: [
+      { step: 'Audit auth routes', status: 'in_progress' },
+      { step: 'Summarize findings', status: 'pending' },
+    ] }, sessionKey);
+
+    const originalFetch = globalThis.fetch;
+    const statuses: string[] = [];
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls === 1) {
+        // Turn does real work: one tool call (no update_plan).
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_dir', arguments: '{"path":"."}' } }] } }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // Conclude with prose, NO tool calls, NO update_plan — the bug shape.
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Findings: auth routes leak the API key.' } }],
+        usage: { prompt_tokens: 30, completion_tokens: 8 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true, sessionKey,
+      });
+      const answer = await agent.runTurn('audit the api', { onStatusUpdate: (s) => statuses.push(s), onToolStart: () => {}, onToolEnd: () => {} });
+      // Guard added exactly one extra iteration: toolcall → answer → [nudge] → answer.
+      assert.equal(llmCalls, 3, `expected 3 LLM calls from the plan-sync re-prompt, got ${llmCalls}`);
+      assert.ok(statuses.some((s) => /plan not advanced/i.test(s)), 'plan-sync nudge status should fire');
+      assert.match(answer, /findings/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn plan-sync guardrail: does NOT fire when the turn completes a plan item', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const { updatePlan } = await import('../state/taskStore.js');
+    const sessionKey = 'session:plansync2';
+    updatePlan(workspace, { plan: [{ step: 'Audit auth routes', status: 'in_progress' }] }, sessionKey);
+
+    const originalFetch = globalThis.fetch;
+    const statuses: string[] = [];
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls === 1) {
+        // The model marks the item completed via update_plan.
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'update_plan', arguments: JSON.stringify({ plan: [{ step: 'Audit auth routes', status: 'completed' }] }) } }] } }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Done — audit complete.' } }],
+        usage: { prompt_tokens: 30, completion_tokens: 8 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true, sessionKey,
+      });
+      await agent.runTurn('audit the api', { onStatusUpdate: (s) => statuses.push(s), onToolStart: () => {}, onToolEnd: () => {} });
+      assert.equal(llmCalls, 2, 'no extra iteration when the plan advanced');
+      assert.ok(!statuses.some((s) => /plan not advanced/i.test(s)), 'no nudge when an item was completed this turn');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

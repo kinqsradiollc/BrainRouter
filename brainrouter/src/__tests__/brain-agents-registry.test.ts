@@ -12,6 +12,13 @@ const EXPECTED = [
   { id: "focus_distiller", modelClass: "synthesis", dependsOn: ["focus_shift_judge"] },
   { id: "identity_distiller", modelClass: "synthesis", dependsOn: ["cognitive_extractor"] },
   { id: "relevance_judge", modelClass: "judge", dependsOn: [] },
+  // 0.4.3 (MEM-10) — depth-pipeline agents
+  { id: "source_chunker", modelClass: "none", dependsOn: [] },
+  { id: "blackboard_reconciler", modelClass: "none", dependsOn: [] },
+  { id: "tree_sealer", modelClass: "none", dependsOn: [] },
+  { id: "tree_digest", modelClass: "synthesis", dependsOn: ["tree_sealer"] },
+  { id: "vault_exporter", modelClass: "none", dependsOn: [] },
+  { id: "benchmark_eval", modelClass: "none", dependsOn: [] },
 ];
 
 describe("brain agent registry", () => {
@@ -57,6 +64,6 @@ describe("brain agent registry", () => {
   it("listBrainAgents returns a fresh array (callers can't mutate the registry)", () => {
     const first = listBrainAgents();
     first.push({} as any);
-    expect(listBrainAgents()).toHaveLength(8);
+    expect(listBrainAgents()).toHaveLength(14);
   });
 });

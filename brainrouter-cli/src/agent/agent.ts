@@ -12,7 +12,8 @@ import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
 import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../cli/cliPrompt.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
-import { appendTranscriptEntry, redactText } from '../state/sessionStore.js';
+import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
+import { recordFileMutation } from '../state/fileSnapshotStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -60,7 +61,8 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // 0.3.9 item 8 — cache-first context regions. The helper here lets us
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
-import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
+import { decideExecutionPolicy } from '../runtime/execPolicy.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -107,6 +109,7 @@ import {
   synthesizeOrphanResults,
   suggestSimilarToolName,
   looksLikeStalledPreamble,
+  looksLikeDeferredToolPromise,
 } from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
@@ -897,6 +900,14 @@ export class Agent {
   private toolCallRepair: ToolCallRepair | null = null;
   /** 0.3.9 item 11 — last repair report, surfaced via /briefing debug. */
   private lastRepairReport: RepairReport | null = null;
+  /**
+   * 0.4.3 (CLI-8) — session-cumulative repair telemetry. The per-turn report
+   * is reset every intent; these totals persist across the session (reset only
+   * by `resetSessionCounters()`) so `/context` can show how often the
+   * tool-call repair pipeline had to intervene — a health signal for the
+   * model/transport pairing.
+   */
+  private repairTotals = { scavenged: 0, truncationsFixed: 0, truncationsUnrecoverable: 0, stormsBroken: 0, turnsWithRepair: 0 };
   /** 0.3.9 item 13 — count of NEEDS_HIGH escalations this turn, bounded so a marker loop can't churn. */
   private tierEscalationsThisTurn = 0;
   /**
@@ -909,6 +920,14 @@ export class Agent {
    * `prompt_tokens` value).
    */
   private lastSeenPromptTokens: number | undefined;
+  /**
+   * 0.4.x-3b (`/rewind --files`) — file-restore undo log state. `snapshotsThisTurn`
+   * is null at turn start; on the first file mutation of a turn we lazily compute
+   * `fileSnapshotTurn` (the user-turn ordinal from the transcript) and capture
+   * each touched file's prior content once. See state/fileSnapshotStore.ts.
+   */
+  private fileSnapshotTurn = 0;
+  private snapshotsThisTurn: Set<string> | null = null;
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -1090,6 +1109,8 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // 0.4.x-3b — new turn: re-resolve the file-snapshot ordinal on first mutation.
+    this.snapshotsThisTurn = null;
     this.lastGoalTransition = undefined;
     // 0.3.9 item 11 — clear the storm window for the new user intent.
     // Old repetition state from the previous turn shouldn't suppress a
@@ -1296,6 +1317,21 @@ export class Agent {
     // either deliver the answer or admit it can't.
     let preambleGuardFired = 0;
     const PREAMBLE_GUARD_MAX = 2;
+    // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
+    // goal_complete — so a turn that concludes WITHOUT goal_complete (just
+    // delivers the answer) never reconciles the plan, leaving it stale (the
+    // "audit delivered, plan still ⏳" bug). Snapshot how many items are already
+    // completed; if this turn does real work but advances NONE of them while
+    // items remain open, nudge ONCE to reconcile. Note we can't gate on "called
+    // update_plan" — the model calls it to CREATE the plan (item in_progress)
+    // yet never marks anything completed; the completed-count delta is the
+    // honest signal. Bounded so a model that won't update can't loop.
+    let planSyncGuardFired = 0;
+    const PLAN_SYNC_GUARD_MAX = 1;
+    const planCompletedAtTurnStart = (() => {
+      try { return readPlan(this.workspaceRoot, this.sessionKey).items.filter((i) => i.status === 'completed').length; }
+      catch { return 0; }
+    })();
     // Tracks whether we exited the loop because the LLM stopped requesting
     // tools (clean break) vs because we hit maxLoops. Critical: an empty
     // `finalAnswer === ''` from a clean break is NOT a loop-limit timeout.
@@ -1602,6 +1638,16 @@ export class Agent {
         typeof response.content === 'string' ? response.content : null,
       );
       this.lastRepairReport = repaired.report;
+      // CLI-8 — fold this turn's report into the session totals.
+      const rr = repaired.report;
+      const touched = rr.scavenged > 0 || rr.truncationsFixed > 0 || rr.truncationsUnrecoverable > 0 || rr.stormsBroken > 0;
+      if (touched) {
+        this.repairTotals.scavenged += rr.scavenged;
+        this.repairTotals.truncationsFixed += rr.truncationsFixed;
+        this.repairTotals.truncationsUnrecoverable += rr.truncationsUnrecoverable;
+        this.repairTotals.stormsBroken += rr.stormsBroken;
+        this.repairTotals.turnsWithRepair += 1;
+      }
       for (const c of repaired.calls) if (c.id) survivingIds.add(c.id);
       if (repaired.report.scavenged > 0 || repaired.report.truncationsFixed > 0 || repaired.report.stormsBroken > 0) {
         traceEvent('tool_call.repair', {
@@ -1735,10 +1781,16 @@ export class Agent {
         // Inject a corrective user message and continue one more iteration.
         // The model either delivers the substantive answer or, on the next
         // pass, writes a real reply that escapes the preamble heuristic.
+        // Fire when it's a stalled preamble AND either (a) the model already
+        // called tools this turn then stalled, OR (b) it opened with a
+        // confident "I'll run/check/spawn X" promise but emitted ZERO tools
+        // (the "narrated intent, never acted" turn — gpt-5.3-codex's
+        // "Absolutely — I'll run the full deep sweep now" stall). Without (b)
+        // a turn that promises work and does nothing slips straight through.
         if (
           preambleGuardFired < PREAMBLE_GUARD_MAX &&
-          this.lastTurnToolCalls > 0 &&
-          looksLikeStalledPreamble(response.content)
+          looksLikeStalledPreamble(response.content) &&
+          (this.lastTurnToolCalls > 0 || looksLikeDeferredToolPromise(response.content))
         ) {
           preambleGuardFired += 1;
           const preview = response.content.trim().slice(0, 140);
@@ -1757,6 +1809,39 @@ export class Agent {
           this.recordTranscript(guardMsg);
           callbacks.onStatusUpdate(`Recovery: preamble-without-action (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing continuation`);
           continue;
+        }
+
+        // Plan-sync guardrail — see planCompletedAtTurnStart. The model is about
+        // to finish (no tool_calls, clean exit) but it did real work this turn
+        // yet advanced NO plan item while open items remain. That's the "work
+        // done, plan left at ⏳" bug — nudge once to reconcile, then accept the
+        // turn regardless (bounded).
+        if (planSyncGuardFired < PLAN_SYNC_GUARD_MAX && this.lastTurnToolCalls > 0) {
+          let plan: ReturnType<typeof readPlan> | { items: [] };
+          try { plan = readPlan(this.workspaceRoot, this.sessionKey); } catch { plan = { items: [] }; }
+          const open = plan.items.filter((i) => i.status !== 'completed');
+          const completedNow = plan.items.length - open.length;
+          if (plan.items.length > 0 && open.length > 0 && completedNow === planCompletedAtTurnStart) {
+            planSyncGuardFired += 1;
+            const openSummary = open
+              .map((i) => `  - [${i.status === 'in_progress' ? '⏳' : '☐'}] ${i.step}`)
+              .join('\n');
+            const correction = [
+              'Runtime plan-sync guardrail tripped.',
+              `You did work this turn but advanced no plan item, and the plan still has ${open.length} open item(s):`,
+              openSummary,
+              '',
+              'Before finishing, make the plan honest about what you ACTUALLY did this turn:',
+              '- If you completed any of these, call `update_plan` now to mark them `completed` (keep at most one `in_progress`).',
+              '- If an item is genuinely still unfinished, leave it as-is and just say so in your answer.',
+              'Then deliver your final answer — the user only sees your tool_calls and final prose, not the plan unless you sync it.',
+            ].join('\n');
+            const guardMsg = { role: 'user', content: correction };
+            this.chatHistory.push(guardMsg);
+            this.recordTranscript(guardMsg);
+            callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
+            continue;
+          }
         }
 
         finalAnswer = response.content;
@@ -2178,11 +2263,14 @@ export class Agent {
       tokens_in: this.lastTurnUsage.promptTokens,
       tokens_out: this.lastTurnUsage.completionTokens,
     });
-    if (!exitedCleanly) {
-      // Same string as finalAnswer above; preserve the historical early-return
-      // shape so callers that switch on the loop-limit branch keep working.
-      return finalAnswer;
-    }
+    // Accumulate session usage + (below) run the turn-end tool-result shrink on
+    // EVERY exit path, the loop-limit path included. A `return finalAnswer`
+    // used to sit here and skip all of it for loop-limit turns — which both
+    // undercounted session token totals for the MOST expensive turns (the ones
+    // that ran to the limit) AND left their oversized tool results uncompacted,
+    // bloating the next `/continue`. Callers detect the loop-limit branch via
+    // `lastTurnHitLoopLimit` (set above) + the answer string, not this return,
+    // so falling through to the shared tail is contract-safe.
     this.sessionUsage.promptTokens += this.lastTurnUsage.promptTokens;
     this.sessionUsage.completionTokens += this.lastTurnUsage.completionTokens;
     this.sessionUsage.calls += this.lastTurnUsage.calls;
@@ -2265,6 +2353,7 @@ export class Agent {
         const resolved = resolveHere(args.path, { forWrite: true });
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
+        this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
@@ -2292,6 +2381,7 @@ export class Agent {
         }
 
         const updated = content.replace(target, replacement);
+        this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
         return `Successfully edited ${args.path}`;
       }
@@ -2361,8 +2451,11 @@ export class Agent {
       }
       case 'run_command': {
         const cmd = args.command;
-        if (this.accessMode !== 'shell') {
-          return `Command execution denied: agent access mode is "${this.accessMode}".`;
+        // CLI-11 — route the shell gate through the unified execution policy
+        // (same outcome as the previous `accessMode !== 'shell'` check).
+        const shellPolicy = decideExecutionPolicy('shell', this.accessMode);
+        if (shellPolicy.decision === 'deny') {
+          return `Command execution denied: ${shellPolicy.reason}.`;
         }
         // Approval gating routes through the pure resolver in
         // runtime/dangerousCommand.ts. Three outcomes:
@@ -2539,6 +2632,13 @@ export class Agent {
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
         if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
+        // 0.4.x-3b — capture each target file's prior content before the patch
+        // applies (undo log for /rewind --files). Parse the envelope's file
+        // headers (`*** Add/Update/Delete File: <path>`).
+        for (const m of patch.matchAll(/^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+)\s*$/gm)) {
+          const p = m[1].trim();
+          if (p) { try { this.captureFileSnapshot(path.resolve(this.workspaceRoot, p)); } catch { /* noop */ } }
+        }
         return applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
       }
       case 'update_plan': {
@@ -2734,6 +2834,83 @@ export class Agent {
   }
 
   /**
+   * 0.4.x-4b (`/context`) — best estimate of the CURRENT context-window fill
+   * in tokens. Prefers the provider's last `usage.prompt_tokens` (the truest
+   * count); falls back to the content-aware estimate of `chatHistory` for
+   * turn 1 / silent runs. This is the exact signal auto-compact triggers on,
+   * so `/context` and the auto-compact threshold agree.
+   */
+  public getCurrentContextTokens(): number {
+    return this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
+      ? this.lastSeenPromptTokens
+      : estimateChatHistoryTokens(this.chatHistory as any);
+  }
+
+  /**
+   * CLI-5 — read-only snapshot of the cache-stable prefix's components (system
+   * message + pinned memory anchors) from the live chat history. Tool-list
+   * fingerprinting is omitted here (the per-turn tool set isn't retained on the
+   * agent); `/context prefix` diffs this across invocations for drift labels.
+   */
+  public getPrefixComponents(): PrefixComponents {
+    return computePrefixComponents(this.chatHistory as any, []);
+  }
+
+  /**
+   * CLI-4 — `/bg`: run a prompt as a DETACHED background worker. Reuses the
+   * proven worker-thread infra (a separate in-process Agent + on-disk
+   * transcript/status), so there's no concurrency hazard with the foreground
+   * turn's chat history. Manage via `/workers` (list / attach / close) or `/ps`.
+   */
+  public spawnBackgroundWorker(goal: string): { id: string; status: string; goal: string } {
+    const worker = spawnWorkerThread(this.mcpClient, this.llmConfig, {
+      workspaceRoot: this.workspaceRoot,
+      launchCwd: this.launchCwd,
+      role: 'worker',
+      goal,
+      parentSessionKey: this.sessionKey,
+      parentAccessMode: this.accessMode,
+      spawnerDepth: this.agentDepth,
+      effortOverride: this.effortOverride,
+    });
+    return { id: worker.id, status: worker.status, goal: worker.goal };
+  }
+
+  /**
+   * 0.4.3 (CLI-8) — session-cumulative tool-call repair telemetry, surfaced by
+   * `/context`. Returns a copy so callers can't mutate the running totals.
+   */
+  public getRepairTotals(): { scavenged: number; truncationsFixed: number; truncationsUnrecoverable: number; stormsBroken: number; turnsWithRepair: number } {
+    return { ...this.repairTotals };
+  }
+
+  /**
+   * 0.4.x-3b (`/rewind --files`) — record a file's prior content the first time
+   * it's mutated this turn, tagged with the user-turn ordinal. Lazily computes
+   * the ordinal from the transcript on the turn's first capture (the user
+   * message is already recorded by then). Best-effort: never throws into a tool.
+   */
+  private captureFileSnapshot(absPath: string): void {
+    try {
+      const rel = path.relative(this.workspaceRoot, absPath);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return; // outside workspace
+      if (this.snapshotsThisTurn === null) {
+        // First mutation of the turn — resolve the turn ordinal once.
+        const users = readTranscriptEntries(this.workspaceRoot, this.sessionKey, Number.MAX_SAFE_INTEGER)
+          .filter((e) => e.role === 'user').length;
+        this.fileSnapshotTurn = users;
+        this.snapshotsThisTurn = new Set();
+      }
+      if (this.snapshotsThisTurn.has(rel)) return; // only the turn's first touch
+      this.snapshotsThisTurn.add(rel);
+      const priorContent = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf8') : null;
+      recordFileMutation(this.workspaceRoot, this.sessionKey, { turn: this.fileSnapshotTurn, path: rel, priorContent });
+    } catch {
+      /* snapshotting must never break a tool call */
+    }
+  }
+
+  /**
    * 0.3.9 item 13 — read-only snapshot of the active LLM config for
    * slash commands that need the provider id (e.g. `/tier`).
    */
@@ -2911,6 +3088,7 @@ export class Agent {
    */
   public resetSessionCounters(): void {
     this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
+    this.repairTotals = { scavenged: 0, truncationsFixed: 0, truncationsUnrecoverable: 0, stormsBroken: 0, turnsWithRepair: 0 };
     this.memoryMetrics = {
       briefingTokensInjected: 0,
       offloadCharsAvoided: 0,

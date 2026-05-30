@@ -99,7 +99,7 @@ export const memoryEngineeringToolSchemas = [
   },
   {
     name: "memory_verify",
-    description: "Update verification status and confidence for a memory after re-checking it.",
+    description: "Inspect and/or update a memory's verification. Always returns the record plus its source-chunk provenance (the excerpts it was distilled from); omit verificationStatus to inspect read-only, or pass it (and optional confidence/status/note) to also record a re-check.",
     inputSchema: {
       type: "object",
       properties: {
@@ -110,7 +110,7 @@ export const memoryEngineeringToolSchemas = [
         verificationStatus: { type: "string", enum: ["", "verified", "unverified", "stale"] },
         note: { type: "string" },
       },
-      required: ["recordId", "verificationStatus"],
+      required: ["recordId"],
     },
   },
 ] as const;
@@ -273,16 +273,25 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
         recordId: z.string(),
         confidence: z.number().min(0).max(1).optional(),
         status: z.enum(["active", "superseded", "archived", "needs_verification"]).optional(),
-        verificationStatus: z.enum(["", "verified", "unverified", "stale"]),
+        verificationStatus: z.enum(["", "verified", "unverified", "stale"]).optional(),
         note: z.string().optional(),
       }).parse(args);
-      const result = memoryEngine.updateMemory(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, {
-        confidence: params.confidence,
-        status: params.status,
-        verificationStatus: params.verificationStatus,
-        note: params.note,
-      });
-      return toolResult(result);
+      const uid = effectiveUserId(params.userId, options?.defaultUserId);
+      // Apply a verification update only when a mutable field was supplied;
+      // otherwise this is a read-only provenance inspection.
+      const hasUpdate =
+        params.confidence !== undefined || params.status !== undefined ||
+        params.verificationStatus !== undefined || params.note !== undefined;
+      const record = hasUpdate
+        ? memoryEngine.updateMemory(uid, params.recordId, {
+            confidence: params.confidence,
+            status: params.status,
+            verificationStatus: params.verificationStatus,
+            note: params.note,
+          })
+        : memoryEngine.getMemoryById(uid, params.recordId);
+      // MEM-3 — the source chunks this record was distilled from.
+      return toolResult({ record, sources: memoryEngine.getRecordProvenance(uid, params.recordId) });
     }
     default:
       throw new Error(`Unknown engineering memory tool: ${name}`);

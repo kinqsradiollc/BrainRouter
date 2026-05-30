@@ -13,7 +13,25 @@ import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from 
 import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
+import { ingestSource, type SourceIngestStore } from "./source/ingest.js";
 import crypto from "node:crypto";
+
+/**
+ * MEM-2′ — minimum redacted-char length for a turn message to be worth
+ * persisting as a source document (skips greetings / acks). ~30 tokens.
+ */
+const MIN_SOURCE_CHARS = 120;
+
+/**
+ * MEM-3 — the store capability needed for batch-level provenance linking.
+ * Structural (minimal shapes) so it stays decoupled from the concrete store
+ * and is runtime-detected, like the source-ingest capability.
+ */
+interface ProvenanceStore {
+  getSourceDocumentByHash(userId: string, hash: string): { id: string } | null;
+  getSourceChunksByDocument(documentId: string): { id: string }[];
+  linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void;
+}
 
 export class MemoryCapturePipeline {
   constructor(
@@ -55,6 +73,12 @@ export class MemoryCapturePipeline {
       sensoryRecords.push(record);
     }
 
+    // 1b. MEM-2′ — token-aware source capture. Persist each substantial turn
+    // message as a source document + chunks so the raw content stays
+    // retrievable and citable (record→chunk provenance lands in MEM-3).
+    // Best-effort + idempotent; never blocks the rest of the turn.
+    this.ingestTurnSources(userId, sessionKey, messages);
+
     // 2. Decide if we should trigger Cognitive extraction
     const unextractedCount = this.store.getUnextractedSensoryCount(userId, sessionKey);
 
@@ -78,6 +102,100 @@ export class MemoryCapturePipeline {
       cognitiveExtractionStatus,
       cognitiveExtractionError,
     };
+  }
+
+  /**
+   * MEM-2′ — narrow the store to the source-ingest capability. These methods
+   * live on the concrete SqliteMemoryStore, not the IMemoryStore interface, so
+   * detect them at runtime and skip gracefully on a store that lacks them
+   * (e.g. a partial test mock) rather than widening the shared contract.
+   */
+  private asSourceStore(): SourceIngestStore | null {
+    const s = this.store as Partial<SourceIngestStore>;
+    return typeof s.createSourceDocument === "function" &&
+      typeof s.getSourceChunksByDocument === "function" &&
+      typeof s.addSourceChunks === "function"
+      ? (s as SourceIngestStore)
+      : null;
+  }
+
+  /**
+   * MEM-2′ — persist substantial turn messages as source documents + chunks.
+   * Synchronous but cheap (redact + hash + chunk + local inserts; no LLM or
+   * network) and fully best-effort: any failure is logged, never thrown into
+   * the turn. Idempotent via createSourceDocument's (user, hash) dedup, so
+   * re-capturing identical content reuses the existing doc + chunks.
+   */
+  private ingestTurnSources(
+    userId: string,
+    sessionKey: string,
+    messages: { role: string; content: string; timestamp: number }[],
+  ): void {
+    const sourceStore = this.asSourceStore();
+    if (!sourceStore) return;
+    for (const msg of messages) {
+      const text = redactSensitiveMemoryText(msg.content ?? "");
+      if (text.trim().length < MIN_SOURCE_CHARS) continue;
+      try {
+        ingestSource(
+          sourceStore,
+          {
+            userId,
+            // Turn transcripts are workspace-agnostic for now; MEM-14 plumbs scope later.
+            workspaceTag: null,
+            kind: "transcript",
+            uri: null,
+            hash: contentHash(text),
+            title: `${msg.role} turn @ ${new Date(msg.timestamp).toISOString()}`,
+            metadata: { sessionKey, role: msg.role },
+          },
+          text,
+        );
+      } catch (err: any) {
+        console.error("[BrainRouter] MEM-2′ source ingest failed:", err?.message ?? err);
+      }
+    }
+  }
+
+  /** MEM-3 — runtime-narrow the store to the provenance-linking capability. */
+  private asProvenanceStore(): ProvenanceStore | null {
+    const s = this.store as Partial<ProvenanceStore>;
+    return typeof s.getSourceDocumentByHash === "function" &&
+      typeof s.getSourceChunksByDocument === "function" &&
+      typeof s.linkRecordSources === "function"
+      ? (s as ProvenanceStore)
+      : null;
+  }
+
+  /**
+   * MEM-3 — batch-level provenance. Collect every source chunk id for the
+   * messages in this extraction window (matched to their source docs by the
+   * same redacted-content hash MEM-2′ ingests under), then link each newly
+   * written record to that set. Coarse but deterministic and zero-LLM-cost;
+   * per-record attribution can refine it later. Best-effort + non-fatal.
+   */
+  private linkBatchProvenance(
+    userId: string,
+    windowSensory: SensoryRecord[],
+    records: { id: string }[],
+  ): void {
+    const store = this.asProvenanceStore();
+    if (!store || records.length === 0) return;
+    try {
+      const chunkIds = new Set<string>();
+      for (const s of windowSensory) {
+        const text = s.messageText ?? "";
+        if (text.trim().length < MIN_SOURCE_CHARS) continue;
+        const doc = store.getSourceDocumentByHash(userId, contentHash(text));
+        if (!doc) continue;
+        for (const c of store.getSourceChunksByDocument(doc.id)) chunkIds.add(c.id);
+      }
+      if (chunkIds.size === 0) return;
+      const ids = [...chunkIds];
+      for (const r of records) store.linkRecordSources(userId, r.id, ids);
+    } catch (err: any) {
+      console.error("[BrainRouter] MEM-3 provenance link failed:", err?.message ?? err);
+    }
   }
 
   public async processBacklog(params: {
@@ -248,6 +366,9 @@ export class MemoryCapturePipeline {
         }
       }
     }
+
+    // MEM-3 — link this batch's records to the source chunks of its window.
+    this.linkBatchProvenance(userId, recentSensory, uniqueRecords);
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {

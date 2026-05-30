@@ -101,6 +101,11 @@ import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from './tools/memor
 import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/memory_consolidate.js';
 import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/memory_agent_status.js';
 import { memoryProvenanceToolSchema, handleMemoryProvenance } from './tools/memory_provenance.js';
+import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from './tools/memory_fetch_source_chunk.js';
+import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from './tools/memory_blackboard.js';
+import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from './tools/memory_tree_walk.js';
+import { memoryVaultExportToolSchema, handleMemoryVaultExport } from './tools/memory_vault_export.js';
+import { memoryPruneSourcesToolSchema, handleMemoryPruneSources } from './tools/memory_prune_sources.js';
 import { memoryAgentRunToolSchema, handleMemoryAgentRun } from './tools/memory_agent_run.js';
 import { memoryJobRetryToolSchema, handleMemoryJobRetry } from './tools/memory_job_retry.js';
 import { memoryEngine } from './memory/engine.js';
@@ -312,6 +317,11 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryConsolidateToolSchema,
       memoryAgentStatusToolSchema,
       memoryProvenanceToolSchema,
+      memoryFetchSourceChunkToolSchema,
+      memoryBlackboardReviewToolSchema,
+      memoryTreeWalkToolSchema,
+      memoryVaultExportToolSchema,
+      memoryPruneSourcesToolSchema,
       memoryAgentRunToolSchema,
       memoryJobRetryToolSchema,
     ],
@@ -390,6 +400,16 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryAgentStatus(request.params.arguments, { defaultUserId });
         case 'memory_provenance':
           return await handleMemoryProvenance(request.params.arguments, { defaultUserId });
+        case 'memory_fetch_source_chunk':
+          return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
+        case 'memory_blackboard_review':
+          return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
+        case 'memory_tree_walk':
+          return await handleMemoryTreeWalk(request.params.arguments, { defaultUserId });
+        case 'memory_vault_export':
+          return await handleMemoryVaultExport(request.params.arguments, { defaultUserId });
+        case 'memory_prune_sources':
+          return await handleMemoryPruneSources(request.params.arguments, { defaultUserId });
         case 'memory_agent_run':
           return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
         case 'memory_job_retry':

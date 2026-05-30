@@ -421,6 +421,27 @@ test('statusline: tokens segment surfaces last-turn counts when calls > 0', () =
   assert.equal(seg, '1234↑567↓');
 });
 
+test('statusline: cost segment is hidden before the first turn (CLI-9)', () => {
+  assert.equal(renderSegment('cost', {
+    workspaceRoot: '/tmp', sessionKey: 'a', accessMode: 'read', model: 'm',
+    lastTurnUsage: { calls: 0, promptTokens: 0, completionTokens: 0 },
+  }), undefined);
+});
+
+test('statusline: cost segment shows USD + cache-hit % when calls > 0 (CLI-9)', () => {
+  // Unknown model → $0.0000 from the zero default pricing row; cache % is still
+  // computed from the token split (750 / (750+250) = 75%).
+  const seg = renderSegment('cost', {
+    workspaceRoot: '/tmp', sessionKey: 'a', accessMode: 'read', model: 'unknown-model',
+    lastTurnUsage: { calls: 1, promptTokens: 1000, completionTokens: 100, cachedTokens: 750, missedTokens: 250 },
+  });
+  assert.equal(seg, '$0.0000 75% cached');
+});
+
+test('statusline: SEGMENT_NAMES includes cost (CLI-9)', () => {
+  assert.ok(SEGMENT_NAMES.includes('cost' as any));
+});
+
 test('statusline: workflow segment returns wf:<slug> when bound', () => {
   withTempWorkspace((workspace) => {
     // 9d-bugfix: pass sessionKey through createWorkflow so the binding

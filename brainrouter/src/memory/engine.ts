@@ -3,11 +3,20 @@ import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, I
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
+import { enqueueAgentJob } from "./scheduler/jobs.js";
+import { chunkSource } from "./source/chunker.js";
+import { chunkCode } from "./source/code-chunker.js";
+import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
+import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
+import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
+import { reconcileBlackboard } from "./blackboard/reconcile.js";
+import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
+import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
@@ -21,7 +30,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, UserRecord } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind } from "@kinqs/brainrouter-types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -274,14 +283,125 @@ export class MemoryEngine {
     if (process.env.BRAINROUTER_JOB_RUNNER === "off") return;
     this.jobRunner = new MemoryJobRunner(
       this.store,
-      { store: this.store, llmRunner: this.synthesisRunner },
+      // `engine: this` lets the 0.4.3 depth executors (vault / blackboard /
+      // tree) call the capability-detected engine ops. MemoryEngine
+      // structurally satisfies JobEngineOps.
+      { store: this.store, llmRunner: this.synthesisRunner, engine: this },
       {
         intervalMs: process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS
           ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS, 10)
           : undefined,
+        // 0.4.3 — auto-schedule the maintenance depth agents (own throttle).
+        onTick: () => { this.enqueueScheduledMaintenance(); },
       },
     );
     this.jobRunner.start();
+  }
+
+  // 0.4.3 — scheduled-maintenance cadence (own throttle, independent of the
+  // much faster drain interval). Do real work at most every 5 min; export the
+  // vault ~hourly (every 12th pass) since it rescans records each run.
+  private maintenanceLastAt = 0;
+  private maintenancePass = 0;
+
+  /**
+   * 0.4.3 (MEM-10) — auto-enqueue the maintenance depth agents. Called
+   * best-effort from the job runner's per-tick hook. Per active user:
+   *   - `blackboard_reconciler` — only when pending candidates exist
+   *     (self-limiting: reconcile+commit drains the queue, so it won't re-fire
+   *     until new items stage).
+   *   - `vault_exporter` — every ~hour, so the markdown mirror stays fresh
+   *     without rescanning records every tick (export is ledger-idempotent).
+   * `tree_sealer` is intentionally NOT auto-enqueued: nothing auto-appends tree
+   * leaves yet, so there are no full buckets to seal — run it on demand via
+   * `memory_agent_run` until auto-leaf-accumulation lands.
+   * Disable the whole pass with `BRAINROUTER_JOB_MAINTENANCE=off`. Idempotency
+   * keys dedupe in-flight, so re-enqueues are safe. `force` skips the throttle
+   * (tests).
+   */
+  public enqueueScheduledMaintenance(force = false): { enqueued: Record<string, number>; skipped?: boolean } {
+    if (process.env.BRAINROUTER_JOB_MAINTENANCE === "off") return { enqueued: {}, skipped: true };
+    const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
+    const VAULT_MAINTENANCE_EVERY = 12; // ~hourly at the 5-min cadence
+    const now = Date.now();
+    if (!force && now - this.maintenanceLastAt < MAINTENANCE_INTERVAL_MS) return { enqueued: {}, skipped: true };
+    this.maintenanceLastAt = now;
+    const pass = this.maintenancePass++;
+
+    const enqueued: Record<string, number> = { blackboard_reconciler: 0, vault_exporter: 0, tree_sealer: 0 };
+    const bb = this.blackboardStore();
+    let users: { userId: string }[] = [];
+    try { users = this.store.listUsers(); } catch { users = []; }
+    for (const { userId } of users) {
+      if (!userId) continue;
+      if (bb && bb.getBlackboardItems(userId, "pending").length > 0) {
+        enqueueAgentJob(this.store, "blackboard_reconciler", { userId });
+        enqueued.blackboard_reconciler++;
+      }
+      if (pass % VAULT_MAINTENANCE_EVERY === 0) {
+        enqueueAgentJob(this.store, "vault_exporter", { userId });
+        enqueued.vault_exporter++;
+      }
+      // 0.4.3 — grow the scene-tree (leaf per mature scene); when a bucket of
+      // unsealed leaves fills, enqueue tree_sealer to seal it into a parent.
+      const tree = this.autobuildSceneTree(userId);
+      if (tree.sealableBucket) {
+        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: "global" });
+        enqueued.tree_sealer++;
+      }
+    }
+    return { enqueued };
+  }
+
+  // 0.4.3 (MEM-10) — scene-tree autobuild thresholds.
+  private static readonly TREE_MIN_SCENE_RECORDS = 3; // don't leaf a trivial scene
+  private static readonly TREE_LEAF_PER_PASS = 5;     // bound work per maintenance tick
+  private static readonly TREE_SEAL_THRESHOLD = 6;    // unsealed scene-leaves → seal
+
+  /**
+   * 0.4.3 (MEM-10) — the tree_sealer auto-trigger source. Builds a DURABLE
+   * memory-summary tree over COGNITIVE RECORDS grouped by scene (deliberately
+   * NOT over transcripts — those churn and get pruned, which would orphan tree
+   * leaves). Appends one level-0 leaf per mature, not-yet-leafed scene (a
+   * deterministic, redacted digest of its records — the LLM re-summary is
+   * tree_digest's job, deferred), bounded per pass. Once enough unsealed
+   * scene-leaves accumulate it returns their ids so the maintenance pass can
+   * enqueue tree_sealer to seal them into a `global` parent. Idempotent (one
+   * leaf per scene_key); capability-detected; gated by
+   * BRAINROUTER_TREE_AUTOBUILD=off.
+   */
+  public autobuildSceneTree(userId: string): { leafed: number; sealableBucket: string[] | null } {
+    if (process.env.BRAINROUTER_TREE_AUTOBUILD === "off") return { leafed: 0, sealableBucket: null };
+    const store = this.store as any;
+    if (
+      typeof store.getDistinctScenes !== "function" ||
+      typeof store.getSceneLeafKeys !== "function" ||
+      typeof store.appendTreeNode !== "function" ||
+      typeof store.getUnsealedSceneLeaves !== "function"
+    ) {
+      return { leafed: 0, sealableBucket: null };
+    }
+
+    const leafedKeys = new Set<string>(store.getSceneLeafKeys(userId));
+    const scenes = store.getDistinctScenes(userId) as Array<{ sceneName: string; recordCount: number }>;
+    let leafed = 0;
+    for (const sc of scenes) {
+      if (leafed >= MemoryEngine.TREE_LEAF_PER_PASS) break;
+      if (!sc.sceneName || sc.recordCount < MemoryEngine.TREE_MIN_SCENE_RECORDS || leafedKeys.has(sc.sceneName)) continue;
+      const contents = store.getSceneRecordContents(userId, sc.sceneName, 8) as string[];
+      const digest = contents.map((c) => `- ${redactSensitiveMemoryText(c).replace(/\s+/g, " ").slice(0, 160)}`).join("\n");
+      store.appendTreeNode(userId, {
+        kind: "topic",
+        level: 0,
+        summaryMd: `Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
+        sceneKey: sc.sceneName,
+      });
+      leafed++;
+    }
+
+    const unsealed = store.getUnsealedSceneLeaves(userId, MemoryEngine.TREE_SEAL_THRESHOLD) as Array<{ id: string }>;
+    const sealableBucket = unsealed.length >= MemoryEngine.TREE_SEAL_THRESHOLD ? unsealed.map((n) => n.id) : null;
+    return { leafed, sealableBucket };
   }
 
   private async ensureSeedAdminUser() {
@@ -649,6 +769,361 @@ export class MemoryEngine {
 
   public governanceDelete(userId: string, recordId: string, reason: string) {
     this.store.hardDeleteMemory(userId, recordId, reason);
+  }
+
+  /**
+   * MEM-11 — governance dry-run: preview which active memories a filter would
+   * sweep, with counts + a size proxy + a sample, WITHOUT mutating anything.
+   */
+  public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
+    const items = this.store.listMemories(userId, { type: filters.type, archived: false });
+    return planGovernance(items, filters, Date.now());
+  }
+
+  // ── Blackboard commit pipeline (MEM-4) ──────────────────────────────────
+  // Stage candidates → reconcile (dedup/score) → commit to cognitive records
+  // with an audit trail, or reject. The blackboard store methods live on the
+  // concrete store, so narrow at runtime (like the source capability).
+
+  private blackboardStore(): {
+    stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
+    getBlackboardItem(id: string): BlackboardItem | null;
+    getBlackboardItems(userId: string, status?: BlackboardStatus): BlackboardItem[];
+    updateBlackboardItem(id: string, patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null }): void;
+  } | null {
+    const s = this.store as any;
+    return typeof s.stageBlackboardItems === "function" &&
+      typeof s.getBlackboardItems === "function" &&
+      typeof s.updateBlackboardItem === "function"
+      ? s
+      : null;
+  }
+
+  /** MEM-4 — stage extracted candidates for review before they become memory. */
+  public stageBlackboardCandidates(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+    const store = this.blackboardStore();
+    if (!store) return [];
+    // MEM-13 — redact candidate content at the staging boundary, before it
+    // persists, so secrets never land in the blackboard.
+    const redacted = items.map((i) => ({
+      ...i,
+      candidate: { ...i.candidate, content: redactSensitiveMemoryText(i.candidate.content) },
+    }));
+    return store.stageBlackboardItems(userId, redacted);
+  }
+
+  /** MEM-4 — reconcile all pending items (dedup/score/threshold) and persist the verdicts. */
+  public reconcilePendingBlackboard(userId: string): { reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] } {
+    const store = this.blackboardStore();
+    if (!store) return { reconciled: 0, duplicate: 0, rejected: 0, items: [] };
+    const decisions = reconcileBlackboard(store.getBlackboardItems(userId, "pending"));
+    for (const d of decisions) store.updateBlackboardItem(d.id, { status: d.status, score: d.score, conflictIds: d.conflictIds });
+    const count = (st: string) => decisions.filter((d) => d.status === st).length;
+    return { reconciled: count("reconciled"), duplicate: count("duplicate"), rejected: count("rejected"), items: store.getBlackboardItems(userId) };
+  }
+
+  /** MEM-4 — promote a reconciled item to a cognitive record (with audit), linking its source chunk. */
+  public commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string } {
+    const store = this.blackboardStore();
+    if (!store) return { committed: false, reason: "blackboard unavailable" };
+    const item = store.getBlackboardItem(itemId);
+    if (!item || item.userId !== userId) return { committed: false, reason: "not found" };
+    if (item.status === "committed") return { committed: true, recordId: item.committedRecordId ?? undefined };
+    if (item.status !== "reconciled") return { committed: false, reason: `status is "${item.status}"; reconcile before committing` };
+
+    const record = this.upsertEngineeringMemory({
+      userId,
+      type: item.candidate.type,
+      content: item.candidate.content,
+      priority: item.candidate.priority,
+      confidence: item.candidate.confidence,
+      metadata: { committedFromBlackboard: item.id, sourceChunkId: item.sourceChunkId },
+    });
+    store.updateBlackboardItem(item.id, { status: "committed", committedRecordId: record.id });
+    if (item.sourceChunkId) {
+      const linker = this.store as Partial<{ linkRecordSources(u: string, r: string, ids: string[]): void }>;
+      try { linker.linkRecordSources?.(userId, record.id, [item.sourceChunkId]); } catch { /* best-effort */ }
+    }
+    return { committed: true, recordId: record.id };
+  }
+
+  /** MEM-4 — drop an item without committing it. */
+  public rejectBlackboardItem(userId: string, itemId: string): boolean {
+    const store = this.blackboardStore();
+    if (!store) return false;
+    const item = store.getBlackboardItem(itemId);
+    if (!item || item.userId !== userId) return false;
+    store.updateBlackboardItem(itemId, { status: "rejected" });
+    return true;
+  }
+
+  /** MEM-4 — list staged items (optionally by status) for review. */
+  public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
+    const store = this.blackboardStore();
+    return store ? store.getBlackboardItems(userId, status) : [];
+  }
+
+  // ── Memory tree (MEM-5) ─────────────────────────────────────────────────
+  // Generic mechanics only — append a leaf, roll a bucket of children into a
+  // summarized parent, and walk/drill. Policy (when to seal, source→topic→
+  // global promotion) layers on top; the summarizer is deterministic here and
+  // swappable for an LLM later.
+
+  private treeStore(): {
+    appendTreeNode(userId: string, input: MemoryTreeNodeInput): MemoryTreeNode;
+    getTreeNode(id: string): MemoryTreeNode | null;
+    getTreeChildren(parentId: string): MemoryTreeNode[];
+    getTreeRoots(userId: string, kind?: MemoryTreeKind): MemoryTreeNode[];
+    setTreeParent(childIds: string[], parentId: string): void;
+    sealTreeNode(id: string): void;
+  } | null {
+    const s = this.store as any;
+    return typeof s.appendTreeNode === "function" && typeof s.getTreeRoots === "function" ? s : null;
+  }
+
+  /** MEM-5 — append a leaf (level 0) summarizing some source chunks. */
+  public appendTreeLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds: string[] = [], heatScore = 0): MemoryTreeNode | null {
+    const store = this.treeStore();
+    return store ? store.appendTreeNode(userId, { kind, level: 0, summaryMd, sourceChunkIds, heatScore }) : null;
+  }
+
+  /** MEM-5 — seal a bucket: roll the given children into a summarized parent. */
+  public summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): MemoryTreeNode | null {
+    const store = this.treeStore();
+    if (!store) return null;
+    const children = childIds.map((id) => store.getTreeNode(id)).filter((n): n is MemoryTreeNode => !!n);
+    if (children.length === 0) return null;
+    const parent = store.appendTreeNode(userId, {
+      kind,
+      level: parentLevel(children),
+      summaryMd: summarizeChildren(children),
+      sourceChunkIds: aggregateChunkIds(children),
+      heatScore: aggregateHeat(children),
+    });
+    store.setTreeParent(childIds, parent.id);
+    for (const c of children) store.sealTreeNode(c.id);
+    return parent;
+  }
+
+  /** MEM-5 / MEM-8 — walk the tree: a node + its children, or the roots of a kind. */
+  public treeWalk(userId: string, nodeId?: string, kind?: MemoryTreeKind): { node: MemoryTreeNode | null; children: MemoryTreeNode[]; roots?: MemoryTreeNode[] } {
+    const store = this.treeStore();
+    if (!store) return { node: null, children: [] };
+    if (nodeId) {
+      const node = store.getTreeNode(nodeId);
+      return { node, children: node ? store.getTreeChildren(nodeId) : [] };
+    }
+    return { node: null, children: [], roots: store.getTreeRoots(userId, kind) };
+  }
+
+  // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
+  /**
+   * 0.4.3 (MEM-9) — benchmark_eval job: a self-retrieval regression benchmark
+   * over the user's OWN records (no synthetic corpus / labels). Samples records,
+   * derives a partial query from each, and runs recall in two modes — `baseline`
+   * (diversity off) vs `lexmmr` (the 0.4.3 lexical+MMR selection) — measuring
+   * whether the source record resurfaces and at what rank. Writes a markdown
+   * mode-comparison summary and returns per-mode ModeStats + a pass/fail against
+   * a sane recall floor. Read-only w.r.t. memory (only writes the summary file);
+   * temporarily raises BRAINROUTER_RECALL_TOP_RESULTS to 20 for @20 coverage and
+   * restores it. Returns insufficient (empty stats) when < 3 records exist.
+   */
+  public async runRetrievalBenchmark(
+    userId: string,
+    opts?: { sampleSize?: number; baseDir?: string },
+  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean }> {
+    const sampleSize = Math.max(1, Math.min(opts?.sampleSize ?? 20, 100));
+    const sample = this.store.listMemories(userId, { archived: false }).slice(0, sampleSize);
+    if (sample.length < 3) {
+      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true };
+    }
+
+    const modes: Array<{ name: string; diversity: string }> = [
+      { name: "baseline", diversity: "off" },
+      { name: "lexmmr", diversity: "on" },
+    ];
+    const statsByMode: Record<string, ModeStats> = {};
+    const prevTop = process.env.BRAINROUTER_RECALL_TOP_RESULTS;
+    const prevDiv = process.env.BRAINROUTER_RECALL_DIVERSITY;
+    process.env.BRAINROUTER_RECALL_TOP_RESULTS = "20"; // recall reads env per-call, so this scopes the bench
+    try {
+      for (const mode of modes) {
+        process.env.BRAINROUTER_RECALL_DIVERSITY = mode.diversity;
+        const ranks: number[] = [];
+        for (const rec of sample) {
+          const query = deriveBenchQuery(rec.content);
+          if (!query) { ranks.push(-1); continue; }
+          const result = await this.recall({ userId, sessionKey: "benchmark", query });
+          const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
+          ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
+        }
+        statsByMode[mode.name] = aggregateRanks(ranks);
+      }
+    } finally {
+      if (prevTop === undefined) delete process.env.BRAINROUTER_RECALL_TOP_RESULTS; else process.env.BRAINROUTER_RECALL_TOP_RESULTS = prevTop;
+      if (prevDiv === undefined) delete process.env.BRAINROUTER_RECALL_DIVERSITY; else process.env.BRAINROUTER_RECALL_DIVERSITY = prevDiv;
+    }
+
+    let summaryPath: string | null = null;
+    try {
+      const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench", userId);
+      fs.mkdirSync(dir, { recursive: true });
+      summaryPath = path.join(dir, `bench-${Date.now()}.md`);
+      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode), "utf8");
+    } catch {
+      summaryPath = null;
+    }
+    // Sane regression floor: the lexmmr mode should resurface ≥50% of sampled
+    // records within the top 10. A bar for the CI gate, not a hard guarantee.
+    const { passed } = checkThresholds(statsByMode, { lexmmr: { recall_any_at_10: 0.5 } });
+    return { summaryPath, statsByMode, sampled: sample.length, passed };
+  }
+
+  /**
+   * 0.4.3 (MEM-10) — source_chunker job: re-chunk source documents with the
+   * CURRENT chunker (kind-aware: AST chunker for file/code, text chunker
+   * otherwise). PROVENANCE-SAFE — skips any doc whose chunks are already cited
+   * by a live memory, because re-chunking mints new chunk ids and would orphan
+   * the cognitive_source_links (memory_verify / provenance would break). Text is
+   * reassembled from the existing ordered chunks. user-scoped. Returns counts.
+   */
+  public rechunkSources(userId: string, documentIds: string[]): { rechunked: number; skipped: number; chunksWritten: number } {
+    const store = this.store as any;
+    if (typeof store.getSourceChunksByDocument !== "function" || typeof store.replaceSourceChunks !== "function") {
+      return { rechunked: 0, skipped: 0, chunksWritten: 0 };
+    }
+    let rechunked = 0;
+    let skipped = 0;
+    let chunksWritten = 0;
+    for (const docId of documentIds) {
+      const doc = store.getSourceDocument?.(docId);
+      if (!doc || doc.userId !== userId) { skipped++; continue; }          // ownership (MEM-14)
+      if (store.isSourceDocumentReferenced(docId)) { skipped++; continue; } // provenance-safe
+      const chunks = store.getSourceChunksByDocument(docId) as SourceChunk[];
+      if (chunks.length === 0) { skipped++; continue; }
+      const text = [...chunks].sort((a, b) => a.ordinal - b.ordinal).map((c) => c.content).join("\n");
+      const isCode = doc.kind === "file" || doc.kind === "code";
+      const fresh = isCode ? chunkCode(text) : chunkSource(text);
+      const written = store.replaceSourceChunks(docId, fresh) as SourceChunk[];
+      rechunked++;
+      chunksWritten += written.length;
+    }
+    return { rechunked, skipped, chunksWritten };
+  }
+
+  /**
+   * 0.4.3 — provenance-safe transcript retention. Delete `transcript` source
+   * documents older than `olderThanDays` whose chunks are NOT referenced by a
+   * live memory (so provenance drill-down never breaks). Capability-detected —
+   * the prune lives on SqliteMemoryStore, not IMemoryStore. Returns counts.
+   */
+  public pruneTranscriptSources(userId: string, olderThanDays: number): { prunedDocs: number; prunedChunks: number } {
+    const store = this.store as any;
+    if (typeof store.pruneTranscriptSources !== "function") {
+      return { prunedDocs: 0, prunedChunks: 0 };
+    }
+    const days = Number.isFinite(olderThanDays) && olderThanDays >= 0 ? olderThanDays : 30;
+    const beforeIso = new Date(Date.now() - days * 86_400_000).toISOString();
+    return store.pruneTranscriptSources(userId, beforeIso);
+  }
+
+  /**
+   * Export active records + tree nodes to a read-only markdown vault. The DB
+   * stays authoritative; a hash ledger makes re-export idempotent (only changed
+   * files are rewritten). Content is redacted before it lands (MEM-13's vault
+   * boundary).
+   */
+  public exportVault(userId: string, baseDir?: string): { dir: string; written: number; unchanged: number; total: number } {
+    const store = this.store as any;
+    if (typeof store.upsertVaultExport !== "function" || typeof store.getVaultExports !== "function") {
+      return { dir: "", written: 0, unchanged: 0, total: 0 };
+    }
+    const dir = baseDir ?? path.join(os.homedir(), ".brainrouter", "vault", userId);
+    const ledger = new Map<string, string>(store.getVaultExports(userId).map((e: { path: string; hash: string }) => [e.path, e.hash]));
+    let written = 0;
+    let unchanged = 0;
+
+    const writeIf = (relPath: string, raw: string, kind: "record" | "tree", refId: string): void => {
+      const content = redactSensitiveMemoryText(raw);
+      const hash = vaultHash(content);
+      if (ledger.get(relPath) === hash) { unchanged++; return; }
+      const abs = path.join(dir, relPath);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content, "utf8");
+      store.upsertVaultExport(userId, { path: relPath, hash, kind, refId });
+      written++;
+    };
+
+    for (const rec of this.store.listMemories(userId, { archived: false })) {
+      writeIf(`records/${rec.recordId}.md`, renderRecordMarkdown(rec), "record", rec.recordId);
+    }
+    const nodes: MemoryTreeNode[] = typeof store.getAllTreeNodes === "function" ? store.getAllTreeNodes(userId) : [];
+    for (const node of nodes) {
+      writeIf(`tree/${node.id}.md`, renderTreeNodeMarkdown(node), "tree", node.id);
+    }
+    return { dir, written, unchanged, total: written + unchanged };
+  }
+
+  /**
+   * MEM-3 — batch-level provenance: the source chunks a record was distilled
+   * from, as compact excerpts (for `memory_verify`). Returns [] when the store
+   * lacks the source-link capability or the record cites no sources.
+   */
+  public getRecordProvenance(userId: string, recordId: string): Array<{
+    chunkId: string;
+    documentId: string;
+    excerpt: string;
+    filePath: string | null;
+    symbol: string | null;
+    startLine: number | null;
+    endLine: number | null;
+  }> {
+    const store = this.store as Partial<{ getRecordSourceChunks(userId: string, id: string): SourceChunk[] }>;
+    if (typeof store.getRecordSourceChunks !== "function") return [];
+    return store.getRecordSourceChunks(userId, recordId).map((c) => ({
+      chunkId: c.id,
+      documentId: c.documentId,
+      excerpt: c.content.length > 280 ? `${c.content.slice(0, 280)}…` : c.content,
+      filePath: c.filePath,
+      symbol: c.symbol,
+      startLine: c.startLine,
+      endLine: c.endLine,
+    }));
+  }
+
+  /**
+   * MEM-8 — recall drill-down: fetch one source chunk by id (full content)
+   * plus its parent document and, optionally, ±N neighbouring chunks for
+   * context. Pairs with the excerpts returned by `memory_verify` / provenance.
+   * Returns null when the store lacks the source capability or the id is
+   * unknown.
+   */
+  public fetchSourceChunk(
+    userId: string,
+    chunkId: string,
+    neighbors = 0,
+  ): { chunk: SourceChunk; document: SourceDocument | null; neighbors: SourceChunk[] } | null {
+    const store = this.store as Partial<{
+      getSourceChunk(id: string): SourceChunk | null;
+      getSourceDocument(id: string): SourceDocument | null;
+      getSourceChunksByDocument(documentId: string): SourceChunk[];
+    }>;
+    if (typeof store.getSourceChunk !== "function") return null;
+    const chunk = store.getSourceChunk(chunkId);
+    if (!chunk) return null;
+    const document =
+      typeof store.getSourceDocument === "function" ? store.getSourceDocument(chunk.documentId) : null;
+    // Ownership gate: the chunk's parent document must belong to the caller.
+    // (source_chunks/source_documents carry user_id per MEM-14.) Without this a
+    // user could fetch any chunk by id — cross-tenant leak.
+    if (!document || document.userId !== userId) return null;
+    let neighborChunks: SourceChunk[] = [];
+    if (neighbors > 0 && typeof store.getSourceChunksByDocument === "function") {
+      neighborChunks = store
+        .getSourceChunksByDocument(chunk.documentId)
+        .filter((c) => c.id !== chunk.id && Math.abs(c.ordinal - chunk.ordinal) <= neighbors);
+    }
+    return { chunk, document, neighbors: neighborChunks };
   }
 
   public getOperationLog(
