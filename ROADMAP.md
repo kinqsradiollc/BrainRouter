@@ -31,7 +31,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
-| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | `/rewind` + `/context` finished ✓; next: agent transcript debugger + Brain Phases 2-5 (capture / source chunks / memory tree) + worktree isolation / AST chunking / benchmark harness | In flight |
+| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | `/rewind --files`, `/context` header, agent transcript debugger ✓; next: memory depth (source chunks → blackboard → tree → vault + benchmark) + CLI ops (`/bg`, prefix-drift, headless JSONL, unified policy) | In flight |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -42,18 +42,43 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 > and `brainrouter-changelog/`. This section only describes work that is
 > still ahead.
 
-### 0.4.3 — Finish /rewind & /context, then Brain Phases 2–5
+### 0.4.3 — Memory depth (source chunks → tree) + CLI debugging & ops
 
-- **First:** fully complete the two 0.4.2 ergonomics commands — `/rewind`
-  gains an optional file-restore mode (pairs with worktree isolation), and
-  `/context` gains a context-window fill header (current ≈N / max M, % used,
-  remaining) on top of today's cumulative breakdown.
-- Agent transcript debugger (`/agents tree` / `why` / `replay`).
-- **Brain-side (MCP server):** token-aware capture (TokenJuice) + source
-  chunks + vault mirror (Phases 2–3, carried from 0.4.2); memory tree +
-  blackboard commit pipeline (Phases 4–5). Tasks: `BRAIN-P2-TN`–`BRAIN-P5-TN`.
-- Carried 0.4.x infra: git-worktree session isolation, AST-aware recall
-  chunking, the retrieval benchmark harness.
+Shipped so far: `/rewind --files` file restore, `/context` window-fill header,
+and the agent transcript debugger (`/agents tree` / `why` / `transcript` /
+`replay`).
+
+**CLI, remaining (priority order):**
+
+- `/bg` — detach the in-flight turn (persist a run id, stream logs to the
+  transcript, `/fg` + completion notice); the missing background primitive.
+- `/context prefix` — prefix-cache drift labels: pinned hash, changed region,
+  tool-list / memory-anchor delta, last cache-miss cause.
+- Headless `brainrouter run --format jsonl` — a stable machine-readable event
+  stream (turn / text / tool / child / memory / offload / cost / error) for CI
+  and external orchestrators.
+- A unified execution-policy module — one allow/ask/deny decision (with reason)
+  behind shell, file edits, child writes, network, and `/bg`.
+- `/verify detect` recipe cache + post-edit language diagnostics; command-
+  registry cleanup (one source drives help + the slash palette).
+
+**Brain-side memory (depth before breadth):**
+
+- **Source documents + chunks** — first-class raw-source + chunk tables so
+  every extracted record cites its source. The foundation the rest builds on.
+- **Blackboard commit pipeline** — stage extraction candidates, reconcile /
+  conflict-check, then commit to cognitive records with an audit trail.
+- **Memory tree** — durable source/topic/global summary hierarchy: append leaf
+  → seal bucket → summarize parent → walk/drill.
+- **AST-aware code chunking** (TS/JS/Python/Rust) and a **vault mirror**
+  (read-only markdown export with a hash ledger; the DB stays authoritative).
+- **Retrieval benchmark harness** — one command, fixed datasets, JSON +
+  markdown summary, regression thresholds.
+
+Sequencing: source chunks + blackboard first; tree / vault / AST chunking /
+benchmarks build on them. New tables carry user + workspace scope columns so
+team/RBAC features can arrive later without migration pain. Carried infra:
+git-worktree session isolation.
 
 ### 0.5.0 — Power User Surface
 
