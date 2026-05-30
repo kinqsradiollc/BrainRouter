@@ -20,6 +20,8 @@
 import type { IMemoryStore, LLMRunner } from "@kinqs/brainrouter-types";
 import { distillCoreIdentity } from "../pipeline/identity-distiller.js";
 import { distillFocusScenes } from "../pipeline/contextual-focus-builder.js";
+import { digestTreeNodes } from "../tree/digest.js";
+import { enqueueAgentJob } from "./jobs.js";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -97,7 +99,19 @@ const EXECUTORS: Record<string, JobExecutor> = {
     if (childIds.length === 0) return { parentId: null, reason: "no childIds supplied" };
     const kind = typeof input?.kind === "string" ? input.kind : "topic";
     const parent = requireEngine(ctx).summarizeBucket(userIdOf(input), childIds, kind);
+    // Auto-chain: refine the freshly-sealed parent's deterministic summary with
+    // an LLM digest. No-ops gracefully if no LLM is configured (tree_digest
+    // keeps the deterministic summary). Best-effort — a failed enqueue must not
+    // fail the seal.
+    if (parent?.id && ctx.store) {
+      try { enqueueAgentJob(ctx.store, "tree_digest", { userId: userIdOf(input), nodeIds: [parent.id] }); } catch { /* seal still succeeded */ }
+    }
     return { parentId: parent?.id ?? null, sealed: parent ? childIds.length : 0 };
+  },
+  tree_digest: async (input, { store, llmRunner }) => {
+    const nodeIds: string[] = Array.isArray(input?.nodeIds) ? input.nodeIds.map(String) : [];
+    if (nodeIds.length === 0) return { summarized: [], skipped: 0, reason: "no nodeIds supplied" };
+    return digestTreeNodes({ userId: userIdOf(input), nodeIds, store, llmRunner });
   },
   source_chunker: async (input, ctx) => {
     // Re-chunk specific documents with the current chunker (provenance-safe;
