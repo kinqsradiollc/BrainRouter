@@ -127,7 +127,7 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       const usd = costUsd(inputs.model, { cachedTokens: cached, missedTokens: missed, completionTokens: u.completionTokens });
       const base = `$${usd.toFixed(4)}`;
       const totalPrompt = cached + missed;
-      return totalPrompt > 0 ? `${base} ${Math.round((cached / totalPrompt) * 100)}%¢` : base;
+      return totalPrompt > 0 ? `${base} ${Math.round((cached / totalPrompt) * 100)}% cached` : base;
     }
     case 'session': {
       const k = inputs.sessionKey;

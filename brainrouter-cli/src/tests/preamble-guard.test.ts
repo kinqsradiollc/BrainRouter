@@ -34,3 +34,14 @@ test('looksLikeDeferredToolPromise: false for prose answers (protects legit zero
   assert.equal(looksLikeDeferredToolPromise('The answer is 42.'), false);
   assert.equal(looksLikeDeferredToolPromise(''), false);
 });
+
+test('looksLikeDeferredToolPromise: adjacency — a tool verb buried in prose does NOT match', () => {
+  // Regression (these wrongly matched when the verb was scanned anywhere): the
+  // opener verb is explanatory (summarize/clarify/note), so they are answers.
+  assert.equal(looksLikeDeferredToolPromise("I'll summarize: the function reads the config and runs once."), false);
+  assert.equal(looksLikeDeferredToolPromise('Let me clarify — the test passes and the build is green.'), false);
+  assert.equal(looksLikeDeferredToolPromise("I'll note that grep finds three call sites."), false);
+  // still catches genuine promises (tool verb adjacent to the opener)
+  assert.equal(looksLikeDeferredToolPromise("I'll start by exploring the repo"), true);
+  assert.equal(looksLikeDeferredToolPromise('Let me just run the tests'), true);
+});

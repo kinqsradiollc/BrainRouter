@@ -223,11 +223,21 @@ export function looksLikeDeferredToolPromise(content: string | null | undefined)
   if (typeof content !== 'string') return false;
   const trimmed = stripLeadingAck(content.trim());
   if (trimmed.length === 0 || trimmed.length > 500) return false;
-  const futureIntent =
-    /^(?:I['’]?ll|I will|I['’]?m (?:going to|about to)|Let me|Let['’]?s|Now,?\s+(?:I['’]?ll|I will|let['’]?s)|Next,?\s+I['’]?ll|First,?\s+I['’]?ll|Going to|About to|Will\b)/i.test(trimmed);
-  if (!futureIntent) return false;
-  // …and it announces work that requires tools (not just "explain"/"summarize").
-  return /\b(run|runs|running|check|checking|search|searching|look(?:ing)?|explore|exploring|investigat|examin|scan|scanning|spawn|delegat|inspect|audit|build|test|grep|find|read|fetch|analyz|review|sweep|verify|lint|diagnos)/i.test(trimmed);
+  // A future-intent opener IMMEDIATELY followed (allowing light filler) by a
+  // tool-action verb. Adjacency is the point: the verb must be the PROMISED
+  // ACTION, not a tool-ish word buried later in a prose answer — so
+  // "I'll summarize: the function reads the config" or "Let me clarify — the
+  // test passes" do NOT match (their opener verb is summarize/clarify), while
+  // "I'll run the sweep" / "Let me check the repo" / "Now I will grep …" do.
+  const opener =
+    "(?:I['’]?ll|I will|I['’]?m going to|I['’]?m about to|Let me|Let['’]?s|Now,?\\s+(?:I['’]?ll|I will|let['’]?s)|Next,?\\s+I['’]?ll|First,?\\s+I['’]?ll|Going to|About to|Will)";
+  const filler = "(?:just |now |quickly |also |then |go ahead and |start by |begin by |proceed to )*";
+  // Verb stems so -ing/-ed forms match too (explor→exploring, trac→tracing;
+  // the e-dropping verbs investigat/examin/analyz/diagnos/delegat are stemmed
+  // the same way). run/check/search/etc. need no stemming.
+  const toolVerb =
+    "(?:run|check|search|look|explor|investigat|examin|scan|spawn|delegat|inspect|audit|build|test|grep|find|read|fetch|analyz|review|sweep|verif|lint|diagnos|kick off|fire off|dig into|trac)";
+  return new RegExp(`^${opener}\\s+${filler}${toolVerb}`, 'i').test(trimmed);
 }
 
 /**
