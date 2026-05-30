@@ -1,5 +1,6 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
-import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus } from "@kinqs/brainrouter-types";
+import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus, CognitiveRecord, BlackboardItem, BlackboardItemInput } from "@kinqs/brainrouter-types";
+import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { extractCognitiveMemories } from "./pipeline/cognitive-extractor.js";
 import { deduplicateMemories } from "./pipeline/cognitive-dedup.js";
 import { detectContradictions } from "./pipeline/cognitive-contradiction.js";
@@ -32,6 +33,19 @@ interface ProvenanceStore {
   getSourceDocumentByHash(userId: string, hash: string): { id: string } | null;
   getSourceChunksByDocument(documentId: string): { id: string; content: string }[];
   linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void;
+}
+
+/**
+ * MEM-16 — the store capability needed to route extraction candidates through
+ * the blackboard before they become cognitive records. Structural + runtime-
+ * detected, like the source/provenance capabilities above.
+ */
+interface BlackboardAdmissionStore {
+  stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
+  updateBlackboardItem(
+    id: string,
+    patch: { status?: BlackboardItem["status"]; conflictIds?: string[]; committedRecordId?: string | null },
+  ): void;
 }
 
 export class MemoryCapturePipeline {
@@ -210,6 +224,86 @@ export class MemoryCapturePipeline {
     }
   }
 
+  /** MEM-16 — blackboard admission is the default path; `off` restores the
+   * legacy direct-write behaviour. (Brain-side env knob, like the recall ones.) */
+  private blackboardAdmissionEnabled(): boolean {
+    return (process.env.BRAINROUTER_BLACKBOARD_ADMISSION ?? "").trim().toLowerCase() !== "off";
+  }
+
+  /** MEM-16 — runtime-narrow the store to the blackboard-admission capability. */
+  private asBlackboardStore(): BlackboardAdmissionStore | null {
+    const s = this.store as Partial<BlackboardAdmissionStore>;
+    return typeof s.stageBlackboardItems === "function" && typeof s.updateBlackboardItem === "function"
+      ? (s as BlackboardAdmissionStore)
+      : null;
+  }
+
+  /**
+   * MEM-16 — blackboard-default admission. Instead of writing every extracted
+   * record straight to long-term memory, stage them as blackboard candidates,
+   * reconcile (dedup the batch + reject below-threshold), and let only the
+   * survivors proceed to the normal commit path (upsert + embed + contradiction
+   * + graph). Duplicate/rejected candidates stay on the blackboard for audit via
+   * `memory_blackboard_review`. The returned `markCommitted` stamps each
+   * survivor's blackboard item with the cognitive record it produced.
+   *
+   * Fail-open: a store without the capability, the knob set to `off`, or any
+   * error falls back to admitting all records — capture never loses memory to a
+   * blackboard problem. (Cross-active dedup already ran in `deduplicateMemories`;
+   * per-record contradiction-vs-active still runs post-commit.)
+   */
+  private admitViaBlackboard(
+    userId: string,
+    records: CognitiveRecord[],
+  ): { survivors: CognitiveRecord[]; markCommitted: (recordId: string) => void } {
+    const passthrough = { survivors: records, markCommitted: () => {} };
+    if (!this.blackboardAdmissionEnabled() || records.length === 0) return passthrough;
+    const store = this.asBlackboardStore();
+    if (!store) return passthrough;
+    try {
+      const staged = store.stageBlackboardItems(
+        userId,
+        records.map((r) => ({
+          sourceChunkId: null, // precise provenance is linked post-commit (MEM-15)
+          score: r.confidence,
+          candidate: {
+            content: r.content,
+            type: r.type,
+            priority: r.priority,
+            sceneName: r.sceneName,
+            confidence: r.confidence,
+          },
+        })),
+      );
+      // staged[i] corresponds to records[i] (stageBlackboardItems preserves order).
+      const decisions = reconcileBlackboard(staged);
+      const decisionById = new Map(decisions.map((d) => [d.id, d]));
+      const itemIdByRecordId = new Map<string, string>();
+      const survivors: CognitiveRecord[] = [];
+      for (let i = 0; i < records.length; i++) {
+        const item = staged[i];
+        const decision = item ? decisionById.get(item.id) : undefined;
+        if (!item || !decision) { survivors.push(records[i]); continue; } // safety: keep
+        store.updateBlackboardItem(item.id, { status: decision.status, conflictIds: decision.conflictIds });
+        if (decision.status === "reconciled") {
+          itemIdByRecordId.set(records[i].id, item.id);
+          survivors.push(records[i]);
+        }
+        // duplicate / rejected → held on the blackboard, not committed.
+      }
+      return {
+        survivors,
+        markCommitted: (recordId: string) => {
+          const itemId = itemIdByRecordId.get(recordId);
+          if (itemId) store.updateBlackboardItem(itemId, { status: "committed", committedRecordId: recordId });
+        },
+      };
+    } catch (err: any) {
+      console.error("[BrainRouter] MEM-16 blackboard admission failed:", err?.message ?? err);
+      return passthrough; // fail-open
+    }
+  }
+
   public async processBacklog(params: {
     userId: string;
     sessionKey: string;
@@ -310,9 +404,16 @@ export class MemoryCapturePipeline {
       uniqueRecords = guarded;
     }
 
+    // MEM-16 — blackboard-default admission: stage + reconcile the batch; only
+    // the survivors proceed to commit. Reassigning uniqueRecords routes all
+    // downstream steps (connections, provenance, focus, count) through the gate.
+    const admission = this.admitViaBlackboard(userId, uniqueRecords);
+    uniqueRecords = admission.survivors;
+
     // Write to store
     for (const record of uniqueRecords) {
       this.store.upsertCognitive(record);
+      admission.markCommitted(record.id); // MEM-16 — stamp the blackboard item committed
 
       // Non-blocking background embedding (Slice A)
       if (this.embeddingService.isReady()) {
