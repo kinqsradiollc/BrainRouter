@@ -11,6 +11,7 @@ import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
 import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
+import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
@@ -797,6 +798,44 @@ export class MemoryEngine {
       return { node, children: node ? store.getTreeChildren(nodeId) : [] };
     }
     return { node: null, children: [], roots: store.getTreeRoots(userId, kind) };
+  }
+
+  // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
+  /**
+   * Export active records + tree nodes to a read-only markdown vault. The DB
+   * stays authoritative; a hash ledger makes re-export idempotent (only changed
+   * files are rewritten). Content is redacted before it lands (MEM-13's vault
+   * boundary).
+   */
+  public exportVault(userId: string, baseDir?: string): { dir: string; written: number; unchanged: number; total: number } {
+    const store = this.store as any;
+    if (typeof store.upsertVaultExport !== "function" || typeof store.getVaultExports !== "function") {
+      return { dir: "", written: 0, unchanged: 0, total: 0 };
+    }
+    const dir = baseDir ?? path.join(os.homedir(), ".brainrouter", "vault", userId);
+    const ledger = new Map<string, string>(store.getVaultExports(userId).map((e: { path: string; hash: string }) => [e.path, e.hash]));
+    let written = 0;
+    let unchanged = 0;
+
+    const writeIf = (relPath: string, raw: string, kind: "record" | "tree", refId: string): void => {
+      const content = redactSensitiveMemoryText(raw);
+      const hash = vaultHash(content);
+      if (ledger.get(relPath) === hash) { unchanged++; return; }
+      const abs = path.join(dir, relPath);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content, "utf8");
+      store.upsertVaultExport(userId, { path: relPath, hash, kind, refId });
+      written++;
+    };
+
+    for (const rec of this.store.listMemories(userId, { archived: false })) {
+      writeIf(`records/${rec.recordId}.md`, renderRecordMarkdown(rec), "record", rec.recordId);
+    }
+    const nodes: MemoryTreeNode[] = typeof store.getAllTreeNodes === "function" ? store.getAllTreeNodes(userId) : [];
+    for (const node of nodes) {
+      writeIf(`tree/${node.id}.md`, renderTreeNodeMarkdown(node), "tree", node.id);
+    }
+    return { dir, written, unchanged, total: written + unchanged };
   }
 
   /**
