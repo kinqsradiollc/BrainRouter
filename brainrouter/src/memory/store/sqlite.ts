@@ -1368,6 +1368,12 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.prepare("UPDATE memory_tree_nodes SET sealed_at = ? WHERE id = ? AND sealed_at IS NULL").run(new Date().toISOString(), id);
   }
 
+  /** 0.4.3 (MEM-10) — replace a node's summary (tree_digest's LLM re-summary
+   *  refines the deterministic summary tree_sealer wrote). */
+  public updateTreeNodeSummary(id: string, summaryMd: string): void {
+    this.db.prepare("UPDATE memory_tree_nodes SET summary_md = ? WHERE id = ?").run(summaryMd, id);
+  }
+
   /** MEM-7 — all tree nodes for a user (vault export reads the whole tree). */
   public getAllTreeNodes(userId: string): MemoryTreeNode[] {
     const rows = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? ORDER BY level ASC, created_at ASC").all(userId) as any[];

@@ -14,7 +14,7 @@ function ctxWith(engine: unknown): JobExecContext {
 describe("depth-agent executors", () => {
   it("registers the depth agents as on-demand runnable", () => {
     const ids = onDemandRunnableAgentIds();
-    for (const id of ["vault_exporter", "blackboard_reconciler", "tree_sealer", "source_chunker", "benchmark_eval"]) {
+    for (const id of ["vault_exporter", "blackboard_reconciler", "tree_sealer", "source_chunker", "benchmark_eval", "tree_digest"]) {
       expect(ids, id).toContain(id);
       expect(getJobExecutor(id)).toBeTypeOf("function");
     }
