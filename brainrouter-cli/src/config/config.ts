@@ -184,6 +184,10 @@ export interface CliKnobs {
   /** Enable the heuristic tool-output compactor. Default true. */
   contextCompaction?: boolean;
 
+  // ---- update notice (CLI-22) -------------------------------------------
+  /** Show a throttled "update available" notice at startup. Default true. */
+  updateCheck?: boolean;
+
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
   childAgentTimeoutMs?: number;
@@ -429,6 +433,7 @@ export interface ResolvedCliKnobs {
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
   scheduleTickMs: number;
+  updateCheck: boolean;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -489,6 +494,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     webSearchEndpoint: c.webSearchEndpoint,
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
+    updateCheck: c.updateCheck ?? true,
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,

@@ -851,6 +851,23 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
               // ignore — LM Studio probably isn't running
             }
           })();
+          // CLI-22 — fire-and-forget "update available" notice (throttled +
+          // cached; offline / npm-missing fails silent). Self-contained
+          // try/catch so it can never surface as an unhandled rejection.
+          if (getCliKnobs().updateCheck) {
+            (async () => {
+              try {
+                const { checkForUpdate, formatUpdateBanner } = await import('../../runtime/updateCheck.js');
+                const upd = await checkForUpdate();
+                if (upd?.behind && controller) {
+                  const banner = formatUpdateBanner(upd.current, upd.latest, upd.command);
+                  if (banner) controller.push.notice(banner, 'info');
+                }
+              } catch {
+                // best-effort — never disturb the session
+              }
+            })();
+          }
         }}
         onAccessModeCycle={() => {
           const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];
