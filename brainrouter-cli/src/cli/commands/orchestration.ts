@@ -8,6 +8,7 @@ import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries, appendTranscriptEntry } from '../../state/sessionStore.js';
 import { readGoal, setGoal, pauseGoal } from '../../state/goalStore.js';
@@ -530,6 +531,35 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
             }
           }, intervalMs);
         });
+        return true;
+      }
+
+      // MAS-P5-T5 (§6.5): `/agents tree` renders the spawn hierarchy
+      // (parent → children → workers) so you can see who spawned what.
+      if (args[0] === 'tree') {
+        const sessions = listSessions(agent.workspaceRoot);
+        if (sessions.length === 0) {
+          console.log(chalk.gray('\nNo child agents in this workspace yet.\n'));
+          return true;
+        }
+        console.log(chalk.bold('\n🌳 Agent tree'));
+        for (const line of formatAgentForest(buildAgentForest(sessions))) console.log(`  ${line}`);
+        console.log(chalk.gray(`\n  ${sessions.length} agent${sessions.length === 1 ? '' : 's'} total. /agents why <id> for one's rationale; /agents transcript <id> for its run.\n`));
+        return true;
+      }
+
+      // MAS-P5-T6 (§6.5): `/agents why <id>` — why this agent exists (role,
+      // task, spawner, usage) so a fan-out can be debugged after the fact.
+      if (args[0] === 'why' && args[1]) {
+        const sessions = listSessions(agent.workspaceRoot);
+        const match = sessions.find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list, or pass a full id.\n`));
+          return true;
+        }
+        console.log(chalk.bold('\n🔎 Why this agent'));
+        for (const line of formatAgentWhy(match, sessions)) console.log(line.startsWith('  ') ? chalk.gray(line) : `  ${line}`);
+        console.log();
         return true;
       }
 
