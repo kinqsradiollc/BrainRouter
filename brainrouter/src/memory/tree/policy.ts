@@ -37,6 +37,26 @@ export function parentDomain(child: TreeDomain): TreeDomain {
 /** Scene-grouped cognitive-record leaves are TOPIC-domain (one topic per scene). */
 export const SCENE_LEAF_DOMAIN: TreeDomain = "topic";
 
+/**
+ * BRAIN-P4-T5 — topic routing: derive a stable TOPIC bucket key from a scene
+ * name, so scenes about the same topic route to the same topic tree (the
+ * `topic_curator` step). Strips the `… engineering` suffix that
+ * `upsertEngineeringMemory` appends, normalizes, and keeps the leading salient
+ * tokens. Pure + deterministic; empty/odd input → "general".
+ */
+export function topicKeyForScene(sceneName: string): string {
+  const key = (sceneName ?? "")
+    .replace(/\s+engineering\s*$/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" ");
+  return key || "general";
+}
+
 export interface TreePolicy {
   /** Min records in a scene before it's worth its own leaf (skip trivial). */
   minSceneRecords: number;
@@ -44,9 +64,11 @@ export interface TreePolicy {
   leafPerPass: number;
   /** Unsealed topic leaves that trigger a seal into the parent domain. */
   sealThreshold: number;
+  /** BRAIN-P4-T5 — unsealed global-domain roots that trigger a global rollup digest. */
+  globalRollupThreshold: number;
 }
 
-const DEFAULTS: TreePolicy = { minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6 };
+const DEFAULTS: TreePolicy = { minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, globalRollupThreshold: 3 };
 
 /**
  * Read the (env-overridable) tree-build thresholds. Invalid/blank values fall
@@ -54,6 +76,7 @@ const DEFAULTS: TreePolicy = { minSceneRecords: 3, leafPerPass: 5, sealThreshold
  *   BRAINROUTER_TREE_MIN_SCENE_RECORDS  (default 3)
  *   BRAINROUTER_TREE_LEAF_PER_PASS      (default 5)
  *   BRAINROUTER_TREE_SEAL_THRESHOLD     (default 6)
+ *   BRAINROUTER_TREE_GLOBAL_ROLLUP      (default 3)
  */
 export function readTreePolicy(env: NodeJS.ProcessEnv = process.env): TreePolicy {
   const num = (name: string, def: number, min = 1): number => {
@@ -64,6 +87,7 @@ export function readTreePolicy(env: NodeJS.ProcessEnv = process.env): TreePolicy
     minSceneRecords: num("BRAINROUTER_TREE_MIN_SCENE_RECORDS", DEFAULTS.minSceneRecords),
     leafPerPass: num("BRAINROUTER_TREE_LEAF_PER_PASS", DEFAULTS.leafPerPass),
     sealThreshold: num("BRAINROUTER_TREE_SEAL_THRESHOLD", DEFAULTS.sealThreshold),
+    globalRollupThreshold: num("BRAINROUTER_TREE_GLOBAL_ROLLUP", DEFAULTS.globalRollupThreshold),
   };
 }
 

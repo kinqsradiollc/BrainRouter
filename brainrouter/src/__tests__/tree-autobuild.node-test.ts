@@ -24,6 +24,7 @@ const TREE_ENV = [
   "BRAINROUTER_TREE_MIN_SCENE_RECORDS",
   "BRAINROUTER_TREE_LEAF_PER_PASS",
   "BRAINROUTER_TREE_SEAL_THRESHOLD",
+  "BRAINROUTER_TREE_GLOBAL_ROLLUP",
 ];
 
 function fresh(label: string) {
@@ -113,6 +114,29 @@ test("autobuildSceneTree is a no-op when BRAINROUTER_TREE_AUTOBUILD=off", () => 
   } finally {
     if (prev === undefined) delete process.env.BRAINROUTER_TREE_AUTOBUILD;
     else process.env.BRAINROUTER_TREE_AUTOBUILD = prev;
+    cleanup();
+  }
+});
+
+test("BRAIN-P4-T5 rollupGlobalTree digests accumulated global roots into one rollup", () => {
+  const { store, engine, cleanup } = fresh("rollup");
+  try {
+    engine.appendTreeLeaf("u1", "global", "global digest A");
+    engine.appendTreeLeaf("u1", "global", "global digest B");
+    assert.equal(engine.rollupGlobalTree("u1"), null, "2 global roots < threshold (3) → no rollup");
+
+    engine.appendTreeLeaf("u1", "global", "global digest C");
+    const rollup = engine.rollupGlobalTree("u1");
+    assert.ok(rollup, "3 global roots → rollup created");
+    assert.equal(rollup!.kind, "global");
+
+    const children = store.getTreeChildren(rollup!.id);
+    assert.equal(children.length, 3, "the 3 roots are reparented under the rollup");
+    assert.ok(children.every((c) => c.sealedAt), "digested roots are sealed");
+
+    // Only the (unsealed) rollup remains as a global root → below threshold again.
+    assert.equal(engine.rollupGlobalTree("u1"), null);
+  } finally {
     cleanup();
   }
 });
