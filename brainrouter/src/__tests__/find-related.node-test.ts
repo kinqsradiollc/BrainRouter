@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
-import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms } from "../memory/code-retrieval.js";
+import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks } from "../memory/code-retrieval.js";
+import type { SourceChunk } from "@kinqs/brainrouter-types";
 
 function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem29-${label}-`));
@@ -96,6 +97,51 @@ test("MEM-29 find_related: unknown seed → found:false", () => {
     const engine = new MemoryEngine(store);
     assert.equal(engine.findRelatedChunks("u1", { chunkId: "nope" }).found, false);
   } finally { cleanup(); }
+});
+
+function chunk(over: Partial<SourceChunk> & { id: string; ftsRank: number }): SourceChunk & { ftsRank: number } {
+  return {
+    documentId: "d", ordinal: 0, content: "x", tokenCount: 1, filePath: null, symbol: null,
+    startLine: null, endLine: null, hash: "h", ...over,
+  };
+}
+
+test("MEM-27 pathPriorPenalty: vendored/generated/test/.d.ts/barrel down-ranked, real source unpenalized", () => {
+  assert.equal(pathPriorPenalty("src/parser.ts").multiplier, 1);
+  assert.equal(pathPriorPenalty("src/parser.ts").tag, null);
+  assert.ok(pathPriorPenalty("node_modules/lib/x.js").multiplier <= 0.2);
+  assert.equal(pathPriorPenalty("dist/bundle.js").tag, "build-output");
+  assert.equal(pathPriorPenalty("src/api.generated.ts").tag, "generated");
+  assert.equal(pathPriorPenalty("src/types.d.ts").tag, "type-decl");
+  assert.equal(pathPriorPenalty("src/parser.test.ts").tag, "test");
+  assert.equal(pathPriorPenalty("src/__tests__/x.ts").tag, "test");
+  // barrel is content-aware: an index.* of pure re-exports
+  assert.equal(pathPriorPenalty("src/index.ts", "export * from './a';\nexport { b } from './b';").tag, "barrel");
+  // an index.* with real code is NOT a barrel
+  assert.equal(pathPriorPenalty("src/index.ts", "function main(){ run(); }\nmain();").tag, null);
+});
+
+test("MEM-27 rankRelatedChunks: a real-source hit outranks a stronger test/.d.ts hit", () => {
+  const hits = [
+    chunk({ id: "t", filePath: "src/parser.test.ts", content: "parseConfig test", ftsRank: -5 }), // stronger lexical
+    chunk({ id: "s", filePath: "src/parser.ts", content: "parseConfig impl", ftsRank: -3 }),       // weaker lexical
+  ];
+  const ranked = rankRelatedChunks({ symbol: "parseConfig" }, hits, 10);
+  assert.equal(ranked[0].chunk.id, "s", "real source beats the test despite a stronger raw match");
+  assert.ok(ranked.find((r) => r.chunk.id === "t")!.reason.includes("-test"));
+});
+
+test("MEM-27 per-file saturation: one file cannot dominate the top-k", () => {
+  const hits = [
+    chunk({ id: "a1", filePath: "src/big.ts", content: "x", ftsRank: -9 }),
+    chunk({ id: "a2", filePath: "src/big.ts", content: "x", ftsRank: -8 }),
+    chunk({ id: "a3", filePath: "src/big.ts", content: "x", ftsRank: -7 }),
+    chunk({ id: "b1", filePath: "src/other.ts", content: "x", ftsRank: -1 }),
+  ];
+  const ranked = rankRelatedChunks({}, hits, 3, { maxPerFile: 2 });
+  const fromBig = ranked.filter((r) => r.chunk.filePath === "src/big.ts").length;
+  assert.equal(fromBig, 2, "big.ts capped at 2");
+  assert.ok(ranked.some((r) => r.chunk.filePath === "src/other.ts"), "other.ts gets a slot");
 });
 
 test("MEM-29 helpers: splitIdentifier / fileExtension / languageScopeFor / extractChunkQueryTerms", () => {
