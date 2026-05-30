@@ -13,6 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.4.3** | In flight | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
 | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
 | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
@@ -25,6 +26,12 @@ Planning for future releases belongs in [`ROADMAP.md`](ROADMAP.md), not
 this changelog.
 
 ---
+
+## [0.4.3] - Unreleased
+
+In flight. Brain Phases 2-5 + carried CLI/infra work; `/rewind --files` +
+`/context` window header have landed so far. Full notes accrue in
+[`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md).
 
 ## [0.4.2] - 2026-05-30
 
