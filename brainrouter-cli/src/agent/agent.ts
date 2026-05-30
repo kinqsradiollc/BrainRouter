@@ -1986,19 +1986,19 @@ export class Agent {
           if (blockedByHook) {
             throw new Error(`Blocked by pre-tool hook: ${blockedByHook}`);
           }
-          // POLICY-1 — route every LOCAL tool through the unified execution
-          // policy (not just the shell): mutating actions emit an audit event,
-          // a deny throws with the policy's reason, and an 'ask' that can't be
-          // answered (silent child) fails closed. Defense-in-depth: a tool
-          // outside the access-mode inventory (e.g. scope/budget-filtered) is
-          // still blocked even when its action kind would be allowed.
-          if (isLocal) {
+          // POLICY-2 — route EVERY tool (local, orchestration, worker, MCP)
+          // through the unified execution policy, not just local ones (POLICY-1).
+          // A mutating action (file edit, child spawn/delegate, shell) emits an
+          // audit + trace event; a deny throws with the policy's reason; an 'ask'
+          // a silent child can't answer fails closed. This closes the gap where
+          // spawn/delegate/worker dispatches bypassed the access-mode gate.
+          {
             const policy = resolveToolPolicy(name, this.accessMode);
             if (policy.mutating) {
               this.policyAudit.push({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
               traceEvent(
                 'policy.decision',
-                { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey },
+                { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey, local: isLocal },
                 { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId },
               );
             }
@@ -2008,9 +2008,13 @@ export class Agent {
             if (policy.decision === 'ask' && this.silent) {
               throw new Error(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
             }
-            if (!allowed.has(name)) {
-              throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
-            }
+          }
+          // Defense-in-depth: a LOCAL tool outside the access-mode inventory
+          // (scope/budget-filtered) is still blocked even when its action kind
+          // is allowed. Orchestration/MCP tools have their own inventory; the
+          // `allowed` set is the local-tool roster.
+          if (isLocal && !allowed.has(name)) {
+            throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
