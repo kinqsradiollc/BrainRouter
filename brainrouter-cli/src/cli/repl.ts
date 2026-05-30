@@ -32,7 +32,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
  * inline slash palette so both surfaces stay in lockstep as new commands land.
  */
 export const SLASH_COMMANDS = [
-  '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/plan', '/transcript',
+  '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
   '/doctor', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
@@ -128,6 +128,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/workflow resume <slug>', desc: 'Switch to <slug> AND resume its goal in one shot' },
       { cmd: '/skill <name> [input]', desc: 'Run any catalogued skill' },
       { cmd: '/skills', desc: 'List installed BrainRouter skills' },
+      { cmd: '/reload-skills', desc: 'Force a re-scan of the skill directories' },
       { cmd: '/plan  /plan clear', desc: 'Show the durable CLI task plan; clear it (drops stale items)' },
       { cmd: '/tools', desc: 'List local + MCP tools available to the agent' },
       { cmd: '/goal [text|clear|complete|pause|resume|budget <n>]', desc: 'Sticky goal' },
