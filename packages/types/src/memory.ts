@@ -504,6 +504,14 @@ export interface RecallExplanation {
   skillBoostApplied: boolean;
   /** Whether the neural reranker was used in Stage 3. */
   rerankerUsed: boolean;
+  /**
+   * 0.4.3 — whether the local lexical-relevance + MMR-diversity selection ran
+   * (Stage 3b). True on the default no-cross-encoder path when
+   * BRAINROUTER_RECALL_DIVERSITY is on: off-topic boilerplate is demoted and
+   * near-duplicate records are collapsed before the final top-K. Mutually
+   * exclusive with `rerankerUsed` (the cross-encoder path wins when a key is set).
+   */
+  diversityApplied?: boolean;
   /** Whether the LLM relevance judge was used in Stage 4. */
   judgeUsed?: boolean;
   /** How many candidates the judge approved as relevant. */
