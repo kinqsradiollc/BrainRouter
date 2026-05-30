@@ -105,6 +105,7 @@ import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from '
 import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from './tools/memory_find_related.js';
 import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from './tools/memory_reindex_source.js';
 import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from './tools/memory_record_lesson.js';
+import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from './tools/memory_extract_skill.js';
 import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from './tools/memory_blackboard.js';
 import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from './tools/memory_tree_walk.js';
 import { memoryVaultExportToolSchema, handleMemoryVaultExport } from './tools/memory_vault_export.js';
@@ -324,6 +325,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryFindRelatedToolSchema,
       memoryReindexSourceToolSchema,
       memoryRecordLessonToolSchema,
+      memoryExtractSkillToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -414,6 +416,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryReindexSource(request.params.arguments, { defaultUserId });
         case 'memory_record_lesson':
           return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId });
+        case 'memory_extract_skill':
+          return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':
