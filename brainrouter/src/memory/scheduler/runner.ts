@@ -84,6 +84,14 @@ export interface MemoryJobRunnerOptions {
    * lifecycle with deterministic stub executors.
    */
   resolveExecutor?: (agentId: string) => JobExecutor | undefined;
+  /**
+   * 0.4.3 — best-effort hook run at the START of every drain tick, before jobs
+   * are claimed, so freshly-enqueued work can be drained the same tick. The
+   * engine wires this to its scheduled-maintenance enqueue (vault / blackboard).
+   * Never blocks the runner: a throwing/slow onTick is caught and the drain
+   * proceeds. The hook owns its own cadence throttle.
+   */
+  onTick?: () => void | Promise<void>;
 }
 
 /**
@@ -105,6 +113,7 @@ export class MemoryJobRunner {
   private readonly maxPerTick: number;
   private readonly stuckMs: number;
   private readonly resolveExecutor: (agentId: string) => JobExecutor | undefined;
+  private readonly onTick?: () => void | Promise<void>;
 
   constructor(
     private readonly store: IMemoryStore,
@@ -115,6 +124,7 @@ export class MemoryJobRunner {
     this.maxPerTick = options?.maxPerTick ?? 10;
     this.stuckMs = options?.stuckMs ?? 5 * 60_000;
     this.resolveExecutor = options?.resolveExecutor ?? getJobExecutor;
+    this.onTick = options?.onTick;
   }
 
   start(): void {
@@ -140,6 +150,15 @@ export class MemoryJobRunner {
     if (this.inProgress) return;
     this.inProgress = true;
     try {
+      // Best-effort scheduled-maintenance enqueue (own cadence throttle).
+      // Isolated so a slow/throwing hook never stalls or breaks the drain.
+      if (this.onTick) {
+        try {
+          await this.onTick();
+        } catch (err: any) {
+          console.error("[BrainRouter] job runner onTick failed:", err?.message ?? err);
+        }
+      }
       this.store.sweepStuckMemoryJobs(this.stuckMs);
       for (let i = 0; i < this.maxPerTick; i++) {
         const job = this.store.claimNextMemoryJob();
