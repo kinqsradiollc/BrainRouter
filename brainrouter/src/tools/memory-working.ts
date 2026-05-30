@@ -3,6 +3,7 @@ import {
   getWorkingContext,
   offloadWorkingPayload,
   resetWorkingMemory,
+  reclaimWorkingMemory,
 } from "../memory/working/offload.js";
 
 function toolResult(value: unknown) {
@@ -66,6 +67,20 @@ export const memoryWorkingToolSchemas = [
       required: ["sessionKey"],
     },
   },
+  {
+    name: "memory_working_reclaim",
+    description: "Reclaim orphan offload refs (payloads no longer referenced by the live step log) while protecting active refs. Optional maxAgeMs retention window. Returns { scannedRefs, reclaimed, keptActive, bytesFreed }.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspacePath: { type: "string" },
+        userId: { type: "string" },
+        sessionKey: { type: "string" },
+        maxAgeMs: { type: "number", description: "Only reclaim orphans older than this many ms (omit to reclaim all orphans)." },
+      },
+      required: ["sessionKey"],
+    },
+  },
 ] as const;
 
 export async function handleMemoryWorkingTool(
@@ -106,6 +121,10 @@ export async function handleMemoryWorkingTool(
     case "memory_working_reset": {
       const params = z.object(baseWorkingInput).parse(args);
       return toolResult(resetWorkingMemory(params.workspacePath, params.userId ?? options?.defaultUserId ?? "default", params.sessionKey));
+    }
+    case "memory_working_reclaim": {
+      const params = z.object({ ...baseWorkingInput, maxAgeMs: z.number().nonnegative().optional() }).parse(args);
+      return toolResult(reclaimWorkingMemory(params.workspacePath, params.userId ?? options?.defaultUserId ?? "default", params.sessionKey, { maxAgeMs: params.maxAgeMs }));
     }
     default:
       throw new Error(`Unknown working memory tool: ${name}`);
