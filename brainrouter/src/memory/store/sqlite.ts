@@ -854,6 +854,8 @@ export class SqliteMemoryStore implements IMemoryStore {
       CREATE TABLE IF NOT EXISTS source_chunks (
         id TEXT PRIMARY KEY,
         document_id TEXT NOT NULL,
+        user_id TEXT DEFAULT NULL,
+        workspace_tag TEXT DEFAULT NULL,
         ordinal INTEGER NOT NULL,
         content TEXT NOT NULL,
         token_count INTEGER NOT NULL DEFAULT 0,
@@ -871,6 +873,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cognitive_source_links (
         user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
         record_id TEXT NOT NULL,
         chunk_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -885,6 +888,7 @@ export class SqliteMemoryStore implements IMemoryStore {
       CREATE TABLE IF NOT EXISTS memory_blackboard_items (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
         source_chunk_id TEXT DEFAULT NULL,
         candidate_json TEXT NOT NULL,
         score REAL NOT NULL DEFAULT 0,
@@ -901,6 +905,7 @@ export class SqliteMemoryStore implements IMemoryStore {
       CREATE TABLE IF NOT EXISTS memory_tree_nodes (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
         kind TEXT NOT NULL,
         parent_id TEXT DEFAULT NULL,
         level INTEGER NOT NULL DEFAULT 0,
@@ -917,6 +922,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS vault_exports (
         user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
         path TEXT NOT NULL,
         hash TEXT NOT NULL,
         kind TEXT NOT NULL,
@@ -925,6 +931,23 @@ export class SqliteMemoryStore implements IMemoryStore {
         PRIMARY KEY (user_id, path)
       )
     `);
+    // MEM-14 — RBAC-ready schema. The CREATE statements above carry user_id +
+    // workspace_tag on fresh DBs; for DBs created earlier in 0.4.3 dev, add the
+    // columns idempotently so every new table is scope-ready without a future
+    // migration. Local-first: columns stay NULL until federation populates them.
+    this.ensureColumn("source_chunks", "user_id", "TEXT DEFAULT NULL");
+    this.ensureColumn("source_chunks", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("cognitive_source_links", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("memory_blackboard_items", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("memory_tree_nodes", "workspace_tag", "TEXT DEFAULT NULL");
+    this.ensureColumn("vault_exports", "workspace_tag", "TEXT DEFAULT NULL");
+  }
+
+  /** MEM-14 — idempotently add a column to a table (no-op if it already exists). */
+  private ensureColumn(table: string, column: string, ddl: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (cols.some((c) => c.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
   }
 
   // ============================
@@ -1002,9 +1025,12 @@ export class SqliteMemoryStore implements IMemoryStore {
   /** Append chunks to a document; ordinals continue from the current count. Chunk hash = sha1(content). */
   public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
     const startOrdinal = ((this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = ?").get(documentId) as any)?.n ?? 0) as number;
+    // MEM-14 — denormalize the parent doc's scope onto each chunk so chunk-level
+    // queries stay scoped without a join.
+    const parent = this.db.prepare("SELECT user_id, workspace_tag FROM source_documents WHERE id = ?").get(documentId) as { user_id?: string; workspace_tag?: string } | undefined;
     const stmt = this.db.prepare(
-      `INSERT INTO source_chunks (id, document_id, ordinal, content, token_count, file_path, symbol, start_line, end_line, hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO source_chunks (id, document_id, user_id, workspace_tag, ordinal, content, token_count, file_path, symbol, start_line, end_line, hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const out: SourceChunk[] = [];
     this.db.exec("BEGIN");
@@ -1022,7 +1048,7 @@ export class SqliteMemoryStore implements IMemoryStore {
           endLine: c.endLine ?? null,
           hash: createHash("sha1").update(c.content).digest("hex"),
         };
-        stmt.run(chunk.id, chunk.documentId, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash);
+        stmt.run(chunk.id, chunk.documentId, parent?.user_id ?? null, parent?.workspace_tag ?? null, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash);
         out.push(chunk);
       });
       this.db.exec("COMMIT");
