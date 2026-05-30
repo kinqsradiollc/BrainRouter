@@ -5,6 +5,7 @@
 
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
+import { formatInboxPane } from '../../runtime/inboxView.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
@@ -17,7 +18,6 @@ import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '..
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
-import { formatIncomingBanner } from '../incomingBanner.js';
 import { resolveAutoChainMode, isAutoChainMode } from '../../orchestration/autoChain.js';
 import { resolveDelegationPolicy, isDelegationPolicy } from '../../orchestration/delegationPolicy.js';
 import { listPacks, packAgentIds } from '../../orchestration/packs.js';
@@ -229,12 +229,11 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log(chalk.gray(includeDelivered ? '  (no messages at all)\n' : '  (nothing unread — try /inbox --all to see delivered history)\n'));
         return true;
       }
-      console.log(chalk.bold(`\nInbox — ${messages.length} message${messages.length === 1 ? '' : 's'}${peek ? ' (peek)' : ''}`));
-      for (const m of messages) {
-        const text = m.kind === 'text' && typeof m.payload?.text === 'string'
-          ? m.payload.text
-          : `(${m.kind} payload)`;
-        console.log(formatIncomingBanner({ id: m.id, fromSessionKey: m.fromSessionKey, text, receivedAt: m.createdAt }));
+      // CLI-15 — compact pane grouped by kind (text / goal-handoff / memory-ref
+      // / tool-result / delegate) so what's waiting is legible at a glance.
+      console.log(chalk.bold(`\n📥 Inbox${peek ? ' (peek)' : ''}`));
+      for (const line of formatInboxPane(messages)) {
+        console.log(line.startsWith('  ') ? chalk.gray(line) : chalk.cyan(line));
       }
       console.log(peek
         ? chalk.gray('\n(peek — messages left unread. Run /inbox without --peek to mark them delivered.)\n')
