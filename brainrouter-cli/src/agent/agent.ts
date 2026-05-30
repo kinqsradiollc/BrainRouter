@@ -61,7 +61,7 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // 0.3.9 item 8 — cache-first context regions. The helper here lets us
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
-import { computePrefixFingerprint } from '../runtime/contextRegions.js';
+import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
 import { decideExecutionPolicy } from '../runtime/execPolicy.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
@@ -2786,6 +2786,16 @@ export class Agent {
     return this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
       ? this.lastSeenPromptTokens
       : estimateChatHistoryTokens(this.chatHistory as any);
+  }
+
+  /**
+   * CLI-5 — read-only snapshot of the cache-stable prefix's components (system
+   * message + pinned memory anchors) from the live chat history. Tool-list
+   * fingerprinting is omitted here (the per-turn tool set isn't retained on the
+   * agent); `/context prefix` diffs this across invocations for drift labels.
+   */
+  public getPrefixComponents(): PrefixComponents {
+    return computePrefixComponents(this.chatHistory as any, []);
   }
 
   /**
