@@ -26,6 +26,18 @@ export function normalizePriority(effectivePriority: number): number {
   return effectivePriority / PRIORITY_SCALE;
 }
 
+/**
+ * 0.4.3 — clamp a normalized priority to a per-type ceiling. Generic,
+ * long-lived "context" types (instruction, architecture_decision, task_state)
+ * carry a `recallPriorityCap` so their priority term can't structurally
+ * out-rank fresh, on-topic findings. `cap === undefined` is a no-op (the
+ * default for task-specific types), so this never lowers existing scores
+ * except for the explicitly-capped types.
+ */
+export function capPriority(priorityScore: number, cap?: number): number {
+  return cap === undefined ? priorityScore : Math.min(priorityScore, cap);
+}
+
 /** Weighted blend of base relevance and normalized priority. */
 export function blendBaseAndPriority(baseScore: number, priorityScore: number): number {
   return baseScore * BASE_WEIGHT + priorityScore * PRIORITY_WEIGHT;
