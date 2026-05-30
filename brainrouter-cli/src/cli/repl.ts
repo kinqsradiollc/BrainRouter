@@ -145,6 +145,8 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/agents [--json]', desc: 'List local child-agent sessions in this CLI.' },
       { cmd: '/agents tree', desc: 'Spawn hierarchy (parent → children) with role + status glyphs.' },
       { cmd: '/agents why <id>', desc: 'Why a child exists: role, task, spawner, usage.' },
+      { cmd: '/agents transcript <id> [--tools] [--errors]', desc: "A child's transcript, optionally filtered to tool calls / errors." },
+      { cmd: '/agents replay <id>', desc: "Numbered, read-only step-through of a child's run." },
       { cmd: '/agents --remote [--watch] [--usage] [--include-stale] [--json]', desc: 'List federated peer CLIs / hosts attached to the same brain (0.4.0 Stage 2).' },
       { cmd: '/dm <sessionKey> <message>', desc: 'Send text to one federated peer; recipient sees a banner above their next prompt (0.4.0 Stage 3).' },
       { cmd: '/broadcast [<clientKind>:*] <message>', desc: 'Send text to every active peer under your userId, or narrow to one clientKind.' },
