@@ -9,6 +9,7 @@ import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
+import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries, appendTranscriptEntry } from '../../state/sessionStore.js';
 import { readGoal, setGoal, pauseGoal } from '../../state/goalStore.js';
@@ -559,6 +560,40 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         }
         console.log(chalk.bold('\n🔎 Why this agent'));
         for (const line of formatAgentWhy(match, sessions)) console.log(line.startsWith('  ') ? chalk.gray(line) : `  ${line}`);
+        console.log();
+        return true;
+      }
+
+      // MAS-P5-T7 (§6.5): `/agents transcript <id> [--tools] [--errors]` —
+      // dump a child's transcript, optionally filtered to tool calls / errors.
+      if (args[0] === 'transcript' && args[1]) {
+        const match = listSessions(agent.workspaceRoot).find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list.\n`));
+          return true;
+        }
+        const childKey = childSessionKey(match.parentSessionKey, match.id);
+        const entries = readTranscriptEntries(agent.workspaceRoot, childKey, Number.MAX_SAFE_INTEGER);
+        const opts = { tools: args.includes('--tools'), errors: args.includes('--errors') };
+        const filterNote = opts.tools || opts.errors ? ` (${[opts.tools && 'tools', opts.errors && 'errors'].filter(Boolean).join(' + ')})` : '';
+        console.log(chalk.bold(`\n📜 Transcript — ${match.id} (${match.role})${filterNote}`));
+        for (const line of formatAgentTranscript(entries as any, opts)) console.log(`  ${line}`);
+        console.log();
+        return true;
+      }
+
+      // MAS-P5-T8 (§6.5): `/agents replay <id>` — numbered, read-only
+      // step-through of a child's run in order.
+      if (args[0] === 'replay' && args[1]) {
+        const match = listSessions(agent.workspaceRoot).find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list.\n`));
+          return true;
+        }
+        const childKey = childSessionKey(match.parentSessionKey, match.id);
+        const entries = readTranscriptEntries(agent.workspaceRoot, childKey, Number.MAX_SAFE_INTEGER);
+        console.log(chalk.bold(`\n⏯  Replay — ${match.id} (${match.role}) · ${match.status} · read-only`));
+        for (const line of formatAgentReplay(entries as any)) console.log(`  ${chalk.gray(line)}`);
         console.log();
         return true;
       }
