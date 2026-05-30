@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
-import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost } from "../memory/code-retrieval.js";
+import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost, extractIntraFileCallEdges } from "../memory/code-retrieval.js";
 import type { SourceChunk } from "@kinqs/brainrouter-types";
 
 function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
@@ -173,6 +173,48 @@ test("MEM-26 helpers: definedIdentifiers / deriveSeedIdentifiers / codeRerankBoo
   assert.ok(ids.has("parseconfig") && ids.has("parse") && ids.has("applyconfig") && ids.has("raw"));
   const b = codeRerankBoost(ids, "src/a.ts", { symbol: "applyConfig", content: "function applyConfig(){}", filePath: "src/a.ts" });
   assert.ok(b.boost > 0 && b.reasons.includes("+def") && b.reasons.includes("+samefile"));
+});
+
+test("MEM-28 extractIntraFileCallEdges: edges from referencing chunk → defining chunk; ambiguous + self skipped", () => {
+  const edges = extractIntraFileCallEdges([
+    { id: "a", symbol: "parseConfig", content: "function parseConfig(raw){ return validate(raw); }" },
+    { id: "b", symbol: "validate", content: "function validate(x){ return x != null; }" },
+    { id: "c", symbol: "loadConfig", content: "function loadConfig(){ return parseConfig(read()); }" },
+    { id: "d", symbol: "validate", content: "duplicate symbol — ambiguous, must be dropped" },
+  ]);
+  const pairs = new Set(edges.map((e) => `${e.fromChunkId}->${e.toChunkId}`));
+  // a references validate (but 'validate' is ambiguous → no edge to it)
+  assert.ok(!pairs.has("a->b"), "ambiguous target symbol is not linked");
+  // c references parseConfig (unique) → c->a
+  assert.ok(pairs.has("c->a"), "loadConfig → parseConfig edge");
+  // no self edges
+  assert.ok(![...pairs].some((p) => p.split("->")[0] === p.split("->")[1]), "no self edges");
+});
+
+test("MEM-28 find_related: surfaces the seed's callees/callers as graph: hits, leading the result", () => {
+  const { store, cleanup } = fresh("edges");
+  try {
+    const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/mod.ts", hash: "he", title: "mod.ts" });
+    const chunks = store.addSourceChunks(doc.id, [
+      { content: "export function loadConfig(){ const r = readFile(); return parseConfig(r); }", tokenCount: 12, filePath: "src/mod.ts", symbol: "loadConfig", startLine: 1, endLine: 3 },
+      { content: "export function parseConfig(raw){ return JSON.parse(raw); }", tokenCount: 10, filePath: "src/mod.ts", symbol: "parseConfig", startLine: 5, endLine: 7 },
+      { content: "export function readFile(){ return fs.readFileSync('x'); }", tokenCount: 9, filePath: "src/mod.ts", symbol: "readFile", startLine: 9, endLine: 11 },
+    ]);
+    const engine = new MemoryEngine(store);
+    // Seed = loadConfig, which calls parseConfig + readFile (callees).
+    const r = engine.findRelatedChunks("u1", { chunkId: chunks[0].id });
+    assert.equal(r.found, true);
+    const byId = new Map(r.related.map((x) => [x.chunk.id, x]));
+    assert.ok(byId.has(chunks[1].id) && byId.get(chunks[1].id)!.reason.startsWith("graph:"), "parseConfig surfaced as a graph edge");
+    assert.ok(byId.has(chunks[2].id) && byId.get(chunks[2].id)!.reason.startsWith("graph:"), "readFile surfaced as a graph edge");
+    // Seed = parseConfig → loadConfig is its caller.
+    const r2 = engine.findRelatedChunks("u1", { chunkId: chunks[1].id });
+    const caller = r2.related.find((x) => x.chunk.id === chunks[0].id);
+    assert.ok(caller && caller.reason === "graph:caller", "loadConfig surfaced as a caller");
+    // includeEdges:false drops the structural hits.
+    const r3 = engine.findRelatedChunks("u1", { chunkId: chunks[0].id }, { includeEdges: false });
+    assert.ok(r3.related.every((x) => !x.reason.startsWith("graph:")), "edges suppressed when includeEdges=false");
+  } finally { cleanup(); }
 });
 
 test("MEM-29 helpers: splitIdentifier / fileExtension / languageScopeFor / extractChunkQueryTerms", () => {
