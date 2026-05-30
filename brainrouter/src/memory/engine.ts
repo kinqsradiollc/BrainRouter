@@ -3,6 +3,7 @@ import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, I
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
+import { enqueueAgentJob } from "./scheduler/jobs.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
@@ -286,9 +287,59 @@ export class MemoryEngine {
         intervalMs: process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS
           ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS, 10)
           : undefined,
+        // 0.4.3 — auto-schedule the maintenance depth agents (own throttle).
+        onTick: () => { this.enqueueScheduledMaintenance(); },
       },
     );
     this.jobRunner.start();
+  }
+
+  // 0.4.3 — scheduled-maintenance cadence (own throttle, independent of the
+  // much faster drain interval). Do real work at most every 5 min; export the
+  // vault ~hourly (every 12th pass) since it rescans records each run.
+  private maintenanceLastAt = 0;
+  private maintenancePass = 0;
+
+  /**
+   * 0.4.3 (MEM-10) — auto-enqueue the maintenance depth agents. Called
+   * best-effort from the job runner's per-tick hook. Per active user:
+   *   - `blackboard_reconciler` — only when pending candidates exist
+   *     (self-limiting: reconcile+commit drains the queue, so it won't re-fire
+   *     until new items stage).
+   *   - `vault_exporter` — every ~hour, so the markdown mirror stays fresh
+   *     without rescanning records every tick (export is ledger-idempotent).
+   * `tree_sealer` is intentionally NOT auto-enqueued: nothing auto-appends tree
+   * leaves yet, so there are no full buckets to seal — run it on demand via
+   * `memory_agent_run` until auto-leaf-accumulation lands.
+   * Disable the whole pass with `BRAINROUTER_JOB_MAINTENANCE=off`. Idempotency
+   * keys dedupe in-flight, so re-enqueues are safe. `force` skips the throttle
+   * (tests).
+   */
+  public enqueueScheduledMaintenance(force = false): { enqueued: Record<string, number>; skipped?: boolean } {
+    if (process.env.BRAINROUTER_JOB_MAINTENANCE === "off") return { enqueued: {}, skipped: true };
+    const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
+    const VAULT_MAINTENANCE_EVERY = 12; // ~hourly at the 5-min cadence
+    const now = Date.now();
+    if (!force && now - this.maintenanceLastAt < MAINTENANCE_INTERVAL_MS) return { enqueued: {}, skipped: true };
+    this.maintenanceLastAt = now;
+    const pass = this.maintenancePass++;
+
+    const enqueued: Record<string, number> = { blackboard_reconciler: 0, vault_exporter: 0 };
+    const bb = this.blackboardStore();
+    let users: { userId: string }[] = [];
+    try { users = this.store.listUsers(); } catch { users = []; }
+    for (const { userId } of users) {
+      if (!userId) continue;
+      if (bb && bb.getBlackboardItems(userId, "pending").length > 0) {
+        enqueueAgentJob(this.store, "blackboard_reconciler", { userId });
+        enqueued.blackboard_reconciler++;
+      }
+      if (pass % VAULT_MAINTENANCE_EVERY === 0) {
+        enqueueAgentJob(this.store, "vault_exporter", { userId });
+        enqueued.vault_exporter++;
+      }
+    }
+    return { enqueued };
   }
 
   private async ensureSeedAdminUser() {
