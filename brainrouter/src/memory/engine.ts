@@ -1238,7 +1238,7 @@ export class MemoryEngine {
   public findRelatedChunks(
     userId: string,
     seed: { chunkId?: string; filePath?: string; line?: number },
-    opts?: { limit?: number; sameLanguage?: boolean },
+    opts?: { limit?: number; sameLanguage?: boolean; maxPerFile?: number },
   ): { found: boolean; seed?: { chunkId: string; filePath: string | null; symbol: string | null }; related: RelatedChunkHit[] } {
     const store = this.store as Partial<{
       getSourceChunk(id: string): SourceChunk | null;
@@ -1276,7 +1276,7 @@ export class MemoryEngine {
       excludeChunkId: seedChunk.id,
       filePathLike: scope.length ? scope : undefined,
     });
-    const related = rankRelatedChunks(seedChunk, hits, limit);
+    const related = rankRelatedChunks(seedChunk, hits, limit, { maxPerFile: opts?.maxPerFile });
 
     return {
       found: true,
