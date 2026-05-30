@@ -46,10 +46,11 @@ const schema = z.object({
   neighbors: z.number().int().min(0).max(10).optional().default(0),
 });
 
-export async function handleMemoryFetchSourceChunk(args: any, _options?: { defaultUserId?: string }) {
+export async function handleMemoryFetchSourceChunk(args: any, options?: { defaultUserId?: string }) {
   try {
     const params = schema.parse(args ?? {});
-    const result = memoryEngine.fetchSourceChunk(params.chunkId, params.neighbors);
+    const userId = params.userId ?? options?.defaultUserId ?? "default";
+    const result = memoryEngine.fetchSourceChunk(userId, params.chunkId, params.neighbors);
     if (!result) return toolResult({ found: false, chunkId: params.chunkId });
     return toolResult({ found: true, ...result });
   } catch (err) {

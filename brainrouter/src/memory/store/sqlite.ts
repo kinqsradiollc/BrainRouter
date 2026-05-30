@@ -1103,13 +1103,13 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   /** MEM-3 — the source chunks a cognitive record cites, ordered by document + position. */
-  public getRecordSourceChunks(recordId: string): SourceChunk[] {
+  public getRecordSourceChunks(userId: string, recordId: string): SourceChunk[] {
     const rows = this.db.prepare(
       `SELECT sc.* FROM cognitive_source_links l
          JOIN source_chunks sc ON sc.id = l.chunk_id
-        WHERE l.record_id = ?
+        WHERE l.record_id = ? AND l.user_id = ?
         ORDER BY sc.document_id ASC, sc.ordinal ASC`,
-    ).all(recordId) as any[];
+    ).all(recordId, userId) as any[];
     return rows.map((r) => this.rowToSourceChunk(r));
   }
 
