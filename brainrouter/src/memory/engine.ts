@@ -9,6 +9,7 @@ import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
+import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
@@ -22,7 +23,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus } from "@kinqs/brainrouter-types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -659,6 +660,82 @@ export class MemoryEngine {
   public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
     const items = this.store.listMemories(userId, { type: filters.type, archived: false });
     return planGovernance(items, filters, Date.now());
+  }
+
+  // ── Blackboard commit pipeline (MEM-4) ──────────────────────────────────
+  // Stage candidates → reconcile (dedup/score) → commit to cognitive records
+  // with an audit trail, or reject. The blackboard store methods live on the
+  // concrete store, so narrow at runtime (like the source capability).
+
+  private blackboardStore(): {
+    stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
+    getBlackboardItem(id: string): BlackboardItem | null;
+    getBlackboardItems(userId: string, status?: BlackboardStatus): BlackboardItem[];
+    updateBlackboardItem(id: string, patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null }): void;
+  } | null {
+    const s = this.store as any;
+    return typeof s.stageBlackboardItems === "function" &&
+      typeof s.getBlackboardItems === "function" &&
+      typeof s.updateBlackboardItem === "function"
+      ? s
+      : null;
+  }
+
+  /** MEM-4 — stage extracted candidates for review before they become memory. */
+  public stageBlackboardCandidates(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+    const store = this.blackboardStore();
+    return store ? store.stageBlackboardItems(userId, items) : [];
+  }
+
+  /** MEM-4 — reconcile all pending items (dedup/score/threshold) and persist the verdicts. */
+  public reconcilePendingBlackboard(userId: string): { reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] } {
+    const store = this.blackboardStore();
+    if (!store) return { reconciled: 0, duplicate: 0, rejected: 0, items: [] };
+    const decisions = reconcileBlackboard(store.getBlackboardItems(userId, "pending"));
+    for (const d of decisions) store.updateBlackboardItem(d.id, { status: d.status, score: d.score, conflictIds: d.conflictIds });
+    const count = (st: string) => decisions.filter((d) => d.status === st).length;
+    return { reconciled: count("reconciled"), duplicate: count("duplicate"), rejected: count("rejected"), items: store.getBlackboardItems(userId) };
+  }
+
+  /** MEM-4 — promote a reconciled item to a cognitive record (with audit), linking its source chunk. */
+  public commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string } {
+    const store = this.blackboardStore();
+    if (!store) return { committed: false, reason: "blackboard unavailable" };
+    const item = store.getBlackboardItem(itemId);
+    if (!item || item.userId !== userId) return { committed: false, reason: "not found" };
+    if (item.status === "committed") return { committed: true, recordId: item.committedRecordId ?? undefined };
+    if (item.status !== "reconciled") return { committed: false, reason: `status is "${item.status}"; reconcile before committing` };
+
+    const record = this.upsertEngineeringMemory({
+      userId,
+      type: item.candidate.type,
+      content: item.candidate.content,
+      priority: item.candidate.priority,
+      confidence: item.candidate.confidence,
+      metadata: { committedFromBlackboard: item.id, sourceChunkId: item.sourceChunkId },
+    });
+    store.updateBlackboardItem(item.id, { status: "committed", committedRecordId: record.id });
+    if (item.sourceChunkId) {
+      const linker = this.store as Partial<{ linkRecordSources(u: string, r: string, ids: string[]): void }>;
+      try { linker.linkRecordSources?.(userId, record.id, [item.sourceChunkId]); } catch { /* best-effort */ }
+    }
+    return { committed: true, recordId: record.id };
+  }
+
+  /** MEM-4 — drop an item without committing it. */
+  public rejectBlackboardItem(userId: string, itemId: string): boolean {
+    const store = this.blackboardStore();
+    if (!store) return false;
+    const item = store.getBlackboardItem(itemId);
+    if (!item || item.userId !== userId) return false;
+    store.updateBlackboardItem(itemId, { status: "rejected" });
+    return true;
+  }
+
+  /** MEM-4 — list staged items (optionally by status) for review. */
+  public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
+    const store = this.blackboardStore();
+    return store ? store.getBlackboardItems(userId, status) : [];
   }
 
   /**
