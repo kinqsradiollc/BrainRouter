@@ -66,7 +66,8 @@ export type MemoryType =
   | "source_evidence"
   | "artifact_reference"
   | "file_history"
-  | "command_knowledge";
+  | "command_knowledge"
+  | "lesson";
 
 // The runtime list of every cognitive `MemoryType` lives in the
 // crypto-free `./memory-type-list.ts` so browser bundles (the dashboard
