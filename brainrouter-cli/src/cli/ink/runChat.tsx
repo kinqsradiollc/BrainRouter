@@ -17,6 +17,7 @@ import { parseBangCommand } from '../../runtime/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
+import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue } from '../../state/checkpointStore.js';
 import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
 import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';
 import { expandMentions } from '../../memory/mentions.js';
@@ -423,6 +424,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }
     isProcessing = true;
     clearIdleHint();
+    // CLI-21 — crash checkpoint: record the in-flight prompt before the turn so
+    // a mid-turn crash can be recovered on the next launch. Cleared in finally.
+    beginTurnCheckpoint(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
 
     const { expanded, mentions } = expandMentions(rawInput, agent.workspaceRoot);
     if (mentions.length > 0 && !isQuiet()) {
@@ -698,8 +702,17 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     } catch (err: any) {
       parentDone = true;
       controller.push.notice(`✗ Execution failed: ${err?.message ?? err}`, 'error');
+      // CLI-21 — a connectivity failure means the prompt wasn't really handled;
+      // queue it so it isn't lost (offered for replay on reconnect / relaunch).
+      if (isConnectivityError(err)) {
+        queueOfflinePrompt(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
+        controller.push.notice('↺ Saved to the offline queue — it was a connectivity error.', 'info');
+      }
     } finally {
       isProcessing = false;
+      // CLI-21 — turn settled (success or normal error): clear the in-flight
+      // checkpoint so only a true crash leaves one behind.
+      endTurnCheckpoint(agent.workspaceRoot, agent.sessionKey);
       controller.push.setPhase('idle');
       controller.push.setStatus('');
       agent.activeSkill = undefined;
@@ -867,6 +880,21 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
                 // best-effort — never disturb the session
               }
             })();
+          }
+          // CLI-21 — surface anything left unfinished by a previous run (a turn
+          // that crashed mid-flight, or prompts queued while offline) so the
+          // user can resend them, then clear so it doesn't nag next launch.
+          try {
+            const rec = readRecoverable(agent.workspaceRoot, agent.sessionKey);
+            const pending = [...(rec.crashed ? [rec.crashed] : []), ...rec.offline];
+            if (pending.length > 0 && controller) {
+              const lines = pending.map((p) => `  • ${p.kind === 'crash' ? '(unfinished)' : '(offline)'} ${p.prompt.replace(/\s+/g, ' ').slice(0, 120)}`);
+              controller.push.notice(`⏮ ${pending.length} prompt(s) from a previous session weren't completed — resend if still needed:\n${lines.join('\n')}`, 'info');
+              endTurnCheckpoint(agent.workspaceRoot, agent.sessionKey);
+              clearOfflineQueue(agent.workspaceRoot, agent.sessionKey);
+            }
+          } catch {
+            // recovery surfacing is best-effort
           }
         }}
         onAccessModeCycle={() => {
