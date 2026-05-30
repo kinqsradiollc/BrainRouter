@@ -84,6 +84,59 @@ export function actionKindForTool(name: string): ActionKind {
   }
 }
 
+export type ExternalDirMode = 'deny' | 'ask' | 'allow';
+
+/**
+ * POLICY-3 (0.4.4) — gate writes that target paths OUTSIDE the workspace root.
+ * Within-workspace writes are always allowed; an external target is decided by
+ * the active profile's `externalDirWrites` mode (deny / ask / allow). Uses the
+ * realpath-aware containment from MEM-36 so `..` / symlink escapes are caught.
+ */
+export function externalDirectoryDecision(
+  targetPath: string,
+  workspaceRoot: string,
+  mode: ExternalDirMode,
+  within: (target: string, roots: string[]) => boolean,
+): PolicyResult {
+  if (within(targetPath, [workspaceRoot])) {
+    return { decision: 'allow', reason: 'write target is inside the workspace' };
+  }
+  switch (mode) {
+    case 'allow':
+      return { decision: 'allow', reason: 'external-directory writes permitted by policy profile' };
+    case 'ask':
+      return { decision: 'ask', reason: `write to "${targetPath}" is outside the workspace — approval required` };
+    default:
+      return { decision: 'deny', reason: `write to "${targetPath}" is outside the workspace — denied by policy profile` };
+  }
+}
+
+/** Lowercased host of a URL, or '' when unparseable. */
+export function hostOf(url: string): string {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return ''; }
+}
+
+/**
+ * POLICY-3 — per-host network egress decision. An EMPTY allowlist means "no
+ * restriction" (current behavior — every host allowed). A non-empty allowlist
+ * permits only its hosts (exact or dot-suffix subdomain match) and denies the
+ * rest, so a profile can confine outbound `fetch_url` / `web_search` traffic.
+ */
+export function egressDecision(url: string, allowlist: string[]): PolicyResult {
+  if (!allowlist || allowlist.length === 0) {
+    return { decision: 'allow', reason: 'no egress allowlist configured — all hosts permitted' };
+  }
+  const host = hostOf(url);
+  if (!host) return { decision: 'deny', reason: `unparseable URL — denied under an active egress allowlist` };
+  const ok = allowlist.some((entry) => {
+    const e = entry.trim().toLowerCase().replace(/^\*\./, '');
+    return e !== '' && (host === e || host.endsWith(`.${e}`));
+  });
+  return ok
+    ? { decision: 'allow', reason: `host "${host}" is on the egress allowlist` }
+    : { decision: 'deny', reason: `host "${host}" is not on the egress allowlist` };
+}
+
 export interface ToolPolicyResult extends PolicyResult {
   action: ActionKind;
   /** True for actions that change state (file/child/shell) — i.e. worth auditing. */
