@@ -88,3 +88,29 @@ test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a
     cleanup();
   }
 });
+
+test("MEM-25 retrieval benchmark reports per-mode latency", async () => {
+  const { engine, cleanup } = fresh("latency");
+  try {
+    for (let i = 0; i < 4; i++) {
+      engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: `fact ${i} about the recall pipeline, chunking, and the blackboard reconciler` });
+    }
+    const r = await engine.runRetrievalBenchmark("u1", { sampleSize: 4 });
+    assert.ok(r.latencyMsByMode && typeof r.latencyMsByMode.baseline === "number", "baseline latency present");
+    assert.ok(r.latencyMsByMode.baseline >= 0, "non-negative latency");
+  } finally {
+    cleanup();
+  }
+});
+
+test("MEM-25 code-recall benchmark scores symbol isolation + writes a numbers file", () => {
+  const { engine, dir, cleanup } = fresh("coderecall");
+  try {
+    const r = engine.runCodeChunkBenchmark({ baseDir: join(dir, "cr") });
+    assert.equal(r.expectedSymbols, 8);
+    assert.ok(r.symbolRecall >= 0.875, `symbol recall ${r.symbolRecall}`);
+    assert.ok(r.summaryPath && existsSync(r.summaryPath), "code-recall numbers file written");
+  } finally {
+    cleanup();
+  }
+});

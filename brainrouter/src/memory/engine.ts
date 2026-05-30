@@ -8,6 +8,7 @@ import { chunkSource } from "./source/chunker.js";
 import { chunkCode } from "./source/code-chunker.js";
 import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
+import { benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd, type CodeRecallResult } from "./bench/code-recall.js";
 import { readTreePolicy, treeAutobuildEnabled, parentDomain, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
@@ -957,11 +958,11 @@ export class MemoryEngine {
   public async runRetrievalBenchmark(
     userId: string,
     opts?: { sampleSize?: number; baseDir?: string },
-  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean; skippedModes: string[] }> {
+  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean; skippedModes: string[]; latencyMsByMode: Record<string, number> }> {
     const sampleSize = Math.max(1, Math.min(opts?.sampleSize ?? 20, 100));
     const sample = this.store.listMemories(userId, { archived: false }).slice(0, sampleSize);
     if (sample.length < 3) {
-      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true, skippedModes: [] };
+      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true, skippedModes: [], latencyMsByMode: {} };
     }
 
     interface BenchMode {
@@ -989,8 +990,10 @@ export class MemoryEngine {
     }
 
     const statsByMode: Record<string, ModeStats> = {};
+    const latencyMsByMode: Record<string, number> = {}; // MEM-25 — publishable latency
     for (const mode of modes) {
       const ranks: number[] = [];
+      const startedAt = Date.now();
       for (const rec of sample) {
         const query = deriveBenchQuery(rec.content);
         if (!query) { ranks.push(-1); continue; }
@@ -1007,6 +1010,7 @@ export class MemoryEngine {
         ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
       }
       statsByMode[mode.name] = aggregateRanks(ranks);
+      latencyMsByMode[mode.name] = Date.now() - startedAt;
     }
     if (skippedModes.length > 0) {
       console.error(`[BrainRouter] benchmark skipped modes: ${skippedModes.join(", ")}`);
@@ -1017,15 +1021,37 @@ export class MemoryEngine {
       const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench", userId);
       fs.mkdirSync(dir, { recursive: true });
       summaryPath = path.join(dir, `bench-${Date.now()}.md`);
+      const latencyNote = `\n_Latency (ms): ${Object.entries(latencyMsByMode).map(([m, ms]) => `${m}=${ms}`).join(", ") || "n/a"}._\n`;
       const skippedNote = skippedModes.length > 0 ? `\n_Skipped: ${skippedModes.join("; ")}._\n` : "";
-      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode) + skippedNote, "utf8");
+      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode) + latencyNote + skippedNote, "utf8");
     } catch {
       summaryPath = null;
     }
     // Sane regression floor: the lexmmr mode should resurface ≥50% of sampled
     // records within the top 10. A bar for the CI gate, not a hard guarantee.
     const { passed } = checkThresholds(statsByMode, { lexmmr: { recall_any_at_10: 0.5 } });
-    return { summaryPath, statsByMode, sampled: sample.length, passed, skippedModes };
+    return { summaryPath, statsByMode, sampled: sample.length, passed, skippedModes, latencyMsByMode };
+  }
+
+  /**
+   * MEM-25 (0.4.4) — code-recall benchmark: scores how well the code chunker
+   * (MEM-18 structural + MEM-24 AST adapter) isolates known top-level symbols
+   * over built-in TS/Python/Rust fixtures, and publishes the numbers to a
+   * markdown file. The "code recall metrics" the competitive review asked for.
+   * Pure w.r.t. memory (only writes the numbers file). Read-only.
+   */
+  public runCodeChunkBenchmark(opts?: { baseDir?: string }): CodeRecallResult & { summaryPath: string | null } {
+    const result = benchmarkCodeChunking(DEFAULT_CODE_SAMPLES);
+    let summaryPath: string | null = null;
+    try {
+      const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench");
+      fs.mkdirSync(dir, { recursive: true });
+      summaryPath = path.join(dir, `code-recall-${Date.now()}.md`);
+      fs.writeFileSync(summaryPath, formatCodeRecallMd(result), "utf8");
+    } catch {
+      summaryPath = null;
+    }
+    return { ...result, summaryPath };
   }
 
   /**
