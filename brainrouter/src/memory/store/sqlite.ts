@@ -1119,6 +1119,30 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   /**
+   * 0.4.3 — true if any chunk of this document is cited by a live memory's
+   * provenance (cognitive_source_links). The source_chunker re-chunk job must
+   * skip such docs: re-chunking changes chunk ids and would orphan the links.
+   */
+  public isSourceDocumentReferenced(documentId: string): boolean {
+    const row = this.db.prepare(
+      "SELECT 1 FROM source_chunks c JOIN cognitive_source_links l ON l.chunk_id = c.id WHERE c.document_id = ? LIMIT 1",
+    ).get(documentId);
+    return !!row;
+  }
+
+  /**
+   * 0.4.3 — replace a document's chunks (delete then re-add via addSourceChunks,
+   * which restarts ordinals from 0 once the old rows are gone). Used by the
+   * source_chunker re-chunk job; callers MUST guard provenance with
+   * `isSourceDocumentReferenced` first (FK cascade is declared but not enforced
+   * here, so the explicit delete is required).
+   */
+  public replaceSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
+    this.db.prepare("DELETE FROM source_chunks WHERE document_id = ?").run(documentId);
+    return this.addSourceChunks(documentId, chunks);
+  }
+
+  /**
    * MEM-3 — link a cognitive record to the source chunks it was distilled
    * from (batch-level provenance). Idempotent (INSERT OR IGNORE on the
    * (record_id, chunk_id) primary key), so re-extraction doesn't duplicate.

@@ -12,9 +12,9 @@ function ctxWith(engine: unknown): JobExecContext {
 }
 
 describe("depth-agent executors", () => {
-  it("registers vault_exporter / blackboard_reconciler / tree_sealer as on-demand runnable", () => {
+  it("registers the depth agents as on-demand runnable", () => {
     const ids = onDemandRunnableAgentIds();
-    for (const id of ["vault_exporter", "blackboard_reconciler", "tree_sealer"]) {
+    for (const id of ["vault_exporter", "blackboard_reconciler", "tree_sealer", "source_chunker"]) {
       expect(ids, id).toContain(id);
       expect(getJobExecutor(id)).toBeTypeOf("function");
     }
@@ -54,6 +54,18 @@ describe("depth-agent executors", () => {
 
     const empty = await getJobExecutor("tree_sealer")!({ userId: "u1", childIds: [] }, ctxWith(engine));
     expect(empty).toMatchObject({ parentId: null });
+  });
+
+  it("source_chunker re-chunks the given documentIds; no-ops without them", async () => {
+    let calledWith: { u: string; ids: string[] } | null = null;
+    const engine = {
+      rechunkSources: (u: string, ids: string[]) => { calledWith = { u, ids }; return { rechunked: ids.length, skipped: 0, chunksWritten: ids.length * 3 }; },
+    };
+    const out = await getJobExecutor("source_chunker")!({ userId: "u1", documentIds: ["d1", "d2"] }, ctxWith(engine));
+    expect(calledWith).toEqual({ u: "u1", ids: ["d1", "d2"] });
+    expect(out).toMatchObject({ rechunked: 2, chunksWritten: 6 });
+    const empty = await getJobExecutor("source_chunker")!({ userId: "u1" }, ctxWith(engine));
+    expect(empty).toMatchObject({ rechunked: 0, reason: "no documentIds supplied" });
   });
 
   it("a depth executor without an engine in ctx throws a clear 'not wired' error", async () => {
