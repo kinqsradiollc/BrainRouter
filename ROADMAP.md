@@ -66,10 +66,12 @@ path (zero added latency); and **provenance-safe transcript retention**
 **Brain agents fully wired (BRAIN-P1 follow-through):** the six "idle · never"
 depth agents now have real executors (on-demand via `memory_agent_run`) — vault
 export, blackboard reconcile+commit, tree seal, source re-chunk, and a
-self-retrieval `benchmark_eval`. A throttled maintenance pass on the job runner
-auto-schedules vault export, blackboard reconcile, and `tree_sealer` (fed by a
-**scene-tree autobuild over cognitive records**). Deferred: `tree_digest`'s LLM
-re-summarizer.
+self-retrieval `benchmark_eval`, and `tree_digest` (LLM re-summary of tree
+parents, **auto-chained off tree_sealer**). A throttled maintenance pass on the
+job runner auto-schedules vault export, blackboard reconcile, and `tree_sealer`
+(fed by a **scene-tree autobuild over cognitive records**). With `tree_digest`
+in, **every Brain Agent has a real executor** — the tree flow runs on its own:
+scene-leaf → seal → LLM re-summary.
 
 **CLI — full set**
 
