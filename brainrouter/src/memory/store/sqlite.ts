@@ -3,6 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, VaultExportEntry, VaultExportInput } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import { extractIntraFileCallEdges } from "../code-retrieval.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
@@ -900,6 +901,24 @@ export class SqliteMemoryStore implements IMemoryStore {
         DELETE FROM source_chunks_fts WHERE chunk_id = old.id;
       END
     `);
+
+    // MEM-28 (0.4.4) — code symbol graph (Phase-1): intra-file call/reference
+    // edges (from_chunk references a symbol defined by to_chunk in the same
+    // document). Lets find_related expand a hit to its direct callers/callees.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS code_symbol_edges (
+        document_id TEXT NOT NULL,
+        from_chunk_id TEXT NOT NULL,
+        to_chunk_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'calls',
+        PRIMARY KEY (from_chunk_id, to_chunk_id, kind),
+        FOREIGN KEY (from_chunk_id) REFERENCES source_chunks(id) ON DELETE CASCADE,
+        FOREIGN KEY (to_chunk_id) REFERENCES source_chunks(id) ON DELETE CASCADE
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_code_edges_from ON code_symbol_edges(from_chunk_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_code_edges_to ON code_symbol_edges(to_chunk_id)");
+
     // MEM-3 — batch-level provenance: which source chunks a cognitive record
     // was distilled from. user_id carried for RBAC-readiness (MEM-14).
     this.db.exec(`
@@ -1153,6 +1172,20 @@ export class SqliteMemoryStore implements IMemoryStore {
         stmt.run(chunk.id, chunk.documentId, parent?.user_id ?? null, parent?.workspace_tag ?? null, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash);
         out.push(chunk);
       });
+      // MEM-28 — record intra-file call/reference edges for this batch's code
+      // chunks (those with a symbol). Code files ingest atomically, so `out` is
+      // the document's full chunk set here; transcript/doc batches have no
+      // symbols and produce no edges.
+      const codeChunks = out.filter((c) => c.symbol);
+      if (codeChunks.length >= 2) {
+        const edges = extractIntraFileCallEdges(codeChunks.map((c) => ({ id: c.id, symbol: c.symbol, content: c.content })));
+        if (edges.length > 0) {
+          const edgeStmt = this.db.prepare(
+            "INSERT OR IGNORE INTO code_symbol_edges (document_id, from_chunk_id, to_chunk_id, kind) VALUES (?, ?, ?, 'calls')",
+          );
+          for (const e of edges) edgeStmt.run(documentId, e.fromChunkId, e.toChunkId);
+        }
+      }
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -1255,8 +1288,28 @@ export class SqliteMemoryStore implements IMemoryStore {
    * here, so the explicit delete is required).
    */
   public replaceSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
+    // MEM-28 — clear this document's code edges first. The FK cascade only
+    // fires under PRAGMA foreign_keys=ON; mirror the explicit-delete discipline
+    // the chunk delete already follows so stale edges can't survive a re-chunk.
+    this.db.prepare("DELETE FROM code_symbol_edges WHERE document_id = ?").run(documentId);
     this.db.prepare("DELETE FROM source_chunks WHERE document_id = ?").run(documentId);
     return this.addSourceChunks(documentId, chunks);
+  }
+
+  /**
+   * MEM-28 — the chunks a chunk directly references (callees) or that reference
+   * it (callers), within the same file. Scoped to the caller via the chunk's
+   * denormalized user_id. `direction` picks the edge orientation.
+   */
+  public getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): SourceChunk[] {
+    const col = direction === "callees" ? "from_chunk_id" : "to_chunk_id";
+    const other = direction === "callees" ? "to_chunk_id" : "from_chunk_id";
+    const rows = this.db.prepare(
+      `SELECT sc.* FROM code_symbol_edges e
+         JOIN source_chunks sc ON sc.id = e.${other}
+        WHERE e.${col} = ? AND (sc.user_id = ? OR sc.user_id IS NULL)`,
+    ).all(chunkId, userId) as any[];
+    return rows.map((r) => this.rowToSourceChunk(r));
   }
 
   /**

@@ -1238,7 +1238,7 @@ export class MemoryEngine {
   public findRelatedChunks(
     userId: string,
     seed: { chunkId?: string; filePath?: string; line?: number },
-    opts?: { limit?: number; sameLanguage?: boolean; maxPerFile?: number },
+    opts?: { limit?: number; sameLanguage?: boolean; maxPerFile?: number; includeEdges?: boolean },
   ): { found: boolean; seed?: { chunkId: string; filePath: string | null; symbol: string | null }; related: RelatedChunkHit[] } {
     const store = this.store as Partial<{
       getSourceChunk(id: string): SourceChunk | null;
@@ -1250,6 +1250,7 @@ export class MemoryEngine {
         opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
       ): Array<SourceChunk & { ftsRank: number }>;
       getSourceDocument(id: string): SourceDocument | null;
+      getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): SourceChunk[];
     }>;
     if (typeof store.searchSourceChunksFts !== "function") return { found: false, related: [] };
 
@@ -1267,22 +1268,47 @@ export class MemoryEngine {
     const doc = typeof store.getSourceDocument === "function" ? store.getSourceDocument(seedChunk.documentId) : null;
     if (!doc || doc.userId !== userId) return { found: false, related: [] };
 
-    const query = extractChunkQueryTerms(seedChunk);
-    if (!query) return { found: true, seed: { chunkId: seedChunk.id, filePath: seedChunk.filePath, symbol: seedChunk.symbol }, related: [] };
     const limit = Math.max(1, Math.min(50, opts?.limit ?? 10));
+    const seedInfo = { chunkId: seedChunk.id, filePath: seedChunk.filePath, symbol: seedChunk.symbol };
+
+    // MEM-28 — structural neighbours lead: the seed's direct callees/callers
+    // (intra-file symbol edges) are authoritatively related regardless of
+    // lexical overlap or language scope (they're in the same file), so they're
+    // surfaced even when the seed has no extractable query terms.
+    const edgeHits: RelatedChunkHit[] = [];
+    if (opts?.includeEdges !== false && typeof store.getCodeEdgeNeighbors === "function") {
+      for (const c of store.getCodeEdgeNeighbors(userId, seedChunk.id, "callees")) {
+        edgeHits.push({ chunk: c, score: 0.97, reason: "graph:callee" });
+      }
+      for (const c of store.getCodeEdgeNeighbors(userId, seedChunk.id, "callers")) {
+        edgeHits.push({ chunk: c, score: 0.95, reason: "graph:caller" });
+      }
+    }
+
+    // Lexical neighbours (symbol/identifier overlap), code-reranked (MEM-26/27).
+    const query = extractChunkQueryTerms(seedChunk);
     const scope = opts?.sameLanguage === false ? [] : languageScopeFor(seedChunk.filePath);
+    const lexical = query
+      ? rankRelatedChunks(
+          seedChunk,
+          store.searchSourceChunksFts(userId, query, limit, { excludeChunkId: seedChunk.id, filePathLike: scope.length ? scope : undefined }),
+          limit,
+          { maxPerFile: opts?.maxPerFile },
+        )
+      : [];
 
-    const hits = store.searchSourceChunksFts(userId, query, limit, {
-      excludeChunkId: seedChunk.id,
-      filePathLike: scope.length ? scope : undefined,
-    });
-    const related = rankRelatedChunks(seedChunk, hits, limit, { maxPerFile: opts?.maxPerFile });
+    // Merge: structural edges first, then lexical; dedupe by chunk id (an edge
+    // entry wins over a lexical one for the same chunk), exclude the seed, cap.
+    const merged: RelatedChunkHit[] = [];
+    const seen = new Set<string>([seedChunk.id]);
+    for (const h of [...edgeHits, ...lexical]) {
+      if (seen.has(h.chunk.id)) continue;
+      seen.add(h.chunk.id);
+      merged.push(h);
+      if (merged.length >= limit) break;
+    }
 
-    return {
-      found: true,
-      seed: { chunkId: seedChunk.id, filePath: seedChunk.filePath, symbol: seedChunk.symbol },
-      related,
-    };
+    return { found: true, seed: seedInfo, related: merged };
   }
 
   public getOperationLog(
