@@ -10,6 +10,7 @@ import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
 import { reconcileBlackboard } from "./blackboard/reconcile.js";
+import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
@@ -23,7 +24,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind } from "@kinqs/brainrouter-types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -736,6 +737,59 @@ export class MemoryEngine {
   public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
     const store = this.blackboardStore();
     return store ? store.getBlackboardItems(userId, status) : [];
+  }
+
+  // ── Memory tree (MEM-5) ─────────────────────────────────────────────────
+  // Generic mechanics only — append a leaf, roll a bucket of children into a
+  // summarized parent, and walk/drill. Policy (when to seal, source→topic→
+  // global promotion) layers on top; the summarizer is deterministic here and
+  // swappable for an LLM later.
+
+  private treeStore(): {
+    appendTreeNode(userId: string, input: MemoryTreeNodeInput): MemoryTreeNode;
+    getTreeNode(id: string): MemoryTreeNode | null;
+    getTreeChildren(parentId: string): MemoryTreeNode[];
+    getTreeRoots(userId: string, kind?: MemoryTreeKind): MemoryTreeNode[];
+    setTreeParent(childIds: string[], parentId: string): void;
+    sealTreeNode(id: string): void;
+  } | null {
+    const s = this.store as any;
+    return typeof s.appendTreeNode === "function" && typeof s.getTreeRoots === "function" ? s : null;
+  }
+
+  /** MEM-5 — append a leaf (level 0) summarizing some source chunks. */
+  public appendTreeLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds: string[] = [], heatScore = 0): MemoryTreeNode | null {
+    const store = this.treeStore();
+    return store ? store.appendTreeNode(userId, { kind, level: 0, summaryMd, sourceChunkIds, heatScore }) : null;
+  }
+
+  /** MEM-5 — seal a bucket: roll the given children into a summarized parent. */
+  public summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): MemoryTreeNode | null {
+    const store = this.treeStore();
+    if (!store) return null;
+    const children = childIds.map((id) => store.getTreeNode(id)).filter((n): n is MemoryTreeNode => !!n);
+    if (children.length === 0) return null;
+    const parent = store.appendTreeNode(userId, {
+      kind,
+      level: parentLevel(children),
+      summaryMd: summarizeChildren(children),
+      sourceChunkIds: aggregateChunkIds(children),
+      heatScore: aggregateHeat(children),
+    });
+    store.setTreeParent(childIds, parent.id);
+    for (const c of children) store.sealTreeNode(c.id);
+    return parent;
+  }
+
+  /** MEM-5 / MEM-8 — walk the tree: a node + its children, or the roots of a kind. */
+  public treeWalk(userId: string, nodeId?: string, kind?: MemoryTreeKind): { node: MemoryTreeNode | null; children: MemoryTreeNode[]; roots?: MemoryTreeNode[] } {
+    const store = this.treeStore();
+    if (!store) return { node: null, children: [] };
+    if (nodeId) {
+      const node = store.getTreeNode(nodeId);
+      return { node, children: node ? store.getTreeChildren(nodeId) : [] };
+    }
+    return { node: null, children: [], roots: store.getTreeRoots(userId, kind) };
   }
 
   /**

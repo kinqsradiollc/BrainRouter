@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID, createHash } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -895,6 +895,24 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_blackboard_user_status ON memory_blackboard_items(user_id, status)");
+    // MEM-5 — durable hierarchical summary tree (source/topic/global). user_id
+    // for RBAC-readiness (MEM-14). level 0 = leaf.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_tree_nodes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        parent_id TEXT DEFAULT NULL,
+        level INTEGER NOT NULL DEFAULT 0,
+        summary_md TEXT NOT NULL DEFAULT '',
+        source_chunk_ids_json TEXT NOT NULL DEFAULT '[]',
+        sealed_at TEXT DEFAULT NULL,
+        heat_score REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_tree_user_kind ON memory_tree_nodes(user_id, kind, parent_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_tree_parent ON memory_tree_nodes(parent_id)");
   }
 
   // ============================
@@ -1115,6 +1133,83 @@ export class SqliteMemoryStore implements IMemoryStore {
     if (sets.length === 0) return;
     vals.push(id);
     this.db.prepare(`UPDATE memory_blackboard_items SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  }
+
+  // ============================
+  // Memory Tree (MEM-5)
+  // ============================
+
+  private rowToTreeNode(row: any): MemoryTreeNode {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      kind: row.kind,
+      parentId: row.parent_id ?? null,
+      level: row.level,
+      summaryMd: row.summary_md ?? "",
+      sourceChunkIds: row.source_chunk_ids_json ? JSON.parse(row.source_chunk_ids_json) : [],
+      sealedAt: row.sealed_at ?? null,
+      heatScore: row.heat_score ?? 0,
+      createdAt: row.created_at,
+    };
+  }
+
+  /** MEM-5 — append a tree node (leaf or parent). */
+  public appendTreeNode(userId: string, input: MemoryTreeNodeInput): MemoryTreeNode {
+    const node: MemoryTreeNode = {
+      id: `tree_${randomUUID()}`,
+      userId,
+      kind: input.kind,
+      parentId: input.parentId ?? null,
+      level: input.level ?? 0,
+      summaryMd: input.summaryMd,
+      sourceChunkIds: input.sourceChunkIds ?? [],
+      sealedAt: null,
+      heatScore: input.heatScore ?? 0,
+      createdAt: new Date().toISOString(),
+    };
+    this.db.prepare(
+      `INSERT INTO memory_tree_nodes (id, user_id, kind, parent_id, level, summary_md, source_chunk_ids_json, sealed_at, heat_score, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+    ).run(node.id, userId, node.kind, node.parentId, node.level, node.summaryMd, JSON.stringify(node.sourceChunkIds), node.heatScore, node.createdAt);
+    return node;
+  }
+
+  public getTreeNode(id: string): MemoryTreeNode | null {
+    const row = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE id = ? LIMIT 1").get(id) as any;
+    return row ? this.rowToTreeNode(row) : null;
+  }
+
+  public getTreeChildren(parentId: string): MemoryTreeNode[] {
+    const rows = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE parent_id = ? ORDER BY created_at ASC").all(parentId) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  /** Top-level nodes (no parent), optionally filtered by kind. */
+  public getTreeRoots(userId: string, kind?: MemoryTreeKind): MemoryTreeNode[] {
+    const rows = (kind
+      ? this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? AND parent_id IS NULL AND kind = ? ORDER BY heat_score DESC, created_at ASC").all(userId, kind)
+      : this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? AND parent_id IS NULL ORDER BY heat_score DESC, created_at ASC").all(userId)) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  /** Re-parent a set of nodes under a freshly created parent (used when summarizing a bucket). */
+  public setTreeParent(childIds: string[], parentId: string): void {
+    if (childIds.length === 0) return;
+    const stmt = this.db.prepare("UPDATE memory_tree_nodes SET parent_id = ? WHERE id = ?");
+    this.db.exec("BEGIN");
+    try {
+      for (const id of childIds) stmt.run(parentId, id);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /** MEM-5 — seal a bucket: no more leaves append under it. */
+  public sealTreeNode(id: string): void {
+    this.db.prepare("UPDATE memory_tree_nodes SET sealed_at = ? WHERE id = ? AND sealed_at IS NULL").run(new Date().toISOString(), id);
   }
 
   // ============================
