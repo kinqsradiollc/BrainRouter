@@ -22,6 +22,17 @@ import crypto from "node:crypto";
  */
 const MIN_SOURCE_CHARS = 120;
 
+/**
+ * MEM-3 — the store capability needed for batch-level provenance linking.
+ * Structural (minimal shapes) so it stays decoupled from the concrete store
+ * and is runtime-detected, like the source-ingest capability.
+ */
+interface ProvenanceStore {
+  getSourceDocumentByHash(userId: string, hash: string): { id: string } | null;
+  getSourceChunksByDocument(documentId: string): { id: string }[];
+  linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void;
+}
+
 export class MemoryCapturePipeline {
   constructor(
     private store: IMemoryStore,
@@ -143,6 +154,47 @@ export class MemoryCapturePipeline {
       } catch (err: any) {
         console.error("[BrainRouter] MEM-2′ source ingest failed:", err?.message ?? err);
       }
+    }
+  }
+
+  /** MEM-3 — runtime-narrow the store to the provenance-linking capability. */
+  private asProvenanceStore(): ProvenanceStore | null {
+    const s = this.store as Partial<ProvenanceStore>;
+    return typeof s.getSourceDocumentByHash === "function" &&
+      typeof s.getSourceChunksByDocument === "function" &&
+      typeof s.linkRecordSources === "function"
+      ? (s as ProvenanceStore)
+      : null;
+  }
+
+  /**
+   * MEM-3 — batch-level provenance. Collect every source chunk id for the
+   * messages in this extraction window (matched to their source docs by the
+   * same redacted-content hash MEM-2′ ingests under), then link each newly
+   * written record to that set. Coarse but deterministic and zero-LLM-cost;
+   * per-record attribution can refine it later. Best-effort + non-fatal.
+   */
+  private linkBatchProvenance(
+    userId: string,
+    windowSensory: SensoryRecord[],
+    records: { id: string }[],
+  ): void {
+    const store = this.asProvenanceStore();
+    if (!store || records.length === 0) return;
+    try {
+      const chunkIds = new Set<string>();
+      for (const s of windowSensory) {
+        const text = s.messageText ?? "";
+        if (text.trim().length < MIN_SOURCE_CHARS) continue;
+        const doc = store.getSourceDocumentByHash(userId, contentHash(text));
+        if (!doc) continue;
+        for (const c of store.getSourceChunksByDocument(doc.id)) chunkIds.add(c.id);
+      }
+      if (chunkIds.size === 0) return;
+      const ids = [...chunkIds];
+      for (const r of records) store.linkRecordSources(userId, r.id, ids);
+    } catch (err: any) {
+      console.error("[BrainRouter] MEM-3 provenance link failed:", err?.message ?? err);
     }
   }
 
@@ -314,6 +366,9 @@ export class MemoryCapturePipeline {
         }
       }
     }
+
+    // MEM-3 — link this batch's records to the source chunks of its window.
+    this.linkBatchProvenance(userId, recentSensory, uniqueRecords);
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {

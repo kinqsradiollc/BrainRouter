@@ -22,7 +22,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, UserRecord } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, UserRecord } from "@kinqs/brainrouter-types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -659,6 +659,33 @@ export class MemoryEngine {
   public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
     const items = this.store.listMemories(userId, { type: filters.type, archived: false });
     return planGovernance(items, filters, Date.now());
+  }
+
+  /**
+   * MEM-3 — batch-level provenance: the source chunks a record was distilled
+   * from, as compact excerpts (for `memory_verify`). Returns [] when the store
+   * lacks the source-link capability or the record cites no sources.
+   */
+  public getRecordProvenance(recordId: string): Array<{
+    chunkId: string;
+    documentId: string;
+    excerpt: string;
+    filePath: string | null;
+    symbol: string | null;
+    startLine: number | null;
+    endLine: number | null;
+  }> {
+    const store = this.store as Partial<{ getRecordSourceChunks(id: string): SourceChunk[] }>;
+    if (typeof store.getRecordSourceChunks !== "function") return [];
+    return store.getRecordSourceChunks(recordId).map((c) => ({
+      chunkId: c.id,
+      documentId: c.documentId,
+      excerpt: c.content.length > 280 ? `${c.content.slice(0, 280)}…` : c.content,
+      filePath: c.filePath,
+      symbol: c.symbol,
+      startLine: c.startLine,
+      endLine: c.endLine,
+    }));
   }
 
   public getOperationLog(
