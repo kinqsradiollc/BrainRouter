@@ -210,12 +210,25 @@ export class MemoryRecallPipeline {
     activeSkill?: string;
     explain?: boolean;
     filters?: RecallFilters;
+    /**
+     * MEM-19 — per-call recall config overrides so callers (the retrieval
+     * benchmark) can compare modes deterministically WITHOUT mutating
+     * process.env. The old benchmark toggled BRAINROUTER_RECALL_* globally and
+     * restored it in a finally, which leaked '20' across runs and flaked under
+     * concurrency. These overrides layer over the env-read defaults.
+     */
+    limitsOverride?: Partial<RecallLimits>;
+    selectionOverride?: Partial<RecallSelection>;
+    /** MEM-19 — force-disable the reranker / relevance-judge stages for this
+     * call (the benchmark's baseline vs rerank/judge modes). */
+    disableReranker?: boolean;
+    disableJudge?: boolean;
   }): Promise<RecallResult> {
     const startTime = Date.now();
     const { userId, sessionKey, query, activeSkill, filters } = params;
     const intent = detectTaskIntent(query);
-    const limits = readRecallLimits();
-    const selection = readRecallSelection();
+    const limits = { ...readRecallLimits(), ...params.limitsOverride };
+    const selection = { ...readRecallSelection(), ...params.selectionOverride };
 
     // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
     const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
@@ -476,7 +489,7 @@ export class MemoryRecallPipeline {
     let usedReranker = false;
     let usedLexicalSelection = false;
 
-    if (this.rerankerService.isReady()) {
+    if (this.rerankerService.isReady() && !params.disableReranker) {
       try {
         const documents = rerankCandidates.map(r => r.record.content);
         const ranked = await this.rerankerService.rerank({
@@ -523,7 +536,7 @@ export class MemoryRecallPipeline {
     let judgeRejected = 0;
     let judgeVerdicts: RelevanceVerdict[] | undefined;
 
-    if (this.relevanceJudge?.isReady() && topResults.length > 0) {
+    if (this.relevanceJudge?.isReady() && !params.disableJudge && topResults.length > 0) {
       try {
         const judgeCandidates = topResults.map(r => ({
           id: r.record.record_id,
