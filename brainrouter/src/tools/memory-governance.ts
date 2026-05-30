@@ -80,14 +80,15 @@ export const memoryGovernanceToolSchemas = [
   },
   {
     name: "memory_governance_plan",
-    description: "Dry-run: preview which active memories a cleanup filter would sweep (type / olderThanDays / uncitedOnly) — counts by type, an estimated reclaimable size, and a sample of record ids. Mutates nothing; run before memory_governance_delete.",
+    description: "Dry-run: preview a cleanup. scope='cognitive' (default) previews which active memories a filter would sweep (type / olderThanDays / uncitedOnly) — counts by type, estimated reclaimable size, sample ids. scope='storage' previews the 0.4.3 depth tables (source chunks / documents / tree nodes / vault exports) with per-class reclaim estimates (only orphaned source chunks count as reclaimable). scope='all' returns both. Mutates nothing.",
     inputSchema: {
       type: "object",
       properties: {
         userId: { type: "string" },
-        type: { type: "string", description: "Restrict to one memory type." },
-        olderThanDays: { type: "number", description: "Only records created more than N days ago." },
-        uncitedOnly: { type: "boolean", description: "Only records that have never been cited." },
+        scope: { type: "string", enum: ["cognitive", "storage", "all"], description: "What to preview. Default 'cognitive'." },
+        type: { type: "string", description: "Restrict to one memory type (cognitive scope)." },
+        olderThanDays: { type: "number", description: "Only records created more than N days ago (cognitive scope)." },
+        uncitedOnly: { type: "boolean", description: "Only records that have never been cited (cognitive scope)." },
       },
     },
   },
@@ -230,17 +231,24 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
     case "memory_governance_plan": {
       const params = z.object({
         ...baseUser,
+        scope: z.enum(["cognitive", "storage", "all"]).optional().default("cognitive"),
         type: z.string().optional(),
         olderThanDays: z.number().optional(),
         uncitedOnly: z.boolean().optional(),
       }).parse(args ?? {});
-      return toolResult(
-        memoryEngine.governancePlan(effectiveUserId(params.userId, options?.defaultUserId), {
-          type: params.type,
-          olderThanDays: params.olderThanDays,
-          uncitedOnly: params.uncitedOnly,
-        }),
-      );
+      const uid = effectiveUserId(params.userId, options?.defaultUserId);
+      // MEM-21 — scope chooses cognitive (default), storage (depth tables), or both.
+      const cognitive =
+        params.scope === "storage"
+          ? undefined
+          : memoryEngine.governancePlan(uid, {
+              type: params.type,
+              olderThanDays: params.olderThanDays,
+              uncitedOnly: params.uncitedOnly,
+            });
+      const storage = params.scope === "cognitive" ? undefined : memoryEngine.governanceStoragePlan(uid);
+      // Back-compat: a bare cognitive plan returns its result unchanged.
+      return toolResult(params.scope === "cognitive" ? cognitive : { scope: params.scope, cognitive, storage });
     }
     case "memory_audit": {
       const params = z.object({
