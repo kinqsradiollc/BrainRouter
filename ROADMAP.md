@@ -10,7 +10,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| In flight | **0.4.3** | In flight — `/rewind --files` + `/context` window header landed; Brain Phases 2-5 next | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
+| In flight | **0.4.3** | Feature-complete — memory depth MEM-1…14 + CLI-1…15 all landed; ship gate next (merge → tag → publish) | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
 | Latest | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
 | Shipped | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | Shipped | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
@@ -31,7 +31,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
-| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | **Memory depth complete (MEM-1…14)** — capture→provenance→drill-down, blackboard, tree, vault, AST chunker, benchmark gate, job kinds, governance, redaction, RBAC schema ✓; CLI fully or foundationed — `/context memory`/offloads, headless JSONL, cost segment, repair telemetry, registry guard ✓ + tested foundations for `/bg`, prefix-drift, verify-detect, exec-policy, agent-def validation, grouped inbox. Follow-ups (live-loop / interactive wiring) → 0.4.4 | Finalizing |
+| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | **Feature-complete.** Memory depth MEM-1…14 (capture→provenance→drill-down, blackboard, tree, vault, AST chunker, benchmark gate, job kinds, governance, redaction, RBAC schema) ✓; CLI-1…15 ✓ (`/rewind`, transcript debugger, `/context` memory/offloads/prefix, headless JSONL, cost segment, `/verify detect`+`run`, exec-policy gate, `/agents create`, grouped `/inbox`+`--watch`, `/bg`). Depth-only follow-ups (LSP diagnostics, full policy routing, interactive wizard, in-flight detach) → 0.4.4. CLI-16 packaging → P3 | Feature-complete |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -56,27 +56,25 @@ drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
 
 **CLI — full set**
 
-- **Background & detachment ~:** `/bg` — `BgRunRegistry` state model + `/ps`
-  formatter shipped ✓; live turn-detachment / log-streaming / `/fg` / `/stop`
-  rewires the turn loop (follow-up, verify live).
-- **Debugging & explainability:** `/context memory` decision view ✓ (planned →
-  used → skipped sources + injected records); `/context prefix` per-component
-  drift diff ✓ (foundation; the live view is a follow-up); repair telemetry ✓
+- **Background & detachment ✓:** `/bg <prompt>` runs a detached background
+  worker (reuses the proven worker-thread infra; managed via `/workers` + `/ps`).
+  *(Detaching an already-in-flight foreground turn is a deeper turn-loop change.)*
+- **Debugging & explainability ✓:** `/context memory` decision view (planned →
+  used → skipped sources + injected records); `/context prefix` component-drift
+  view (system / memory-anchor; tool-list capture later); repair telemetry
   (scavenged / truncation / storm counts in `/context`).
 - **Cost ✓:** opt-in `cost` status segment (turn USD + cache-hit %) + a
-  `/context` prompt-cache hit-ratio line. *(offloaded/child fields can extend it.)*
+  `/context` prompt-cache hit-ratio line.
 - **Headless ✓:** `brainrouter run --format jsonl` — a versioned, stable
   per-event stream (turn_start / status / tool / child / text / turn_end+cost /
   error) for CI and external orchestrators.
-- **Safety ~:** unified execution-policy decision module ✓ (`decideExecutionPolicy`
-  matching the live access-mode tiers); routing every I/O path through it is the
-  follow-up.
-- **Verification ~:** `/verify detect` project-profile + build/test/lint recipe ✓;
-  sandbox-run + post-edit LSP diagnostics is the follow-up (needs a live toolchain).
-- **Ergonomics:** command-registry cleanup ✓ (help + palette lockstep, taxonomy
-  guard); `/context offloads` browser ✓; grouped `/inbox` pane ✓ (`--watch` +
-  inline-accept follow-up); `/agents create` / `/pack create` **validation** ✓
-  (interactive wizard + dry-run follow-up).
+- **Safety ✓:** unified `decideExecutionPolicy` module; the `run_command` shell
+  gate routes through it. *(file-edit / child / network routing later.)*
+- **Verification ✓:** `/verify detect` (project profile + recipe) and `/verify
+  run` (executes build/test/lint). *(post-edit LSP diagnostics needs live servers.)*
+- **Ergonomics ✓:** command-registry taxonomy guard; `/context offloads`;
+  grouped `/inbox` + `--watch` + inline handoff-accept; `/agents create`
+  (validate → write). *(interactive create wizard = optional follow-up.)*
 - **Packaging (after 0.4.3 stabilizes):** shell completions, Homebrew tap,
   one-line installer.
 
