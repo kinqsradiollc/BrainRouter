@@ -58,7 +58,7 @@ export const SLASH_COMMANDS = [
 interface HelpEntry { cmd: string; desc: string; }
 interface HelpCategory { key: string; title: string; entries: HelpEntry[]; }
 
-const HELP_CATEGORIES: HelpCategory[] = [
+export const HELP_CATEGORIES: HelpCategory[] = [
   {
     key: 'session',
     title: 'Session & State',
@@ -207,7 +207,6 @@ const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/keymap [json]', desc: 'Show built-in bindings and set overrides' },
       { cmd: '/copy', desc: 'Copy last assistant response to clipboard' },
       { cmd: '/mention [partial]', desc: 'Suggest files for @ mentions' },
-      { cmd: '/model <name>', desc: 'Switch the LLM model in-session' },
       { cmd: '/mcp [list|reconnect|tools]', desc: 'MCP profiles, identity tags, online/offline status, reconnect, tool namespaces' },
       { cmd: '/ide', desc: 'Show detected IDE host' },
       { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
