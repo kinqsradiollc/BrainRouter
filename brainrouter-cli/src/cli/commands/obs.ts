@@ -257,6 +257,26 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         console.log();
         return true;
       }
+      // CLI-5 — `/context prefix`: the cache-stable region's components + drift
+      // (system / memory-anchor) since the last check, diffed against a
+      // CLI-state snapshot. Read-only; no change to the turn loop.
+      if ((args[0] ?? '').toLowerCase() === 'prefix') {
+        const { diffPrefixComponents } = await import('../../runtime/contextRegions.js');
+        const curr = agent.getPrefixComponents();
+        const snapFile = getCliStateFile(agent.workspaceRoot, 'prefix-snapshot.json');
+        let prev: ReturnType<typeof agent.getPrefixComponents> | null = null;
+        try { if (fs.existsSync(snapFile)) prev = JSON.parse(fs.readFileSync(snapFile, 'utf8')); } catch { /* first run */ }
+        const drift = diffPrefixComponents(prev, curr);
+        console.log(chalk.bold('\n🔌 Context — prefix (cache-stable region)'));
+        console.log(chalk.gray(`  system hash:    ${curr.systemHash}`));
+        console.log(chalk.gray(`  memory anchors: ${curr.anchorCount} (hash ${curr.anchorsHash})`));
+        const labels = drift.labels.join('; ');
+        console.log(`  drift since last check: ${drift.changed ? chalk.yellow(labels) : chalk.green(labels)}`);
+        console.log(chalk.gray('  (tool-list drift not tracked in this view yet — needs per-turn tool capture)'));
+        try { fs.writeFileSync(snapFile, JSON.stringify(curr), 'utf8'); } catch { /* best-effort */ }
+        console.log();
+        return true;
+      }
       const scope: 'all' | 'current' = (args[0] ?? '').toLowerCase() === 'current' ? 'current' : 'all';
       const session = agent.sessionUsage;
       const children = listSessions(agent.workspaceRoot).filter(
