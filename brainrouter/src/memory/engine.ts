@@ -22,7 +22,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, UserRecord } from "@kinqs/brainrouter-types";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord } from "@kinqs/brainrouter-types";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -686,6 +686,36 @@ export class MemoryEngine {
       startLine: c.startLine,
       endLine: c.endLine,
     }));
+  }
+
+  /**
+   * MEM-8 — recall drill-down: fetch one source chunk by id (full content)
+   * plus its parent document and, optionally, ±N neighbouring chunks for
+   * context. Pairs with the excerpts returned by `memory_verify` / provenance.
+   * Returns null when the store lacks the source capability or the id is
+   * unknown.
+   */
+  public fetchSourceChunk(
+    chunkId: string,
+    neighbors = 0,
+  ): { chunk: SourceChunk; document: SourceDocument | null; neighbors: SourceChunk[] } | null {
+    const store = this.store as Partial<{
+      getSourceChunk(id: string): SourceChunk | null;
+      getSourceDocument(id: string): SourceDocument | null;
+      getSourceChunksByDocument(documentId: string): SourceChunk[];
+    }>;
+    if (typeof store.getSourceChunk !== "function") return null;
+    const chunk = store.getSourceChunk(chunkId);
+    if (!chunk) return null;
+    const document =
+      typeof store.getSourceDocument === "function" ? store.getSourceDocument(chunk.documentId) : null;
+    let neighborChunks: SourceChunk[] = [];
+    if (neighbors > 0 && typeof store.getSourceChunksByDocument === "function") {
+      neighborChunks = store
+        .getSourceChunksByDocument(chunk.documentId)
+        .filter((c) => c.id !== chunk.id && Math.abs(c.ordinal - chunk.ordinal) <= neighbors);
+    }
+    return { chunk, document, neighbors: neighborChunks };
   }
 
   public getOperationLog(
