@@ -8,6 +8,7 @@ import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
+import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
@@ -649,6 +650,15 @@ export class MemoryEngine {
 
   public governanceDelete(userId: string, recordId: string, reason: string) {
     this.store.hardDeleteMemory(userId, recordId, reason);
+  }
+
+  /**
+   * MEM-11 — governance dry-run: preview which active memories a filter would
+   * sweep, with counts + a size proxy + a sample, WITHOUT mutating anything.
+   */
+  public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
+    const items = this.store.listMemories(userId, { type: filters.type, archived: false });
+    return planGovernance(items, filters, Date.now());
   }
 
   public getOperationLog(

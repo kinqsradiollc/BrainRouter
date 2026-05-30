@@ -79,6 +79,19 @@ export const memoryGovernanceToolSchemas = [
     },
   },
   {
+    name: "memory_governance_plan",
+    description: "Dry-run: preview which active memories a cleanup filter would sweep (type / olderThanDays / uncitedOnly) — counts by type, an estimated reclaimable size, and a sample of record ids. Mutates nothing; run before memory_governance_delete.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        userId: { type: "string" },
+        type: { type: "string", description: "Restrict to one memory type." },
+        olderThanDays: { type: "number", description: "Only records created more than N days ago." },
+        uncitedOnly: { type: "boolean", description: "Only records that have never been cited." },
+      },
+    },
+  },
+  {
     name: "memory_audit",
     description: "List memory audit log entries for a user.",
     inputSchema: {
@@ -213,6 +226,21 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
       const params = z.object({ ...baseUser, recordId: z.string(), reason: z.string().min(1) }).parse(args);
       memoryEngine.governanceDelete(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params.reason);
       return toolResult({ success: true });
+    }
+    case "memory_governance_plan": {
+      const params = z.object({
+        ...baseUser,
+        type: z.string().optional(),
+        olderThanDays: z.number().optional(),
+        uncitedOnly: z.boolean().optional(),
+      }).parse(args ?? {});
+      return toolResult(
+        memoryEngine.governancePlan(effectiveUserId(params.userId, options?.defaultUserId), {
+          type: params.type,
+          olderThanDays: params.olderThanDays,
+          uncitedOnly: params.uncitedOnly,
+        }),
+      );
     }
     case "memory_audit": {
       const params = z.object({
