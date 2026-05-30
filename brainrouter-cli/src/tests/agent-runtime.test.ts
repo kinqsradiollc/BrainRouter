@@ -1932,3 +1932,61 @@ test('runTurn recovery: synthetic orphan results do NOT trigger the R1 child-dra
 // and task_agent child spawn under the native adapter. Equivalent
 // coverage on the OpenAI-compat path is upstream in this file (see the
 // `runTurn` block of tests starting at the top).
+
+test('runTurn loop-limit turn still rolls usage into session totals + counts the turn (P2a regression)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    // Distinct dirs so every forced tool call differs (dodges the repeat
+    // guards) and actually succeeds against the real fs.
+    for (let i = 0; i < 8; i++) fs.mkdirSync(path.join(workspace, `d${i}`));
+    const originalFetch = globalThis.fetch;
+    // maxToolLoops:1 → maxLoops floors to 5 (fast); keep the repeat guard out
+    // of the way so we reach the loop limit rather than a guard break.
+    setCliKnobOverride({ repeatToolSequenceLimit: 999, maxToolLoops: 1 });
+    let llmCalls = 0;
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      // ALWAYS request another tool call → never a clean exit → loop limit.
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: '',
+            tool_calls: [{
+              id: `call_${llmCalls}`,
+              type: 'function',
+              function: { name: 'list_dir', arguments: JSON.stringify({ path: `d${llmCalls % 8}` }) },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('keep going', {
+        onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
+      });
+      // Sanity: we really hit the loop limit (not a clean exit).
+      assert.equal(agent.lastTurnHitLoopLimit, true);
+      assert.match(answer, /tool-call loop limit/);
+      // The regression itself: a `return` used to fire on the loop-limit path
+      // BEFORE these accumulated, so the most expensive turns vanished from
+      // session totals. maxLoops=5 → ≥5 LLM calls at 10 prompt tokens each.
+      assert.ok(
+        agent.sessionUsage.promptTokens >= 50,
+        `loop-limit turn must accumulate session prompt tokens, got ${agent.sessionUsage.promptTokens}`,
+      );
+      assert.equal(agent.sessionUsage.turns, 1);
+      assert.ok(agent.sessionUsage.completionTokens >= 10);
+    } finally {
+      globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
+    }
+  });
+});

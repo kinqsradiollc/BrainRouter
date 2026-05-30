@@ -2215,11 +2215,14 @@ export class Agent {
       tokens_in: this.lastTurnUsage.promptTokens,
       tokens_out: this.lastTurnUsage.completionTokens,
     });
-    if (!exitedCleanly) {
-      // Same string as finalAnswer above; preserve the historical early-return
-      // shape so callers that switch on the loop-limit branch keep working.
-      return finalAnswer;
-    }
+    // Accumulate session usage + (below) run the turn-end tool-result shrink on
+    // EVERY exit path, the loop-limit path included. A `return finalAnswer`
+    // used to sit here and skip all of it for loop-limit turns — which both
+    // undercounted session token totals for the MOST expensive turns (the ones
+    // that ran to the limit) AND left their oversized tool results uncompacted,
+    // bloating the next `/continue`. Callers detect the loop-limit branch via
+    // `lastTurnHitLoopLimit` (set above) + the answer string, not this return,
+    // so falling through to the shared tail is contract-safe.
     this.sessionUsage.promptTokens += this.lastTurnUsage.promptTokens;
     this.sessionUsage.completionTokens += this.lastTurnUsage.completionTokens;
     this.sessionUsage.calls += this.lastTurnUsage.calls;
