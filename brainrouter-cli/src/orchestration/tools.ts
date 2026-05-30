@@ -790,14 +790,24 @@ async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<st
   const ids = Array.isArray(args?.ids) ? args.ids.map(String) : [];
   if (ids.length === 0) throw new Error('wait_agents requires a non-empty `ids` array.');
   const timeoutMs = Number(args?.timeoutMs ?? 240_000);
-  const settled = await Promise.all(ids.map(async (id: string) => {
-    const single = await handleWait({ id, timeoutMs }, ctx);
-    try {
-      return JSON.parse(single);
-    } catch {
-      return { id, raw: single };
-    }
-  }));
+  // ORCH-FIX — allSettled, not all: one child's wait rejecting must NOT reject
+  // the whole batch (which would surface as a tool failure and lose the other
+  // children's results). A rejected wait becomes a per-child error result.
+  const results = await Promise.allSettled(
+    ids.map(async (id: string) => {
+      const single = await handleWait({ id, timeoutMs }, ctx);
+      try {
+        return JSON.parse(single);
+      } catch {
+        return { id, raw: single };
+      }
+    }),
+  );
+  const settled = results.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : { id: ids[i], status: 'error', error: r.reason?.message ?? String(r.reason) },
+  );
   // MAS-P4-T3: roll the children's usage into one total so the parent sees
   // the cost split (and offload savings) of the whole batch at a glance.
   const childTotals = aggregateChildUsage(settled);
@@ -1161,35 +1171,53 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
         }
       }
     } catch (err: any) {
-      const message = err?.message ?? String(err);
-      const syntheticOutput = `ERROR: ${message}`;
-      const completedAt = new Date().toISOString();
-      updateSession(ctx.workspaceRoot, record.id, {
-        status: 'failed',
-        completedAt,
-        error: message,
-        finalOutput: syntheticOutput,
-      });
-      void emitRouteFeedback(ctx, {
-        task: prompt,
-        chosenAgentId: role.name,
-        parentAgentId: ctx.parentAgentId,
-        ownership,
-        outcome: 'failure',
-        record,
-        completedAt,
-      });
-      ctx.onChildComplete?.({
-        childId: record.id,
-        role: role.name,
-        status: 'failed',
-        error: message,
-      });
+      // ORCH-FIX — a child failure must stay ISOLATED. Do all failure
+      // bookkeeping inside its own try/catch so a throwing callback
+      // (onChildComplete / updateSession / emitRouteFeedback) can't turn this
+      // into a REJECTED promise → unhandled rejection → process exit.
+      try {
+        const message = err?.message ?? String(err);
+        const syntheticOutput = `ERROR: ${message}`;
+        const completedAt = new Date().toISOString();
+        updateSession(ctx.workspaceRoot, record.id, {
+          status: 'failed',
+          completedAt,
+          error: message,
+          finalOutput: syntheticOutput,
+        });
+        void emitRouteFeedback(ctx, {
+          task: prompt,
+          chosenAgentId: role.name,
+          parentAgentId: ctx.parentAgentId,
+          ownership,
+          outcome: 'failure',
+          record,
+          completedAt,
+        });
+        ctx.onChildComplete?.({
+          childId: record.id,
+          role: role.name,
+          status: 'failed',
+          error: message,
+        });
+      } catch (bookkeepingErr: any) {
+        console.error(`[BrainRouter] child ${record.id} failure-bookkeeping threw (isolated):`, bookkeepingErr?.message ?? bookkeepingErr);
+      }
     } finally {
       runningPromises.delete(record.id);
     }
   })();
-  runningPromises.set(record.id, promise);
+  // ORCH-FIX — backstop: a child promise must NEVER reject unhandled (that would
+  // hit the global unhandledRejection handler and kill the session). The IIFE
+  // already isolates child errors; this guarantees it even if something slips
+  // through. handleWait awaits this guarded promise, so a child failure resolves
+  // the wait rather than rejecting it.
+  runningPromises.set(
+    record.id,
+    promise.catch((e: any) => {
+      console.error(`[BrainRouter] child ${record.id} promise rejected (isolated):`, e?.message ?? e);
+    }),
+  );
 
   if (args.wait) {
     return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? childTimeoutMs }, ctx);
@@ -1232,7 +1260,15 @@ async function handleWait(args: any, ctx: OrchestrationContext): Promise<string>
   }
 
   const record = getSession(ctx.workspaceRoot, id);
-  if (!record) throw new Error(`No child session with id ${id}.`);
+  if (!record) {
+    // ORCH-FIX — return a value, never throw: a missing record (closed / never
+    // started / bad id) must not reject a wait batch and stall the parent.
+    return JSON.stringify(
+      { id, status: 'gone', summary: `No child session with id ${id} (closed, never started, or unknown id).` },
+      null,
+      2,
+    );
+  }
   return JSON.stringify(summarize(record, true), null, 2);
 }
 
