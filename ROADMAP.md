@@ -31,7 +31,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
-| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | Memory depth complete — capture→provenance→drill-down, blackboard, tree, vault, AST chunker, governance dry-run, RBAC-ready schema ✓; CLI: transcript debugger, headless JSONL, cost segment, repair telemetry, registry guard ✓; next: benchmark + job kinds + offload reclaimer; `/bg`, prefix-drift, memory-decision view, verify, unified policy | In flight |
+| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | **Memory depth complete (MEM-1…14)** — capture→provenance→drill-down, blackboard, tree, vault, AST chunker, benchmark gate, job kinds, governance, redaction, RBAC schema ✓; CLI fully or foundationed — `/context memory`/offloads, headless JSONL, cost segment, repair telemetry, registry guard ✓ + tested foundations for `/bg`, prefix-drift, verify-detect, exec-policy, agent-def validation, grouped inbox. Follow-ups (live-loop / interactive wiring) → 0.4.4 | Finalizing |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -56,26 +56,27 @@ drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
 
 **CLI — full set**
 
-- **Background & detachment:** `/bg` — detach the in-flight turn (persist a run
-  id, stream logs to the transcript; `/fg`, `/ps`, `/stop`, completion notice).
-- **Debugging & explainability:** `/context prefix` drift labels (pinned hash,
-  changed region, tool-list / memory-anchor delta, last cache-miss cause); a
-  memory-decision view (which prompt regions were stable, which memories were
-  injected vs skipped, and why); repair telemetry ✓ (scavenged / truncation /
-  storm counts, surfaced in `/context`).
+- **Background & detachment ~:** `/bg` — `BgRunRegistry` state model + `/ps`
+  formatter shipped ✓; live turn-detachment / log-streaming / `/fg` / `/stop`
+  rewires the turn loop (follow-up, verify live).
+- **Debugging & explainability:** `/context memory` decision view ✓ (planned →
+  used → skipped sources + injected records); `/context prefix` per-component
+  drift diff ✓ (foundation; the live view is a follow-up); repair telemetry ✓
+  (scavenged / truncation / storm counts in `/context`).
 - **Cost ✓:** opt-in `cost` status segment (turn USD + cache-hit %) + a
   `/context` prompt-cache hit-ratio line. *(offloaded/child fields can extend it.)*
 - **Headless ✓:** `brainrouter run --format jsonl` — a versioned, stable
   per-event stream (turn_start / status / tool / child / text / turn_end+cost /
   error) for CI and external orchestrators.
-- **Safety:** a unified execution-policy module — one allow/ask/deny (+ reason)
-  behind shell, file edits, child writes, network, and `/bg`.
-- **Verification:** `/verify detect` recipe cache (Node/Python/Rust/web) +
-  post-edit language diagnostics after write/edit/apply_patch.
-- **Ergonomics:** command-registry cleanup ✓ (help + palette in lockstep, no
-  duplicate rows, taxonomy guard; filterable "workflow mode" palettes next);
-  `/agents create` / `/pack create` wizard; a `/context offloads` browser;
-  inline handoff-accept + `/inbox --watch`.
+- **Safety ~:** unified execution-policy decision module ✓ (`decideExecutionPolicy`
+  matching the live access-mode tiers); routing every I/O path through it is the
+  follow-up.
+- **Verification ~:** `/verify detect` project-profile + build/test/lint recipe ✓;
+  sandbox-run + post-edit LSP diagnostics is the follow-up (needs a live toolchain).
+- **Ergonomics:** command-registry cleanup ✓ (help + palette lockstep, taxonomy
+  guard); `/context offloads` browser ✓; grouped `/inbox` pane ✓ (`--watch` +
+  inline-accept follow-up); `/agents create` / `/pack create` **validation** ✓
+  (interactive wizard + dry-run follow-up).
 - **Packaging (after 0.4.3 stabilizes):** shell completions, Homebrew tap,
   one-line installer.
 
