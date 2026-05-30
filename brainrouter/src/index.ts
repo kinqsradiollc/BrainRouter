@@ -103,6 +103,7 @@ import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/me
 import { memoryProvenanceToolSchema, handleMemoryProvenance } from './tools/memory_provenance.js';
 import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from './tools/memory_fetch_source_chunk.js';
 import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from './tools/memory_find_related.js';
+import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from './tools/memory_reindex_source.js';
 import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from './tools/memory_blackboard.js';
 import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from './tools/memory_tree_walk.js';
 import { memoryVaultExportToolSchema, handleMemoryVaultExport } from './tools/memory_vault_export.js';
@@ -320,6 +321,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryProvenanceToolSchema,
       memoryFetchSourceChunkToolSchema,
       memoryFindRelatedToolSchema,
+      memoryReindexSourceToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -406,6 +408,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
         case 'memory_find_related':
           return await handleMemoryFindRelated(request.params.arguments, { defaultUserId });
+        case 'memory_reindex_source':
+          return await handleMemoryReindexSource(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':

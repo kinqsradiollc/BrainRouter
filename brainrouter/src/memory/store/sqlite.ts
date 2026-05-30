@@ -995,6 +995,11 @@ export class SqliteMemoryStore implements IMemoryStore {
     // the tree autobuilder keep one leaf per scene without a content scan.
     this.ensureColumn("memory_tree_nodes", "scene_key", "TEXT DEFAULT NULL");
     this.ensureColumn("vault_exports", "workspace_tag", "TEXT DEFAULT NULL");
+    // MEM-30 (0.4.4) — code-index freshness: when a file's content drifts, its
+    // prior document is marked stale (not deleted — provenance links survive)
+    // and a fresh document is re-ingested. Stale chunks are excluded from
+    // find_related so recall reflects the current file.
+    this.ensureColumn("source_documents", "stale", "INTEGER NOT NULL DEFAULT 0");
 
     // MEM-29 — one-time backfill of the chunk FTS for stores created before this
     // index existed. Triggers keep it in sync going forward; this only fires on
@@ -1143,6 +1148,38 @@ export class SqliteMemoryStore implements IMemoryStore {
     return doc;
   }
 
+  /**
+   * MEM-30 — look up the document for (user, uri, content-hash), returning its
+   * id + stale flag (any state). Lets reindex distinguish "already fresh"
+   * (no-op) from "this exact content existed but was staled" (revert → revive)
+   * from "brand-new content" (ingest). Newest wins.
+   */
+  public lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null {
+    const row = this.db.prepare(
+      `SELECT id, COALESCE(stale, 0) AS stale FROM source_documents
+        WHERE user_id = ? AND uri = ? AND hash = ?
+        ORDER BY created_at DESC LIMIT 1`,
+    ).get(userId, uri, hash) as any;
+    return row ? { id: String(row.id), stale: !!row.stale } : null;
+  }
+
+  /**
+   * MEM-30 — mark every currently-live document for (user, uri) stale. Returns
+   * the count flipped. Used when a file's content drifts: the old index stays
+   * for provenance but is excluded from fresh recall.
+   */
+  public markSourceDocumentsStaleByPath(userId: string, uri: string): number {
+    const res = this.db.prepare(
+      "UPDATE source_documents SET stale = 1 WHERE user_id = ? AND uri = ? AND COALESCE(stale, 0) = 0",
+    ).run(userId, uri);
+    return Number((res as any)?.changes ?? 0);
+  }
+
+  /** MEM-30 — un-stale a document (revert case: content matches a prior version). */
+  public reviveSourceDocument(documentId: string): void {
+    this.db.prepare("UPDATE source_documents SET stale = 0 WHERE id = ?").run(documentId);
+  }
+
   /** Append chunks to a document; ordinals continue from the current count. Chunk hash = sha1(content). */
   public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
     const startOrdinal = ((this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = ?").get(documentId) as any)?.n ?? 0) as number;
@@ -1249,7 +1286,8 @@ export class SqliteMemoryStore implements IMemoryStore {
       `SELECT sc.*, f.rank AS fts_rank
          FROM source_chunks_fts f
          JOIN source_chunks sc ON sc.id = f.chunk_id
-        WHERE f.user_id = ? AND source_chunks_fts MATCH ?
+         JOIN source_documents d ON d.id = sc.document_id
+        WHERE f.user_id = ? AND source_chunks_fts MATCH ? AND COALESCE(d.stale, 0) = 0
         ORDER BY f.rank
         LIMIT ?`,
     ).all(userId, ftsQuery, fetch) as any[];
