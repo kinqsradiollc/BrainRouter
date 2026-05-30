@@ -802,6 +802,22 @@ export class MemoryEngine {
 
   // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
   /**
+   * 0.4.3 — provenance-safe transcript retention. Delete `transcript` source
+   * documents older than `olderThanDays` whose chunks are NOT referenced by a
+   * live memory (so provenance drill-down never breaks). Capability-detected —
+   * the prune lives on SqliteMemoryStore, not IMemoryStore. Returns counts.
+   */
+  public pruneTranscriptSources(userId: string, olderThanDays: number): { prunedDocs: number; prunedChunks: number } {
+    const store = this.store as any;
+    if (typeof store.pruneTranscriptSources !== "function") {
+      return { prunedDocs: 0, prunedChunks: 0 };
+    }
+    const days = Number.isFinite(olderThanDays) && olderThanDays >= 0 ? olderThanDays : 30;
+    const beforeIso = new Date(Date.now() - days * 86_400_000).toISOString();
+    return store.pruneTranscriptSources(userId, beforeIso);
+  }
+
+  /**
    * Export active records + tree nodes to a read-only markdown vault. The DB
    * stays authoritative; a hash ledger makes re-export idempotent (only changed
    * files are rewritten). Content is redacted before it lands (MEM-13's vault
