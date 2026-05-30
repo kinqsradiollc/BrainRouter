@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import { listSessions } from '../../orchestration/orchestrator.js';
 import { formatContextReport } from '../../runtime/contextReport.js';
 import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
+import { formatOffloadList, type OffloadStep } from '../../runtime/offloadView.js';
 import { contextWindowFor } from '../../runtime/contextWindow.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
@@ -230,6 +231,29 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         });
         console.log(chalk.bold('\n🧠 Context — memory decisions (last turn)'));
         for (const line of lines) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
+        console.log();
+        return true;
+      }
+      // CLI-14 — `/context offloads` lists working-memory offloads (durable
+      // refs pushed out of context) with their tool, token savings, and ref id.
+      if ((args[0] ?? '').toLowerCase() === 'offloads') {
+        let steps: OffloadStep[] = [];
+        try {
+          const res = await mcpClient.callTool('memory_working_context', { sessionKey: agent.sessionKey, workspacePath: agent.workspaceRoot });
+          const text = (res as any)?.content?.[0]?.text;
+          const parsed = text ? JSON.parse(text) : {};
+          if (Array.isArray(parsed?.steps)) {
+            steps = parsed.steps.map((s: any) => ({
+              nodeId: s.nodeId, title: s.title, summary: s.summary, kind: s.kind,
+              refPath: s.refPath, tokenEstimate: s.tokenEstimate, createdAt: s.createdAt,
+            }));
+          }
+        } catch (err: any) {
+          console.log(chalk.yellow(`\nCould not read working memory: ${err?.message ?? err}\n`));
+          return true;
+        }
+        console.log(chalk.bold('\n📦 Context — offloads'));
+        for (const line of formatOffloadList(steps)) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
         console.log();
         return true;
       }
