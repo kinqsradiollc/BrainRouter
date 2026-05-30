@@ -278,7 +278,10 @@ export class MemoryEngine {
     if (process.env.BRAINROUTER_JOB_RUNNER === "off") return;
     this.jobRunner = new MemoryJobRunner(
       this.store,
-      { store: this.store, llmRunner: this.synthesisRunner },
+      // `engine: this` lets the 0.4.3 depth executors (vault / blackboard /
+      // tree) call the capability-detected engine ops. MemoryEngine
+      // structurally satisfies JobEngineOps.
+      { store: this.store, llmRunner: this.synthesisRunner, engine: this },
       {
         intervalMs: process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS
           ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS, 10)
