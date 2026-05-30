@@ -21,6 +21,20 @@ export default function SourcesPage() {
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [chunks, setChunks] = useState<Record<string, SourceChunk[] | "loading">>({});
+  // 0.4.3 — transcripts are auto-ingested every turn and dominate this view
+  // ("transcript firehose"). Hide them by default so durable sources (files,
+  // tool output, tree leaves) are foregrounded; one click reveals them. Old
+  // transcripts are pruned via the memory_prune_sources tool.
+  const [showTranscripts, setShowTranscripts] = useState(false);
+
+  const transcriptCount = useMemo(
+    () => (docs ?? []).filter((d) => d.kind === "transcript").length,
+    [docs],
+  );
+  const visibleDocs = useMemo(
+    () => (docs ?? []).filter((d) => showTranscripts || d.kind !== "transcript"),
+    [docs, showTranscripts],
+  );
 
   useEffect(() => {
     client
@@ -52,7 +66,7 @@ export default function SourcesPage() {
       >
         <PageHeader
           title="Sources"
-          description="Captured source documents (transcripts, files, tool output) chunked for citable, source-grounded recall. Click a document to drill into its chunks."
+          description="Captured source documents chunked for citable, source-grounded recall. Conversation transcripts are auto-captured every turn and hidden by default (toggle below); prune old ones with the memory_prune_sources tool. Click a document to drill into its chunks."
         />
 
         {error && <p style={{ color: "#fca5a5", fontSize: "13px" }}>Could not load sources: {error}</p>}
@@ -63,8 +77,24 @@ export default function SourcesPage() {
           </p>
         )}
 
+        {transcriptCount > 0 && (
+          <button
+            onClick={() => setShowTranscripts((v) => !v)}
+            style={{ alignSelf: "flex-start", background: "none", border: "1px solid var(--color-golden-accent)", borderRadius: "6px", color: "var(--color-golden-accent)", cursor: "pointer", fontSize: "12px", letterSpacing: "0.04em", padding: "6px 12px" }}
+          >
+            {showTranscripts
+              ? `Hide ${transcriptCount} conversation transcript${transcriptCount === 1 ? "" : "s"}`
+              : `Show ${transcriptCount} hidden conversation transcript${transcriptCount === 1 ? "" : "s"}`}
+          </button>
+        )}
+        {docs && docs.length > 0 && visibleDocs.length === 0 && (
+          <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>
+            All {transcriptCount} source{transcriptCount === 1 ? "" : "s"} {transcriptCount === 1 ? "is" : "are"} conversation transcript{transcriptCount === 1 ? "" : "s"} (hidden). Use the toggle above to view them, or prune old ones with <code>memory_prune_sources</code>.
+          </p>
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          {docs?.map((d) => {
+          {visibleDocs.map((d) => {
             const open = openId === d.id;
             const loaded = chunks[d.id];
             return (
