@@ -993,6 +993,18 @@ export class SqliteMemoryStore implements IMemoryStore {
     return row ? this.rowToSourceDocument(row) : null;
   }
 
+  /** List a user's source documents (newest first) + their chunk counts — powers the dashboard Sources view. */
+  public getSourceDocuments(userId: string, limit = 100): Array<SourceDocument & { chunkCount: number }> {
+    const rows = this.db.prepare(
+      `SELECT d.*, (SELECT COUNT(*) FROM source_chunks c WHERE c.document_id = d.id) AS chunk_count
+         FROM source_documents d
+        WHERE d.user_id = ?
+        ORDER BY d.created_at DESC
+        LIMIT ?`,
+    ).all(userId, limit) as any[];
+    return rows.map((r) => ({ ...this.rowToSourceDocument(r), chunkCount: (r.chunk_count as number) ?? 0 }));
+  }
+
   /**
    * Insert a source document, or return the existing one with the same
    * (user_id, hash) — re-ingesting identical content is idempotent.
