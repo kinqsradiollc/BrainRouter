@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAgentDefinition } from '../orchestration/agentDefValidation.js';
+import { validateAgentDefinition, buildAgentDefinition } from '../orchestration/agentDefValidation.js';
 
 const valid = {
   id: 'doc-writer',
@@ -39,4 +39,17 @@ test('CLI-13 validateAgentDefinition: non-positive numeric bounds', () => {
   assert.equal(r.valid, false);
   assert.ok(r.errors.some((e) => /maxIterations must be a positive number/.test(e)));
   assert.ok(r.errors.some((e) => /timeoutMs must be a positive number/.test(e)));
+});
+
+test('CLI-13 buildAgentDefinition: fills the complete def with sane defaults', () => {
+  const def = buildAgentDefinition({ id: 'doc-writer', prompt: 'write docs', defaultAccess: 'write', toolScope: { local: ['read_file'], mcp: [] } });
+  assert.equal(def.id, 'doc-writer');
+  assert.equal(def.displayName, 'doc-writer'); // defaults to id
+  assert.equal(def.defaultAccess, 'write');
+  assert.deepEqual(def.toolScope, { local: ['read_file'], mcp: [] });
+  assert.equal(def.tier, 'worker');
+  assert.equal(def.model, null);
+  assert.equal(def.maxIterations, 25);
+  assert.equal(def.delegateName, 'doc-writer');
+  assert.deepEqual(def.subagents, []);
 });

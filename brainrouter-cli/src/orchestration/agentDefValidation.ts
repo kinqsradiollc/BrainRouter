@@ -62,3 +62,50 @@ export function validateAgentDefinition(def: AgentDefDraft): ValidationResult {
 
   return { valid: errors.length === 0, errors };
 }
+
+/** A complete AgentDefinition (the JSON `/agents create` writes), defaults filled. */
+export interface BuiltAgentDefinition {
+  id: string;
+  displayName: string;
+  whenToUse: string;
+  prompt: string;
+  model: string | null;
+  effort: string | null;
+  defaultAccess: string;
+  toolScope: { local: string[]; mcp: string[] };
+  disallowedTools: string[];
+  maxIterations: number;
+  timeoutMs: number;
+  maxResultChars: number;
+  subagents: string[];
+  delegateName: string;
+  tier: string;
+  outputContract: unknown;
+}
+
+/**
+ * CLI-13 — fill a validated draft into the complete AgentDefinition shape the
+ * registry loads (sensible defaults for the fields the create flow doesn't ask).
+ * Call only after `validateAgentDefinition` passes.
+ */
+export function buildAgentDefinition(draft: AgentDefDraft): BuiltAgentDefinition {
+  const id = draft.id!;
+  return {
+    id,
+    displayName: draft.displayName ?? id,
+    whenToUse: draft.whenToUse ?? '',
+    prompt: draft.prompt ?? '',
+    model: null,
+    effort: null,
+    defaultAccess: draft.defaultAccess ?? 'read',
+    toolScope: { local: draft.toolScope?.local ?? [], mcp: draft.toolScope?.mcp ?? [] },
+    disallowedTools: draft.disallowedTools ?? [],
+    maxIterations: draft.maxIterations ?? 25,
+    timeoutMs: draft.timeoutMs ?? 300_000,
+    maxResultChars: 30_000,
+    subagents: [],
+    delegateName: id,
+    tier: 'worker',
+    outputContract: null,
+  };
+}

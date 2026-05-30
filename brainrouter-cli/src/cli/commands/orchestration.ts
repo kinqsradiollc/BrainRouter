@@ -3,9 +3,12 @@
  * Hand-tune imports if the compiler complains.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
 import { formatInboxPane } from '../../runtime/inboxView.js';
+import { validateAgentDefinition, buildAgentDefinition } from '../../orchestration/agentDefValidation.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
@@ -478,6 +481,47 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     }
     case '/agents':
     {
+      // CLI-13 — `/agents create <id>` writes a scoped agent definition.
+      // Non-interactive (flags → validate → write) to avoid a readline
+      // conflict with the live REPL prompt; an interactive wizard can layer on.
+      if (args[0] === 'create') {
+        const id = args[1];
+        const flag = (name: string): string | undefined => {
+          const i = args.indexOf(`--${name}`);
+          return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
+        };
+        const toolsCsv = flag('tools');
+        const draft = {
+          id,
+          displayName: flag('display'),
+          whenToUse: flag('when'),
+          prompt: flag('prompt'),
+          defaultAccess: flag('access') ?? 'read',
+          toolScope: { local: toolsCsv ? toolsCsv.split(',').map((s) => s.trim()).filter(Boolean) : [], mcp: [] },
+        };
+        const v = validateAgentDefinition(draft);
+        if (!v.valid) {
+          console.log(chalk.red('\nInvalid agent definition:'));
+          for (const e of v.errors) console.log(chalk.gray(`  - ${e}`));
+          console.log(chalk.gray('\nUsage: /agents create <id> --display "Name" --when "..." --prompt "..." --access read|write|shell [--tools a,b] [--force]\n'));
+          return true;
+        }
+        const dir = path.join(agent.workspaceRoot, '.brainrouter', 'agents');
+        const file = path.join(dir, `${id}.json`);
+        if (fs.existsSync(file) && !args.includes('--force')) {
+          console.log(chalk.yellow(`\n${id}.json already exists — pass --force to overwrite.\n`));
+          return true;
+        }
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(file, JSON.stringify(buildAgentDefinition(draft), null, 2), 'utf8');
+          console.log(chalk.green(`\n✓ Wrote agent definition: ${path.relative(agent.workspaceRoot, file)}`));
+          console.log(chalk.gray('  Loads on next /agents (workspace tier).\n'));
+        } catch (err: any) {
+          console.log(chalk.red(`\nFailed to write: ${err?.message ?? err}\n`));
+        }
+        return true;
+      }
       // `--remote` (FED-S2-T6): list peers attached to the same BrainRouter
       // brain via `session_list`. Local-child output stays the default —
       // `--remote` is opt-in. `--watch` flips to a live re-poll, `--json`
