@@ -1074,6 +1074,17 @@ export interface SourceChunk {
   hash: string;
 }
 
+/**
+ * MEM-29 (0.4.4) — one ranked `find_related` hit: a source chunk plus the score
+ * that ordered it and a short human reason (which signals fired). `score` is a
+ * normalized 0..1 relevance after code-aware reranking (higher = better).
+ */
+export interface RelatedChunkHit {
+  chunk: SourceChunk;
+  score: number;
+  reason: string;
+}
+
 /** Input shape for `addSourceChunks` — ordinal + id + hash are assigned by the store. */
 export interface SourceChunkInput {
   content: string;

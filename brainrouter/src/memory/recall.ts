@@ -608,6 +608,7 @@ export class MemoryRecallPipeline {
   Use memory_search to retrieve more specific memories.
   Use memory_contradictions to review unresolved conflicts.
   To drill into a memory's "↳ source" refs: memory_fetch_source_chunk(<chunkId>) for the exact source, memory_tree_walk(<treeNodeId>) for its summary tree.
+  To explore code neighbours: memory_find_related(<chunkId> | file+line) for the nearest related code chunks across files.
   Max 3 memory tool calls per turn.
 </memory-tools-guide>`;
 
