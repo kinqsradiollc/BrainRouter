@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord } from "@kinqs/brainrouter-types";
+import { randomUUID, createHash } from "node:crypto";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -831,6 +831,157 @@ export class SqliteMemoryStore implements IMemoryStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_conn_user_src ON cognitive_connections(user_id, source_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cognitive_conn_user_tgt ON cognitive_connections(user_id, target_id)");
+
+    // 0.4.3 Brain Phase 2/3 — source documents + token-aware chunks. Additive
+    // tables: every extracted cognitive record will cite chunk ids. user_id +
+    // workspace_tag are present now so team/RBAC can arrive without migration;
+    // `hash` makes re-ingest of the same source idempotent.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS source_documents (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workspace_tag TEXT DEFAULT NULL,
+        kind TEXT NOT NULL,
+        uri TEXT DEFAULT NULL,
+        hash TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_docs_user_hash ON source_documents(user_id, hash)");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS source_chunks (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        token_count INTEGER NOT NULL DEFAULT 0,
+        file_path TEXT DEFAULT NULL,
+        symbol TEXT DEFAULT NULL,
+        start_line INTEGER DEFAULT NULL,
+        end_line INTEGER DEFAULT NULL,
+        hash TEXT NOT NULL,
+        FOREIGN KEY (document_id) REFERENCES source_documents(id) ON DELETE CASCADE
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_doc ON source_chunks(document_id, ordinal)");
+  }
+
+  // ============================
+  // Source Documents & Chunks (0.4.3 Brain Phase 2/3)
+  // ============================
+
+  private rowToSourceDocument(row: any): SourceDocument {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      workspaceTag: row.workspace_tag ?? null,
+      kind: row.kind,
+      uri: row.uri ?? null,
+      hash: row.hash,
+      title: row.title ?? "",
+      createdAt: row.created_at,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : {},
+    };
+  }
+
+  private rowToSourceChunk(row: any): SourceChunk {
+    return {
+      id: row.id,
+      documentId: row.document_id,
+      ordinal: row.ordinal,
+      content: row.content,
+      tokenCount: row.token_count,
+      filePath: row.file_path ?? null,
+      symbol: row.symbol ?? null,
+      startLine: row.start_line ?? null,
+      endLine: row.end_line ?? null,
+      hash: row.hash,
+    };
+  }
+
+  public getSourceDocumentByHash(userId: string, hash: string): SourceDocument | null {
+    const row = this.db.prepare("SELECT * FROM source_documents WHERE user_id = ? AND hash = ? LIMIT 1").get(userId, hash) as any;
+    return row ? this.rowToSourceDocument(row) : null;
+  }
+
+  public getSourceDocument(id: string): SourceDocument | null {
+    const row = this.db.prepare("SELECT * FROM source_documents WHERE id = ?").get(id) as any;
+    return row ? this.rowToSourceDocument(row) : null;
+  }
+
+  /**
+   * Insert a source document, or return the existing one with the same
+   * (user_id, hash) — re-ingesting identical content is idempotent.
+   */
+  public createSourceDocument(
+    input: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string },
+  ): SourceDocument {
+    const existing = this.getSourceDocumentByHash(input.userId, input.hash);
+    if (existing) return existing;
+    const doc: SourceDocument = {
+      id: input.id ?? randomUUID(),
+      userId: input.userId,
+      workspaceTag: input.workspaceTag ?? null,
+      kind: input.kind,
+      uri: input.uri ?? null,
+      hash: input.hash,
+      title: input.title ?? "",
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      metadata: input.metadata,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO source_documents (id, user_id, workspace_tag, kind, uri, hash, title, created_at, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(doc.id, doc.userId, doc.workspaceTag, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {}));
+    return doc;
+  }
+
+  /** Append chunks to a document; ordinals continue from the current count. Chunk hash = sha1(content). */
+  public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
+    const startOrdinal = ((this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = ?").get(documentId) as any)?.n ?? 0) as number;
+    const stmt = this.db.prepare(
+      `INSERT INTO source_chunks (id, document_id, ordinal, content, token_count, file_path, symbol, start_line, end_line, hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const out: SourceChunk[] = [];
+    this.db.exec("BEGIN");
+    try {
+      chunks.forEach((c, i) => {
+        const chunk: SourceChunk = {
+          id: randomUUID(),
+          documentId,
+          ordinal: startOrdinal + i,
+          content: c.content,
+          tokenCount: c.tokenCount,
+          filePath: c.filePath ?? null,
+          symbol: c.symbol ?? null,
+          startLine: c.startLine ?? null,
+          endLine: c.endLine ?? null,
+          hash: createHash("sha1").update(c.content).digest("hex"),
+        };
+        stmt.run(chunk.id, chunk.documentId, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash);
+        out.push(chunk);
+      });
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return out;
+  }
+
+  public getSourceChunk(id: string): SourceChunk | null {
+    const row = this.db.prepare("SELECT * FROM source_chunks WHERE id = ?").get(id) as any;
+    return row ? this.rowToSourceChunk(row) : null;
+  }
+
+  public getSourceChunksByDocument(documentId: string): SourceChunk[] {
+    const rows = this.db.prepare("SELECT * FROM source_chunks WHERE document_id = ? ORDER BY ordinal ASC").all(documentId) as any[];
+    return rows.map((r) => this.rowToSourceChunk(r));
   }
 
   // ============================
