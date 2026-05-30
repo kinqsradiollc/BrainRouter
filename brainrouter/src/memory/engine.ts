@@ -35,6 +35,7 @@ import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit } from "@kinqs/brainrouter-types";
 import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks } from "./code-retrieval.js";
+import { buildSkillExtractionPrompt, parseSkillResponse } from "./skill-extract.js";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -700,7 +701,7 @@ export class MemoryEngine {
   public recordLesson(
     userId: string,
     text: string,
-    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number },
+    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string },
   ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number } {
     const normalized = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
     const fingerprint = createHash("sha1").update(normalized).digest("hex");
@@ -736,9 +737,49 @@ export class MemoryEngine {
       priority: opts?.priority ?? 80,
       activeSkill: opts?.activeSkill,
       sourceKind: "user_instruction",
-      metadata: { fingerprint, corroborations: 1, ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
+      metadata: { fingerprint, corroborations: 1, ...(opts?.kind ? { kind: opts.kind } : {}), ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
     });
     return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1 };
+  }
+
+  /**
+   * MEM-33 (0.4.4) — distill a reusable skill (SOP) from a successful session
+   * and store it. The LLM gate emits `<no-skill/>` for exploratory/trivial runs
+   * (→ nothing stored). A real skill is stored as a durable `lesson` tagged
+   * `kind:'skill'`, so it reinforces on re-extraction (MEM-32) and flows through
+   * recall. The LLM is injectable for tests; defaults to the synthesis runner.
+   */
+  public async extractSkillFromSession(
+    userId: string,
+    opts: {
+      sessionSummary: string;
+      sessionKey?: string;
+      activeSkill?: string;
+      llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string>;
+    },
+  ): Promise<{ extracted: boolean; recordId?: string; reinforced?: boolean; skill?: string }> {
+    const summary = (opts.sessionSummary ?? "").trim();
+    if (summary.length < 20) return { extracted: false };
+
+    const { system, user } = buildSkillExtractionPrompt(summary);
+    const run = opts.llm ?? ((p) => this.synthesisRunner.run(p as any));
+    let raw: string;
+    try {
+      raw = await run({ prompt: user, systemPrompt: system, timeoutMs: 60_000 });
+    } catch {
+      return { extracted: false }; // LLM unavailable → best-effort, store nothing
+    }
+
+    const { skill } = parseSkillResponse(raw);
+    if (!skill) return { extracted: false };
+
+    const res = this.recordLesson(userId, skill, {
+      sessionKey: opts.sessionKey,
+      activeSkill: opts.activeSkill,
+      priority: 82,
+      kind: "skill",
+    });
+    return { extracted: true, recordId: res.recordId, reinforced: res.reinforced, skill };
   }
 
   public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): CognitiveRecord[] {
