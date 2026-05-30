@@ -120,16 +120,33 @@ export function spawnWorkerThread(
         updateWorkerMeta(input.workspaceRoot, worker.id, { status: 'completed' });
       }
     } catch (err) {
-      appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'system', event: 'error', error: (err as Error).message });
-      if (readWorkerMeta(input.workspaceRoot, worker.id)?.status === 'running') {
-        updateWorkerMeta(input.workspaceRoot, worker.id, { status: 'failed' });
+      // ORCH-FIX (worker analog) — the failure-bookkeeping itself touches disk
+      // (transcript append + meta read/write); if THAT throws, it must not
+      // reject the detached worker promise. Isolate it in its own try/catch so
+      // a worker failure can never escalate into an unhandled rejection.
+      try {
+        appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'system', event: 'error', error: (err as Error).message });
+        if (readWorkerMeta(input.workspaceRoot, worker.id)?.status === 'running') {
+          updateWorkerMeta(input.workspaceRoot, worker.id, { status: 'failed' });
+        }
+      } catch (bookkeepingErr: any) {
+        console.error(`[BrainRouter] worker ${worker.id} failure-bookkeeping threw (isolated):`, bookkeepingErr?.message ?? bookkeepingErr);
       }
     } finally {
       runningWorkers.delete(worker.id);
     }
   })();
 
-  runningWorkers.set(worker.id, promise);
+  // ORCH-FIX (worker analog) — store the promise WITH a .catch backstop so a
+  // fire-and-forget worker (one nobody `wait_worker`s) can never surface as an
+  // unhandled rejection. `waitWorker` adds its own .catch on the race, so this
+  // double-guard is harmless; the stored value stays Promise<void>.
+  runningWorkers.set(
+    worker.id,
+    promise.catch((e: any) => {
+      console.error(`[BrainRouter] worker ${worker.id} promise rejected (isolated):`, e?.message ?? e);
+    }),
+  );
   return worker;
 }
 
