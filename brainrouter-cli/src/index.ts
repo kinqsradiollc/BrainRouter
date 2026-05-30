@@ -91,6 +91,8 @@ if (getCliKnobs().debugExit) {
 }
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
+import { formatJsonlEvent, type RunEvent } from './runtime/jsonlEvents.js';
+import { costUsd } from './runtime/pricing.js';
 import { VERSION } from './version.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from './config/config.js';
@@ -298,6 +300,7 @@ program
   .option('-w, --workspace <path>', 'Workspace root')
   .option('--print', 'Print the answer text only, no chrome')
   .option('--json', 'Emit one JSON line { answer, usage, durationMs, sessionKey }')
+  .option('--format <fmt>', 'Output format: text (default) | json | jsonl (stable per-event stream for CI)')
   .option('--session <key>', 'Resume a specific sessionKey')
   .option('--timeout <ms>', 'LLM request timeout in ms')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
@@ -401,33 +404,62 @@ program
       sessionKey: options.session,
     });
 
+    // CLI-7 — output format: text (default) | json (single line) | jsonl (per-event stream).
+    const fmt: 'text' | 'json' | 'jsonl' =
+      options.format === 'jsonl' ? 'jsonl'
+      : options.format === 'json' || options.json ? 'json'
+      : options.format === 'text' || options.format === undefined ? 'text'
+      : 'text';
+    if (options.format && !['text', 'json', 'jsonl'].includes(options.format)) {
+      console.error(`Error: --format must be text | json | jsonl (got "${options.format}").`);
+      await mcpClient.close();
+      process.exit(2);
+    }
+    const emit = (ev: RunEvent): void => {
+      if (fmt === 'jsonl') process.stdout.write(formatJsonlEvent(ev, new Date().toISOString()) + '\n');
+    };
+
     const startedAt = Date.now();
     let answer = '';
+    emit({ type: 'turn_start', sessionKey: agent.sessionKey, prompt });
     try {
       answer = await agent.runTurn(prompt, {
-        onStatusUpdate: () => {},
-        onToolStart: (name) => { if (!options.print && !options.json) process.stderr.write(`  · ${name}\n`); },
-        onToolEnd: () => {},
+        onStatusUpdate: (message) => emit({ type: 'status', message }),
+        onToolStart: (name) => { emit({ type: 'tool_start', name }); if (fmt === 'text' && !options.print) process.stderr.write(`  · ${name}\n`); },
+        onToolEnd: (name, result) => emit({ type: 'tool_end', name, ok: result.success, summary: result.summary }),
+        onChildToolStart: (e) => emit({ type: 'child_tool', childId: e.childId, role: e.role, tool: e.tool }),
+        onChildToolEnd: (e) => emit({ type: 'child_tool', childId: e.childId, role: e.role, tool: e.tool, ok: e.ok, summary: e.summary }),
+        onChildComplete: (e) => emit({ type: 'child_complete', childId: e.childId, role: e.role, status: e.status, error: e.error }),
       });
     } catch (err: any) {
-      console.error(`run failed: ${err.message}`);
+      emit({ type: 'error', message: err?.message ?? String(err) });
+      if (fmt !== 'jsonl') console.error(`run failed: ${err.message}`);
       await mcpClient.close();
       process.exit(1);
     }
     const durationMs = Date.now() - startedAt;
     await mcpClient.close();
 
-    if (options.json) {
+    const u = agent.lastTurnUsage;
+    if (fmt === 'jsonl') {
+      emit({ type: 'text', text: answer });
+      emit({
+        type: 'turn_end',
+        sessionKey: agent.sessionKey,
+        durationMs,
+        usage: u,
+        costUsd: costUsd(agent.getModel(), { cachedTokens: u.cachedTokens, missedTokens: u.missedTokens, completionTokens: u.completionTokens }),
+      });
+    } else if (fmt === 'json') {
       process.stdout.write(JSON.stringify({
         answer,
         sessionKey: agent.sessionKey,
-        usage: agent.lastTurnUsage,
+        usage: u,
         durationMs,
       }) + '\n');
     } else {
       process.stdout.write(answer + (answer.endsWith('\n') ? '' : '\n'));
       if (!options.print) {
-        const u = agent.lastTurnUsage;
         process.stderr.write(`\n[done · ${Math.round(durationMs / 1000)}s · ${u.promptTokens} in / ${u.completionTokens} out across ${u.calls} call${u.calls === 1 ? '' : 's'}]\n`);
       }
     }
