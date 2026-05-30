@@ -1142,3 +1142,30 @@ export interface MemoryTreeNodeInput {
   sourceChunkIds?: string[];
   heatScore?: number;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Vault mirror (MEM-7, 0.4.3) — a read-only markdown export of records + tree
+// nodes, with a hash ledger so re-running only rewrites what changed. The DB
+// stays authoritative; the vault is a human-inspectable mirror.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type VaultExportKind = "record" | "tree";
+
+export interface VaultExportEntry {
+  userId: string;
+  /** Vault-relative path, e.g. "records/<id>.md". */
+  path: string;
+  /** sha256 of the rendered markdown — drives idempotent re-export. */
+  hash: string;
+  kind: VaultExportKind;
+  /** The record / tree-node id this file mirrors. */
+  refId: string;
+  exportedAt: string;
+}
+
+export interface VaultExportInput {
+  path: string;
+  hash: string;
+  kind: VaultExportKind;
+  refId: string;
+}

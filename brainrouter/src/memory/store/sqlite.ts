@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID, createHash } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, VaultExportEntry, VaultExportInput } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -913,6 +913,18 @@ export class SqliteMemoryStore implements IMemoryStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_tree_user_kind ON memory_tree_nodes(user_id, kind, parent_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_tree_parent ON memory_tree_nodes(parent_id)");
+    // MEM-7 — vault export ledger (path → content hash) for idempotent re-export.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS vault_exports (
+        user_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        exported_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, path)
+      )
+    `);
   }
 
   // ============================
@@ -1210,6 +1222,29 @@ export class SqliteMemoryStore implements IMemoryStore {
   /** MEM-5 — seal a bucket: no more leaves append under it. */
   public sealTreeNode(id: string): void {
     this.db.prepare("UPDATE memory_tree_nodes SET sealed_at = ? WHERE id = ? AND sealed_at IS NULL").run(new Date().toISOString(), id);
+  }
+
+  /** MEM-7 — all tree nodes for a user (vault export reads the whole tree). */
+  public getAllTreeNodes(userId: string): MemoryTreeNode[] {
+    const rows = this.db.prepare("SELECT * FROM memory_tree_nodes WHERE user_id = ? ORDER BY level ASC, created_at ASC").all(userId) as any[];
+    return rows.map((r) => this.rowToTreeNode(r));
+  }
+
+  // ============================
+  // Vault Export Ledger (MEM-7)
+  // ============================
+
+  public upsertVaultExport(userId: string, input: VaultExportInput): void {
+    this.db.prepare(
+      `INSERT INTO vault_exports (user_id, path, hash, kind, ref_id, exported_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, path) DO UPDATE SET hash = excluded.hash, kind = excluded.kind, ref_id = excluded.ref_id, exported_at = excluded.exported_at`,
+    ).run(userId, input.path, input.hash, input.kind, input.refId, new Date().toISOString());
+  }
+
+  public getVaultExports(userId: string): VaultExportEntry[] {
+    const rows = this.db.prepare("SELECT * FROM vault_exports WHERE user_id = ? ORDER BY path ASC").all(userId) as any[];
+    return rows.map((r) => ({ userId: r.user_id, path: r.path, hash: r.hash, kind: r.kind, refId: r.ref_id, exportedAt: r.exported_at }));
   }
 
   // ============================
