@@ -48,3 +48,47 @@ export function decideExecutionPolicy(action: ActionKind, mode: AccessMode): Pol
       return { decision: 'deny', reason: `unknown action kind` };
   }
 }
+
+/**
+ * POLICY-1 (0.4.4) — map a built-in tool name to the execution ActionKind it
+ * represents, so the agent can route EVERY mutating tool (not just the shell)
+ * through `decideExecutionPolicy`. Anything not listed is treated as read-only
+ * (the safe default — read-only is always permitted, so an unrecognised tool is
+ * never wrongly allowed to mutate).
+ */
+export function actionKindForTool(name: string): ActionKind {
+  switch (name) {
+    case 'run_command':
+      return 'shell';
+    case 'write_file':
+    case 'edit_file':
+    case 'apply_patch':
+      return 'file_edit';
+    case 'spawn_agent':
+    case 'spawn_agents':
+    case 'spawn_worker_thread':
+      return 'child_write';
+    case 'fetch_url':
+      return 'network';
+    default:
+      return 'read_only';
+  }
+}
+
+export interface ToolPolicyResult extends PolicyResult {
+  action: ActionKind;
+  /** True for actions that change state (file/child/shell) — i.e. worth auditing. */
+  mutating: boolean;
+}
+
+/**
+ * POLICY-1 — the unified policy decision for a tool given the session's access
+ * mode: maps name → ActionKind → decision in one call. The single entry point
+ * the agent's tool-dispatch guard uses.
+ */
+export function resolveToolPolicy(name: string, mode: AccessMode): ToolPolicyResult {
+  const action = actionKindForTool(name);
+  const { decision, reason } = decideExecutionPolicy(action, mode);
+  const mutating = action === 'file_edit' || action === 'child_write' || action === 'shell';
+  return { action, decision, reason, mutating };
+}
