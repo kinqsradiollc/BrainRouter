@@ -45,39 +45,61 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 ### 0.4.3 — Memory depth (source chunks → tree) + CLI debugging & ops
 
 Shipped so far: `/rewind --files` file restore, `/context` window-fill header,
-and the agent transcript debugger (`/agents tree` / `why` / `transcript` /
-`replay`).
+the agent transcript debugger (`/agents tree` / `why` / `transcript` /
+`replay`), and the `source_documents` + `source_chunks` foundation.
 
-**CLI, remaining (priority order):**
+**CLI — full set**
 
-- `/bg` — detach the in-flight turn (persist a run id, stream logs to the
-  transcript, `/fg` + completion notice); the missing background primitive.
-- `/context prefix` — prefix-cache drift labels: pinned hash, changed region,
-  tool-list / memory-anchor delta, last cache-miss cause.
-- Headless `brainrouter run --format jsonl` — a stable machine-readable event
-  stream (turn / text / tool / child / memory / offload / cost / error) for CI
-  and external orchestrators.
-- A unified execution-policy module — one allow/ask/deny decision (with reason)
+- **Background & detachment:** `/bg` — detach the in-flight turn (persist a run
+  id, stream logs to the transcript; `/fg`, `/ps`, `/stop`, completion notice).
+- **Debugging & explainability:** `/context prefix` drift labels (pinned hash,
+  changed region, tool-list / memory-anchor delta, last cache-miss cause); a
+  memory-decision view (which prompt regions were stable, which memories were
+  injected vs skipped, and why); repair telemetry (scavenged / truncation /
+  storm counts + tool-name suggestions) in `/tokens` + `/diagnostics`.
+- **Cost:** an opt-in per-turn footer (model · effort/tier · cost · cache hit ·
+  offloaded + child tokens).
+- **Headless:** `brainrouter run --format jsonl` — a stable event stream
+  (turn / text / tool / child / memory / offload / cost / error) for CI and
+  external orchestrators.
+- **Safety:** a unified execution-policy module — one allow/ask/deny (+ reason)
   behind shell, file edits, child writes, network, and `/bg`.
-- `/verify detect` recipe cache + post-edit language diagnostics; command-
-  registry cleanup (one source drives help + the slash palette).
+- **Verification:** `/verify detect` recipe cache (Node/Python/Rust/web) +
+  post-edit language diagnostics after write/edit/apply_patch.
+- **Ergonomics:** command-registry cleanup (one source drives help + palette,
+  no duplicate rows, filterable "workflow mode" palettes); `/agents create` /
+  `/pack create` wizard; a `/context offloads` browser; inline handoff-accept +
+  `/inbox --watch`.
+- **Packaging (after 0.4.3 stabilizes):** shell completions, Homebrew tap,
+  one-line installer.
 
-**Brain-side memory (depth before breadth):**
+**Brain-side memory — full set** *(depth before breadth)*
 
-- **Source documents + chunks** — first-class raw-source + chunk tables so
-  every extracted record cites its source. The foundation the rest builds on.
-- **Blackboard commit pipeline** — stage extraction candidates, reconcile /
-  conflict-check, then commit to cognitive records with an audit trail.
-- **Memory tree** — durable source/topic/global summary hierarchy: append leaf
-  → seal bucket → summarize parent → walk/drill.
-- **AST-aware code chunking** (TS/JS/Python/Rust) and a **vault mirror**
-  (read-only markdown export with a hash ledger; the DB stays authoritative).
-- **Retrieval benchmark harness** — one command, fixed datasets, JSON +
-  markdown summary, regression thresholds.
+- **Source layer (done):** `source_documents` + `source_chunks` tables + store.
+- **Token-aware capture:** chunk sources before extraction; every extracted
+  record cites its source-chunk ids; `memory_verify` returns source excerpts +
+  a confidence trail.
+- **Blackboard commit pipeline:** stage extraction candidates → reconcile /
+  conflict-check → commit to cognitive records with an audit trail.
+- **Memory tree:** durable source/topic/global summary hierarchy (append leaf →
+  seal bucket → summarize parent → walk/drill), generic mechanics kept separate
+  from policy.
+- **AST-aware code chunking** (TS/JS/Python/Rust) and a read-only **vault
+  mirror** (markdown export + hash ledger; the DB stays authoritative).
+- **Recall drill-down:** compact hit first, then fetch the original source
+  chunk / walk the tree.
+- **Retrieval benchmark harness:** one command, fixed datasets, FTS / hybrid /
+  rerank / tree / AST modes, JSON + markdown summary, regression thresholds,
+  CI-friendly.
+- **Brain jobs:** new kinds for chunking, blackboard reconcile, tree
+  seal/digest, vault export, and benchmark eval.
+- **Governance & hygiene:** a governance dry-run (preview what would
+  archive/delete by filter); an offload reclaimer (retention + orphan cleanup);
+  uniform redaction across source chunks, vault sync, blackboard candidates, and
+  offload previews.
 
-Sequencing: source chunks + blackboard first; tree / vault / AST chunking /
-benchmarks build on them. New tables carry user + workspace scope columns so
-team/RBAC features can arrive later without migration pain. Carried infra:
+Cross-cutting: new tables carry user + workspace scope columns so team/RBAC can
+arrive later without migration; 0.4.3 stays local-first. Carried infra:
 git-worktree session isolation.
 
 ### 0.5.0 — Power User Surface
