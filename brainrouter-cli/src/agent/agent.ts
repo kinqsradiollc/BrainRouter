@@ -1317,6 +1317,21 @@ export class Agent {
     // either deliver the answer or admit it can't.
     let preambleGuardFired = 0;
     const PREAMBLE_GUARD_MAX = 2;
+    // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
+    // goal_complete — so a turn that concludes WITHOUT goal_complete (just
+    // delivers the answer) never reconciles the plan, leaving it stale (the
+    // "audit delivered, plan still ⏳" bug). Snapshot how many items are already
+    // completed; if this turn does real work but advances NONE of them while
+    // items remain open, nudge ONCE to reconcile. Note we can't gate on "called
+    // update_plan" — the model calls it to CREATE the plan (item in_progress)
+    // yet never marks anything completed; the completed-count delta is the
+    // honest signal. Bounded so a model that won't update can't loop.
+    let planSyncGuardFired = 0;
+    const PLAN_SYNC_GUARD_MAX = 1;
+    const planCompletedAtTurnStart = (() => {
+      try { return readPlan(this.workspaceRoot, this.sessionKey).items.filter((i) => i.status === 'completed').length; }
+      catch { return 0; }
+    })();
     // Tracks whether we exited the loop because the LLM stopped requesting
     // tools (clean break) vs because we hit maxLoops. Critical: an empty
     // `finalAnswer === ''` from a clean break is NOT a loop-limit timeout.
@@ -1794,6 +1809,39 @@ export class Agent {
           this.recordTranscript(guardMsg);
           callbacks.onStatusUpdate(`Recovery: preamble-without-action (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing continuation`);
           continue;
+        }
+
+        // Plan-sync guardrail — see planCompletedAtTurnStart. The model is about
+        // to finish (no tool_calls, clean exit) but it did real work this turn
+        // yet advanced NO plan item while open items remain. That's the "work
+        // done, plan left at ⏳" bug — nudge once to reconcile, then accept the
+        // turn regardless (bounded).
+        if (planSyncGuardFired < PLAN_SYNC_GUARD_MAX && this.lastTurnToolCalls > 0) {
+          let plan: ReturnType<typeof readPlan> | { items: [] };
+          try { plan = readPlan(this.workspaceRoot, this.sessionKey); } catch { plan = { items: [] }; }
+          const open = plan.items.filter((i) => i.status !== 'completed');
+          const completedNow = plan.items.length - open.length;
+          if (plan.items.length > 0 && open.length > 0 && completedNow === planCompletedAtTurnStart) {
+            planSyncGuardFired += 1;
+            const openSummary = open
+              .map((i) => `  - [${i.status === 'in_progress' ? '⏳' : '☐'}] ${i.step}`)
+              .join('\n');
+            const correction = [
+              'Runtime plan-sync guardrail tripped.',
+              `You did work this turn but advanced no plan item, and the plan still has ${open.length} open item(s):`,
+              openSummary,
+              '',
+              'Before finishing, make the plan honest about what you ACTUALLY did this turn:',
+              '- If you completed any of these, call `update_plan` now to mark them `completed` (keep at most one `in_progress`).',
+              '- If an item is genuinely still unfinished, leave it as-is and just say so in your answer.',
+              'Then deliver your final answer — the user only sees your tool_calls and final prose, not the plan unless you sync it.',
+            ].join('\n');
+            const guardMsg = { role: 'user', content: correction };
+            this.chatHistory.push(guardMsg);
+            this.recordTranscript(guardMsg);
+            callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
+            continue;
+          }
         }
 
         finalAnswer = response.content;
