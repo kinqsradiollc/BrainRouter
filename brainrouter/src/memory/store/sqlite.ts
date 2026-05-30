@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID, createHash } from "node:crypto";
-import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput } from "@kinqs/brainrouter-types";
+import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
@@ -879,6 +879,22 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_cog_source_links_record ON cognitive_source_links(record_id)");
+    // MEM-4 — blackboard: extracted candidates staged here before committing to
+    // cognitive records. user_id for RBAC-readiness (MEM-14).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_blackboard_items (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        source_chunk_id TEXT DEFAULT NULL,
+        candidate_json TEXT NOT NULL,
+        score REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        conflict_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        committed_record_id TEXT DEFAULT NULL
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_blackboard_user_status ON memory_blackboard_items(user_id, status)");
   }
 
   // ============================
@@ -1027,6 +1043,78 @@ export class SqliteMemoryStore implements IMemoryStore {
         ORDER BY sc.document_id ASC, sc.ordinal ASC`,
     ).all(recordId) as any[];
     return rows.map((r) => this.rowToSourceChunk(r));
+  }
+
+  // ============================
+  // Blackboard Items (MEM-4)
+  // ============================
+
+  private rowToBlackboardItem(row: any): BlackboardItem {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      sourceChunkId: row.source_chunk_id ?? null,
+      candidate: JSON.parse(row.candidate_json),
+      score: row.score,
+      status: row.status,
+      conflictIds: row.conflict_ids_json ? JSON.parse(row.conflict_ids_json) : [],
+      createdAt: row.created_at,
+      committedRecordId: row.committed_record_id ?? null,
+    };
+  }
+
+  /** MEM-4 — stage extracted candidates as `pending` blackboard items. */
+  public stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      `INSERT INTO memory_blackboard_items (id, user_id, source_chunk_id, candidate_json, score, status, conflict_ids_json, created_at, committed_record_id)
+       VALUES (?, ?, ?, ?, ?, 'pending', '[]', ?, NULL)`,
+    );
+    const staged: BlackboardItem[] = [];
+    this.db.exec("BEGIN");
+    try {
+      for (const input of items) {
+        const id = `bb_${randomUUID()}`;
+        stmt.run(id, userId, input.sourceChunkId ?? null, JSON.stringify(input.candidate), input.score ?? 0, now);
+        staged.push({
+          id, userId, sourceChunkId: input.sourceChunkId ?? null, candidate: input.candidate,
+          score: input.score ?? 0, status: "pending", conflictIds: [], createdAt: now, committedRecordId: null,
+        });
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return staged;
+  }
+
+  public getBlackboardItem(id: string): BlackboardItem | null {
+    const row = this.db.prepare("SELECT * FROM memory_blackboard_items WHERE id = ? LIMIT 1").get(id) as any;
+    return row ? this.rowToBlackboardItem(row) : null;
+  }
+
+  public getBlackboardItems(userId: string, status?: BlackboardStatus): BlackboardItem[] {
+    const rows = (status
+      ? this.db.prepare("SELECT * FROM memory_blackboard_items WHERE user_id = ? AND status = ? ORDER BY score DESC, created_at ASC").all(userId, status)
+      : this.db.prepare("SELECT * FROM memory_blackboard_items WHERE user_id = ? ORDER BY created_at ASC").all(userId)) as any[];
+    return rows.map((r) => this.rowToBlackboardItem(r));
+  }
+
+  /** MEM-4 — patch a blackboard item's reconcile/commit state. */
+  public updateBlackboardItem(
+    id: string,
+    patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null },
+  ): void {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    if (patch.status !== undefined) { sets.push("status = ?"); vals.push(patch.status); }
+    if (patch.score !== undefined) { sets.push("score = ?"); vals.push(patch.score); }
+    if (patch.conflictIds !== undefined) { sets.push("conflict_ids_json = ?"); vals.push(JSON.stringify(patch.conflictIds)); }
+    if (patch.committedRecordId !== undefined) { sets.push("committed_record_id = ?"); vals.push(patch.committedRecordId); }
+    if (sets.length === 0) return;
+    vals.push(id);
+    this.db.prepare(`UPDATE memory_blackboard_items SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   }
 
   // ============================
