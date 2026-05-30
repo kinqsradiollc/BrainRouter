@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type { ExternalDirMode } from '../runtime/execPolicy.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -187,6 +188,12 @@ export interface CliKnobs {
   // ---- update notice (CLI-22) -------------------------------------------
   /** Show a throttled "update available" notice at startup. Default true. */
   updateCheck?: boolean;
+
+  // ---- policy hardening (POLICY-3) --------------------------------------
+  /** How to treat file writes outside the workspace root. Default 'ask'. */
+  externalDirWrites?: ExternalDirMode;
+  /** Per-host outbound allowlist for fetch_url / web_search ([] = unrestricted). */
+  egressAllowlist?: string[];
 
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
@@ -434,6 +441,8 @@ export interface ResolvedCliKnobs {
   agentMcpToolBudget: number;
   scheduleTickMs: number;
   updateCheck: boolean;
+  externalDirWrites: ExternalDirMode;
+  egressAllowlist: string[];
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -495,6 +504,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,
+    externalDirWrites: c.externalDirWrites ?? 'ask',
+    egressAllowlist: Array.isArray(c.egressAllowlist) ? c.egressAllowlist : [],
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
