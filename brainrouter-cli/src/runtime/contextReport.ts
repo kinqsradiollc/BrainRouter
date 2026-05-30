@@ -26,6 +26,12 @@ export interface ContextReportInput {
    * `autoCompactThreshold` is the token count at which auto-compact fires.
    */
   window: { current: number; max: number | null; autoCompactThreshold: number };
+  /**
+   * 0.4.x (CLI-5) — prompt-cache effectiveness this session. `cachedTokens` is
+   * prompt tokens served from cache; `missedTokens` is prompt tokens that had
+   * to be (re)processed. Omitted/zero → the cache line is suppressed.
+   */
+  cache?: { cachedTokens: number; missedTokens: number };
   session: { promptTokens: number; completionTokens: number; turns: number; calls: number };
   bySkill: SkillUsageRow[];
   byTool: Array<{ tool: string; count: number }>;
@@ -50,6 +56,19 @@ export function formatContextReport(input: ContextReportInput): string[] {
     lines.push(`Context window: ~${w.current.toLocaleString()} tokens used (model window unknown)`);
   }
   lines.push(`Auto-compact fires at: ${w.autoCompactThreshold.toLocaleString()} tokens`);
+
+  // ── Prompt-cache effectiveness (CLI-5) ──────────────────────────────────
+  // Cache hits avoid reprocessing the stable prefix (system prompt, briefing,
+  // tool schemas) every turn — a high hit ratio is the main lever on cost and
+  // latency. Suppressed until there's at least one prompt token to attribute.
+  if (input.cache) {
+    const { cachedTokens, missedTokens } = input.cache;
+    const totalPrompt = cachedTokens + missedTokens;
+    if (totalPrompt > 0) {
+      const hit = Math.round((cachedTokens / totalPrompt) * 100);
+      lines.push(`Prompt cache: ${cachedTokens.toLocaleString()} cached / ${missedTokens.toLocaleString()} missed (${hit}% hit this session)`);
+    }
+  }
   lines.push('');
 
   const sessionTotal = tokens(input.session);
