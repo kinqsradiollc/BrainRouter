@@ -17,6 +17,7 @@
 export * from "./weighting.js";
 export * from "./boosting.js";
 export * from "./penalties.js";
+export * from "./lexical.js";
 
 import { halfLifeDecay } from "./penalties.js";
 import { citationBoost, freshnessBoost } from "./boosting.js";
