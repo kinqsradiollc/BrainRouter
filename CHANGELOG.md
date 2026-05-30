@@ -13,7 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
-| **0.4.3** | In flight | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
+| **0.4.3** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
 | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
 | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
@@ -27,7 +27,7 @@ this changelog.
 
 ---
 
-## [0.4.3] - Unreleased
+## [0.4.3] - 2026-05-30
 
 Feature-complete (memory depth MEM-1…14 + CLI-1…15), plus a post-investigation
 hardening batch: the cost-telemetry `$0.00` fix (pricing family-fallback +
