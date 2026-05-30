@@ -1854,6 +1854,22 @@ export class SqliteMemoryStore implements IMemoryStore {
     return rows.map(cognitiveRowToRecord);
   }
 
+  /**
+   * MEM-32 — find a live `lesson` record by its dedup fingerprint (stored in
+   * `metadata.fingerprint`). Lets `recordLesson` reinforce an existing lesson on
+   * corroboration instead of creating a near-duplicate. Newest live match wins.
+   */
+  public findLessonByFingerprint(userId: string, fingerprint: string): CognitiveRecord | null {
+    const row = this.db.prepare(`
+      SELECT r.* FROM cognitive_records r
+       WHERE r.user_id = ? AND r.type = 'lesson'
+         AND json_extract(r.metadata_json, '$.fingerprint') = ?
+         AND r.invalid_at IS NULL AND r.archived = 0
+       ORDER BY r.created_time DESC LIMIT 1
+    `).get(userId, fingerprint) as any;
+    return row ? cognitiveRowToRecord(row) : null;
+  }
+
   public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void {
     const now = new Date().toISOString();
     this.db.prepare(

@@ -55,6 +55,10 @@ export const TYPE_CONFIGS: Record<MemoryType, TypeConfig> = {
   artifact_reference: { halfLifeDays: 90, defaultConfidence: 0.7, requiresEvidence: false, intentAffinity: { plan: 1.1, build: 1.1 } },
   file_history: { halfLifeDays: 90, defaultConfidence: 0.75, requiresEvidence: false, intentAffinity: { debug: 1.15, refactor: 1.2, review: 1.1 } },
   command_knowledge: { halfLifeDays: 90, defaultConfidence: 0.75, requiresEvidence: false, intentAffinity: { debug: 1.2, performance: 1.15, test: 1.1 } },
+  // MEM-32 — durable, corroboration-reinforced lessons/insights. No decay (a
+  // lesson re-confirmed across sessions only strengthens), evidence-backed, and
+  // broadly recall-favorable so it surfaces in briefings.
+  lesson: { halfLifeDays: null, defaultConfidence: 0.8, requiresEvidence: true, intentAffinity: { plan: 1.2, build: 1.15, debug: 1.2, review: 1.15, refactor: 1.1 } },
 };
 
 export function getMemoryTypeConfig(type: string): TypeConfig {

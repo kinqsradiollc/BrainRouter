@@ -688,6 +688,59 @@ export class MemoryEngine {
     return record;
   }
 
+  /**
+   * MEM-32 (0.4.4) — record a durable lesson/insight with corroboration
+   * reinforcement. The lesson is fingerprinted (normalized-text hash); a
+   * corroborating call to the same lesson does NOT duplicate — it bumps the
+   * record's confidence (asymptotically toward 1) and corroboration count
+   * instead. New lessons are stored as `lesson` cognitive records, so they flow
+   * through normal recall/briefing. Returns whether it reinforced an existing
+   * lesson and the resulting confidence.
+   */
+  public recordLesson(
+    userId: string,
+    text: string,
+    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number },
+  ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number } {
+    const normalized = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    const fingerprint = createHash("sha1").update(normalized).digest("hex");
+    const store = this.store as typeof this.store & {
+      findLessonByFingerprint?: (u: string, f: string) => CognitiveRecord | null;
+    };
+
+    const existing = typeof store.findLessonByFingerprint === "function" ? store.findLessonByFingerprint(userId, fingerprint) : null;
+    if (existing) {
+      const confidence = Math.min(0.99, existing.confidence + (1 - existing.confidence) * 0.25);
+      // The corroboration counter lives in metadata (authoritative); a fresh
+      // lesson is created at 1, so the next corroboration is 2, etc.
+      const prevCorr = Number((existing.metadata as any)?.corroborations ?? existing.citationCount ?? 1);
+      const corroborations = prevCorr + 1;
+      const nowIso = new Date().toISOString();
+      const updated: CognitiveRecord = {
+        ...existing,
+        confidence,
+        citationCount: corroborations,
+        lastCitedAt: nowIso,
+        updatedTime: nowIso,
+        metadata: { ...(existing.metadata ?? {}), fingerprint, corroborations },
+      };
+      this.store.upsertCognitive(updated, { skipAudit: true });
+      return { recordId: existing.id, reinforced: true, confidence, corroborations };
+    }
+
+    const record = this.upsertEngineeringMemory({
+      userId,
+      sessionKey: opts?.sessionKey,
+      type: "lesson",
+      content: text,
+      priority: opts?.priority ?? 80,
+      activeSkill: opts?.activeSkill,
+      sourceKind: "user_instruction",
+      metadata: { fingerprint, corroborations: 1, ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
+    });
+    return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1 };
+  }
+
   public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): CognitiveRecord[] {
     return this.store.getMemoriesByFilePath(userId, filePath, limit);
   }
