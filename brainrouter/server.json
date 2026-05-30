@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.kinqsradiollc/brainrouter",
+  "description": "BrainRouter MCP server — the cognitive memory engine. Durable recall, capture, focus scenes, persona, contradictions, code-aware retrieval, and a cognitive graph as MCP tools for any MCP-speaking agent.",
+  "version": "0.4.4",
+  "repository": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@kinqs/brainrouter-mcp-server",
+      "version": "0.4.4",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "OPENAI_API_KEY",
+          "description": "API key for the LLM used by memory extraction/recall judging (or set BRAINROUTER_LLM_API_KEY).",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "BRAINROUTER_LLM_API_KEY",
+          "description": "Overrides OPENAI_API_KEY for the memory engine's LLM calls.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "BRAINROUTER_LLM_ENDPOINT",
+          "description": "OpenAI-compatible chat-completions endpoint (e.g. a local LM Studio / Ollama URL). Defaults to OpenAI.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "BRAINROUTER_LLM_MODEL",
+          "description": "Model id for the memory engine's LLM calls (default gpt-4o-mini).",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
