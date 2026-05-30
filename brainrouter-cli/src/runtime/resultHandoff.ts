@@ -96,12 +96,33 @@ export function formatHandoffForModel(
 interface CacheEntry {
   text: string;
   expiresAt: number;
+  lastAccess: number;
+}
+
+/** MEM-22 — what a reclaim pass freed. */
+export interface ReclaimStats {
+  /** Entries removed because their TTL elapsed. */
+  expired: number;
+  /** Entries evicted to stay under maxEntries (least-recently-used first). */
+  evicted: number;
+  /** Total chars freed. */
+  bytesReclaimed: number;
+  /** Entries kept despite being expired/over-cap because they were protected. */
+  protectedKept: number;
+  /** Entries remaining after the pass. */
+  remaining: number;
 }
 
 /**
- * Per-session, TTL'd in-memory store of full tool results keyed by
- * `resultRef`. Bounded by both TTL and a max-entry cap (oldest evicted)
- * so a long session can't grow it unbounded.
+ * Per-session, TTL'd in-memory store of full tool results keyed by `resultRef`.
+ *
+ * MEM-22 — a proper reclaimer that PROTECTS ACTIVE refs. Eviction (both the
+ * put-time overflow guard and the explicit `reclaim` pass) drops the
+ * LEAST-RECENTLY-USED entry, and `reclaim(protect)` never removes a ref in the
+ * protected set even when it's expired or over the cap. `get` counts as a use,
+ * so a ref the model keeps expanding stays resident. Retention (ttlMs /
+ * maxEntries) is configurable via `cli.offloadRetentionMs` /
+ * `cli.offloadMaxEntries`.
  */
 export class ResultCache {
   private readonly entries = new Map<string, CacheEntry>();
@@ -114,21 +135,25 @@ export class ResultCache {
 
   put(resultRef: string, text: string): void {
     this.sweep();
-    if (this.entries.size >= this.maxEntries) {
-      // Evict the oldest insertion (Map preserves insertion order).
-      const oldest = this.entries.keys().next().value;
-      if (oldest !== undefined) this.entries.delete(oldest);
+    const t = this.now();
+    if (!this.entries.has(resultRef) && this.entries.size >= this.maxEntries) {
+      this.evictLru(this.entries.size - this.maxEntries + 1);
     }
-    this.entries.set(resultRef, { text, expiresAt: this.now() + this.ttlMs });
+    this.entries.set(resultRef, { text, expiresAt: t + this.ttlMs, lastAccess: t });
   }
 
   get(resultRef: string): string | undefined {
     const entry = this.entries.get(resultRef);
     if (!entry) return undefined;
-    if (entry.expiresAt <= this.now()) {
+    const t = this.now();
+    if (entry.expiresAt <= t) {
       this.entries.delete(resultRef);
       return undefined;
     }
+    // A use protects the ref: bump LRU recency AND slide the TTL window, so a
+    // ref the model keeps expanding never expires out from under it (MEM-22).
+    entry.lastAccess = t;
+    entry.expiresAt = t + this.ttlMs;
     return entry.text;
   }
 
@@ -152,5 +177,56 @@ export class ResultCache {
       }
     }
     return removed;
+  }
+
+  /** Evict the `count` least-recently-used entries NOT in `protect`; returns
+   * how many were removed + the chars freed. */
+  private evictLru(count: number, protect?: ReadonlySet<string>): { evicted: number; bytes: number } {
+    if (count <= 0) return { evicted: 0, bytes: 0 };
+    const candidates = [...this.entries.entries()]
+      .filter(([ref]) => !protect?.has(ref))
+      .sort((a, b) => a[1].lastAccess - b[1].lastAccess); // LRU first (stable for equal stamps)
+    let evicted = 0;
+    let bytes = 0;
+    for (const [ref, entry] of candidates) {
+      if (evicted >= count) break;
+      this.entries.delete(ref);
+      evicted++;
+      bytes += entry.text.length;
+    }
+    return { evicted, bytes };
+  }
+
+  /**
+   * MEM-22 — retention pass. Removes expired entries (unless protected), then
+   * evicts least-recently-used entries beyond maxEntries (never a protected
+   * ref). `protect` is the set of refs still live in the model's context.
+   */
+  reclaim(protect?: ReadonlySet<string>): ReclaimStats {
+    const now = this.now();
+    let expired = 0;
+    let bytesReclaimed = 0;
+    let protectedKept = 0;
+    for (const [ref, entry] of [...this.entries]) {
+      if (entry.expiresAt <= now) {
+        if (protect?.has(ref)) {
+          // Protected (still live in context) → refresh its window so get/sweep
+          // stay coherent and don't immediately re-expire it.
+          entry.expiresAt = now + this.ttlMs;
+          protectedKept++;
+          continue;
+        }
+        this.entries.delete(ref);
+        expired++;
+        bytesReclaimed += entry.text.length;
+      }
+    }
+    let evicted = 0;
+    if (this.entries.size > this.maxEntries) {
+      const r = this.evictLru(this.entries.size - this.maxEntries, protect);
+      evicted = r.evicted;
+      bytesReclaimed += r.bytes;
+    }
+    return { expired, evicted, bytesReclaimed, protectedKept, remaining: this.entries.size };
   }
 }

@@ -146,6 +146,10 @@ export interface CliKnobs {
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
   childDrainTimeoutMs?: number;
+  /** MEM-22: working-offload result-cache retention in ms. Default 1_800_000 (30m). */
+  offloadRetentionMs?: number;
+  /** MEM-22: max cached offload results before the reclaimer evicts the least-recently-used. Default 64. */
+  offloadMaxEntries?: number;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
@@ -419,6 +423,8 @@ export interface ResolvedCliKnobs {
   sandboxNetwork: boolean;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
+  offloadRetentionMs: number;
+  offloadMaxEntries: number;
   maxSpawnDepth: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
@@ -470,6 +476,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxNetwork: c.sandboxNetwork ?? false,
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
+    offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
+    offloadMaxEntries: c.offloadMaxEntries ?? 64,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
