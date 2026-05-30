@@ -1,4 +1,5 @@
 import type { SourceChunkInput } from "@kinqs/brainrouter-types";
+import { createRequire } from "node:module";
 import { chunkSource, estimateTokens, type ChunkOptions } from "./chunker.js";
 
 /**
@@ -176,12 +177,92 @@ class StructuralAdapter implements CodeStructureAdapter {
   }
 }
 
+/**
+ * MEM-24 (0.4.4) — optional AST-backed adapter for TS/JS. Loads the TypeScript
+ * compiler ONLY if it resolves at runtime — a dependency-light enhancement
+ * (`typescript` is an OPTIONAL, dynamically-loaded peer, never a forced runtime
+ * dep, so the default install carries no ~60 MB compiler). When present it parses
+ * a real AST and reports exact top-level symbol spans (functions, classes,
+ * interfaces, type aliases, enums, modules, and arrow/function/class consts) —
+ * correctly handling regex/template literals, JSX, and decorators that the brace
+ * scanner can't see. When absent (or on a parse error) it transparently falls
+ * back to the MEM-18 structural brace scanner, so the no-dep install is unchanged.
+ */
+let tsModule: unknown | null | undefined; // undefined = untried, null = unavailable
+function loadTypeScript(): any | null {
+  if (tsModule !== undefined) return tsModule;
+  try {
+    tsModule = createRequire(import.meta.url)("typescript");
+  } catch {
+    tsModule = null;
+  }
+  return tsModule;
+}
+
+/** Test seam: drop the cached TS module so the loader is re-tried. */
+export function __resetTsAdapterCacheForTests(): void {
+  tsModule = undefined;
+}
+
+/** Name of a top-level statement that's a chunkable symbol, else null. */
+function tsSymbolName(ts: any, stmt: any): string | null {
+  if (ts.isFunctionDeclaration(stmt) && stmt.name) return stmt.name.text;
+  if (ts.isClassDeclaration(stmt) && stmt.name) return stmt.name.text;
+  if (ts.isInterfaceDeclaration(stmt)) return stmt.name.text;
+  if (ts.isTypeAliasDeclaration(stmt)) return stmt.name.text;
+  if (ts.isEnumDeclaration(stmt)) return stmt.name.text;
+  if (ts.isModuleDeclaration(stmt) && stmt.name && ts.isIdentifier(stmt.name)) return stmt.name.text;
+  if (ts.isVariableStatement(stmt)) {
+    const decl = stmt.declarationList.declarations[0];
+    if (
+      decl?.name && ts.isIdentifier(decl.name) && decl.initializer &&
+      (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer) || ts.isClassExpression(decl.initializer))
+    ) {
+      return decl.name.text;
+    }
+  }
+  return null;
+}
+
+class TypeScriptAstAdapter implements CodeStructureAdapter {
+  readonly id = "tsjs-ast";
+  constructor(private readonly fallback: CodeStructureAdapter, private readonly jsx: boolean) {}
+
+  findSymbols(lines: string[]): SymbolSpan[] {
+    const ts = loadTypeScript();
+    if (!ts) return this.fallback.findSymbols(lines); // no typescript → structural scan
+    try {
+      const sf = ts.createSourceFile(
+        this.jsx ? "f.tsx" : "f.ts",
+        lines.join("\n"),
+        ts.ScriptTarget.Latest,
+        true,
+        this.jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+      );
+      const spans: SymbolSpan[] = [];
+      for (const stmt of sf.statements) {
+        const symbol = tsSymbolName(ts, stmt);
+        if (!symbol) continue;
+        const startIdx = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line;
+        const endIdx = sf.getLineAndCharacterOfPosition(stmt.getEnd()).line;
+        spans.push({ startIdx, endIdx: Math.max(startIdx, endIdx), symbol });
+      }
+      return spans;
+    } catch {
+      return this.fallback.findSymbols(lines); // parse error → structural scan
+    }
+  }
+}
+
 /** Select the structural adapter for a language hint / extension. Default TS/JS. */
 export function adapterFor(language?: string): CodeStructureAdapter {
   const l = (language ?? "").toLowerCase().replace(/^\./, "").trim();
   if (l === "py" || l === "python") return new StructuralAdapter("python-indent", PYTHON, scanIndentEnd);
   if (l === "rs" || l === "rust") return new StructuralAdapter("rust-brace", RUST, scanBracedEnd);
-  return new StructuralAdapter("tsjs-brace", TS_JS, scanBracedEnd);
+  // TS/JS (and unknown → default): real AST when `typescript` resolves, else the
+  // structural brace scanner (the AST adapter falls back internally).
+  const structural = new StructuralAdapter("tsjs-brace", TS_JS, scanBracedEnd);
+  return new TypeScriptAstAdapter(structural, l === "tsx" || l === "jsx");
 }
 
 /** Best-effort language from a file path's extension (for callers with a path). */
