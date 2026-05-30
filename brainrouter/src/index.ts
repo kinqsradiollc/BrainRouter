@@ -103,6 +103,7 @@ import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/me
 import { memoryProvenanceToolSchema, handleMemoryProvenance } from './tools/memory_provenance.js';
 import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from './tools/memory_fetch_source_chunk.js';
 import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from './tools/memory_blackboard.js';
+import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from './tools/memory_tree_walk.js';
 import { memoryAgentRunToolSchema, handleMemoryAgentRun } from './tools/memory_agent_run.js';
 import { memoryJobRetryToolSchema, handleMemoryJobRetry } from './tools/memory_job_retry.js';
 import { memoryEngine } from './memory/engine.js';
@@ -316,6 +317,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryProvenanceToolSchema,
       memoryFetchSourceChunkToolSchema,
       memoryBlackboardReviewToolSchema,
+      memoryTreeWalkToolSchema,
       memoryAgentRunToolSchema,
       memoryJobRetryToolSchema,
     ],
@@ -398,6 +400,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
+        case 'memory_tree_walk':
+          return await handleMemoryTreeWalk(request.params.arguments, { defaultUserId });
         case 'memory_agent_run':
           return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
         case 'memory_job_retry':

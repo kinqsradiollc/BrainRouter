@@ -1109,3 +1109,36 @@ export interface BlackboardItemInput {
   candidate: BlackboardCandidate;
   score?: number;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Memory tree (MEM-5, 0.4.3) — durable hierarchical summary over source/topic/
+// global scope. Generic mechanics (append leaf → seal bucket → summarize
+// parent → walk) are kept separate from policy. Level 0 = leaf.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type MemoryTreeKind = "source" | "topic" | "global";
+
+export interface MemoryTreeNode {
+  id: string;
+  userId: string;
+  kind: MemoryTreeKind;
+  parentId: string | null;
+  level: number;
+  summaryMd: string;
+  /** Source chunks this node summarizes (leaves cite directly; parents aggregate). */
+  sourceChunkIds: string[];
+  /** Set once the bucket is sealed (no more leaves appended). */
+  sealedAt: string | null;
+  heatScore: number;
+  createdAt: string;
+}
+
+/** Input shape for appending a node — id/createdAt/sealedAt assigned by the store. */
+export interface MemoryTreeNodeInput {
+  kind: MemoryTreeKind;
+  parentId?: string | null;
+  level?: number;
+  summaryMd: string;
+  sourceChunkIds?: string[];
+  heatScore?: number;
+}
