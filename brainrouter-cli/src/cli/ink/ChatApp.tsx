@@ -245,6 +245,23 @@ export interface PushScrollback {
 // overwhelming the layout.
 export const REASONING_TAIL_CHARS = 1500;
 
+/**
+ * Footer effort indicator (glyph + colour). claude-code-style ramp:
+ *   low ○ · medium ◐ · high ● · xhigh ✦. `max` is the user alias for `xhigh`.
+ * Returns an empty glyph for unknown/undefined so the footer hides it.
+ * Pure + exported for tests.
+ */
+export function effortIndicator(effort?: string): { glyph: string; color: string } {
+  const level = effort === 'max' ? 'xhigh' : effort;
+  switch (level) {
+    case 'xhigh': return { glyph: '✦', color: 'redBright' };
+    case 'high': return { glyph: '●', color: 'magenta' };
+    case 'medium': return { glyph: '◐', color: 'yellow' };
+    case 'low': return { glyph: '○', color: 'gray' };
+    default: return { glyph: '', color: 'gray' };
+  }
+}
+
 export function tailReasoning(text: string): string {
   if (text.length <= REASONING_TAIL_CHARS) return text;
   // Cut at a word boundary near the start of the tail window so the
@@ -1367,8 +1384,10 @@ function FooterStatus({
   //   high   → ● (filled circle, heavy)
   // Rendered inline next to the pill, not as a separate boxed pill, so
   // the footer stays compact on narrow terminals.
-  const effortGlyph = footer.effort === 'high' ? '●' : footer.effort === 'medium' ? '◐' : footer.effort === 'low' ? '○' : '';
-  const effortColor = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
+  // `max` is the user-facing alias for `xhigh` (normalizeEffort canonicalises
+  // it, but handle the literal defensively too). xhigh gets its own heavier
+  // glyph + colour so the top reasoning tier is visible in the footer.
+  const { glyph: effortGlyph, color: effortColor } = effortIndicator(footer.effort);
 
   // Left side: model (· Nk ctx) · session · branch. Right: ? for shortcuts.
   // The "Nk ctx" segment surfaces the model's max prompt context so the
@@ -1380,7 +1399,7 @@ function FooterStatus({
     const ctxLabel = formatContextWindow(footer.model);
     leftSegs.push(`${footer.model}${ctxLabel !== '?' ? ` · ${ctxLabel} ctx` : ''}`);
   }
-  if (footer.session) leftSegs.push(footer.session.slice(0, 16));
+  if (footer.session) leftSegs.push(footer.session);
   if (footer.branch) leftSegs.push(footer.branch);
   if (footer.rightExtra) leftSegs.push(footer.rightExtra);
 

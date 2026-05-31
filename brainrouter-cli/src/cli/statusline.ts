@@ -150,8 +150,9 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       return `repair:${r.turnsWithRepair}t/${fixes}`;
     }
     case 'session': {
-      const k = inputs.sessionKey;
-      return k.length > 22 ? `${k.slice(0, 22)}…` : k;
+      // Full session key — users copy it into /resume, /agents why <id>, etc.,
+      // so truncating it made the displayed id unusable.
+      return inputs.sessionKey;
     }
     case 'branch':
     case 'dirty': {
