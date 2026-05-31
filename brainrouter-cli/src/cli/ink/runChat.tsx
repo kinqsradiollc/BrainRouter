@@ -182,6 +182,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       lastTurnUsage: agent.lastTurnUsage,
       tier,
       repairTotals: agent.getRepairTotals?.(),
+      offloadTotals: agent.getOffloadTotals?.(),
       prDetector: () => detectGitHubPR(agent.workspaceRoot),
     });
     let branch: string | undefined;

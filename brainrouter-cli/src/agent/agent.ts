@@ -1412,6 +1412,7 @@ export class Agent {
       llmConfig: this.llmConfig,
       launchCwd: this.launchCwd,
       recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
+      recordChildTokens: (tokens) => { this.memoryMetrics.childTokensSpent += tokens; },
       onChildToolStart: (event) => {
         callbacks.onChildToolStart?.(event);
       },
@@ -3042,6 +3043,21 @@ export class Agent {
   }
 
   /**
+   * FOOTER-TELEMETRY-2 — the counters behind the `offload` statusline segment:
+   * cumulative child-agent token spend + child-output chars kept out of the
+   * parent's context window this session. Both are in-memory, so the footer can
+   * read them every render without a disk scan. (See `/tokens` / `/context` for
+   * the full per-child breakdown sourced from session usage on disk.)
+   */
+  public getOffloadTotals(): { childTokensSpent: number; offloadCharsAvoided: number; compactedToolCharsAvoided: number } {
+    return {
+      childTokensSpent: this.memoryMetrics.childTokensSpent,
+      offloadCharsAvoided: this.memoryMetrics.offloadCharsAvoided,
+      compactedToolCharsAvoided: this.memoryMetrics.compactedToolCharsAvoided,
+    };
+  }
+
+  /**
    * 0.4.x-3b (`/rewind --files`) — record a file's prior content the first time
    * it's mutated this turn, tagged with the user-turn ordinal. Lazily computes
    * the ordinal from the transcript on the turn's first capture (the user
@@ -3225,6 +3241,10 @@ export class Agent {
     offloadCharsAvoided: 0,
     recallRecordsConsulted: 0,
     compactedToolCharsAvoided: 0,
+    // FOOTER-TELEMETRY-2 — cumulative tokens spent by child agents this session.
+    // In-memory parent-side counter (children persist their own usage to disk;
+    // this lets the footer surface child spend without a per-render disk scan).
+    childTokensSpent: 0,
   };
 
   /**
@@ -3306,6 +3326,7 @@ export class Agent {
       offloadCharsAvoided: 0,
       recallRecordsConsulted: 0,
       compactedToolCharsAvoided: 0,
+      childTokensSpent: 0,
     };
     // 0.4.x-4 — per-skill + per-tool accounting is session-scoped too.
     this.usageBySkill = new Map();
