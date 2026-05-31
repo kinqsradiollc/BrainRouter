@@ -10,8 +10,8 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| In flight | **0.4.4** | **Feature-complete, version-bumped to 0.4.4, unreleased** (on `release/0.4.4`) — memory pipeline tightening + unified exec policy (POLICY-1/2) + offload reclaimer + redaction fixtures + `/reload-skills`, plus the 2026-05-31 competitive follow-ups (parser-backed AST chunks, code-recall benchmark, tree topic-routing/global rollup). No publish/tag/merge yet | [`brainrouter-changelog/0.4.4.md`](brainrouter-changelog/0.4.4.md) |
-| Latest | **0.4.3** | Shipped — 2026-05-30 — memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
+| Latest | **0.4.4** | Shipped — 2026-05-31 — memory pipeline tightening + unified exec policy (POLICY-1/2/3) + **code-aware retrieval** (`find_related`, code reranking, symbol + import graph, index freshness) + **memory that learns** (lessons, skill extraction, reflect) + **multi-agent resilience** (ORCH-FIX) + **edit→verify** (post-edit checks + LSP semantic nav) + crash-checkpoint/offline-queue + graph analytics + MCP-registry/plugin packaging | [`brainrouter-changelog/0.4.4.md`](brainrouter-changelog/0.4.4.md) |
+| Previous | **0.4.3** | Shipped — 2026-05-30 — memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
 | Previous | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
 | Shipped | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | Shipped | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
