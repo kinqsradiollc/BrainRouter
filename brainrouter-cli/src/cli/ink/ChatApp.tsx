@@ -782,7 +782,7 @@ export function ChatApp({
           blocks to accumulate while dragging the window. */}
       <Box flexDirection="column">
         {scrollback.map((entry) => (
-          <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} />
+          <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} cols={cols} />
         ))}
         {/* TIER A: transient live assistant + reasoning rows. The
             assistant streams here mid-turn; when the turn finishes,
@@ -802,7 +802,18 @@ export function ChatApp({
             <Text color="magenta" italic dimColor>
               💭 thinking{liveReasoning.length > REASONING_TAIL_CHARS ? ` (${liveReasoning.length.toLocaleString()} chars)` : ''}
             </Text>
-            <Box paddingLeft={3} height={REASONING_VISIBLE_LINES} flexDirection="column">
+            <Box
+              marginLeft={1}
+              paddingLeft={1}
+              height={REASONING_VISIBLE_LINES}
+              flexDirection="column"
+              borderStyle="single"
+              borderColor="magenta"
+              borderDimColor
+              borderTop={false}
+              borderRight={false}
+              borderBottom={false}
+            >
               <Text color="gray" italic wrap="truncate-end">
                 {buildReasoningWindow(tailReasoning(liveReasoning), cols)}<Text color="gray">▍</Text>
               </Text>
@@ -932,7 +943,7 @@ export function ChatApp({
 // 80ms streaming tick re-walks the entire scrollback (potentially 1000+
 // entries) and Ink re-diffs each row — that's the dominant cause of
 // the visible flicker / flashing during streaming.
-const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
+const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor, cols }: { entry: ScrollbackEntry; accentColor: string; cols: number }) {
   switch (entry.kind) {
     case 'raw':
       return <Text wrap={entry.noWrap ? 'truncate' : 'wrap'}>{entry.text}</Text>;
@@ -967,7 +978,9 @@ const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: 
       // `entry.raw === true` (user's rawScrollback preference) skips
       // marked entirely — useful when the user wants to see the LLM's
       // literal markdown source.
-      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text)).trimEnd();
+      // Pass the live terminal width so GFM tables render to fit (and re-fit
+      // on resize — `cols` is a prop, so the row re-renders when it changes).
+      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text, { width: cols })).trimEnd();
       const meta = entry.durationMs !== undefined
         ? `  ${Math.floor(entry.durationMs / 1000)}s${entry.tokensIn !== undefined ? ` · ${entry.tokensIn.toLocaleString()} in / ${entry.tokensOut?.toLocaleString() ?? 0} out` : ''}`
         : '';
@@ -1114,10 +1127,22 @@ const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: 
     }
     case 'reasoning': {
       const lines = entry.text.split('\n');
+      // A dim-magenta left rule frames the chain-of-thought as a distinct
+      // "thinking aside" — visually separate from the model's actual prose.
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text color="magenta" italic dimColor>💭 thinking</Text>
-          <Box paddingLeft={3} flexDirection="column">
+          <Box
+            flexDirection="column"
+            marginLeft={1}
+            paddingLeft={1}
+            borderStyle="single"
+            borderColor="magenta"
+            borderDimColor
+            borderTop={false}
+            borderRight={false}
+            borderBottom={false}
+          >
             {lines.map((line, i) => (
               <Text key={i} color="gray" italic wrap="wrap">{line || ' '}</Text>
             ))}
