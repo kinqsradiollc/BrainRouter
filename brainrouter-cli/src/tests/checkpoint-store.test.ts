@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt,
-  readOfflineQueue, clearOfflineQueue, readRecoverable, isConnectivityError,
+  readOfflineQueue, clearOfflineQueue, readRecoverable, isConnectivityError, shouldAutoReplayOffline,
 } from '../state/checkpointStore.js';
 
 function ws(): { dir: string; cleanup: () => void } {
@@ -54,6 +54,13 @@ test('CLI-21 readRecoverable merges crash + offline', () => {
     assert.equal(rec.offline.length, 1);
     assert.equal(rec.offline[0].prompt, 'queued one');
   } finally { cleanup(); }
+});
+
+test('CLI-21b shouldAutoReplayOffline: enabled + connected + non-empty', () => {
+  assert.equal(shouldAutoReplayOffline({ enabled: true, connected: true, count: 2 }), true);
+  assert.equal(shouldAutoReplayOffline({ enabled: false, connected: true, count: 2 }), false); // disabled
+  assert.equal(shouldAutoReplayOffline({ enabled: true, connected: false, count: 2 }), false); // still offline
+  assert.equal(shouldAutoReplayOffline({ enabled: true, connected: true, count: 0 }), false); // nothing to replay
 });
 
 test('CLI-21 isConnectivityError: connectivity-shaped errors vs ordinary errors', () => {

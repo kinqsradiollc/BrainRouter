@@ -82,6 +82,11 @@ export function readRecoverable(ws: string, sessionKey: string): { crashed: Queu
 
 const CONNECTIVITY_RE = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|fetch failed|network|socket hang up|request to .* failed|getaddrinfo|aborted|timed? ?out|Connection error/i;
 
+/** CLI-21b — replay the offline queue only when enabled, reconnected, and there's something to replay. */
+export function shouldAutoReplayOffline(opts: { enabled: boolean; connected: boolean; count: number }): boolean {
+  return opts.enabled && opts.connected && opts.count > 0;
+}
+
 /** True when an error looks like a transient connectivity failure (→ offline queue, not lost). */
 export function isConnectivityError(err: unknown): boolean {
   const msg = err instanceof Error ? `${err.message} ${(err as any).code ?? ''} ${(err as any).cause?.code ?? ''}` : String(err ?? '');
