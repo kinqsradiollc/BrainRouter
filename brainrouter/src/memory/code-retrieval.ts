@@ -91,6 +91,44 @@ function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
+/**
+ * MEM-28b (0.4.4) — extract module specifiers from a file's import statements
+ * (JS/TS `import … from 'x'` / `require('x')` / `import('x')` / bare `import 'x'`,
+ * Python `from x import …`). Used to build cross-file import edges: find_related
+ * resolves the RELATIVE specifiers to indexed documents and surfaces them.
+ * Bare/package specifiers are returned too but won't resolve to local files.
+ */
+export function extractImportSpecifiers(content: string): string[] {
+  const out = new Set<string>();
+  const text = content ?? "";
+  for (const m of text.matchAll(/\bfrom\s*['"]([^'"\n]+)['"]/g)) out.add(m[1]);
+  for (const m of text.matchAll(/\b(?:require|import)\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g)) out.add(m[1]);
+  for (const m of text.matchAll(/^\s*import\s+['"]([^'"\n]+)['"]/gm)) out.add(m[1]);
+  for (const m of text.matchAll(/^\s*from\s+([A-Za-z0-9_.]+)\s+import\b/gm)) out.add(m[1]);
+  return [...out].map((s) => s.trim()).filter((s) => s.length >= 2 && s.length < 200);
+}
+
+/**
+ * MEM-28b — resolve a RELATIVE import specifier against the importing file's
+ * path to an extensionless target path (e.g. `src/config.ts` + `./parser` →
+ * `src/parser`). Returns null for bare/package specifiers (not local files).
+ * Pure; the store then matches the target to an indexed document.
+ */
+export function resolveRelativeImport(seedFilePath: string, specifier: string): string | null {
+  if (!seedFilePath || !specifier.startsWith(".")) return null;
+  const dir = seedFilePath.slice(0, seedFilePath.lastIndexOf("/") + 1);
+  const stack: string[] = [];
+  for (const part of `${dir}${specifier}`.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  // Drop a known code extension if the specifier included one.
+  let joined = stack.join("/");
+  joined = joined.replace(/\.(t|j)sx?$/, "");
+  return joined || null;
+}
+
 function dirOf(filePath: string): string {
   const i = filePath.lastIndexOf("/");
   return i >= 0 ? filePath.slice(0, i) : "";

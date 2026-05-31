@@ -1180,6 +1180,21 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.db.prepare("UPDATE source_documents SET stale = 0 WHERE id = ?").run(documentId);
   }
 
+  /**
+   * MEM-28b — resolve an extensionless import target (e.g. `src/parser`) to an
+   * indexed, non-stale document, trying common code extensions and `/index.*`.
+   * Newest live match wins; null when the imported file isn't indexed.
+   */
+  public findImportedDocument(userId: string, candidateBase: string): SourceDocument | null {
+    const exts = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs'];
+    const candidates = exts.map((e) => candidateBase + e).concat(exts.map((e) => `${candidateBase}/index${e}`));
+    const placeholders = candidates.map(() => '?').join(',');
+    const row = this.db.prepare(
+      `SELECT * FROM source_documents WHERE user_id = ? AND COALESCE(stale,0)=0 AND uri IN (${placeholders}) ORDER BY created_at DESC LIMIT 1`,
+    ).get(userId, ...candidates) as any;
+    return row ? this.rowToSourceDocument(row) : null;
+  }
+
   /** Append chunks to a document; ordinals continue from the current count. Chunk hash = sha1(content). */
   public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
     const startOrdinal = ((this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = ?").get(documentId) as any)?.n ?? 0) as number;
