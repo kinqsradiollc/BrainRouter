@@ -1122,6 +1122,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           lastRenderedBanner = fresh;
         }
       } catch { /* banner reprint is best-effort; don't break the command */ }
+      // BG-TASKS-PANEL — commands like /bg, /spawn, /workflow, /loop start
+      // background actors WITHOUT a chat turn, so arm the ticker + refresh the
+      // panel here too (the turn path does this in runChatTurn's finally).
+      ensureChildRefreshTimer();
+      refreshBackgroundTasks();
     }
   }
 }
