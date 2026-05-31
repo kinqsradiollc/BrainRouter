@@ -825,6 +825,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   // MAS-P4-T1: an agent def may scope which MCP tools its children see.
   let childToolScope: { local: string[]; mcp: string[] } | undefined;
   let childDisallowedTools: string[] | undefined;
+  // AGENTS-WIZARD: a def may carry a default ownership glob, used when the
+  // spawner doesn't pass an explicit one.
+  let childDefOwnership: string | null | undefined;
 
   if (typeof args.agentId === 'string' && args.agentId.trim()) {
     const loaded = findById(args.agentId.trim(), ctx.workspaceRoot);
@@ -841,6 +844,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     childTier = loaded.def.tier;
     childToolScope = loaded.def.toolScope;
     childDisallowedTools = loaded.def.disallowedTools;
+    childDefOwnership = loaded.def.ownership ?? undefined;
   } else {
     const roleName = String(args.role ?? '');
     if (!roleName.trim()) throw new Error('spawn_agent requires either "agentId" or "role".');
@@ -920,7 +924,11 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   const parentPlan = ctx.parentPlanText?.();
   const parentExecutionMode = ctx.parentExecutionMode;
   const parentReviewPolicy = ctx.parentReviewPolicy;
-  const ownership = typeof args.ownership === 'string' ? args.ownership : null;
+  // AGENTS-WIZARD: explicit spawn arg wins; else fall back to the def's
+  // declared ownership glob (so a custom write/shell agent stays bounded
+  // without the spawner repeating its ownership each time).
+  const ownership = typeof args.ownership === 'string' ? args.ownership
+    : (typeof childDefOwnership === 'string' && childDefOwnership.trim() !== '' ? childDefOwnership : null);
   const snapshot = buildParentExecutionContextSnapshot({
     parentSessionKey: ctx.parentSessionKey,
     childSessionKey: childKey,
