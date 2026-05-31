@@ -28,14 +28,14 @@ const STATUSES = ["pending", "reconciled", "duplicate", "committed", "rejected"]
 export const memoryBlackboardReviewToolSchema = {
   name: "memory_blackboard_review",
   description:
-    "Review and drive the memory blackboard: list staged candidates (optionally by status), or run an action — stage new candidates, reconcile (dedup/score) pending ones, commit a reconciled item to a cognitive record (with audit), or reject one. Keeps low-quality extraction out of long-term memory until reviewed.",
+    "Review and drive the memory blackboard: list staged candidates (optionally by status), or run an action — stage new candidates, reconcile (dedup/score) pending ones, commit a reconciled item to a cognitive record (with audit), reject one, or restore a rejected/duplicate one back to pending for re-review. Keeps low-quality extraction out of long-term memory until reviewed.",
   inputSchema: {
     type: "object",
     properties: {
       userId: { type: "string" },
-      action: { type: "string", enum: ["stage", "reconcile", "commit", "reject"], description: "Omit to just list." },
-      status: { type: "string", enum: STATUSES as unknown as string[], description: "Filter the listing by status." },
-      itemId: { type: "string", description: "Target item for commit/reject." },
+      action: { type: "string", enum: ["stage", "reconcile", "commit", "reject", "restore"], description: "Omit to just list." },
+      status: { type: "string", enum: STATUSES as unknown as string[], description: "Filter the listing by status (e.g. rejected, duplicate)." },
+      itemId: { type: "string", description: "Target item for commit/reject/restore." },
       items: {
         type: "array",
         description: "Candidates to stage (action=stage).",
@@ -73,7 +73,7 @@ const candidateSchema = z.object({
 
 const schema = z.object({
   userId: z.string().optional(),
-  action: z.enum(["stage", "reconcile", "commit", "reject"]).optional(),
+  action: z.enum(["stage", "reconcile", "commit", "reject", "restore"]).optional(),
   status: z.enum(STATUSES).optional(),
   itemId: z.string().optional(),
   items: z.array(z.object({ sourceChunkId: z.string().optional(), score: z.number().optional(), candidate: candidateSchema })).optional(),
@@ -102,6 +102,10 @@ export async function handleMemoryBlackboardReview(args: any, options?: { defaul
       case "reject": {
         if (!params.itemId) throw new Error("itemId is required for reject");
         return toolResult({ rejected: memoryEngine.rejectBlackboardItem(userId, params.itemId) });
+      }
+      case "restore": {
+        if (!params.itemId) throw new Error("itemId is required for restore");
+        return toolResult(memoryEngine.restoreBlackboardItem(userId, params.itemId));
       }
       default:
         return toolResult({ items: memoryEngine.reviewBlackboard(userId, params.status) });
