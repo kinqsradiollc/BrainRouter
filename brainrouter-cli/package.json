@@ -33,7 +33,7 @@
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
-    "ink": "^7.0.3",
+    "ink": "^7.0.5",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "inquirer": "^9.3.2",
