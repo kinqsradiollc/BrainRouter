@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
-import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost, extractIntraFileCallEdges } from "../memory/code-retrieval.js";
+import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost, extractIntraFileCallEdges, extractImportSpecifiers, resolveRelativeImport } from "../memory/code-retrieval.js";
 import type { SourceChunk } from "@kinqs/brainrouter-types";
 
 function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
@@ -214,6 +214,41 @@ test("MEM-28 find_related: surfaces the seed's callees/callers as graph: hits, l
     // includeEdges:false drops the structural hits.
     const r3 = engine.findRelatedChunks("u1", { chunkId: chunks[0].id }, { includeEdges: false });
     assert.ok(r3.related.every((x) => !x.reason.startsWith("graph:")), "edges suppressed when includeEdges=false");
+  } finally { cleanup(); }
+});
+
+test("MEM-28b extractImportSpecifiers / resolveRelativeImport", () => {
+  const specs = extractImportSpecifiers(`import { a } from './parser';\nconst x = require('../util/io');\nimport 'side-effect';\nfrom mypkg.sub import thing`);
+  assert.ok(specs.includes('./parser') && specs.includes('../util/io') && specs.includes('side-effect') && specs.includes('mypkg.sub'));
+  assert.equal(resolveRelativeImport('src/config.ts', './parser'), 'src/parser');
+  assert.equal(resolveRelativeImport('src/a/b.ts', '../util/io'), 'src/util/io');
+  assert.equal(resolveRelativeImport('src/config.ts', './parser.ts'), 'src/parser'); // ext stripped
+  assert.equal(resolveRelativeImport('src/config.ts', 'react'), null); // bare → not local
+});
+
+test("MEM-28b find_related: a seed's relative imports surface the imported file as a graph:import hit", () => {
+  const { store, cleanup } = fresh("imports");
+  try {
+    // parser.ts is imported by config.ts
+    const parser = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/parser.ts", hash: "hp", title: "parser.ts" });
+    store.addSourceChunks(parser.id, [
+      { content: "export function parseConfig(raw){ return JSON.parse(raw); }", tokenCount: 10, filePath: "src/parser.ts", symbol: "parseConfig", startLine: 1, endLine: 3 },
+    ]);
+    const config = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/config.ts", hash: "hc", title: "config.ts" });
+    const cfgChunks = store.addSourceChunks(config.id, [
+      { content: "import { parseConfig } from './parser';", tokenCount: 6, filePath: "src/config.ts", symbol: null, startLine: 1, endLine: 1 },
+      { content: "export function loadConfig(text){ return useThing(text); }", tokenCount: 9, filePath: "src/config.ts", symbol: "loadConfig", startLine: 3, endLine: 5 },
+    ]);
+    const engine = new MemoryEngine(store);
+    // Seed the loadConfig chunk (no lexical overlap with parseConfig) — the
+    // import edge should still surface parser.ts.
+    const r = engine.findRelatedChunks("u1", { chunkId: cfgChunks[1].id });
+    const imp = r.related.find((x) => x.chunk.filePath === "src/parser.ts");
+    assert.ok(imp, "imported file surfaced");
+    assert.equal(imp!.reason, "graph:import");
+    // includeEdges:false suppresses it
+    const r2 = engine.findRelatedChunks("u1", { chunkId: cfgChunks[1].id }, { includeEdges: false });
+    assert.ok(!r2.related.some((x) => x.reason === "graph:import"));
   } finally { cleanup(); }
 });
 
