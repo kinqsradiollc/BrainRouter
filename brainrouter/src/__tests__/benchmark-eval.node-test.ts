@@ -47,6 +47,9 @@ test("benchmark: insufficient data (< 3 records) → empty stats, passed, no fil
 
 test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a summary", async () => {
   const { engine, dir, cleanup } = fresh("run");
+  // MEM-19: capture the recall knobs to prove the bench no longer mutates them.
+  const top0 = process.env.BRAINROUTER_RECALL_TOP_RESULTS;
+  const div0 = process.env.BRAINROUTER_RECALL_DIVERSITY;
   try {
     const facts = [
       "the recall pipeline fuses FTS and vector hits with reciprocal rank fusion",
@@ -72,9 +75,41 @@ test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a
     assert.ok(r.summaryPath && existsSync(r.summaryPath), "summary markdown written to baseDir");
     assert.equal(typeof r.passed, "boolean");
 
-    // The env knobs the bench toggles must be restored afterwards.
-    assert.equal(process.env.BRAINROUTER_RECALL_TOP_RESULTS, undefined, "TOP_RESULTS restored");
-    assert.equal(process.env.BRAINROUTER_RECALL_DIVERSITY, undefined, "DIVERSITY restored");
+    // MEM-19: mode config is passed to recall per-call, so the bench must NOT
+    // mutate these process.env knobs (the old toggle approach leaked '20').
+    assert.equal(process.env.BRAINROUTER_RECALL_TOP_RESULTS, top0, "TOP_RESULTS untouched");
+    assert.equal(process.env.BRAINROUTER_RECALL_DIVERSITY, div0, "DIVERSITY untouched");
+    // No reranker/judge configured in tests → reported as skipped, not faked as baseline.
+    assert.deepEqual(
+      [...r.skippedModes].sort(),
+      ["judge (relevance judge disabled)", "rerank (no reranker configured)"],
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("MEM-25 retrieval benchmark reports per-mode latency", async () => {
+  const { engine, cleanup } = fresh("latency");
+  try {
+    for (let i = 0; i < 4; i++) {
+      engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: `fact ${i} about the recall pipeline, chunking, and the blackboard reconciler` });
+    }
+    const r = await engine.runRetrievalBenchmark("u1", { sampleSize: 4 });
+    assert.ok(r.latencyMsByMode && typeof r.latencyMsByMode.baseline === "number", "baseline latency present");
+    assert.ok(r.latencyMsByMode.baseline >= 0, "non-negative latency");
+  } finally {
+    cleanup();
+  }
+});
+
+test("MEM-25 code-recall benchmark scores symbol isolation + writes a numbers file", () => {
+  const { engine, dir, cleanup } = fresh("coderecall");
+  try {
+    const r = engine.runCodeChunkBenchmark({ baseDir: join(dir, "cr") });
+    assert.equal(r.expectedSymbols, 8);
+    assert.ok(r.symbolRecall >= 0.875, `symbol recall ${r.symbolRecall}`);
+    assert.ok(r.summaryPath && existsSync(r.summaryPath), "code-recall numbers file written");
   } finally {
     cleanup();
   }

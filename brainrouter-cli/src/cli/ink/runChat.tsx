@@ -17,6 +17,9 @@ import { parseBangCommand } from '../../runtime/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
+import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '../../state/checkpointStore.js';
+import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
+import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
 import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';
 import { expandMentions } from '../../memory/mentions.js';
@@ -423,6 +426,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }
     isProcessing = true;
     clearIdleHint();
+    // CLI-21 — crash checkpoint: record the in-flight prompt before the turn so
+    // a mid-turn crash can be recovered on the next launch. Cleared in finally.
+    beginTurnCheckpoint(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
+    let turnToolCalls = 0; // MEM-33b — multi-step signal for auto skill extraction
 
     const { expanded, mentions } = expandMentions(rawInput, agent.workspaceRoot);
     if (mentions.length > 0 && !isQuiet()) {
@@ -526,6 +533,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // Surface the in-flight tool via the spinner status line — the
           // scrollback entry is pushed at onToolEnd so each tool call is
           // a single block (header + result), not two rows.
+          turnToolCalls++;
           toolStartTimes.set(name, Date.now());
           toolArgsSnapshot.set(name, args ?? {});
           if (!isQuiet()) {
@@ -695,11 +703,32 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // Goal continuation lives at the bottom of the success path so a
       // failed turn doesn't trigger it (we don't want auto-retry loops).
       scheduleGoalContinuation(rawInput, answer);
+
+      // MEM-33b — after a successful MULTI-STEP turn, fire-and-forget distil a
+      // reusable skill (the brain's <no-skill/> gate drops trivial runs). Opt-in
+      // (cli.autoExtractSkills, off by default — one LLM call per turn). Fully
+      // self-contained so it can never disturb the session.
+      if (shouldAutoExtractSkill({ enabled: getCliKnobs().autoExtractSkills, toolCalls: turnToolCalls, answerLength: (answer ?? '').length })) {
+        const summary = buildSessionSummary(rawInput, answer, turnToolCalls);
+        void (async () => {
+          try { await callMcpTool(mcpClient, 'memory_extract_skill', { sessionSummary: summary, sessionKey: agent.sessionKey, activeSkill: agent.activeSkill }); }
+          catch { /* best-effort — never disturb the session */ }
+        })();
+      }
     } catch (err: any) {
       parentDone = true;
       controller.push.notice(`✗ Execution failed: ${err?.message ?? err}`, 'error');
+      // CLI-21 — a connectivity failure means the prompt wasn't really handled;
+      // queue it so it isn't lost (offered for replay on reconnect / relaunch).
+      if (isConnectivityError(err)) {
+        queueOfflinePrompt(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
+        controller.push.notice('↺ Saved to the offline queue — it was a connectivity error.', 'info');
+      }
     } finally {
       isProcessing = false;
+      // CLI-21 — turn settled (success or normal error): clear the in-flight
+      // checkpoint so only a true crash leaves one behind.
+      endTurnCheckpoint(agent.workspaceRoot, agent.sessionKey);
       controller.push.setPhase('idle');
       controller.push.setStatus('');
       agent.activeSkill = undefined;
@@ -851,6 +880,53 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
               // ignore — LM Studio probably isn't running
             }
           })();
+          // CLI-22 — fire-and-forget "update available" notice (throttled +
+          // cached; offline / npm-missing fails silent). Self-contained
+          // try/catch so it can never surface as an unhandled rejection.
+          if (getCliKnobs().updateCheck) {
+            (async () => {
+              try {
+                const { checkForUpdate, formatUpdateBanner } = await import('../../runtime/updateCheck.js');
+                const upd = await checkForUpdate();
+                if (upd?.behind && controller) {
+                  const banner = formatUpdateBanner(upd.current, upd.latest, upd.command);
+                  if (banner) controller.push.notice(banner, 'info');
+                }
+              } catch {
+                // best-effort — never disturb the session
+              }
+            })();
+          }
+          // CLI-21 / CLI-21b — recover what a previous run left behind. A crash
+          // checkpoint (an UNFINISHED turn) is only surfaced for manual resend —
+          // never auto-run (it may have been mid-mutation). The offline queue
+          // (prompts that failed on connectivity) is AUTO-REPLAYED on reconnect
+          // when enabled, else surfaced. Best-effort throughout.
+          try {
+            const rec = readRecoverable(agent.workspaceRoot, agent.sessionKey);
+            if (rec.crashed && controller) {
+              controller.push.notice(`⏮ A prompt from a previous session didn't finish — resend if still needed:\n  • ${rec.crashed.prompt.replace(/\s+/g, ' ').slice(0, 120)}`, 'info');
+              endTurnCheckpoint(agent.workspaceRoot, agent.sessionKey);
+            }
+            const offline = rec.offline.slice(0, 3);
+            if (offline.length > 0) {
+              // Clear first so a still-offline replay re-queues cleanly (no doubling).
+              clearOfflineQueue(agent.workspaceRoot, agent.sessionKey);
+              if (shouldAutoReplayOffline({ enabled: getCliKnobs().autoReplayOffline, connected: mcpClient.isConnected(), count: offline.length }) && controller) {
+                controller.push.notice(`↺ Replaying ${offline.length} prompt(s) queued while offline…`, 'info');
+                void (async () => {
+                  for (const q of offline) {
+                    try { await runChatTurn(q.prompt); } catch { /* a re-failure is re-queued by runChatTurn */ }
+                  }
+                })();
+              } else if (controller) {
+                const lines = offline.map((p) => `  • ${p.prompt.replace(/\s+/g, ' ').slice(0, 120)}`);
+                controller.push.notice(`↺ ${offline.length} prompt(s) were queued while offline — resend when ready:\n${lines.join('\n')}`, 'info');
+              }
+            }
+          } catch {
+            // recovery is best-effort
+          }
         }}
         onAccessModeCycle={() => {
           const cycle: Array<'read' | 'write' | 'shell'> = ['read', 'write', 'shell'];

@@ -42,6 +42,7 @@ import {
   BlackboardItem,
   MemoryTreeNode,
   VaultExportEntry,
+  GraphAnalytics,
 } from "@kinqs/brainrouter-types";
 
 export class BrainRouterApiError extends Error {
@@ -172,6 +173,11 @@ export class BrainRouterClient {
   // 0.4.3 — blackboard / memory tree / vault layers.
   getBlackboard(params?: { status?: string }) { return this.get<{ items: BlackboardItem[] }>("/api/brain/blackboard", params); }
   getTreeRoots(params?: { kind?: string }) { return this.get<{ roots: MemoryTreeNode[] }>("/api/brain/tree", params); }
+  /** DASH-1b — graph analytics lenses (PageRank centrality, broker/bridge entities,
+   *  namespace overview, optional shortest connection path between `from` and `to`). */
+  getGraphAnalytics(params?: { topN?: number; from?: string; to?: string }) {
+    return this.get<GraphAnalytics>("/api/graph/analytics", params);
+  }
   getTreeChildren(nodeId: string) { return this.get<{ children: MemoryTreeNode[] }>(`/api/brain/tree/${nodeId}/children`); }
   getVaultExports() { return this.get<{ exports: VaultExportEntry[] }>("/api/brain/vault"); }
   getSkillActivations() { return this.get<SkillActivationsResponse>("/api/skills/activations"); }

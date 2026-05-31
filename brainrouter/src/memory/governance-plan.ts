@@ -60,3 +60,75 @@ export function planGovernance(
     filters,
   };
 }
+
+/**
+ * MEM-21 (0.4.4) — storage-governance dry-run beyond cognitive records.
+ *
+ * 0.4.3's plan covered cognitive records only. This extends the preview to the
+ * 0.4.3 depth tables — source documents/chunks, memory-tree nodes, and the
+ * vault-export ledger — reporting how much each class holds and how much is
+ * SAFELY reclaimable (e.g. only orphaned source chunks, not those still backing
+ * a live memory). Pure: the store supplies the counts, this turns them into a
+ * per-class plan + totals. (Working-memory offloads live CLI-side, not in this
+ * store; MEM-22's reclaimer governs those.)
+ */
+export interface StorageGovernanceStats {
+  sourceDocuments: number;
+  sourceChunks: { count: number; chars: number; orphanCount: number; orphanChars: number };
+  treeNodes: { count: number; chars: number };
+  vaultExports: number;
+}
+
+export interface StorageGovernanceClass {
+  class: string;
+  count: number;
+  estimatedChars: number;
+  /** The subset of estimatedChars that is safe to reclaim now. */
+  reclaimableChars: number;
+  note: string;
+}
+
+export interface StorageGovernanceResult {
+  classes: StorageGovernanceClass[];
+  totalEstimatedChars: number;
+  totalReclaimableChars: number;
+}
+
+export function planStorageGovernance(stats: StorageGovernanceStats): StorageGovernanceResult {
+  const classes: StorageGovernanceClass[] = [
+    {
+      class: "source_chunks",
+      count: stats.sourceChunks.count,
+      estimatedChars: stats.sourceChunks.chars,
+      // Only chunks NOT cited by a live memory's provenance are safe to prune.
+      reclaimableChars: stats.sourceChunks.orphanChars,
+      note: `${stats.sourceChunks.orphanCount} of ${stats.sourceChunks.count} chunks orphaned (not cited by a live memory) → safe to prune via memory_prune_sources`,
+    },
+    {
+      class: "source_documents",
+      count: stats.sourceDocuments,
+      estimatedChars: 0,
+      reclaimableChars: 0,
+      note: "documents are reclaimed together with their orphaned chunks",
+    },
+    {
+      class: "tree_nodes",
+      count: stats.treeNodes.count,
+      estimatedChars: stats.treeNodes.chars,
+      reclaimableChars: 0,
+      note: "durable summaries — reported only, not auto-reclaimed",
+    },
+    {
+      class: "vault_exports",
+      count: stats.vaultExports,
+      estimatedChars: 0,
+      reclaimableChars: 0,
+      note: "ledger entries for regenerable off-DB markdown files; re-export is idempotent",
+    },
+  ];
+  return {
+    classes,
+    totalEstimatedChars: classes.reduce((a, c) => a + c.estimatedChars, 0),
+    totalReclaimableChars: classes.reduce((a, c) => a + c.reclaimableChars, 0),
+  };
+}

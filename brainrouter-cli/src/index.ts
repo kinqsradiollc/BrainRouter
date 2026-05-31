@@ -66,13 +66,24 @@ process.emitWarning = ((warning: string | Error, ...rest: any[]) => {
  * see whether the event loop drained (= stdin refcount issue) vs explicit
  * process.exit (= bug).
  */
+// MEM-36 — scrub secret-shaped values from crash output before it hits the
+// terminal/log. Bulletproof: redaction failure falls back to the raw text so
+// the last-resort handler can never itself throw.
+function redactSafe(detail: string): string {
+  try { return redactText(detail); } catch { return detail; }
+}
 process.on('uncaughtException', (err) => {
-  process.stderr.write(`\n[brainrouter] Uncaught exception killed the process:\n${err?.stack ?? err}\n`);
+  process.stderr.write(`\n[brainrouter] Uncaught exception killed the process:\n${redactSafe(String(err?.stack ?? err))}\n`);
   process.exit(1);
 });
 process.on('unhandledRejection', (reason: any) => {
-  process.stderr.write(`\n[brainrouter] Unhandled promise rejection killed the process:\n${reason?.stack ?? reason}\n`);
-  process.exit(1);
+  // ORCH-FIX — a stray async rejection (e.g. a detached child agent that failed
+  // after the parent stopped awaiting it) must NOT kill an interactive session.
+  // Log it loudly and keep the CLI alive; genuinely-unstable SYNC throws are
+  // still fatal via uncaughtException above. Child promises are additionally
+  // guarded at the source (orchestration/tools.ts), so this is a last-resort
+  // logger rather than the common path.
+  process.stderr.write(`\n[brainrouter] Unhandled promise rejection (continuing):\n${redactSafe(String(reason?.stack ?? reason))}\n`);
 });
 
 import fs from 'node:fs';
@@ -80,6 +91,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride } from './config/config.js';
+import { redactText } from './state/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {

@@ -10,7 +10,8 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Track | Version | State | Read next |
 |---|---|---|---|
-| Latest | **0.4.3** | Shipped — 2026-05-30 — memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
+| Latest | **0.4.4** | Shipped — 2026-05-31 — memory pipeline tightening + unified exec policy (POLICY-1/2/3) + **code-aware retrieval** (`find_related`, code reranking, symbol + import graph, index freshness) + **memory that learns** (lessons, skill extraction, reflect) + **multi-agent resilience** (ORCH-FIX) + **edit→verify** (post-edit checks + LSP semantic nav) + crash-checkpoint/offline-queue + graph analytics + MCP-registry/plugin packaging | [`brainrouter-changelog/0.4.4.md`](brainrouter-changelog/0.4.4.md) |
+| Previous | **0.4.3** | Shipped — 2026-05-30 — memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
 | Previous | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
 | Shipped | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
 | Shipped | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
@@ -32,6 +33,7 @@ changes live in [`CHANGELOG.md`](CHANGELOG.md).
 | **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
 | **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
 | **[0.4.3](brainrouter-roadmap/0.4.x.md)** | **Feature-complete.** Memory depth MEM-1…14 (capture→provenance→drill-down, blackboard, tree, vault, AST chunker, benchmark gate, job kinds, governance, redaction, RBAC schema) ✓; CLI-1…15 ✓ (`/rewind`, transcript debugger, `/context` memory/offloads/prefix, headless JSONL, cost segment, `/verify detect`+`run`, exec-policy gate, `/agents create`, grouped `/inbox`+`--watch`, `/bg`). Depth-only follow-ups (LSP diagnostics, full policy routing, interactive wizard, in-flight detach) → 0.4.4. CLI-16 packaging → P3 | Shipped — 2026-05-30 |
+| **[0.4.4](brainrouter-roadmap/0.4.x.md)** | **Memory pipeline tightening** — exact chunk-level provenance, blackboard-default admission, recall expansion refs, parser-backed code chunks, benchmark tree/AST modes, tree source/topic/global policy split — plus **unified exec-policy rollout** (POLICY-1/2), AST code chunks + code-recall benchmark, tree topic-routing/global rollup, and small CLI ergonomics | v0.4.4 bumped — unreleased |
 | **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
 
 ---
@@ -108,8 +110,9 @@ scene-leaf → seal → LLM re-summary.
   *(Pipeline + `memory_blackboard_review` tool; live-extraction rerouting later.)*
 - **Memory tree ✓:** durable source/topic/global summary hierarchy (append leaf
   → seal bucket → summarize parent → walk/drill via `memory_tree_walk`), generic
-  mechanics in `tree/tree.ts` kept separate from policy. *(deterministic
-  summarizer; LLM summaries + auto-build later.)*
+  mechanics in `tree/tree.ts` kept separate from policy. *(deterministic +
+  LLM re-summary (`tree_digest`) and scene-autobuild now wired; source/topic/
+  global policy split → 0.4.4.)*
 - **AST-aware code chunking ✓** (TS/JS/Python/Rust, line-based fallback) and a
   read-only **vault mirror ✓** (`memory_vault_export` — markdown + hash ledger,
   idempotent, redacted; DB authoritative).
@@ -129,6 +132,39 @@ Cross-cutting ✓: every new table carries `user_id` + `workspace_tag` scope
 columns so team/RBAC can arrive later without migration; 0.4.3 stays
 local-first (columns NULL until federation populates them). Carried infra:
 git-worktree session isolation.
+
+### 0.4.4 — Memory pipeline tightening + unified trust
+
+0.4.3 shipped the memory *depth primitives* and wired every brain agent. 0.4.4
+makes them **precise and unavoidable** rather than available-but-optional —
+the theme is *tighten, don't invent*. (The CLI multi-agent + parity feature
+bar this builds on top of shipped across 0.4.0–0.4.2.)
+
+- **Exact chunk-level provenance.** Replace batch-level record→chunk linking
+  with per-candidate chunk ids/spans, surfaced in `memory_verify` + recall.
+- **Blackboard-default admission.** Route extraction candidates *through* the
+  blackboard (stage → reconcile/conflict-check → commit) instead of writing
+  cognitive records directly — staged, audited memory by default.
+- **Recall expansion refs inline.** Every compact recall hit carries
+  source-chunk / tree-node / provenance handles so a client can drill down
+  without a second blind query.
+- **Parser-backed code chunking.** Swap the heuristic regex chunker for a
+  tree-sitter/LSP adapter (TS/JS/Python/Rust) with a line-based fallback, and
+  benchmark code recall against the heuristic baseline.
+- **Benchmark honesty.** Add the advertised-but-missing tree/AST (and
+  rerank/judge) modes to the retrieval harness; publish numbers; make the
+  strict summary a release gate.
+- **Tree policy split.** Separate generic tree mechanics from source/topic/
+  global domain policy; document + schedule the three domains.
+- **Unified exec policy.** Route file-write / edit / apply_patch / child-spawn
+  / background / network through the one `decideExecutionPolicy` surface (only
+  the shell tool does today), with approval audit events.
+- **Governance & retention (P2):** extend the governance dry-run to source
+  chunks / tree nodes / vault exports / offloads; add an offload reclaimer;
+  broaden redaction regression fixtures.
+- **CLI ergonomics:** `/reload-skills`; optional carried follow-ups
+  (interactive `/agents create` wizard, in-flight `/bg` detach, post-edit LSP
+  diagnostics) ride along if capacity allows.
 
 ### 0.5.0 — Power User Surface
 

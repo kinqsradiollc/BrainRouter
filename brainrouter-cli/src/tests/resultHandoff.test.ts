@@ -34,23 +34,72 @@ test("formatHandoffForModel: footer carries ref + extract_result + durable ref",
   assert.match(s, /run_command output truncated/);
 });
 
-test("ResultCache: put/get, TTL expiry, max-entry eviction (injected clock)", () => {
+test("ResultCache: put/get, TTL expiry (no access), max-entry eviction (injected clock)", () => {
   let now = 1000;
   const cache = new ResultCache(100, 2, () => now);
   cache.put("a", "AAA");
   assert.equal(cache.get("a"), "AAA");
-  now = 1099;
-  assert.equal(cache.get("a"), "AAA"); // still within TTL
-  now = 1101;
-  assert.equal(cache.get("a"), undefined); // expired
+  now = 1101; // no intervening access slid the window → expired
+  assert.equal(cache.get("a"), undefined);
 
   now = 2000;
   cache.put("x", "1");
   cache.put("y", "2");
-  cache.put("z", "3"); // exceeds maxEntries=2 → oldest (x) evicted
+  cache.put("z", "3"); // exceeds maxEntries=2 → least-recently-used (x) evicted
   assert.equal(cache.get("x"), undefined);
   assert.equal(cache.get("y"), "2");
   assert.equal(cache.get("z"), "3");
+});
+
+test("MEM-22 sliding TTL: an access extends the ref's lifetime (active protection)", () => {
+  let now = 1000;
+  const cache = new ResultCache(100, 8, () => now);
+  cache.put("a", "AAA");
+  now = 1090;
+  assert.equal(cache.get("a"), "AAA"); // slides expiry to 1190 (would die at 1100 without sliding)
+  now = 1180;
+  assert.equal(cache.get("a"), "AAA"); // still alive; slides to 1280
+  now = 1281;
+  assert.equal(cache.get("a"), undefined); // finally idle-expired
+});
+
+test("MEM-22 LRU eviction protects the recently-used ref over the idle one", () => {
+  let now = 0;
+  const cache = new ResultCache(10_000, 2, () => now);
+  cache.put("a", "1");
+  now = 1; cache.put("b", "2");
+  now = 2; assert.equal(cache.get("a"), "1"); // touch a → most-recently-used
+  now = 3; cache.put("c", "3"); // overflow → evict LRU = b, NOT the touched a
+  assert.equal(cache.get("a"), "1");
+  assert.equal(cache.get("b"), undefined);
+  assert.equal(cache.get("c"), "3");
+});
+
+test("MEM-22 reclaim: removes expired orphans, reports stats, keeps active", () => {
+  let now = 0;
+  const cache = new ResultCache(100, 10, () => now);
+  cache.put("keep", "active-ref");
+  cache.put("idle", "idle-orphan");
+  now = 50; cache.get("keep"); // slide keep to 150
+  now = 120; // idle (exp 100) is expired; keep (exp 150) alive
+  const stats = cache.reclaim();
+  assert.equal(stats.expired, 1);
+  assert.equal(stats.bytesReclaimed, "idle-orphan".length);
+  assert.equal(stats.remaining, 1);
+  assert.equal(cache.get("keep"), "active-ref");
+});
+
+test("MEM-22 reclaim: a protected ref is kept + refreshed even when expired", () => {
+  let now = 0;
+  const cache = new ResultCache(100, 10, () => now);
+  cache.put("a", "AAA");
+  cache.put("b", "BBB");
+  now = 200; // both past TTL (exp 100)
+  const stats = cache.reclaim(new Set(["a"]));
+  assert.equal(stats.expired, 1); // only b
+  assert.equal(stats.protectedKept, 1); // a kept
+  assert.equal(cache.get("a"), "AAA"); // refreshed → still resolvable
+  assert.equal(cache.get("b"), undefined);
 });
 
 test("extractFromResult: no query returns head + truncated flag", () => {

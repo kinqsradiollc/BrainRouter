@@ -66,7 +66,8 @@ export type MemoryType =
   | "source_evidence"
   | "artifact_reference"
   | "file_history"
-  | "command_knowledge";
+  | "command_knowledge"
+  | "lesson";
 
 // The runtime list of every cognitive `MemoryType` lives in the
 // crypto-free `./memory-type-list.ts` so browser bundles (the dashboard
@@ -466,6 +467,17 @@ export interface RecalledMemory {
   type: string;
   recordId: string;
   skillTag?: string;
+  /**
+   * MEM-17 — source chunk ids this record was distilled from (precise post
+   * MEM-15). Drill in with `memory_fetch_source_chunk`. Omitted when the record
+   * has no linked provenance.
+   */
+  sourceChunkIds?: string[];
+  /**
+   * MEM-17 — a memory-tree node whose sealed bucket covers this record's source,
+   * when known. Walk it with `memory_tree_walk`. Omitted when none.
+   */
+  treeNodeId?: string | null;
 }
 
 export type MemoryTaskIntent =
@@ -1061,6 +1073,31 @@ export interface SourceChunk {
   startLine: number | null;
   endLine: number | null;
   hash: string;
+}
+
+/**
+ * DASH-1 (0.4.4) — graph analytics lenses over the cognitive graph: PageRank
+ * centrality, broker/bridge entities (articulation points), namespace overview,
+ * and an optional shortest connection path between two entities.
+ */
+export interface GraphAnalytics {
+  nodeCount: number;
+  edgeCount: number;
+  topCentral: Array<{ entity: string; entityType: string; score: number }>;
+  bridges: Array<{ entity: string; entityType: string }>;
+  namespaces: Record<string, number>;
+  path?: { from: string; to: string; found: boolean; entities: string[] };
+}
+
+/**
+ * MEM-29 (0.4.4) — one ranked `find_related` hit: a source chunk plus the score
+ * that ordered it and a short human reason (which signals fired). `score` is a
+ * normalized 0..1 relevance after code-aware reranking (higher = better).
+ */
+export interface RelatedChunkHit {
+  chunk: SourceChunk;
+  score: number;
+  reason: string;
 }
 
 /** Input shape for `addSourceChunks` — ordinal + id + hash are assigned by the store. */

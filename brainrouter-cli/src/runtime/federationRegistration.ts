@@ -176,7 +176,11 @@ export async function attachFederation(options: FederationOptions): Promise<Fede
       activeHandler = handler;
       if (handler && buffered.length > 0) {
         const replay = buffered.splice(0, buffered.length);
-        void handler(replay);
+        // Route the buffered replay through `dispatch` (not the raw handler) so
+        // it goes through the same try/catch the poller uses. The current
+        // handler is synchronous, but the type permits a Promise<void> handler
+        // — a future async one rejecting here would otherwise be unhandled.
+        void dispatch(replay);
       }
     },
   };

@@ -62,7 +62,9 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
-import { decideExecutionPolicy } from '../runtime/execPolicy.js';
+import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
+import { isPathWithinRoots } from '../runtime/pathPolicy.js';
+import { runPostEditCheck } from '../runtime/postEditCheck.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -519,6 +521,20 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'lsp',
+    description: "Semantic code navigation via the language server (exact, not fuzzy). actions: definition / references / hover (need file + 1-based line + character), symbols (file only, lists the file's symbols). Returns file:line:col locations or hover text. Requires a configured language server (cli.lspServers); reports clearly when none is available.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['definition', 'references', 'hover', 'symbols'], description: 'The LSP query.' },
+        file: { type: 'string', description: 'File path (workspace-relative or absolute).' },
+        line: { type: 'integer', description: '1-based line of the symbol (required for definition/references/hover).' },
+        character: { type: 'integer', description: '1-based column of the symbol (default 1).' }
+      },
+      required: ['action', 'file']
+    }
+  },
+  {
     name: 'extract_result',
     description: 'Expand a large tool result that was handed off (you hold a `resultRef` instead of the full output). With no `query`, returns the head of the result; with a `query`, returns the matching lines plus surrounding context. Use this instead of re-running the original tool when you only need a slice of a big output.',
     inputSchema: {
@@ -853,7 +869,8 @@ export class Agent {
   public launchCwd: string;
   private chatHistory: any[] = [];
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
-  private readonly resultCache = new ResultCache();
+  // MEM-22 — retention is configurable via cli.offloadRetentionMs / cli.offloadMaxEntries.
+  private readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   private triedModelFallback = false;
   private initialized = false;
@@ -944,6 +961,8 @@ export class Agent {
   private recentToolFailure?: string;
   private roleOverlay?: string;
   private accessMode: AccessMode;
+  /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
+  private policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
   private silent: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
@@ -1087,7 +1106,7 @@ export class Agent {
     // mode — they don't touch the workspace and the agent needs them to end
     // a goal cleanly (goal_complete / goal_blocked) or observe state.
     const readOnly = new Set([
-      'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
+      'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'lsp', 'update_plan',
       'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'route_task',
       'goal_complete', 'goal_blocked',
@@ -1983,7 +2002,48 @@ export class Agent {
           if (blockedByHook) {
             throw new Error(`Blocked by pre-tool hook: ${blockedByHook}`);
           }
-          if (!allowed.has(name) && isLocal) {
+          // POLICY-2 — route EVERY tool (local, orchestration, worker, MCP)
+          // through the unified execution policy, not just local ones (POLICY-1).
+          // A mutating action (file edit, child spawn/delegate, shell) emits an
+          // audit + trace event; a deny throws with the policy's reason; an 'ask'
+          // a silent child can't answer fails closed. This closes the gap where
+          // spawn/delegate/worker dispatches bypassed the access-mode gate.
+          {
+            const policy = resolveToolPolicy(name, this.accessMode);
+            if (policy.mutating) {
+              this.policyAudit.push({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
+              traceEvent(
+                'policy.decision',
+                { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey, local: isLocal },
+                { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId },
+              );
+            }
+            if (policy.decision === 'deny') {
+              throw new Error(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
+            }
+            if (policy.decision === 'ask' && this.silent) {
+              throw new Error(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
+            }
+            // POLICY-3 — external-directory gate: a file write whose target
+            // escapes the workspace is governed by the profile's
+            // `externalDirWrites` mode (deny / ask / allow). Independent of the
+            // access-mode decision above.
+            if (policy.action === 'file_edit' && typeof args?.path === 'string' && args.path) {
+              const target = path.resolve(this.workspaceRoot, args.path);
+              const ext = externalDirectoryDecision(target, this.workspaceRoot, getCliKnobs().externalDirWrites, isPathWithinRoots);
+              if (ext.decision === 'deny') {
+                throw new Error(`Tool "${name}" denied: ${ext.reason}.`);
+              }
+              if (ext.decision === 'ask' && this.silent) {
+                throw new Error(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
+              }
+            }
+          }
+          // Defense-in-depth: a LOCAL tool outside the access-mode inventory
+          // (scope/budget-filtered) is still blocked even when its action kind
+          // is allowed. Orchestration/MCP tools have their own inventory; the
+          // `allowed` set is the local-tool roster.
+          if (isLocal && !allowed.has(name)) {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
@@ -2359,7 +2419,7 @@ export class Agent {
           fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(resolved, args.content, 'utf8');
-        return `Successfully wrote file: ${args.path}`;
+        return `Successfully wrote file: ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
       }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
@@ -2383,7 +2443,7 @@ export class Agent {
         const updated = content.replace(target, replacement);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
-        return `Successfully edited ${args.path}`;
+        return `Successfully edited ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
       }
       case 'list_dir': {
         const targetDir = resolveHere(args.path || '.');
@@ -2546,6 +2606,11 @@ export class Agent {
       }
       case 'fetch_url': {
         const url = args.url;
+        // POLICY-3 — per-host egress allowlist (empty = unrestricted).
+        const egress = egressDecision(url, getCliKnobs().egressAllowlist);
+        if (egress.decision === 'deny') {
+          return `fetch_url blocked by egress policy: ${egress.reason}.`;
+        }
         try {
           const res = await fetch(url, {
             headers: {
@@ -2575,6 +2640,24 @@ export class Agent {
         if (!query) throw new Error('web_search requires a non-empty query.');
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
         return await runWebSearch(query, maxResults);
+      }
+      case 'lsp': {
+        // CLI-19 — semantic navigation via a language server.
+        const action = String(args.action ?? '').trim() as 'definition' | 'references' | 'hover' | 'symbols';
+        if (!['definition', 'references', 'hover', 'symbols'].includes(action)) {
+          throw new Error('lsp: action must be definition | references | hover | symbols.');
+        }
+        if (!args.file) throw new Error('lsp requires a `file`.');
+        const resolved = resolveHere(String(args.file));
+        const { runLspQuery } = await import('../runtime/lsp/manager.js');
+        return await runLspQuery({
+          action,
+          file: resolved,
+          line: args.line != null ? Number(args.line) : undefined,
+          character: args.character != null ? Number(args.character) : undefined,
+          cwd: this.workspaceRoot,
+          servers: getCliKnobs().lspServers,
+        });
       }
       case 'extract_result': {
         const resultRef = String(args.resultRef ?? '').trim();
@@ -2639,7 +2722,12 @@ export class Agent {
           const p = m[1].trim();
           if (p) { try { this.captureFileSnapshot(path.resolve(this.workspaceRoot, p)); } catch { /* noop */ } }
         }
-        return applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
+        {
+          const result = applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
+          const firstFile = patch.match(/^\*\*\*\s+(?:Add|Update) File:\s*(.+)\s*$/m)?.[1]?.trim();
+          const checkFile = firstFile ? path.resolve(this.workspaceRoot, firstFile) : this.workspaceRoot;
+          return result + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
+        }
       }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
@@ -2943,6 +3031,12 @@ export class Agent {
   }
   public setAccessMode(mode: AccessMode): void {
     this.accessMode = mode;
+  }
+
+  /** POLICY-1 — the session's execution-policy audit trail (mutating-tool
+   * decisions). Read-only snapshot for observability / tests. */
+  public getPolicyAudit(): ReadonlyArray<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> {
+    return this.policyAudit;
   }
 
   /**

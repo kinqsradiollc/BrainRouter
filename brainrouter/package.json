@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-mcp-server",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "BrainRouter MCP server — the cognitive memory engine. Exposes recall, capture, focus scenes, persona, contradictions, skills, and graph queries as MCP tools for any MCP-speaking agent.",
   "type": "module",
   "main": "dist/index.js",
@@ -14,7 +14,8 @@
     "references",
     "docs",
     "README.md",
-    ".env.example"
+    ".env.example",
+    "server.json"
   ],
   "scripts": {
     "prepack": "node scripts/prepack.mjs",

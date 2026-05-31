@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideExecutionPolicy } from '../runtime/execPolicy.js';
+import { decideExecutionPolicy, actionKindForTool, resolveToolPolicy } from '../runtime/execPolicy.js';
 
 test('CLI-11 read mode: read-only allowed, everything mutating denied', () => {
   assert.equal(decideExecutionPolicy('read_only', 'read').decision, 'allow');
@@ -28,4 +28,56 @@ test('CLI-11 network + bg are allowed in every mode (not access-mode gated)', ()
     assert.equal(decideExecutionPolicy('network', m).decision, 'allow');
     assert.equal(decideExecutionPolicy('bg', m).decision, 'allow');
   }
+});
+
+test('POLICY-1 actionKindForTool maps every mutating built-in (else read-only)', () => {
+  assert.equal(actionKindForTool('run_command'), 'shell');
+  for (const t of ['write_file', 'edit_file', 'apply_patch']) assert.equal(actionKindForTool(t), 'file_edit');
+  for (const t of ['spawn_agent', 'spawn_agents', 'spawn_worker_thread']) assert.equal(actionKindForTool(t), 'child_write');
+  assert.equal(actionKindForTool('fetch_url'), 'network');
+  // Unknown / read tools default to read-only (safe — never wrongly mutating).
+  assert.equal(actionKindForTool('read_file'), 'read_only');
+  assert.equal(actionKindForTool('grep_search'), 'read_only');
+});
+
+test('POLICY-1 resolveToolPolicy unifies name → action → decision + mutating flag', () => {
+  // file edits: denied in read, allowed once writing.
+  assert.equal(resolveToolPolicy('write_file', 'read').decision, 'deny');
+  const w = resolveToolPolicy('write_file', 'write');
+  assert.equal(w.decision, 'allow');
+  assert.equal(w.action, 'file_edit');
+  assert.equal(w.mutating, true);
+
+  // shell: only in shell mode; the reason explains the gate.
+  const shellInWrite = resolveToolPolicy('run_command', 'write');
+  assert.equal(shellInWrite.decision, 'deny');
+  assert.match(shellInWrite.reason, /requires "shell" mode/);
+  assert.equal(resolveToolPolicy('run_command', 'shell').decision, 'allow');
+
+  // child spawns are child_write (mutating); denied in read.
+  assert.equal(resolveToolPolicy('spawn_agents', 'read').decision, 'deny');
+  assert.equal(resolveToolPolicy('spawn_agents', 'write').mutating, true);
+
+  // read-only tools are allowed everywhere and NOT flagged mutating (no audit).
+  for (const m of ['read', 'write', 'shell'] as const) {
+    const r = resolveToolPolicy('read_file', m);
+    assert.equal(r.decision, 'allow');
+    assert.equal(r.mutating, false);
+  }
+});
+
+test('POLICY-2 orchestration / worker spawns gate as child_write; observers + MCP are read-only', () => {
+  for (const t of ['spawn_agent', 'spawn_agents', 'spawn_worker_thread', 'task_agent', 'delegate_agent', 'delegate_reviewer']) {
+    assert.equal(actionKindForTool(t), 'child_write', `${t} should be child_write`);
+  }
+  // Observation / planning orchestration tools + MCP reads are read-only (allowed everywhere).
+  for (const t of ['wait_agent', 'wait_agents', 'list_agents', 'route_task', 'read_agent_transcript', 'wait_worker', 'memory_recall']) {
+    assert.equal(actionKindForTool(t), 'read_only', `${t} should be read_only`);
+  }
+  // Child spawns/delegations: denied in read mode, allowed (and audited) once writing.
+  assert.equal(resolveToolPolicy('spawn_agents', 'read').decision, 'deny');
+  const del = resolveToolPolicy('delegate_reviewer', 'write');
+  assert.equal(del.decision, 'allow');
+  assert.equal(del.action, 'child_write');
+  assert.equal(del.mutating, true);
 });

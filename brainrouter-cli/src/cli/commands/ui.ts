@@ -17,7 +17,8 @@ import { readPlan } from '../../state/taskStore.js';
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
-import { getConfigPath, saveConfig, setCliKnobOverride } from '../../config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '../../config/config.js';
+import { getPolicyProfile, profileNames } from '../../runtime/policyProfiles.js';
 import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
@@ -157,6 +158,35 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     // + verb-overloaded get/set). The dispatcher in repl.ts routes it
     // before this case, so leaving anything here is dead — removed.
     // Use `/config raw` if you want the old scrubbed-JSON dump.
+    case '/policy':
+    {
+      const knobs = getCliKnobs();
+      const requested = (args[0] ?? '').toLowerCase().trim();
+      if (!requested) {
+        console.log(chalk.bold('\n🛡️  Policy:'));
+        console.log(`  Access mode:      ${chalk.cyan(agent.getAccessMode())}`);
+        console.log(`  Sandbox:          ${chalk.cyan(knobs.sandbox)}`);
+        console.log(`  External writes:  ${chalk.cyan(knobs.externalDirWrites)}`);
+        console.log(`  Egress allowlist: ${knobs.egressAllowlist.length ? chalk.cyan(knobs.egressAllowlist.join(', ')) : chalk.gray('(unrestricted)')}`);
+        console.log(chalk.gray(`\n  Profiles (apply with \`/policy <name>\`):`));
+        for (const n of profileNames()) {
+          console.log(`    ${chalk.bold(n.padEnd(10))} ${chalk.gray(getPolicyProfile(n)!.description)}`);
+        }
+        console.log();
+        return true;
+      }
+      const profile = getPolicyProfile(requested);
+      if (!profile) {
+        console.log(chalk.red(`Unknown policy profile "${requested}". Available: ${profileNames().join(', ')}.`));
+        return true;
+      }
+      agent.setAccessMode(profile.accessMode);
+      setCliKnobOverride({ sandbox: profile.sandbox, externalDirWrites: profile.externalDirWrites, egressAllowlist: profile.egressAllowlist });
+      agent.refreshSystemPrompt?.();
+      console.log(chalk.green(`\n🛡️  Applied policy "${requested}": access=${profile.accessMode}, sandbox=${profile.sandbox}, externalWrites=${profile.externalDirWrites}, egress=${profile.egressAllowlist.length ? profile.egressAllowlist.join(',') : 'unrestricted'}.`));
+      console.log(chalk.gray(`  ${profile.description}\n`));
+      return true;
+    }
     case '/doctor':
     {
       console.log(chalk.bold('\nBrainRouter Doctor:'));

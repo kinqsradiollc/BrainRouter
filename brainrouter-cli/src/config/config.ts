@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type { ExternalDirMode } from '../runtime/execPolicy.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -146,6 +147,10 @@ export interface CliKnobs {
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
   childDrainTimeoutMs?: number;
+  /** MEM-22: working-offload result-cache retention in ms. Default 1_800_000 (30m). */
+  offloadRetentionMs?: number;
+  /** MEM-22: max cached offload results before the reclaimer evicts the least-recently-used. Default 64. */
+  offloadMaxEntries?: number;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
@@ -179,6 +184,37 @@ export interface CliKnobs {
   // ---- tool-output context compaction ----------------------------------
   /** Enable the heuristic tool-output compactor. Default true. */
   contextCompaction?: boolean;
+
+  // ---- update notice (CLI-22) -------------------------------------------
+  /** Show a throttled "update available" notice at startup. Default true. */
+  updateCheck?: boolean;
+
+  // ---- policy hardening (POLICY-3) --------------------------------------
+  /** How to treat file writes outside the workspace root. Default 'ask'. */
+  externalDirWrites?: ExternalDirMode;
+  /** Per-host outbound allowlist for fetch_url / web_search ([] = unrestricted). */
+  egressAllowlist?: string[];
+
+  // ---- edit→verify loop (CLI-18) ----------------------------------------
+  /** Command run after a file write; failures are fed back to the model.
+   *  `{file}` is substituted with the edited path. Empty = off. */
+  postEditCheck?: string;
+
+  // ---- auto skill extraction (MEM-33b) ----------------------------------
+  /** After a successful multi-step turn, fire-and-forget distil a reusable
+   *  skill (memory_extract_skill). Off by default (one LLM call per turn). */
+  autoExtractSkills?: boolean;
+
+  // ---- offline replay (CLI-21b) -----------------------------------------
+  /** On launch, auto-replay prompts that were queued while offline (once
+   *  reconnected). Default true. */
+  autoReplayOffline?: boolean;
+
+  // ---- LSP semantic navigation (CLI-19) ---------------------------------
+  /** language → server launch command for the `lsp` tool, e.g.
+   *  { "typescript": "typescript-language-server --stdio" }. Merged over the
+   *  built-in defaults; set "" to disable a language. */
+  lspServers?: Record<string, string>;
 
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
@@ -419,10 +455,19 @@ export interface ResolvedCliKnobs {
   sandboxNetwork: boolean;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
+  offloadRetentionMs: number;
+  offloadMaxEntries: number;
   maxSpawnDepth: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
   scheduleTickMs: number;
+  updateCheck: boolean;
+  externalDirWrites: ExternalDirMode;
+  egressAllowlist: string[];
+  postEditCheck: string;
+  autoExtractSkills: boolean;
+  autoReplayOffline: boolean;
+  lspServers: Record<string, string>;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -470,6 +515,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxNetwork: c.sandboxNetwork ?? false,
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
+    offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
+    offloadMaxEntries: c.offloadMaxEntries ?? 64,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
@@ -481,6 +528,13 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     webSearchEndpoint: c.webSearchEndpoint,
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
+    updateCheck: c.updateCheck ?? true,
+    externalDirWrites: c.externalDirWrites ?? 'ask',
+    egressAllowlist: Array.isArray(c.egressAllowlist) ? c.egressAllowlist : [],
+    postEditCheck: c.postEditCheck ?? '',
+    autoExtractSkills: c.autoExtractSkills ?? false,
+    autoReplayOffline: c.autoReplayOffline ?? true,
+    lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,

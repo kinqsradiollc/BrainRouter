@@ -8,12 +8,14 @@ import { chunkSource } from "./source/chunker.js";
 import { chunkCode } from "./source/code-chunker.js";
 import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
+import { benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd, type CodeRecallResult } from "./bench/code-recall.js";
+import { readTreePolicy, treeAutobuildEnabled, parentDomain, topicKeyForScene, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
-import { planGovernance, type GovernancePlanFilters, type GovernancePlanResult } from "./governance-plan.js";
+import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance-plan.js";
 import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
 import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
@@ -30,7 +32,12 @@ import os from "node:os";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind } from "@kinqs/brainrouter-types";
+import { createHash } from "node:crypto";
+import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
+import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks, extractImportSpecifiers, resolveRelativeImport } from "./code-retrieval.js";
+import { buildSkillExtractionPrompt, parseSkillResponse } from "./skill-extract.js";
+import { buildReflectPrompt, parseReflectResponse } from "./reflect.js";
+import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "./graph-analytics.js";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
@@ -167,6 +174,9 @@ export class MemoryEngine {
   public readonly store: IMemoryStore;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
+  /** MEM-19 — kept to query reranker/judge readiness when picking benchmark modes. */
+  private rerankerService!: RerankerService;
+  private relevanceJudge!: RelevanceJudgeService;
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
@@ -265,6 +275,8 @@ export class MemoryEngine {
     
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
+    this.rerankerService = rerankerService; // MEM-19 — readiness drives benchmark mode selection
+    this.relevanceJudge = relevanceJudge;
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
     this.startSessionInboxSweeper();
@@ -346,20 +358,21 @@ export class MemoryEngine {
       // unsealed leaves fills, enqueue tree_sealer to seal it into a parent.
       const tree = this.autobuildSceneTree(userId);
       if (tree.sealableBucket) {
-        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: "global" });
+        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
         enqueued.tree_sealer++;
+      }
+      // BRAIN-P4-T5 — roll accumulated global roots into a higher global digest.
+      try {
+        if (this.rollupGlobalTree(userId)) enqueued.global_rollup = (enqueued.global_rollup ?? 0) + 1;
+      } catch (err: any) {
+        console.error("[BrainRouter] global rollup failed:", err?.message ?? err);
       }
     }
     return { enqueued };
   }
 
-  // 0.4.3 (MEM-10) — scene-tree autobuild thresholds.
-  private static readonly TREE_MIN_SCENE_RECORDS = 3; // don't leaf a trivial scene
-  private static readonly TREE_LEAF_PER_PASS = 5;     // bound work per maintenance tick
-  private static readonly TREE_SEAL_THRESHOLD = 6;    // unsealed scene-leaves → seal
-
   /**
-   * 0.4.3 (MEM-10) — the tree_sealer auto-trigger source. Builds a DURABLE
+   * 0.4.3 (MEM-10) / MEM-20 (0.4.4) — the tree_sealer auto-trigger source. Builds a DURABLE
    * memory-summary tree over COGNITIVE RECORDS grouped by scene (deliberately
    * NOT over transcripts — those churn and get pruned, which would orphan tree
    * leaves). Appends one level-0 leaf per mature, not-yet-leafed scene (a
@@ -371,7 +384,7 @@ export class MemoryEngine {
    * BRAINROUTER_TREE_AUTOBUILD=off.
    */
   public autobuildSceneTree(userId: string): { leafed: number; sealableBucket: string[] | null } {
-    if (process.env.BRAINROUTER_TREE_AUTOBUILD === "off") return { leafed: 0, sealableBucket: null };
+    if (!treeAutobuildEnabled()) return { leafed: 0, sealableBucket: null };
     const store = this.store as any;
     if (
       typeof store.getDistinctScenes !== "function" ||
@@ -382,25 +395,26 @@ export class MemoryEngine {
       return { leafed: 0, sealableBucket: null };
     }
 
+    const policy = readTreePolicy();
     const leafedKeys = new Set<string>(store.getSceneLeafKeys(userId));
     const scenes = store.getDistinctScenes(userId) as Array<{ sceneName: string; recordCount: number }>;
     let leafed = 0;
     for (const sc of scenes) {
-      if (leafed >= MemoryEngine.TREE_LEAF_PER_PASS) break;
-      if (!sc.sceneName || sc.recordCount < MemoryEngine.TREE_MIN_SCENE_RECORDS || leafedKeys.has(sc.sceneName)) continue;
+      if (leafed >= policy.leafPerPass) break;
+      if (!sc.sceneName || sc.recordCount < policy.minSceneRecords || leafedKeys.has(sc.sceneName)) continue;
       const contents = store.getSceneRecordContents(userId, sc.sceneName, 8) as string[];
       const digest = contents.map((c) => `- ${redactSensitiveMemoryText(c).replace(/\s+/g, " ").slice(0, 160)}`).join("\n");
       store.appendTreeNode(userId, {
-        kind: "topic",
+        kind: SCENE_LEAF_DOMAIN, // MEM-20 — scene leaves are topic-domain
         level: 0,
-        summaryMd: `Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
+        summaryMd: `Topic: ${topicKeyForScene(sc.sceneName)} · Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
         sceneKey: sc.sceneName,
       });
       leafed++;
     }
 
-    const unsealed = store.getUnsealedSceneLeaves(userId, MemoryEngine.TREE_SEAL_THRESHOLD) as Array<{ id: string }>;
-    const sealableBucket = unsealed.length >= MemoryEngine.TREE_SEAL_THRESHOLD ? unsealed.map((n) => n.id) : null;
+    const unsealed = store.getUnsealedSceneLeaves(userId, policy.sealThreshold) as Array<{ id: string }>;
+    const sealableBucket = unsealed.length >= policy.sealThreshold ? unsealed.map((n) => n.id) : null;
     return { leafed, sealableBucket };
   }
 
@@ -562,6 +576,56 @@ export class MemoryEngine {
     return this.store.getGraphNeighbors(userId, node.id, skillTag, maxHops);
   }
 
+  /**
+   * DASH-1 (0.4.4) — graph analytics lenses over the user's GraphRAG store:
+   * PageRank centrality (most load-bearing entities), articulation points
+   * (broker/bridge entities), a namespace overview (counts by entity type), and
+   * an optional shortest connection path between two entities ("how is A related
+   * to B"). Pure compute (graph-analytics.ts); read-only.
+   */
+  public graphAnalytics(
+    userId: string,
+    opts?: { topN?: number; from?: string; to?: string },
+  ): {
+    nodeCount: number;
+    edgeCount: number;
+    topCentral: Array<{ entity: string; entityType: string; score: number }>;
+    bridges: Array<{ entity: string; entityType: string }>;
+    namespaces: Record<string, number>;
+    path?: { from: string; to: string; found: boolean; entities: string[] };
+  } {
+    const store = this.store as Partial<{
+      getAllGraphNodes(u: string): GraphNode[];
+      getAllGraphEdges(u: string): GraphEdge[];
+    }>;
+    const nodes = typeof store.getAllGraphNodes === "function" ? store.getAllGraphNodes(userId) : [];
+    const edges = typeof store.getAllGraphEdges === "function" ? store.getAllGraphEdges(userId) : [];
+    const nodeIds = nodes.map((n) => n.id);
+    const liteEdges = edges.map((e) => ({ from: e.fromNodeId, to: e.toNodeId }));
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const topN = Math.max(1, Math.min(50, opts?.topN ?? 10));
+
+    const pr = pageRank(nodeIds, liteEdges);
+    const topCentral = [...pr.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, topN)
+      .map(([id, score]) => ({ entity: byId.get(id)?.entity ?? id, entityType: byId.get(id)?.entityType ?? "unknown", score: Math.round(score * 1e4) / 1e4 }));
+    const bridges = articulationPoints(nodeIds, liteEdges)
+      .slice(0, topN)
+      .map((id) => ({ entity: byId.get(id)?.entity ?? id, entityType: byId.get(id)?.entityType ?? "unknown" }));
+    const namespaces = namespaceOverview(nodes);
+
+    let path: { from: string; to: string; found: boolean; entities: string[] } | undefined;
+    if (opts?.from && opts?.to) {
+      const fromId = nodes.find((n) => n.entity.toLowerCase() === opts.from!.toLowerCase())?.id;
+      const toId = nodes.find((n) => n.entity.toLowerCase() === opts.to!.toLowerCase())?.id;
+      const ids = fromId && toId ? shortestPath(nodeIds, liteEdges, fromId, toId) : null;
+      path = { from: opts.from, to: opts.to, found: !!ids, entities: (ids ?? []).map((id) => byId.get(id)?.entity ?? id) };
+    }
+
+    return { nodeCount: nodes.length, edgeCount: edges.length, topCentral, bridges, namespaces, ...(path ? { path } : {}) };
+  }
+
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {
     return this.store.createUser(userId, apiKey, displayName, isAdmin);
   }
@@ -677,6 +741,128 @@ export class MemoryEngine {
     return record;
   }
 
+  /**
+   * MEM-32 (0.4.4) — record a durable lesson/insight with corroboration
+   * reinforcement. The lesson is fingerprinted (normalized-text hash); a
+   * corroborating call to the same lesson does NOT duplicate — it bumps the
+   * record's confidence (asymptotically toward 1) and corroboration count
+   * instead. New lessons are stored as `lesson` cognitive records, so they flow
+   * through normal recall/briefing. Returns whether it reinforced an existing
+   * lesson and the resulting confidence.
+   */
+  public recordLesson(
+    userId: string,
+    text: string,
+    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string },
+  ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number } {
+    const normalized = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    const fingerprint = createHash("sha1").update(normalized).digest("hex");
+    const store = this.store as typeof this.store & {
+      findLessonByFingerprint?: (u: string, f: string) => CognitiveRecord | null;
+    };
+
+    const existing = typeof store.findLessonByFingerprint === "function" ? store.findLessonByFingerprint(userId, fingerprint) : null;
+    if (existing) {
+      const confidence = Math.min(0.99, existing.confidence + (1 - existing.confidence) * 0.25);
+      // The corroboration counter lives in metadata (authoritative); a fresh
+      // lesson is created at 1, so the next corroboration is 2, etc.
+      const prevCorr = Number((existing.metadata as any)?.corroborations ?? existing.citationCount ?? 1);
+      const corroborations = prevCorr + 1;
+      const nowIso = new Date().toISOString();
+      const updated: CognitiveRecord = {
+        ...existing,
+        confidence,
+        citationCount: corroborations,
+        lastCitedAt: nowIso,
+        updatedTime: nowIso,
+        metadata: { ...(existing.metadata ?? {}), fingerprint, corroborations },
+      };
+      this.store.upsertCognitive(updated, { skipAudit: true });
+      return { recordId: existing.id, reinforced: true, confidence, corroborations };
+    }
+
+    const record = this.upsertEngineeringMemory({
+      userId,
+      sessionKey: opts?.sessionKey,
+      type: "lesson",
+      content: text,
+      priority: opts?.priority ?? 80,
+      activeSkill: opts?.activeSkill,
+      sourceKind: "user_instruction",
+      metadata: { fingerprint, corroborations: 1, ...(opts?.kind ? { kind: opts.kind } : {}), ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
+    });
+    return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1 };
+  }
+
+  /**
+   * MEM-33 (0.4.4) — distill a reusable skill (SOP) from a successful session
+   * and store it. The LLM gate emits `<no-skill/>` for exploratory/trivial runs
+   * (→ nothing stored). A real skill is stored as a durable `lesson` tagged
+   * `kind:'skill'`, so it reinforces on re-extraction (MEM-32) and flows through
+   * recall. The LLM is injectable for tests; defaults to the synthesis runner.
+   */
+  public async extractSkillFromSession(
+    userId: string,
+    opts: {
+      sessionSummary: string;
+      sessionKey?: string;
+      activeSkill?: string;
+      llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string>;
+    },
+  ): Promise<{ extracted: boolean; recordId?: string; reinforced?: boolean; skill?: string }> {
+    const summary = (opts.sessionSummary ?? "").trim();
+    if (summary.length < 20) return { extracted: false };
+
+    const { system, user } = buildSkillExtractionPrompt(summary);
+    const run = opts.llm ?? ((p) => this.synthesisRunner.run(p as any));
+    let raw: string;
+    try {
+      raw = await run({ prompt: user, systemPrompt: system, timeoutMs: 60_000 });
+    } catch {
+      return { extracted: false }; // LLM unavailable → best-effort, store nothing
+    }
+
+    const { skill } = parseSkillResponse(raw);
+    if (!skill) return { extracted: false };
+
+    const res = this.recordLesson(userId, skill, {
+      sessionKey: opts.sessionKey,
+      activeSkill: opts.activeSkill,
+      priority: 82,
+      kind: "skill",
+    });
+    return { extracted: true, recordId: res.recordId, reinforced: res.reinforced, skill };
+  }
+
+  /**
+   * MEM-32b (0.4.4) — `reflect`: synthesize NON-OBVIOUS cross-memory insights
+   * (patterns spanning multiple records) via the synthesis LLM and record each
+   * as a reinforcing `lesson` (kind:"insight"). `<no-insight/>` → nothing stored.
+   * LLM failure is best-effort. The LLM is injectable for tests.
+   */
+  public async reflect(
+    userId: string,
+    opts?: { limit?: number; llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string> },
+  ): Promise<{ reflected: number; insights: string[] }> {
+    const records = this.store.listMemories(userId, { archived: false }).slice(0, Math.max(3, Math.min(50, opts?.limit ?? 25)));
+    if (records.length < 3) return { reflected: 0, insights: [] };
+
+    const { system, user } = buildReflectPrompt(records.map((r) => r.content));
+    const run = opts?.llm ?? ((p) => this.synthesisRunner.run(p as any));
+    let raw: string;
+    try {
+      raw = await run({ prompt: user, systemPrompt: system, timeoutMs: 60_000 });
+    } catch {
+      return { reflected: 0, insights: [] };
+    }
+
+    const insights = parseReflectResponse(raw);
+    for (const insight of insights) {
+      this.recordLesson(userId, insight, { kind: "insight", priority: 78 });
+    }
+    return { reflected: insights.length, insights };
+  }
+
   public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): CognitiveRecord[] {
     return this.store.getMemoriesByFilePath(userId, filePath, limit);
   }
@@ -778,6 +964,20 @@ export class MemoryEngine {
   public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
     const items = this.store.listMemories(userId, { type: filters.type, archived: false });
     return planGovernance(items, filters, Date.now());
+  }
+
+  /**
+   * MEM-21 — storage-governance dry-run across the 0.4.3 depth tables (source
+   * chunks / documents / tree nodes / vault exports) with per-class reclaim
+   * estimates. Read-only; capability-detected so a partial store mock degrades
+   * to an empty plan.
+   */
+  public governanceStoragePlan(userId: string): StorageGovernanceResult {
+    const store = this.store as Partial<{ getStorageGovernanceStats(u: string): StorageGovernanceStats }>;
+    if (typeof store.getStorageGovernanceStats !== "function") {
+      return { classes: [], totalEstimatedChars: 0, totalReclaimableChars: 0 };
+    }
+    return planStorageGovernance(store.getStorageGovernanceStats(userId));
   }
 
   // ── Blackboard commit pipeline (MEM-4) ──────────────────────────────────
@@ -905,6 +1105,23 @@ export class MemoryEngine {
     return parent;
   }
 
+  /**
+   * BRAIN-P4-T5 — global rollup digest. Scene autobuild seals topic leaves into
+   * GLOBAL roots; once enough unsealed global roots accumulate
+   * (`BRAINROUTER_TREE_GLOBAL_ROLLUP`, default 3) this rolls them up into ONE
+   * higher global digest — the periodic "what happened across topics" summary
+   * that matures the source → topic → global hierarchy beyond scene autobuild.
+   * Reuses summarizeBucket; gated like the autobuild; returns the rollup or null.
+   */
+  public rollupGlobalTree(userId: string): MemoryTreeNode | null {
+    if (!treeAutobuildEnabled()) return null;
+    const store = this.store as any;
+    if (typeof store.getTreeRoots !== "function") return null;
+    const roots = (store.getTreeRoots(userId, "global") as MemoryTreeNode[]).filter((n) => !n.sealedAt);
+    if (roots.length < readTreePolicy().globalRollupThreshold) return null;
+    return this.summarizeBucket(userId, roots.map((n) => n.id), "global");
+  }
+
   /** MEM-5 / MEM-8 — walk the tree: a node + its children, or the roots of a kind. */
   public treeWalk(userId: string, nodeId?: string, kind?: MemoryTreeKind): { node: MemoryTreeNode | null; children: MemoryTreeNode[]; roots?: MemoryTreeNode[] } {
     const store = this.treeStore();
@@ -918,50 +1135,85 @@ export class MemoryEngine {
 
   // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
   /**
-   * 0.4.3 (MEM-9) — benchmark_eval job: a self-retrieval regression benchmark
-   * over the user's OWN records (no synthetic corpus / labels). Samples records,
-   * derives a partial query from each, and runs recall in two modes — `baseline`
-   * (diversity off) vs `lexmmr` (the 0.4.3 lexical+MMR selection) — measuring
-   * whether the source record resurfaces and at what rank. Writes a markdown
-   * mode-comparison summary and returns per-mode ModeStats + a pass/fail against
-   * a sane recall floor. Read-only w.r.t. memory (only writes the summary file);
-   * temporarily raises BRAINROUTER_RECALL_TOP_RESULTS to 20 for @20 coverage and
-   * restores it. Returns insufficient (empty stats) when < 3 records exist.
+   * 0.4.3 (MEM-9) / MEM-19 (0.4.4) — benchmark_eval job: a self-retrieval
+   * regression benchmark over the user's OWN records (no synthetic corpus /
+   * labels). Samples records, derives a partial query from each, and runs recall
+   * in several MODES (recall configurations), measuring whether the source
+   * record resurfaces and at what rank:
+   *   - baseline — RRF + priority only (no diversity, reranker, or judge)
+   *   - lexmmr   — + local lexical-relevance + MMR-diversity selection
+   *   - rerank   — + cross-encoder reranker  (only when one is configured)
+   *   - judge    — + LLM relevance judge      (only when enabled)
+   * rerank/judge are SKIPPED — and reported in `skippedModes`, not silently
+   * equated to baseline — when their service isn't configured. MEM-19 passes
+   * each mode's config to recall PER-CALL (`limitsOverride` / `selectionOverride`
+   * / `disableReranker` / `disableJudge`) instead of mutating process.env, so
+   * runs are deterministic and concurrency-safe (the old env-toggle approach
+   * leaked global state across runs). Writes a markdown summary; returns per-mode
+   * ModeStats + a pass/fail recall floor. Insufficient (empty) when < 3 records.
+   *
+   * Scope: this harness scores cognitive-record self-retrieval. Chunk/tree
+   * ("AST") retrieval is a separate fixture and is not measured here.
    */
   public async runRetrievalBenchmark(
     userId: string,
     opts?: { sampleSize?: number; baseDir?: string },
-  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean }> {
+  ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean; skippedModes: string[]; latencyMsByMode: Record<string, number> }> {
     const sampleSize = Math.max(1, Math.min(opts?.sampleSize ?? 20, 100));
     const sample = this.store.listMemories(userId, { archived: false }).slice(0, sampleSize);
     if (sample.length < 3) {
-      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true };
+      return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true, skippedModes: [], latencyMsByMode: {} };
     }
 
-    const modes: Array<{ name: string; diversity: string }> = [
-      { name: "baseline", diversity: "off" },
-      { name: "lexmmr", diversity: "on" },
+    interface BenchMode {
+      name: string;
+      selection: { diversity: boolean };
+      disableReranker: boolean;
+      disableJudge: boolean;
+    }
+    const modes: BenchMode[] = [
+      { name: "baseline", selection: { diversity: false }, disableReranker: true, disableJudge: true },
+      { name: "lexmmr", selection: { diversity: true }, disableReranker: true, disableJudge: true },
     ];
+    const skippedModes: string[] = [];
+    // Augmentation modes run only when their service is actually configured —
+    // otherwise they'd duplicate baseline and overstate coverage.
+    if (this.rerankerService.isReady()) {
+      modes.push({ name: "rerank", selection: { diversity: true }, disableReranker: false, disableJudge: true });
+    } else {
+      skippedModes.push("rerank (no reranker configured)");
+    }
+    if (this.relevanceJudge.isReady()) {
+      modes.push({ name: "judge", selection: { diversity: true }, disableReranker: false, disableJudge: false });
+    } else {
+      skippedModes.push("judge (relevance judge disabled)");
+    }
+
     const statsByMode: Record<string, ModeStats> = {};
-    const prevTop = process.env.BRAINROUTER_RECALL_TOP_RESULTS;
-    const prevDiv = process.env.BRAINROUTER_RECALL_DIVERSITY;
-    process.env.BRAINROUTER_RECALL_TOP_RESULTS = "20"; // recall reads env per-call, so this scopes the bench
-    try {
-      for (const mode of modes) {
-        process.env.BRAINROUTER_RECALL_DIVERSITY = mode.diversity;
-        const ranks: number[] = [];
-        for (const rec of sample) {
-          const query = deriveBenchQuery(rec.content);
-          if (!query) { ranks.push(-1); continue; }
-          const result = await this.recall({ userId, sessionKey: "benchmark", query });
-          const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
-          ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
-        }
-        statsByMode[mode.name] = aggregateRanks(ranks);
+    const latencyMsByMode: Record<string, number> = {}; // MEM-25 — publishable latency
+    for (const mode of modes) {
+      const ranks: number[] = [];
+      const startedAt = Date.now();
+      for (const rec of sample) {
+        const query = deriveBenchQuery(rec.content);
+        if (!query) { ranks.push(-1); continue; }
+        const result = await this.recall({
+          userId,
+          sessionKey: "benchmark",
+          query,
+          limitsOverride: { topResults: 20 }, // @20 coverage, per-call (no env mutation)
+          selectionOverride: mode.selection,
+          disableReranker: mode.disableReranker,
+          disableJudge: mode.disableJudge,
+        });
+        const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
+        ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced
       }
-    } finally {
-      if (prevTop === undefined) delete process.env.BRAINROUTER_RECALL_TOP_RESULTS; else process.env.BRAINROUTER_RECALL_TOP_RESULTS = prevTop;
-      if (prevDiv === undefined) delete process.env.BRAINROUTER_RECALL_DIVERSITY; else process.env.BRAINROUTER_RECALL_DIVERSITY = prevDiv;
+      statsByMode[mode.name] = aggregateRanks(ranks);
+      latencyMsByMode[mode.name] = Date.now() - startedAt;
+    }
+    if (skippedModes.length > 0) {
+      console.error(`[BrainRouter] benchmark skipped modes: ${skippedModes.join(", ")}`);
     }
 
     let summaryPath: string | null = null;
@@ -969,14 +1221,37 @@ export class MemoryEngine {
       const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench", userId);
       fs.mkdirSync(dir, { recursive: true });
       summaryPath = path.join(dir, `bench-${Date.now()}.md`);
-      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode), "utf8");
+      const latencyNote = `\n_Latency (ms): ${Object.entries(latencyMsByMode).map(([m, ms]) => `${m}=${ms}`).join(", ") || "n/a"}._\n`;
+      const skippedNote = skippedModes.length > 0 ? `\n_Skipped: ${skippedModes.join("; ")}._\n` : "";
+      fs.writeFileSync(summaryPath, formatModesSummaryMd(statsByMode) + latencyNote + skippedNote, "utf8");
     } catch {
       summaryPath = null;
     }
     // Sane regression floor: the lexmmr mode should resurface ≥50% of sampled
     // records within the top 10. A bar for the CI gate, not a hard guarantee.
     const { passed } = checkThresholds(statsByMode, { lexmmr: { recall_any_at_10: 0.5 } });
-    return { summaryPath, statsByMode, sampled: sample.length, passed };
+    return { summaryPath, statsByMode, sampled: sample.length, passed, skippedModes, latencyMsByMode };
+  }
+
+  /**
+   * MEM-25 (0.4.4) — code-recall benchmark: scores how well the code chunker
+   * (MEM-18 structural + MEM-24 AST adapter) isolates known top-level symbols
+   * over built-in TS/Python/Rust fixtures, and publishes the numbers to a
+   * markdown file. The "code recall metrics" the competitive review asked for.
+   * Pure w.r.t. memory (only writes the numbers file). Read-only.
+   */
+  public runCodeChunkBenchmark(opts?: { baseDir?: string }): CodeRecallResult & { summaryPath: string | null } {
+    const result = benchmarkCodeChunking(DEFAULT_CODE_SAMPLES);
+    let summaryPath: string | null = null;
+    try {
+      const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench");
+      fs.mkdirSync(dir, { recursive: true });
+      summaryPath = path.join(dir, `code-recall-${Date.now()}.md`);
+      fs.writeFileSync(summaryPath, formatCodeRecallMd(result), "utf8");
+    } catch {
+      summaryPath = null;
+    }
+    return { ...result, summaryPath };
   }
 
   /**
@@ -1124,6 +1399,174 @@ export class MemoryEngine {
         .filter((c) => c.id !== chunk.id && Math.abs(c.ordinal - chunk.ordinal) <= neighbors);
     }
     return { chunk, document, neighbors: neighborChunks };
+  }
+
+  /**
+   * MEM-29 (0.4.4) — `find_related`: exploration-driven code recall. Seed from a
+   * chunk id or a `file:line`, then retrieve the nearest code-chunk neighbours by
+   * symbol/identifier overlap over the chunk FTS — language-scoped, seed
+   * excluded. Unlike `fetchSourceChunk` (positional ±N within one document), this
+   * crosses files to surface callers/callees/similar definitions. Read-only;
+   * returns `found:false` when the store lacks the capability or the seed is
+   * unknown / not owned by the caller. Ranking (MEM-26/27) lives in
+   * `rankRelatedChunks` so the scoring stays pure + testable.
+   */
+  public findRelatedChunks(
+    userId: string,
+    seed: { chunkId?: string; filePath?: string; line?: number },
+    opts?: { limit?: number; sameLanguage?: boolean; maxPerFile?: number; includeEdges?: boolean },
+  ): { found: boolean; seed?: { chunkId: string; filePath: string | null; symbol: string | null }; related: RelatedChunkHit[] } {
+    const store = this.store as Partial<{
+      getSourceChunk(id: string): SourceChunk | null;
+      getSourceChunkByFileLine(userId: string, filePath: string, line: number): SourceChunk | null;
+      searchSourceChunksFts(
+        userId: string,
+        query: string,
+        limit: number,
+        opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
+      ): Array<SourceChunk & { ftsRank: number }>;
+      getSourceDocument(id: string): SourceDocument | null;
+      getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): SourceChunk[];
+      getSourceChunksByDocument(documentId: string): SourceChunk[];
+      findImportedDocument(userId: string, candidateBase: string): SourceDocument | null;
+    }>;
+    if (typeof store.searchSourceChunksFts !== "function") return { found: false, related: [] };
+
+    // Resolve the seed chunk (by id, or by file:line span).
+    let seedChunk: SourceChunk | null = null;
+    if (seed.chunkId && typeof store.getSourceChunk === "function") {
+      seedChunk = store.getSourceChunk(seed.chunkId);
+    } else if (seed.filePath && typeof seed.line === "number" && typeof store.getSourceChunkByFileLine === "function") {
+      seedChunk = store.getSourceChunkByFileLine(userId, seed.filePath, seed.line);
+    }
+    if (!seedChunk) return { found: false, related: [] };
+
+    // Ownership gate — mirror fetchSourceChunk: the seed's parent document must
+    // belong to the caller (the FTS search is already user-scoped for results).
+    const doc = typeof store.getSourceDocument === "function" ? store.getSourceDocument(seedChunk.documentId) : null;
+    if (!doc || doc.userId !== userId) return { found: false, related: [] };
+
+    const limit = Math.max(1, Math.min(50, opts?.limit ?? 10));
+    const seedInfo = { chunkId: seedChunk.id, filePath: seedChunk.filePath, symbol: seedChunk.symbol };
+
+    // MEM-28 — structural neighbours lead: the seed's direct callees/callers
+    // (intra-file symbol edges) are authoritatively related regardless of
+    // lexical overlap or language scope (they're in the same file), so they're
+    // surfaced even when the seed has no extractable query terms.
+    const edgeHits: RelatedChunkHit[] = [];
+    if (opts?.includeEdges !== false && typeof store.getCodeEdgeNeighbors === "function") {
+      for (const c of store.getCodeEdgeNeighbors(userId, seedChunk.id, "callees")) {
+        edgeHits.push({ chunk: c, score: 0.97, reason: "graph:callee" });
+      }
+      for (const c of store.getCodeEdgeNeighbors(userId, seedChunk.id, "callers")) {
+        edgeHits.push({ chunk: c, score: 0.95, reason: "graph:caller" });
+      }
+    }
+
+    // MEM-28b — cross-file import edges: resolve the seed FILE's relative imports
+    // to indexed documents and surface a lead chunk from each (a callee often
+    // lives in an imported file). Resolved lazily here (order-independent).
+    const importHits: RelatedChunkHit[] = [];
+    if (
+      opts?.includeEdges !== false && doc.uri &&
+      typeof store.getSourceChunksByDocument === "function" &&
+      typeof store.findImportedDocument === "function"
+    ) {
+      const fileChunks = store.getSourceChunksByDocument(seedChunk.documentId);
+      const specifiers = extractImportSpecifiers(fileChunks.map((c) => c.content).join("\n"));
+      const seenDocs = new Set<string>([seedChunk.documentId]);
+      let added = 0;
+      for (const spec of specifiers) {
+        if (added >= 5) break;
+        const base = resolveRelativeImport(doc.uri, spec);
+        if (!base) continue;
+        const importedDoc = store.findImportedDocument(userId, base);
+        if (!importedDoc || seenDocs.has(importedDoc.id)) continue;
+        seenDocs.add(importedDoc.id);
+        const chunks = store.getSourceChunksByDocument(importedDoc.id);
+        const lead = chunks.find((c) => c.symbol) ?? chunks[0];
+        if (lead) { importHits.push({ chunk: lead, score: 0.9, reason: "graph:import" }); added++; }
+      }
+    }
+
+    // Lexical neighbours (symbol/identifier overlap), code-reranked (MEM-26/27).
+    const query = extractChunkQueryTerms(seedChunk);
+    const scope = opts?.sameLanguage === false ? [] : languageScopeFor(seedChunk.filePath);
+    const lexical = query
+      ? rankRelatedChunks(
+          seedChunk,
+          store.searchSourceChunksFts(userId, query, limit, { excludeChunkId: seedChunk.id, filePathLike: scope.length ? scope : undefined }),
+          limit,
+          { maxPerFile: opts?.maxPerFile },
+        )
+      : [];
+
+    // Merge: structural edges first, then lexical; dedupe by chunk id (an edge
+    // entry wins over a lexical one for the same chunk), exclude the seed, cap.
+    const merged: RelatedChunkHit[] = [];
+    const seen = new Set<string>([seedChunk.id]);
+    for (const h of [...edgeHits, ...importHits, ...lexical]) {
+      if (seen.has(h.chunk.id)) continue;
+      seen.add(h.chunk.id);
+      merged.push(h);
+      if (merged.length >= limit) break;
+    }
+
+    return { found: true, seed: seedInfo, related: merged };
+  }
+
+  /**
+   * MEM-30 (0.4.4) — incremental code-index freshness. Re-index a code file by
+   * content hash: a no-op when the indexed content is unchanged; on drift the
+   * prior document(s) for that path are marked stale (kept for provenance,
+   * excluded from `find_related`) and the fresh content is re-chunked. Reverting
+   * to an exact prior version revives that document instead of duplicating.
+   * Callers can cheaply gate this with a size/mtime stat before passing content.
+   */
+  public reindexCodeSource(
+    userId: string,
+    input: { filePath: string; content: string; language?: string; title?: string },
+  ): { status: "fresh" | "reindexed" | "unsupported"; documentId?: string; staleMarked: number; chunks: number } {
+    const store = this.store as Partial<{
+      lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null;
+      markSourceDocumentsStaleByPath(userId: string, uri: string): number;
+      reviveSourceDocument(documentId: string): void;
+      createSourceDocument(input: any): SourceDocument;
+      addSourceChunks(documentId: string, chunks: any[]): SourceChunk[];
+    }>;
+    if (
+      typeof store.lookupDocumentByPathHash !== "function" ||
+      typeof store.createSourceDocument !== "function" ||
+      typeof store.addSourceChunks !== "function"
+    ) {
+      return { status: "unsupported", staleMarked: 0, chunks: 0 };
+    }
+
+    const hash = createHash("sha1").update(input.content ?? "").digest("hex");
+    const existing = store.lookupDocumentByPathHash(userId, input.filePath, hash);
+    if (existing && !existing.stale) {
+      return { status: "fresh", documentId: existing.id, staleMarked: 0, chunks: 0 };
+    }
+
+    const staleMarked = store.markSourceDocumentsStaleByPath?.(userId, input.filePath) ?? 0;
+
+    // Revert case — this exact content was indexed before (now staled). Revive
+    // it rather than duplicate; its chunks + edges are still intact.
+    if (existing) {
+      store.reviveSourceDocument?.(existing.id);
+      return { status: "reindexed", documentId: existing.id, staleMarked, chunks: 0 };
+    }
+
+    const doc = store.createSourceDocument({
+      userId,
+      workspaceTag: null,
+      kind: "file",
+      uri: input.filePath,
+      hash,
+      title: input.title ?? input.filePath,
+    });
+    const stored = store.addSourceChunks(doc.id, chunkCode(input.content ?? "", { filePath: input.filePath, language: input.language }));
+    return { status: "reindexed", documentId: doc.id, staleMarked, chunks: stored.length };
   }
 
   public getOperationLog(

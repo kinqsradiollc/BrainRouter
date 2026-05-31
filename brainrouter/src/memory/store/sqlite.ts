@@ -3,6 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, SessionInboxFilters, SessionInboxKind, SessionInboxRecord, PendingDelegationRecord, PendingDelegationEnqueueInput, PendingDelegationFilters, PendingDelegationStatus, DelegationPacket, MemoryJobRecord, MemoryJobStatus, MemoryJobEnqueueInput, MemoryJobListFilters, MemoryJobKindAggregate, ContradictionRecord, CursorPaginationOptions, EvidenceListFilters, ExtractionStatus, ImportResult, SensoryRecord, CognitiveRecord, CognitiveFtsResult, MemoryEvidence, MemoryExport, MemoryImport, MemoryListFilters, MemoryListItem, MemoryOperation, MemoryStatus, OperationLogFilters, VectorSearchResult, SkillActivationRecord, SkillHintsRecord, ContextualFocusRecord, CoreIdentityRecord, SchedulerState, GraphNode, GraphEdge, StalledExtractionBacklog, UserRecord, SourceDocument, SourceChunk, SourceChunkInput, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, VaultExportEntry, VaultExportInput } from "@kinqs/brainrouter-types";
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import { extractIntraFileCallEdges } from "../code-retrieval.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
@@ -871,6 +872,53 @@ export class SqliteMemoryStore implements IMemoryStore {
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_doc ON source_chunks(document_id, ordinal)");
+
+    // MEM-29 (0.4.4) — lexical index over source chunks so `find_related` can
+    // retrieve nearest code-chunk neighbours by symbol/identifier overlap. The
+    // record vector index only covers chunks that were distilled into a memory;
+    // code recall needs every chunk reachable, so we index chunk content +
+    // symbol directly here. Kept in sync by triggers (chunks are insert/replace-
+    // only, never updated in place), so addSourceChunks / replaceSourceChunks /
+    // document-delete cascades all stay consistent without per-method wiring.
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS source_chunks_fts USING fts5(
+        content,
+        symbol,
+        chunk_id UNINDEXED,
+        user_id UNINDEXED,
+        document_id UNINDEXED,
+        file_path UNINDEXED
+      )
+    `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS source_chunks_fts_ai AFTER INSERT ON source_chunks BEGIN
+        INSERT INTO source_chunks_fts (content, symbol, chunk_id, user_id, document_id, file_path)
+        VALUES (new.content, COALESCE(new.symbol, ''), new.id, COALESCE(new.user_id, ''), new.document_id, COALESCE(new.file_path, ''));
+      END
+    `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS source_chunks_fts_ad AFTER DELETE ON source_chunks BEGIN
+        DELETE FROM source_chunks_fts WHERE chunk_id = old.id;
+      END
+    `);
+
+    // MEM-28 (0.4.4) — code symbol graph (Phase-1): intra-file call/reference
+    // edges (from_chunk references a symbol defined by to_chunk in the same
+    // document). Lets find_related expand a hit to its direct callers/callees.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS code_symbol_edges (
+        document_id TEXT NOT NULL,
+        from_chunk_id TEXT NOT NULL,
+        to_chunk_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'calls',
+        PRIMARY KEY (from_chunk_id, to_chunk_id, kind),
+        FOREIGN KEY (from_chunk_id) REFERENCES source_chunks(id) ON DELETE CASCADE,
+        FOREIGN KEY (to_chunk_id) REFERENCES source_chunks(id) ON DELETE CASCADE
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_code_edges_from ON code_symbol_edges(from_chunk_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_code_edges_to ON code_symbol_edges(to_chunk_id)");
+
     // MEM-3 — batch-level provenance: which source chunks a cognitive record
     // was distilled from. user_id carried for RBAC-readiness (MEM-14).
     this.db.exec(`
@@ -947,6 +995,32 @@ export class SqliteMemoryStore implements IMemoryStore {
     // the tree autobuilder keep one leaf per scene without a content scan.
     this.ensureColumn("memory_tree_nodes", "scene_key", "TEXT DEFAULT NULL");
     this.ensureColumn("vault_exports", "workspace_tag", "TEXT DEFAULT NULL");
+    // MEM-30 (0.4.4) — code-index freshness: when a file's content drifts, its
+    // prior document is marked stale (not deleted — provenance links survive)
+    // and a fresh document is re-ingested. Stale chunks are excluded from
+    // find_related so recall reflects the current file.
+    this.ensureColumn("source_documents", "stale", "INTEGER NOT NULL DEFAULT 0");
+
+    // MEM-29 — one-time backfill of the chunk FTS for stores created before this
+    // index existed. Triggers keep it in sync going forward; this only fires on
+    // the first boot after upgrade (when the new FTS table is empty but chunks
+    // already exist). Bounded by the workspace's chunk count.
+    try {
+      const ftsCount = (this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks_fts").get() as any)?.n ?? 0;
+      if (ftsCount === 0) {
+        const chunkCount = (this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks").get() as any)?.n ?? 0;
+        if (chunkCount > 0) {
+          this.db.exec(`
+            INSERT INTO source_chunks_fts (content, symbol, chunk_id, user_id, document_id, file_path)
+            SELECT content, COALESCE(symbol, ''), id, COALESCE(user_id, ''), document_id, COALESCE(file_path, '')
+            FROM source_chunks
+          `);
+        }
+      }
+    } catch {
+      // FTS5 unavailable or backfill race — non-fatal; find_related degrades to
+      // empty results rather than blocking store init.
+    }
   }
 
   /** MEM-14 — idempotently add a column to a table (no-op if it already exists). */
@@ -1074,6 +1148,53 @@ export class SqliteMemoryStore implements IMemoryStore {
     return doc;
   }
 
+  /**
+   * MEM-30 — look up the document for (user, uri, content-hash), returning its
+   * id + stale flag (any state). Lets reindex distinguish "already fresh"
+   * (no-op) from "this exact content existed but was staled" (revert → revive)
+   * from "brand-new content" (ingest). Newest wins.
+   */
+  public lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null {
+    const row = this.db.prepare(
+      `SELECT id, COALESCE(stale, 0) AS stale FROM source_documents
+        WHERE user_id = ? AND uri = ? AND hash = ?
+        ORDER BY created_at DESC LIMIT 1`,
+    ).get(userId, uri, hash) as any;
+    return row ? { id: String(row.id), stale: !!row.stale } : null;
+  }
+
+  /**
+   * MEM-30 — mark every currently-live document for (user, uri) stale. Returns
+   * the count flipped. Used when a file's content drifts: the old index stays
+   * for provenance but is excluded from fresh recall.
+   */
+  public markSourceDocumentsStaleByPath(userId: string, uri: string): number {
+    const res = this.db.prepare(
+      "UPDATE source_documents SET stale = 1 WHERE user_id = ? AND uri = ? AND COALESCE(stale, 0) = 0",
+    ).run(userId, uri);
+    return Number((res as any)?.changes ?? 0);
+  }
+
+  /** MEM-30 — un-stale a document (revert case: content matches a prior version). */
+  public reviveSourceDocument(documentId: string): void {
+    this.db.prepare("UPDATE source_documents SET stale = 0 WHERE id = ?").run(documentId);
+  }
+
+  /**
+   * MEM-28b — resolve an extensionless import target (e.g. `src/parser`) to an
+   * indexed, non-stale document, trying common code extensions and `/index.*`.
+   * Newest live match wins; null when the imported file isn't indexed.
+   */
+  public findImportedDocument(userId: string, candidateBase: string): SourceDocument | null {
+    const exts = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs'];
+    const candidates = exts.map((e) => candidateBase + e).concat(exts.map((e) => `${candidateBase}/index${e}`));
+    const placeholders = candidates.map(() => '?').join(',');
+    const row = this.db.prepare(
+      `SELECT * FROM source_documents WHERE user_id = ? AND COALESCE(stale,0)=0 AND uri IN (${placeholders}) ORDER BY created_at DESC LIMIT 1`,
+    ).get(userId, ...candidates) as any;
+    return row ? this.rowToSourceDocument(row) : null;
+  }
+
   /** Append chunks to a document; ordinals continue from the current count. Chunk hash = sha1(content). */
   public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
     const startOrdinal = ((this.db.prepare("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = ?").get(documentId) as any)?.n ?? 0) as number;
@@ -1103,6 +1224,20 @@ export class SqliteMemoryStore implements IMemoryStore {
         stmt.run(chunk.id, chunk.documentId, parent?.user_id ?? null, parent?.workspace_tag ?? null, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash);
         out.push(chunk);
       });
+      // MEM-28 — record intra-file call/reference edges for this batch's code
+      // chunks (those with a symbol). Code files ingest atomically, so `out` is
+      // the document's full chunk set here; transcript/doc batches have no
+      // symbols and produce no edges.
+      const codeChunks = out.filter((c) => c.symbol);
+      if (codeChunks.length >= 2) {
+        const edges = extractIntraFileCallEdges(codeChunks.map((c) => ({ id: c.id, symbol: c.symbol, content: c.content })));
+        if (edges.length > 0) {
+          const edgeStmt = this.db.prepare(
+            "INSERT OR IGNORE INTO code_symbol_edges (document_id, from_chunk_id, to_chunk_id, kind) VALUES (?, ?, ?, 'calls')",
+          );
+          for (const e of edges) edgeStmt.run(documentId, e.fromChunkId, e.toChunkId);
+        }
+      }
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -1119,6 +1254,71 @@ export class SqliteMemoryStore implements IMemoryStore {
   public getSourceChunksByDocument(documentId: string): SourceChunk[] {
     const rows = this.db.prepare("SELECT * FROM source_chunks WHERE document_id = ? ORDER BY ordinal ASC").all(documentId) as any[];
     return rows.map((r) => this.rowToSourceChunk(r));
+  }
+
+  /**
+   * MEM-29 — resolve a `file:line` seed to the chunk whose [start_line,end_line]
+   * span contains the line (the smallest such span wins when chunks nest). Scoped
+   * to the caller. Matches file_path by suffix so callers can pass a workspace-
+   * relative or absolute path. Returns null when nothing covers the line.
+   */
+  public getSourceChunkByFileLine(userId: string, filePath: string, line: number): SourceChunk | null {
+    const needle = filePath.replace(/^\.\//, "");
+    const row = this.db.prepare(
+      `SELECT * FROM source_chunks
+        WHERE user_id = ?
+          AND file_path IS NOT NULL
+          AND (file_path = ? OR file_path LIKE ?)
+          AND start_line IS NOT NULL AND end_line IS NOT NULL
+          AND start_line <= ? AND end_line >= ?
+        ORDER BY (end_line - start_line) ASC
+        LIMIT 1`,
+    ).get(userId, needle, `%${needle}`, line, line) as any;
+    return row ? this.rowToSourceChunk(row) : null;
+  }
+
+  /**
+   * MEM-29 — lexical nearest-neighbour search over the chunk FTS. `query` is a
+   * free-text bag of symbols/identifiers (built from a seed chunk); results are
+   * ranked by FTS5 `rank` (more negative = better, so ascending). Scoped to the
+   * caller; optional excludes/scope let `find_related` drop the seed itself, its
+   * own document, and other-language files. `ftsRank` is surfaced so the
+   * code-aware reranker (MEM-26/27) can refine ordering.
+   */
+  public searchSourceChunksFts(
+    userId: string,
+    query: string,
+    limit: number,
+    opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
+  ): Array<SourceChunk & { ftsRank: number }> {
+    const ftsQuery = buildFtsQuery(query);
+    if (!ftsQuery) return [];
+    const cap = Math.max(1, Math.min(200, limit));
+    // Over-fetch a little so post-filters (exclude seed/doc, language scope)
+    // still leave `limit` candidates for the reranker.
+    const fetch = Math.min(200, cap * 4);
+    const rows = this.db.prepare(
+      `SELECT sc.*, f.rank AS fts_rank
+         FROM source_chunks_fts f
+         JOIN source_chunks sc ON sc.id = f.chunk_id
+         JOIN source_documents d ON d.id = sc.document_id
+        WHERE f.user_id = ? AND source_chunks_fts MATCH ? AND COALESCE(d.stale, 0) = 0
+        ORDER BY f.rank
+        LIMIT ?`,
+    ).all(userId, ftsQuery, fetch) as any[];
+    const exts = opts?.filePathLike;
+    const out: Array<SourceChunk & { ftsRank: number }> = [];
+    for (const r of rows) {
+      if (opts?.excludeChunkId && r.id === opts.excludeChunkId) continue;
+      if (opts?.excludeDocumentId && r.document_id === opts.excludeDocumentId) continue;
+      if (exts && exts.length > 0) {
+        const fp: string = r.file_path ?? "";
+        if (!exts.some((e) => fp.endsWith(e))) continue;
+      }
+      out.push({ ...this.rowToSourceChunk(r), ftsRank: typeof r.fts_rank === "number" ? r.fts_rank : 0 });
+      if (out.length >= cap) break;
+    }
+    return out;
   }
 
   /**
@@ -1141,8 +1341,28 @@ export class SqliteMemoryStore implements IMemoryStore {
    * here, so the explicit delete is required).
    */
   public replaceSourceChunks(documentId: string, chunks: SourceChunkInput[]): SourceChunk[] {
+    // MEM-28 — clear this document's code edges first. The FK cascade only
+    // fires under PRAGMA foreign_keys=ON; mirror the explicit-delete discipline
+    // the chunk delete already follows so stale edges can't survive a re-chunk.
+    this.db.prepare("DELETE FROM code_symbol_edges WHERE document_id = ?").run(documentId);
     this.db.prepare("DELETE FROM source_chunks WHERE document_id = ?").run(documentId);
     return this.addSourceChunks(documentId, chunks);
+  }
+
+  /**
+   * MEM-28 — the chunks a chunk directly references (callees) or that reference
+   * it (callers), within the same file. Scoped to the caller via the chunk's
+   * denormalized user_id. `direction` picks the edge orientation.
+   */
+  public getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): SourceChunk[] {
+    const col = direction === "callees" ? "from_chunk_id" : "to_chunk_id";
+    const other = direction === "callees" ? "to_chunk_id" : "from_chunk_id";
+    const rows = this.db.prepare(
+      `SELECT sc.* FROM code_symbol_edges e
+         JOIN source_chunks sc ON sc.id = e.${other}
+        WHERE e.${col} = ? AND (sc.user_id = ? OR sc.user_id IS NULL)`,
+    ).all(chunkId, userId) as any[];
+    return rows.map((r) => this.rowToSourceChunk(r));
   }
 
   /**
@@ -1164,6 +1384,42 @@ export class SqliteMemoryStore implements IMemoryStore {
       this.db.exec("ROLLBACK");
       throw e;
     }
+  }
+
+  /**
+   * MEM-21 — read-only storage stats for the governance dry-run across the
+   * 0.4.3 depth tables. Orphan source chunks = chunks NOT cited by any live
+   * memory's provenance (the only ones safe to prune). All user-scoped.
+   */
+  public getStorageGovernanceStats(userId: string): {
+    sourceDocuments: number;
+    sourceChunks: { count: number; chars: number; orphanCount: number; orphanChars: number };
+    treeNodes: { count: number; chars: number };
+    vaultExports: number;
+  } {
+    const num = (v: any): number => Number(v ?? 0) || 0;
+    const docs = this.db.prepare("SELECT COUNT(*) AS n FROM source_documents WHERE user_id = ?").get(userId) as any;
+    const chunks = this.db
+      .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS chars FROM source_chunks WHERE user_id = ?")
+      .get(userId) as any;
+    const orphans = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS chars
+           FROM source_chunks
+          WHERE user_id = ?
+            AND id NOT IN (SELECT chunk_id FROM cognitive_source_links WHERE user_id = ?)`,
+      )
+      .get(userId, userId) as any;
+    const tree = this.db
+      .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(summary_md)), 0) AS chars FROM memory_tree_nodes WHERE user_id = ?")
+      .get(userId) as any;
+    const vault = this.db.prepare("SELECT COUNT(*) AS n FROM vault_exports WHERE user_id = ?").get(userId) as any;
+    return {
+      sourceDocuments: num(docs?.n),
+      sourceChunks: { count: num(chunks?.n), chars: num(chunks?.chars), orphanCount: num(orphans?.n), orphanChars: num(orphans?.chars) },
+      treeNodes: { count: num(tree?.n), chars: num(tree?.chars) },
+      vaultExports: num(vault?.n),
+    };
   }
 
   /** MEM-3 — the source chunks a cognitive record cites, ordered by document + position. */
@@ -1266,6 +1522,24 @@ export class SqliteMemoryStore implements IMemoryStore {
       heatScore: row.heat_score ?? 0,
       createdAt: row.created_at,
     };
+  }
+
+  /**
+   * MEM-17 — the most recent tree node whose source-chunk set includes this
+   * chunk, for recall drill-down (recall hits expose a `treeNodeId` handle).
+   * Cheap LIKE scan (tree nodes are few); underscores/percent in the chunk id
+   * are escaped so the match is exact. Returns null when no node covers it.
+   */
+  public getTreeNodeIdByChunkId(userId: string, chunkId: string): string | null {
+    const needle = `%"${chunkId.replace(/[\\%_]/g, (c) => "\\" + c)}"%`;
+    const row = this.db
+      .prepare(
+        `SELECT id FROM memory_tree_nodes
+          WHERE user_id = ? AND source_chunk_ids_json LIKE ? ESCAPE '\\'
+          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(userId, needle) as any;
+    return row?.id ?? null;
   }
 
   /** MEM-5 — append a tree node (leaf or parent). */
@@ -1593,6 +1867,22 @@ export class SqliteMemoryStore implements IMemoryStore {
       LIMIT ?
     `).all(userId, filePath, `%${filePath}%`, limit) as any[];
     return rows.map(cognitiveRowToRecord);
+  }
+
+  /**
+   * MEM-32 — find a live `lesson` record by its dedup fingerprint (stored in
+   * `metadata.fingerprint`). Lets `recordLesson` reinforce an existing lesson on
+   * corroboration instead of creating a near-duplicate. Newest live match wins.
+   */
+  public findLessonByFingerprint(userId: string, fingerprint: string): CognitiveRecord | null {
+    const row = this.db.prepare(`
+      SELECT r.* FROM cognitive_records r
+       WHERE r.user_id = ? AND r.type = 'lesson'
+         AND json_extract(r.metadata_json, '$.fingerprint') = ?
+         AND r.invalid_at IS NULL AND r.archived = 0
+       ORDER BY r.created_time DESC LIMIT 1
+    `).get(userId, fingerprint) as any;
+    return row ? cognitiveRowToRecord(row) : null;
   }
 
   public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void {
@@ -3010,6 +3300,18 @@ export class SqliteMemoryStore implements IMemoryStore {
       entityType: r.entity_type, skillTag: r.skill_tag,
       confidence: r.confidence, sourceRecordId: r.source_record_id,
       createdTime: r.created_time
+    }));
+  }
+
+  /** DASH-1 — all of a user's graph edges (for whole-graph analytics). */
+  public getAllGraphEdges(userId: string): GraphEdge[] {
+    const rows = this.db.prepare(
+      "SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time FROM graph_edges WHERE user_id = ?",
+    ).all(userId) as any[];
+    return rows.map(r => ({
+      id: r.id, userId: r.user_id, fromNodeId: r.from_node_id, toNodeId: r.to_node_id,
+      relation: r.relation, skillTag: r.skill_tag, confidence: r.confidence,
+      sourceRecordId: r.source_record_id, createdTime: r.created_time,
     }));
   }
 

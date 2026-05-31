@@ -102,6 +102,12 @@ import { memoryConsolidateToolSchema, handleMemoryConsolidate } from './tools/me
 import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from './tools/memory_agent_status.js';
 import { memoryProvenanceToolSchema, handleMemoryProvenance } from './tools/memory_provenance.js';
 import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from './tools/memory_fetch_source_chunk.js';
+import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from './tools/memory_find_related.js';
+import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from './tools/memory_reindex_source.js';
+import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from './tools/memory_record_lesson.js';
+import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from './tools/memory_extract_skill.js';
+import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from './tools/memory_graph_analytics.js';
+import { memoryReflectToolSchema, handleMemoryReflect } from './tools/memory_reflect.js';
 import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from './tools/memory_blackboard.js';
 import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from './tools/memory_tree_walk.js';
 import { memoryVaultExportToolSchema, handleMemoryVaultExport } from './tools/memory_vault_export.js';
@@ -318,6 +324,12 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryAgentStatusToolSchema,
       memoryProvenanceToolSchema,
       memoryFetchSourceChunkToolSchema,
+      memoryFindRelatedToolSchema,
+      memoryReindexSourceToolSchema,
+      memoryRecordLessonToolSchema,
+      memoryExtractSkillToolSchema,
+      memoryGraphAnalyticsToolSchema,
+      memoryReflectToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -402,6 +414,18 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryProvenance(request.params.arguments, { defaultUserId });
         case 'memory_fetch_source_chunk':
           return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
+        case 'memory_find_related':
+          return await handleMemoryFindRelated(request.params.arguments, { defaultUserId });
+        case 'memory_reindex_source':
+          return await handleMemoryReindexSource(request.params.arguments, { defaultUserId });
+        case 'memory_record_lesson':
+          return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId });
+        case 'memory_extract_skill':
+          return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
+        case 'memory_graph_analytics':
+          return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
+        case 'memory_reflect':
+          return await handleMemoryReflect(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':
