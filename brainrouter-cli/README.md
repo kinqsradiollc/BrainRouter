@@ -113,6 +113,26 @@ make the CLI exit instead of degrading.
 instead of running it separately: open `/config`, go to MCP settings, and
 pick the bundled `stdio` profile. The CLI manages the server's lifecycle.
 
+## Exec policy & trust
+
+Every tool call — file edits, shell, child-agent spawns, network fetches — is
+gated by one exec policy. Switch the whole posture with `/policy`:
+
+| Profile | Access | Writes outside workspace | Shell | Sandbox |
+|---|---|---|---|---|
+| `readonly` | read-only | ❌ | ❌ | on |
+| `workspace` | full, file tools confined to the workspace | ❌ | ✅ | on |
+| `trusted` | full | ✅ | ✅ | off |
+
+```bash
+/policy            # show current access mode, sandbox, egress allowlist + profiles
+/policy readonly   # apply a profile
+```
+
+Individual knobs (`cli.externalDirWrites`, `cli.egressAllowlist`,
+`cli.sandbox`) live under `cli.*` in `config.json`. Full reference:
+[`brainrouter-docs/policy.md`](https://github.com/kinqsradiollc/BrainRouter/blob/main/brainrouter-docs/policy.md).
+
 ## Workspace detection
 
 By default, the CLI uses the nearest project root with `AGENT.md`,

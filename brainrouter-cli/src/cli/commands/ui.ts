@@ -172,6 +172,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         for (const n of profileNames()) {
           console.log(`    ${chalk.bold(n.padEnd(10))} ${chalk.gray(getPolicyProfile(n)!.description)}`);
         }
+        console.log(chalk.gray(`\n  Trust model reference: brainrouter-docs/policy.md`));
         console.log();
         return true;
       }
