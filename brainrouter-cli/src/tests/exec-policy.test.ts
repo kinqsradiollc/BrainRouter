@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideExecutionPolicy, actionKindForTool, resolveToolPolicy } from '../runtime/execPolicy.js';
+import { decideExecutionPolicy, actionKindForTool, resolveToolPolicy } from '../runtime/exec/execPolicy.js';
 
 test('CLI-11 read mode: read-only allowed, everything mutating denied', () => {
   assert.equal(decideExecutionPolicy('read_only', 'read').decision, 'allow');
