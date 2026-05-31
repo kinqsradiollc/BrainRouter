@@ -210,6 +210,14 @@ export interface CliKnobs {
    *  reconnected). Default true. */
   autoReplayOffline?: boolean;
 
+  // ---- browser verification (VERIFY-BROWSER) ---------------------------
+  /** Shell command template for `/verify browser` — runs a browser smoke
+   *  test and writes artifacts (screenshots / video / console+network logs)
+   *  into a run directory. `{url}` and `{out}` are substituted. Empty = off.
+   *  Infrastructure-agnostic: wire Playwright / puppeteer / a Chrome
+   *  DevTools MCP harness — whatever produces files in `{out}`. */
+  browserSmoke?: string;
+
   // ---- automatic code-index freshness (CLI-REINDEX) --------------------
   /** Keep the brain's code index fresh by calling memory_reindex_source from
    *  the file read/edit paths (stat-gated to skip unchanged files; a no-op
@@ -475,6 +483,7 @@ export interface ResolvedCliKnobs {
   autoExtractSkills: boolean;
   autoReplayOffline: boolean;
   autoReindex: boolean;
+  browserSmoke: string;
   lspServers: Record<string, string>;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
@@ -543,6 +552,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     autoExtractSkills: c.autoExtractSkills ?? false,
     autoReplayOffline: c.autoReplayOffline ?? true,
     autoReindex: c.autoReindex ?? true,
+    browserSmoke: c.browserSmoke ?? '',
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
