@@ -210,6 +210,12 @@ export interface CliKnobs {
    *  reconnected). Default true. */
   autoReplayOffline?: boolean;
 
+  // ---- LSP semantic navigation (CLI-19) ---------------------------------
+  /** language → server launch command for the `lsp` tool, e.g.
+   *  { "typescript": "typescript-language-server --stdio" }. Merged over the
+   *  built-in defaults; set "" to disable a language. */
+  lspServers?: Record<string, string>;
+
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
   childAgentTimeoutMs?: number;
@@ -461,6 +467,7 @@ export interface ResolvedCliKnobs {
   postEditCheck: string;
   autoExtractSkills: boolean;
   autoReplayOffline: boolean;
+  lspServers: Record<string, string>;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -527,6 +534,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     postEditCheck: c.postEditCheck ?? '',
     autoExtractSkills: c.autoExtractSkills ?? false,
     autoReplayOffline: c.autoReplayOffline ?? true,
+    lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,

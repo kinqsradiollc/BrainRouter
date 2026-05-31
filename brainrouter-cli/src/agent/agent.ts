@@ -521,6 +521,20 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'lsp',
+    description: "Semantic code navigation via the language server (exact, not fuzzy). actions: definition / references / hover (need file + 1-based line + character), symbols (file only, lists the file's symbols). Returns file:line:col locations or hover text. Requires a configured language server (cli.lspServers); reports clearly when none is available.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['definition', 'references', 'hover', 'symbols'], description: 'The LSP query.' },
+        file: { type: 'string', description: 'File path (workspace-relative or absolute).' },
+        line: { type: 'integer', description: '1-based line of the symbol (required for definition/references/hover).' },
+        character: { type: 'integer', description: '1-based column of the symbol (default 1).' }
+      },
+      required: ['action', 'file']
+    }
+  },
+  {
     name: 'extract_result',
     description: 'Expand a large tool result that was handed off (you hold a `resultRef` instead of the full output). With no `query`, returns the head of the result; with a `query`, returns the matching lines plus surrounding context. Use this instead of re-running the original tool when you only need a slice of a big output.',
     inputSchema: {
@@ -1092,7 +1106,7 @@ export class Agent {
     // mode — they don't touch the workspace and the agent needs them to end
     // a goal cleanly (goal_complete / goal_blocked) or observe state.
     const readOnly = new Set([
-      'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'update_plan',
+      'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'lsp', 'update_plan',
       'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'route_task',
       'goal_complete', 'goal_blocked',
@@ -2626,6 +2640,24 @@ export class Agent {
         if (!query) throw new Error('web_search requires a non-empty query.');
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
         return await runWebSearch(query, maxResults);
+      }
+      case 'lsp': {
+        // CLI-19 — semantic navigation via a language server.
+        const action = String(args.action ?? '').trim() as 'definition' | 'references' | 'hover' | 'symbols';
+        if (!['definition', 'references', 'hover', 'symbols'].includes(action)) {
+          throw new Error('lsp: action must be definition | references | hover | symbols.');
+        }
+        if (!args.file) throw new Error('lsp requires a `file`.');
+        const resolved = resolveHere(String(args.file));
+        const { runLspQuery } = await import('../runtime/lsp/manager.js');
+        return await runLspQuery({
+          action,
+          file: resolved,
+          line: args.line != null ? Number(args.line) : undefined,
+          character: args.character != null ? Number(args.character) : undefined,
+          cwd: this.workspaceRoot,
+          servers: getCliKnobs().lspServers,
+        });
       }
       case 'extract_result': {
         const resultRef = String(args.resultRef ?? '').trim();
