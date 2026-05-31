@@ -65,6 +65,7 @@ import { computePrefixFingerprint, computePrefixComponents, type PrefixComponent
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
 import { isPathWithinRoots } from '../runtime/pathPolicy.js';
 import { runPostEditCheck } from '../runtime/postEditCheck.js';
+import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../runtime/autoReindex.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -850,6 +851,9 @@ export function resolveWorkspacePath(
 export class Agent {
   private mcpClient: McpClientWrapper;
   private llmConfig: LLMConfig;
+  /** CLI-REINDEX — per-path stat signature of the last reindex, so unchanged
+   *  files don't re-ship content to memory_reindex_source on every read. */
+  private reindexSignatures = new Map<string, string>();
   public sessionKey: string;
   /**
    * Federation Stage 3 — the per-process key the `attachFederation`
@@ -2392,9 +2396,12 @@ export class Agent {
           throw new Error(`File not found: ${args.path}`);
         }
         const content = fs.readFileSync(resolved, 'utf8');
+        // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
+        // reads stay snappy, and guarded so a rejection never escapes.
+        void this.maybeReindexSource(resolved, content).catch(() => {});
         const startLine = args.startLine ? Number(args.startLine) : 1;
         const endLine = args.endLine ? Number(args.endLine) : undefined;
-        
+
         if (startLine === 1 && endLine === undefined) {
           return content;
         }
@@ -2419,7 +2426,9 @@ export class Agent {
           fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(resolved, args.content, 'utf8');
-        return `Successfully wrote file: ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const writeNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const reindexNotice = await this.maybeReindexSource(resolved, args.content);
+        return `Successfully wrote file: ${args.path}` + writeNotice + reindexNotice;
       }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
@@ -2443,7 +2452,9 @@ export class Agent {
         const updated = content.replace(target, replacement);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
-        return `Successfully edited ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const editReindex = await this.maybeReindexSource(resolved, updated);
+        return `Successfully edited ${args.path}` + editNotice + editReindex;
       }
       case 'list_dir': {
         const targetDir = resolveHere(args.path || '.');
@@ -2726,7 +2737,12 @@ export class Agent {
           const result = applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
           const firstFile = patch.match(/^\*\*\*\s+(?:Add|Update) File:\s*(.+)\s*$/m)?.[1]?.trim();
           const checkFile = firstFile ? path.resolve(this.workspaceRoot, firstFile) : this.workspaceRoot;
-          return result + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
+          const patchNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
+          let patchReindex = '';
+          if (firstFile) {
+            try { patchReindex = await this.maybeReindexSource(checkFile, fs.readFileSync(checkFile, 'utf8')); } catch { /* file may have been deleted */ }
+          }
+          return result + patchNotice + patchReindex;
         }
       }
       case 'update_plan': {
@@ -2995,6 +3011,53 @@ export class Agent {
       recordFileMutation(this.workspaceRoot, this.sessionKey, { turn: this.fileSnapshotTurn, path: rel, priorContent });
     } catch {
       /* snapshotting must never break a tool call */
+    }
+  }
+
+  /**
+   * CLI-REINDEX (0.4.5) — keep the brain's code index fresh from the file
+   * read/edit paths. Stat-gated (skips unchanged files), offline-safe, and
+   * scoped to code files. Returns a short notice when a reindex actually
+   * happened (empty string otherwise — including every skip/error path), so
+   * callers can append it without branching. Never throws: index upkeep must
+   * not break a file operation.
+   */
+  private async maybeReindexSource(resolved: string, content: string): Promise<string> {
+    try {
+      const connected = typeof (this.mcpClient as any).isConnected === 'function'
+        ? !!(this.mcpClient as any).isConnected()
+        : true;
+      let signature: string;
+      try {
+        const st = fs.statSync(resolved);
+        signature = reindexSignature({ size: st.size, mtimeMs: st.mtimeMs });
+      } catch {
+        return ''; // file gone (e.g. a delete) — nothing to index
+      }
+      const gate: ReindexGate = {
+        enabled: getCliKnobs().autoReindex,
+        connected,
+        filePath: resolved,
+        signature,
+        lastSignature: this.reindexSignatures.get(resolved),
+      };
+      if (!shouldReindex(gate)) return '';
+      const res = await callMcpTool<{ status?: string; chunks?: number; staleMarked?: boolean }>(
+        this.mcpClient,
+        'memory_reindex_source',
+        { file: resolved, content, language: languageHint(resolved) },
+      );
+      // Leave the signature unrecorded on failure so it retries on the next
+      // touch; only mark it once the brain confirms it saw this content.
+      if (res.isError) return '';
+      this.reindexSignatures.set(resolved, signature);
+      if (res.parsed?.status === 'reindexed') {
+        const chunks = typeof res.parsed.chunks === 'number' ? res.parsed.chunks : 0;
+        return `\n[code index refreshed: ${chunks} chunk${chunks === 1 ? '' : 's'}]`;
+      }
+      return '';
+    } catch {
+      return '';
     }
   }
 
