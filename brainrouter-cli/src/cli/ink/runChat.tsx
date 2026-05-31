@@ -18,6 +18,8 @@ import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue } from '../../state/checkpointStore.js';
+import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
+import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
 import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';
 import { expandMentions } from '../../memory/mentions.js';
@@ -427,6 +429,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     // CLI-21 — crash checkpoint: record the in-flight prompt before the turn so
     // a mid-turn crash can be recovered on the next launch. Cleared in finally.
     beginTurnCheckpoint(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
+    let turnToolCalls = 0; // MEM-33b — multi-step signal for auto skill extraction
 
     const { expanded, mentions } = expandMentions(rawInput, agent.workspaceRoot);
     if (mentions.length > 0 && !isQuiet()) {
@@ -530,6 +533,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // Surface the in-flight tool via the spinner status line — the
           // scrollback entry is pushed at onToolEnd so each tool call is
           // a single block (header + result), not two rows.
+          turnToolCalls++;
           toolStartTimes.set(name, Date.now());
           toolArgsSnapshot.set(name, args ?? {});
           if (!isQuiet()) {
@@ -699,6 +703,18 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // Goal continuation lives at the bottom of the success path so a
       // failed turn doesn't trigger it (we don't want auto-retry loops).
       scheduleGoalContinuation(rawInput, answer);
+
+      // MEM-33b — after a successful MULTI-STEP turn, fire-and-forget distil a
+      // reusable skill (the brain's <no-skill/> gate drops trivial runs). Opt-in
+      // (cli.autoExtractSkills, off by default — one LLM call per turn). Fully
+      // self-contained so it can never disturb the session.
+      if (shouldAutoExtractSkill({ enabled: getCliKnobs().autoExtractSkills, toolCalls: turnToolCalls, answerLength: (answer ?? '').length })) {
+        const summary = buildSessionSummary(rawInput, answer, turnToolCalls);
+        void (async () => {
+          try { await callMcpTool(mcpClient, 'memory_extract_skill', { sessionSummary: summary, sessionKey: agent.sessionKey, activeSkill: agent.activeSkill }); }
+          catch { /* best-effort — never disturb the session */ }
+        })();
+      }
     } catch (err: any) {
       parentDone = true;
       controller.push.notice(`✗ Execution failed: ${err?.message ?? err}`, 'error');
