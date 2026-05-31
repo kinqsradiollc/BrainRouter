@@ -196,7 +196,38 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log();
         return true;
       }
-      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect  ·  /verify run [build|test|lint]\n')); return true; }
+      // VERIFY-BROWSER — `/verify browser [url]` runs the configured browser
+      // smoke command, writes artifacts to a run dir, and reports what it
+      // produced. Infrastructure-agnostic (cli.browserSmoke template).
+      if (id === 'browser') {
+        const { runBrowserSmoke, formatBrowserSmokeResult } = await import('../../runtime/browserVerify.js');
+        const cp = await import('node:child_process');
+        const template = getCliKnobs().browserSmoke;
+        const url = args[1] || 'http://localhost:3000';
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const outDir = path.join(agent.workspaceRoot, '.brainrouter', 'browser-smoke', stamp);
+        try { fs.mkdirSync(outDir, { recursive: true }); } catch { /* best-effort */ }
+        const exec = (command: string, cwd: string): { exitCode: number; output: string } => {
+          try {
+            const out = cp.execSync(command, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+            return { exitCode: 0, output: out };
+          } catch (e: any) {
+            return { exitCode: typeof e?.status === 'number' ? e.status : 1, output: `${e?.stdout ?? ''}${e?.stderr ?? ''}` || String(e?.message ?? e) };
+          }
+        };
+        const list = (dir: string): string[] => {
+          try { return fs.readdirSync(dir).map((f) => path.join(dir, f)); } catch { return []; }
+        };
+        console.log(chalk.bold(`\n🌐 Verify — browser smoke (${url})`));
+        const result = runBrowserSmoke(template, { url, outDir, cwd: agent.workspaceRoot }, exec, list);
+        if ('error' in result) { console.log(chalk.yellow(`  ${result.error}`)); console.log(); return true; }
+        for (const line of formatBrowserSmokeResult(result)) {
+          console.log(line.startsWith('  ') ? chalk.gray(line) : (result.ok ? chalk.green(line) : chalk.red(line)));
+        }
+        console.log();
+        return true;
+      }
+      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect  ·  /verify run [build|test|lint]  ·  /verify browser [url]\n')); return true; }
       const status = args[1] || 'verified';
       const confidence = args[2] ? Number(args[2]) : 0.9;
       await printMcpCall(mcpClient, 'memory_verify', { recordId: id, verificationStatus: status, confidence }, `Verify ${id}`);
