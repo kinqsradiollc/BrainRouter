@@ -205,6 +205,11 @@ export interface CliKnobs {
    *  skill (memory_extract_skill). Off by default (one LLM call per turn). */
   autoExtractSkills?: boolean;
 
+  // ---- offline replay (CLI-21b) -----------------------------------------
+  /** On launch, auto-replay prompts that were queued while offline (once
+   *  reconnected). Default true. */
+  autoReplayOffline?: boolean;
+
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
   childAgentTimeoutMs?: number;
@@ -455,6 +460,7 @@ export interface ResolvedCliKnobs {
   egressAllowlist: string[];
   postEditCheck: string;
   autoExtractSkills: boolean;
+  autoReplayOffline: boolean;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -520,6 +526,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     egressAllowlist: Array.isArray(c.egressAllowlist) ? c.egressAllowlist : [],
     postEditCheck: c.postEditCheck ?? '',
     autoExtractSkills: c.autoExtractSkills ?? false,
+    autoReplayOffline: c.autoReplayOffline ?? true,
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
