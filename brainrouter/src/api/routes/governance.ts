@@ -1,17 +1,12 @@
 import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
 
 export const governanceRouter = Router();
 governanceRouter.use(requireAnyAuth);
 
-function scopedUserId(req: AuthedRequest, requested?: unknown): string {
-  const requestedUserId = typeof requested === "string" && requested.trim() ? requested.trim() : undefined;
-  if (!requestedUserId || requestedUserId === req.userId) return req.userId!;
-  if (req.isAdmin) return requestedUserId;
-  throw new Error("Cannot access another user's memory operations");
-}
+const scopeOps = (req: AuthedRequest, requested?: unknown) => scopedUserId(req, requested, "memory operations");
 
 governanceRouter.get("/export", (req: AuthedRequest, res) => {
   res.json(memoryEngine.exportMemories(req.userId!));
@@ -44,9 +39,9 @@ governanceRouter.get("/audit", (req: AuthedRequest, res) => {
 
 governanceRouter.get("/governance/diagnostics", (req: AuthedRequest, res) => {
   try {
-    res.json(memoryEngine.getDiagnostics(scopedUserId(req, req.query.userId)));
+    res.json(memoryEngine.getDiagnostics(scopeOps(req, req.query.userId)));
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid diagnostics parameters" });
+    res.status(errorStatus(error, 400)).json({ error: error instanceof Error ? error.message : "Invalid diagnostics parameters" });
   }
 });
 
@@ -54,7 +49,7 @@ governanceRouter.get("/governance/diagnostics", (req: AuthedRequest, res) => {
 governanceRouter.get("/operations", (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const userId = scopedUserId(req, req.query.userId);
+    const userId = scopeOps(req, req.query.userId);
     const filters = {
       operation: typeof req.query.operation === "string" && req.query.operation !== "all" ? req.query.operation : undefined,
       sessionKey: typeof req.query.sessionKey === "string" && req.query.sessionKey.trim() ? req.query.sessionKey.trim() : undefined,
@@ -71,7 +66,7 @@ governanceRouter.get("/operations", (req: AuthedRequest, res) => {
     }));
     res.json({ operations: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid parameters" });
+    res.status(errorStatus(error, 400)).json({ error: error instanceof Error ? error.message : "Invalid parameters" });
   }
 });
 
@@ -89,13 +84,13 @@ governanceRouter.post("/recall/explain", async (req: AuthedRequest, res) => {
       return;
     }
     const result = await memoryEngine.explainRecall({
-      userId: scopedUserId(req, requestedUserId),
+      userId: scopeOps(req, requestedUserId),
       sessionKey: sessionKey ?? `inspector_${Date.now()}`,
       query: query.trim(),
       activeSkill,
     });
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : "Explain recall failed" });
+    res.status(errorStatus(error, 500)).json({ error: error instanceof Error ? error.message : "Explain recall failed" });
   }
 });
