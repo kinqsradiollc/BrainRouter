@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { listSessions } from '../../orchestration/orchestrator.js';
 import { formatContextReport } from '../../runtime/contextReport.js';
 import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
-import { formatOffloadList, type OffloadStep } from '../../runtime/offloadView.js';
+import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../runtime/offloadView.js';
 import { contextWindowFor } from '../../runtime/contextWindow.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
@@ -246,14 +246,18 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
             steps = parsed.steps.map((s: any) => ({
               nodeId: s.nodeId, title: s.title, summary: s.summary, kind: s.kind,
               refPath: s.refPath, tokenEstimate: s.tokenEstimate, createdAt: s.createdAt,
+              taskId: s.taskId, replaceable: s.replaceable, currentTask: s.currentTask,
             }));
           }
         } catch (err: any) {
           console.log(chalk.yellow(`\nCould not read working memory: ${err?.message ?? err}\n`));
           return true;
         }
+        // OFFLOAD-GRAPH — `/context offloads graph` renders a Mermaid task-graph.
+        const graphMode = ['graph', '--graph', 'mermaid'].includes((args[1] ?? '').toLowerCase());
         console.log(chalk.bold('\n📦 Context — offloads'));
-        for (const line of formatOffloadList(steps)) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
+        const out = graphMode ? formatOffloadGraph(steps) : formatOffloadList(steps);
+        for (const line of out) console.log(line.startsWith('  ') ? chalk.gray(line) : line);
         console.log();
         return true;
       }
