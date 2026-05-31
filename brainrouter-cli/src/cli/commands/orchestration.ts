@@ -11,7 +11,9 @@ import { formatInboxPane } from '../../runtime/inboxView.js';
 import { validateAgentDefinition, buildAgentDefinition } from '../../orchestration/agentDefValidation.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
-import { formatSessionSummary, getSession, listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '../../orchestration/orchestrator.js';
+import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
+import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDetach.js';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
 import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
@@ -72,6 +74,32 @@ async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], target: 
   return { to: rawTarget };
 }
 
+/**
+ * CLI-BG-DETACH — render a point-in-time snapshot of a worker (status + recent
+ * transcript + summary). Shared by `/workers attach <id>` and `/fg <id>`.
+ * Workers run detached + persist to disk, so this is a read, not a live stream;
+ * re-run to refresh.
+ */
+function renderWorkerSnapshot(ws: string, id: string): boolean {
+  const w = readWorkerMeta(ws, id);
+  if (!w) return false;
+  console.log(chalk.bold(`\nWorker ${chalk.cyan(w.id)} ${chalk.gray(`(${w.role})`)} — ${w.status}`));
+  console.log(chalk.gray(`  goal: ${w.goal}`));
+  const entries = readWorkerTranscript(ws, w.id, 12) as Array<Record<string, any>>;
+  if (entries.length) {
+    console.log(chalk.gray('  --- recent transcript ---'));
+    for (const e of entries) {
+      const tag = e.event ? `${e.role}/${e.event}` : e.role;
+      const body = e.tool ? `${e.tool}${e.summary ? `: ${String(e.summary).slice(0, 80)}` : ''}` : String(e.content ?? e.error ?? '').slice(0, 120);
+      console.log(`  ${chalk.gray(tag)} ${body}`);
+    }
+  }
+  const summary = readWorkerSummary(ws, w.id);
+  if (summary) console.log(chalk.gray('\n  --- summary.md ---\n') + summary.slice(0, 1200));
+  console.log(chalk.gray('\n  (snapshot — re-run to refresh; workers run in the background)\n'));
+  return true;
+}
+
 export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config, rl, repl } = ctx;
   // 'ctx' alias to keep references to the old ReplContext name working
@@ -122,24 +150,12 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         // Snapshot view of a worker's recent transcript + summary. Workers
         // run detached and persist to disk, so "attach" is a point-in-time
         // read; re-run /workers attach to refresh. (No live session is held,
-        // so /workers detach is a no-op acknowledgement.)
+        // so /workers detach is a no-op acknowledgement.) `/fg <id>` is the
+        // top-level alias for this.
         const id = args[1];
-        const w = id ? readWorkerMeta(ws, id) : null;
-        if (!w) { console.log(chalk.red(`\nNo worker "${id ?? ''}". Try /workers.\n`)); return true; }
-        console.log(chalk.bold(`\nWorker ${chalk.cyan(w.id)} ${chalk.gray(`(${w.role})`)} — ${w.status}`));
-        console.log(chalk.gray(`  goal: ${w.goal}`));
-        const entries = readWorkerTranscript(ws, w.id, 12) as Array<Record<string, any>>;
-        if (entries.length) {
-          console.log(chalk.gray('  --- recent transcript ---'));
-          for (const e of entries) {
-            const tag = e.event ? `${e.role}/${e.event}` : e.role;
-            const body = e.tool ? `${e.tool}${e.summary ? `: ${String(e.summary).slice(0, 80)}` : ''}` : String(e.content ?? e.error ?? '').slice(0, 120);
-            console.log(`  ${chalk.gray(tag)} ${body}`);
-          }
+        if (!renderWorkerSnapshot(ws, id ?? '')) {
+          console.log(chalk.red(`\nNo worker "${id ?? ''}". Try /workers.\n`));
         }
-        const summary = readWorkerSummary(ws, w.id);
-        if (summary) console.log(chalk.gray('\n  --- summary.md ---\n') + summary.slice(0, 1200));
-        console.log(chalk.gray('\n  (snapshot — re-run to refresh; /workers detach to dismiss)\n'));
         return true;
       }
       if (sub === 'detach') {
@@ -977,34 +993,87 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       );
       return true;
     }
+    case '/fg':
+    {
+      // CLI-BG-DETACH — bring a background worker or child agent to the
+      // foreground: a snapshot of its status + recent transcript. (Workers
+      // run detached + persist to disk; child agents persist their session
+      // record + final output. No live stream is held — re-run to refresh.)
+      const id = (args[0] ?? '').trim();
+      if (!id) {
+        console.log(chalk.red('\nUsage: /fg <id> — show a background worker/child agent (see /ps for ids).\n'));
+        return true;
+      }
+      const ws = agent.workspaceRoot;
+      reconcileStale(ws);
+      const target = resolveBackgroundTarget(
+        id,
+        listWorkers(ws).map((w) => ({ id: w.id, status: w.status, role: w.role })),
+        listSessions(ws).map((s) => ({ id: s.id, status: s.status, role: s.role })),
+      );
+      if (target.kind === 'worker') {
+        renderWorkerSnapshot(ws, id);
+        return true;
+      }
+      if (target.kind === 'agent') {
+        const s = getSession(ws, id);
+        console.log(chalk.bold(`\nChild agent ${chalk.cyan(id)} ${chalk.gray(`(${s?.role ?? target.role ?? '?'})`)} — ${s?.status ?? target.status}`));
+        if (s?.prompt) console.log(chalk.gray(`  task: ${s.prompt.slice(0, 200)}${s.prompt.length > 200 ? '…' : ''}`));
+        if (s?.finalOutput) console.log(chalk.gray('\n  --- output ---\n') + s.finalOutput.slice(0, 1200));
+        else if (s?.error) console.log(chalk.red(`\n  error: ${s.error}`));
+        else console.log(chalk.gray('\n  (no output yet — still running; re-run /fg to refresh)'));
+        console.log();
+        return true;
+      }
+      console.log(chalk.red(`\nNo background worker or child agent with id "${id}". Try /ps.\n`));
+      return true;
+    }
     case '/ps':
     {
+      // CLI-BG-DETACH — unified background view: loop + workflows + workers +
+      // child agents (was loop + child agents only). Reuses the same
+      // collector that backs the live bg-tasks panel.
+      const ws = agent.workspaceRoot;
       const loopState = getLoopState();
       console.log(chalk.bold('\nBackground tasks'));
-      if (!loopState) {
-        console.log(chalk.gray('  No /loop running.'));
-      } else {
-        console.log(`  Loop: ${chalk.cyan(loopState.prompt)} (${loopState.iterations} ticks, every ${loopState.intervalMs}ms)`);
+      if (loopState) {
+        console.log(`  ${chalk.magenta('⟲')} Loop: ${chalk.cyan(loopState.prompt)} ${chalk.gray(`(${loopState.iterations} ticks, every ${loopState.intervalMs}ms)`)}`);
       }
-      reconcileStale(agent.workspaceRoot);
-      const sessions = listSessions(agent.workspaceRoot).filter((s) => s.status === 'pending' || s.status === 'running');
-      if (sessions.length === 0) {
-        console.log(chalk.gray('  No running child agents.'));
+      const tasks = collectRunningTasks(ws);
+      if (tasks.length === 0) {
+        console.log(chalk.gray(loopState ? '  No other running tasks.' : '  No running tasks.'));
       } else {
-        for (const s of sessions) {
-          console.log(`  Agent: ${chalk.cyan(s.id)} ${chalk.gray(s.role)} (${s.status})`);
-        }
+        console.log(chalk.gray(`  ${summarizeTasks(tasks)}`));
+        for (const line of formatBackgroundTasks(tasks, { max: 20 })) console.log(`  ${line}`);
+        console.log(chalk.gray('\n  /fg <id> to view · /stop <id> to stop'));
       }
       console.log();
       return true;
     }
     case '/stop':
     {
-      // Stop the loop AND mark any running children stale.
+      const ws = agent.workspaceRoot;
+      const id = (args[0] ?? '').trim();
+      // `/stop <id>` stops one worker/child; `/stop` (no id) stops the loop +
+      // reconciles orphaned children (original behavior).
+      if (id) {
+        reconcileStale(ws);
+        const target = resolveBackgroundTarget(
+          id,
+          listWorkers(ws).map((w) => ({ id: w.id, status: w.status, role: w.role })),
+          listSessions(ws).map((s) => ({ id: s.id, status: s.status, role: s.role })),
+        );
+        if (target.kind === 'worker') closeWorker(ws, id);
+        else if (target.kind === 'agent' && target.active) updateSession(ws, id, { status: 'closed' });
+        const outcome = describeStopOutcome(target);
+        console.log((outcome.ok ? chalk.green('\n✓ ') : chalk.red('\n')) + outcome.message + '\n');
+        return true;
+      }
       const stopped = stopLoop();
       console.log(stopped ? chalk.green('\n✓ Stopped /loop.') : chalk.gray('\nNo loop was running.'));
-      const reconciled = reconcileStale(agent.workspaceRoot);
+      const reconciled = reconcileStale(ws);
       if (reconciled > 0) console.log(chalk.yellow(`Marked ${reconciled} child session(s) stale.`));
+      console.log(chalk.gray('  Tip: /stop <id> to stop a specific worker/child (see /ps).'));
       console.log();
       return true;
     }

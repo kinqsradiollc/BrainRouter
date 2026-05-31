@@ -45,7 +45,7 @@ export const SLASH_COMMANDS = [
   '/tokens', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
-  '/feedback', '/rollout', '/ps', '/stop', '/logout', '/apps', '/plugins',
+  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/logout', '/apps', '/plugins',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
@@ -168,8 +168,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/auto-chain [review|verify|both|off]', desc: 'Auto-chain review/verify follow-ups after every worker' },
       { cmd: '/delegation-policy [auto|ask-before-spawn|ask-before-write-child|no-children]', desc: 'Gate whether/when the agent may spawn child agents' },
       { cmd: '/bg <prompt>', desc: 'Run a prompt in a detached background worker (manage via /workers, /ps)' },
-      { cmd: '/ps', desc: 'List background tasks (loop + running children)' },
-      { cmd: '/stop', desc: 'Stop the running loop, mark stale children' },
+      { cmd: '/ps', desc: 'List all background tasks (loop + workflows + workers + child agents)' },
+      { cmd: '/fg <id>', desc: 'Bring a background worker/child agent to the foreground (snapshot of status + transcript)' },
+      { cmd: '/stop [id]', desc: 'Stop a specific worker/child by id, or (no id) stop the loop + mark stale children' },
     ],
   },
   {
