@@ -103,7 +103,7 @@ if (getCliKnobs().debugExit) {
 }
 import { McpClientWrapper } from './runtime/mcpClient.js';
 import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
-import { formatJsonlEvent, type RunEvent } from './runtime/jsonlEvents.js';
+import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
 import { VERSION } from './version.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
@@ -438,10 +438,27 @@ program
       answer = await agent.runTurn(prompt, {
         onStatusUpdate: (message) => emit({ type: 'status', message }),
         onToolStart: (name) => { emit({ type: 'tool_start', name }); if (fmt === 'text' && !options.print) process.stderr.write(`  · ${name}\n`); },
-        onToolEnd: (name, result) => emit({ type: 'tool_end', name, ok: result.success, summary: result.summary }),
+        onToolEnd: (name, result) => {
+          emit({ type: 'tool_end', name, ok: result.success, summary: result.summary });
+          // HEADLESS-EVENTS — a completed offload also gets a dedicated event.
+          if (isOffloadTool(name)) emit({ type: 'offload', tool: name, ok: result.success, summary: result.summary });
+        },
         onChildToolStart: (e) => emit({ type: 'child_tool', childId: e.childId, role: e.role, tool: e.tool }),
         onChildToolEnd: (e) => emit({ type: 'child_tool', childId: e.childId, role: e.role, tool: e.tool, ok: e.ok, summary: e.summary }),
         onChildComplete: (e) => emit({ type: 'child_complete', childId: e.childId, role: e.role, status: e.status, error: e.error }),
+        // HEADLESS-EVENTS (0.4.5) — richer taxonomy for jsonl consumers.
+        onMemoryEvent: (e) => { const ev = memoryRunEvent(e as any); if (ev) emit(ev); },
+        onApproval: (e) => emit({ type: 'approval', tool: e.tool, action: e.action, decision: e.decision, reason: e.reason }),
+        onUsageUpdate: (u) => emit({
+          type: 'cost_update',
+          promptTokens: u.promptTokens,
+          completionTokens: u.completionTokens,
+          calls: u.calls,
+          cachedTokens: u.cachedTokens,
+          missedTokens: u.missedTokens,
+          costUsd: costUsd(agent.getModel(), { cachedTokens: u.cachedTokens ?? 0, missedTokens: u.missedTokens ?? 0, completionTokens: u.completionTokens }),
+        }),
+        onCodeIndex: (e) => emit({ type: 'code_index', file: e.file, status: 'reindexed', chunks: e.chunks }),
       });
     } catch (err: any) {
       emit({ type: 'error', message: err?.message ?? String(err) });
