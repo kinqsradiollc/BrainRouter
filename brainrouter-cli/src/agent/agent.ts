@@ -37,6 +37,12 @@ import {
 import { getSession } from '../orchestration/orchestrator.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
 import { ownershipWriteViolation } from '../orchestration/ownership.js';
+// REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
+// in their own modules now; imported here and re-exported below for back-compat.
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
+import { applyPatchEnvelope } from './applyPatch.js';
+export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
+export { applyPatchEnvelope } from './applyPatch.js';
 import { applyToolScope, rankAndCapTools } from '../orchestration/toolBudget.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
@@ -117,7 +123,6 @@ import {
 } from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
-const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
 const DEFAULT_CHILD_DRAIN_TIMEOUT_MS = 30_000;
 
 function parseJsonObject(text: string): any | undefined {
@@ -812,58 +817,6 @@ export function normalizeToolName(raw: string, candidates: string[]): string {
   const matches = candidates.filter((c) => flatten(c) === target);
   if (matches.length === 1) return matches[0];
   return trimmed;
-}
-
-export function isPathInside(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-/**
- * Resolve a workspace-relative path against the given workspaceRoot. Throws
- * if the result escapes the workspace.
- *
- * `workspaceRoot` is REQUIRED — passing a stale `process.cwd()` was the bug
- * that let tool writes land in `~/.brainrouter` when the user's cwd drifted.
- *
- * For backwards compatibility, the workspaceRoot parameter may be omitted; it
- * then falls back to process.cwd(). New code should always pass it explicitly.
- */
-export function resolveWorkspacePath(
-  workspaceRootOrPath: string = '.',
-  inputPathOrOptions?: string | { forWrite?: boolean },
-  maybeOptions?: { forWrite?: boolean },
-): string {
-  // Two call shapes are supported during the migration of callers:
-  //   resolveWorkspacePath(workspaceRoot, inputPath, options)
-  //   resolveWorkspacePath(inputPath, options)   ← deprecated; falls back to cwd
-  let workspaceRoot: string;
-  let inputPath: string;
-  let options: { forWrite?: boolean };
-  if (typeof inputPathOrOptions === 'string') {
-    workspaceRoot = workspaceRootOrPath;
-    inputPath = inputPathOrOptions;
-    options = maybeOptions ?? {};
-  } else {
-    workspaceRoot = fs.realpathSync(process.cwd());
-    inputPath = workspaceRootOrPath;
-    options = inputPathOrOptions ?? {};
-  }
-
-  if (typeof inputPath !== 'string' || inputPath.trim() === '') {
-    throw new Error('Path must be a non-empty string.');
-  }
-
-  const root = fs.realpathSync(workspaceRoot);
-  const resolved = path.resolve(root, inputPath);
-  const checkPath = options.forWrite ? path.dirname(resolved) : resolved;
-  const existingCheckPath = fs.existsSync(checkPath) ? fs.realpathSync(checkPath) : checkPath;
-
-  if (!isPathInside(root, existingCheckPath) || !isPathInside(root, resolved)) {
-    throw new Error(`Path escapes workspace root: ${inputPath}`);
-  }
-
-  return resolved;
 }
 
 export class Agent {
@@ -3843,202 +3796,6 @@ async function runWebSearch(query: string, maxResults: number): Promise<string> 
  * Returns a JSON summary of operations performed; throws on a malformed envelope
  * or when an Update fails to match its context block uniquely.
  */
-export function applyPatchEnvelope(patch: string, workspaceRoot?: string, ownership?: string | null): string {
-  const text = patch.replace(/\r\n/g, '\n').trim();
-  if (!text.startsWith('*** Begin Patch')) {
-    throw new Error('apply_patch: missing "*** Begin Patch" header.');
-  }
-  if (!text.endsWith('*** End Patch')) {
-    throw new Error('apply_patch: missing "*** End Patch" footer.');
-  }
-  const inner = text.slice('*** Begin Patch'.length, text.length - '*** End Patch'.length);
-  const lines = inner.split('\n');
-
-  type Op =
-    | { kind: 'update'; file: string; oldBlock: string; newBlock: string }
-    | { kind: 'add'; file: string; body: string }
-    | { kind: 'delete'; file: string };
-
-  const ops: Op[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.startsWith('*** Update File: ')) {
-      const file = line.slice('*** Update File: '.length).trim();
-      i++;
-      // Optional @@ anchor (single line for now).
-      if (i < lines.length && lines[i].startsWith('@@')) {
-        i++;
-      }
-      const oldLines: string[] = [];
-      const newLines: string[] = [];
-      while (i < lines.length && !lines[i].startsWith('*** ')) {
-        const l = lines[i];
-        if (l.startsWith('-')) {
-          oldLines.push(l.slice(1));
-        } else if (l.startsWith('+')) {
-          newLines.push(l.slice(1));
-        } else if (l.startsWith(' ')) {
-          oldLines.push(l.slice(1));
-          newLines.push(l.slice(1));
-        } else if (l === '') {
-          // tolerate blank lines as untouched
-          oldLines.push('');
-          newLines.push('');
-        } else {
-          throw new Error(`apply_patch: unexpected line in Update File "${file}": ${JSON.stringify(l)}`);
-        }
-        i++;
-      }
-      ops.push({ kind: 'update', file, oldBlock: oldLines.join('\n'), newBlock: newLines.join('\n') });
-    } else if (line.startsWith('*** Add File: ')) {
-      const file = line.slice('*** Add File: '.length).trim();
-      i++;
-      const body: string[] = [];
-      while (i < lines.length && !lines[i].startsWith('*** ')) {
-        const l = lines[i];
-        if (l.startsWith('+')) body.push(l.slice(1));
-        else if (l === '') body.push('');
-        else throw new Error(`apply_patch: Add File "${file}" lines must start with '+': ${JSON.stringify(l)}`);
-        i++;
-      }
-      ops.push({ kind: 'add', file, body: body.join('\n') });
-    } else if (line.startsWith('*** Delete File: ')) {
-      const file = line.slice('*** Delete File: '.length).trim();
-      ops.push({ kind: 'delete', file });
-      i++;
-    } else if (line === '' || line.startsWith('***')) {
-      i++;
-    } else {
-      throw new Error(`apply_patch: expected an operation header, got ${JSON.stringify(line)}`);
-    }
-  }
-
-  const applied: Array<{ kind: string; file: string }> = [];
-  const wsRoot = workspaceRoot ?? fs.realpathSync(process.cwd());
-  // MAS-P3: validate EVERY op against the ownership boundary up front, so a
-  // multi-file patch never partially applies before hitting a violation.
-  if (ownership) {
-    for (const op of ops) {
-      const resolved = resolveWorkspacePath(wsRoot, op.file, { forWrite: op.kind !== 'delete' });
-      const ownErr = ownershipWriteViolation(ownership, wsRoot, resolved);
-      if (ownErr) throw new Error(`apply_patch: ${ownErr}`);
-    }
-  }
-  for (const op of ops) {
-    const resolved = resolveWorkspacePath(wsRoot, op.file, { forWrite: op.kind !== 'delete' });
-    if (op.kind === 'add') {
-      const dir = path.dirname(resolved);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      if (fs.existsSync(resolved)) {
-        throw new Error(`apply_patch: Add File "${op.file}" already exists. Use Update File instead.`);
-      }
-      fs.writeFileSync(resolved, op.body, 'utf8');
-      applied.push({ kind: 'add', file: op.file });
-    } else if (op.kind === 'delete') {
-      if (!fs.existsSync(resolved)) {
-        throw new Error(`apply_patch: Delete File "${op.file}" does not exist.`);
-      }
-      fs.unlinkSync(resolved);
-      applied.push({ kind: 'delete', file: op.file });
-    } else {
-      if (!fs.existsSync(resolved)) {
-        throw new Error(`apply_patch: Update File "${op.file}" does not exist.`);
-      }
-      const content = fs.readFileSync(resolved, 'utf8');
-      const count = op.oldBlock === '' ? 0 : content.split(op.oldBlock).length - 1;
-      if (count === 0) {
-        throw new Error(`apply_patch: context for Update File "${op.file}" did not match. Re-read the file and resubmit.`);
-      }
-      if (count > 1) {
-        throw new Error(`apply_patch: context for Update File "${op.file}" matched ${count} times. Add more surrounding lines for uniqueness.`);
-      }
-      const updated = content.replace(op.oldBlock, op.newBlock);
-      fs.writeFileSync(resolved, updated, 'utf8');
-      applied.push({ kind: 'update', file: op.file });
-    }
-  }
-
-  return JSON.stringify({ applied }, null, 2);
-}
-
-export function matchGlob(pattern: string, filePath: string): boolean {
-  const base = path.basename(filePath);
-  const convertPattern = (p: string) => new RegExp(`^${globToRegexSource(p)}$`);
-
-  const normPath = filePath.replace(/\\/g, '/');
-  if (convertPattern(pattern).test(normPath)) {
-    return true;
-  }
-  
-  if (!pattern.includes('/') && convertPattern(pattern).test(base)) {
-    return true;
-  }
-  
-  return false;
-}
-
-function globToRegexSource(pattern: string): string {
-  let source = '';
-  for (let index = 0; index < pattern.length; index++) {
-    const char = pattern[index];
-    const next = pattern[index + 1];
-    const afterNext = pattern[index + 2];
-
-    if (char === '*' && next === '*' && afterNext === '/') {
-      source += '(?:.*/)?';
-      index += 2;
-      continue;
-    }
-
-    if (char === '*' && next === '*') {
-      source += '.*';
-      index += 1;
-      continue;
-    }
-
-    if (char === '*') {
-      source += '[^/]*';
-      continue;
-    }
-
-    if (char === '?') {
-      source += '.';
-      continue;
-    }
-
-    source += char.replace(/[-/\\^$+?.()|[\]{}]/g, '\\$&');
-  }
-  return source;
-}
-
-export function globFiles(pattern: string, workspaceRoot?: string, dir?: string): string[] {
-  const wsRoot = fs.realpathSync(workspaceRoot ?? process.cwd());
-  const startDir = dir ?? wsRoot;
-  const safeDir = resolveWorkspacePath(wsRoot, path.relative(wsRoot, startDir) || '.');
-  const results: string[] = [];
-  const items = fs.readdirSync(safeDir);
-  for (const item of items) {
-    if (IGNORED_DIRS.has(item)) {
-      continue;
-    }
-    const fullPath = path.join(safeDir, item);
-    if (!isPathInside(wsRoot, fs.realpathSync(fullPath))) {
-      continue;
-    }
-    const stat = fs.statSync(fullPath);
-    if (stat.isDirectory()) {
-      results.push(...globFiles(pattern, wsRoot, fullPath));
-    } else if (stat.isFile()) {
-      const relPath = path.relative(wsRoot, fullPath);
-      if (matchGlob(pattern, relPath)) {
-        results.push(relPath);
-      }
-    }
-  }
-  return results;
-}
-
 export function getToolSummary(name: string, args: Record<string, any>, result: string): string {
   switch (name) {
     case 'read_file': {
