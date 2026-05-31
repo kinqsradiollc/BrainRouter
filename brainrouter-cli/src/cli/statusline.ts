@@ -22,6 +22,8 @@ import { costUsd } from '../runtime/pricing.js';
  *   - `model`    — chat-LLM model name
  *   - `tokens`   — last turn's input/output tokens, only when calls > 0
  *   - `cost`     — last turn's USD cost + cache-hit %, only when calls > 0 (CLI-9)
+ *   - `offload`  — cumulative child-agent token spend + offloaded child output,
+ *                  only when children ran / something was offloaded (FOOTER-TELEMETRY-2)
  *   - `session`  — first ~22 chars of the sessionKey
  *   - `branch`   — git branch, only when in a git repo
  *   - `dirty`    — `*` when the working tree has uncommitted changes
@@ -46,6 +48,7 @@ export const SEGMENT_NAMES = [
   'tokens',
   'cost',
   'repair',
+  'offload',
   'session',
   'branch',
   'dirty',
@@ -70,6 +73,10 @@ export interface SegmentInputs {
   /** FOOTER-TELEMETRY — cumulative self-repair counters (agent.getRepairTotals);
    *  renders the `repair` segment. Hidden when nothing was repaired. */
   repairTotals?: { turnsWithRepair: number; scavenged: number; truncationsFixed: number; stormsBroken: number };
+  /** FOOTER-TELEMETRY-2 — cumulative child-agent token spend + offloaded child
+   *  output (agent.getOffloadTotals); renders the `offload` segment. Hidden when
+   *  no children ran and nothing was offloaded. */
+  offloadTotals?: { childTokensSpent: number; offloadCharsAvoided: number; compactedToolCharsAvoided: number };
   /** Optional GitHub PR identifier (e.g. "#42"). REPL caches the gh shell-out, so this is precomputed. */
   prDetector?: () => string | null;
   /**
@@ -84,6 +91,16 @@ export interface SegmentInputs {
 
 export function isKnownSegment(name: string): name is SegmentName {
   return (SEGMENT_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * Compact token count for footer segments: `< 1000` stays exact, larger values
+ * collapse to one-decimal `k` (e.g. 12345 → `12.3k`). Keeps the `offload`
+ * segment narrow on a single status line.
+ */
+export function formatTokenCount(n: number): string {
+  if (n < 1000) return `${n}`;
+  return `${(n / 1000).toFixed(1)}k`;
 }
 
 /**
@@ -148,6 +165,19 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       if (!r || r.turnsWithRepair <= 0) return undefined;
       const fixes = r.scavenged + r.truncationsFixed + r.stormsBroken;
       return `repair:${r.turnsWithRepair}t/${fixes}`;
+    }
+    case 'offload': {
+      // FOOTER-TELEMETRY-2 — the "fan-out cost / context savings" segment:
+      // how many tokens child agents spent, and roughly how many parent
+      // tokens their offloaded output saved. Hidden when no children ran and
+      // nothing was offloaded — same hide-when-nothing rule as `repair`.
+      const o = inputs.offloadTotals;
+      if (!o) return undefined;
+      const savedTokens = Math.round((o.offloadCharsAvoided ?? 0) / 4); // ~4 chars/token
+      const parts: string[] = [];
+      if (o.childTokensSpent > 0) parts.push(`child:${formatTokenCount(o.childTokensSpent)}`);
+      if (savedTokens > 0) parts.push(`saved:~${formatTokenCount(savedTokens)}`);
+      return parts.length ? parts.join(' ') : undefined;
     }
     case 'session': {
       // Full session key — users copy it into /resume, /agents why <id>, etc.,
