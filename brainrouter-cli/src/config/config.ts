@@ -210,6 +210,13 @@ export interface CliKnobs {
    *  reconnected). Default true. */
   autoReplayOffline?: boolean;
 
+  // ---- automatic code-index freshness (CLI-REINDEX) --------------------
+  /** Keep the brain's code index fresh by calling memory_reindex_source from
+   *  the file read/edit paths (stat-gated to skip unchanged files; a no-op
+   *  brain-side when content matches). Skipped while MCP is offline and for
+   *  non-code files. Default true. */
+  autoReindex?: boolean;
+
   // ---- LSP semantic navigation (CLI-19) ---------------------------------
   /** language → server launch command for the `lsp` tool, e.g.
    *  { "typescript": "typescript-language-server --stdio" }. Merged over the
@@ -467,6 +474,7 @@ export interface ResolvedCliKnobs {
   postEditCheck: string;
   autoExtractSkills: boolean;
   autoReplayOffline: boolean;
+  autoReindex: boolean;
   lspServers: Record<string, string>;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
@@ -534,6 +542,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     postEditCheck: c.postEditCheck ?? '',
     autoExtractSkills: c.autoExtractSkills ?? false,
     autoReplayOffline: c.autoReplayOffline ?? true,
+    autoReindex: c.autoReindex ?? true,
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
