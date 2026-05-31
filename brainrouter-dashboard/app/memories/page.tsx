@@ -27,7 +27,7 @@ const TYPES = [
   "debug_trace", "fix_summary", "verification_result", "failed_attempt",
   "regression_risk", "task_state", "handover_note", "blocked_reason",
   "review_comment", "release_note", "source_evidence", "artifact_reference",
-  "file_history", "command_knowledge",
+  "file_history", "command_knowledge", "lesson",
 ] as const satisfies readonly MemoryType[];
 
 // Compile-time exhaustiveness: if a new MemoryType is added upstream and not
