@@ -9,19 +9,14 @@ import {
   registerHostHook,
 } from "../../integrations/generic-mcp.js";
 import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
 
 export const hooksRouter = Router();
 hooksRouter.use(requireAnyAuth);
 
 const hookSourceSchema = z.enum(["claude-code", "codex", "generic-mcp"]);
 
-function scopedUserId(req: AuthedRequest, requested?: unknown): string {
-  const requestedUserId = typeof requested === "string" && requested.trim() ? requested.trim() : undefined;
-  if (!requestedUserId || requestedUserId === req.userId) return req.userId!;
-  if (req.isAdmin) return requestedUserId;
-  throw new Error("Cannot register hooks for another user");
-}
+const scopeHooks = (req: AuthedRequest, requested?: unknown) => scopedUserId(req, requested, "hooks");
 
 hooksRouter.post("/register", async (req: AuthedRequest, res) => {
   try {
@@ -36,7 +31,7 @@ hooksRouter.post("/register", async (req: AuthedRequest, res) => {
       payload: z.record(z.unknown()).optional(),
       metadata: z.record(z.unknown()).optional(),
     }).parse(req.body ?? {});
-    const userId = scopedUserId(req, params.userId);
+    const userId = scopeHooks(req, params.userId);
     const hook = registerHostHook({
       userId,
       source: params.source,
@@ -77,7 +72,7 @@ hooksRouter.post("/register", async (req: AuthedRequest, res) => {
     res.status(201).json({ registered: hook, captureResult });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid hook registration body";
-    res.status(message.includes("another user") ? 403 : 400).json({ error: message });
+    res.status(errorStatus(error, 400)).json({ error: message });
   }
 });
 
@@ -87,11 +82,11 @@ hooksRouter.get("/status", (req: AuthedRequest, res) => {
       source: hookSourceSchema.optional(),
       userId: z.string().optional(),
     }).parse(req.query);
-    const userId = scopedUserId(req, params.userId);
+    const userId = scopeHooks(req, params.userId);
     const hooks = listHostHooks(userId).filter((hook) => !params.source || hook.source === params.source);
     res.json({ hooks });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid hook status parameters";
-    res.status(message.includes("another user") ? 403 : 400).json({ error: message });
+    res.status(errorStatus(error, 400)).json({ error: message });
   }
 });
