@@ -36,6 +36,10 @@ deep dives.
   canonical CLI store (`llm.*` creds + `cli.*` runtime knobs incl.
   `fallbackModel` / `notifyBell` / `effort`), stdio vs HTTP transport,
   storage layout, backpressure, diagnostics.
+- **[policy.md](policy.md)** — the exec policy & trust model: access modes
+  (`read`/`write`/`shell`), sandbox, external-directory writes, the per-host
+  egress allowlist, how each tool maps to a gated action, and the bundled
+  `readonly` / `workspace` / `trusted` profiles you switch with `/policy`.
 
 If you're new, read [BRAINROUTER.md](../BRAINROUTER.md) first. If you just
 want to run something, [README.md → Quick Start](../README.md#quick-start).
