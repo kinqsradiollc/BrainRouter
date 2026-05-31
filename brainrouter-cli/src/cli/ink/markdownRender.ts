@@ -1,6 +1,8 @@
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import chalk from 'chalk';
+import stringWidth from 'string-width';
+import wrapAnsi from 'wrap-ansi';
 
 /**
  * Configure `marked` + `marked-terminal` for the Ink chat REPL, then
@@ -75,19 +77,193 @@ function ensureConfigured(): void {
  *
  * Empty / non-string input returns the input verbatim.
  */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(source: string, opts?: { width?: number }): string {
   if (typeof source !== 'string' || source.length === 0) return source;
   ensureConfigured();
   const unwrapped = unwrapMarkdownFences(source);
-  let out: string;
-  try {
-    out = String(marked.parse(unwrapped));
-  } catch {
-    // Some malformed input crashes marked. Fall back to verbatim so the
-    // user still sees the LLM's reply.
-    return unwrapped;
+  // marked-terminal renders GFM tables as a fixed-width cli-table3 grid that
+  // overflows narrow terminals; Ink then wraps each row mid-cell and mangles
+  // the grid. So we OWN table rendering: split the source into table and
+  // non-table segments, render tables ourselves at the real terminal width,
+  // and pass everything else through marked unchanged. When there's no table
+  // the whole source is a single segment → byte-identical to the old path.
+  const width = Math.max(20, Math.floor(opts?.width ?? (process.stdout.columns || 80)));
+  const segments = extractMarkdownSegments(unwrapped);
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (seg.type === 'table') {
+      out.push(renderTable(seg.text, width));
+      continue;
+    }
+    try {
+      out.push(preserveAnsiAcrossNewlines(String(marked.parse(seg.text))));
+    } catch {
+      // Some malformed input crashes marked. Fall back to verbatim so the
+      // user still sees the LLM's reply.
+      out.push(seg.text);
+    }
   }
-  return preserveAnsiAcrossNewlines(out);
+  return out.join('');
+}
+
+// --- GFM table rendering ----------------------------------------------
+
+export type MarkdownSegment = { type: 'md' | 'table'; text: string };
+
+/** A GFM separator row: `| --- | :--: | ---: |` (pipes optional at ends). */
+function isTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(line) || /^\s*\|\s*:?-{1,}:?\s*\|\s*$/.test(line);
+}
+
+/** A plausible table row: contains a pipe and isn't blank. */
+function looksLikeTableRow(line: string): boolean {
+  return line.includes('|') && line.trim() !== '';
+}
+
+/**
+ * Split markdown into ordered table / non-table segments. A table is a row
+ * line immediately followed by a separator line, plus the contiguous pipe
+ * rows after it. Everything else accumulates into `md` segments. Exported for
+ * tests.
+ */
+export function extractMarkdownSegments(source: string): MarkdownSegment[] {
+  const lines = source.split('\n');
+  const segs: MarkdownSegment[] = [];
+  let buf: string[] = [];
+  const flushMd = () => { if (buf.length) { segs.push({ type: 'md', text: buf.join('\n') }); buf = []; } };
+  for (let i = 0; i < lines.length; i++) {
+    if (looksLikeTableRow(lines[i]) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      flushMd();
+      const tbl = [lines[i], lines[i + 1]];
+      let j = i + 2;
+      while (j < lines.length && looksLikeTableRow(lines[j])) { tbl.push(lines[j]); j++; }
+      segs.push({ type: 'table', text: tbl.join('\n') });
+      i = j - 1;
+    } else {
+      buf.push(lines[i]);
+    }
+  }
+  flushMd();
+  return segs.length ? segs : [{ type: 'md', text: source }];
+}
+
+type Align = 'left' | 'center' | 'right';
+
+/**
+ * Distribute `avail` columns across cells by water-filling: process columns
+ * narrowest-first, giving each its natural width when it fits within an even
+ * share of the remaining budget, otherwise capping it (min 3) and letting the
+ * leftover flow to the still-wide columns. Exported for tests.
+ */
+export function fitColumns(natural: number[], avail: number): number[] {
+  const n = natural.length;
+  if (n === 0) return [];
+  if (natural.reduce((a, b) => a + b, 0) <= avail) return natural.slice();
+  const result = new Array<number>(n).fill(0);
+  const order = [...natural.keys()].sort((a, b) => natural[a] - natural[b]);
+  let remaining = avail;
+  let colsLeft = n;
+  for (const idx of order) {
+    const fair = Math.floor(remaining / colsLeft);
+    result[idx] = natural[idx] <= fair ? natural[idx] : Math.max(3, fair);
+    remaining -= result[idx];
+    colsLeft--;
+  }
+  return result;
+}
+
+/** Split one `| a | b |` row into trimmed cells (drops the outer pipes). */
+function splitRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  // Split on unescaped pipes.
+  return s.split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+}
+
+function alignFor(sep: string): Align {
+  const t = sep.trim();
+  const left = t.startsWith(':');
+  const right = t.endsWith(':');
+  if (left && right) return 'center';
+  if (right) return 'right';
+  return 'left';
+}
+
+/** Pad an ANSI-styled string to `w` display columns honouring alignment. */
+function padCell(s: string, w: number, align: Align): string {
+  const gap = Math.max(0, w - stringWidth(s));
+  if (align === 'right') return ' '.repeat(gap) + s;
+  if (align === 'center') { const l = Math.floor(gap / 2); return ' '.repeat(l) + s + ' '.repeat(gap - l); }
+  return s + ' '.repeat(gap);
+}
+
+/**
+ * Render a GFM table to an ANSI box that fits `width` columns. Cells are
+ * inline-rendered (bold/code/links), header is bold, content wraps inside its
+ * column (ANSI-aware), and columns shrink proportionally when the natural
+ * layout would overflow. Each emitted line is a self-contained ANSI scope, so
+ * Ink can wrap the block without breaking styling. Exported for tests.
+ */
+export function renderTable(tableSource: string, width: number): string {
+  ensureConfigured();
+  const rows = tableSource.split('\n').filter((l) => l.trim() !== '');
+  if (rows.length < 2) return tableSource;
+  const headerCells = splitRow(rows[0]);
+  const aligns = splitRow(rows[1]).map(alignFor);
+  const bodyCells = rows.slice(2).map(splitRow);
+  const ncols = headerCells.length;
+  if (ncols === 0) return tableSource;
+
+  const inline = (s: string): string => {
+    try { return String(marked.parseInline(s)).trim(); } catch { return s; }
+  };
+  const header = headerCells.map((c) => chalk.bold(inline(c)));
+  const body = bodyCells.map((r) =>
+    Array.from({ length: ncols }, (_, c) => inline(r[c] ?? '')),
+  );
+  const colAlign = Array.from({ length: ncols }, (_, c) => aligns[c] ?? 'left');
+
+  // Natural width per column = widest rendered cell.
+  const natural = Array.from({ length: ncols }, (_, c) =>
+    Math.max(1, stringWidth(header[c] ?? ''), ...body.map((r) => stringWidth(r[c] ?? ''))),
+  );
+  // Budget: borders (ncols+1) + 1-space padding each side of every cell.
+  const chrome = (ncols + 1) + ncols * 2;
+  const avail = Math.max(ncols * 3, width - chrome);
+  // Water-fill: narrow columns keep their natural width; only columns wider
+  // than their fair share of the remaining budget get shrunk (min 3). This
+  // avoids squishing a "Name" column just because a sibling "Notes" column is
+  // long — the long one absorbs the deficit instead.
+  const colW = fitColumns(natural, avail);
+
+  const wrapCell = (s: string, w: number): string[] => {
+    const wrapped = wrapAnsi(s, w, { hard: true, trim: false });
+    return wrapped.length ? wrapped.split('\n') : [''];
+  };
+
+  const dim = (s: string) => chalk.gray.dim(s);
+  const bar = (l: string, mid: string, r: string) =>
+    dim(l + colW.map((w) => '─'.repeat(w + 2)).join(mid) + r);
+
+  const renderRow = (cells: string[]): string[] => {
+    const wrapped = cells.map((cell, c) => wrapCell(cell, colW[c]));
+    const height = Math.max(1, ...wrapped.map((w) => w.length));
+    const out: string[] = [];
+    for (let line = 0; line < height; line++) {
+      const cols = wrapped.map((w, c) => ` ${padCell(w[line] ?? '', colW[c], colAlign[c])} `);
+      out.push(dim('│') + cols.join(dim('│')) + dim('│'));
+    }
+    return out;
+  };
+
+  const lines: string[] = [];
+  lines.push(bar('┌', '┬', '┐'));
+  lines.push(...renderRow(header));
+  lines.push(bar('├', '┼', '┤'));
+  for (const r of body) lines.push(...renderRow(r));
+  lines.push(bar('└', '┴', '┘'));
+  return lines.join('\n') + '\n';
 }
 
 /**
