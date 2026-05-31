@@ -40,7 +40,9 @@
     "marked": "^12.0.1",
     "marked-terminal": "^7.0.0",
     "ora": "^8.0.1",
-    "react": "^19.2.6"
+    "react": "^19.2.6",
+    "string-width": "^4.2.3",
+    "wrap-ansi": "^6.2.0"
   },
   "devDependencies": {
     "@types/inquirer": "^9.0.7",
