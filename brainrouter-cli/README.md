@@ -6,6 +6,33 @@ recall, skills, and capture.
 
 Ships the `brainrouter` binary.
 
+## What you get
+
+- **Memory-native recall** — every turn pulls relevant facts, focus scenes,
+  persona, lessons, and skills from the connected BrainRouter MCP server.
+- **Code retrieval** — `find_related` surfaces semantically related code
+  chunks (lexical + symbol-graph + cross-file import edges); the index stays
+  fresh as you read and edit.
+- **Memory that learns** — captured `lesson` memories reinforce on repeat,
+  skills are auto-extracted from successful sessions, and `reflect`
+  synthesises higher-level patterns.
+- **Multi-agent orchestration** — `spawn_agent` / `delegate` / `route_task`,
+  worker threads, agent packs, durable `/workflows`, a transcript debugger,
+  and a shared blackboard.
+- **Graph intelligence** — PageRank / articulation-point / shortest-path
+  analytics over the memory graph.
+- **Exec policy** — readonly / workspace / trusted profiles gate shell,
+  file writes outside the workspace, child-spawn, and network egress; inspect
+  and switch with `/policy`.
+- **LSP-backed navigation** — an incremental language-server client powers
+  definition / reference lookups in supported languages.
+- **Resilience** — post-edit verification, crash checkpoints, and an offline
+  prompt queue that auto-replays on reconnect.
+
+Type `/help` in the REPL for the full slash-command surface, or `/policy`,
+`/workflows`, `/agents`, `/context` for the orchestration and observability
+panels.
+
 ## Install
 
 ```bash
@@ -32,7 +59,7 @@ Verify the install:
 
 ```bash
 which brainrouter           # prints the path to the binary
-brainrouter --version       # prints 0.3.7
+brainrouter --version       # prints 0.4.5
 ```
 
 ## Configure
@@ -55,8 +82,11 @@ home panel. To re-configure the MCP server connection: use `/login`.
 For local-model setups (LM Studio / Ollama), point the LLM endpoint at
 `http://localhost:1234/v1/chat/completions` or `http://localhost:11434/v1/chat/completions`.
 
-**Runtime knobs** (sandbox, trace log, web-search backend, tool-loop limits)
-are set as shell environment variables. See
+**Runtime knobs** (sandbox, exec policy, trace log, web-search backend,
+tool-loop limits, update check, post-edit verification, offline auto-replay,
+LSP servers, auto-skill extraction) live under the `cli.*` block of
+`config.json` — set them with `/config cli.<key> <value>` or by editing the
+file. See
 [`brainrouter-docs/configuration.md`](https://github.com/kinqsradiollc/BrainRouter/blob/main/brainrouter-docs/configuration.md)
 for the full list.
 
