@@ -215,7 +215,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       const parts: string[] = [];
       for (const seg of segs) {
         if (seg === 'model') parts.push(agent.getModel());
-        else if (seg === 'session') parts.push(agent.sessionKey.slice(0, 24));
+        else if (seg === 'session') parts.push(agent.sessionKey);
         else if (seg === 'mode') parts.push(agent.getAccessMode());
         else if (seg === 'branch') {
           try {
@@ -654,18 +654,18 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             const sensory = event.sensoryRecorded ?? event.messageCount;
             const extracted = event.extractedCount;
             const triggered = event.extractionTriggered;
-            const sk = event.sessionKey.slice(0, 12);
+            const sk = event.sessionKey;
             if (event.extractionWarning) {
-              line = `💾 Captured ${sensory} sensory msg(s) in ${sk}… — ⚠️ ${event.extractionWarning}`;
+              line = `💾 Captured ${sensory} sensory msg(s) in ${sk} — ⚠️ ${event.extractionWarning}`;
               level = 'warn';
             } else if (triggered && typeof extracted === 'number') {
               line = extracted > 0
-                ? `💾 Captured ${sensory} msg(s) → ${extracted} cognitive record(s) extracted (${sk}…)`
-                : `💾 Captured ${sensory} msg(s) → no new memories worth promoting (${sk}…)`;
+                ? `💾 Captured ${sensory} msg(s) → ${extracted} cognitive record(s) extracted (${sk})`
+                : `💾 Captured ${sensory} msg(s) → no new memories worth promoting (${sk})`;
             } else if (triggered === false) {
-              line = `💾 Captured ${sensory} msg(s) → sensory buffer (${sk}…)`;
+              line = `💾 Captured ${sensory} msg(s) → sensory buffer (${sk})`;
             } else {
-              line = `💾 Captured ${sensory} msg(s) → memory (${sk}…)`;
+              line = `💾 Captured ${sensory} msg(s) → memory (${sk})`;
             }
           } else if (event.kind === 'citation' && event.recordIds.length > 0) {
             line = `📌 Reinforced ${event.recordIds.length} record${event.recordIds.length === 1 ? '' : 's'}: ${event.recordIds.slice(0, 3).join(', ')}${event.recordIds.length > 3 ? '…' : ''}`;
