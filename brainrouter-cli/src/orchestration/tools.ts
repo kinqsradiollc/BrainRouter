@@ -64,6 +64,10 @@ export interface OrchestrationContext {
   launchCwd: string;
   /** Called when a child output got offloaded — chars beyond preview that didn't land in parent context. */
   recordOffload?: (charsAvoided: number) => void;
+  /** FOOTER-TELEMETRY-2 — called when a child completes, with its total token
+   *  spend (prompt + completion), so the parent can surface cumulative child
+   *  cost in the footer `offload` segment without a per-render disk scan. */
+  recordChildTokens?: (tokens: number) => void;
   /**
    * Paired child tool lifecycle callbacks. Fire from the child agent's
    * onToolStart / onToolEnd so the parent's REPL can render explicit
@@ -1095,6 +1099,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       if (workingRef && output.length > OFFLOAD_PREVIEW_CHARS) {
         ctx.recordOffload?.(output.length - OFFLOAD_PREVIEW_CHARS);
       }
+      // FOOTER-TELEMETRY-2 — roll this child's token spend into the parent's
+      // in-memory counter so the footer `offload` segment can show it live.
+      ctx.recordChildTokens?.(
+        (childAgent.sessionUsage?.promptTokens ?? 0) +
+        (childAgent.sessionUsage?.completionTokens ?? 0),
+      );
       // Tell the REPL the child finished — otherwise the user sees the child's
       // tool calls scroll by and then silence, with no signal that it's safe
       // to ask the parent agent to continue.
