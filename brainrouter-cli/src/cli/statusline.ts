@@ -41,9 +41,11 @@ export const SEGMENT_NAMES = [
   'mode',
   'exec',
   'effort',
+  'tier',
   'model',
   'tokens',
   'cost',
+  'repair',
   'session',
   'branch',
   'dirty',
@@ -62,6 +64,12 @@ export interface SegmentInputs {
   accessMode: string;
   model: string;
   lastTurnUsage: { calls: number; promptTokens: number; completionTokens: number; cachedTokens?: number; missedTokens?: number };
+  /** FOOTER-TELEMETRY — current model tier on the provider ladder (precomputed
+   *  by the REPL); renders the `tier` segment. Hidden when absent. */
+  tier?: string | null;
+  /** FOOTER-TELEMETRY — cumulative self-repair counters (agent.getRepairTotals);
+   *  renders the `repair` segment. Hidden when nothing was repaired. */
+  repairTotals?: { turnsWithRepair: number; scavenged: number; truncationsFixed: number; stormsBroken: number };
   /** Optional GitHub PR identifier (e.g. "#42"). REPL caches the gh shell-out, so this is precomputed. */
   prDetector?: () => string | null;
   /**
@@ -128,6 +136,18 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
       const base = `$${usd.toFixed(4)}`;
       const totalPrompt = cached + missed;
       return totalPrompt > 0 ? `${base} ${Math.round((cached / totalPrompt) * 100)}% cached` : base;
+    }
+    case 'tier': {
+      // FOOTER-TELEMETRY — model tier on the provider's ladder (precomputed).
+      return inputs.tier ? `tier:${inputs.tier}` : undefined;
+    }
+    case 'repair': {
+      // FOOTER-TELEMETRY — surface self-repair activity ("cost at decision
+      // time"). Hidden when nothing was repaired this session.
+      const r = inputs.repairTotals;
+      if (!r || r.turnsWithRepair <= 0) return undefined;
+      const fixes = r.scavenged + r.truncationsFixed + r.stormsBroken;
+      return `repair:${r.turnsWithRepair}t/${fixes}`;
     }
     case 'session': {
       const k = inputs.sessionKey;
