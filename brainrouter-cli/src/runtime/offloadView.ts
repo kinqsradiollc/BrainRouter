@@ -19,6 +19,61 @@ export interface OffloadStep {
   /** ~tokens kept out of context by offloading. */
   tokenEstimate?: number;
   createdAt?: string;
+  // OFFLOAD-GRAPH (0.4.5) — task-graph metadata. Optional + forward-compatible:
+  // the brain populates these when it tracks task context; the graph view uses
+  // them when present and falls back to grouping by `kind` otherwise.
+  /** The task this payload was offloaded under. */
+  taskId?: string;
+  /** True when the payload can be regenerated/replaced (safe to evict). */
+  replaceable?: boolean;
+  /** True when this offload belongs to the task currently in focus. */
+  currentTask?: boolean;
+}
+
+/** Escape a Mermaid node label (quotes + brackets break the parser). */
+function mermaidLabel(text: string): string {
+  return text.replace(/["[\]{}|]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function shortId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 24);
+}
+
+/**
+ * OFFLOAD-GRAPH — render the offloads as a Mermaid task-graph: a root session
+ * node fans out to task groups (by `taskId`, falling back to `kind`), each
+ * holding its offload nodes labelled with token savings. The current task and
+ * replaceable payloads are marked. Pure (returns lines); the caller prints.
+ */
+export function formatOffloadGraph(steps: OffloadStep[]): string[] {
+  if (!steps.length) return ["No offloads in this session's working memory."];
+
+  // Group by taskId when any step carries one, else by kind.
+  const useTask = steps.some((s) => s.taskId);
+  const groups = new Map<string, OffloadStep[]>();
+  for (const s of steps) {
+    const key = (useTask ? s.taskId : s.kind) || "untasked";
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(s);
+    else groups.set(key, [s]);
+  }
+
+  const lines: string[] = ["```mermaid", "graph TD", "  session([session working memory])"];
+  let gi = 0;
+  for (const [key, group] of groups) {
+    const gid = `g${gi++}_${shortId(key)}`;
+    const current = group.some((s) => s.currentTask);
+    const groupSaved = group.reduce((n, s) => n + (s.tokenEstimate ?? 0), 0);
+    lines.push(`  session --> ${gid}["${mermaidLabel(key)}${current ? " *current" : ""} (~${groupSaved} tok)"]`);
+    for (const s of group) {
+      const nid = `n_${shortId(s.nodeId)}`;
+      const saved = s.tokenEstimate != null ? `~${s.tokenEstimate} tok` : "size?";
+      const repl = s.replaceable ? " (replaceable)" : "";
+      lines.push(`  ${gid} --> ${nid}["${mermaidLabel(s.title ?? s.nodeId)}${repl} (${saved})"]`);
+    }
+  }
+  lines.push("```");
+  return lines;
 }
 
 function snippet(text: string | undefined, max = 90): string {
