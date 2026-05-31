@@ -82,3 +82,28 @@ under `cli.*` in `config.json`:
 ```
 
 See [configuration.md](configuration.md) for the full `cli.*` knob list.
+
+---
+
+## API RBAC — per-user data scoping (server)
+
+The CLI access policy above governs what a *local agent* may do. The **brain's
+HTTP API** enforces a separate, orthogonal boundary: every authenticated request
+may only read/write **its own** user's data.
+
+- **Identity** comes from the auth middleware (`req.userId` / `req.isAdmin`),
+  derived from the API key or JWT — never from request input.
+- **Scoping** runs through one helper, `scopedUserId(req, requested, resource)`
+  (`api/middleware/scope.ts`, the single source of truth):
+  - no `userId` requested, or it matches the caller → the caller's own id;
+  - a *different* `userId` → allowed **only for admins** (cross-user access);
+  - otherwise → `ScopeError` (HTTP **403**, `Cannot access another user's <resource>`).
+- **Consistency:** routes catch errors with `errorStatus(error, fallback)`, so a
+  scope violation is always a **403** (previously the same denial returned 400,
+  403, or 500 depending on the endpoint).
+- **Resource-by-id reads** (source documents, tree nodes) additionally verify
+  ownership after fetch and return **404** on mismatch (no cross-user IDOR).
+- **Admin-only** routes (user management) sit behind `requireAdmin`.
+
+Scope is keyed on `user_id`; `workspace_tag` narrows recall *within* a user
+(federation) and is not a security boundary on its own.
