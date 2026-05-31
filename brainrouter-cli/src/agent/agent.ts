@@ -14,7 +14,7 @@ import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
-import { shouldRetryConnectivity } from '../state/checkpointStore.js';
+import { shouldRetryLlm } from '../state/checkpointStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -1526,8 +1526,11 @@ export class Agent {
       // hang up / timeouts) are retried with backoff before giving up — a
       // network blip shouldn't kill a turn, a worker, or a child agent. This
       // is why background workers (which are `silent`) were dying on the first
-      // hiccup while grok/claude-code/codex ride it out. Context-overflow and
-      // model-not-found errors are NOT connectivity errors, so they fall
+      // hiccup while grok/claude-code/codex ride it out. `shouldRetryLlm` also
+      // covers transient SERVER-side failures — HTTP 5xx, gateway timeouts
+      // (the "504 Gateway Time-out" from the provider's load balancer), rate
+      // limits (429), and overload errors — not just client-side connectivity.
+      // Context-overflow and model-not-found errors are neither, so they fall
       // straight through to the dedicated recovery in the catch below.
       const LLM_MAX_ATTEMPTS = 3;
       const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
@@ -1535,10 +1538,10 @@ export class Agent {
           try {
             return await invokeLlm();
           } catch (err: any) {
-            if (!shouldRetryConnectivity(err, attempt, LLM_MAX_ATTEMPTS)) throw err;
+            if (!shouldRetryLlm(err, attempt, LLM_MAX_ATTEMPTS)) throw err;
             const delayMs = attempt === 1 ? 600 : 1800;
             callbacks.onStatusUpdate(
-              `Network error reaching the model (${String(err?.message ?? err).slice(0, 80)}) — retrying ${attempt}/${LLM_MAX_ATTEMPTS - 1} in ${(delayMs / 1000).toFixed(1)}s...`,
+              `Transient error reaching the model (${String(err?.message ?? err).slice(0, 80)}) — retrying ${attempt}/${LLM_MAX_ATTEMPTS - 1} in ${(delayMs / 1000).toFixed(1)}s...`,
             );
             await new Promise((r) => setTimeout(r, delayMs));
           }
