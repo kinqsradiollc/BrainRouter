@@ -29,6 +29,10 @@
  */
 
 import { createHash } from 'node:crypto';
+import { snapshotPrefix, type PrefixSnapshot } from './prefixDrift.js';
+
+/** PREFIX-DRIFT — which component last invalidated the prefix cache. */
+export type PrefixDriftCause = 'system' | 'tools' | 'anchors' | 'fewShots';
 
 /**
  * Minimal OpenAI-shaped chat message — matches what the agent already
@@ -88,6 +92,8 @@ export class ImmutablePrefix {
   private _anchors: ChatMessage[];
   /** Invalidated by any mutation; recomputed lazily. */
   private _fingerprintCache: string | null = null;
+  /** PREFIX-DRIFT — the component that caused the most recent cache miss. */
+  private _lastDriftCause: PrefixDriftCause | null = null;
 
   constructor(opts: ImmutablePrefixOptions) {
     this._system = opts.system;
@@ -120,6 +126,7 @@ export class ImmutablePrefix {
     if (this._system === s) return false;
     this._system = s;
     this._fingerprintCache = null;
+    this._lastDriftCause = 'system';
     return true;
   }
 
@@ -131,6 +138,7 @@ export class ImmutablePrefix {
     if (toolSpecsEqual(this._toolSpecs, specs)) return false;
     this._toolSpecs = [...specs];
     this._fingerprintCache = null;
+    this._lastDriftCause = 'tools';
     return true;
   }
 
@@ -144,6 +152,7 @@ export class ImmutablePrefix {
     if (this._toolSpecs.some(t => t.function?.name === name)) return false;
     this._toolSpecs.push(spec);
     this._fingerprintCache = null;
+    this._lastDriftCause = 'tools';
     return true;
   }
 
@@ -156,6 +165,7 @@ export class ImmutablePrefix {
     if (idx < 0) return false;
     this._toolSpecs.splice(idx, 1);
     this._fingerprintCache = null;
+    this._lastDriftCause = 'tools';
     return true;
   }
 
@@ -168,6 +178,7 @@ export class ImmutablePrefix {
     if (chatMessagesEqual(this._anchors, anchors)) return false;
     this._anchors = [...anchors];
     this._fingerprintCache = null;
+    this._lastDriftCause = 'anchors';
     return true;
   }
 
@@ -208,6 +219,22 @@ export class ImmutablePrefix {
     if (this._fingerprintCache !== null) return this._fingerprintCache;
     this._fingerprintCache = this.computeFingerprint();
     return this._fingerprintCache;
+  }
+
+  /** PREFIX-DRIFT — the component that caused the most recent cache miss
+   *  (null until the first mutation). Pairs with `snapshot()` + the
+   *  `diffPrefixSnapshots` helper for a richer "why did we miss" label. */
+  get lastDriftCause(): PrefixDriftCause | null {
+    return this._lastDriftCause;
+  }
+
+  /** PREFIX-DRIFT — component-level snapshot for diffing across turns. */
+  snapshot(): PrefixSnapshot {
+    return snapshotPrefix({
+      system: this._system,
+      toolNames: this._toolSpecs.map((t) => t.function?.name ?? '').filter(Boolean),
+      anchors: this._anchors.map((a) => a.content ?? ''),
+    });
   }
 
   /**
