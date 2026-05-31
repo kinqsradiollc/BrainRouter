@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "brainrouter": {
+      "command": "npx",
+      "args": ["-y", "@kinqs/brainrouter-mcp-server@latest"],
+      "env": {}
+    }
+  }
+}
