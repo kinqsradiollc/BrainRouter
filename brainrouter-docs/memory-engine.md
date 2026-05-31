@@ -18,6 +18,25 @@ graph TD
     Cognitive -->|identity distiller| Identity[CoreIdentity]
 ```
 
+### Memory levels (L0–L3)
+
+The same stack read as a retention hierarchy — each level is more distilled,
+more durable, and cheaper to recall than the one below it. Consolidation pushes
+content *up*; decay and eviction pull it *down/out*.
+
+| Level | Backing store | Holds | Retention |
+| --- | --- | --- | --- |
+| **L0 — sensory** | SensoryStream | Raw turn-by-turn messages | Transient: dropped once the extractor has consumed the row |
+| **L1 — cognitive** | CognitiveRecord (incl. `lesson`) | Classified, deduped facts/decisions/preferences/lessons | Long-term, per-type half-life decay; citations + lesson corroboration push priority back up |
+| **L2 — working / grouped** | ContextualFocus scenes + `source`/`topic` trees | Heat-scored task scenes; per-document and per-topic summary nodes | Medium: scenes evict as heat cools; tree leaves seal into summaries |
+| **L3 — identity / global** | CoreIdentity + `global` tree | Distilled user profile + hard rules; cross-topic rollup digests | Permanent: prepended to every system prompt; global is the top of the seal hierarchy |
+
+Recall reads top-down — L3 identity is always present, L2 summaries answer
+"what was this about", and the pipeline drills into L1/L0 detail only when a
+query needs it (keeping the token budget flat; see [BENCHMARKS](../BENCHMARKS.md)).
+The tree seal hierarchy (`source → topic → global`) is how L1 detail is
+compacted into L2/L3 digests — see *Memory tree* below.
+
 ### SensoryStream
 
 High-bandwidth dialogue buffer. Stores raw user/assistant messages
