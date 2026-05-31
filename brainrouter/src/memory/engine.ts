@@ -4,6 +4,7 @@ import type { StalenessThresholds } from "./lessonHygiene.js";
 // the engine methods below are thin wrappers delegating to them.
 import * as lessonOps from "./lessons/lessonOps.js";
 import * as blackboardOps from "./blackboard/blackboardOps.js";
+import * as treeOps from "./tree/treeOps.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
@@ -23,7 +24,6 @@ import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance-plan.js";
-import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
 import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
@@ -1034,68 +1034,24 @@ export class MemoryEngine {
   // global promotion) layers on top; the summarizer is deterministic here and
   // swappable for an LLM later.
 
-  private treeStore(): {
-    appendTreeNode(userId: string, input: MemoryTreeNodeInput): MemoryTreeNode;
-    getTreeNode(id: string): MemoryTreeNode | null;
-    getTreeChildren(parentId: string): MemoryTreeNode[];
-    getTreeRoots(userId: string, kind?: MemoryTreeKind): MemoryTreeNode[];
-    setTreeParent(childIds: string[], parentId: string): void;
-    sealTreeNode(id: string): void;
-  } | null {
-    const s = this.store as any;
-    return typeof s.appendTreeNode === "function" && typeof s.getTreeRoots === "function" ? s : null;
-  }
-
   /** MEM-5 — append a leaf (level 0) summarizing some source chunks. */
   public appendTreeLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds: string[] = [], heatScore = 0): MemoryTreeNode | null {
-    const store = this.treeStore();
-    return store ? store.appendTreeNode(userId, { kind, level: 0, summaryMd, sourceChunkIds, heatScore }) : null;
+    return treeOps.appendTreeLeaf(this, userId, kind, summaryMd, sourceChunkIds, heatScore);
   }
 
   /** MEM-5 — seal a bucket: roll the given children into a summarized parent. */
   public summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): MemoryTreeNode | null {
-    const store = this.treeStore();
-    if (!store) return null;
-    const children = childIds.map((id) => store.getTreeNode(id)).filter((n): n is MemoryTreeNode => !!n);
-    if (children.length === 0) return null;
-    const parent = store.appendTreeNode(userId, {
-      kind,
-      level: parentLevel(children),
-      summaryMd: summarizeChildren(children),
-      sourceChunkIds: aggregateChunkIds(children),
-      heatScore: aggregateHeat(children),
-    });
-    store.setTreeParent(childIds, parent.id);
-    for (const c of children) store.sealTreeNode(c.id);
-    return parent;
+    return treeOps.summarizeBucket(this, userId, childIds, kind);
   }
 
-  /**
-   * BRAIN-P4-T5 — global rollup digest. Scene autobuild seals topic leaves into
-   * GLOBAL roots; once enough unsealed global roots accumulate
-   * (`BRAINROUTER_TREE_GLOBAL_ROLLUP`, default 3) this rolls them up into ONE
-   * higher global digest — the periodic "what happened across topics" summary
-   * that matures the source → topic → global hierarchy beyond scene autobuild.
-   * Reuses summarizeBucket; gated like the autobuild; returns the rollup or null.
-   */
+  /** BRAIN-P4-T5 — global rollup digest (matures source → topic → global). */
   public rollupGlobalTree(userId: string): MemoryTreeNode | null {
-    if (!treeAutobuildEnabled()) return null;
-    const store = this.store as any;
-    if (typeof store.getTreeRoots !== "function") return null;
-    const roots = (store.getTreeRoots(userId, "global") as MemoryTreeNode[]).filter((n) => !n.sealedAt);
-    if (roots.length < readTreePolicy().globalRollupThreshold) return null;
-    return this.summarizeBucket(userId, roots.map((n) => n.id), "global");
+    return treeOps.rollupGlobalTree(this, userId);
   }
 
   /** MEM-5 / MEM-8 — walk the tree: a node + its children, or the roots of a kind. */
   public treeWalk(userId: string, nodeId?: string, kind?: MemoryTreeKind): { node: MemoryTreeNode | null; children: MemoryTreeNode[]; roots?: MemoryTreeNode[] } {
-    const store = this.treeStore();
-    if (!store) return { node: null, children: [] };
-    if (nodeId) {
-      const node = store.getTreeNode(nodeId);
-      return { node, children: node ? store.getTreeChildren(nodeId) : [] };
-    }
-    return { node: null, children: [], roots: store.getTreeRoots(userId, kind) };
+    return treeOps.treeWalk(this, userId, nodeId, kind);
   }
 
   // ── Vault mirror (MEM-7) ────────────────────────────────────────────────
