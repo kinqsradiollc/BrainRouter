@@ -1,12 +1,8 @@
 import { SqliteMemoryStore } from "./store/sqlite.js";
-import {
-  deriveConflictKey,
-  lessonsConflict,
-  isLessonStale,
-  normalizeSupersedes,
-  DEFAULT_STALENESS,
-  type StalenessThresholds,
-} from "./lessonHygiene.js";
+import type { StalenessThresholds } from "./lessonHygiene.js";
+// REFAC-ENGINE-SPLIT (0.4.6) — lesson-domain ops live in lessons/lessonOps.ts;
+// the engine methods below are thin wrappers delegating to them.
+import * as lessonOps from "./lessons/lessonOps.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
@@ -765,66 +761,7 @@ export class MemoryEngine {
     text: string,
     opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string; supersedes?: string | string[] },
   ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] } {
-    const normalized = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-    const fingerprint = createHash("sha1").update(normalized).digest("hex");
-    const store = this.store as typeof this.store & {
-      findLessonByFingerprint?: (u: string, f: string) => CognitiveRecord | null;
-    };
-
-    const existing = typeof store.findLessonByFingerprint === "function" ? store.findLessonByFingerprint(userId, fingerprint) : null;
-    if (existing) {
-      const confidence = Math.min(0.99, existing.confidence + (1 - existing.confidence) * 0.25);
-      // The corroboration counter lives in metadata (authoritative); a fresh
-      // lesson is created at 1, so the next corroboration is 2, etc.
-      const prevCorr = Number((existing.metadata as any)?.corroborations ?? existing.citationCount ?? 1);
-      const corroborations = prevCorr + 1;
-      const nowIso = new Date().toISOString();
-      const updated: CognitiveRecord = {
-        ...existing,
-        confidence,
-        citationCount: corroborations,
-        lastCitedAt: nowIso,
-        updatedTime: nowIso,
-        metadata: { ...(existing.metadata ?? {}), fingerprint, corroborations },
-      };
-      this.store.upsertCognitive(updated, { skipAudit: true });
-      return { recordId: existing.id, reinforced: true, confidence, corroborations, supersededIds: [] };
-    }
-
-    // LESSON-HYGIENE — store a deterministic conflict key alongside the
-    // fingerprint so `findLessonConflicts` can locate same-subject lessons
-    // without an LLM (see lessonHygiene.deriveConflictKey).
-    const conflictKey = deriveConflictKey(text);
-    const record = this.upsertEngineeringMemory({
-      userId,
-      sessionKey: opts?.sessionKey,
-      type: "lesson",
-      content: text,
-      priority: opts?.priority ?? 80,
-      activeSkill: opts?.activeSkill,
-      sourceKind: "user_instruction",
-      metadata: { fingerprint, conflictKey, corroborations: 1, ...(opts?.kind ? { kind: opts.kind } : {}), ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
-    });
-
-    // LESSON-HYGIENE — explicit supersede: invalidate each named prior lesson,
-    // pointing `superseded_by` at this new record. Best-effort per id so one
-    // bad/missing id can't sink the whole call; recall already drops
-    // `invalid_at IS NOT NULL`, so a superseded lesson stops surfacing at once.
-    const supersededIds: string[] = [];
-    for (const oldId of normalizeSupersedes(opts?.supersedes)) {
-      if (oldId === record.id) continue;
-      try {
-        // `invalidateCognitiveRecord` is an UPDATE that silently no-ops on an
-        // unknown id, so confirm the record exists first — otherwise we'd
-        // report a bogus id as "superseded".
-        if (!this.store.getMemoryById(userId, oldId)) continue;
-        this.store.invalidateCognitiveRecord(userId, oldId, record.id);
-        supersededIds.push(oldId);
-      } catch {
-        /* unknown id — skip, don't fail the record */
-      }
-    }
-    return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1, supersededIds };
+    return lessonOps.recordLesson(this, userId, text, opts);
   }
 
   /**
@@ -835,13 +772,7 @@ export class MemoryEngine {
    * design (it won't guess at semantic equivalence like npm≠pnpm).
    */
   public findLessonConflicts(userId: string, text: string): CognitiveRecord[] {
-    const key = deriveConflictKey(text);
-    if (!key) return [];
-    const store = this.store as typeof this.store & {
-      findLessonsByConflictKey?: (u: string, k: string) => CognitiveRecord[];
-    };
-    const candidates = typeof store.findLessonsByConflictKey === "function" ? store.findLessonsByConflictKey(userId, key) : [];
-    return candidates.filter((c) => lessonsConflict(c.content, text));
+    return lessonOps.findLessonConflicts(this, userId, text);
   }
 
   /**
@@ -856,32 +787,7 @@ export class MemoryEngine {
     userId: string,
     opts?: { apply?: boolean; thresholds?: Partial<StalenessThresholds>; nowMs?: number; limit?: number },
   ): { candidates: Array<{ recordId: string; reason: string; lastCitedAt: string | null; confidence: number }>; archived: number } {
-    const store = this.store as typeof this.store & {
-      listLessonsForHygiene?: (u: string, limit: number) => CognitiveRecord[];
-    };
-    const lessons = typeof store.listLessonsForHygiene === "function" ? store.listLessonsForHygiene(userId, opts?.limit ?? 1000) : [];
-    const thresholds: StalenessThresholds = { ...DEFAULT_STALENESS, ...(opts?.thresholds ?? {}) };
-    const nowMs = opts?.nowMs ?? Date.now();
-    const candidates = lessons
-      .filter((l) => isLessonStale(l, nowMs, thresholds))
-      .map((l) => ({
-        recordId: l.id,
-        reason: `not cited since ${l.lastCitedAt ?? l.createdTime}; confidence ${l.confidence.toFixed(2)}; ${l.citationCount} corroboration(s)`,
-        lastCitedAt: l.lastCitedAt ?? null,
-        confidence: l.confidence,
-      }));
-    let archived = 0;
-    if (opts?.apply) {
-      for (const c of candidates) {
-        try {
-          this.store.updateCognitiveConfidence(userId, c.recordId, c.confidence, "archived");
-          archived++;
-        } catch {
-          /* best-effort */
-        }
-      }
-    }
-    return { candidates, archived };
+    return lessonOps.sweepStaleLessons(this, userId, opts);
   }
 
   /**
