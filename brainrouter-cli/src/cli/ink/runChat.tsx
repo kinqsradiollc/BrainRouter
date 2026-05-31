@@ -17,7 +17,7 @@ import { parseBangCommand } from '../../runtime/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
-import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue } from '../../state/checkpointStore.js';
+import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '../../state/checkpointStore.js';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
@@ -897,20 +897,35 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
               }
             })();
           }
-          // CLI-21 — surface anything left unfinished by a previous run (a turn
-          // that crashed mid-flight, or prompts queued while offline) so the
-          // user can resend them, then clear so it doesn't nag next launch.
+          // CLI-21 / CLI-21b — recover what a previous run left behind. A crash
+          // checkpoint (an UNFINISHED turn) is only surfaced for manual resend —
+          // never auto-run (it may have been mid-mutation). The offline queue
+          // (prompts that failed on connectivity) is AUTO-REPLAYED on reconnect
+          // when enabled, else surfaced. Best-effort throughout.
           try {
             const rec = readRecoverable(agent.workspaceRoot, agent.sessionKey);
-            const pending = [...(rec.crashed ? [rec.crashed] : []), ...rec.offline];
-            if (pending.length > 0 && controller) {
-              const lines = pending.map((p) => `  • ${p.kind === 'crash' ? '(unfinished)' : '(offline)'} ${p.prompt.replace(/\s+/g, ' ').slice(0, 120)}`);
-              controller.push.notice(`⏮ ${pending.length} prompt(s) from a previous session weren't completed — resend if still needed:\n${lines.join('\n')}`, 'info');
+            if (rec.crashed && controller) {
+              controller.push.notice(`⏮ A prompt from a previous session didn't finish — resend if still needed:\n  • ${rec.crashed.prompt.replace(/\s+/g, ' ').slice(0, 120)}`, 'info');
               endTurnCheckpoint(agent.workspaceRoot, agent.sessionKey);
+            }
+            const offline = rec.offline.slice(0, 3);
+            if (offline.length > 0) {
+              // Clear first so a still-offline replay re-queues cleanly (no doubling).
               clearOfflineQueue(agent.workspaceRoot, agent.sessionKey);
+              if (shouldAutoReplayOffline({ enabled: getCliKnobs().autoReplayOffline, connected: mcpClient.isConnected(), count: offline.length }) && controller) {
+                controller.push.notice(`↺ Replaying ${offline.length} prompt(s) queued while offline…`, 'info');
+                void (async () => {
+                  for (const q of offline) {
+                    try { await runChatTurn(q.prompt); } catch { /* a re-failure is re-queued by runChatTurn */ }
+                  }
+                })();
+              } else if (controller) {
+                const lines = offline.map((p) => `  • ${p.prompt.replace(/\s+/g, ' ').slice(0, 120)}`);
+                controller.push.notice(`↺ ${offline.length} prompt(s) were queued while offline — resend when ready:\n${lines.join('\n')}`, 'info');
+              }
             }
           } catch {
-            // recovery surfacing is best-effort
+            // recovery is best-effort
           }
         }}
         onAccessModeCycle={() => {
