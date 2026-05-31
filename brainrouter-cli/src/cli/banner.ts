@@ -177,7 +177,7 @@ export function renderBanner(inputs: BannerInputs, theme: Theme): string {
     rows.push({ label: 'last on', value: `${inputs.lastUsedWorkflow}   /workflow switch ${inputs.lastUsedWorkflow}` });
   }
   if (inputs.goal) rows.push({ label: 'goal', value: formatGoalSummary(inputs.goal) });
-  rows.push({ label: 'session', value: inputs.sessionKey.slice(0, 8) });
+  rows.push({ label: 'session', value: inputs.sessionKey });
   rows.push({ label: 'model', value: inputs.model });
 
   const version = inputs.version ?? VERSION;

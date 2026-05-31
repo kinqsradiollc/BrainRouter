@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { captureConsoleOutput } from '../cli/ink/consoleCapture.js';
-import { filterPaletteCommands, tailReasoning, REASONING_TAIL_CHARS, buildReasoningWindow, REASONING_VISIBLE_LINES } from '../cli/ink/ChatApp.js';
+import { filterPaletteCommands, tailReasoning, REASONING_TAIL_CHARS, buildReasoningWindow, REASONING_VISIBLE_LINES, effortIndicator } from '../cli/ink/ChatApp.js';
+
+test('effortIndicator: every effort level (incl. xhigh + max alias) has a glyph', () => {
+  assert.deepEqual(effortIndicator('low'), { glyph: '○', color: 'gray' });
+  assert.deepEqual(effortIndicator('medium'), { glyph: '◐', color: 'yellow' });
+  assert.deepEqual(effortIndicator('high'), { glyph: '●', color: 'magenta' });
+  // xhigh — the previously-missing case — and its `max` alias both render.
+  assert.deepEqual(effortIndicator('xhigh'), { glyph: '✦', color: 'redBright' });
+  assert.deepEqual(effortIndicator('max'), { glyph: '✦', color: 'redBright' });
+  // Unknown / undefined → no glyph (footer hides it).
+  assert.equal(effortIndicator(undefined).glyph, '');
+  assert.equal(effortIndicator('bogus').glyph, '');
+});
 
 // --- Pure helpers from the Ink chat REPL ---------------------------------
 // These are testable without mounting Ink. The orchestration in runChat.tsx
