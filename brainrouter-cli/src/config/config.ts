@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { ExternalDirMode } from '../runtime/execPolicy.js';
+import type { ExternalDirMode } from '../runtime/exec/execPolicy.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';

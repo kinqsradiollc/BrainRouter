@@ -51,8 +51,8 @@ import { applyFederationIdentity } from '../runtime/federationIdentity.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
 import { runHooks } from '../state/hooksStore.js';
-import { resolveSandboxConfig, runShell } from '../runtime/sandbox.js';
-import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
+import { resolveSandboxConfig, runShell } from '../runtime/exec/sandbox.js';
+import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../runtime/exec/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
@@ -63,8 +63,8 @@ import { startSpan, traceEvent } from '../runtime/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../runtime/contextRegions.js';
-import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
-import { isPathWithinRoots } from '../runtime/pathPolicy.js';
+import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/exec/execPolicy.js';
+import { isPathWithinRoots } from '../runtime/exec/pathPolicy.js';
 import { runPostEditCheck } from '../runtime/postEditCheck.js';
 import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../runtime/autoReindex.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a

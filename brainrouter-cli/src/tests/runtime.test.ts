@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/loopRunner.js';
-import { resolveSandboxConfig } from '../runtime/sandbox.js';
+import { resolveSandboxConfig } from '../runtime/exec/sandbox.js';
 import { startSpan, traceEnabled } from '../runtime/tracing.js';
-import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/dangerousCommand.js';
+import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/exec/dangerousCommand.js';
 
 test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
   // Stub the global fetch with three scenarios that have historically crashed

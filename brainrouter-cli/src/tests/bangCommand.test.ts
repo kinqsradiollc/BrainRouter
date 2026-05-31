@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBangCommand } from '../runtime/bangCommand.js';
+import { parseBangCommand } from '../runtime/exec/bangCommand.js';
 
 test('PARITY-B1 parseBangCommand: non-bang input falls through', () => {
   assert.deepEqual(parseBangCommand('hello world'), { isBang: false, command: '' });
