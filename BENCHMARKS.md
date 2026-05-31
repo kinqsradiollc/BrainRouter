@@ -77,6 +77,44 @@ Reproduce:
 npx tsx -e "import {benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd} from './brainrouter/src/memory/bench/code-recall.ts'; console.log(formatCodeRecallMd(benchmarkCodeChunking(DEFAULT_CODE_SAMPLES)))"
 ```
 
+### 2b. Repo-scale retrieval — `find_related` ranking
+
+Chunking quality is necessary but not sufficient; this measures *retrieval* at
+repo scale. The fixture is 8 independent clusters × 5 files (40 files): within a
+cluster, files import each other and share a symbol prefix; across clusters
+there is no shared vocabulary. Gold relevance for a seed = the rest of its
+cluster.
+
+| Metric | Value |
+|---|---:|
+| Queries | 8 |
+| **Recall@10** | **100.0%** |
+| Precision@10 | 40.0% |
+| MRR | 1.000 |
+| nDCG@10 | 1.000 |
+| Token efficiency (returned ÷ whole-repo dump) | **19.4%** (792 vs 4,080 tokens) |
+
+`find_related` recalls every in-cluster file and ranks a relevant hit first
+(MRR/nDCG = 1.0) while returning ~1/5 the tokens a full dump costs. Precision@10
+of 40% is a conservative floor — the fixture deliberately shares boilerplate
+(`trim().toLowerCase()`) across clusters; real repos separate cleaner.
+
+**Build vs. integrate:** BrainRouter *builds* code retrieval into the memory
+plane (one FTS index + a call/import symbol graph + the same recall ranking),
+rather than bolting on an external code-graph service. That keeps code and
+conversational/decision memory in one store with one provenance and ownership
+model, and lets code chunks participate in the same graph expansion as every
+other memory — at the cost of not (yet) being a dedicated repo-scale semantic
+index. The numbers above are the bar a future external integration would have
+to beat to justify the added moving parts.
+
+Raw: [`2026-05-31/code-scale.json`](brainrouter/benchmark/results/2026-05-31/code-scale.json).
+Reproduce:
+
+```bash
+cd brainrouter && npx tsx -e "import {SqliteMemoryStore} from './src/memory/store/sqlite.js'; import {MemoryEngine} from './src/memory/engine.js'; const s=new SqliteMemoryStore(':memory:'); s.init(); console.log(new MemoryEngine(s).runCodeScaleBenchmark({k:10}))"
+```
+
 ## 3. Scale & context efficiency
 
 Built-in memory loads *all* history every session; BrainRouter retrieves only

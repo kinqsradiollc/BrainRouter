@@ -1,0 +1,14 @@
+{
+  "date": "2026-05-31",
+  "harness": "MemoryEngine.runCodeScaleBenchmark()",
+  "fixture": { "clusters": 8, "perCluster": 5, "files": 40 },
+  "queries": 8,
+  "recallAtK": 1,
+  "precisionAtK": 0.4,
+  "mrr": 1,
+  "ndcgAtK": 1,
+  "k": 10,
+  "avgReturnedTokens": 792.125,
+  "avgRepoTokens": 4080,
+  "tokenEfficiency": 0.1941482843137255
+}
