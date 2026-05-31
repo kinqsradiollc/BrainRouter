@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
 import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks, extractImportSpecifiers, resolveRelativeImport } from "./code-retrieval.js";
 import { buildSkillExtractionPrompt, parseSkillResponse } from "./skill-extract.js";
+import { buildReflectPrompt, parseReflectResponse } from "./reflect.js";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "./graph-analytics.js";
 import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./memory-type-config.js";
@@ -831,6 +832,35 @@ export class MemoryEngine {
       kind: "skill",
     });
     return { extracted: true, recordId: res.recordId, reinforced: res.reinforced, skill };
+  }
+
+  /**
+   * MEM-32b (0.4.4) — `reflect`: synthesize NON-OBVIOUS cross-memory insights
+   * (patterns spanning multiple records) via the synthesis LLM and record each
+   * as a reinforcing `lesson` (kind:"insight"). `<no-insight/>` → nothing stored.
+   * LLM failure is best-effort. The LLM is injectable for tests.
+   */
+  public async reflect(
+    userId: string,
+    opts?: { limit?: number; llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string> },
+  ): Promise<{ reflected: number; insights: string[] }> {
+    const records = this.store.listMemories(userId, { archived: false }).slice(0, Math.max(3, Math.min(50, opts?.limit ?? 25)));
+    if (records.length < 3) return { reflected: 0, insights: [] };
+
+    const { system, user } = buildReflectPrompt(records.map((r) => r.content));
+    const run = opts?.llm ?? ((p) => this.synthesisRunner.run(p as any));
+    let raw: string;
+    try {
+      raw = await run({ prompt: user, systemPrompt: system, timeoutMs: 60_000 });
+    } catch {
+      return { reflected: 0, insights: [] };
+    }
+
+    const insights = parseReflectResponse(raw);
+    for (const insight of insights) {
+      this.recordLesson(userId, insight, { kind: "insight", priority: 78 });
+    }
+    return { reflected: insights.length, insights };
   }
 
   public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): CognitiveRecord[] {
