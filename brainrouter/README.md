@@ -14,6 +14,9 @@ Ships the `brainrouter-mcp` binary.
 
 - **Long-term memory** — sensory log + cognitive extraction (L1 facts, L2 focus scenes, L3 persona) with decay, contradiction tracking, and citation reinforcement.
 - **Recall surface** — `memory_recall`, `memory_search`, `memory_graph_query`, `memory_file_history`, `memory_failed_attempts`, `memory_explain_recall`.
+- **Code retrieval** — `memory_find_related` ranks related code chunks over a dedicated FTS index plus a call/import symbol graph; `memory_reindex_source` keeps the index fresh and prunes stale files.
+- **Memory that learns** — `memory_record_lesson` (dedup-fingerprinted, confidence-reinforcing), `memory_extract_skill` (distil a skill from a session), and `memory_reflect` (LLM synthesis of higher-level patterns).
+- **Graph intelligence** — `memory_graph_analytics` exposes PageRank, articulation points, and shortest paths over the memory graph (also served at `GET /api/graph/analytics`).
 - **Working memory** — `memory_working_context` / `memory_working_offload` for in-flight payloads that shouldn't bloat the LLM context.
 - **Skill catalogue** — `list_skills`, `get_skill`, `search_skills`, `get_persona` — ships with 70+ canonical skills bundled at publish time.
 - **HTTP and stdio transports** — run as a hosted service (HTTP/SSE) or spawn as a stdio child from any MCP client.
@@ -34,7 +37,7 @@ Verify:
 
 ```bash
 which brainrouter-mcp
-brainrouter-mcp --version    # prints 0.3.7
+brainrouter-mcp --version    # prints 0.4.5
 ```
 
 ---
