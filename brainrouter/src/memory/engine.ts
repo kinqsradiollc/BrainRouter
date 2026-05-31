@@ -9,6 +9,8 @@ import { chunkCode } from "./source/code-chunker.js";
 import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
 import { benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd, type CodeRecallResult } from "./bench/code-recall.js";
+import { computeRetrievalMetrics, withTokenEfficiency, formatCodeScaleMd, type RankedQueryResult, type RetrievalMetrics } from "./bench/code-scale.js";
+import { buildCodeScaleFixture } from "./bench/code-scale-fixture.js";
 import { readTreePolicy, treeAutobuildEnabled, parentDomain, topicKeyForScene, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
@@ -1252,6 +1254,66 @@ export class MemoryEngine {
       summaryPath = null;
     }
     return { ...result, summaryPath };
+  }
+
+  /**
+   * CODE-SCALE (0.4.5) — repo-scale find_related retrieval benchmark. Ingests a
+   * deterministic labelled fixture, runs find_related per seed, and scores the
+   * ranked file list against the gold relevance set (recall@k / precision@k /
+   * MRR / nDCG) plus token-efficiency vs. a whole-repo dump. Self-contained: it
+   * writes into the engine's own store under a dedicated benchmark user so it
+   * doesn't touch real memory.
+   */
+  public runCodeScaleBenchmark(opts?: {
+    baseDir?: string;
+    userId?: string;
+    k?: number;
+    clusters?: number;
+    perCluster?: number;
+  }): RetrievalMetrics & { summaryPath: string | null } {
+    const userId = opts?.userId ?? "__codescale_bench__";
+    const k = opts?.k ?? 10;
+    const fixture = buildCodeScaleFixture({ clusters: opts?.clusters, perCluster: opts?.perCluster });
+
+    // Ingest the whole fixture into the code index.
+    let repoTokens = 0;
+    for (const f of fixture.files) {
+      this.reindexCodeSource(userId, { filePath: f.filePath, content: f.content, language: f.language });
+      repoTokens += Math.ceil(f.content.length / 4); // ~4 chars/token proxy
+    }
+
+    // Run find_related per seed, collapse hits to unique files in rank order.
+    const results: RankedQueryResult[] = fixture.queries.map((q) => {
+      // Seed at the first exported function body (line 5 in the fixture
+      // layout); find_related resolves the seed chunk by file:line.
+      const res = this.findRelatedChunks(userId, { filePath: q.seed, line: 5 }, { limit: Math.max(k * 3, 30), includeEdges: true });
+      const seen = new Set<string>();
+      const ranked: string[] = [];
+      let returnedTokens = 0;
+      for (const hit of res.related) {
+        const fp = hit.chunk.filePath;
+        if (!fp || fp === q.seed) continue; // exclude the seed file itself
+        returnedTokens += hit.chunk.tokenCount ?? 0;
+        if (!seen.has(fp)) { seen.add(fp); ranked.push(fp); }
+      }
+      return { query: q.seed, relevant: q.relevant, ranked, returnedTokens };
+    });
+
+    const metrics = withTokenEfficiency(
+      computeRetrievalMetrics(results, k),
+      fixture.queries.length ? repoTokens : 0,
+    );
+
+    let summaryPath: string | null = null;
+    try {
+      const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench");
+      fs.mkdirSync(dir, { recursive: true });
+      summaryPath = path.join(dir, `code-scale-${Date.now()}.md`);
+      fs.writeFileSync(summaryPath, formatCodeScaleMd(metrics), "utf8");
+    } catch {
+      summaryPath = null;
+    }
+    return { ...metrics, summaryPath };
   }
 
   /**
