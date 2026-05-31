@@ -8,7 +8,8 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
 import { formatInboxPane } from '../../runtime/inboxView.js';
-import { validateAgentDefinition, buildAgentDefinition } from '../../orchestration/agentDefValidation.js';
+import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../orchestration/agentDefValidation.js';
+import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '../../orchestration/orchestrator.js';
@@ -497,29 +498,57 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
     }
     case '/agents':
     {
-      // CLI-13 — `/agents create <id>` writes a scoped agent definition.
-      // Non-interactive (flags → validate → write) to avoid a readline
-      // conflict with the live REPL prompt; an interactive wizard can layer on.
+      // CLI-13 + AGENTS-WIZARD — `/agents create <id>` writes a scoped agent
+      // definition. Flag-driven (non-interactive) to avoid a stdin conflict
+      // with the live Ink REPL; AGENTS-WIZARD adds tool-scope existence +
+      // ownership validation and a `--dry-run` preview. (A fully interactive
+      // Ink flow needs mid-REPL stdin handoff — same 0.5.0 TUI-NATIVE concern
+      // as live-turn detach — so it stays deferred; flags + dry-run give the
+      // full capability scriptably.)
       if (args[0] === 'create') {
         const id = args[1];
+        const dryRun = args.includes('--dry-run');
         const flag = (name: string): string | undefined => {
           const i = args.indexOf(`--${name}`);
           return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
         };
-        const toolsCsv = flag('tools');
+        const csv = (v?: string): string[] => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []);
         const draft = {
           id,
           displayName: flag('display'),
           whenToUse: flag('when'),
           prompt: flag('prompt'),
           defaultAccess: flag('access') ?? 'read',
-          toolScope: { local: toolsCsv ? toolsCsv.split(',').map((s) => s.trim()).filter(Boolean) : [], mcp: [] },
+          toolScope: { local: csv(flag('tools')), mcp: csv(flag('mcp')) },
+          ownership: flag('ownership'),
         };
-        const v = validateAgentDefinition(draft);
+        // Validate against the REAL tool sets: this build's LOCAL_TOOLS + the
+        // currently-connected MCP server's tools (best-effort — skip MCP names
+        // when offline so an unreachable server doesn't block creation).
+        let knownMcpTools: string[] | undefined;
+        try {
+          if (mcpClient.isConnected()) {
+            const res = await mcpClient.listTools();
+            knownMcpTools = (res.tools ?? []).map((t: any) => t.name);
+          }
+        } catch { /* offline / list failed — skip MCP existence check */ }
+        const v = validateAgentDefinition(draft, {
+          knownLocalTools: LOCAL_TOOLS.map((t) => t.name),
+          knownMcpTools,
+        });
         if (!v.valid) {
           console.log(chalk.red('\nInvalid agent definition:'));
           for (const e of v.errors) console.log(chalk.gray(`  - ${e}`));
-          console.log(chalk.gray('\nUsage: /agents create <id> --display "Name" --when "..." --prompt "..." --access read|write|shell [--tools a,b] [--force]\n'));
+          console.log(chalk.gray('\nUsage: /agents create <id> --display "Name" --when "..." --prompt "..." --access read|write|shell'));
+          console.log(chalk.gray('         [--tools a,b] [--mcp memory_search,...] [--ownership "src/x/**"] [--dry-run] [--force]\n'));
+          return true;
+        }
+        for (const w of v.warnings) console.log(chalk.yellow(`  ⚠ ${w}`));
+        const built = buildAgentDefinition(draft);
+        if (dryRun) {
+          console.log(chalk.bold('\n[dry-run] Resolved agent definition (nothing written):\n'));
+          console.log(previewAgentDefinition(built));
+          console.log(chalk.gray('\n  Re-run without --dry-run to write it.\n'));
           return true;
         }
         const dir = path.join(agent.workspaceRoot, '.brainrouter', 'agents');
@@ -530,7 +559,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         }
         try {
           fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(file, JSON.stringify(buildAgentDefinition(draft), null, 2), 'utf8');
+          fs.writeFileSync(file, JSON.stringify(built, null, 2), 'utf8');
           console.log(chalk.green(`\n✓ Wrote agent definition: ${path.relative(agent.workspaceRoot, file)}`));
           console.log(chalk.gray('  Loads on next /agents (workspace tier).\n'));
         } catch (err: any) {
