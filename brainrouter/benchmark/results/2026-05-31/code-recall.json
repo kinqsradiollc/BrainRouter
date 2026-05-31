@@ -1,0 +1,9 @@
+{
+  "date": "2026-05-31",
+  "harness": "benchmarkCodeChunking(DEFAULT_CODE_SAMPLES)",
+  "samples": 3,
+  "expectedSymbols": 8,
+  "isolatedSymbols": 8,
+  "symbolRecall": 1,
+  "chunksPerSymbol": 1.125
+}
