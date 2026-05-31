@@ -1147,6 +1147,26 @@ export class MemoryEngine {
     return true;
   }
 
+  /**
+   * BLACKBOARD-REVIEW-UX (0.4.5) — un-drop a candidate that was rejected or
+   * deduped (`duplicate`) in error: move it back to `pending` and clear the
+   * stale score/conflict links so the next reconcile re-evaluates it from
+   * scratch. Only `rejected`/`duplicate` are restorable — a `committed` item is
+   * already a cognitive record (nothing to restore), and `pending`/`reconciled`
+   * aren't dropped. Returns a reason on no-op so the surface can explain why.
+   */
+  public restoreBlackboardItem(userId: string, itemId: string): { restored: boolean; reason?: string; status?: BlackboardStatus } {
+    const store = this.blackboardStore();
+    if (!store) return { restored: false, reason: "blackboard store unavailable" };
+    const item = store.getBlackboardItem(itemId);
+    if (!item || item.userId !== userId) return { restored: false, reason: "no such item" };
+    if (item.status !== "rejected" && item.status !== "duplicate") {
+      return { restored: false, reason: `status is "${item.status}"; only rejected/duplicate items can be restored`, status: item.status };
+    }
+    store.updateBlackboardItem(itemId, { status: "pending", score: 0, conflictIds: [] });
+    return { restored: true, status: "pending" };
+  }
+
   /** MEM-4 — list staged items (optionally by status) for review. */
   public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
     const store = this.blackboardStore();
