@@ -34,7 +34,7 @@ import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
-import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks } from "./code-retrieval.js";
+import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks, extractImportSpecifiers, resolveRelativeImport } from "./code-retrieval.js";
 import { buildSkillExtractionPrompt, parseSkillResponse } from "./skill-extract.js";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "./graph-analytics.js";
 import { hashPassword } from "../api/auth/crypto.js";
@@ -1397,6 +1397,8 @@ export class MemoryEngine {
       ): Array<SourceChunk & { ftsRank: number }>;
       getSourceDocument(id: string): SourceDocument | null;
       getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): SourceChunk[];
+      getSourceChunksByDocument(documentId: string): SourceChunk[];
+      findImportedDocument(userId: string, candidateBase: string): SourceDocument | null;
     }>;
     if (typeof store.searchSourceChunksFts !== "function") return { found: false, related: [] };
 
@@ -1431,6 +1433,32 @@ export class MemoryEngine {
       }
     }
 
+    // MEM-28b — cross-file import edges: resolve the seed FILE's relative imports
+    // to indexed documents and surface a lead chunk from each (a callee often
+    // lives in an imported file). Resolved lazily here (order-independent).
+    const importHits: RelatedChunkHit[] = [];
+    if (
+      opts?.includeEdges !== false && doc.uri &&
+      typeof store.getSourceChunksByDocument === "function" &&
+      typeof store.findImportedDocument === "function"
+    ) {
+      const fileChunks = store.getSourceChunksByDocument(seedChunk.documentId);
+      const specifiers = extractImportSpecifiers(fileChunks.map((c) => c.content).join("\n"));
+      const seenDocs = new Set<string>([seedChunk.documentId]);
+      let added = 0;
+      for (const spec of specifiers) {
+        if (added >= 5) break;
+        const base = resolveRelativeImport(doc.uri, spec);
+        if (!base) continue;
+        const importedDoc = store.findImportedDocument(userId, base);
+        if (!importedDoc || seenDocs.has(importedDoc.id)) continue;
+        seenDocs.add(importedDoc.id);
+        const chunks = store.getSourceChunksByDocument(importedDoc.id);
+        const lead = chunks.find((c) => c.symbol) ?? chunks[0];
+        if (lead) { importHits.push({ chunk: lead, score: 0.9, reason: "graph:import" }); added++; }
+      }
+    }
+
     // Lexical neighbours (symbol/identifier overlap), code-reranked (MEM-26/27).
     const query = extractChunkQueryTerms(seedChunk);
     const scope = opts?.sameLanguage === false ? [] : languageScopeFor(seedChunk.filePath);
@@ -1447,7 +1475,7 @@ export class MemoryEngine {
     // entry wins over a lexical one for the same chunk), exclude the seed, cap.
     const merged: RelatedChunkHit[] = [];
     const seen = new Set<string>([seedChunk.id]);
-    for (const h of [...edgeHits, ...lexical]) {
+    for (const h of [...edgeHits, ...importHits, ...lexical]) {
       if (seen.has(h.chunk.id)) continue;
       seen.add(h.chunk.id);
       merged.push(h);
