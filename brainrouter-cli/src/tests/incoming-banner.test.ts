@@ -37,7 +37,9 @@ test('renderIncomingMessages: prints sender prefix, age, and body', () => {
       },
     ]),
   );
-  assert.match(out, /📨 from abcdef012345…/);
+  // Full sender session key (no truncation/ellipsis) so it's copyable.
+  assert.match(out, /📨 from abcdef0123456789-rest/);
+  assert.doesNotMatch(out, /abcdef012345…/);
   assert.match(out, /just now/);
   assert.match(out, /heads up, deploying main/);
 });

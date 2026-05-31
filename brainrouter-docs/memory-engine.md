@@ -18,6 +18,25 @@ graph TD
     Cognitive -->|identity distiller| Identity[CoreIdentity]
 ```
 
+### Memory levels (L0–L3)
+
+The same stack read as a retention hierarchy — each level is more distilled,
+more durable, and cheaper to recall than the one below it. Consolidation pushes
+content *up*; decay and eviction pull it *down/out*.
+
+| Level | Backing store | Holds | Retention |
+| --- | --- | --- | --- |
+| **L0 — sensory** | SensoryStream | Raw turn-by-turn messages | Transient: dropped once the extractor has consumed the row |
+| **L1 — cognitive** | CognitiveRecord (incl. `lesson`) | Classified, deduped facts/decisions/preferences/lessons | Long-term, per-type half-life decay; citations + lesson corroboration push priority back up |
+| **L2 — working / grouped** | ContextualFocus scenes + `source`/`topic` trees | Heat-scored task scenes; per-document and per-topic summary nodes | Medium: scenes evict as heat cools; tree leaves seal into summaries |
+| **L3 — identity / global** | CoreIdentity + `global` tree | Distilled user profile + hard rules; cross-topic rollup digests | Permanent: prepended to every system prompt; global is the top of the seal hierarchy |
+
+Recall reads top-down — L3 identity is always present, L2 summaries answer
+"what was this about", and the pipeline drills into L1/L0 detail only when a
+query needs it (keeping the token budget flat; see [BENCHMARKS](../BENCHMARKS.md)).
+The tree seal hierarchy (`source → topic → global`) is how L1 detail is
+compacted into L2/L3 digests — see *Memory tree* below.
+
 ### SensoryStream
 
 High-bandwidth dialogue buffer. Stores raw user/assistant messages
@@ -179,6 +198,46 @@ $$H_{\text{new}} = \min(H_{\text{max}},\ H_{\text{decayed}} + \Delta_{\text{spik
 with $H_{\text{max}} = 4.0$, $\Delta_{\text{spike}} = 1.0$. Decay follows a
 10-minute half-life. When $H \ge 0.3$ the system pre-warms the skill
 context and injects its directives into the prompt.
+
+## Memory tree: source → topic → global
+
+Raw records and source chunks don't stay flat — they roll up into a
+**three-domain tree** so recall can return a summary instead of dozens of
+leaves, and so old detail can be sealed without being lost.
+
+| Domain | One tree per… | Leaves | Grown by | Seals into |
+|---|---|---|---|---|
+| **source** | source document (file / transcript / imported doc) | that document's chunks | ingestion | topic |
+| **topic** | topic / focus scene | scene-grouped record digests | scene autobuild | global |
+| **global** | (singleton) cross-topic rollup | topic digests | autobuild cap | — (top) |
+
+Lifecycle:
+
+1. **Ingest** — a file/transcript is chunked; a **source** tree is created with
+   those chunks as leaves (`reindexCodeSource` keeps it fresh — see CLI-REINDEX).
+2. **Seal** — when a bucket of leaves is hot/large enough, the autobuild
+   scheduler digests them into a summarized parent one domain up
+   (`source → topic → global`). `heatScore` and level thresholds drive when.
+3. **Recall** — the pipeline can expand a matched summary node down to its
+   leaves (drill-down) or stop at the digest, trading detail for tokens.
+
+The domain rules + thresholds live in one place — `memory/tree/policy.ts`
+(`parentDomain`, `treeAutobuildEnabled`) — kept deliberately separate from the
+recall ranking so routing and autobuild plug in without touching scoring.
+
+## Vault: a reviewable markdown mirror
+
+The vault (MEM-7) exports memory to a **deterministic, redacted markdown
+mirror** with a content-hash ledger, so re-export is idempotent (same record →
+same bytes → same hash → the ledger skips the write). Records land under
+`records/<id>.md`, tree nodes under their own files, each with YAML frontmatter.
+
+Every generated file carries a `generated: brainrouter-vault` frontmatter label
+(TREE-VAULT, 0.4.5) so a future reviewed **import/sync** — and any human editing
+the vault — can tell BrainRouter-authored mirror files apart from hand-written
+notes. The redaction boundary (MEM-13) applies before write, so secrets never
+reach the mirror. Reviewed write-back (importing edited vault files into memory
+behind a review gate) is the planned next step; today the vault is export-only.
 
 ## Federation policy decisions (0.4.0)
 

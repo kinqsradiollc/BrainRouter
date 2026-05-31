@@ -442,6 +442,32 @@ test('statusline: SEGMENT_NAMES includes cost (CLI-9)', () => {
   assert.ok(SEGMENT_NAMES.includes('cost' as any));
 });
 
+// FOOTER-TELEMETRY (0.4.5)
+const baseInputs = { workspaceRoot: '/tmp', sessionKey: 'a', accessMode: 'read', model: 'm', lastTurnUsage: { calls: 1, promptTokens: 10, completionTokens: 5 } };
+
+test('statusline: tier segment renders when set, hidden otherwise', () => {
+  assert.equal(renderSegment('tier', { ...baseInputs, tier: 'flagship' }), 'tier:flagship');
+  assert.equal(renderSegment('tier', { ...baseInputs }), undefined);
+  assert.equal(renderSegment('tier', { ...baseInputs, tier: null }), undefined);
+});
+
+test('statusline: repair segment summarizes repairs, hidden when none', () => {
+  assert.equal(renderSegment('repair', {
+    ...baseInputs,
+    repairTotals: { turnsWithRepair: 3, scavenged: 1, truncationsFixed: 2, stormsBroken: 0 },
+  }), 'repair:3t/3');
+  assert.equal(renderSegment('repair', {
+    ...baseInputs,
+    repairTotals: { turnsWithRepair: 0, scavenged: 0, truncationsFixed: 0, stormsBroken: 0 },
+  }), undefined);
+  assert.equal(renderSegment('repair', { ...baseInputs }), undefined);
+});
+
+test('statusline: SEGMENT_NAMES includes tier + repair (FOOTER-TELEMETRY)', () => {
+  assert.ok(SEGMENT_NAMES.includes('tier' as any));
+  assert.ok(SEGMENT_NAMES.includes('repair' as any));
+});
+
 test('statusline: workflow segment returns wf:<slug> when bound', () => {
   withTempWorkspace((workspace) => {
     // 9d-bugfix: pass sessionKey through createWorkflow so the binding

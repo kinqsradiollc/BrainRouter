@@ -11,6 +11,7 @@ import type { WorkspaceInfo } from '../../config/workspace.js';
 import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
+import { resolveTierLadder, currentTier } from '../../runtime/tierLadder.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { resolveSandboxConfig, runShell } from '../../runtime/sandbox.js';
 import { parseBangCommand } from '../../runtime/bangCommand.js';
@@ -21,6 +22,7 @@ import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectiv
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
+import { collectRunningTasks } from '../../runtime/backgroundTasks.js';
 import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';
 import { expandMentions } from '../../memory/mentions.js';
 import {
@@ -163,12 +165,24 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     const prefs = readPreferences(agent.workspaceRoot);
     const requested = prefs.statusline.split(',').map((s) => s.trim()).filter(Boolean);
     const segments = requested.filter(isKnownSegment).filter((segment) => segment !== 'effort');
+    // FOOTER-TELEMETRY — precompute the model tier (only when the user opted the
+    // segment in, to avoid the ladder lookup every refresh).
+    let tier: string | null = null;
+    if (segments.includes('tier')) {
+      try {
+        const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();
+        tier = currentTier(agent.getModel(), resolveTierLadder({ provider }));
+      } catch { tier = null; }
+    }
     const rendered = renderSegments(segments, {
       workspaceRoot: agent.workspaceRoot,
       sessionKey: agent.sessionKey,
       accessMode: agent.getAccessMode(),
       model: agent.getModel(),
       lastTurnUsage: agent.lastTurnUsage,
+      tier,
+      repairTotals: agent.getRepairTotals?.(),
+      offloadTotals: agent.getOffloadTotals?.(),
       prDetector: () => detectGitHubPR(agent.workspaceRoot),
     });
     let branch: string | undefined;
@@ -203,7 +217,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       const parts: string[] = [];
       for (const seg of segs) {
         if (seg === 'model') parts.push(agent.getModel());
-        else if (seg === 'session') parts.push(agent.sessionKey.slice(0, 24));
+        else if (seg === 'session') parts.push(agent.sessionKey);
         else if (seg === 'mode') parts.push(agent.getAccessMode());
         else if (seg === 'branch') {
           try {
@@ -252,6 +266,15 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   const getRunningWorkerCount = (): number => {
     try { return listWorkers(agent.workspaceRoot).filter((w) => w.status === 'running').length; }
     catch { return 0; }
+  };
+  const getRunningWorkflowCount = (): number => {
+    try { return listRuns(agent.workspaceRoot).filter((r) => r.status === 'running').length; }
+    catch { return 0; }
+  };
+  // BG-TASKS-PANEL — push the live running-tasks list into the panel.
+  const refreshBackgroundTasks = (): void => {
+    try { controller?.setBackgroundTasks(collectRunningTasks(agent.workspaceRoot)); }
+    catch { /* panel refresh must never break the REPL */ }
   };
   const collectTerminalCompletions = (): CompletionItem[] => {
     const items: CompletionItem[] = [];
@@ -642,18 +665,18 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             const sensory = event.sensoryRecorded ?? event.messageCount;
             const extracted = event.extractedCount;
             const triggered = event.extractionTriggered;
-            const sk = event.sessionKey.slice(0, 12);
+            const sk = event.sessionKey;
             if (event.extractionWarning) {
-              line = `💾 Captured ${sensory} sensory msg(s) in ${sk}… — ⚠️ ${event.extractionWarning}`;
+              line = `💾 Captured ${sensory} sensory msg(s) in ${sk} — ⚠️ ${event.extractionWarning}`;
               level = 'warn';
             } else if (triggered && typeof extracted === 'number') {
               line = extracted > 0
-                ? `💾 Captured ${sensory} msg(s) → ${extracted} cognitive record(s) extracted (${sk}…)`
-                : `💾 Captured ${sensory} msg(s) → no new memories worth promoting (${sk}…)`;
+                ? `💾 Captured ${sensory} msg(s) → ${extracted} cognitive record(s) extracted (${sk})`
+                : `💾 Captured ${sensory} msg(s) → no new memories worth promoting (${sk})`;
             } else if (triggered === false) {
-              line = `💾 Captured ${sensory} msg(s) → sensory buffer (${sk}…)`;
+              line = `💾 Captured ${sensory} msg(s) → sensory buffer (${sk})`;
             } else {
-              line = `💾 Captured ${sensory} msg(s) → memory (${sk}…)`;
+              line = `💾 Captured ${sensory} msg(s) → memory (${sk})`;
             }
           } else if (event.kind === 'citation' && event.recordIds.length > 0) {
             line = `📌 Reinforced ${event.recordIds.length} record${event.recordIds.length === 1 ? '' : 's'}: ${event.recordIds.slice(0, 3).join(', ')}${event.recordIds.length > 3 ? '…' : ''}`;
@@ -739,6 +762,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // count decrements when they finish — without this the "· N working"
       // pill would stick until the user types something.
       ensureChildRefreshTimer();
+      refreshBackgroundTasks(); // immediate panel update post-turn (don't wait for the 3s tick)
       // PARITY-W3: now that the turn is over (isProcessing=false), surface any
       // background actor that finished WHILE the turn was running — those were
       // held back so they didn't scroll past under the active turn.
@@ -759,21 +783,24 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   const tickChildRefresh = () => {
     // PARITY-W3: announce any background actor that finished since last tick.
     notifyIdleCompletions();
+    refreshBackgroundTasks();
     const count = getRunningChildCount();
     if (count !== lastChildCount) {
       lastChildCount = count;
       refreshFooter();
     }
-    // Keep ticking while ANY background actor (child session or worker) is
-    // live, so a lone worker finishing while idle is still caught.
-    if (count === 0 && getRunningWorkerCount() === 0 && childRefreshTimer) {
+    // Keep ticking while ANY background actor (child session, worker, or
+    // workflow) is live, so a lone worker/workflow finishing while idle is
+    // still caught.
+    if (count === 0 && getRunningWorkerCount() === 0 && getRunningWorkflowCount() === 0 && childRefreshTimer) {
       clearInterval(childRefreshTimer);
       childRefreshTimer = null;
+      refreshBackgroundTasks(); // final sweep → clears the panel when all done
     }
   };
   const ensureChildRefreshTimer = () => {
     if (childRefreshTimer) return;
-    if (getRunningChildCount() === 0 && getRunningWorkerCount() === 0) return;
+    if (getRunningChildCount() === 0 && getRunningWorkerCount() === 0 && getRunningWorkflowCount() === 0) return;
     childRefreshTimer = setInterval(tickChildRefresh, 3000);
   };
 
@@ -1096,6 +1123,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           lastRenderedBanner = fresh;
         }
       } catch { /* banner reprint is best-effort; don't break the command */ }
+      // BG-TASKS-PANEL — commands like /bg, /spawn, /workflow, /loop start
+      // background actors WITHOUT a chat turn, so arm the ticker + refresh the
+      // panel here too (the turn path does this in runChatTurn's finally).
+      ensureChildRefreshTimer();
+      refreshBackgroundTasks();
     }
   }
 }

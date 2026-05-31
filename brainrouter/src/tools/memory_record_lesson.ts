@@ -21,7 +21,7 @@ function toolError(toolName: string, err: unknown) {
 export const memoryRecordLessonToolSchema = {
   name: "memory_record_lesson",
   description:
-    "Record a durable lesson/insight (e.g. 'always run the migration before seeding'). Dedup-fingerprinted: recording the same lesson again reinforces it (confidence + corroboration count) instead of duplicating. Surfaces in future recall/briefings. Returns {recordId, reinforced, confidence, corroborations}.",
+    "Record a durable lesson/insight (e.g. 'always run the migration before seeding'). Dedup-fingerprinted: recording the same lesson again reinforces it (confidence + corroboration count) instead of duplicating. Pass `supersedes` with the recordId(s) of a prior lesson this one replaces (e.g. a reversed decision) to invalidate them in the same call. Surfaces in future recall/briefings. Returns {recordId, reinforced, confidence, corroborations, supersededIds}.",
   inputSchema: {
     type: "object",
     properties: {
@@ -31,6 +31,10 @@ export const memoryRecordLessonToolSchema = {
       sessionKey: { type: "string" },
       activeSkill: { type: "string", description: "Optional active skill/scene tag." },
       priority: { type: "number", description: "Recall priority 0-100 (default 80)." },
+      supersedes: {
+        oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+        description: "Optional recordId(s) of prior lesson(s) this one replaces — they are invalidated (stop surfacing in recall) and point to this record via superseded_by.",
+      },
     },
     required: ["text"],
   },
@@ -43,6 +47,7 @@ const schema = z.object({
   sessionKey: z.string().optional(),
   activeSkill: z.string().optional(),
   priority: z.number().int().min(0).max(100).optional(),
+  supersedes: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
 export async function handleMemoryRecordLesson(args: any, options?: { defaultUserId?: string }) {
@@ -54,6 +59,7 @@ export async function handleMemoryRecordLesson(args: any, options?: { defaultUse
       sessionKey: params.sessionKey,
       activeSkill: params.activeSkill,
       priority: params.priority,
+      supersedes: params.supersedes,
     });
     return toolResult(result);
   } catch (err) {

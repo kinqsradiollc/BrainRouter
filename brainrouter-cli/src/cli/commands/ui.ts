@@ -172,6 +172,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         for (const n of profileNames()) {
           console.log(`    ${chalk.bold(n.padEnd(10))} ${chalk.gray(getPolicyProfile(n)!.description)}`);
         }
+        console.log(chalk.gray(`\n  Trust model reference: brainrouter-docs/policy.md`));
         console.log();
         return true;
       }
@@ -427,7 +428,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
           const parts: string[] = [];
           for (const seg of segs) {
             if (seg === 'model') parts.push(agent.getModel());
-            else if (seg === 'session') parts.push(agent.sessionKey.slice(0, 24));
+            else if (seg === 'session') parts.push(agent.sessionKey);
             else if (seg === 'mode') parts.push(agent.getAccessMode());
             else if (seg === 'branch') {
               try { parts.push(execSync('git rev-parse --abbrev-ref HEAD', { cwd: agent.workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()); } catch { /* not a git repo */ }

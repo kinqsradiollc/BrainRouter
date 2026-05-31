@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "../memory/vault/render.js";
+import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash, VAULT_GENERATED_LABEL } from "../memory/vault/render.js";
 import type { MemoryListItem, MemoryTreeNode } from "@kinqs/brainrouter-types";
 
 const rec: MemoryListItem = {
@@ -28,6 +28,12 @@ describe("vault render (MEM-7)", () => {
     expect(md).toMatch(/kind: topic/);
     expect(md).toMatch(/chunks: 2/);
     expect(md).toMatch(/Summary of auth/);
+  });
+
+  it("TREE-VAULT — both renders carry the generated label (identifies mirror files)", () => {
+    expect(VAULT_GENERATED_LABEL).toBe("brainrouter-vault");
+    expect(renderRecordMarkdown(rec)).toMatch(/generated: brainrouter-vault/);
+    expect(renderTreeNodeMarkdown(node)).toMatch(/generated: brainrouter-vault/);
   });
 
   it("render is deterministic → stable hash (drives idempotent re-export)", () => {

@@ -49,9 +49,9 @@ export function formatIncomingBanner(m: InboxTextMessage): string {
 }
 
 function formatBanner(m: InboxTextMessage): string {
-  const sender = m.fromSessionKey.slice(0, 12);
+  const sender = m.fromSessionKey;
   const age = formatAge(Date.parse(m.receivedAt));
-  const header = chalk.cyan(`┌─ 📨 from ${sender}…`) + chalk.gray(` (${age})`);
+  const header = chalk.cyan(`┌─ 📨 from ${sender}`) + chalk.gray(` (${age})`);
   const footer = chalk.cyan('└─');
   const bodyLines = wrap(m.text, BANNER_WIDTH - 4)
     .map((line) => chalk.cyan('│ ') + line);

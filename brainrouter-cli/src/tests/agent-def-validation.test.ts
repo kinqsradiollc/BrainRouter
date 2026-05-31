@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAgentDefinition, buildAgentDefinition } from '../orchestration/agentDefValidation.js';
+import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../orchestration/agentDefValidation.js';
 
 const valid = {
   id: 'doc-writer',
@@ -52,4 +52,56 @@ test('CLI-13 buildAgentDefinition: fills the complete def with sane defaults', (
   assert.equal(def.maxIterations, 25);
   assert.equal(def.delegateName, 'doc-writer');
   assert.deepEqual(def.subagents, []);
+  assert.equal(def.ownership, null); // none declared → null
+});
+
+test('AGENTS-WIZARD tool-scope existence: unknown local tool errors, unknown MCP tool warns', () => {
+  const r = validateAgentDefinition(
+    { ...valid, defaultAccess: 'read', disallowedTools: [], toolScope: { local: ['read_file', 'no_such_tool'], mcp: ['memory_search', 'mystery_mcp'] } },
+    { knownLocalTools: ['read_file', 'write_file'], knownMcpTools: ['memory_search'] },
+  );
+  assert.equal(r.valid, false, 'unknown local tool is a hard error');
+  assert.ok(r.errors.some((e) => /unknown local tool "no_such_tool"/.test(e)));
+  assert.ok(r.warnings.some((w) => /mystery_mcp/.test(w)), 'unknown MCP tool is a warning, not error');
+});
+
+test('AGENTS-WIZARD tool-scope existence: all-known tools pass clean', () => {
+  const r = validateAgentDefinition(
+    { ...valid, defaultAccess: 'read', disallowedTools: [], toolScope: { local: ['read_file', 'write_file'], mcp: ['memory_search'] } },
+    { knownLocalTools: ['read_file', 'write_file'], knownMcpTools: ['memory_search'] },
+  );
+  assert.equal(r.valid, true, r.errors.join('; '));
+  assert.equal(r.warnings.length, 0);
+});
+
+test('AGENTS-WIZARD ownership: empty string errors; write/shell without ownership warns', () => {
+  const empty = validateAgentDefinition({ ...valid, ownership: '   ' });
+  assert.equal(empty.valid, false);
+  assert.ok(empty.errors.some((e) => /ownership must be a non-empty glob/.test(e)));
+
+  const writeNoOwnership = validateAgentDefinition({ ...valid, defaultAccess: 'write', ownership: undefined });
+  assert.equal(writeNoOwnership.valid, true);
+  assert.ok(writeNoOwnership.warnings.some((w) => /no ownership glob/.test(w)));
+
+  const writeWithOwnership = validateAgentDefinition({ ...valid, defaultAccess: 'write', ownership: 'src/docs/**' });
+  assert.equal(writeWithOwnership.valid, true);
+  assert.ok(!writeWithOwnership.warnings.some((w) => /no ownership glob/.test(w)));
+});
+
+test('AGENTS-WIZARD buildAgentDefinition: ownership persisted (trimmed) or null', () => {
+  assert.equal(buildAgentDefinition({ id: 'a', prompt: 'p', ownership: '  src/x/** ' }).ownership, 'src/x/**');
+  assert.equal(buildAgentDefinition({ id: 'a', prompt: 'p' }).ownership, null);
+});
+
+test('AGENTS-WIZARD previewAgentDefinition: shows resolved fields + prompt overlay', () => {
+  const out = previewAgentDefinition(buildAgentDefinition({
+    id: 'doc-writer', displayName: 'Doc Writer', whenToUse: 'docs', prompt: 'You write docs.',
+    defaultAccess: 'write', ownership: 'docs/**', toolScope: { local: ['write_file'], mcp: [] },
+  }));
+  assert.match(out, /agent: doc-writer/);
+  assert.match(out, /access: write/);
+  assert.match(out, /ownership: docs\/\*\*/);
+  assert.match(out, /tools: write_file/);
+  assert.match(out, /--- prompt overlay ---/);
+  assert.match(out, /You write docs\./);
 });

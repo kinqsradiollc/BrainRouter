@@ -98,3 +98,8 @@ export function requireAdmin(req: AuthedRequest, res: Response, next: NextFuncti
   }
   next();
 }
+
+// RBAC-ENFORCE (0.4.5) — the per-user scoping helpers live in `scope.ts` (no
+// memoryEngine import, so they stay pure + unit-testable). Re-exported here so
+// routes keep importing scoping + auth from one place.
+export { ScopeError, scopedUserId, errorStatus, type ScopeRequest } from "./scope.js";
