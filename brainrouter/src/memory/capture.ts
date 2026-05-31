@@ -1,5 +1,6 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
-import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus } from "@kinqs/brainrouter-types";
+import type { SensoryRecord, CaptureResult, LLMRunner, CognitiveExtractionStatus, CognitiveRecord, BlackboardItem, BlackboardItemInput } from "@kinqs/brainrouter-types";
+import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { extractCognitiveMemories } from "./pipeline/cognitive-extractor.js";
 import { deduplicateMemories } from "./pipeline/cognitive-dedup.js";
 import { detectContradictions } from "./pipeline/cognitive-contradiction.js";
@@ -14,6 +15,7 @@ import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { redactSensitiveMemoryText } from "./redaction.js";
 import { ingestSource, type SourceIngestStore } from "./source/ingest.js";
+import { attributeRecordToChunks, readProvenanceConfig, type AttributableChunk } from "./source/attribution.js";
 import crypto from "node:crypto";
 
 /**
@@ -29,8 +31,21 @@ const MIN_SOURCE_CHARS = 120;
  */
 interface ProvenanceStore {
   getSourceDocumentByHash(userId: string, hash: string): { id: string } | null;
-  getSourceChunksByDocument(documentId: string): { id: string }[];
+  getSourceChunksByDocument(documentId: string): { id: string; content: string }[];
   linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void;
+}
+
+/**
+ * MEM-16 — the store capability needed to route extraction candidates through
+ * the blackboard before they become cognitive records. Structural + runtime-
+ * detected, like the source/provenance capabilities above.
+ */
+interface BlackboardAdmissionStore {
+  stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
+  updateBlackboardItem(
+    id: string,
+    patch: { status?: BlackboardItem["status"]; conflictIds?: string[]; committedRecordId?: string | null },
+  ): void;
 }
 
 export class MemoryCapturePipeline {
@@ -168,33 +183,124 @@ export class MemoryCapturePipeline {
   }
 
   /**
-   * MEM-3 — batch-level provenance. Collect every source chunk id for the
-   * messages in this extraction window (matched to their source docs by the
-   * same redacted-content hash MEM-2′ ingests under), then link each newly
-   * written record to that set. Coarse but deterministic and zero-LLM-cost;
-   * per-record attribution can refine it later. Best-effort + non-fatal.
+   * MEM-15 — exact chunk-level provenance. Gather the candidate source chunks
+   * for this extraction window (the chunks of the window messages' source docs,
+   * matched by the same redacted-content hash MEM-2′ ingests under), then link
+   * EACH record only to the chunk(s) it actually derives from — attributed by
+   * salient-token overlap (`attributeRecordToChunks`). Replaces 0.4.3's
+   * batch-level "link every record to every chunk" linking, which over-attributed
+   * evidence. Deterministic, zero-LLM-cost; best-effort + non-fatal.
    */
-  private linkBatchProvenance(
+  private linkRecordProvenance(
     userId: string,
     windowSensory: SensoryRecord[],
-    records: { id: string }[],
+    records: { id: string; content: string }[],
   ): void {
     const store = this.asProvenanceStore();
     if (!store || records.length === 0) return;
     try {
-      const chunkIds = new Set<string>();
+      // Candidate chunks {id, content} from the window's source docs (deduped).
+      const chunks: AttributableChunk[] = [];
+      const seen = new Set<string>();
       for (const s of windowSensory) {
         const text = s.messageText ?? "";
         if (text.trim().length < MIN_SOURCE_CHARS) continue;
         const doc = store.getSourceDocumentByHash(userId, contentHash(text));
         if (!doc) continue;
-        for (const c of store.getSourceChunksByDocument(doc.id)) chunkIds.add(c.id);
+        for (const c of store.getSourceChunksByDocument(doc.id)) {
+          if (seen.has(c.id)) continue;
+          seen.add(c.id);
+          chunks.push({ id: c.id, content: c.content });
+        }
       }
-      if (chunkIds.size === 0) return;
-      const ids = [...chunkIds];
-      for (const r of records) store.linkRecordSources(userId, r.id, ids);
+      if (chunks.length === 0) return;
+      const config = readProvenanceConfig();
+      for (const r of records) {
+        const chunkIds = attributeRecordToChunks(r.content, chunks, config);
+        if (chunkIds.length > 0) store.linkRecordSources(userId, r.id, chunkIds);
+      }
     } catch (err: any) {
-      console.error("[BrainRouter] MEM-3 provenance link failed:", err?.message ?? err);
+      console.error("[BrainRouter] MEM-15 provenance link failed:", err?.message ?? err);
+    }
+  }
+
+  /** MEM-16 — blackboard admission is the default path; `off` restores the
+   * legacy direct-write behaviour. (Brain-side env knob, like the recall ones.) */
+  private blackboardAdmissionEnabled(): boolean {
+    return (process.env.BRAINROUTER_BLACKBOARD_ADMISSION ?? "").trim().toLowerCase() !== "off";
+  }
+
+  /** MEM-16 — runtime-narrow the store to the blackboard-admission capability. */
+  private asBlackboardStore(): BlackboardAdmissionStore | null {
+    const s = this.store as Partial<BlackboardAdmissionStore>;
+    return typeof s.stageBlackboardItems === "function" && typeof s.updateBlackboardItem === "function"
+      ? (s as BlackboardAdmissionStore)
+      : null;
+  }
+
+  /**
+   * MEM-16 — blackboard-default admission. Instead of writing every extracted
+   * record straight to long-term memory, stage them as blackboard candidates,
+   * reconcile (dedup the batch + reject below-threshold), and let only the
+   * survivors proceed to the normal commit path (upsert + embed + contradiction
+   * + graph). Duplicate/rejected candidates stay on the blackboard for audit via
+   * `memory_blackboard_review`. The returned `markCommitted` stamps each
+   * survivor's blackboard item with the cognitive record it produced.
+   *
+   * Fail-open: a store without the capability, the knob set to `off`, or any
+   * error falls back to admitting all records — capture never loses memory to a
+   * blackboard problem. (Cross-active dedup already ran in `deduplicateMemories`;
+   * per-record contradiction-vs-active still runs post-commit.)
+   */
+  private admitViaBlackboard(
+    userId: string,
+    records: CognitiveRecord[],
+  ): { survivors: CognitiveRecord[]; markCommitted: (recordId: string) => void } {
+    const passthrough = { survivors: records, markCommitted: () => {} };
+    if (!this.blackboardAdmissionEnabled() || records.length === 0) return passthrough;
+    const store = this.asBlackboardStore();
+    if (!store) return passthrough;
+    try {
+      const staged = store.stageBlackboardItems(
+        userId,
+        records.map((r) => ({
+          sourceChunkId: null, // precise provenance is linked post-commit (MEM-15)
+          score: r.confidence,
+          candidate: {
+            content: r.content,
+            type: r.type,
+            priority: r.priority,
+            sceneName: r.sceneName,
+            confidence: r.confidence,
+          },
+        })),
+      );
+      // staged[i] corresponds to records[i] (stageBlackboardItems preserves order).
+      const decisions = reconcileBlackboard(staged);
+      const decisionById = new Map(decisions.map((d) => [d.id, d]));
+      const itemIdByRecordId = new Map<string, string>();
+      const survivors: CognitiveRecord[] = [];
+      for (let i = 0; i < records.length; i++) {
+        const item = staged[i];
+        const decision = item ? decisionById.get(item.id) : undefined;
+        if (!item || !decision) { survivors.push(records[i]); continue; } // safety: keep
+        store.updateBlackboardItem(item.id, { status: decision.status, conflictIds: decision.conflictIds });
+        if (decision.status === "reconciled") {
+          itemIdByRecordId.set(records[i].id, item.id);
+          survivors.push(records[i]);
+        }
+        // duplicate / rejected → held on the blackboard, not committed.
+      }
+      return {
+        survivors,
+        markCommitted: (recordId: string) => {
+          const itemId = itemIdByRecordId.get(recordId);
+          if (itemId) store.updateBlackboardItem(itemId, { status: "committed", committedRecordId: recordId });
+        },
+      };
+    } catch (err: any) {
+      console.error("[BrainRouter] MEM-16 blackboard admission failed:", err?.message ?? err);
+      return passthrough; // fail-open
     }
   }
 
@@ -298,9 +404,16 @@ export class MemoryCapturePipeline {
       uniqueRecords = guarded;
     }
 
+    // MEM-16 — blackboard-default admission: stage + reconcile the batch; only
+    // the survivors proceed to commit. Reassigning uniqueRecords routes all
+    // downstream steps (connections, provenance, focus, count) through the gate.
+    const admission = this.admitViaBlackboard(userId, uniqueRecords);
+    uniqueRecords = admission.survivors;
+
     // Write to store
     for (const record of uniqueRecords) {
       this.store.upsertCognitive(record);
+      admission.markCommitted(record.id); // MEM-16 — stamp the blackboard item committed
 
       // Non-blocking background embedding (Slice A)
       if (this.embeddingService.isReady()) {
@@ -367,8 +480,8 @@ export class MemoryCapturePipeline {
       }
     }
 
-    // MEM-3 — link this batch's records to the source chunks of its window.
-    this.linkBatchProvenance(userId, recentSensory, uniqueRecords);
+    // MEM-15 — link each record to the source chunk(s) it actually derives from.
+    this.linkRecordProvenance(userId, recentSensory, uniqueRecords);
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {

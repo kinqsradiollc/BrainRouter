@@ -13,7 +13,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
-| **[0.4.1](0.4.1.md)** | — | In flight | Federation handoff, multi-agent ownership/budgeting, A1–A5, brain-side job queue |
+| **[0.4.4](0.4.4.md)** | — | In flight | Memory pipeline tightening (exact provenance, blackboard-default admission, recall refs, parser code chunks, benchmark modes) + unified exec policy |
+| **[0.4.3](0.4.3.md)** | 2026-05-30 | Shipped | Memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening |
+| **[0.4.2](0.4.2.md)** | 2026-05-30 | Shipped | Federation Stage 5, CLI multi-agent Phases 5–6, durable workflows + `/workflows` viewer, full CLI parity, version centralization |
+| **[0.4.1](0.4.1.md)** | 2026-05-29 | Shipped | Federation handoff, multi-agent ownership/budgeting, A1–A5, brain-side job queue + agent registry |
 | **[0.4.0](0.4.0.md)** | 2026-05-28 | Shipped | Persona injection, federation (Stages 1–3), CLI multi-agent Phase 2, brain-side design pass |
 | **[0.3.9](0.3.9.md)** | 2026-05-28 | Shipped | Memory briefing, cache-first loop, tool repair, cost panel, CLI knobs → `config.json` |
 | **[0.3.8](0.3.8.md)** | 2026-05-26 | Shipped | Delegation reliability, parallel reads, CLI quick wins, briefing prefix fix |

@@ -8,6 +8,7 @@ import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
 import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
+import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "./recall-refs.js";
 import { isExternalTimeoutError } from "./llm-response.js";
 import {
   effectivePriorityScore,
@@ -209,12 +210,25 @@ export class MemoryRecallPipeline {
     activeSkill?: string;
     explain?: boolean;
     filters?: RecallFilters;
+    /**
+     * MEM-19 — per-call recall config overrides so callers (the retrieval
+     * benchmark) can compare modes deterministically WITHOUT mutating
+     * process.env. The old benchmark toggled BRAINROUTER_RECALL_* globally and
+     * restored it in a finally, which leaked '20' across runs and flaked under
+     * concurrency. These overrides layer over the env-read defaults.
+     */
+    limitsOverride?: Partial<RecallLimits>;
+    selectionOverride?: Partial<RecallSelection>;
+    /** MEM-19 — force-disable the reranker / relevance-judge stages for this
+     * call (the benchmark's baseline vs rerank/judge modes). */
+    disableReranker?: boolean;
+    disableJudge?: boolean;
   }): Promise<RecallResult> {
     const startTime = Date.now();
     const { userId, sessionKey, query, activeSkill, filters } = params;
     const intent = detectTaskIntent(query);
-    const limits = readRecallLimits();
-    const selection = readRecallSelection();
+    const limits = { ...readRecallLimits(), ...params.limitsOverride };
+    const selection = { ...readRecallSelection(), ...params.selectionOverride };
 
     // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
     const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
@@ -475,7 +489,7 @@ export class MemoryRecallPipeline {
     let usedReranker = false;
     let usedLexicalSelection = false;
 
-    if (this.rerankerService.isReady()) {
+    if (this.rerankerService.isReady() && !params.disableReranker) {
       try {
         const documents = rerankCandidates.map(r => r.record.content);
         const ranked = await this.rerankerService.rerank({
@@ -522,7 +536,7 @@ export class MemoryRecallPipeline {
     let judgeRejected = 0;
     let judgeVerdicts: RelevanceVerdict[] | undefined;
 
-    if (this.relevanceJudge?.isReady() && topResults.length > 0) {
+    if (this.relevanceJudge?.isReady() && !params.disableJudge && topResults.length > 0) {
       try {
         const judgeCandidates = topResults.map(r => ({
           id: r.record.record_id,
@@ -549,6 +563,15 @@ export class MemoryRecallPipeline {
       }
     }
 
+    // MEM-17 — gather expansion refs (source chunks + covering tree node) once
+    // per recalled record; reused for both the briefing hint and the result objects.
+    const refsByRecord = new Map(
+      topResults.map(({ record }) => [
+        record.record_id,
+        gatherRecordRefs(this.store as RecordRefsStore, userId, record.record_id),
+      ]),
+    );
+
     // 5. Format for context
     const memoryLines = topResults.map(({ record }) => {
       const tag = record.scene_name ? `${record.type}|${record.scene_name}` : record.type;
@@ -556,6 +579,9 @@ export class MemoryRecallPipeline {
       if (record.skill_tag) {
         line += ` (skill: ${record.skill_tag})`;
       }
+      // MEM-17 — one-hop drill-down hint (source chunk ids + tree node), if any.
+      const hint = formatRefHint(refsByRecord.get(record.record_id) ?? { sourceChunkIds: [], treeNodeId: null });
+      if (hint) line += `\n${hint}`;
       return line;
     });
 
@@ -581,6 +607,8 @@ export class MemoryRecallPipeline {
     appendSystemContext += `<memory-tools-guide>
   Use memory_search to retrieve more specific memories.
   Use memory_contradictions to review unresolved conflicts.
+  To drill into a memory's "↳ source" refs: memory_fetch_source_chunk(<chunkId>) for the exact source, memory_tree_walk(<treeNodeId>) for its summary tree.
+  To explore code neighbours: memory_find_related(<chunkId> | file+line) for the nearest related code chunks across files.
   Max 3 memory tool calls per turn.
 </memory-tools-guide>`;
 
@@ -613,13 +641,19 @@ export class MemoryRecallPipeline {
       }
     }
 
-    const recalledCognitiveMemories: RecalledMemory[] = topResults.map(r => ({
-      content: r.record.content,
-      score: r.score,
-      type: r.record.type,
-      recordId: r.record.record_id,
-      skillTag: r.record.skill_tag
-    }));
+    const recalledCognitiveMemories: RecalledMemory[] = topResults.map(r => {
+      const refs = refsByRecord.get(r.record.record_id);
+      return {
+        content: r.record.content,
+        score: r.score,
+        type: r.record.type,
+        recordId: r.record.record_id,
+        skillTag: r.record.skill_tag,
+        // MEM-17 — expansion handles; omit empties so the shape stays lean.
+        ...(refs && refs.sourceChunkIds.length > 0 ? { sourceChunkIds: refs.sourceChunkIds } : {}),
+        ...(refs && refs.treeNodeId ? { treeNodeId: refs.treeNodeId } : {}),
+      };
+    });
 
     const baseStrategy = vecResults.length > 0
       ? (usedReranker ? "hybrid+rerank" : "hybrid")

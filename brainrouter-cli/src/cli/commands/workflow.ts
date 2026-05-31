@@ -23,7 +23,7 @@ import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
-import { listFilesystemSkills, mergeSkillLists, type SkillListItem } from '../../prompt/skillCatalog.js';
+import { listFilesystemSkills, mergeSkillLists, skillSearchRoots, type SkillListItem } from '../../prompt/skillCatalog.js';
 import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from './_helpers.js';
 
 // Promise-flavored exec for case bodies that shell out.
@@ -96,6 +96,34 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
   // 'ctx' alias to keep references to the old ReplContext name working
   const replCtx = repl;
   switch (command) {
+    case '/reload-skills':
+    {
+      // CLI-17 — force a fresh re-scan of the skill directories. Skills are read
+      // live (no cache), so this is a no-restart way to confirm a just-added
+      // SKILL.md is discoverable, and shows WHERE the scan looked.
+      const spinner = makeSpinner(chalk.gray('Re-scanning skill directories...')).start();
+      try {
+        const roots = skillSearchRoots(agent.workspaceRoot);
+        const res = await callMcpTool<any>(mcpClient, 'list_skills', { scope: 'all' });
+        const mcpSkills = !res.isError ? normalizeSkillsList(res.parsed) : undefined;
+        const filesystemSkills = listFilesystemSkills(agent.workspaceRoot);
+        const skillsList = mcpSkills ? mergeSkillLists(mcpSkills, filesystemSkills) : filesystemSkills;
+        spinner.stop();
+        console.log(chalk.bold(`\n🔄 Re-scanned ${roots.length} skill director${roots.length === 1 ? 'y' : 'ies'}:`));
+        for (const r of roots) console.log(`  ${chalk.gray(r)}`);
+        console.log(
+          chalk.green(
+            `\n✓ ${skillsList.length} skill${skillsList.length === 1 ? '' : 's'} available` +
+              (mcpSkills ? ` (${mcpSkills.length} via MCP, ${Math.max(0, skillsList.length - mcpSkills.length)} local-only).` : ' (filesystem).'),
+          ),
+        );
+        console.log(chalk.gray('Skills are read live — new SKILL.md files are picked up without a restart.\n'));
+      } catch (e: any) {
+        spinner.stop();
+        console.log(chalk.red(`Failed to re-scan skills: ${e?.message ?? e}`));
+      }
+      return true;
+    }
     case '/skills':
     {
       const verbose = args.includes('--verbose') || args.includes('-v');
