@@ -200,6 +200,11 @@ export interface CliKnobs {
    *  `{file}` is substituted with the edited path. Empty = off. */
   postEditCheck?: string;
 
+  // ---- auto skill extraction (MEM-33b) ----------------------------------
+  /** After a successful multi-step turn, fire-and-forget distil a reusable
+   *  skill (memory_extract_skill). Off by default (one LLM call per turn). */
+  autoExtractSkills?: boolean;
+
   // ---- orchestration ----------------------------------------------------
   /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
   childAgentTimeoutMs?: number;
@@ -449,6 +454,7 @@ export interface ResolvedCliKnobs {
   externalDirWrites: ExternalDirMode;
   egressAllowlist: string[];
   postEditCheck: string;
+  autoExtractSkills: boolean;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -513,6 +519,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     externalDirWrites: c.externalDirWrites ?? 'ask',
     egressAllowlist: Array.isArray(c.egressAllowlist) ? c.egressAllowlist : [],
     postEditCheck: c.postEditCheck ?? '',
+    autoExtractSkills: c.autoExtractSkills ?? false,
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
