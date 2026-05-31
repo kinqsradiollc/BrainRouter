@@ -1885,6 +1885,37 @@ export class SqliteMemoryStore implements IMemoryStore {
     return row ? cognitiveRowToRecord(row) : null;
   }
 
+  /**
+   * LESSON-HYGIENE (0.4.5) — live `lesson` records sharing a deterministic
+   * conflict key (stored in `metadata.conflictKey` by `recordLesson`). Lets
+   * the engine surface same-subject lessons for supersede review without an
+   * LLM. Bounded; newest first.
+   */
+  public findLessonsByConflictKey(userId: string, conflictKey: string): CognitiveRecord[] {
+    const rows = this.db.prepare(`
+      SELECT r.* FROM cognitive_records r
+       WHERE r.user_id = ? AND r.type = 'lesson'
+         AND json_extract(r.metadata_json, '$.conflictKey') = ?
+         AND r.invalid_at IS NULL AND r.archived = 0
+       ORDER BY r.created_time DESC LIMIT 50
+    `).all(userId, conflictKey) as any[];
+    return rows.map(cognitiveRowToRecord);
+  }
+
+  /**
+   * LESSON-HYGIENE (0.4.5) — live `lesson` records for the staleness sweep,
+   * oldest first so the most likely candidates come first under a limit.
+   */
+  public listLessonsForHygiene(userId: string, limit: number): CognitiveRecord[] {
+    const rows = this.db.prepare(`
+      SELECT r.* FROM cognitive_records r
+       WHERE r.user_id = ? AND r.type = 'lesson'
+         AND r.invalid_at IS NULL AND r.archived = 0
+       ORDER BY r.created_time ASC LIMIT ?
+    `).all(userId, Math.max(1, limit)) as any[];
+    return rows.map(cognitiveRowToRecord);
+  }
+
   public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): void {
     const now = new Date().toISOString();
     this.db.prepare(
