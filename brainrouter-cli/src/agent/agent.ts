@@ -310,6 +310,23 @@ export interface RunTurnCallbacks {
    * this unset so the tool is not exposed.
    */
   onSideQuestion?: (question: string, choices?: string[]) => Promise<string>;
+  /**
+   * HEADLESS-EVENTS (0.4.5) — exec-policy decision for a mutating tool
+   * (allow / ask / deny), fired at the dispatch gate. Lets headless consumers
+   * see what the policy let through or blocked.
+   */
+  onApproval?: (event: { tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }) => void;
+  /**
+   * HEADLESS-EVENTS (0.4.5) — running token tally, fired after each LLM call
+   * accrues usage. Carries the cumulative turn totals so consumers can render
+   * a live cost ticker without waiting for turn_end.
+   */
+  onUsageUpdate?: (usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }) => void;
+  /**
+   * HEADLESS-EVENTS (0.4.5) — the code index was refreshed for a file
+   * (CLI-REINDEX), fired from the file read/edit paths when content drifted.
+   */
+  onCodeIndex?: (event: { file: string; chunks: number }) => void;
 }
 
 export type MemoryEvent =
@@ -854,6 +871,10 @@ export class Agent {
   /** CLI-REINDEX — per-path stat signature of the last reindex, so unchanged
    *  files don't re-ship content to memory_reindex_source on every read. */
   private reindexSignatures = new Map<string, string>();
+  /** HEADLESS-EVENTS — per-turn listener for code-index refreshes, set from
+   *  RunTurnCallbacks.onCodeIndex at the top of runTurn (executeLocalTool has
+   *  no callbacks param, so we bridge through the instance). */
+  private codeIndexListener: ((e: { file: string; chunks: number }) => void) | null = null;
   public sessionKey: string;
   /**
    * Federation Stage 3 — the per-process key the `attachFederation`
@@ -1132,6 +1153,8 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // HEADLESS-EVENTS — bridge the code-index callback to executeLocalTool.
+    this.codeIndexListener = callbacks.onCodeIndex ?? null;
     // 0.4.x-3b — new turn: re-resolve the file-snapshot ordinal on first mutation.
     this.snapshotsThisTurn = null;
     this.lastGoalTransition = undefined;
@@ -1606,6 +1629,8 @@ export class Agent {
           cacheHitRatio: cache.cacheHitRatio,
           source: cache.source,
         });
+        // HEADLESS-EVENTS — running token tally after each LLM call.
+        callbacks.onUsageUpdate?.({ ...this.lastTurnUsage });
       }
 
       // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
@@ -2021,6 +2046,8 @@ export class Agent {
                 { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey, local: isLocal },
                 { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId },
               );
+              // HEADLESS-EVENTS — surface the policy decision to consumers.
+              callbacks.onApproval?.({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
             }
             if (policy.decision === 'deny') {
               throw new Error(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
@@ -3053,6 +3080,8 @@ export class Agent {
       this.reindexSignatures.set(resolved, signature);
       if (res.parsed?.status === 'reindexed') {
         const chunks = typeof res.parsed.chunks === 'number' ? res.parsed.chunks : 0;
+        // HEADLESS-EVENTS — emit a code_index event for headless consumers.
+        try { this.codeIndexListener?.({ file: resolved, chunks }); } catch { /* listener must not break a file op */ }
         return `\n[code index refreshed: ${chunks} chunk${chunks === 1 ? '' : 's'}]`;
       }
       return '';
