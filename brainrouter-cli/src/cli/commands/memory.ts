@@ -196,7 +196,38 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         console.log();
         return true;
       }
-      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect  ·  /verify run [build|test|lint]\n')); return true; }
+      // VERIFY-BROWSER — `/verify browser [url]` runs the configured browser
+      // smoke command, writes artifacts to a run dir, and reports what it
+      // produced. Infrastructure-agnostic (cli.browserSmoke template).
+      if (id === 'browser') {
+        const { runBrowserSmoke, formatBrowserSmokeResult } = await import('../../runtime/browserVerify.js');
+        const cp = await import('node:child_process');
+        const template = getCliKnobs().browserSmoke;
+        const url = args[1] || 'http://localhost:3000';
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const outDir = path.join(agent.workspaceRoot, '.brainrouter', 'browser-smoke', stamp);
+        try { fs.mkdirSync(outDir, { recursive: true }); } catch { /* best-effort */ }
+        const exec = (command: string, cwd: string): { exitCode: number; output: string } => {
+          try {
+            const out = cp.execSync(command, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+            return { exitCode: 0, output: out };
+          } catch (e: any) {
+            return { exitCode: typeof e?.status === 'number' ? e.status : 1, output: `${e?.stdout ?? ''}${e?.stderr ?? ''}` || String(e?.message ?? e) };
+          }
+        };
+        const list = (dir: string): string[] => {
+          try { return fs.readdirSync(dir).map((f) => path.join(dir, f)); } catch { return []; }
+        };
+        console.log(chalk.bold(`\n🌐 Verify — browser smoke (${url})`));
+        const result = runBrowserSmoke(template, { url, outDir, cwd: agent.workspaceRoot }, exec, list);
+        if ('error' in result) { console.log(chalk.yellow(`  ${result.error}`)); console.log(); return true; }
+        for (const line of formatBrowserSmokeResult(result)) {
+          console.log(line.startsWith('  ') ? chalk.gray(line) : (result.ok ? chalk.green(line) : chalk.red(line)));
+        }
+        console.log();
+        return true;
+      }
+      if (!id) { console.log(chalk.red('\nUsage: /verify <recordId> [status] [confidence]  ·  /verify detect  ·  /verify run [build|test|lint]  ·  /verify browser [url]\n')); return true; }
       const status = args[1] || 'verified';
       const confidence = args[2] ? Number(args[2]) : 0.9;
       await printMcpCall(mcpClient, 'memory_verify', { recordId: id, verificationStatus: status, confidence }, `Verify ${id}`);
@@ -411,6 +442,82 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         return true;
       }
       console.log(chalk.red(`\nUnknown /memories subcommand "${sub}". Try: status, on, off, list, consolidate, sources.\n`));
+      return true;
+    }
+    case '/blackboard': {
+      // BLACKBOARD-REVIEW-UX — review + drive the memory blackboard over MCP.
+      // Default view focuses on the candidates a human cares about reviewing:
+      // rejected + duplicate (dropped) ones they may want to restore.
+      const sub = (args[0] ?? 'review').toLowerCase();
+      const STATUSES = ['pending', 'reconciled', 'duplicate', 'committed', 'rejected'];
+      const dot = (s: string) =>
+        s === 'committed' ? chalk.green('●')
+        : s === 'reconciled' ? chalk.cyan('●')
+        : s === 'rejected' ? chalk.red('○')
+        : s === 'duplicate' ? chalk.yellow('○')
+        : chalk.gray('●'); // pending
+      const renderItems = (items: any[]) => {
+        if (!items.length) { console.log(chalk.gray('  (none)')); return; }
+        for (const it of items) {
+          const c = it.candidate ?? {};
+          const content = String(c.content ?? '').replace(/\s+/g, ' ').slice(0, 64);
+          const score = typeof it.score === 'number' ? ` score=${it.score.toFixed(2)}` : '';
+          const conflicts = it.conflictIds?.length ? chalk.gray(` ↔${it.conflictIds.length}`) : '';
+          console.log(`  ${dot(it.status)} ${chalk.cyan(it.id)} ${chalk.gray(`[${it.status}]`)}${chalk.gray(score)} ${chalk.gray(c.type ?? '')}${conflicts} — ${content}`);
+        }
+      };
+      const list = async (status?: string) => {
+        const res = await callMcpTool<any>(mcpClient, 'memory_blackboard_review', status ? { status } : {});
+        if (res.isError) { console.log(chalk.red(`\nblackboard list failed: ${res.text || '(no message)'}\n`)); return [] as any[]; }
+        return (res.parsed?.items ?? []) as any[];
+      };
+      if (sub === 'review' || sub === 'list') {
+        const status = args[1];
+        if (sub === 'list' && status && !STATUSES.includes(status)) {
+          console.log(chalk.red(`\nUnknown status "${status}". One of: ${STATUSES.join(', ')}.\n`));
+          return true;
+        }
+        if (sub === 'list') {
+          console.log(chalk.bold(`\nBlackboard candidates${status ? ` · ${status}` : ''}`));
+          renderItems(await list(status));
+          console.log(chalk.gray('\n  /blackboard restore <id> · commit <id> · reject <id> · reconcile\n'));
+          return true;
+        }
+        // review: surface the dropped candidates (rejected + duplicate).
+        const rejected = await list('rejected');
+        const duplicate = await list('duplicate');
+        console.log(chalk.bold('\nBlackboard review — dropped candidates'));
+        console.log(chalk.red(`\n  rejected (${rejected.length}):`));
+        renderItems(rejected);
+        console.log(chalk.yellow(`\n  duplicate (${duplicate.length}):`));
+        renderItems(duplicate);
+        console.log(chalk.gray('\n  Restore one for re-review: /blackboard restore <id>'));
+        console.log(chalk.gray('  Full list: /blackboard list [status]\n'));
+        return true;
+      }
+      if (sub === 'restore' || sub === 'commit' || sub === 'reject') {
+        const id = args[1];
+        if (!id) { console.log(chalk.red(`\nUsage: /blackboard ${sub} <id>\n`)); return true; }
+        const res = await callMcpTool<any>(mcpClient, 'memory_blackboard_review', { action: sub, itemId: id });
+        if (res.isError) { console.log(chalk.red(`\n${sub} failed: ${res.text || '(no message)'}\n`)); return true; }
+        const r = res.parsed ?? {};
+        if (sub === 'restore') {
+          console.log(r.restored ? chalk.green(`\n✓ Restored ${id} → pending (will be re-evaluated on next reconcile).\n`) : chalk.yellow(`\nNot restored: ${r.reason ?? 'unknown'}.\n`));
+        } else if (sub === 'commit') {
+          console.log(r.committed ? chalk.green(`\n✓ Committed ${id}${r.recordId ? ` → record ${r.recordId}` : ''}.\n`) : chalk.yellow(`\nNot committed: ${r.reason ?? 'unknown'}.\n`));
+        } else {
+          console.log(r.rejected ? chalk.green(`\n✓ Rejected ${id}.\n`) : chalk.yellow(`\nNot rejected (no such item?).\n`));
+        }
+        return true;
+      }
+      if (sub === 'reconcile') {
+        const res = await callMcpTool<any>(mcpClient, 'memory_blackboard_review', { action: 'reconcile' });
+        if (res.isError) { console.log(chalk.red(`\nreconcile failed: ${res.text || '(no message)'}\n`)); return true; }
+        const r = res.parsed ?? {};
+        console.log(chalk.green(`\n✓ Reconciled — ${r.reconciled ?? 0} ready, ${r.duplicate ?? 0} duplicate, ${r.rejected ?? 0} rejected.\n`));
+        return true;
+      }
+      console.log(chalk.gray('\nUsage: /blackboard [review] | list [status] | restore <id> | commit <id> | reject <id> | reconcile\n'));
       return true;
     }
   }

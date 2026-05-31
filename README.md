@@ -120,6 +120,7 @@ Open <http://localhost:3000>. Exposes `/chat` plus inspectors for memories, scen
 
 - **[SETUP.md](SETUP.md)** — maintainer runbook: first-time setup, daily run, upgrade, publish, troubleshooting, and reset.
 - **[BRAINROUTER.md](BRAINROUTER.md)** — what the memory engine actually does.
+- **[BENCHMARKS.md](BENCHMARKS.md)** — reproducible proof: retrieval recall, code-recall, scale/context efficiency, load, and end-to-end lift.
 - **[PRESENTATION.md](PRESENTATION.md)** — slide-deck overview.
 - **[brainrouter-docs/](brainrouter-docs/)** — deep dives (math, env vars, CLI internals). Includes [hooks.md](brainrouter-docs/hooks.md) — authoring reference for shell hooks and hookify rules.
 - **[AGENT.md](AGENT.md)** — guidance for AI coding agents working in this repo.

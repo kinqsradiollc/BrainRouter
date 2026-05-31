@@ -1,17 +1,12 @@
 import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
 
 export const evidenceRouter = Router();
 evidenceRouter.use(requireAnyAuth);
 
-function scopedUserId(req: AuthedRequest, requested?: unknown): string {
-  const requestedUserId = typeof requested === "string" && requested.trim() ? requested.trim() : undefined;
-  if (!requestedUserId || requestedUserId === req.userId) return req.userId!;
-  if (req.isAdmin) return requestedUserId;
-  throw new Error("Cannot access another user's evidence");
-}
+const scopeEvidence = (req: AuthedRequest, requested?: unknown) => scopedUserId(req, requested, "evidence");
 
 /**
  * GET /api/evidence
@@ -25,7 +20,7 @@ function scopedUserId(req: AuthedRequest, requested?: unknown): string {
 evidenceRouter.get("/", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const userId = scopedUserId(req, req.query.userId);
+    const userId = scopeEvidence(req, req.query.userId);
     const filters = {
       recordId: typeof req.query.recordId === "string" && req.query.recordId.trim() ? req.query.recordId.trim() : undefined,
       kind: typeof req.query.kind === "string" && req.query.kind !== "all" ? req.query.kind : undefined,
@@ -40,7 +35,7 @@ evidenceRouter.get("/", async (req: AuthedRequest, res) => {
     }));
     res.json({ evidence: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid evidence parameters" });
+    res.status(errorStatus(error, 400)).json({ error: error instanceof Error ? error.message : "Invalid evidence parameters" });
   }
 });
 

@@ -5,8 +5,11 @@ import Spinner from 'ink-spinner';
 import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
 import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 import { renderMarkdown } from './markdownRender.js';
+import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
+import { appendHistory, historyPrev, historyNext, LIVE } from '../../runtime/inputHistory.js';
+import { flagSuggestions, applyFlagCompletion } from '../../runtime/slashFlags.js';
 // 0.3.9 — show the model's max prompt-context window in the footer next
 // to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
 import { formatContextWindow } from '../../runtime/contextWindow.js';
@@ -137,6 +140,9 @@ export interface ChatController {
   clearOverlay: () => void;
   /** Exit the chat app gracefully. */
   exit: () => void;
+  /** Update the live background-tasks panel (running workflows / workers /
+   *  agents). Pass an empty array to hide it. */
+  setBackgroundTasks: (tasks: BackgroundTask[]) => void;
 }
 
 export type ScrollbackEntry =
@@ -245,6 +251,23 @@ export interface PushScrollback {
 // overwhelming the layout.
 export const REASONING_TAIL_CHARS = 1500;
 
+/**
+ * Footer effort indicator (glyph + colour). claude-code-style ramp:
+ *   low ○ · medium ◐ · high ● · xhigh ✦. `max` is the user alias for `xhigh`.
+ * Returns an empty glyph for unknown/undefined so the footer hides it.
+ * Pure + exported for tests.
+ */
+export function effortIndicator(effort?: string): { glyph: string; color: string } {
+  const level = effort === 'max' ? 'xhigh' : effort;
+  switch (level) {
+    case 'xhigh': return { glyph: '✦', color: 'redBright' };
+    case 'high': return { glyph: '●', color: 'magenta' };
+    case 'medium': return { glyph: '◐', color: 'yellow' };
+    case 'low': return { glyph: '○', color: 'gray' };
+    default: return { glyph: '', color: 'gray' };
+  }
+}
+
 export function tailReasoning(text: string): string {
   if (text.length <= REASONING_TAIL_CHARS) return text;
   // Cut at a word boundary near the start of the tail window so the
@@ -340,6 +363,33 @@ export function ChatApp({
   const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(initialBanner, initialOfflineWarning, initialHint));
   const nextIdRef = useRef(scrollback.length);
   const [composerValue, setComposerValue] = useState('');
+  // INPUT-ERGO — remount key for the composer TextInput. ink-text-input only
+  // initializes its internal cursor at the END of `value` on MOUNT; an external
+  // value change (Tab-complete, history recall, @/flag completion) leaves the
+  // cursor mid-line. Bumping this key remounts the input so the cursor lands at
+  // the end. `setComposerProgrammatic` is the one place that does both.
+  const [composerKey, setComposerKey] = useState(0);
+  const setComposerProgrammatic = useCallback((value: string) => {
+    setComposerValue(value);
+    setComposerKey((k) => k + 1);
+  }, []);
+  // INPUT-ERGO — manual typing exits history browse (so ↑/↓ restart from the
+  // edited buffer). Programmatic sets go through `setComposerProgrammatic` and
+  // remount the input, so they never fire this onChange.
+  const onComposerChange = useCallback((next: string) => {
+    setComposerValue(next);
+    setHistIndex(LIVE);
+  }, []);
+  // INPUT-ERGO — shell-style input history. `histIndex === LIVE` means "not
+  // browsing"; `histDraft` preserves the in-progress buffer while browsing.
+  const [histEntries, setHistEntries] = useState<string[]>([]);
+  const [histIndex, setHistIndex] = useState<number>(LIVE);
+  const [histDraft, setHistDraft] = useState('');
+  // INPUT-ERGO — flag-suggestion palette cursor (args mode, trailing `-token`).
+  const [flagCursor, setFlagCursor] = useState(0);
+  // BG-TASKS-PANEL — running workflows/workers/agents, refreshed by runChat's
+  // ticker via controller.setBackgroundTasks. Empty → panel hidden.
+  const [bgTasks, setBgTasks] = useState<BackgroundTask[]>([]);
   const [phase, setPhase] = useState<'idle' | 'turn-running'>('idle');
   const [spinnerLabel, setSpinnerLabel] = useState<string>('');
   const [accessMode, setAccessMode] = useState<'read' | 'write' | 'shell'>(initialAccessMode);
@@ -604,6 +654,7 @@ export function ChatApp({
         if (r) r();
       },
       exit,
+      setBackgroundTasks: (tasks) => setBgTasks(tasks),
     });
     // Run exactly once — the controller's identity is stable across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -662,6 +713,17 @@ export function ChatApp({
     setPaletteCursor((c) => (paletteMatches.length === 0 ? 0 : Math.min(c, paletteMatches.length - 1)));
   }, [slashQuery, paletteMatches.length]);
 
+  // INPUT-ERGO — flag suggestions when typing `--token` in args mode. Gated on
+  // the other palettes being closed (mutually exclusive: slash palette needs no
+  // space; @-palette needs a trailing @token — neither overlaps a `-` token).
+  const flagMatches = useMemo(() => {
+    if (slashQuery !== null || atMatches.length > 0) return [];
+    return flagSuggestions(composerValue)?.matches ?? [];
+  }, [composerValue, slashQuery, atMatches.length]);
+  useEffect(() => {
+    setFlagCursor((c) => (flagMatches.length === 0 ? 0 : Math.min(c, flagMatches.length - 1)));
+  }, [flagMatches.length]);
+
   const onComposerSubmit = useCallback(async (text: string) => {
     let trimmed = text.trim();
     // Palette substitution: if the user pressed Enter while a slash
@@ -676,6 +738,10 @@ export function ChatApp({
       }
     }
     if (!trimmed) return;
+    // INPUT-ERGO — record the submitted input for ↑/↓ recall and reset browse.
+    setHistEntries((h) => appendHistory(h, trimmed));
+    setHistIndex(LIVE);
+    setHistDraft('');
     pushFns.user(trimmed);
     setComposerValue('');
     setPhase('turn-running');
@@ -741,7 +807,7 @@ export function ChatApp({
       }
       if (key.tab && !key.shift) {
         const picked = atMatches[atCursor] ?? atMatches[0];
-        setComposerValue(applyAtCompletion(composerValue, picked));
+        setComposerProgrammatic(applyAtCompletion(composerValue, picked));
         setAtCursor(0);
         return;
       }
@@ -765,10 +831,51 @@ export function ChatApp({
       }
       if (key.tab && !key.shift) {
         // Tab autocompletes the highlighted command into the composer
-        // (with a trailing space so the user can keep typing args).
+        // (with a trailing space so the user can keep typing args). Uses the
+        // programmatic setter so the cursor lands at the END (INPUT-ERGO).
         const picked = paletteMatches[paletteCursor] ?? paletteMatches[0];
-        setComposerValue(picked.cmd + ' ');
+        setComposerProgrammatic(picked.cmd + ' ');
         setPaletteCursor(0);
+        return;
+      }
+    }
+    // INPUT-ERGO — flag-suggestion palette (args mode, trailing `-token`).
+    // ↑/↓ navigate, Tab completes the highlighted flag.
+    if (flagMatches.length > 0) {
+      if (key.upArrow) {
+        setFlagCursor((c) => (c - 1 + flagMatches.length) % flagMatches.length);
+        return;
+      }
+      if (key.downArrow) {
+        setFlagCursor((c) => (c + 1) % flagMatches.length);
+        return;
+      }
+      if (key.tab && !key.shift) {
+        const picked = flagMatches[flagCursor] ?? flagMatches[0];
+        setComposerProgrammatic(applyFlagCompletion(composerValue, picked.flag));
+        setFlagCursor(0);
+        return;
+      }
+    }
+    // INPUT-ERGO — shell-style history recall. Only when NO palette owns the
+    // arrow keys (slash / @ / flag all closed). ↑ older, ↓ newer; falling off
+    // the new end restores the draft the user was typing.
+    if (slashQuery === null && atMatches.length === 0 && flagMatches.length === 0) {
+      if (key.upArrow) {
+        if (histIndex === LIVE) setHistDraft(composerValue); // entering browse — stash the live draft
+        const move = historyPrev(histEntries, histIndex);
+        if (move.value !== null) {
+          setHistIndex(move.index);
+          setComposerProgrammatic(move.value);
+        }
+        return;
+      }
+      if (key.downArrow) {
+        const move = historyNext(histEntries, histIndex, histDraft);
+        if (move.value !== null || move.index === LIVE) {
+          setHistIndex(move.index);
+          if (move.value !== null) setComposerProgrammatic(move.value);
+        }
         return;
       }
     }
@@ -782,8 +889,31 @@ export function ChatApp({
           blocks to accumulate while dragging the window. */}
       <Box flexDirection="column">
         {scrollback.map((entry) => (
-          <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} />
+          <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} cols={cols} />
         ))}
+        {/* BG-TASKS-PANEL — fixed panel listing background actors that are
+            running right now (workflows / workers / child agents). Auto-hides
+            when nothing is running. Refreshed by runChat's ticker. */}
+        {bgTasks.length > 0 ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color="cyan" dimColor>{`⚙ background · ${summarizeTasks(bgTasks)}`}</Text>
+            <Box
+              flexDirection="column"
+              marginLeft={1}
+              paddingLeft={1}
+              borderStyle="single"
+              borderColor="cyan"
+              borderDimColor
+              borderTop={false}
+              borderRight={false}
+              borderBottom={false}
+            >
+              {formatBackgroundTasks(bgTasks).map((line, i) => (
+                <Text key={i} color="cyan" wrap="truncate-end">{line}</Text>
+              ))}
+            </Box>
+          </Box>
+        ) : null}
         {/* TIER A: transient live assistant + reasoning rows. The
             assistant streams here mid-turn; when the turn finishes,
             assistantDeltaEnd() clears these and runChat.tsx pushes the
@@ -802,7 +932,18 @@ export function ChatApp({
             <Text color="magenta" italic dimColor>
               💭 thinking{liveReasoning.length > REASONING_TAIL_CHARS ? ` (${liveReasoning.length.toLocaleString()} chars)` : ''}
             </Text>
-            <Box paddingLeft={3} height={REASONING_VISIBLE_LINES} flexDirection="column">
+            <Box
+              marginLeft={1}
+              paddingLeft={1}
+              height={REASONING_VISIBLE_LINES}
+              flexDirection="column"
+              borderStyle="single"
+              borderColor="magenta"
+              borderDimColor
+              borderTop={false}
+              borderRight={false}
+              borderBottom={false}
+            >
               <Text color="gray" italic wrap="truncate-end">
                 {buildReasoningWindow(tailReasoning(liveReasoning), cols)}<Text color="gray">▍</Text>
               </Text>
@@ -863,8 +1004,9 @@ export function ChatApp({
             <Box>
               <Text color={accentColor}>{' ❯ '}</Text>
               <TextInput
+                key={composerKey}
                 value={composerValue}
-                onChange={setComposerValue}
+                onChange={onComposerChange}
                 onSubmit={onComposerSubmit}
                 placeholder={phase === 'turn-running' ? '' : 'type a prompt or / for commands'}
               />
@@ -880,6 +1022,22 @@ export function ChatApp({
               accentColor={accentColor}
               cols={cols}
             />
+          ) : null}
+
+          {/* INPUT-ERGO — flag suggestions when typing `--token` in args mode.
+              Tab completes the highlighted flag; ↑/↓ navigate. */}
+          {flagMatches.length > 0 ? (
+            <Box flexDirection="column" marginTop={0}>
+              <Text color="gray" dimColor>  flags (Tab to complete, ↑/↓ to navigate)</Text>
+              {flagMatches.map((m, i) => (
+                <Box key={m.flag}>
+                  <Text color={i === flagCursor ? accentColor : 'gray'}>
+                    {i === flagCursor ? '  › ' : '    '}{m.flag}
+                  </Text>
+                  {cols >= 50 ? <Text color="gray" dimColor>{`  ${m.desc}`}</Text> : null}
+                </Box>
+              ))}
+            </Box>
           ) : null}
 
           {/* @-mention file completions — appear when composer ends with `@token`.
@@ -932,7 +1090,7 @@ export function ChatApp({
 // 80ms streaming tick re-walks the entire scrollback (potentially 1000+
 // entries) and Ink re-diffs each row — that's the dominant cause of
 // the visible flicker / flashing during streaming.
-const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: { entry: ScrollbackEntry; accentColor: string }) {
+const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor, cols }: { entry: ScrollbackEntry; accentColor: string; cols: number }) {
   switch (entry.kind) {
     case 'raw':
       return <Text wrap={entry.noWrap ? 'truncate' : 'wrap'}>{entry.text}</Text>;
@@ -967,7 +1125,9 @@ const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: 
       // `entry.raw === true` (user's rawScrollback preference) skips
       // marked entirely — useful when the user wants to see the LLM's
       // literal markdown source.
-      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text)).trimEnd();
+      // Pass the live terminal width so GFM tables render to fit (and re-fit
+      // on resize — `cols` is a prop, so the row re-renders when it changes).
+      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text, { width: cols })).trimEnd();
       const meta = entry.durationMs !== undefined
         ? `  ${Math.floor(entry.durationMs / 1000)}s${entry.tokensIn !== undefined ? ` · ${entry.tokensIn.toLocaleString()} in / ${entry.tokensOut?.toLocaleString() ?? 0} out` : ''}`
         : '';
@@ -1114,10 +1274,22 @@ const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor }: 
     }
     case 'reasoning': {
       const lines = entry.text.split('\n');
+      // A dim-magenta left rule frames the chain-of-thought as a distinct
+      // "thinking aside" — visually separate from the model's actual prose.
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text color="magenta" italic dimColor>💭 thinking</Text>
-          <Box paddingLeft={3} flexDirection="column">
+          <Box
+            flexDirection="column"
+            marginLeft={1}
+            paddingLeft={1}
+            borderStyle="single"
+            borderColor="magenta"
+            borderDimColor
+            borderTop={false}
+            borderRight={false}
+            borderBottom={false}
+          >
             {lines.map((line, i) => (
               <Text key={i} color="gray" italic wrap="wrap">{line || ' '}</Text>
             ))}
@@ -1342,8 +1514,10 @@ function FooterStatus({
   //   high   → ● (filled circle, heavy)
   // Rendered inline next to the pill, not as a separate boxed pill, so
   // the footer stays compact on narrow terminals.
-  const effortGlyph = footer.effort === 'high' ? '●' : footer.effort === 'medium' ? '◐' : footer.effort === 'low' ? '○' : '';
-  const effortColor = footer.effort === 'high' ? 'magenta' : footer.effort === 'medium' ? 'yellow' : 'gray';
+  // `max` is the user-facing alias for `xhigh` (normalizeEffort canonicalises
+  // it, but handle the literal defensively too). xhigh gets its own heavier
+  // glyph + colour so the top reasoning tier is visible in the footer.
+  const { glyph: effortGlyph, color: effortColor } = effortIndicator(footer.effort);
 
   // Left side: model (· Nk ctx) · session · branch. Right: ? for shortcuts.
   // The "Nk ctx" segment surfaces the model's max prompt context so the
@@ -1355,7 +1529,7 @@ function FooterStatus({
     const ctxLabel = formatContextWindow(footer.model);
     leftSegs.push(`${footer.model}${ctxLabel !== '?' ? ` · ${ctxLabel} ctx` : ''}`);
   }
-  if (footer.session) leftSegs.push(footer.session.slice(0, 16));
+  if (footer.session) leftSegs.push(footer.session);
   if (footer.branch) leftSegs.push(footer.branch);
   if (footer.rightExtra) leftSegs.push(footer.rightExtra);
 

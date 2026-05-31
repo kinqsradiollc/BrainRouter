@@ -110,7 +110,7 @@ function renderWorkspace(inputs: WhereInputs, theme: Theme): string[] {
     indent(dim((() => {
       const ctxLabel = formatContextWindow(inputs.model);
       const modelSeg = ctxLabel !== '?' ? `model ${inputs.model} (${ctxLabel} ctx)` : `model ${inputs.model}`;
-      return `session ${inputs.sessionKey.slice(0, 8)}  ·  ${modelSeg}  ·  mode ${inputs.accessMode}`;
+      return `session ${inputs.sessionKey}  ·  ${modelSeg}  ·  mode ${inputs.accessMode}`;
     })())),
     indent(dim(`exec    ${inputs.executionMode}  ·  review ${inputs.reviewPolicy}  ·  ${effortLine}`)),
     indent(dim(`mcp     ${inputs.mcpProfile}  ·  ${inputs.mcpTransport}  ·  ${inputs.mcpOnline ? 'online' : 'offline'}`)),

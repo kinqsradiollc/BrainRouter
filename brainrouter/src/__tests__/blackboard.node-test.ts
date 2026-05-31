@@ -56,3 +56,34 @@ test("MEM-4 commit refuses a non-reconciled item; reject works", () => {
     assert.equal(engine.reviewBlackboard("u1", "pending").length, 0);
   } finally { cleanup(); }
 });
+
+test("BLACKBOARD-REVIEW-UX restore: a rejected item returns to pending for re-review", () => {
+  const { engine, cleanup } = fresh("restore");
+  try {
+    const [staged] = engine.stageBlackboardCandidates("u1", [{ score: 0.9, candidate: { content: "restorable fact", type: "codebase_fact" } }]);
+    assert.equal(engine.rejectBlackboardItem("u1", staged.id), true);
+    assert.equal(engine.reviewBlackboard("u1", "rejected").length, 1);
+
+    const res = engine.restoreBlackboardItem("u1", staged.id);
+    assert.equal(res.restored, true);
+    assert.equal(res.status, "pending");
+    assert.equal(engine.reviewBlackboard("u1", "rejected").length, 0);
+    assert.equal(engine.reviewBlackboard("u1", "pending").length, 1, "restored item is pending again");
+  } finally { cleanup(); }
+});
+
+test("BLACKBOARD-REVIEW-UX restore: only rejected/duplicate are restorable; pending + unknown are no-ops", () => {
+  const { engine, cleanup } = fresh("restore-guard");
+  try {
+    const [staged] = engine.stageBlackboardCandidates("u1", [{ score: 0.9, candidate: { content: "pending fact", type: "codebase_fact" } }]);
+    // A pending item is not "dropped" — restore should refuse and explain.
+    const pending = engine.restoreBlackboardItem("u1", staged.id);
+    assert.equal(pending.restored, false);
+    assert.match(pending.reason ?? "", /rejected\/duplicate/);
+    // Unknown id.
+    assert.equal(engine.restoreBlackboardItem("u1", "no-such-id").restored, false);
+    // Wrong user can't restore another user's item.
+    engine.rejectBlackboardItem("u1", staged.id);
+    assert.equal(engine.restoreBlackboardItem("other-user", staged.id).restored, false);
+  } finally { cleanup(); }
+});

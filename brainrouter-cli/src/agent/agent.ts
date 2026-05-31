@@ -14,6 +14,7 @@ import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
+import { shouldRetryLlm } from '../state/checkpointStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -65,6 +66,7 @@ import { computePrefixFingerprint, computePrefixComponents, type PrefixComponent
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../runtime/execPolicy.js';
 import { isPathWithinRoots } from '../runtime/pathPolicy.js';
 import { runPostEditCheck } from '../runtime/postEditCheck.js';
+import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../runtime/autoReindex.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -309,6 +311,23 @@ export interface RunTurnCallbacks {
    * this unset so the tool is not exposed.
    */
   onSideQuestion?: (question: string, choices?: string[]) => Promise<string>;
+  /**
+   * HEADLESS-EVENTS (0.4.5) — exec-policy decision for a mutating tool
+   * (allow / ask / deny), fired at the dispatch gate. Lets headless consumers
+   * see what the policy let through or blocked.
+   */
+  onApproval?: (event: { tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }) => void;
+  /**
+   * HEADLESS-EVENTS (0.4.5) — running token tally, fired after each LLM call
+   * accrues usage. Carries the cumulative turn totals so consumers can render
+   * a live cost ticker without waiting for turn_end.
+   */
+  onUsageUpdate?: (usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }) => void;
+  /**
+   * HEADLESS-EVENTS (0.4.5) — the code index was refreshed for a file
+   * (CLI-REINDEX), fired from the file read/edit paths when content drifted.
+   */
+  onCodeIndex?: (event: { file: string; chunks: number }) => void;
 }
 
 export type MemoryEvent =
@@ -850,6 +869,13 @@ export function resolveWorkspacePath(
 export class Agent {
   private mcpClient: McpClientWrapper;
   private llmConfig: LLMConfig;
+  /** CLI-REINDEX — per-path stat signature of the last reindex, so unchanged
+   *  files don't re-ship content to memory_reindex_source on every read. */
+  private reindexSignatures = new Map<string, string>();
+  /** HEADLESS-EVENTS — per-turn listener for code-index refreshes, set from
+   *  RunTurnCallbacks.onCodeIndex at the top of runTurn (executeLocalTool has
+   *  no callbacks param, so we bridge through the instance). */
+  private codeIndexListener: ((e: { file: string; chunks: number }) => void) | null = null;
   public sessionKey: string;
   /**
    * Federation Stage 3 — the per-process key the `attachFederation`
@@ -1128,6 +1154,8 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // HEADLESS-EVENTS — bridge the code-index callback to executeLocalTool.
+    this.codeIndexListener = callbacks.onCodeIndex ?? null;
     // 0.4.x-3b — new turn: re-resolve the file-snapshot ordinal on first mutation.
     this.snapshotsThisTurn = null;
     this.lastGoalTransition = undefined;
@@ -1384,6 +1412,7 @@ export class Agent {
       llmConfig: this.llmConfig,
       launchCwd: this.launchCwd,
       recordOffload: (chars) => { this.memoryMetrics.offloadCharsAvoided += chars; },
+      recordChildTokens: (tokens) => { this.memoryMetrics.childTokensSpent += tokens; },
       onChildToolStart: (event) => {
         callbacks.onChildToolStart?.(event);
       },
@@ -1493,8 +1522,33 @@ export class Agent {
         }
         return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
       };
+      // Transient connectivity failures (fetch failed / ECONNRESET / socket
+      // hang up / timeouts) are retried with backoff before giving up — a
+      // network blip shouldn't kill a turn, a worker, or a child agent. This
+      // is why background workers (which are `silent`) were dying on the first
+      // hiccup while grok/claude-code/codex ride it out. `shouldRetryLlm` also
+      // covers transient SERVER-side failures — HTTP 5xx, gateway timeouts
+      // (the "504 Gateway Time-out" from the provider's load balancer), rate
+      // limits (429), and overload errors — not just client-side connectivity.
+      // Context-overflow and model-not-found errors are neither, so they fall
+      // straight through to the dedicated recovery in the catch below.
+      const LLM_MAX_ATTEMPTS = 3;
+      const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            return await invokeLlm();
+          } catch (err: any) {
+            if (!shouldRetryLlm(err, attempt, LLM_MAX_ATTEMPTS)) throw err;
+            const delayMs = attempt === 1 ? 600 : 1800;
+            callbacks.onStatusUpdate(
+              `Transient error reaching the model (${String(err?.message ?? err).slice(0, 80)}) — retrying ${attempt}/${LLM_MAX_ATTEMPTS - 1} in ${(delayMs / 1000).toFixed(1)}s...`,
+            );
+            await new Promise((r) => setTimeout(r, delayMs));
+          }
+        }
+      };
       try {
-        response = await invokeLlm();
+        response = await invokeLlmResilient();
       } catch (err: any) {
         // Layered LLM recovery. We detect context-
         // window-exceeded errors (the single failure mode where a fresh
@@ -1516,7 +1570,7 @@ export class Agent {
                 summary: r.summary,
               });
             }
-            response = await invokeLlm();
+            response = await invokeLlmResilient();
           } catch (retryErr: any) {
             throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
           }
@@ -1533,7 +1587,7 @@ export class Agent {
           this.setModel(fallback);
           callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
           try {
-            response = await invokeLlm();
+            response = await invokeLlmResilient();
           } catch (retryErr: any) {
             throw new Error(`LLM Execution failed after model fallback (${from} → ${fallback}): ${retryErr?.message ?? retryErr}`);
           }
@@ -1602,6 +1656,8 @@ export class Agent {
           cacheHitRatio: cache.cacheHitRatio,
           source: cache.source,
         });
+        // HEADLESS-EVENTS — running token tally after each LLM call.
+        callbacks.onUsageUpdate?.({ ...this.lastTurnUsage });
       }
 
       // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
@@ -2017,6 +2073,8 @@ export class Agent {
                 { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey, local: isLocal },
                 { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId },
               );
+              // HEADLESS-EVENTS — surface the policy decision to consumers.
+              callbacks.onApproval?.({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
             }
             if (policy.decision === 'deny') {
               throw new Error(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
@@ -2392,9 +2450,12 @@ export class Agent {
           throw new Error(`File not found: ${args.path}`);
         }
         const content = fs.readFileSync(resolved, 'utf8');
+        // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
+        // reads stay snappy, and guarded so a rejection never escapes.
+        void this.maybeReindexSource(resolved, content).catch(() => {});
         const startLine = args.startLine ? Number(args.startLine) : 1;
         const endLine = args.endLine ? Number(args.endLine) : undefined;
-        
+
         if (startLine === 1 && endLine === undefined) {
           return content;
         }
@@ -2419,7 +2480,9 @@ export class Agent {
           fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(resolved, args.content, 'utf8');
-        return `Successfully wrote file: ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const writeNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const reindexNotice = await this.maybeReindexSource(resolved, args.content);
+        return `Successfully wrote file: ${args.path}` + writeNotice + reindexNotice;
       }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
@@ -2443,7 +2506,9 @@ export class Agent {
         const updated = content.replace(target, replacement);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
-        return `Successfully edited ${args.path}` + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
+        const editReindex = await this.maybeReindexSource(resolved, updated);
+        return `Successfully edited ${args.path}` + editNotice + editReindex;
       }
       case 'list_dir': {
         const targetDir = resolveHere(args.path || '.');
@@ -2726,7 +2791,12 @@ export class Agent {
           const result = applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
           const firstFile = patch.match(/^\*\*\*\s+(?:Add|Update) File:\s*(.+)\s*$/m)?.[1]?.trim();
           const checkFile = firstFile ? path.resolve(this.workspaceRoot, firstFile) : this.workspaceRoot;
-          return result + runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
+          const patchNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
+          let patchReindex = '';
+          if (firstFile) {
+            try { patchReindex = await this.maybeReindexSource(checkFile, fs.readFileSync(checkFile, 'utf8')); } catch { /* file may have been deleted */ }
+          }
+          return result + patchNotice + patchReindex;
         }
       }
       case 'update_plan': {
@@ -2973,6 +3043,21 @@ export class Agent {
   }
 
   /**
+   * FOOTER-TELEMETRY-2 — the counters behind the `offload` statusline segment:
+   * cumulative child-agent token spend + child-output chars kept out of the
+   * parent's context window this session. Both are in-memory, so the footer can
+   * read them every render without a disk scan. (See `/tokens` / `/context` for
+   * the full per-child breakdown sourced from session usage on disk.)
+   */
+  public getOffloadTotals(): { childTokensSpent: number; offloadCharsAvoided: number; compactedToolCharsAvoided: number } {
+    return {
+      childTokensSpent: this.memoryMetrics.childTokensSpent,
+      offloadCharsAvoided: this.memoryMetrics.offloadCharsAvoided,
+      compactedToolCharsAvoided: this.memoryMetrics.compactedToolCharsAvoided,
+    };
+  }
+
+  /**
    * 0.4.x-3b (`/rewind --files`) — record a file's prior content the first time
    * it's mutated this turn, tagged with the user-turn ordinal. Lazily computes
    * the ordinal from the transcript on the turn's first capture (the user
@@ -2995,6 +3080,55 @@ export class Agent {
       recordFileMutation(this.workspaceRoot, this.sessionKey, { turn: this.fileSnapshotTurn, path: rel, priorContent });
     } catch {
       /* snapshotting must never break a tool call */
+    }
+  }
+
+  /**
+   * CLI-REINDEX (0.4.5) — keep the brain's code index fresh from the file
+   * read/edit paths. Stat-gated (skips unchanged files), offline-safe, and
+   * scoped to code files. Returns a short notice when a reindex actually
+   * happened (empty string otherwise — including every skip/error path), so
+   * callers can append it without branching. Never throws: index upkeep must
+   * not break a file operation.
+   */
+  private async maybeReindexSource(resolved: string, content: string): Promise<string> {
+    try {
+      const connected = typeof (this.mcpClient as any).isConnected === 'function'
+        ? !!(this.mcpClient as any).isConnected()
+        : true;
+      let signature: string;
+      try {
+        const st = fs.statSync(resolved);
+        signature = reindexSignature({ size: st.size, mtimeMs: st.mtimeMs });
+      } catch {
+        return ''; // file gone (e.g. a delete) — nothing to index
+      }
+      const gate: ReindexGate = {
+        enabled: getCliKnobs().autoReindex,
+        connected,
+        filePath: resolved,
+        signature,
+        lastSignature: this.reindexSignatures.get(resolved),
+      };
+      if (!shouldReindex(gate)) return '';
+      const res = await callMcpTool<{ status?: string; chunks?: number; staleMarked?: boolean }>(
+        this.mcpClient,
+        'memory_reindex_source',
+        { file: resolved, content, language: languageHint(resolved) },
+      );
+      // Leave the signature unrecorded on failure so it retries on the next
+      // touch; only mark it once the brain confirms it saw this content.
+      if (res.isError) return '';
+      this.reindexSignatures.set(resolved, signature);
+      if (res.parsed?.status === 'reindexed') {
+        const chunks = typeof res.parsed.chunks === 'number' ? res.parsed.chunks : 0;
+        // HEADLESS-EVENTS — emit a code_index event for headless consumers.
+        try { this.codeIndexListener?.({ file: resolved, chunks }); } catch { /* listener must not break a file op */ }
+        return `\n[code index refreshed: ${chunks} chunk${chunks === 1 ? '' : 's'}]`;
+      }
+      return '';
+    } catch {
+      return '';
     }
   }
 
@@ -3107,6 +3241,10 @@ export class Agent {
     offloadCharsAvoided: 0,
     recallRecordsConsulted: 0,
     compactedToolCharsAvoided: 0,
+    // FOOTER-TELEMETRY-2 — cumulative tokens spent by child agents this session.
+    // In-memory parent-side counter (children persist their own usage to disk;
+    // this lets the footer surface child spend without a per-render disk scan).
+    childTokensSpent: 0,
   };
 
   /**
@@ -3188,6 +3326,7 @@ export class Agent {
       offloadCharsAvoided: 0,
       recallRecordsConsulted: 0,
       compactedToolCharsAvoided: 0,
+      childTokensSpent: 0,
     };
     // 0.4.x-4 — per-skill + per-tool accounting is session-scoped too.
     this.usageBySkill = new Map();

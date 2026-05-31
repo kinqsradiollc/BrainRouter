@@ -19,6 +19,9 @@ export interface AgentDefinition {
   defaultAccess: AccessMode;
   toolScope: { local: string[]; mcp: string[] };
   disallowedTools: string[];
+  /** AGENTS-WIZARD — default ownership glob applied to write/shell children
+   *  spawned from this def when the spawner doesn't pass an explicit one. */
+  ownership?: string | null;
   maxIterations: number;
   timeoutMs: number;
   maxResultChars: number;

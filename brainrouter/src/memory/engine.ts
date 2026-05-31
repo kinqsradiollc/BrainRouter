@@ -1,4 +1,12 @@
 import { SqliteMemoryStore } from "./store/sqlite.js";
+import {
+  deriveConflictKey,
+  lessonsConflict,
+  isLessonStale,
+  normalizeSupersedes,
+  DEFAULT_STALENESS,
+  type StalenessThresholds,
+} from "./lessonHygiene.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
@@ -9,6 +17,8 @@ import { chunkCode } from "./source/code-chunker.js";
 import { deriveBenchQuery, aggregateRanks } from "./bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "./bench/regression.js";
 import { benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd, type CodeRecallResult } from "./bench/code-recall.js";
+import { computeRetrievalMetrics, withTokenEfficiency, formatCodeScaleMd, type RankedQueryResult, type RetrievalMetrics } from "./bench/code-scale.js";
+import { buildCodeScaleFixture } from "./bench/code-scale-fixture.js";
 import { readTreePolicy, treeAutobuildEnabled, parentDomain, topicKeyForScene, SCENE_LEAF_DOMAIN } from "./tree/policy.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
@@ -753,8 +763,8 @@ export class MemoryEngine {
   public recordLesson(
     userId: string,
     text: string,
-    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string },
-  ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number } {
+    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string; supersedes?: string | string[] },
+  ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] } {
     const normalized = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
     const fingerprint = createHash("sha1").update(normalized).digest("hex");
     const store = this.store as typeof this.store & {
@@ -778,9 +788,13 @@ export class MemoryEngine {
         metadata: { ...(existing.metadata ?? {}), fingerprint, corroborations },
       };
       this.store.upsertCognitive(updated, { skipAudit: true });
-      return { recordId: existing.id, reinforced: true, confidence, corroborations };
+      return { recordId: existing.id, reinforced: true, confidence, corroborations, supersededIds: [] };
     }
 
+    // LESSON-HYGIENE — store a deterministic conflict key alongside the
+    // fingerprint so `findLessonConflicts` can locate same-subject lessons
+    // without an LLM (see lessonHygiene.deriveConflictKey).
+    const conflictKey = deriveConflictKey(text);
     const record = this.upsertEngineeringMemory({
       userId,
       sessionKey: opts?.sessionKey,
@@ -789,9 +803,85 @@ export class MemoryEngine {
       priority: opts?.priority ?? 80,
       activeSkill: opts?.activeSkill,
       sourceKind: "user_instruction",
-      metadata: { fingerprint, corroborations: 1, ...(opts?.kind ? { kind: opts.kind } : {}), ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
+      metadata: { fingerprint, conflictKey, corroborations: 1, ...(opts?.kind ? { kind: opts.kind } : {}), ...(opts?.evidence ? { evidence: opts.evidence } : {}) },
     });
-    return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1 };
+
+    // LESSON-HYGIENE — explicit supersede: invalidate each named prior lesson,
+    // pointing `superseded_by` at this new record. Best-effort per id so one
+    // bad/missing id can't sink the whole call; recall already drops
+    // `invalid_at IS NOT NULL`, so a superseded lesson stops surfacing at once.
+    const supersededIds: string[] = [];
+    for (const oldId of normalizeSupersedes(opts?.supersedes)) {
+      if (oldId === record.id) continue;
+      try {
+        // `invalidateCognitiveRecord` is an UPDATE that silently no-ops on an
+        // unknown id, so confirm the record exists first — otherwise we'd
+        // report a bogus id as "superseded".
+        if (!this.store.getMemoryById(userId, oldId)) continue;
+        this.store.invalidateCognitiveRecord(userId, oldId, record.id);
+        supersededIds.push(oldId);
+      } catch {
+        /* unknown id — skip, don't fail the record */
+      }
+    }
+    return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1, supersededIds };
+  }
+
+  /**
+   * LESSON-HYGIENE (0.4.5) — deterministically find live lessons that conflict
+   * with `text` (same subject, different rule) so a caller can decide whether to
+   * pass them as `supersedes`. Pure store lookup by conflict key + a normalized
+   * text check; NO LLM. Returns [] when nothing collides — conservative by
+   * design (it won't guess at semantic equivalence like npm≠pnpm).
+   */
+  public findLessonConflicts(userId: string, text: string): CognitiveRecord[] {
+    const key = deriveConflictKey(text);
+    if (!key) return [];
+    const store = this.store as typeof this.store & {
+      findLessonsByConflictKey?: (u: string, k: string) => CognitiveRecord[];
+    };
+    const candidates = typeof store.findLessonsByConflictKey === "function" ? store.findLessonsByConflictKey(userId, key) : [];
+    return candidates.filter((c) => lessonsConflict(c.content, text));
+  }
+
+  /**
+   * LESSON-HYGIENE (0.4.5) — conservative staleness sweep. Returns lessons that
+   * are old AND low-confidence AND barely corroborated (see DEFAULT_STALENESS);
+   * a useful rule keeps getting cited/corroborated and is never a candidate.
+   * Read-only by default — pass `apply:true` to archive the candidates (archived
+   * records drop out of recall but stay recoverable; this is expiry, not
+   * deletion). `nowMs` is injectable for tests.
+   */
+  public sweepStaleLessons(
+    userId: string,
+    opts?: { apply?: boolean; thresholds?: Partial<StalenessThresholds>; nowMs?: number; limit?: number },
+  ): { candidates: Array<{ recordId: string; reason: string; lastCitedAt: string | null; confidence: number }>; archived: number } {
+    const store = this.store as typeof this.store & {
+      listLessonsForHygiene?: (u: string, limit: number) => CognitiveRecord[];
+    };
+    const lessons = typeof store.listLessonsForHygiene === "function" ? store.listLessonsForHygiene(userId, opts?.limit ?? 1000) : [];
+    const thresholds: StalenessThresholds = { ...DEFAULT_STALENESS, ...(opts?.thresholds ?? {}) };
+    const nowMs = opts?.nowMs ?? Date.now();
+    const candidates = lessons
+      .filter((l) => isLessonStale(l, nowMs, thresholds))
+      .map((l) => ({
+        recordId: l.id,
+        reason: `not cited since ${l.lastCitedAt ?? l.createdTime}; confidence ${l.confidence.toFixed(2)}; ${l.citationCount} corroboration(s)`,
+        lastCitedAt: l.lastCitedAt ?? null,
+        confidence: l.confidence,
+      }));
+    let archived = 0;
+    if (opts?.apply) {
+      for (const c of candidates) {
+        try {
+          this.store.updateCognitiveConfidence(userId, c.recordId, c.confidence, "archived");
+          archived++;
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+    return { candidates, archived };
   }
 
   /**
@@ -1057,6 +1147,26 @@ export class MemoryEngine {
     return true;
   }
 
+  /**
+   * BLACKBOARD-REVIEW-UX (0.4.5) — un-drop a candidate that was rejected or
+   * deduped (`duplicate`) in error: move it back to `pending` and clear the
+   * stale score/conflict links so the next reconcile re-evaluates it from
+   * scratch. Only `rejected`/`duplicate` are restorable — a `committed` item is
+   * already a cognitive record (nothing to restore), and `pending`/`reconciled`
+   * aren't dropped. Returns a reason on no-op so the surface can explain why.
+   */
+  public restoreBlackboardItem(userId: string, itemId: string): { restored: boolean; reason?: string; status?: BlackboardStatus } {
+    const store = this.blackboardStore();
+    if (!store) return { restored: false, reason: "blackboard store unavailable" };
+    const item = store.getBlackboardItem(itemId);
+    if (!item || item.userId !== userId) return { restored: false, reason: "no such item" };
+    if (item.status !== "rejected" && item.status !== "duplicate") {
+      return { restored: false, reason: `status is "${item.status}"; only rejected/duplicate items can be restored`, status: item.status };
+    }
+    store.updateBlackboardItem(itemId, { status: "pending", score: 0, conflictIds: [] });
+    return { restored: true, status: "pending" };
+  }
+
   /** MEM-4 — list staged items (optionally by status) for review. */
   public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
     const store = this.blackboardStore();
@@ -1252,6 +1362,66 @@ export class MemoryEngine {
       summaryPath = null;
     }
     return { ...result, summaryPath };
+  }
+
+  /**
+   * CODE-SCALE (0.4.5) — repo-scale find_related retrieval benchmark. Ingests a
+   * deterministic labelled fixture, runs find_related per seed, and scores the
+   * ranked file list against the gold relevance set (recall@k / precision@k /
+   * MRR / nDCG) plus token-efficiency vs. a whole-repo dump. Self-contained: it
+   * writes into the engine's own store under a dedicated benchmark user so it
+   * doesn't touch real memory.
+   */
+  public runCodeScaleBenchmark(opts?: {
+    baseDir?: string;
+    userId?: string;
+    k?: number;
+    clusters?: number;
+    perCluster?: number;
+  }): RetrievalMetrics & { summaryPath: string | null } {
+    const userId = opts?.userId ?? "__codescale_bench__";
+    const k = opts?.k ?? 10;
+    const fixture = buildCodeScaleFixture({ clusters: opts?.clusters, perCluster: opts?.perCluster });
+
+    // Ingest the whole fixture into the code index.
+    let repoTokens = 0;
+    for (const f of fixture.files) {
+      this.reindexCodeSource(userId, { filePath: f.filePath, content: f.content, language: f.language });
+      repoTokens += Math.ceil(f.content.length / 4); // ~4 chars/token proxy
+    }
+
+    // Run find_related per seed, collapse hits to unique files in rank order.
+    const results: RankedQueryResult[] = fixture.queries.map((q) => {
+      // Seed at the first exported function body (line 5 in the fixture
+      // layout); find_related resolves the seed chunk by file:line.
+      const res = this.findRelatedChunks(userId, { filePath: q.seed, line: 5 }, { limit: Math.max(k * 3, 30), includeEdges: true });
+      const seen = new Set<string>();
+      const ranked: string[] = [];
+      let returnedTokens = 0;
+      for (const hit of res.related) {
+        const fp = hit.chunk.filePath;
+        if (!fp || fp === q.seed) continue; // exclude the seed file itself
+        returnedTokens += hit.chunk.tokenCount ?? 0;
+        if (!seen.has(fp)) { seen.add(fp); ranked.push(fp); }
+      }
+      return { query: q.seed, relevant: q.relevant, ranked, returnedTokens };
+    });
+
+    const metrics = withTokenEfficiency(
+      computeRetrievalMetrics(results, k),
+      fixture.queries.length ? repoTokens : 0,
+    );
+
+    let summaryPath: string | null = null;
+    try {
+      const dir = opts?.baseDir ?? path.join(os.homedir(), ".brainrouter", "bench");
+      fs.mkdirSync(dir, { recursive: true });
+      summaryPath = path.join(dir, `code-scale-${Date.now()}.md`);
+      fs.writeFileSync(summaryPath, formatCodeScaleMd(metrics), "utf8");
+    } catch {
+      summaryPath = null;
+    }
+    return { ...metrics, summaryPath };
   }
 
   /**
