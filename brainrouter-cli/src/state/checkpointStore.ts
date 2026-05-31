@@ -101,3 +101,49 @@ export function isConnectivityError(err: unknown): boolean {
 export function shouldRetryConnectivity(err: unknown, attempt: number, maxAttempts: number): boolean {
   return attempt < maxAttempts && isConnectivityError(err);
 }
+
+// HTTP statuses worth retrying: request/gateway timeouts (408/504), rate limits
+// (429), and transient server / gateway / overload errors (500/502/503 + the
+// 52x Cloudflare and 529 "overloaded" variants). NOT 4xx like 400/401/403/404 —
+// those are deterministic client errors that a retry can't fix.
+const RETRYABLE_HTTP_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524, 529]);
+
+// Textual forms of the same transient server/gateway failures, for providers
+// whose errors arrive as a string (no structured `status`). The numeric branch
+// is anchored to an "(API) error: <code>" / "status: <code>" prefix so a bare
+// "500" elsewhere in a message (e.g. "500 tokens") can't masquerade as a
+// retryable status; the gateway/overload phrases match on their own.
+const RETRYABLE_SERVER_RE =
+  /(?:api )?error:?\s*(?:40[89]|425|429|5\d{2})\b|status(?: code)?:?\s*(?:40[89]|425|429|5\d{2})\b|gateway time-?out|bad gateway|service (?:is )?unavailable|temporarily unavailable|server (?:is )?overloaded|overloaded_error|too many requests|internal server error|server had an error/i;
+
+/**
+ * True when an error is a transient SERVER-side failure that a retry can fix:
+ * HTTP 5xx, gateway timeouts (504), rate limits (429), and overload errors.
+ * Distinct from `isConnectivityError` (the client couldn't reach the server at
+ * all) — here the server WAS reached but returned a retryable status. Checks a
+ * structured `status`/`statusCode`/`response.status` first, then the message.
+ */
+export function isRetryableServerError(err: unknown): boolean {
+  if (err && typeof err === 'object') {
+    const e = err as any;
+    const status = typeof e.status === 'number' ? e.status
+      : typeof e.statusCode === 'number' ? e.statusCode
+      : typeof e.response?.status === 'number' ? e.response.status
+      : undefined;
+    if (typeof status === 'number' && RETRYABLE_HTTP_STATUS.has(status)) return true;
+  }
+  const msg = err instanceof Error ? `${err.message} ${(err as any).code ?? ''}` : String(err ?? '');
+  return RETRYABLE_SERVER_RE.test(msg);
+}
+
+/**
+ * Whether a failed LLM call should be retried in place: transient connectivity
+ * OR a retryable server/gateway/rate-limit status, while attempts remain
+ * (`attempt` is 1-based). This is the predicate the agent's `invokeLlmResilient`
+ * loop uses — broader than `shouldRetryConnectivity` (which stays scoped to the
+ * offline-queue decision: a 504 means the server is UP, so it must not be
+ * treated as "offline").
+ */
+export function shouldRetryLlm(err: unknown, attempt: number, maxAttempts: number): boolean {
+  return attempt < maxAttempts && (isConnectivityError(err) || isRetryableServerError(err));
+}
