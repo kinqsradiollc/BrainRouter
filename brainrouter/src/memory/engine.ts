@@ -3,6 +3,7 @@ import type { StalenessThresholds } from "./lessonHygiene.js";
 // REFAC-ENGINE-SPLIT (0.4.6) — lesson-domain ops live in lessons/lessonOps.ts;
 // the engine methods below are thin wrappers delegating to them.
 import * as lessonOps from "./lessons/lessonOps.js";
+import * as blackboardOps from "./blackboard/blackboardOps.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
@@ -22,7 +23,6 @@ import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance-plan.js";
-import { reconcileBlackboard } from "./blackboard/reconcile.js";
 import { summarizeChildren, aggregateChunkIds, aggregateHeat, parentLevel } from "./tree/tree.js";
 import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
@@ -997,86 +997,35 @@ export class MemoryEngine {
 
   /** MEM-4 — stage extracted candidates for review before they become memory. */
   public stageBlackboardCandidates(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
-    const store = this.blackboardStore();
-    if (!store) return [];
-    // MEM-13 — redact candidate content at the staging boundary, before it
-    // persists, so secrets never land in the blackboard.
-    const redacted = items.map((i) => ({
-      ...i,
-      candidate: { ...i.candidate, content: redactSensitiveMemoryText(i.candidate.content) },
-    }));
-    return store.stageBlackboardItems(userId, redacted);
+    return blackboardOps.stageBlackboardCandidates(this, userId, items);
   }
 
   /** MEM-4 — reconcile all pending items (dedup/score/threshold) and persist the verdicts. */
   public reconcilePendingBlackboard(userId: string): { reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] } {
-    const store = this.blackboardStore();
-    if (!store) return { reconciled: 0, duplicate: 0, rejected: 0, items: [] };
-    const decisions = reconcileBlackboard(store.getBlackboardItems(userId, "pending"));
-    for (const d of decisions) store.updateBlackboardItem(d.id, { status: d.status, score: d.score, conflictIds: d.conflictIds });
-    const count = (st: string) => decisions.filter((d) => d.status === st).length;
-    return { reconciled: count("reconciled"), duplicate: count("duplicate"), rejected: count("rejected"), items: store.getBlackboardItems(userId) };
+    return blackboardOps.reconcilePendingBlackboard(this, userId);
   }
 
   /** MEM-4 — promote a reconciled item to a cognitive record (with audit), linking its source chunk. */
   public commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string } {
-    const store = this.blackboardStore();
-    if (!store) return { committed: false, reason: "blackboard unavailable" };
-    const item = store.getBlackboardItem(itemId);
-    if (!item || item.userId !== userId) return { committed: false, reason: "not found" };
-    if (item.status === "committed") return { committed: true, recordId: item.committedRecordId ?? undefined };
-    if (item.status !== "reconciled") return { committed: false, reason: `status is "${item.status}"; reconcile before committing` };
-
-    const record = this.upsertEngineeringMemory({
-      userId,
-      type: item.candidate.type,
-      content: item.candidate.content,
-      priority: item.candidate.priority,
-      confidence: item.candidate.confidence,
-      metadata: { committedFromBlackboard: item.id, sourceChunkId: item.sourceChunkId },
-    });
-    store.updateBlackboardItem(item.id, { status: "committed", committedRecordId: record.id });
-    if (item.sourceChunkId) {
-      const linker = this.store as Partial<{ linkRecordSources(u: string, r: string, ids: string[]): void }>;
-      try { linker.linkRecordSources?.(userId, record.id, [item.sourceChunkId]); } catch { /* best-effort */ }
-    }
-    return { committed: true, recordId: record.id };
+    return blackboardOps.commitBlackboardItem(this, userId, itemId);
   }
 
   /** MEM-4 — drop an item without committing it. */
   public rejectBlackboardItem(userId: string, itemId: string): boolean {
-    const store = this.blackboardStore();
-    if (!store) return false;
-    const item = store.getBlackboardItem(itemId);
-    if (!item || item.userId !== userId) return false;
-    store.updateBlackboardItem(itemId, { status: "rejected" });
-    return true;
+    return blackboardOps.rejectBlackboardItem(this, userId, itemId);
   }
 
   /**
    * BLACKBOARD-REVIEW-UX (0.4.5) — un-drop a candidate that was rejected or
-   * deduped (`duplicate`) in error: move it back to `pending` and clear the
-   * stale score/conflict links so the next reconcile re-evaluates it from
-   * scratch. Only `rejected`/`duplicate` are restorable — a `committed` item is
-   * already a cognitive record (nothing to restore), and `pending`/`reconciled`
-   * aren't dropped. Returns a reason on no-op so the surface can explain why.
+   * deduped (`duplicate`) in error: move it back to `pending` for re-review.
    */
   public restoreBlackboardItem(userId: string, itemId: string): { restored: boolean; reason?: string; status?: BlackboardStatus } {
-    const store = this.blackboardStore();
-    if (!store) return { restored: false, reason: "blackboard store unavailable" };
-    const item = store.getBlackboardItem(itemId);
-    if (!item || item.userId !== userId) return { restored: false, reason: "no such item" };
-    if (item.status !== "rejected" && item.status !== "duplicate") {
-      return { restored: false, reason: `status is "${item.status}"; only rejected/duplicate items can be restored`, status: item.status };
-    }
-    store.updateBlackboardItem(itemId, { status: "pending", score: 0, conflictIds: [] });
-    return { restored: true, status: "pending" };
+    return blackboardOps.restoreBlackboardItem(this, userId, itemId);
   }
 
   /** MEM-4 — list staged items (optionally by status) for review. */
   public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
-    const store = this.blackboardStore();
-    return store ? store.getBlackboardItems(userId, status) : [];
+    return blackboardOps.reviewBlackboard(this, userId, status);
   }
 
   // ── Memory tree (MEM-5) ─────────────────────────────────────────────────
