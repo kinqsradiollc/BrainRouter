@@ -92,3 +92,12 @@ export function isConnectivityError(err: unknown): boolean {
   const msg = err instanceof Error ? `${err.message} ${(err as any).code ?? ''} ${(err as any).cause?.code ?? ''}` : String(err ?? '');
   return CONNECTIVITY_RE.test(msg);
 }
+
+/**
+ * Whether a failed LLM call should be retried: only for transient connectivity
+ * errors, and only while attempts remain (`attempt` is 1-based). Keeps the
+ * agent's LLM retry policy pure + testable.
+ */
+export function shouldRetryConnectivity(err: unknown, attempt: number, maxAttempts: number): boolean {
+  return attempt < maxAttempts && isConnectivityError(err);
+}

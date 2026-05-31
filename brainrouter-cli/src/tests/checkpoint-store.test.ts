@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt,
   readOfflineQueue, clearOfflineQueue, readRecoverable, isConnectivityError, shouldAutoReplayOffline,
+  shouldRetryConnectivity,
 } from '../state/checkpointStore.js';
 
 function ws(): { dir: string; cleanup: () => void } {
@@ -70,4 +71,15 @@ test('CLI-21 isConnectivityError: connectivity-shaped errors vs ordinary errors'
   assert.equal(isConnectivityError(Object.assign(new Error('x'), { code: 'ETIMEDOUT' })), true);
   assert.equal(isConnectivityError(new Error('Target content not found in file')), false);
   assert.equal(isConnectivityError(new Error('TypeError: cannot read property')), false);
+});
+
+test('shouldRetryConnectivity: retries transient network errors while attempts remain', () => {
+  const net = new Error('fetch failed');
+  // 3-attempt budget: retry on attempts 1 and 2, give up at 3.
+  assert.equal(shouldRetryConnectivity(net, 1, 3), true);
+  assert.equal(shouldRetryConnectivity(net, 2, 3), true);
+  assert.equal(shouldRetryConnectivity(net, 3, 3), false, 'no retry once attempts are exhausted');
+  // Never retry non-connectivity errors (context overflow, logic bugs, auth).
+  assert.equal(shouldRetryConnectivity(new Error('context length exceeded'), 1, 3), false);
+  assert.equal(shouldRetryConnectivity(new Error('401 Unauthorized'), 1, 3), false);
 });

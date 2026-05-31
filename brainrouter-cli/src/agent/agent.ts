@@ -14,6 +14,7 @@ import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
+import { shouldRetryConnectivity } from '../state/checkpointStore.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -1520,8 +1521,30 @@ export class Agent {
         }
         return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
       };
+      // Transient connectivity failures (fetch failed / ECONNRESET / socket
+      // hang up / timeouts) are retried with backoff before giving up — a
+      // network blip shouldn't kill a turn, a worker, or a child agent. This
+      // is why background workers (which are `silent`) were dying on the first
+      // hiccup while grok/claude-code/codex ride it out. Context-overflow and
+      // model-not-found errors are NOT connectivity errors, so they fall
+      // straight through to the dedicated recovery in the catch below.
+      const LLM_MAX_ATTEMPTS = 3;
+      const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            return await invokeLlm();
+          } catch (err: any) {
+            if (!shouldRetryConnectivity(err, attempt, LLM_MAX_ATTEMPTS)) throw err;
+            const delayMs = attempt === 1 ? 600 : 1800;
+            callbacks.onStatusUpdate(
+              `Network error reaching the model (${String(err?.message ?? err).slice(0, 80)}) — retrying ${attempt}/${LLM_MAX_ATTEMPTS - 1} in ${(delayMs / 1000).toFixed(1)}s...`,
+            );
+            await new Promise((r) => setTimeout(r, delayMs));
+          }
+        }
+      };
       try {
-        response = await invokeLlm();
+        response = await invokeLlmResilient();
       } catch (err: any) {
         // Layered LLM recovery. We detect context-
         // window-exceeded errors (the single failure mode where a fresh
@@ -1543,7 +1566,7 @@ export class Agent {
                 summary: r.summary,
               });
             }
-            response = await invokeLlm();
+            response = await invokeLlmResilient();
           } catch (retryErr: any) {
             throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
           }
@@ -1560,7 +1583,7 @@ export class Agent {
           this.setModel(fallback);
           callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
           try {
-            response = await invokeLlm();
+            response = await invokeLlmResilient();
           } catch (retryErr: any) {
             throw new Error(`LLM Execution failed after model fallback (${from} → ${fallback}): ${retryErr?.message ?? retryErr}`);
           }
