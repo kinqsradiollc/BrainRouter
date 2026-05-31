@@ -11,6 +11,7 @@ import type { WorkspaceInfo } from '../../config/workspace.js';
 import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
+import { resolveTierLadder, currentTier } from '../../runtime/tierLadder.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { resolveSandboxConfig, runShell } from '../../runtime/sandbox.js';
 import { parseBangCommand } from '../../runtime/bangCommand.js';
@@ -163,12 +164,23 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     const prefs = readPreferences(agent.workspaceRoot);
     const requested = prefs.statusline.split(',').map((s) => s.trim()).filter(Boolean);
     const segments = requested.filter(isKnownSegment).filter((segment) => segment !== 'effort');
+    // FOOTER-TELEMETRY — precompute the model tier (only when the user opted the
+    // segment in, to avoid the ladder lookup every refresh).
+    let tier: string | null = null;
+    if (segments.includes('tier')) {
+      try {
+        const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();
+        tier = currentTier(agent.getModel(), resolveTierLadder({ provider }));
+      } catch { tier = null; }
+    }
     const rendered = renderSegments(segments, {
       workspaceRoot: agent.workspaceRoot,
       sessionKey: agent.sessionKey,
       accessMode: agent.getAccessMode(),
       model: agent.getModel(),
       lastTurnUsage: agent.lastTurnUsage,
+      tier,
+      repairTotals: agent.getRepairTotals?.(),
       prDetector: () => detectGitHubPR(agent.workspaceRoot),
     });
     let branch: string | undefined;
