@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -30,7 +30,13 @@ test("DIST-1 .claude-plugin: plugin manifest + bundled mcp config are well-forme
   assert.equal(plugin.version, pkg.version, "plugin version tracks the mcp-server version");
   assert.ok(typeof plugin.description === "string" && plugin.description.length > 0);
 
-  const mcp = readJson("../.claude-plugin/.mcp.json");
+  // `.mcp.json` matches the repo's global gitignore rule (machine-specific MCP
+  // configs), so it must be force-added (`git add -f`) to ship with the plugin.
+  // A clear message beats a cryptic ENOENT when that's forgotten (the CI break
+  // that prompted this guard).
+  const mcpPath = path.join(pkgRoot, "../.claude-plugin/.mcp.json");
+  assert.ok(existsSync(mcpPath), "missing .claude-plugin/.mcp.json — it's gitignored by the global `.mcp.json` rule; commit it with `git add -f`");
+  const mcp = JSON.parse(readFileSync(mcpPath, "utf-8"));
   assert.ok(mcp.mcpServers?.brainrouter, "bundles the brainrouter MCP server");
   const args = mcp.mcpServers.brainrouter.args ?? [];
   assert.ok(args.some((a: string) => a.includes("@kinqs/brainrouter-mcp-server")), "launches the published package");
