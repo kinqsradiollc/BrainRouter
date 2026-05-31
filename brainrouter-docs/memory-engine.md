@@ -180,6 +180,46 @@ with $H_{\text{max}} = 4.0$, $\Delta_{\text{spike}} = 1.0$. Decay follows a
 10-minute half-life. When $H \ge 0.3$ the system pre-warms the skill
 context and injects its directives into the prompt.
 
+## Memory tree: source → topic → global
+
+Raw records and source chunks don't stay flat — they roll up into a
+**three-domain tree** so recall can return a summary instead of dozens of
+leaves, and so old detail can be sealed without being lost.
+
+| Domain | One tree per… | Leaves | Grown by | Seals into |
+|---|---|---|---|---|
+| **source** | source document (file / transcript / imported doc) | that document's chunks | ingestion | topic |
+| **topic** | topic / focus scene | scene-grouped record digests | scene autobuild | global |
+| **global** | (singleton) cross-topic rollup | topic digests | autobuild cap | — (top) |
+
+Lifecycle:
+
+1. **Ingest** — a file/transcript is chunked; a **source** tree is created with
+   those chunks as leaves (`reindexCodeSource` keeps it fresh — see CLI-REINDEX).
+2. **Seal** — when a bucket of leaves is hot/large enough, the autobuild
+   scheduler digests them into a summarized parent one domain up
+   (`source → topic → global`). `heatScore` and level thresholds drive when.
+3. **Recall** — the pipeline can expand a matched summary node down to its
+   leaves (drill-down) or stop at the digest, trading detail for tokens.
+
+The domain rules + thresholds live in one place — `memory/tree/policy.ts`
+(`parentDomain`, `treeAutobuildEnabled`) — kept deliberately separate from the
+recall ranking so routing and autobuild plug in without touching scoring.
+
+## Vault: a reviewable markdown mirror
+
+The vault (MEM-7) exports memory to a **deterministic, redacted markdown
+mirror** with a content-hash ledger, so re-export is idempotent (same record →
+same bytes → same hash → the ledger skips the write). Records land under
+`records/<id>.md`, tree nodes under their own files, each with YAML frontmatter.
+
+Every generated file carries a `generated: brainrouter-vault` frontmatter label
+(TREE-VAULT, 0.4.5) so a future reviewed **import/sync** — and any human editing
+the vault — can tell BrainRouter-authored mirror files apart from hand-written
+notes. The redaction boundary (MEM-13) applies before write, so secrets never
+reach the mirror. Reviewed write-back (importing edited vault files into memory
+behind a review gate) is the planned next step; today the vault is export-only.
+
 ## Federation policy decisions (0.4.0)
 
 These are the six open questions

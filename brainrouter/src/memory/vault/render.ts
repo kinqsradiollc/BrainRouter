@@ -5,7 +5,14 @@ import type { MemoryListItem, MemoryTreeNode } from "@kinqs/brainrouter-types";
  * 0.4.3 (MEM-7) — pure markdown renderers + content hash for the vault mirror.
  * Deterministic so re-export is idempotent: same record/node → same bytes →
  * same hash → the ledger skips the write.
+ *
+ * TREE-VAULT (0.4.5) — every rendered file carries a `generated` frontmatter
+ * label so a downstream import/sync (and humans) can tell BrainRouter-authored
+ * mirror files apart from hand-written ones.
  */
+
+/** Frontmatter marker stamped on every generated vault file. */
+export const VAULT_GENERATED_LABEL = "brainrouter-vault";
 
 export function vaultHash(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -26,6 +33,7 @@ export function renderRecordMarkdown(rec: MemoryListItem): string {
       skill: rec.skillTag || "",
       created: rec.createdTime || "",
       citations: rec.citationCount,
+      generated: VAULT_GENERATED_LABEL,
     }),
     "",
     rec.content ?? "",
@@ -43,6 +51,7 @@ export function renderTreeNodeMarkdown(node: MemoryTreeNode): string {
       sealed: node.sealedAt ?? "",
       heat: node.heatScore,
       chunks: node.sourceChunkIds.length,
+      generated: VAULT_GENERATED_LABEL,
     }),
     "",
     node.summaryMd ?? "",
