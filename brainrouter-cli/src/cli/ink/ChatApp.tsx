@@ -5,6 +5,7 @@ import Spinner from 'ink-spinner';
 import { SlashPalette, type SlashCommandDef } from './SlashPalette.js';
 import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 import { renderMarkdown } from './markdownRender.js';
+import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
 // 0.3.9 — show the model's max prompt-context window in the footer next
@@ -137,6 +138,9 @@ export interface ChatController {
   clearOverlay: () => void;
   /** Exit the chat app gracefully. */
   exit: () => void;
+  /** Update the live background-tasks panel (running workflows / workers /
+   *  agents). Pass an empty array to hide it. */
+  setBackgroundTasks: (tasks: BackgroundTask[]) => void;
 }
 
 export type ScrollbackEntry =
@@ -357,6 +361,9 @@ export function ChatApp({
   const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(initialBanner, initialOfflineWarning, initialHint));
   const nextIdRef = useRef(scrollback.length);
   const [composerValue, setComposerValue] = useState('');
+  // BG-TASKS-PANEL — running workflows/workers/agents, refreshed by runChat's
+  // ticker via controller.setBackgroundTasks. Empty → panel hidden.
+  const [bgTasks, setBgTasks] = useState<BackgroundTask[]>([]);
   const [phase, setPhase] = useState<'idle' | 'turn-running'>('idle');
   const [spinnerLabel, setSpinnerLabel] = useState<string>('');
   const [accessMode, setAccessMode] = useState<'read' | 'write' | 'shell'>(initialAccessMode);
@@ -621,6 +628,7 @@ export function ChatApp({
         if (r) r();
       },
       exit,
+      setBackgroundTasks: (tasks) => setBgTasks(tasks),
     });
     // Run exactly once — the controller's identity is stable across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -801,6 +809,29 @@ export function ChatApp({
         {scrollback.map((entry) => (
           <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} cols={cols} />
         ))}
+        {/* BG-TASKS-PANEL — fixed panel listing background actors that are
+            running right now (workflows / workers / child agents). Auto-hides
+            when nothing is running. Refreshed by runChat's ticker. */}
+        {bgTasks.length > 0 ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color="cyan" dimColor>{`⚙ background · ${summarizeTasks(bgTasks)}`}</Text>
+            <Box
+              flexDirection="column"
+              marginLeft={1}
+              paddingLeft={1}
+              borderStyle="single"
+              borderColor="cyan"
+              borderDimColor
+              borderTop={false}
+              borderRight={false}
+              borderBottom={false}
+            >
+              {formatBackgroundTasks(bgTasks).map((line, i) => (
+                <Text key={i} color="cyan" wrap="truncate-end">{line}</Text>
+              ))}
+            </Box>
+          </Box>
+        ) : null}
         {/* TIER A: transient live assistant + reasoning rows. The
             assistant streams here mid-turn; when the turn finishes,
             assistantDeltaEnd() clears these and runChat.tsx pushes the
