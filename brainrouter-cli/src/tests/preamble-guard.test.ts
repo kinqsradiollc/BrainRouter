@@ -45,3 +45,24 @@ test('looksLikeDeferredToolPromise: adjacency — a tool verb buried in prose do
   assert.equal(looksLikeDeferredToolPromise("I'll start by exploring the repo"), true);
   assert.equal(looksLikeDeferredToolPromise('Let me just run the tests'), true);
 });
+
+// PROMISE-THEN-ASK (the live "why does it stop?" report): the model promised a
+// parallel scan, then ended the turn with a clarifying question instead. The
+// promise must be detected (so the runTurn tracker arms), and the follow-up
+// question must NOT read as a preamble (which is exactly why the old guard
+// missed it — motivating the new promise-then-ask guard).
+test('promise-then-ask: the parallel-scan promise is a deferred-tool-promise', () => {
+  const promise = "I'll scan our CLI and the three peers in parallel, then build a comparison matrix.";
+  assert.equal(looksLikeDeferredToolPromise(promise), true);
+  assert.equal(looksLikeStalledPreamble(promise), true);
+});
+
+test('promise-then-ask: the follow-up clarifying question escapes both heuristics', () => {
+  const question = 'Absolutely — quick heads-up: which exact folder under openSrc/ is codex? I can auto-detect and proceed.';
+  // A question to the user is neither a stalled preamble nor a tool-promise, so
+  // the terminal guards based on those alone never fire — the runTurn
+  // promise-then-ask tracker (unfulfilled promise + no tools since) is what
+  // catches this case.
+  assert.equal(looksLikeStalledPreamble(question), false);
+  assert.equal(looksLikeDeferredToolPromise(question), false);
+});
