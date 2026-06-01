@@ -11,6 +11,7 @@ import {
   matchGlob,
   resolveWorkspacePath,
 } from '../agent/agent.js';
+import { parsePatchEnvelope, assessPatchSafety } from '../agent/applyPatch.js';
 import { findWorkspaceRoot } from '../config/workspace.js';
 import { withTempWorkspace } from './_helpers.js';
 
@@ -212,6 +213,88 @@ test('applyPatchEnvelope (MAS-P3) allows writes inside the ownership glob', () =
     assert.equal(parsed.applied.length, 1);
     assert.equal(fs.readFileSync('src/owned/a.txt', 'utf8'), 'new\n');
   });
+});
+
+test('CODEX-APPLY-PATCH-HARDEN atomic: a later op failure leaves NO earlier op applied', () => {
+  withTempWorkspace(() => {
+    fs.writeFileSync('a.txt', 'aaa\n');
+    fs.writeFileSync('b.txt', 'bbb\n');
+    // Op 1 (a.txt) is valid; op 2 (b.txt) has non-matching context → whole
+    // patch must abort with a.txt untouched (the partial-apply bug).
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: a.txt',
+      '-aaa',
+      '+AAA',
+      '*** Update File: b.txt',
+      '-does-not-match',
+      '+nope',
+      '*** End Patch',
+    ].join('\n');
+    assert.throws(() => applyPatchEnvelope(patch), /did not match/);
+    // Atomicity: a.txt must still hold its ORIGINAL content (op 1 not flushed).
+    assert.equal(fs.readFileSync('a.txt', 'utf8'), 'aaa\n');
+    assert.equal(fs.readFileSync('b.txt', 'utf8'), 'bbb\n');
+  });
+});
+
+test('CODEX-APPLY-PATCH-HARDEN atomic: an Add that collides aborts the whole patch', () => {
+  withTempWorkspace(() => {
+    fs.writeFileSync('keep.txt', 'orig\n');
+    fs.writeFileSync('exists.txt', 'already\n');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: keep.txt',
+      '-orig',
+      '+changed',
+      '*** Add File: exists.txt', // collision → must abort
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    assert.throws(() => applyPatchEnvelope(patch), /already exists/);
+    assert.equal(fs.readFileSync('keep.txt', 'utf8'), 'orig\n', 'earlier update must not have been flushed');
+  });
+});
+
+test('CODEX-APPLY-PATCH-HARDEN Update + Move to renames the file with the new content', () => {
+  withTempWorkspace(() => {
+    fs.writeFileSync('old.txt', 'v1\n');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: old.txt',
+      '*** Move to: new.txt',
+      '-v1',
+      '+v2',
+      '*** End Patch',
+    ].join('\n');
+    const parsed = JSON.parse(applyPatchEnvelope(patch));
+    assert.equal(parsed.applied[0].movedTo, 'new.txt');
+    assert.equal(fs.existsSync('old.txt'), false, 'source removed after move');
+    assert.equal(fs.readFileSync('new.txt', 'utf8'), 'v2\n');
+  });
+});
+
+test('CODEX-APPLY-PATCH-HARDEN parser tolerates *** End of File and reports safety', () => {
+  const ops = parsePatchEnvelope([
+    '*** Begin Patch',
+    '*** Add File: x.txt',
+    '+hello',
+    '*** End of File',
+    '*** Delete File: y.txt',
+    '*** End Patch',
+  ].join('\n'));
+  assert.equal(ops.length, 2);
+  const safety = assessPatchSafety(ops);
+  assert.equal(safety.adds, 1);
+  assert.equal(safety.deletes, 1);
+  assert.equal(safety.touchesVcs, false);
+  // A patch touching .git is flagged for approval routing.
+  const vcs = assessPatchSafety(parsePatchEnvelope([
+    '*** Begin Patch',
+    '*** Delete File: .git/hooks/pre-commit',
+    '*** End Patch',
+  ].join('\n')));
+  assert.equal(vcs.touchesVcs, true);
 });
 
 test('findWorkspaceRoot promotes BrainRouter package cwd to parent monorepo', () => {
