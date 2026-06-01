@@ -21,6 +21,7 @@ import {
   type ChildSessionRecord,
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { countRunningChildren, spawnSlotDecision } from './spawnSlots.js';
 import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
@@ -642,6 +643,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   }
   if (currentDepth >= maxDepth) {
     throw new Error(`Spawn depth cap reached (${currentDepth}/${maxDepth}). Reduce agent nesting or raise cli.maxSpawnDepth in ~/.config/brainrouter/config.json.`);
+  }
+  // CODEX-AGENT-LIFECYCLE — spawn slots: cap the number of children THIS parent
+  // has running concurrently (breadth) so it can't fan out unbounded agents that
+  // exhaust the LLM semaphore and leave orphans drifting. Scoped to the parent's
+  // session key (Codex's per-controller slots) and counts `running` only, so an
+  // orphan `pending` from a crashed spawn never wedges the cap.
+  {
+    const mine = listSessions(ctx.workspaceRoot).filter((s) => s.parentSessionKey === ctx.parentSessionKey);
+    const running = countRunningChildren(mine);
+    const slot = spawnSlotDecision(running, getCliKnobs().maxConcurrentChildren);
+    if (!slot.allow) throw new Error(slot.reason);
   }
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
