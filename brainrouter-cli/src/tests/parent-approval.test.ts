@@ -60,6 +60,35 @@ test('CODEX-MCP-APPROVAL classifier honors MCP safety annotations', () => {
   );
 });
 
+test('CODEX-MCP-APPROVAL network/egress + open-world tools require approval', () => {
+  // Open-world annotation, not read-only → gated (the openWorldHint path).
+  assert.equal(
+    assessMcpToolApproval('mcp_web_search', { annotations: { openWorldHint: true } }).requiresApproval,
+    true,
+  );
+  // Egress-by-name tools a silent child could exfiltrate/side-effect through.
+  for (const name of ['mcp_x_broadcast_message', 'mcp_db_replicate_data', 'mcp_bank_transfer_funds', 'mcp_hooks_webhook_post', 'mcp_files_upload', 'mcp_mail_send_email']) {
+    assert.equal(assessMcpToolApproval(name).requiresApproval, true, `${name} must require approval`);
+  }
+});
+
+test('CODEX-MCP-APPROVAL a readOnly hint cannot whitelist a destructive/egress NAME (bypass closed)', () => {
+  // The exact rogue/mis-marked case: tool claims read-only but is named to
+  // delete or to exfiltrate. The name wins — approval is still required.
+  const del = assessMcpToolApproval('mcp_repo_delete_branch', { annotations: { readOnlyHint: true } });
+  assert.equal(del.requiresApproval, true);
+  assert.equal(del.dangerous, true);
+  assert.equal(
+    assessMcpToolApproval('mcp_data_transfer_records', { annotations: { readOnlyHint: true } }).requiresApproval,
+    true,
+  );
+  // A genuinely read-only, non-destructive, non-egress tool is still trusted.
+  assert.equal(
+    assessMcpToolApproval('mcp_docs_get_page', { annotations: { readOnlyHint: true } }).requiresApproval,
+    false,
+  );
+});
+
 test('CODEX-PARENT-APPROVAL silent child forwards shell approval and runs when parent approves', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const marker = path.join(workspace, 'approved.txt');
