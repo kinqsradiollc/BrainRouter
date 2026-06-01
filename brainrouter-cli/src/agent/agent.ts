@@ -953,9 +953,11 @@ export class Agent {
     // agent reaches for spawn_agents instead of a single sequential tool call.
     // Skipped for child agents (silent) — they've already been narrowed by
     // their parent.
+    let fanOutHinted = false;
     if (!this.silent) {
       const { suggest, intent } = shouldSuggestFanOut(prompt);
       if (suggest) {
+        fanOutHinted = true;
         this.replaceTaggedSystemMessage('fanout-hint', buildFanOutHint(prompt, intent));
         callbacks.onStatusUpdate(`Fan-out hint injected (signals: ${intent.signals.join(', ')})`);
         // Mirror onMemoryEvent's shape so REPL has one render path — but use
@@ -1013,6 +1015,13 @@ export class Agent {
     // preamble heuristic) — the model promised work then stalled/over-asked.
     // -1 = no outstanding promise. Shares PREAMBLE_GUARD_MAX's budget.
     let promisedToolsAtCount = -1;
+    // Fan-out follow-through guard. When the breadth detector injected a
+    // "default to spawn_agents" hint but the turn ends having spawned ZERO
+    // children, the model accepted a shallow single-thread answer instead of
+    // the parallel fan-out the task wanted. Nudge ONCE to actually spawn (or
+    // justify skipping). Bounded so it can't loop.
+    let fanOutGuardFired = 0;
+    const FANOUT_GUARD_MAX = 1;
     // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
     // goal_complete — so a turn that concludes WITHOUT goal_complete (just
     // delivers the answer) never reconciles the plan, leaving it stale (the
@@ -1601,6 +1610,35 @@ export class Agent {
           this.chatHistory.push(guardMsg);
           this.recordTranscript(guardMsg);
           callbacks.onStatusUpdate(`Recovery: promised-tools-then-asked (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — steering to discovery`);
+          continue;
+        }
+
+        // Fan-out follow-through guardrail. The breadth detector recommended a
+        // parallel `spawn_agents` fan-out for this turn, but the model is ending
+        // the turn having spawned NO children — i.e. it delivered a shallow
+        // single-thread answer (or "I'll inspect in parallel" then a summary)
+        // instead of actually fanning out. Nudge ONCE to spawn for real, or to
+        // state explicitly why fan-out doesn't apply. Bounded → never loops.
+        if (
+          fanOutHinted &&
+          fanOutGuardFired < FANOUT_GUARD_MAX &&
+          spawnedChildIdsThisTurn.size === 0
+        ) {
+          fanOutGuardFired += 1;
+          const correction = [
+            'Runtime fan-out follow-through guardrail tripped.',
+            'A fan-out was recommended for this broad/multi-target task, but you are ending the turn having spawned ZERO child agents — that is a shallow single-thread answer, not the parallel coverage the task wanted.',
+            '',
+            'Do ONE of these now, in THIS response:',
+            '1. **Actually fan out** — emit `spawn_agents` with 3–5 children covering distinct angles/targets (one child per comparison target / subsystem), then `wait_agents` and synthesize. Discover targets yourself (`list_dir`, `glob_files`) — do not ask the user for paths you can find.',
+            '2. **Justify skipping** — if the task genuinely does not benefit from parallel children (it is small, or the targets are not separable), say so in one sentence and deliver the complete answer.',
+            '',
+            'Do NOT just promise "I\'ll inspect in parallel" and stop, and do NOT hand back a thin summary while offering to "go deeper if you want" — deliver the deep result now.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Recovery: fan-out-hinted-but-no-spawn (${fanOutGuardFired}/${FANOUT_GUARD_MAX}) — forcing follow-through`);
           continue;
         }
 
