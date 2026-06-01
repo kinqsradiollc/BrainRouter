@@ -572,6 +572,17 @@ export class MemoryRecallPipeline {
       ]),
     );
 
+    // MEM-ACCURACY (0.4.7) — within the selected set, sink records whose source
+    // code changed since capture (provenance document marked stale) so FRESH
+    // memories surface first. Stable (V8 sort) → preserves the ranked order
+    // inside each group. The "⚠ source changed — verify" annotation (below) is
+    // the primary signal; this just stops a stale memory leading the block.
+    topResults.sort((a, b) => {
+      const sa = refsByRecord.get(a.record.record_id)?.staleVsCode ? 1 : 0;
+      const sb = refsByRecord.get(b.record.record_id)?.staleVsCode ? 1 : 0;
+      return sa - sb;
+    });
+
     // 5. Format for context
     const memoryLines = topResults.map(({ record }) => {
       const tag = record.scene_name ? `${record.type}|${record.scene_name}` : record.type;
@@ -580,7 +591,7 @@ export class MemoryRecallPipeline {
         line += ` (skill: ${record.skill_tag})`;
       }
       // MEM-17 — one-hop drill-down hint (source chunk ids + tree node), if any.
-      const hint = formatRefHint(refsByRecord.get(record.record_id) ?? { sourceChunkIds: [], treeNodeId: null });
+      const hint = formatRefHint(refsByRecord.get(record.record_id) ?? { sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
       if (hint) line += `\n${hint}`;
       return line;
     });
@@ -652,6 +663,8 @@ export class MemoryRecallPipeline {
         // MEM-17 — expansion handles; omit empties so the shape stays lean.
         ...(refs && refs.sourceChunkIds.length > 0 ? { sourceChunkIds: refs.sourceChunkIds } : {}),
         ...(refs && refs.treeNodeId ? { treeNodeId: refs.treeNodeId } : {}),
+        // MEM-ACCURACY — flag records whose source code changed since capture.
+        ...(refs && refs.staleVsCode ? { staleVsCode: true } : {}),
       };
     });
 
