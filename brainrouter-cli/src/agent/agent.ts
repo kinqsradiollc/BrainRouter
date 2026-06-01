@@ -1018,10 +1018,11 @@ export class Agent {
     // Fan-out follow-through guard. When the breadth detector injected a
     // "default to spawn_agents" hint but the turn ends having spawned ZERO
     // children, the model accepted a shallow single-thread answer instead of
-    // the parallel fan-out the task wanted. Nudge ONCE to actually spawn (or
-    // justify skipping). Bounded so it can't loop.
+    // the parallel fan-out the task wanted. Nudge to actually spawn (or justify
+    // skipping). Bounded so it can't loop — 2 nudges is enough to push a weaker
+    // model that ignored the first prod off the single-thread default.
     let fanOutGuardFired = 0;
-    const FANOUT_GUARD_MAX = 1;
+    const FANOUT_GUARD_MAX = 2;
     // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
     // goal_complete — so a turn that concludes WITHOUT goal_complete (just
     // delivers the answer) never reconciles the plan, leaving it stale (the
