@@ -343,6 +343,25 @@ test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not',
   }
 });
 
+test('breadthHint: multi-target comparisons trigger fan-out (the live "why no spawn?" miss)', async () => {
+  const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  // The exact prompt that scored 0 and never fanned out — an inherently
+  // parallel "compare N codebases" task (one explorer per target).
+  const comparisons = [
+    'can you help me do a full compairison between our brainrouter-cli vs codex, grok-cli and openhuman?',
+    'compare brainrouter-cli vs codex',
+    'benchmark our recall pipeline against the alternatives',
+    'contrast the three approaches and tell me which is best',
+    'review codex, grok-cli and openhuman', // enumerated ≥3 targets + verb
+  ];
+  for (const p of comparisons) {
+    const r = shouldSuggestFanOut(p);
+    assert.ok(r.suggest, `expected fan-out for comparison: "${p}" (score=${r.intent.score}, signals=${r.intent.signals.join(',')})`);
+  }
+  // A trivial two-thing compare with an explicit self-veto must still NOT fan out.
+  assert.ok(!shouldSuggestFanOut('compare these two lines yourself, no fan-out').suggest);
+});
+
 test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even at high score', async () => {
   const { shouldSuggestFanOut, detectFanOutVeto } = await import('../prompt/breadthHint.js');
   // These prompts ALL score high on breadth (verb-object-broad, every,
