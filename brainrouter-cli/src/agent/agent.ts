@@ -40,13 +40,15 @@ import { ownershipWriteViolation } from '../orchestration/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
 import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
-import { applyPatchEnvelope } from './applyPatch.js';
+import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
 export { applyPatchEnvelope } from './applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
 import { LOCAL_TOOLS } from './tools/specs.js';
 import { normalizeToolName } from './tools/names.js';
 import { registryAllowedTools } from './tools/registry.js';
+import { localToolExecutor, localToolSpecsFromExecutors } from './tools/executors.js';
+import { assessMcpToolApproval } from './mcpApproval.js';
 export { LOCAL_TOOLS } from './tools/specs.js';
 export { normalizeToolName } from './tools/names.js';
 import { applyToolScope, rankAndCapTools } from '../orchestration/toolBudget.js';
@@ -126,6 +128,7 @@ import {
   suggestSimilarToolName,
   looksLikeStalledPreamble,
   looksLikeDeferredToolPromise,
+  mentionsImminentToolWork,
 } from './toolCallRecovery.js';
 
 const execPromise = promisify(exec);
@@ -442,6 +445,12 @@ export interface AgentOptions {
    * this instead of the session-resolved `/effort` for its turns.
    */
   effortOverride?: EffortLevel;
+  /**
+   * CODEX-PARENT-APPROVAL — silent children cannot own terminal prompts. When
+   * set, shell approval requests that would otherwise fail closed are forwarded
+   * to the parent agent/UI for a decision.
+   */
+  confirmToolApproval?: (info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean; arguments?: Record<string, unknown> }) => Promise<boolean>;
 }
 
 
@@ -649,6 +658,7 @@ export class Agent {
   private lastBudgetHiddenTools = new Set<string>();
   /** 0.4.x-5 — per-child reasoning-effort override; falls back to session /effort. */
   private effortOverride?: EffortLevel;
+  private confirmToolApproval?: AgentOptions['confirmToolApproval'];
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -679,6 +689,7 @@ export class Agent {
     this.effortOverride = options.effortOverride;
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
+    this.confirmToolApproval = options.confirmToolApproval;
   }
 
   /** Expose for orchestration so spawn_agent can record the parent linkage. */
@@ -688,6 +699,20 @@ export class Agent {
   /** Internal — used by spawn_agent to record which parent dispatched us. */
   public setParentAgentId(id: string | undefined): void {
     this.parentAgentId = id;
+  }
+
+  private async confirmSilentChildToolApproval(info: {
+    tool: string;
+    command?: string;
+    path?: string;
+    summary?: string;
+    reason: string;
+    dangerous?: boolean;
+  }): Promise<string | null> {
+    if (!this.silent || !this.confirmToolApproval) return null;
+    const approved = await this.confirmToolApproval(info);
+    if (!approved) return `Tool "${info.tool}" rejected by parent approval.`;
+    return null;
   }
 
   private isModelVisibleMcpTool(tool: any): boolean {
@@ -821,7 +846,7 @@ export class Agent {
     // pick four overlapping tools at random instead of consistently using
     // task_agent.
     const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
-    const filteredLocalTools = LOCAL_TOOLS.filter(
+    const filteredLocalTools = localToolSpecsFromExecutors().filter(
       (t) => allowed.has(t.name) && !MODEL_HIDDEN_TOOLS.has(t.name),
     );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
@@ -860,6 +885,13 @@ export class Agent {
     // typed path AND the escape hatch.
     const delegateTools = synthesizeDelegateTools(listAgentDefinitions(this.workspaceRoot));
     const allTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
+    const mcpToolByName = new Map<string, any>();
+    for (const tool of mcpTools) {
+      const name = String(tool?.name ?? '');
+      if (name) mcpToolByName.set(name, tool);
+      const rawName = typeof tool?.__rawName === 'string' ? tool.__rawName : '';
+      if (rawName) mcpToolByName.set(rawName, tool);
+    }
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools, ${delegateTools.length} delegate tools, and ${mcpTools.length} MCP tools.`);
 
     // Auto-compact pre-turn check.
@@ -1057,6 +1089,26 @@ export class Agent {
                 throw new Error(
                   'Delegation policy requires approval but no interactive terminal is attached. ' +
                     'Set /delegation-policy auto to spawn non-interactively.',
+                );
+              }
+              throw err;
+            }
+          },
+      confirmToolApproval: this.silent
+        ? undefined
+        : async (info) => {
+            const command = info.command ? `\n  Command: ${info.command}` : '';
+            const q =
+              `Child agent approval gate — allow ${info.role} (${info.childId}) to run ${info.tool}?` +
+              command +
+              `\n  Reason: ${info.reason}`;
+            try {
+              return await askYesNo(q, false);
+            } catch (err) {
+              if (err instanceof NoTTYError) {
+                throw new Error(
+                  'Child tool approval requires an interactive terminal, but none is attached. ' +
+                    'Run the command in the parent agent, or pre-approve it with cli.commandAllowlist.',
                 );
               }
               throw err;
@@ -1393,7 +1445,14 @@ export class Agent {
       // Record the tool count so the terminal guard can tell whether the
       // promise was actually kept (tools ran after it) or the turn stalled /
       // pivoted to asking the user instead.
-      if ((!response.toolCalls || response.toolCalls.length === 0) && looksLikeDeferredToolPromise(response.content)) {
+      if (
+        (!response.toolCalls || response.toolCalls.length === 0) &&
+        (looksLikeDeferredToolPromise(response.content) || mentionsImminentToolWork(response.content))
+      ) {
+        // Arm on a strict start-anchored preamble OR a lenient "buried" forward
+        // promise (a long message that ends "…I'll proceed by locating … and
+        // run the comparison"), so the terminal guard catches the stall either
+        // way.
         promisedToolsAtCount = this.lastTurnToolCalls;
       } else if (response.toolCalls && response.toolCalls.length > 0) {
         promisedToolsAtCount = -1; // a real tool batch fulfils any prior promise
@@ -1797,6 +1856,31 @@ export class Agent {
             // key the poller/registry actually used (otherwise the read
             // misses the federation-key inbox and comes back empty).
             const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
+            const mcpApproval = assessMcpToolApproval(name, mcpToolByName.get(name));
+            if (mcpApproval.requiresApproval) {
+              if (this.silent) {
+                if (!this.confirmToolApproval) {
+                  throw new Error(`MCP tool "${name}" requires approval but this silent session has no parent approver: ${mcpApproval.reason}.`);
+                }
+                const approved = await this.confirmToolApproval({
+                  tool: name,
+                  arguments: mcpArgs,
+                  reason: mcpApproval.reason,
+                  dangerous: mcpApproval.dangerous,
+                });
+                if (!approved) {
+                  throw new Error(`MCP tool "${name}" rejected by parent approval.`);
+                }
+              } else {
+                const approved = await askYesNo(
+                  `${chalk.yellow('⚠️  MCP tool approval request:')} ${chalk.cyan(name)}${mcpApproval.dangerous ? chalk.red(' (potentially destructive)') : ''}\nReason: ${mcpApproval.reason}\nAllow MCP tool call? (y/N) `,
+                  false,
+                );
+                if (!approved) {
+                  throw new Error(`MCP tool "${name}" rejected by user.`);
+                }
+              }
+            }
             const mcpRes = await this.mcpClient.callTool(name, mcpArgs);
             if (mcpRes.isError) {
               isError = true;
@@ -2096,6 +2180,17 @@ export class Agent {
   }
 
   private async executeLocalTool(name: string, args: Record<string, any>): Promise<string> {
+    const executor = localToolExecutor(name);
+    if (executor) {
+      return executor.handle({
+        args,
+        legacyHandle: (toolName, toolArgs) => this.executeLocalToolLegacy(toolName, toolArgs),
+      });
+    }
+    return this.executeLocalToolLegacy(name, args);
+  }
+
+  private async executeLocalToolLegacy(name: string, args: Record<string, any>): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
     // The Agent might have been constructed with a workspace different from
     // the launching shell's cwd (e.g. /resume from another dir), and cwd can
@@ -2133,6 +2228,13 @@ export class Agent {
         const resolved = resolveHere(args.path, { forWrite: true });
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
+        const parentDenial = await this.confirmSilentChildToolApproval({
+          tool: 'write_file',
+          path: String(args.path ?? ''),
+          summary: `write ${String(args.content ?? '').length} chars`,
+          reason: 'silent child agent requested a file write',
+        });
+        if (parentDenial) return parentDenial;
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
@@ -2163,6 +2265,13 @@ export class Agent {
         }
 
         const updated = content.replace(target, replacement);
+        const parentDenial = await this.confirmSilentChildToolApproval({
+          tool: 'edit_file',
+          path: String(args.path ?? ''),
+          summary: `replace ${String(target ?? '').length} chars with ${String(replacement ?? '').length} chars`,
+          reason: 'silent child agent requested a file edit',
+        });
+        if (parentDenial) return parentDenial;
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
         const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
@@ -2259,8 +2368,21 @@ export class Agent {
         const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
         const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
         const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
+        let parentApproved = false;
         if (approval === 'deny-silent') {
-          if (isDangerousCommand(cmd)) {
+          const dangerous = isDangerousCommand(cmd);
+          if (this.confirmToolApproval) {
+            const approved = await this.confirmToolApproval({
+              tool: 'run_command',
+              command: cmd,
+              dangerous,
+              reason: dangerous
+                ? 'dangerous command requested by a silent child agent'
+                : 'silent child agent shell command requires parent approval',
+            });
+            if (!approved) return 'Command execution rejected by parent approval.';
+            parentApproved = true;
+          } else if (dangerous) {
             return (
               `Command execution denied: dangerous command in a silent child agent. ` +
               `Silent children can't answer the y/N prompt, so destructive commands ` +
@@ -2268,17 +2390,18 @@ export class Agent {
               `Have a parent agent run this command, or split it into a safer ` +
               `equivalent.`
             );
+          } else {
+            return (
+              `Command execution denied: silent child agents may not run shell ` +
+              `without parent opt-in. Switch the session to \`/mode fast\` (or set ` +
+              `the legacy \`autoApproveShell\` pref) to let silent children run ` +
+              `safe commands, or have a parent agent run this command.`
+            );
           }
-          return (
-            `Command execution denied: silent child agents may not run shell ` +
-            `without parent opt-in. Switch the session to \`/mode fast\` (or set ` +
-            `the legacy \`autoApproveShell\` pref) to let silent children run ` +
-            `safe commands, or have a parent agent run this command.`
-          );
         }
-        if (approval === 'auto-approve') {
+        if (approval === 'auto-approve' || parentApproved) {
           const tag = this.silent
-            ? 'Auto-approved (silent child)'
+            ? (parentApproved ? 'Parent-approved (silent child)' : 'Auto-approved (silent child)')
             : goalIsActive && prefs.executionMode !== 'fast'
               ? 'Auto-approved (/goal active)'
               : 'Auto-approved';
@@ -2439,6 +2562,17 @@ export class Agent {
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
         if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
+        const ops = parsePatchEnvelope(patch);
+        const safety = assessPatchSafety(ops);
+        const parentDenial = await this.confirmSilentChildToolApproval({
+          tool: 'apply_patch',
+          summary: `${safety.adds} add, ${safety.updates} update, ${safety.deletes} delete, ${safety.renames} rename`,
+          reason: safety.touchesVcs
+            ? 'silent child agent requested a patch touching VCS metadata'
+            : 'silent child agent requested a patch',
+          dangerous: safety.touchesVcs || safety.deletes > 0,
+        });
+        if (parentDenial) return parentDenial;
         // 0.4.x-3b — capture each target file's prior content before the patch
         // applies (undo log for /rewind --files). Parse the envelope's file
         // headers (`*** Add/Update/Delete File: <path>`).
