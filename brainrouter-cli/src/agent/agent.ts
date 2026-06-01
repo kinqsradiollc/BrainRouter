@@ -46,6 +46,7 @@ export { applyPatchEnvelope } from './applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
 import { LOCAL_TOOLS } from './tools/specs.js';
 import { normalizeToolName } from './tools/names.js';
+import { registryAllowedTools } from './tools/registry.js';
 export { LOCAL_TOOLS } from './tools/specs.js';
 export { normalizeToolName } from './tools/names.js';
 import { applyToolScope, rankAndCapTools } from '../orchestration/toolBudget.js';
@@ -747,24 +748,14 @@ export class Agent {
   }
 
   private allowedToolsForAccess(): Set<string> {
-    // Lifecycle / inspection tools are always available regardless of access
-    // mode — they don't touch the workspace and the agent needs them to end
-    // a goal cleanly (goal_complete / goal_blocked) or observe state.
-    const readOnly = new Set([
-      'read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'lsp', 'update_plan',
-      'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
-      'read_agent_transcript', 'close_agent', 'route_task',
-      'goal_complete', 'goal_blocked',
-      // ask_user_choice doesn't touch the workspace — it's an interaction
-      // primitive, so it stays available in every access mode (and is gated
-      // structurally by activeReadline / isTTY in the helper itself).
-      'ask_user_choice',
-    ]);
-    const writeAdds = new Set(['write_file', 'edit_file', 'apply_patch']);
-    const shellAdds = new Set(['run_command']);
-    if (this.accessMode === 'read') return readOnly;
-    if (this.accessMode === 'write') return new Set([...readOnly, ...writeAdds]);
-    return new Set([...readOnly, ...writeAdds, ...shellAdds]);
+    // CODEX-TOOL-REGISTRY — the exposure set is GENERATED from the single
+    // tool registry (`agent/tools/registry.ts`), which also declares each
+    // tool's action kind + parallel-safety. A guard test keeps the registry,
+    // the execution policy, and the parallel whitelist from drifting (the
+    // class of bug REVIEW-FIX fixed). Read-tier tools (incl. lifecycle +
+    // orchestration observers) are always available; write/shell add their
+    // tiers on top.
+    return registryAllowedTools(this.accessMode);
   }
 
   async runTurn(prompt: string, callbacks: RunTurnCallbacks): Promise<string> {
