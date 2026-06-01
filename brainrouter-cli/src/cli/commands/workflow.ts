@@ -25,6 +25,8 @@ import type { CommandContext } from './_context.js';
 import { SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
 import { listFilesystemSkills, mergeSkillLists, skillSearchRoots, type SkillListItem } from '../../prompt/skillCatalog.js';
 import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from './_helpers.js';
+import { collectReviewDiff } from '../../runtime/gitContext.js';
+import { buildReviewPrompt } from './reviewPrompt.js';
 
 // Promise-flavored exec for case bodies that shell out.
 const execPromise = promisify(exec);
@@ -486,80 +488,41 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const fix = args.includes('--fix');
       const parsed = parseForceFlag(args.filter((a) => a !== '--fix'));
       const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
+      const accessMode = agent.getAccessMode();
+      // REVIEW-FIX — `--fix` mutates the tree, so it needs write/shell up front.
+      if (fix && accessMode === 'read') {
+        console.log(chalk.red('\n/review --fix needs write or shell access (current: read).'));
+        console.log(chalk.gray('  Switch with /policy workspace (or /access write), then re-run.\n'));
+        return true;
+      }
+      // REVIEW-FIX — inject `git diff HEAD` so the model never spawns a child
+      // just to read the diff (the collapse foot-gun). Default scope == the diff.
+      const usingDiffScope = parsed.rest.join(' ').trim() === '';
+      const reviewDiff = await collectReviewDiff(agent.workspaceRoot);
+      if (usingDiffScope && !reviewDiff.hasChanges) {
+        console.log(chalk.yellow('\nNothing to review — `git diff HEAD` is empty.'));
+        console.log(chalk.gray('  Make or stage some changes, or pass an explicit scope: /review src/foo.ts\n'));
+        return true;
+      }
       const reviewTitle = fix ? `Review+fix: ${scope}` : `Review: ${scope}`;
       const meta = createWorkflow(agent.workspaceRoot, { title: reviewTitle, kind: 'review', sessionKey: agent.sessionKey });
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
-      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${fix ? ' (--fix: will apply + verify surviving fixes)' : ''}`));
-      // Workflow: Triage → Summary → 4 parallel reviewers (2 conventions + 2
-      // bug-hunters) → validation pass → HIGH SIGNAL filter → report (--fix:
-      // apply surviving fixes + re-verify).
-      const reviewSteps = [
-        '# Code Review',
-        '',
-        `Provide a code review for: ${scope}`,
-        '',
-        '**Agent assumptions (applies to all subagents launched here):**',
-        '- All tools are functional and will work without error. Do not test tools or make exploratory calls.',
-        '- Only call a tool if it is required to complete the task. Every tool call should have a clear purpose.',
-        '',
-        '## Required memory-first opening',
-        'Run `memory_search` for similar past reviews and `memory_file_history` for any files touched by this diff. Pass relevant record IDs to children via `seedRecordIds`.',
-        '',
-        `Workflow slug: \`${meta.slug}\`. Output file: \`${reportPath}\`.`,
-        '',
-        '## Step 1: Triage',
-        'Use `task_agent` (role=explorer, fast) to check whether this review should proceed: is the scope closed/draft, trivial, or already reviewed? If so, stop here and tell the user.',
-        '',
-        '## Step 2: Locate guidelines',
-        'Use `task_agent` (role=explorer) to return the list of file paths (not contents) of ALL relevant guideline files: root `AGENT.md`/`AGENTS.md`/`CLAUDE.md`, and any of those in directories containing files modified by this scope.',
-        '',
-        '## Step 3: Summary',
-        'Use `task_agent` (role=explorer) to read the diff and return a summary of the changes.',
-        '',
-        '## Step 4: Parallel review (4 agents in ONE message)',
-        'Launch 4 `task_agent` calls IN PARALLEL — single assistant message, four tool_calls:',
-        '- Agents 1+2 (CLAUDE.md/AGENTS.md compliance, role=reviewer access=read): audit changes for guideline compliance. When evaluating compliance for a file, only consider guideline files that share a path with the file or its parents.',
-        '- Agents 3+4 (bug hunters, role=reviewer access=read): scan for obvious bugs and incorrect logic in the diff. Focus only on the diff itself without reading extra context. Flag only significant bugs; ignore nitpicks and likely false positives. Do not flag issues you cannot validate from the diff alone.',
-        '',
-        '**HIGH SIGNAL ONLY filter (CRITICAL):** Only flag issues where:',
-        '- Code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references).',
-        '- Code will definitely produce wrong results regardless of inputs (clear logic errors).',
-        '- Clear, unambiguous guideline violations where you can quote the exact rule being broken.',
-        '',
-        '**Do NOT flag:**',
-        '- Code style or quality concerns.',
-        '- Potential issues that depend on specific inputs or state.',
-        '- Subjective suggestions or improvements.',
-        '- Pre-existing issues.',
-        '- Issues a linter will catch (do not run the linter to verify).',
-        '- General code-quality concerns (test coverage, security) unless explicitly required by AGENTS.md.',
-        '',
-        'If you are not certain an issue is real, do not flag it. False positives erode trust and waste reviewer time.',
-        '',
-        '## Step 5: Validate',
-        'For each issue found in Step 4, launch a parallel `task_agent` (role=reviewer access=read) to validate the claim. Each validator gets the issue description and confirms it is truly an issue with high confidence by re-checking the relevant code.',
-        '',
-        '## Step 6: Filter',
-        'Drop any issue that did not validate in Step 5. The survivors are the high-signal issues.',
-        '',
-        '## Step 7: Output',
-        `\`write_file\` to \`${reportPath}\`: severity-ordered findings (Critical / Important) with file:line citations and concrete fix suggestions. If no issues survived filtering, the report says "No issues found. Checked for bugs and guideline compliance."`,
-      ];
-      if (fix) {
-        reviewSteps.push(
-          '',
-          '## Step 8: Apply fixes (--fix)',
-          'For each surviving high-signal issue, apply the **minimal** fix that resolves exactly that finding:',
-          '- Edit in place (`write_file`); keep each fix tightly scoped to the cited `file:line`. Do NOT refactor unrelated code, rename things, or fix issues you did not flag.',
-          '- After applying ALL fixes, run the project build + tests via `run_command` (e.g. the workspace `npm run build` / test script) to confirm nothing regressed.',
-          '- If the build/tests break, identify the offending fix, revert just that one edit, and mark it `needs-manual` in the report with the failure reason. Never leave the tree in a broken state.',
-          '',
-          'Then update the report: for each finding, append a `Fixed` / `needs-manual (reason)` status. Summarize ≤ 15 lines in chat: what was fixed, what was left for the human (and why), and the final build/test result.',
-        );
-      } else {
-        reviewSteps.push('Then summarize ≤ 15 lines in chat referencing the file. Do NOT edit reviewed files.');
-      }
-      await runSkillCommand(agent, mcpClient, command, scope, reviewSteps.join('\n'), ctx.repl.runAgentTurn);
+      const modeNote = accessMode === 'read' ? ' (read mode: findings printed to chat, not written)' : fix ? ' (--fix: will apply + verify surviving fixes)' : '';
+      console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${modeNote}`));
+      // REVIEW-FIX — one authoritative prompt (no generic-skill double-path):
+      // the diff-injected, access-aware fan-out workflow, run directly. The
+      // skill is latched only so memory recall/capture see the review context.
+      const reviewPrompt = buildReviewPrompt({
+        scope,
+        slug: meta.slug,
+        reportPath,
+        diff: reviewDiff.diff,
+        diffTruncated: reviewDiff.truncated,
+        accessMode,
+        fix,
+      });
+      agent.activeSkill = SLASH_TO_SKILL['/review'] ?? 'code-review-and-quality';
+      ctx.repl.runAgentTurn(reviewPrompt);
       return true;
     }
     case '/review-auto':
