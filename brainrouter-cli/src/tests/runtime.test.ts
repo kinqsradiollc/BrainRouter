@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/loopRunner.js';
-import { resolveSandboxConfig } from '../runtime/exec/sandbox.js';
+import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial } from '../runtime/exec/sandbox.js';
 import { startSpan, traceEnabled } from '../runtime/tracing.js';
 import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/exec/dangerousCommand.js';
 
@@ -122,9 +122,50 @@ test('resolveSandboxConfig reflects cli.sandbox knobs', async () => {
     assert.equal(cfg.enabled, true);
     assert.deepEqual(cfg.readPaths, ['/usr/local', '/opt']);
     assert.equal(cfg.allowNetwork, false);
+    // CODEX-SANDBOX-FAILCLOSED — default fail-closed when no mode is configured.
+    assert.equal(cfg.unavailableMode, 'deny');
   } finally {
     _resetCliKnobsCache();
   }
+});
+
+test('CODEX-SANDBOX-FAILCLOSED resolveSandboxConfig honours cli.sandboxUnavailable', async () => {
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
+  try {
+    setCliKnobOverride({ sandbox: 'on', sandboxUnavailable: 'warn' });
+    assert.equal(resolveSandboxConfig('/tmp/x').unavailableMode, 'warn');
+  } finally {
+    _resetCliKnobsCache();
+  }
+});
+
+test('CODEX-SANDBOX-FAILCLOSED decideUnavailableSandbox never silently runs unsandboxed', () => {
+  // deny / ask → refuse to run (fail closed); warn → run but loudly.
+  const deny = decideUnavailableSandbox('deny', 'Windows');
+  assert.equal(deny.run, false);
+  assert.match(deny.notice, /refused/i);
+
+  const ask = decideUnavailableSandbox('ask', 'Linux (no bwrap/firejail)');
+  assert.equal(ask.run, false);
+  assert.match(ask.notice, /approval required/i);
+
+  const warn = decideUnavailableSandbox('warn', 'Windows');
+  assert.equal(warn.run, true);
+  assert.match(warn.notice, /UNSANDBOXED/);
+
+  // Every verdict names the knob so the operator knows why.
+  for (const v of [deny, ask, warn]) assert.match(v.notice, /sandboxUnavailable/);
+});
+
+test('CODEX-SANDBOX-FAILCLOSED detectSandboxDenial flags sandbox denials, not ordinary failures', () => {
+  assert.equal(detectSandboxDenial('bwrap: Creating new namespace failed: Operation not permitted'), true);
+  assert.equal(detectSandboxDenial('sandbox-exec: execvp() of ... failed'), true);
+  assert.equal(detectSandboxDenial('firejail: cannot create new namespace'), true);
+  assert.equal(detectSandboxDenial('seccomp: blocked syscall'), true);
+  // An ordinary command failure must NOT be misread as a sandbox denial.
+  assert.equal(detectSandboxDenial('error: file not found'), false);
+  assert.equal(detectSandboxDenial('npm ERR! test failed'), false);
+  assert.equal(detectSandboxDenial(''), false);
 });
 
 test('tracing.startSpan is a no-op when cli.traceLog is unset', async () => {
