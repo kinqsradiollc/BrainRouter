@@ -974,6 +974,13 @@ export class Agent {
     // either deliver the answer or admit it can't.
     let preambleGuardFired = 0;
     const PREAMBLE_GUARD_MAX = 2;
+    // Unfulfilled-tool-promise tracker. When the model says "I'll scan X in
+    // parallel" (a deferred-tool-promise) we record the tool-call count at that
+    // moment; if the turn later ends with NO new tool calls since the promise —
+    // even if the final message is a clarifying QUESTION (which escapes the
+    // preamble heuristic) — the model promised work then stalled/over-asked.
+    // -1 = no outstanding promise. Shares PREAMBLE_GUARD_MAX's budget.
+    let promisedToolsAtCount = -1;
     // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
     // goal_complete — so a turn that concludes WITHOUT goal_complete (just
     // delivers the answer) never reconciles the plan, leaving it stale (the
@@ -1382,6 +1389,16 @@ export class Agent {
       this.chatHistory.push(assistantMsg);
       this.recordTranscript(assistantMsg);
 
+      // Note an unfulfilled tool-promise: the model announced future tool work.
+      // Record the tool count so the terminal guard can tell whether the
+      // promise was actually kept (tools ran after it) or the turn stalled /
+      // pivoted to asking the user instead.
+      if ((!response.toolCalls || response.toolCalls.length === 0) && looksLikeDeferredToolPromise(response.content)) {
+        promisedToolsAtCount = this.lastTurnToolCalls;
+      } else if (response.toolCalls && response.toolCalls.length > 0) {
+        promisedToolsAtCount = -1; // a real tool batch fulfils any prior promise
+      }
+
       // 0.3.9 item 11 — flush any storm-suppressed synthetic tool_results
       // immediately after the assistant message so the LLM sees them
       // paired with the original tool_call ids. Done before the
@@ -1493,6 +1510,38 @@ export class Agent {
           this.chatHistory.push(guardMsg);
           this.recordTranscript(guardMsg);
           callbacks.onStatusUpdate(`Recovery: preamble-without-action (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing continuation`);
+          continue;
+        }
+
+        // Promise-then-ask guardrail. The model announced tool work earlier this
+        // turn (a deferred-tool-promise) but ran NO tools since and is now ending
+        // the turn — typically by asking the user a clarifying question it could
+        // have answered itself (e.g. "which folders are codex/grok-cli?" when a
+        // glob would reveal them). The preamble guard misses this because the
+        // FINAL message is a question, not a preamble. Fire one bounded nudge
+        // that steers toward DISCOVERY over asking. Bounded by the shared
+        // PREAMBLE_GUARD_MAX so it can never loop.
+        if (
+          preambleGuardFired < PREAMBLE_GUARD_MAX &&
+          promisedToolsAtCount >= 0 &&
+          this.lastTurnToolCalls === promisedToolsAtCount
+        ) {
+          preambleGuardFired += 1;
+          promisedToolsAtCount = -1; // consume the promise so it can't re-fire on the same one
+          const correction = [
+            'Runtime promise-then-ask guardrail tripped.',
+            'Earlier this turn you said you would run tools (scan / read / search / spawn …) but you ran NONE since, and you are now ending the turn — apparently to ask the user instead of acting.',
+            '',
+            'Before asking the user anything, ask yourself: **can I discover this with a tool?**',
+            '- Missing a path, a directory name, which repos match a label, what a file/config contains? → find it now with `list_dir` / `glob_files` / `grep_search` / `read_file`. Do NOT ask the user for something a tool can reveal.',
+            '- Genuinely blocked by external info no tool can provide (a credential, a product decision, an ambiguous intent)? → then ask ONE focused question as your only output, and do NOT also claim you are about to act.',
+            '',
+            'Do the work you promised: emit the tool_calls now, or deliver the substantive answer. Auto-detect sensible defaults and proceed rather than stalling on a question.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Recovery: promised-tools-then-asked (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — steering to discovery`);
           continue;
         }
 
