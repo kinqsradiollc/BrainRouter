@@ -84,6 +84,69 @@ export function actionKindForTool(name: string): ActionKind {
   }
 }
 
+/** The child-spawning / delegation tools (orchestration + worker + synthesized). */
+const CHILD_SPAWN_TOOLS = new Set([
+  'spawn_agent',
+  'spawn_agents',
+  'spawn_worker_thread',
+  'task_agent',
+  'delegate_agent',
+]);
+
+/** True for a tool that launches a child agent / worker. */
+export function isChildSpawnTool(name: string): boolean {
+  return name.startsWith('delegate_') || CHILD_SPAWN_TOOLS.has(name);
+}
+
+/**
+ * Map a child's requested `access` to the ActionKind the *spawn* represents.
+ * A child can only ever read → spawning it is a read-only fan-out; a write/shell
+ * child gates as `child_write`/`shell`. An unspecified access falls back to
+ * `child_write` — the safe, unchanged default (the spawn handler resolves the
+ * real role default + clamps to the parent, so a missing arg never escalates).
+ */
+function accessToActionKind(access: unknown): ActionKind {
+  switch (access) {
+    case 'read':
+      return 'read_only';
+    case 'write':
+      return 'child_write';
+    case 'shell':
+      return 'shell';
+    default:
+      return 'child_write';
+  }
+}
+
+/**
+ * REVIEW-FIX (0.4.7) — the action kind for a child-spawning tool depends on the
+ * child's REQUESTED access, not just the tool name. This is the root-cause fix
+ * for the policy bug where a **read-mode** parent could not fan out even an
+ * `access:'read'` reviewer: `actionKindForTool` mapped every spawn to
+ * `child_write` (denied in read mode) before the child's access was considered.
+ *
+ * With the call's args in hand: a single spawn maps from its `access`; a batch
+ * `spawn_agents` maps from its **most-powerful** entry (shell > write > read);
+ * everything else delegates to the name-only `actionKindForTool`. The
+ * "child ≤ parent" invariant is preserved — the spawn handler additionally
+ * clamps each child to the parent's mode (`clampAccess`).
+ */
+export function actionKindForToolCall(name: string, args?: Record<string, unknown> | null): ActionKind {
+  // Batch spawn — the most-powerful requested child governs the gate.
+  if (name === 'spawn_agents' && Array.isArray(args?.agents)) {
+    const kinds = (args!.agents as unknown[]).map((e) =>
+      accessToActionKind((e as { access?: unknown } | null)?.access));
+    if (kinds.some((k) => k === 'shell')) return 'shell';
+    if (kinds.some((k) => k === 'child_write')) return 'child_write';
+    return kinds.length > 0 ? 'read_only' : 'child_write';
+  }
+  // Single spawn / delegate — the requested `access` arg determines the kind.
+  if (isChildSpawnTool(name)) {
+    return accessToActionKind(args?.access);
+  }
+  return actionKindForTool(name);
+}
+
 export type ExternalDirMode = 'deny' | 'ask' | 'allow';
 
 /**
@@ -147,9 +210,14 @@ export interface ToolPolicyResult extends PolicyResult {
  * POLICY-1 — the unified policy decision for a tool given the session's access
  * mode: maps name → ActionKind → decision in one call. The single entry point
  * the agent's tool-dispatch guard uses.
+ *
+ * `args` (the tool call's arguments) lets child-spawn tools resolve their
+ * action kind from the requested child `access` (REVIEW-FIX): an `access:'read'`
+ * fan-out is read-only and thus permitted in read mode. Omit `args` for the
+ * name-only decision (unchanged for every non-spawn tool).
  */
-export function resolveToolPolicy(name: string, mode: AccessMode): ToolPolicyResult {
-  const action = actionKindForTool(name);
+export function resolveToolPolicy(name: string, mode: AccessMode, args?: Record<string, unknown> | null): ToolPolicyResult {
+  const action = actionKindForToolCall(name, args);
   const { decision, reason } = decideExecutionPolicy(action, mode);
   const mutating = action === 'file_edit' || action === 'child_write' || action === 'shell';
   return { action, decision, reason, mutating };
