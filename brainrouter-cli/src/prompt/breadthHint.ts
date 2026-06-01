@@ -43,6 +43,22 @@ const PHRASE_SIGNALS: Array<{ pattern: RegExp; weight: number; label: string }> 
   { pattern: /\bmake\s+sure\s+.*\b(works?|passes?|everything|all)\b/i, weight: 1.0, label: 'verification-blanket' },
   // "for everything" / "for each" — usually appended to a broad noun phrase
   { pattern: /\bfor\s+(everything|each|every|all)\b/i, weight: 1.0, label: 'distributive' },
+  // STRUCTURAL breadth — a multi-target comparison is inherently parallel (one
+  // child per target) even without an intensity word. The original heuristic
+  // only caught "thoroughly"/"everything" intensity and scored 0 on
+  // "compare A vs B, C and D", so those tasks never fanned out. `compair`
+  // tolerates the common "compairison" misspelling; `vs`/`versus`/`contrast`/
+  // `benchmark` are the other comparison markers. Clears the threshold alone.
+  { pattern: /(\bcompar|\bcompair|\bcontrast\b|\bbenchmark|\bversus\b|\bvs\.?\b)/i, weight: 2.0, label: 'comparison' },
+  // A bare enumerated list of ≥3 items ("foo, bar and baz"). Kept LIGHT (below
+  // threshold alone) because prose also lists things ("fuses fts, vector and
+  // graph") — it only tips a task that already has another signal.
+  { pattern: /\b[\w./-]+,\s+[\w./-]+\s+and\s+[\w./-]+/i, weight: 1.0, label: 'enumerated-targets' },
+  // An action verb applied to an enumerated list of ≥3 targets
+  // ("review codex, grok-cli and openhuman") — a clean one-child-per-target
+  // fan-out shape. Clears the threshold alone; the action verb keeps
+  // explanatory prose lists ("explain how it fuses fts, vector and graph") out.
+  { pattern: /\b(compare|review|test|audit|analy[sz]e|evaluate|benchmark|inspect|assess|explore|implement|build|check)\b[^.?!]{0,40}?\b[\w./-]+,\s+[\w./-]+\s+and\s+[\w./-]+/i, weight: 2.0, label: 'verb-enumerated' },
 ];
 
 export function detectBreadthIntent(prompt: string): BreadthIntent {
