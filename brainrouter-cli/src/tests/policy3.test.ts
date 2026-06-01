@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { externalDirectoryDecision, egressDecision, hostOf } from '../runtime/execPolicy.js';
-import { isPathWithinRoots } from '../runtime/pathPolicy.js';
-import { getPolicyProfile, profileNames, POLICY_PROFILES } from '../runtime/policyProfiles.js';
+import { externalDirectoryDecision, egressDecision, hostOf } from '../runtime/exec/execPolicy.js';
+import { isPathWithinRoots } from '../runtime/exec/pathPolicy.js';
+import { getPolicyProfile, profileNames, POLICY_PROFILES } from '../runtime/exec/policyProfiles.js';
 
 test('POLICY-3 externalDirectoryDecision: in-workspace allowed; outside follows the mode', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p3-root-'));

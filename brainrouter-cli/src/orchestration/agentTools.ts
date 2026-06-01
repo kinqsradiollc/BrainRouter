@@ -1,0 +1,235 @@
+/**
+ * REFAC-AGENT-ORCH (0.4.6) — the orchestration tool SPEC factories, extracted
+ * verbatim from tools.ts. Each returns a pure model-visible tool spec
+ * (name/description/inputSchema) consumed by agent/tools/specs.ts to build
+ * LOCAL_TOOLS. No shared state, no tools.ts-internal deps. Re-exported from
+ * tools.ts for back-compat. Pairs with the 0.4.7 CODEX-TOOL-REGISTRY work.
+ */
+export function createSpawnAgentTool() {
+  return {
+    name: 'spawn_agent',
+    description: 'Spawn a child agent and a bounded prompt. Returns the child agent id immediately; the child runs in the background. Specify the agent via `role` (legacy: explorer/architect/reviewer/worker/verifier) or `agentId` (registry id, e.g. a custom workspace definition).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier. Prefer agentId for custom definitions.' },
+        agentId: { type: 'string', description: 'Registry id of the agent definition. Takes precedence over role when both are provided.' },
+        prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
+        label: { type: 'string', description: 'Optional short label for the child run.' },
+        access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
+        wait: { type: 'boolean', description: 'If true, block until the child completes and return its final output. Default: false.' },
+        timeoutMs: { type: 'integer', description: 'Optional child wall-clock timeout in milliseconds. Also bounds wait=true. Default 120000 when wait=true; otherwise 600000.' },
+        workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
+        seedRecordIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional BrainRouter memory record IDs that the parent already recalled. The child agent is told to build on these instead of re-discovering them.',
+        },
+        overlay: {
+          type: 'string',
+          description: 'Optional one-off instruction overlay (≤4000 chars) appended to the child\'s role prompt — the escape hatch for a bespoke contractor the preset roles don\'t cover (e.g. "only touch the CSS, match the existing design tokens"). The child is marked synthetic.',
+        },
+        effort: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'xhigh'],
+          description: 'Optional reasoning-effort override for this child (otherwise inherits the session /effort).',
+        },
+      },
+      required: ['prompt'],
+    },
+  };
+}
+
+export function createTaskAgentTool() {
+  return {
+    name: 'task_agent',
+    description:
+      'Launch a new agent to handle complex, multi-step tasks autonomously. Returns the completed child output (foreground, blocks).\n\n' +
+      'When using task_agent, specify a `role` to select which specialized agent type to use. Roles: explorer (read-only investigation), architect (design alternatives), reviewer (code review), worker (write access), verifier (tests/checks). Use `agentId` for custom workspace definitions.\n\n' +
+      'When NOT to use task_agent:\n' +
+      '- Specific file path → use read_file directly.\n' +
+      '- Named class/function ("class Foo") → use grep_search directly.\n' +
+      '- Code within 2-3 known files → use read_file.\n' +
+      '- Trivial one-shot questions answerable from one tool call.\n\n' +
+      'Usage notes:\n' +
+      '- Always include a short `label` (3-5 words) summarizing the task.\n' +
+      '- Launch multiple agents concurrently when possible — single assistant message with multiple task_agent tool_calls.\n' +
+      '- The agent\'s result is NOT visible to the user; after it returns, write a text summary so the user sees the findings.\n' +
+      '- Each invocation starts with fresh context — provide a complete task description (file paths, scope, what to return).\n' +
+      '- Tell the agent whether you expect code-writing or research-only — it is not aware of the user\'s intent.\n' +
+      '- If the user says run agents "in parallel", you MUST send one message with multiple task_agent tool_calls.\n' +
+      '- For background fire-and-forget when you have parent-side work to do, use delegate_agent instead and call wait_agent when the result is needed.\n\n' +
+      'Writing the prompt: brief the child like a smart colleague who just walked in. Explain what you\'re accomplishing and why, what you\'ve already learned or ruled out, enough context for judgment calls. Include file paths and line numbers. **Never delegate understanding** — don\'t write "based on your findings, fix the bug"; that pushes synthesis onto the child. Terse command-style prompts produce shallow generic work.\n\n' +
+      '**Trust but verify:** a child\'s returned summary describes what it INTENDED to do, not necessarily what it actually did. When a child writes or edits code, read the actual changes (git diff, read_file) before reporting work as done.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier. Prefer agentId for custom definitions.' },
+        agentId: { type: 'string', description: 'Registry id of the agent definition. Takes precedence over role when both are provided.' },
+        prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
+        label: { type: 'string', description: 'Optional short label for the child run.' },
+        access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
+        timeoutMs: { type: 'integer', description: 'Optional timeout in milliseconds. Default 120000.' },
+        workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
+        seedRecordIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional BrainRouter memory record IDs that the parent already recalled.',
+        },
+      },
+      required: ['prompt'],
+    },
+  };
+}
+
+export function createDelegateAgentTool() {
+  return {
+    name: 'delegate_agent',
+    description:
+      'Start one background child agent and keep working in the parent turn. ' +
+      'Non-blocking — there is no `timeoutMs`; the child runs until it finishes or is cancelled. ' +
+      'Returns a running child id plus a reminder to continue useful work; call wait_agent later when the result is needed.\n\n' +
+      'When to choose delegate_agent over task_agent: when you have genuinely independent parent-side work to fill the time (read other files, write a different section, run a benchmark) while the child runs. If you would just sit idle waiting, use task_agent instead — it returns the result directly.\n\n' +
+      'Writing the prompt: same standard as task_agent — brief the child like a smart colleague who just walked in. Explain what you\'re accomplishing and why, what you\'ve already learned, enough context for judgment calls. Include file paths and line numbers. Never write "based on your findings, X" — write what to change, where. Terse prompts produce shallow work.\n\n' +
+      '**Trust but verify after wait_agent:** the child\'s returned summary describes intent, not necessarily what landed on disk. If the child wrote or edited code, read the actual changes (git diff / read_file) before reporting the work as done to the user.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', description: 'One of: explorer, architect, reviewer, worker, verifier. Prefer agentId for custom definitions.' },
+        agentId: { type: 'string', description: 'Registry id of the agent definition. Takes precedence over role when both are provided.' },
+        prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
+        label: { type: 'string', description: 'Optional short label for the child run.' },
+        access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
+        workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
+        seedRecordIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional BrainRouter memory record IDs that the parent already recalled.',
+        },
+      },
+      required: ['prompt'],
+    },
+  };
+}
+
+export function createListAgentsTool() {
+  return {
+    name: 'list_agents',
+    description: 'List all child agent sessions for the current workspace with status, role, and elapsed time.',
+    inputSchema: { type: 'object', properties: {} },
+  };
+}
+
+export function createWaitAgentTool() {
+  return {
+    name: 'wait_agent',
+    description: 'Wait for a child agent to complete. Returns final output, error, or timeout state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Child agent id returned by spawn_agent.' },
+        timeoutMs: { type: 'integer', description: 'Maximum wait time in ms. Default 120000.' },
+      },
+      required: ['id'],
+    },
+  };
+}
+
+export function createReadAgentTranscriptTool() {
+  return {
+    name: 'read_agent_transcript',
+    description: 'Read recent transcript entries (default 40) of a child agent session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Child agent id.' },
+        limit: { type: 'integer', description: 'Max entries to return. Default 40.' },
+      },
+      required: ['id'],
+    },
+  };
+}
+
+export function createCloseAgentTool() {
+  return {
+    name: 'close_agent',
+    description: 'Mark a child agent session closed without deleting its transcript. Use this for cleanup.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Child agent id.' } },
+      required: ['id'],
+    },
+  };
+}
+
+export function createSpawnAgentsTool() {
+  return {
+    name: 'spawn_agents',
+    description:
+      'Spawn multiple child agents in parallel with one tool call. Returns all child ids immediately. ' +
+      'Use this for batched fan-out (e.g. 3 explorers covering different parts of the codebase) instead of N back-to-back spawn_agent calls. ' +
+      'Write/shell children MUST declare an `ownership` glob so parallel writers cannot collide — or pass `allowOverlap: true` on the entry to opt out.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agents: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              role: { type: 'string', description: 'explorer | architect | reviewer | worker | verifier (omit to auto-route from the prompt).' },
+              prompt: { type: 'string', description: 'Bounded task prompt for this child.' },
+              label: { type: 'string' },
+              access: { type: 'string', enum: ['read', 'write', 'shell'] },
+              workdir: { type: 'string' },
+              seedRecordIds: { type: 'array', items: { type: 'string' } },
+              ownership: { type: 'string', description: 'File glob this child may write within (e.g. "src/payments/**"). Required for write/shell access unless allowOverlap is set. Enforced on write_file / edit_file / apply_patch.' },
+              allowOverlap: { type: 'boolean', description: 'Opt out of the ownership requirement for this entry (writes are then unbounded). Default false.' },
+            },
+            required: ['prompt'],
+          },
+        },
+      },
+      required: ['agents'],
+    },
+  };
+}
+
+export function createWaitAgentsTool() {
+  return {
+    name: 'wait_agents',
+    description:
+      'Wait for multiple child agents in parallel. Returns each child\'s final status / output / error. ' +
+      'Use after spawn_agents to drain the whole batch before synthesizing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        timeoutMs: { type: 'integer', description: 'Maximum total wait. Default 240000.' },
+      },
+      required: ['ids'],
+    },
+  };
+}
+
+/**
+ * MAS-P2-M2 — `route_task` tool. Returns a typed 4-tier policy
+ * decision (answer-direct / direct-tool / spawn-inline / spawn-worker)
+ * with the recommended tool, agent id (when inline), confidence, and
+ * memory evidence (MAS-P2-M4).
+ */
+export function createRouteTaskTool() {
+  return {
+    name: 'route_task',
+    description:
+      'Direct-first delegation dry-run. Returns `{ tier, reason, recommendedTool, agentId, confidence, memoryEvidence }`. Tiers: `answer-direct` (no tool — reply in prose), `direct-tool` (one concrete tool answers — e.g. `read_file`, `grep_search`, `run_command`), `spawn-inline` (specialized child via `delegate_<id>`), `spawn-worker` (long-running tracked work; worker threads ship in 0.4.2). Call this BEFORE spawning to pick the right tier — fan-out without it routinely over-delegates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'The task prompt the parent is considering routing.' },
+      },
+      required: ['task'],
+    },
+  };
+}

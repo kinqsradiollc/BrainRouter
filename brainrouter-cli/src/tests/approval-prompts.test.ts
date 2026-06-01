@@ -232,7 +232,7 @@ test('ask_user_choice does NOT bypass under proceed-only (no /yolo)', async () =
 
 // --- buildRunCommandPrompt: the helper that feeds askYesNo --------------
 
-import { buildRunCommandPrompt } from '../runtime/dangerousCommand.js';
+import { buildRunCommandPrompt } from '../runtime/exec/dangerousCommand.js';
 
 test('buildRunCommandPrompt embeds the command for the dangerous branch', () => {
   const prompt = buildRunCommandPrompt('rm -rf /tmp/foo');
@@ -249,7 +249,7 @@ test('buildRunCommandPrompt keeps the non-destructive variant clean', () => {
 });
 
 test('resolveRunCommandApproval: active /goal auto-approves safe commands even in planning mode', async () => {
-  const { resolveRunCommandApproval } = await import('../runtime/dangerousCommand.js');
+  const { resolveRunCommandApproval } = await import('../runtime/exec/dangerousCommand.js');
   // Planning + goal active + safe → auto-approve (don't stall the goal loop).
   assert.equal(
     resolveRunCommandApproval({ executionMode: 'planning' }, 'ls -la', { silent: false, goalActive: true }),
@@ -273,7 +273,7 @@ test('resolveRunCommandApproval: active /goal auto-approves safe commands even i
 });
 
 test('resolveRunCommandApproval: silent child + active /goal + safe → auto-approve', async () => {
-  const { resolveRunCommandApproval } = await import('../runtime/dangerousCommand.js');
+  const { resolveRunCommandApproval } = await import('../runtime/exec/dangerousCommand.js');
   // Silent children inherit the parent's "I trust automation" signal from
   // either /mode fast OR an active /goal.
   assert.equal(
