@@ -171,6 +171,13 @@ export interface CliKnobs {
   offloadMaxEntries?: number;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
+  /**
+   * CODEX-AGENT-LIFECYCLE (0.4.7) — cap on concurrently-live child agents
+   * (spawn slots). Spawning beyond this is refused until a child finishes,
+   * preventing unbounded fan-out + orphan drift. `0` disables the cap.
+   * Default 8.
+   */
+  maxConcurrentChildren?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
   autoChainMaxFollowups?: number;
   /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 40. */
@@ -493,6 +500,7 @@ export interface ResolvedCliKnobs {
   offloadRetentionMs: number;
   offloadMaxEntries: number;
   maxSpawnDepth: number;
+  maxConcurrentChildren: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
   scheduleTickMs: number;
@@ -559,6 +567,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
     offloadMaxEntries: c.offloadMaxEntries ?? 64,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
+    maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
