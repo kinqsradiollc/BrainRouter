@@ -35,7 +35,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
-import { prepareChildWorkspace } from './worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -1044,6 +1044,23 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       }
     } finally {
       runningPromises.delete(record.id);
+      // CODEX-WORKTREE-CLEANUP — tear down the child's git worktree when it
+      // finishes (success or failure). Captures a capped diff into the record
+      // first so the child's work isn't silently lost, then removes the
+      // worktree + prunes git's admin entry (no more unbounded $TMPDIR growth).
+      if (childWorkspace.isolation) {
+        try {
+          const cleanup = removeChildWorktree(childWorkspace.isolation);
+          const patch: Partial<ChildSessionRecord> = {};
+          if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
+          if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
+          if (Object.keys(patch).length > 0) {
+            try { updateSession(ctx.workspaceRoot, record.id, patch); } catch { /* record may be closed */ }
+          }
+        } catch (cleanupErr: any) {
+          console.error(`[BrainRouter] child ${record.id} worktree cleanup threw:`, cleanupErr?.message ?? cleanupErr);
+        }
+      }
     }
   })();
   // ORCH-FIX — backstop: a child promise must NEVER reject unhandled (that would
@@ -1137,7 +1154,18 @@ function handleClose(args: any, ctx: OrchestrationContext): string {
   const id = String(args.id ?? '');
   const record = getSession(ctx.workspaceRoot, id);
   if (!record) throw new Error(`No child session with id ${id}.`);
-  const next = updateSession(ctx.workspaceRoot, id, { status: 'closed', completedAt: new Date().toISOString() });
+  // CODEX-WORKTREE-CLEANUP — explicit close also removes a lingering worktree
+  // (e.g. a wait:false child the parent never drained). Idempotent: the spawn
+  // finally usually removed it already, and removeChildWorktree no-ops if gone.
+  const patch: Partial<ChildSessionRecord> = { status: 'closed', completedAt: new Date().toISOString() };
+  if (record.childWorkspaceIsolation) {
+    try {
+      const cleanup = removeChildWorktree(record.childWorkspaceIsolation);
+      if (cleanup.diff && !record.worktreeDiff) patch.worktreeDiff = cleanup.diff;
+      if (typeof cleanup.changedFiles === 'number' && record.worktreeChangedFiles == null) patch.worktreeChangedFiles = cleanup.changedFiles;
+    } catch { /* best-effort */ }
+  }
+  const next = updateSession(ctx.workspaceRoot, id, patch);
   return JSON.stringify(summarize(next, true), null, 2);
 }
 
