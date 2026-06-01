@@ -59,6 +59,15 @@ const PHRASE_SIGNALS: Array<{ pattern: RegExp; weight: number; label: string }> 
   // fan-out shape. Clears the threshold alone; the action verb keeps
   // explanatory prose lists ("explain how it fuses fts, vector and graph") out.
   { pattern: /\b(compare|review|test|audit|analy[sz]e|evaluate|benchmark|inspect|assess|explore|implement|build|check)\b[^.?!]{0,40}?\b[\w./-]+,\s+[\w./-]+\s+and\s+[\w./-]+/i, weight: 2.0, label: 'verb-enumerated' },
+  // Relational comparison "… against those / against the others / vs the
+  // alternatives" — a one-child-per-peer fan-out. Scoped to comparison objects
+  // ("those"/"others"/"alternatives"/"rest"/"competition") so it does NOT fire
+  // on "guard against errors" / "warn against X".
+  { pattern: /\b(against|compared\s+to|relative\s+to|versus|stacked?\s+up\s+against)\s+(those|other|the\s+other|all\s+(the\s+)?other|alternativ|competit|the\s+rest|the\s+field)/i, weight: 1.5, label: 'relational-comparison' },
+  // Analytical-comparison framing — "pros and cons", "strengths and weaknesses",
+  // "tradeoffs". Mild on its own (an essay), but a strong tip when it pairs with
+  // a relational/enumerated signal (the "pros and cons of X against those" case).
+  { pattern: /\b(pros\s+and\s+cons|strengths?\s+and\s+weakness|trade[- ]?offs?)\b/i, weight: 1.0, label: 'pros-cons' },
 ];
 
 export function detectBreadthIntent(prompt: string): BreadthIntent {
