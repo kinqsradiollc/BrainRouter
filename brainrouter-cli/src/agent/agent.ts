@@ -2218,7 +2218,7 @@ export class Agent {
         // "type a goal, walk away". Dangerous commands still ask.
         const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
         const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
-        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent, goalActive: goalIsActive });
+        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
         if (approval === 'deny-silent') {
           if (isDangerousCommand(cmd)) {
             return (

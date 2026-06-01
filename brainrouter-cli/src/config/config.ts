@@ -152,6 +152,14 @@ export interface CliKnobs {
    * notice (the pre-0.4.7 behavior — opt back in explicitly).
    */
   sandboxUnavailable?: 'ask' | 'deny' | 'warn';
+  /**
+   * CODEX-EXEC-POLICY (0.4.7) — command prefixes the user pre-approves, so a
+   * `run_command` whose every segment matches one auto-approves without a prompt
+   * in any mode (e.g. `git status`, `npm test`). Prefixes match on a word
+   * boundary. Over-broad prefixes (bare `git`/`bash`/`sudo`/…) are rejected by
+   * CODEX-APPROVAL-GUARD. Default empty = no change to approval behavior.
+   */
+  commandAllowlist?: string[];
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -478,6 +486,7 @@ export interface ResolvedCliKnobs {
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
+  commandAllowlist: string[];
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -541,6 +550,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
     sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
+    commandAllowlist: c.commandAllowlist ?? [],
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
