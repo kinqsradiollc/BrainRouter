@@ -67,6 +67,15 @@ export interface LLMConfig {
  * those are documented at their callsites.)
  */
 export interface CliKnobs {
+  // ---- planning / orchestration -----------------------------------------
+  /**
+   * NEXT-ACTION PLANNER (0.4.7). Default 'on'. A focused pre-flight reasoning
+   * call that decides the turn's strategy (answer-direct / investigate /
+   * fan-out / workflow) and concrete subtasks, then injects a decisive
+   * directive — replacing the keyword-only breadth hint. 'off' falls back to
+   * the breadthHint heuristic. Skipped for trivial prompts regardless.
+   */
+  nextActionPlanner?: 'on' | 'off';
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -473,6 +482,7 @@ export function selfHealConfig(parsed: Config): { config: Config; changed: boole
  */
 export interface ResolvedCliKnobs {
   recallMode: 'always' | 'gated' | 'off';
+  nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
   personaAnchor: 'on' | 'off';
   briefingMaxCharsPerSource: number;
@@ -539,6 +549,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   return {
     recallMode: c.recallMode ?? 'gated',
+    nextActionPlanner: c.nextActionPlanner ?? 'on',
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,

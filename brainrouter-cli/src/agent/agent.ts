@@ -120,6 +120,7 @@ import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../state
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
 import { compactToolOutput } from '../prompt/toolCompaction.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
+import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/nextAction.js';
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 import {
   dedupeToolCalls,
@@ -955,16 +956,45 @@ export class Agent {
     // their parent.
     let fanOutHinted = false;
     if (!this.silent) {
-      const { suggest, intent } = shouldSuggestFanOut(prompt);
-      if (suggest) {
-        fanOutHinted = true;
-        this.replaceTaggedSystemMessage('fanout-hint', buildFanOutHint(prompt, intent));
-        callbacks.onStatusUpdate(`Fan-out hint injected (signals: ${intent.signals.join(', ')})`);
-        // Mirror onMemoryEvent's shape so REPL has one render path — but use
-        // onToolStart since it goes through the safePrint pipeline that the
-        // user already sees. Tag as a virtual tool so it's obvious.
-        callbacks.onToolStart('breadth-detector', { signals: intent.signals, score: intent.score });
-        callbacks.onToolEnd('breadth-detector', { success: true, summary: `fan-out hint injected (${intent.signals.length} signals)` });
+      let planned = false;
+      // NEXT-ACTION PLANNER — a focused pre-flight reasoning call DECIDES the
+      // turn's strategy (answer-direct / investigate / fan-out / workflow) and
+      // concrete subtasks, then injects a decisive directive. This replaces the
+      // keyword-only breadth guess with actual reasoning. Fail-open: any error /
+      // unparseable reply falls through to the breadthHint heuristic below.
+      if (getCliKnobs().nextActionPlanner !== 'off' && !shouldSkipPlanner(prompt)) {
+        try {
+          callbacks.onToolStart('next-action-planner', {});
+          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt), []);
+          const plan = parseNextActionPlan(planResp?.content);
+          if (plan) {
+            planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
+            const directive = nextActionDirective(plan);
+            if (directive) this.replaceTaggedSystemMessage('next-action-plan', directive);
+            if (planWantsFanOut(plan)) fanOutHinted = true;
+            callbacks.onToolEnd('next-action-planner', {
+              success: true,
+              summary: `strategy=${plan.strategy}${plan.subtasks.length ? ` (${plan.subtasks.length} subtasks)` : ''}`,
+            });
+            callbacks.onStatusUpdate(`Next-action plan: ${plan.strategy}${planWantsFanOut(plan) ? ' — fanning out' : ''}`);
+          } else {
+            callbacks.onToolEnd('next-action-planner', { success: true, summary: 'no usable plan — fail-open to heuristic' });
+          }
+        } catch {
+          callbacks.onToolEnd('next-action-planner', { success: false, summary: 'planner unavailable — fail-open to heuristic' });
+        }
+      }
+      // Fallback: planner disabled / skipped / failed / produced nothing → the
+      // keyword breadth heuristic still nudges fan-out for obvious broad prompts.
+      if (!planned) {
+        const { suggest, intent } = shouldSuggestFanOut(prompt);
+        if (suggest) {
+          fanOutHinted = true;
+          this.replaceTaggedSystemMessage('fanout-hint', buildFanOutHint(prompt, intent));
+          callbacks.onStatusUpdate(`Fan-out hint injected (signals: ${intent.signals.join(', ')})`);
+          callbacks.onToolStart('breadth-detector', { signals: intent.signals, score: intent.score });
+          callbacks.onToolEnd('breadth-detector', { success: true, summary: `fan-out hint injected (${intent.signals.length} signals)` });
+        }
       }
     }
 
