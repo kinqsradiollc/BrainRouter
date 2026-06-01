@@ -60,6 +60,10 @@ export interface ChildSessionRecord {
     worktreeRoot: string;
   };
   childWorkspaceNotice?: string;
+  /** CODEX-WORKTREE-CLEANUP — capped diff of the child's isolated-worktree changes, captured at teardown. */
+  worktreeDiff?: string;
+  /** CODEX-WORKTREE-CLEANUP — number of files the child changed in its worktree. */
+  worktreeChangedFiles?: number;
 }
 
 interface SessionsFile {

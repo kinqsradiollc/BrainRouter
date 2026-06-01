@@ -125,3 +125,81 @@ export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildW
     },
   };
 }
+
+export interface ChildWorktreeIsolation {
+  kind: 'git-worktree';
+  sourceRoot: string;
+  worktreeRoot: string;
+}
+
+/**
+ * Capture a child worktree's changes (so the work isn't silently lost) and then
+ * remove the worktree. Without this, isolated children leaked their worktree
+ * dirs under `$TMPDIR/brainrouter-worktrees/` forever and `git worktree list`
+ * drifted from the filesystem. Returns a capped diff summary for the caller to
+ * surface in the child's completion record ("report diff", the merge-back half).
+ * Best-effort + never throws — cleanup failure must not break spawn teardown.
+ */
+export function removeChildWorktree(
+  isolation: ChildWorktreeIsolation | null | undefined,
+  maxDiffChars = 4000,
+): { ok: boolean; diff?: string; changedFiles?: number; notice?: string } {
+  if (!isolation || isolation.kind !== 'git-worktree') return { ok: true };
+  const { sourceRoot, worktreeRoot } = isolation;
+  let diff: string | undefined;
+  let changedFiles: number | undefined;
+  try {
+    if (fs.existsSync(worktreeRoot)) {
+      const stat = runGit(worktreeRoot, ['diff', '--stat', 'HEAD']);
+      if (stat.ok && stat.stdout.trim()) {
+        const lines = stat.stdout.trim().split('\n');
+        changedFiles = Math.max(0, lines.length - 1); // last line is the summary
+        const full = runGit(worktreeRoot, ['diff', 'HEAD']);
+        const body = (full.ok ? full.stdout : stat.stdout).trim();
+        diff = body.length > maxDiffChars ? `${body.slice(0, maxDiffChars)}\n… [diff truncated]` : body;
+      }
+    }
+  } catch { /* diff capture is best-effort */ }
+  // Remove the worktree, then prune the admin entry so `git worktree list` stays honest.
+  const removed = runGit(sourceRoot, ['worktree', 'remove', '--force', worktreeRoot]);
+  if (!removed.ok) {
+    try { if (fs.existsSync(worktreeRoot)) fs.rmSync(worktreeRoot, { recursive: true, force: true }); } catch { /* noop */ }
+  }
+  runGit(sourceRoot, ['worktree', 'prune']);
+  return {
+    ok: true,
+    diff,
+    changedFiles,
+    notice: removed.ok ? undefined : `git worktree remove reported: ${removed.stderr.trim() || 'non-zero exit'} (force-removed the directory)`,
+  };
+}
+
+/**
+ * Startup reconcile: prune git's stale worktree admin entries and delete any
+ * leftover `brainrouter-worktrees/<repo>/*` dirs that git no longer tracks
+ * (orphans from a crashed prior process). Best-effort; returns how many dirs it
+ * removed. Mirrors `reconcileStale` for session records.
+ */
+export function reconcileOrphanWorktrees(workspaceRoot: string): number {
+  let removed = 0;
+  try {
+    const repoRoot = gitRoot(workspaceRoot);
+    if (!repoRoot) return 0;
+    runGit(repoRoot, ['worktree', 'prune']);
+    const base = path.join(os.tmpdir(), 'brainrouter-worktrees', safeName(path.basename(repoRoot)));
+    if (!fs.existsSync(base)) return 0;
+    const tracked = new Set(
+      (runGit(repoRoot, ['worktree', 'list', '--porcelain']).stdout.match(/^worktree (.+)$/gm) ?? [])
+        .map((l) => l.replace(/^worktree /, '').trim()),
+    );
+    for (const entry of fs.readdirSync(base)) {
+      const dir = path.join(base, entry);
+      let real = dir;
+      try { real = fs.realpathSync(dir); } catch { /* use dir */ }
+      if (!tracked.has(real) && !tracked.has(dir)) {
+        try { fs.rmSync(dir, { recursive: true, force: true }); removed++; } catch { /* noop */ }
+      }
+    }
+  } catch { /* best-effort */ }
+  return removed;
+}

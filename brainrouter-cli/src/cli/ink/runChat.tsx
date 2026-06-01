@@ -17,6 +17,7 @@ import { resolveSandboxConfig, runShell } from '../../runtime/exec/sandbox.js';
 import { parseBangCommand } from '../../runtime/exec/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { reconcileOrphanWorktrees } from '../../orchestration/worktreeIsolation.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '../../state/checkpointStore.js';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
@@ -244,6 +245,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // only writes the JSON file when there were actual stale entries
       // to flip — subsequent calls are pure reads.
       reconcileStale(agent.workspaceRoot);
+      // CODEX-WORKTREE-CLEANUP — also GC orphan child worktrees left under
+      // $TMPDIR by a crashed prior process (git worktree prune + rm untracked
+      // dirs). Best-effort + idempotent, mirrors reconcileStale.
+      try { reconcileOrphanWorktrees(agent.workspaceRoot); } catch { /* best-effort */ }
       // MAS-P5-T3: same treatment for worker threads — a `running` worker
       // from a dead CLI process can't resume mid-turn, so flip it to failed.
       reconcileStaleWorkers(agent.workspaceRoot);
