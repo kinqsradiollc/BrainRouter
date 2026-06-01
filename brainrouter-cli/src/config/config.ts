@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { ExternalDirMode } from '../runtime/exec/execPolicy.js';
+import { sanitizeCommandAllowlist } from '../runtime/exec/approvalGuard.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -550,7 +551,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
     sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
-    commandAllowlist: c.commandAllowlist ?? [],
+    // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
+    // so a too-permissive config.json entry can never auto-approve everything.
+    commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
