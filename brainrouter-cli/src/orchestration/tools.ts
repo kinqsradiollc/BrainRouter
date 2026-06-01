@@ -35,6 +35,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
+import { prepareChildWorkspace } from './worktreeIsolation.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -91,6 +92,21 @@ export interface OrchestrationContext {
    * terminal is attached.
    */
   confirmDelegation?: (info: { role: string; access: AccessMode; prompt: string }) => Promise<boolean>;
+  /**
+   * CODEX-PARENT-APPROVAL — child agents run silently, so risky tool prompts
+   * are routed back through the parent/UI instead of being denied solely because
+   * the child cannot read from the terminal.
+   */
+  confirmToolApproval?: (info: {
+    childId: string;
+    role: string;
+    tool: string;
+    command?: string;
+    path?: string;
+    summary?: string;
+    reason: string;
+    dangerous?: boolean;
+  }) => Promise<boolean>;
   // MAS-P2-M3 parent-context accessors. Each returns the parent's
   // runtime state at spawn time — all optional so callers can adopt
   // incrementally. When omitted, the snapshot field stays undefined
@@ -683,7 +699,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     }
   }
 
-  const childLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
+  const requestedChildLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
   const childTimeoutMs = childTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
     role: role.name,
@@ -694,6 +710,23 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     tier: childTier,
     depth: currentDepth + 1,
   });
+  const childWorkspace = prepareChildWorkspace({
+    parentWorkspaceRoot: ctx.workspaceRoot,
+    parentLaunchCwd: requestedChildLaunchCwd,
+    childId: record.id,
+    access,
+    mode: getCliKnobs().childWorkspaceIsolation,
+  });
+  const childWorkspaceRoot = childWorkspace.workspaceRoot;
+  const childLaunchCwd = childWorkspace.launchCwd;
+  if (childWorkspace.isolated || childWorkspace.notice) {
+    updateSession(ctx.workspaceRoot, record.id, {
+      childWorkspaceRoot: childWorkspace.isolated ? childWorkspaceRoot : undefined,
+      childLaunchCwd,
+      childWorkspaceIsolation: childWorkspace.isolation,
+      childWorkspaceNotice: childWorkspace.notice,
+    });
+  }
 
   const childKey = childSessionKey(ctx.parentSessionKey, record.id);
   const seededIds: string[] = Array.isArray(args.seedRecordIds)
@@ -734,17 +767,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     outputContract: getOutputContract(role.name)?.id ?? null,
   });
   updateSession(ctx.workspaceRoot, record.id, { parentContext: snapshot });
-  appendTranscriptEntry(ctx.workspaceRoot, childKey, {
+  appendTranscriptEntry(childWorkspaceRoot, childKey, {
     role: 'system',
     name: 'parent_context',
     content: JSON.stringify(snapshot),
   });
 
   const basePrompt = buildSystemPrompt({
-    workspaceRoot: ctx.workspaceRoot,
+    workspaceRoot: childWorkspaceRoot,
     launchCwd: childLaunchCwd,
     sessionKey: childKey,
-    instructionSummary: loadWorkspaceInstructionSummary(ctx.workspaceRoot),
+    instructionSummary: loadWorkspaceInstructionSummary(childWorkspaceRoot),
   });
   let systemPromptOverride = buildRolePrompt(role, basePrompt, '');
   if (seededIds.length > 0) {
@@ -768,7 +801,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     args.effort === 'low' || args.effort === 'medium' || args.effort === 'high' ? args.effort : undefined;
 
   const childAgent = new Agent(ctx.mcpClient, ctx.llmConfig, {
-    workspaceRoot: ctx.workspaceRoot,
+    workspaceRoot: childWorkspaceRoot,
     launchCwd: childLaunchCwd,
     sessionKey: childKey,
     // The role overlay is already embedded inside `systemPromptOverride` via
@@ -796,6 +829,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     disallowedTools: childDisallowedTools,
     // 0.4.x-5: per-child reasoning-effort override.
     effortOverride,
+    confirmToolApproval: ctx.confirmToolApproval
+      ? (info) => ctx.confirmToolApproval!({ childId: record.id, role: role.name, ...info })
+      : undefined,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
@@ -1025,7 +1061,18 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   if (args.wait) {
     return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? childTimeoutMs }, ctx);
   }
-  return JSON.stringify({ id: record.id, role: role.name, access, status: 'running', workdir: childLaunchCwd, timeoutMs: childTimeoutMs }, null, 2);
+  return JSON.stringify({
+    id: record.id,
+    role: role.name,
+    access,
+    status: 'running',
+    workdir: childLaunchCwd,
+    workspaceRoot: childWorkspaceRoot,
+    isolatedWorkspace: childWorkspace.isolated,
+    isolation: childWorkspace.isolation,
+    notice: childWorkspace.notice,
+    timeoutMs: childTimeoutMs,
+  }, null, 2);
 }
 
 function handleList(ctx: OrchestrationContext): string {
@@ -1081,7 +1128,8 @@ function handleReadTranscript(args: any, ctx: OrchestrationContext): string {
   const record = getSession(ctx.workspaceRoot, id);
   if (!record) throw new Error(`No child session with id ${id}.`);
   const childKey = childSessionKey(record.parentSessionKey, record.id);
-  const entries = readTranscriptEntries(ctx.workspaceRoot, childKey, limit);
+  const transcriptRoot = record.childWorkspaceRoot ?? ctx.workspaceRoot;
+  const entries = readTranscriptEntries(transcriptRoot, childKey, limit);
   return JSON.stringify({ id, entries }, null, 2);
 }
 
@@ -1126,6 +1174,10 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     followUps: record.autoChainFollowups ?? undefined,
     // MAS-P4-T3: per-child accounting (tokens, calls, offloaded chars, wall-clock).
     usage: record.usage ?? undefined,
+    workspaceRoot: record.childWorkspaceRoot ?? undefined,
+    workdir: record.childLaunchCwd ?? undefined,
+    isolation: record.childWorkspaceIsolation ?? undefined,
+    isolationNotice: record.childWorkspaceNotice ?? undefined,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     completedAt: record.completedAt,

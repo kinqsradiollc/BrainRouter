@@ -241,6 +241,32 @@ export function looksLikeDeferredToolPromise(content: string | null | undefined)
 }
 
 /**
+ * Lenient companion to `looksLikeDeferredToolPromise`, used ONLY to ARM the
+ * promise-then-ask tracker (not to fire a guard directly). Unlike the strict
+ * variant it is NOT anchored to the start of the message and has NO length cap,
+ * so a LONG message that buries its promise at the end —
+ *   "Perfect, you were right. I found them… I'll proceed by locating the exact
+ *    repo roots for all 4 and then run a strict file/line comparison."
+ * — still arms the tracker. The terminal guard then fires only if NO tools ran
+ * after the promise (the model announced work and stalled / pivoted to asking).
+ *
+ * Kept FIRST-PERSON + FUTURE-INTENT so it doesn't match advice to the user
+ * ("you could run the tests") or a delivered answer ("the comparison shows…").
+ * The intent opener must sit within ~60 chars of an action verb.
+ */
+export function mentionsImminentToolWork(content: string | null | undefined): boolean {
+  if (typeof content !== 'string') return false;
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return false;
+  // Note: verb stems are kept narrow to avoid matching common non-verbs that
+  // merely START with the stem (e.g. an earlier "diff" stem wrongly matched
+  // "differences"). "compar" already covers comparison tasks.
+  const re =
+    /(?:\bI['’]?ll\b|\bI will\b|\bI['’]?m going to\b|\bI['’]?m about to\b|\bnext,?\s+I['’]?ll\b|\bthen\s+I['’]?ll\b|\bI['’]?ll proceed\b|\bI['’]?ll now\b|\blet me\b)[^.?!]{0,60}?\b(?:scan|run|search|explor|locat|compar|enumerat|grep|investigat|examin|build|audit|analyz|inspect|fetch|sweep|verif|kick off|fire off|dig into)/i;
+  return re.test(trimmed);
+}
+
+/**
  * Use the caller's existing `normalizeToolName` to surface a "did you mean"
  * suggestion when the LLM emits a tool name that doesn't exist as-is but
  * normalizes to a real registered tool. Tolerates the single-underscore

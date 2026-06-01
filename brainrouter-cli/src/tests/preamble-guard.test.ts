@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { looksLikeStalledPreamble, looksLikeDeferredToolPromise, stripLeadingAck } from '../agent/toolCallRecovery.js';
+import { looksLikeStalledPreamble, looksLikeDeferredToolPromise, mentionsImminentToolWork, stripLeadingAck } from '../agent/toolCallRecovery.js';
 
 // The exact phrasing that slipped through the guard (gpt-5.3-codex):
 const STALL = 'Absolutely — I\'ll run the full deep sweep now (lint, strict types, audits, and runtime smoke paths) and return a prioritized bug list with exact file paths.';
@@ -65,4 +65,27 @@ test('promise-then-ask: the follow-up clarifying question escapes both heuristic
   // catches this case.
   assert.equal(looksLikeStalledPreamble(question), false);
   assert.equal(looksLikeDeferredToolPromise(question), false);
+});
+
+// The LONG buried-promise stall that escaped the start-anchored, ≤400-char
+// preamble heuristic — the second live "why does it stop?" report.
+test('mentionsImminentToolWork: arms on a long message that buries a forward tool-promise', () => {
+  const buried =
+    'Perfect — you were right. I found them in this workspace under openSrc/. ' +
+    'I found clear candidates: openSrc/openhuman, openSrc/grok-cli, and many codex matches. ' +
+    "I'll proceed by locating exact repo roots for all 4 and then run a strict file/line-based comparison.";
+  // Too long + doesn't start with a preamble → the strict heuristics miss it…
+  assert.equal(looksLikeStalledPreamble(buried), false);
+  assert.equal(looksLikeDeferredToolPromise(buried), false);
+  // …but the lenient arming detector catches the buried "I'll proceed by locating … run".
+  assert.equal(mentionsImminentToolWork(buried), true);
+});
+
+test('mentionsImminentToolWork: does NOT arm on a delivered answer or advice to the user', () => {
+  // A real answer that merely describes findings — no first-person future promise.
+  assert.equal(mentionsImminentToolWork('The comparison shows codex has a typed executor contract; BrainRouter generates exposure from a registry.'), false);
+  // Advice phrased at the user, not a self-promise.
+  assert.equal(mentionsImminentToolWork('You could run the tests to verify, then compare the outputs.'), false);
+  // First-person but explanatory verb (summarize) — stays an answer, not a promise.
+  assert.equal(mentionsImminentToolWork("I'll summarize the differences: both support parallel tool calls."), false);
 });

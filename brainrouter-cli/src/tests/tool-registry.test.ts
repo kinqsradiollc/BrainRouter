@@ -8,6 +8,12 @@ import {
 import { actionKindForTool } from '../runtime/exec/execPolicy.js';
 import { isParallelSafe } from '../agent/toolSafety.js';
 import { LOCAL_TOOLS } from '../agent/tools/specs.js';
+import {
+  assertLocalToolExecutorInvariants,
+  localToolExecutor,
+  localToolExecutors,
+  localToolSpecsFromExecutors,
+} from '../agent/tools/executors.js';
 
 // Worker tools are a separate, goal-scoped dynamic surface — not access-gated
 // through the registry, so the spec↔registry guard treats them as known.
@@ -76,4 +82,30 @@ test('CODEX-TOOL-REGISTRY every spec\'d local tool is classified (registry or kn
 test('CODEX-TOOL-REGISTRY entries are unique', () => {
   const names = LOCAL_TOOL_REGISTRY.map((t) => t.name);
   assert.equal(new Set(names).size, names.length, 'duplicate tool name in the registry');
+});
+
+test('CODEX-TOOL-EXECUTOR one executor exists for every registry entry', () => {
+  const registryNames = LOCAL_TOOL_REGISTRY.map((t) => t.name).sort();
+  const executorNames = localToolExecutors().map((t) => t.toolName()).sort();
+  assert.deepEqual(executorNames, registryNames);
+  assertLocalToolExecutorInvariants();
+});
+
+test('CODEX-TOOL-EXECUTOR owns spec + policy + parallel metadata together', () => {
+  const specs = new Map((LOCAL_TOOLS as Array<{ name: string }>).map((spec) => [spec.name, spec]));
+  for (const entry of LOCAL_TOOL_REGISTRY) {
+    const executor = localToolExecutor(entry.name);
+    assert.ok(executor, `${entry.name} should have an executor`);
+    assert.equal(executor.toolName(), entry.name);
+    assert.equal(executor.spec(), specs.get(entry.name), `${entry.name} executor should expose the canonical spec object`);
+    assert.equal(executor.accessTier(), entry.accessTier);
+    assert.equal(executor.actionKind(), entry.actionKind);
+    assert.equal(executor.supportsParallelToolCalls(), entry.parallelSafe);
+  }
+});
+
+test('CODEX-TOOL-EXECUTOR direct specs are generated from executors', () => {
+  const executorSpecs = localToolSpecsFromExecutors().map((tool) => tool.name).sort();
+  const registryNames = LOCAL_TOOL_REGISTRY.map((tool) => tool.name).sort();
+  assert.deepEqual(executorSpecs, registryNames);
 });
