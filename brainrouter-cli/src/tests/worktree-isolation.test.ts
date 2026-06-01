@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import { prepareChildWorkspace } from '../orchestration/worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees } from '../orchestration/worktreeIsolation.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
+import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 
 function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
   const res = spawnSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -88,6 +89,9 @@ test('CODEX-WORKTREE-ISOLATION git-worktree mode fails closed outside git', asyn
 
 test('CODEX-WORKTREE-ISOLATION spawn_agent routes mutating child into isolated workspace metadata', async () => {
   await withGitWorkspace(async (workspace) => {
+    // CODEX-WORKTREE-CLEANUP flipped the default to 'off' (opt-in), so this
+    // test must explicitly enable isolation to exercise the routing.
+    setCliKnobOverride({ childWorkspaceIsolation: 'auto' });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Response(JSON.stringify({
       choices: [{ message: { content: 'child done' } }],
@@ -125,6 +129,69 @@ test('CODEX-WORKTREE-ISOLATION spawn_agent routes mutating child into isolated w
       }
     } finally {
       globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
     }
+  });
+});
+
+test('CODEX-WORKTREE-CLEANUP default is off (opt-in) — no isolation by default', async () => {
+  // Fresh temp home → no config.json → documented defaults.
+  await withTempWorkspaceAsync(async () => {
+    _resetCliKnobsCache();
+    try {
+      assert.equal(getCliKnobs().childWorkspaceIsolation, 'off');
+    } finally {
+      _resetCliKnobsCache();
+    }
+  });
+});
+
+test('CODEX-WORKTREE-CLEANUP removeChildWorktree captures the diff then removes the worktree', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-cleanup-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    // The child "edits" a file inside its worktree.
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 2; // changed\n', 'utf8');
+    const out = removeChildWorktree(resolved.isolation);
+    assert.equal(out.ok, true);
+    assert.equal(out.changedFiles, 1, 'one file changed in the worktree');
+    assert.match(out.diff ?? '', /index\.ts/);
+    // The worktree directory is gone, and git no longer tracks it.
+    assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+    const list = git(workspace, ['worktree', 'list', '--porcelain']).stdout;
+    assert.ok(!list.includes(resolved.workspaceRoot), 'git worktree list no longer references the removed worktree');
+  });
+});
+
+test('CODEX-WORKTREE-CLEANUP removeChildWorktree is a no-op for non-isolated children', () => {
+  assert.deepEqual(removeChildWorktree(null), { ok: true });
+  assert.deepEqual(removeChildWorktree(undefined), { ok: true });
+});
+
+test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git no longer tracks', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-orphan-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation);
+    // Simulate a crash: git's worktree admin entry is pruned but the dir
+    // lingers (as if the process died before cleanup).
+    git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+    fs.mkdirSync(resolved.workspaceRoot, { recursive: true });
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'stale.txt'), 'orphan\n', 'utf8');
+    assert.equal(fs.existsSync(resolved.workspaceRoot), true);
+    const removed = reconcileOrphanWorktrees(workspace);
+    assert.ok(removed >= 1, 'at least the orphan dir was reclaimed');
+    assert.equal(fs.existsSync(resolved.workspaceRoot), false);
   });
 });
