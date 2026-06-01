@@ -143,6 +143,15 @@ export interface CliKnobs {
   sandboxWritePaths?: string[];
   /** Allow outbound network from the sandbox. Default false. */
   sandboxNetwork?: boolean;
+  /**
+   * CODEX-SANDBOX-FAILCLOSED (0.4.7) — what to do when `sandbox: 'on'` but no
+   * sandboxer is available on this platform (Linux without bwrap/firejail,
+   * Windows, etc.). `'deny'` (default) refuses to run rather than silently
+   * running unsandboxed; `'ask'` requires approval (fails closed where no
+   * approver exists, e.g. silent children); `'warn'` runs unsandboxed with a
+   * notice (the pre-0.4.7 behavior — opt back in explicitly).
+   */
+  sandboxUnavailable?: 'ask' | 'deny' | 'warn';
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -468,6 +477,7 @@ export interface ResolvedCliKnobs {
   sandboxReadPaths: string[];
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
+  sandboxUnavailable: 'ask' | 'deny' | 'warn';
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -530,6 +540,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxReadPaths: c.sandboxReadPaths ?? [],
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
+    sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
