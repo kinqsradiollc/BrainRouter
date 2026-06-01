@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getCliKnobs } from '../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
 
 /**
  * Optional sandboxing for `run_command`.

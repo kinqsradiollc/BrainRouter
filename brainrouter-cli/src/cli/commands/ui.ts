@@ -18,7 +18,7 @@ import { readPlan } from '../../state/taskStore.js';
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
 import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '../../config/config.js';
-import { getPolicyProfile, profileNames } from '../../runtime/policyProfiles.js';
+import { getPolicyProfile, profileNames } from '../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
