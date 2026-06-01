@@ -1433,6 +1433,24 @@ export class SqliteMemoryStore implements IMemoryStore {
     return rows.map((r) => this.rowToSourceChunk(r));
   }
 
+  /**
+   * MEM-ACCURACY (0.4.7) — true when a record's provenance points at a source
+   * document that has since been marked `stale` (its file changed / was
+   * reindexed after this record was captured). Recall uses this to down-rank +
+   * flag "the code this memory was derived from has changed — verify". Returns
+   * false for records with no code provenance (pure conversational memories).
+   */
+  public isRecordSourceStale(userId: string, recordId: string): boolean {
+    const row = this.db.prepare(
+      `SELECT 1 FROM cognitive_source_links l
+         JOIN source_chunks sc ON sc.id = l.chunk_id
+         JOIN source_documents d ON d.id = sc.document_id
+        WHERE l.record_id = ? AND l.user_id = ? AND COALESCE(d.stale, 0) = 1
+        LIMIT 1`,
+    ).get(recordId, userId);
+    return !!row;
+  }
+
   // ============================
   // Blackboard Items (MEM-4)
   // ============================
