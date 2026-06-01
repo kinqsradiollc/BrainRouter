@@ -1684,7 +1684,7 @@ export class Agent {
           // a silent child can't answer fails closed. This closes the gap where
           // spawn/delegate/worker dispatches bypassed the access-mode gate.
           {
-            const policy = resolveToolPolicy(name, this.accessMode);
+            const policy = resolveToolPolicy(name, this.accessMode, args as Record<string, unknown> | null);
             if (policy.mutating) {
               this.policyAudit.push({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
               traceEvent(
