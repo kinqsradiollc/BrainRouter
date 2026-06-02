@@ -338,9 +338,8 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
             style={{ 
               width: "10px", 
               height: "10px", 
-              borderRadius: "50%", 
+              borderRadius: "50%",
               background: "var(--color-golden-accent)",
-              boxShadow: "0 0 10px var(--color-golden-accent)",
               flexShrink: 0
             }} 
           />
@@ -520,9 +519,8 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
                 width: "8px", 
                 height: "8px", 
                 borderRadius: "50%", 
-                background: "#34C28E", 
-                display: "inline-block",
-                boxShadow: "0 0 8px #34C28E"
+                background: "#34C28E",
+                display: "inline-block"
               }}
             />
           </div>
