@@ -59,7 +59,7 @@ Verify the install:
 
 ```bash
 which brainrouter           # prints the path to the binary
-brainrouter --version       # prints 0.4.6
+brainrouter --version       # prints 0.4.7
 ```
 
 ## Configure
