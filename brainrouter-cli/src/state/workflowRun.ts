@@ -50,6 +50,9 @@ export interface WorkflowRun {
    * undefined and behave exactly as before.
    */
   phases?: WorkflowRunPhase[];
+  /** WF-RESUME (0.4.8) — the serialized PhasePlan, so an interrupted run can be
+   *  re-loaded and resumed from its failed/interrupted phase. Set on creation. */
+  planJson?: string;
 }
 
 /** Status of one phase in a runtime-driven (PhasePlan) workflow run. */
@@ -418,7 +421,7 @@ export function ensurePhaseRun(
   workspaceRoot: string,
   slug: string,
   phases: Array<{ id: string; title: string }>,
-  opts: { sessionKey?: string | null; pid?: number | null; now?: string; kind?: string } = {},
+  opts: { sessionKey?: string | null; pid?: number | null; now?: string; kind?: string; planJson?: string } = {},
 ): WorkflowRun {
   const existing = readRun(workspaceRoot, slug);
   if (existing) return existing;
@@ -435,6 +438,7 @@ export function ensurePhaseRun(
     steps: [],
     currentStepId: null,
     phases: phases.map((p) => ({ id: p.id, title: p.title, status: 'pending' as RunPhaseStatus, childIds: [] })),
+    planJson: opts.planJson,
   };
   return writeRun(workspaceRoot, run);
 }
