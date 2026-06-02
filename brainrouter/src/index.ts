@@ -653,9 +653,23 @@ if (USE_HTTP) {
     console.log(`   Root      : ${config.localRoot}\n`);
   });
 
-  process.on('SIGINT', () => {
+  // Fast, idempotent shutdown on SIGINT *and* SIGTERM (the latter is what
+  // `tsx watch` sends on a file change). Without this the open keep-alive
+  // connections + background sweeper intervals keep the event loop alive, so
+  // `httpServer.close()`'s callback never fires and the dev watcher has to
+  // force-kill after 5s. We drop connections immediately and hold a short hard
+  // deadline so the process always exits well before any force-kill.
+  let shuttingDown = false;
+  const shutdownHttp = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const hardExit = setTimeout(() => process.exit(0), 700);
+    hardExit.unref();
+    try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
     httpServer.close(() => process.exit(0));
-  });
+  };
+  process.on('SIGINT', shutdownHttp);
+  process.on('SIGTERM', shutdownHttp);
 
 } else {
   // ── stdio transport (default) ───────────────────────────────────────────────
@@ -711,8 +725,15 @@ if (USE_HTTP) {
   await server.connect(transport);
   console.error('BrainRouter MCP server running on stdio');
 
-  process.on('SIGINT', async () => {
-    await server.close();
+  let stdioShuttingDown = false;
+  const shutdownStdio = async () => {
+    if (stdioShuttingDown) return;
+    stdioShuttingDown = true;
+    const hardExit = setTimeout(() => process.exit(0), 700);
+    hardExit.unref();
+    try { await server.close(); } catch { /* ignore */ }
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', shutdownStdio);
+  process.on('SIGTERM', shutdownStdio);
 }
