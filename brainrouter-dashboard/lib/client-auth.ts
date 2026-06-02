@@ -1,6 +1,7 @@
 "use client";
 
 const JWT_KEY = "brainrouter_jwt";
+const REFRESH_KEY = "brainrouter_refresh";
 const API_KEY = "brainrouter_api_key";
 
 function safeDecodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -14,26 +15,46 @@ function safeDecodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
-export function getJwt(): string | null {
-  if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(JWT_KEY) ?? localStorage.getItem(JWT_KEY);
+function notExpired(token: string | null | undefined): boolean {
+  if (!token) return false;
+  const payload = safeDecodeJwtPayload(token);
+  if (!payload) return false;
+  const exp = typeof payload.exp === "number" ? payload.exp : 0;
+  return exp > Math.floor(Date.now() / 1000);
 }
 
-export function setJwt(token: string, rememberMe = false): void {
+// Access token — ALWAYS localStorage so the session is shared across tabs and
+// survives a browser restart. The refresh token transparently renews it.
+export function getJwt(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(JWT_KEY) ?? sessionStorage.getItem(JWT_KEY);
+}
+
+export function setJwt(token: string, _rememberMe = true): void {
   if (typeof window === "undefined") return;
-  if (rememberMe) {
-    sessionStorage.removeItem(JWT_KEY);
-    localStorage.setItem(JWT_KEY, token);
-  } else {
-    localStorage.removeItem(JWT_KEY);
-    sessionStorage.setItem(JWT_KEY, token);
-  }
+  sessionStorage.removeItem(JWT_KEY); // migrate any legacy per-tab token
+  localStorage.setItem(JWT_KEY, token);
 }
 
 export function clearJwt(): void {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(JWT_KEY);
   localStorage.removeItem(JWT_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+export function setRefreshToken(token: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(REFRESH_KEY, token);
+}
+
+export function clearRefreshToken(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(REFRESH_KEY);
 }
 
 export function getApiKey(): string {
@@ -53,16 +74,15 @@ export function clearApiKey(): void {
 
 export function clearAll(): void {
   clearJwt();
+  clearRefreshToken();
   clearApiKey();
 }
 
+/** Authenticated if the access token is still valid OR a refresh token can mint
+ *  a new one (so an expired access token alone doesn't bounce the user to login). */
 export function isAuthenticated(): boolean {
-  const jwt = getJwt();
-  if (!jwt) return false;
-  const payload = safeDecodeJwtPayload(jwt);
-  if (!payload) return false;
-  const exp = typeof payload.exp === "number" ? payload.exp : 0;
-  return exp > Math.floor(Date.now() / 1000);
+  if (notExpired(getJwt())) return true;
+  return notExpired(getRefreshToken());
 }
 
 export function signOut(): void {

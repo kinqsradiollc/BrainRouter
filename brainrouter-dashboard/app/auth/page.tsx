@@ -68,7 +68,7 @@ export default function AuthPage() {
     try {
       const client = getClient();
       const data = await client.signIn(signin);
-      await login(data.jwt, data.apiKey, rememberMe);
+      await login(data.jwt, data.apiKey, rememberMe, data.refreshToken);
       router.replace("/overview");
     } catch (err) {
       setError(authErrorMessage(err));
@@ -89,7 +89,7 @@ export default function AuthPage() {
         password: signup.password,
         displayName: signup.displayName || undefined,
       });
-      await login(data.jwt);
+      await login(data.jwt, undefined, true, data.refreshToken);
       router.replace("/overview");
     } catch (err) {
       setError(authErrorMessage(err));

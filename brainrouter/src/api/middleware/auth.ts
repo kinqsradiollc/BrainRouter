@@ -54,19 +54,19 @@ export function requireJwt(req: AuthedRequest, res: Response, next: NextFunction
   }
   const payload = verifyJwt(token, JWT_SECRET);
   if (!payload) {
-    res.status(403).json({ error: "Invalid or expired token" });
+    res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
   req.userId = typeof payload.userId === "string" ? payload.userId : undefined;
   req.isAdmin = Boolean(payload.isAdmin);
   req.email = typeof payload.email === "string" ? payload.email : undefined;
   if (!req.userId) {
-    res.status(403).json({ error: "Invalid or expired token" });
+    res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
   const user = memoryEngine.getUserById(req.userId);
   if (!user) {
-    res.status(403).json({ error: "Invalid or expired token" });
+    res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
   if (user.status === "disabled") {
