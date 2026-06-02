@@ -21,7 +21,7 @@ import {
   type PhaseChildResult,
   type PhaseStatus,
 } from './phaseOrchestrator.js';
-import { ensurePhaseRun, advanceRunPhase, type RunPhaseStatus } from '../state/workflowRun.js';
+import { ensurePhaseRun, advanceRunPhase, finishRun, type RunPhaseStatus } from '../state/workflowRun.js';
 import { getCliKnobs } from '../config/config.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
@@ -131,7 +131,7 @@ export interface RunWorkflowDeps {
  * return a compact JSON summary. Returns `{ ok:false, ... }` on an invalid plan.
  */
 export async function runWorkflow(
-  args: { plan?: unknown; slug?: unknown; template?: unknown; templateArgs?: unknown },
+  args: { plan?: unknown; slug?: unknown; template?: unknown; templateArgs?: unknown; background?: unknown },
   ctx: OrchestrationContext,
   deps: RunWorkflowDeps,
 ): Promise<string> {
@@ -162,16 +162,40 @@ export async function runWorkflow(
   const runner =
     deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
 
-  const execution = await executePhasePlan(plan, runner, {
-    onPhaseStart: (phase) => {
+  const hooks = {
+    onPhaseStart: (phase: { id: string }) => {
       advanceRunPhase(ws, slug, phase.id, 'running');
     },
-    onPhaseComplete: (exec) => {
+    onPhaseComplete: (exec: { id: string; status: keyof typeof PHASE_TO_RUN_STATUS; children: Array<{ id: string }> }) => {
       advanceRunPhase(ws, slug, exec.id, PHASE_TO_RUN_STATUS[exec.status], {
         childIds: exec.children.map((c) => c.id),
       });
     },
-  });
+  };
+
+  // WF-BG — background mode: kick the run off DETACHED so a long fan-out doesn't
+  // block the REPL turn. The durable ledger (visible via /workflows + the bg
+  // panel) tracks live phase progress; the run continues in-process. On an
+  // unexpected throw, the ledger is marked failed.
+  if (args?.background === true) {
+    void executePhasePlan(plan, runner, hooks).catch(() => {
+      finishRun(ws, slug, 'failed');
+    });
+    return JSON.stringify(
+      {
+        ok: true,
+        slug,
+        background: true,
+        status: 'running',
+        phases: plan.phases.map((p) => ({ id: p.id, status: 'pending', children: 0 })),
+        note: `Workflow "${slug}" started in the background — track it with \`/workflows ${slug}\` or the background panel.`,
+      },
+      null,
+      2,
+    );
+  }
+
+  const execution = await executePhasePlan(plan, runner, hooks);
 
   return JSON.stringify(
     {
