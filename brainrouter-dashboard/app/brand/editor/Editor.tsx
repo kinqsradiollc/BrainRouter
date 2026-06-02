@@ -190,13 +190,6 @@ export function Editor() {
   const doPNG = () => downloadPNGFromSVG(buildEditorSVG(doc), doc.width, doc.height, `${exportName}.png`, scale);
   const doSVG = () => downloadSVGString(buildEditorSVG(doc), `${exportName}.svg`);
 
-  const editText = (id: string) => {
-    const t = doc.layers.find((x) => x.id === id) as TextLayer | undefined;
-    if (!t) return;
-    const v = window.prompt("Edit text", t.text);
-    if (v != null) update(id, { text: v });
-  };
-
   // keyboard: delete removes, arrows nudge
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -244,7 +237,7 @@ export function Editor() {
       {/* body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <LayersPanel ed={ed} />
-        <EditorCanvas doc={doc} selId={selId} onSelect={setSelId} onChange={update} onEditText={editText} guides={false} />
+        <EditorCanvas doc={doc} selId={selId} onSelect={setSelId} onChange={update} guides={false} />
         <Inspector ed={ed} />
       </div>
     </div>

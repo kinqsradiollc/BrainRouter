@@ -62,7 +62,7 @@ function renderLayer(l: Layer, defs: { s: string }): string {
   return transform || op ? `<g${transform}${op}>${inner}</g>` : inner;
 }
 
-export function buildEditorSVG(doc: EditorDoc): string {
+export function buildEditorSVG(doc: EditorDoc, opts?: { hideId?: string }): string {
   const { width: w, height: h, background: b } = doc;
   const defs = { s: "" };
 
@@ -88,6 +88,6 @@ export function buildEditorSVG(doc: EditorDoc): string {
     }
   }
 
-  const layers = doc.layers.map((l) => renderLayer(l, defs)).join("");
+  const layers = doc.layers.map((l) => (opts?.hideId && l.id === opts.hideId ? "" : renderLayer(l, defs))).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="${FONT}"><defs>${defs.s}</defs>${bg}${layers}</svg>`;
 }

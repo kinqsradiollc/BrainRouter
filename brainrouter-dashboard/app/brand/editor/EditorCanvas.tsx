@@ -13,7 +13,6 @@ export function EditorCanvas({
   selId,
   onSelect,
   onChange,
-  onEditText,
   guides,
   maxW = 860,
   maxH = 560,
@@ -22,17 +21,18 @@ export function EditorCanvas({
   selId: string | null;
   onSelect: (id: string | null) => void;
   onChange: (id: string, patch: Partial<Layer>) => void;
-  onEditText: (id: string) => void;
   guides: boolean;
   maxW?: number;
   maxH?: number;
 }) {
   const drag = useRef<Drag | null>(null);
   const [snap, setSnap] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
+  const [editingId, setEditingId] = useState<string | null>(null);
   const sc = Math.min(maxW / doc.width, maxH / doc.height, 1);
   const dispW = doc.width * sc;
   const dispH = doc.height * sc;
-  const svg = buildEditorSVG(doc).replace("<svg ", '<svg style="display:block;width:100%;height:100%" ');
+  const svg = buildEditorSVG(doc, { hideId: editingId ?? undefined }).replace("<svg ", '<svg style="display:block;width:100%;height:100%" ');
+  const editing = editingId ? doc.layers.find((l) => l.id === editingId) : null;
 
   const startMove = (e: React.PointerEvent, l: Layer) => {
     if (l.locked) return;
@@ -104,7 +104,7 @@ export function EditorCanvas({
             <div
               key={l.id}
               onPointerDown={(e) => startMove(e, l)}
-              onDoubleClick={() => l.type === "text" && onEditText(l.id)}
+              onDoubleClick={() => { if (l.type === "text") { onSelect(l.id); setEditingId(l.id); } }}
               style={{ position: "absolute", left: l.x * sc, top: l.y * sc, width: l.w * sc, height: l.h * sc, boxSizing: "border-box", cursor: l.locked ? "default" : "move", border: l.id === selId ? "1px solid var(--accent)" : "1px solid transparent", outline: l.id === selId ? "1px solid rgba(0,0,0,0.3)" : "none" }}
             />
           ) : null
@@ -123,6 +123,48 @@ export function EditorCanvas({
               />
             );
           })}
+
+        {/* inline text editor — double-click a text layer to edit in place */}
+        {editing && editing.type === "text" && (
+          <textarea
+            autoFocus
+            value={editing.text}
+            onChange={(e) => onChange(editing.id, { text: e.target.value })}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onBlur={() => setEditingId(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" || (e.key === "Enter" && !e.shiftKey)) {
+                e.preventDefault();
+                setEditingId(null);
+              }
+            }}
+            style={{
+              position: "absolute",
+              left: editing.x * sc,
+              top: editing.y * sc,
+              width: editing.w * sc,
+              height: editing.h * sc,
+              boxSizing: "border-box",
+              fontFamily: editing.fontFamily === "mono" ? "var(--font-mono)" : "var(--font-sans)",
+              fontSize: editing.fontSize * sc,
+              fontWeight: editing.weight,
+              lineHeight: editing.lineHeight,
+              letterSpacing: editing.letterSpacing * sc,
+              color: editing.color,
+              textAlign: editing.align,
+              background: "rgba(0,0,0,0.18)",
+              border: "1px solid var(--accent)",
+              outline: "none",
+              resize: "none",
+              overflow: "hidden",
+              padding: 0,
+              margin: 0,
+              zIndex: 10,
+              caretColor: "var(--accent)",
+            }}
+          />
+        )}
 
         {/* snap guides */}
         {snap.x !== null && <div style={{ position: "absolute", left: snap.x * sc, top: 0, width: 1, height: dispH, background: "var(--accent)", pointerEvents: "none" }} />}
