@@ -76,7 +76,7 @@ export function SceneCard({ scene, onEvict }: SceneCardProps) {
             height: "100%", 
             borderRadius: "9999px", 
             background: "var(--color-golden-accent)",
-            boxShadow: "0 0 8px var(--color-golden-accent)"
+            boxShadow: "none"
           }}
         />
       </div>

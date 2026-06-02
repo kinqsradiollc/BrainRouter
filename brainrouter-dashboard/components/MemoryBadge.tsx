@@ -65,7 +65,7 @@ export function MemoryBadge({ score }: MemoryBadgeProps) {
           borderRadius: "50%", 
           marginRight: "6px",
           background: isActive ? "var(--color-golden-accent)" : isDecaying ? "#E5675F" : "var(--color-silver-text)",
-          boxShadow: isActive ? "0 0 6px var(--color-golden-accent)" : "none"
+          boxShadow: "none"
         }} 
       />
       {badgeStyle.text}

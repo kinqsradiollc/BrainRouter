@@ -221,7 +221,7 @@ export default function Page() {
                 API Status
               </h3>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#34C28E", boxShadow: "0 0 8px #34C28E" }} />
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#34C28E" }} />
                 <span style={{ fontSize: "14px", fontWeight: 500, color: "var(--color-pure-white)" }}>Server Connected</span>
               </div>
               <p style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5, margin: 0, marginTop: "8px" }}>

@@ -122,7 +122,7 @@ export default function RecallInspectorPage() {
                             height: "6px",
                             borderRadius: "50%",
                             background: node.fired ? "var(--color-golden-accent)" : "var(--color-stone-text)",
-                            boxShadow: node.fired ? "0 0 6px var(--color-golden-accent)" : "none",
+                            boxShadow: "none",
                             flexShrink: 0,
                           }}
                         />
