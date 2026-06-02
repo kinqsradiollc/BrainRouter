@@ -21,6 +21,7 @@ import {
   type ChildSessionRecord,
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { runWorkflow } from './workflowTool.js';
 import { countRunningChildren, spawnSlotDecision } from './spawnSlots.js';
 import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
@@ -191,6 +192,7 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
   'read_agent_transcript',
   'close_agent',
   'route_task',
+  'run_workflow',
 ]);
 
 /**
@@ -290,7 +292,7 @@ async function withChildDeadline<T>(promise: Promise<T>, timeoutMs: number, chil
   }
 }
 
-export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool } from './agentTools.js';
+export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool } from './agentTools.js';
 
 /**
  * MAS-P2-M1: per-turn synthesized `delegate_<agentId>` tools.
@@ -432,6 +434,11 @@ export async function executeOrchestrationTool(
       return handleClose(args, ctx);
     case 'route_task':
       return await handleRouteTask(args, ctx);
+    case 'run_workflow':
+      // WF-TOOL — execute a declarative PhasePlan deterministically. Inject this
+      // very dispatcher as the spawn backend (run_workflow's children go through
+      // the same spawn_agents/wait_agents path everything else does).
+      return await runWorkflow(args, ctx, { dispatch: executeOrchestrationTool });
     default:
       throw new Error(`Unknown orchestration tool: ${name}`);
   }
