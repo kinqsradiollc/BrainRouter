@@ -478,6 +478,13 @@ export interface RecalledMemory {
    * when known. Walk it with `memory_tree_walk`. Omitted when none.
    */
   treeNodeId?: string | null;
+  /**
+   * MEM-ACCURACY (0.4.7) — true when the source code this record was derived
+   * from has changed since capture (its provenance document is now stale). The
+   * record is down-ranked and flagged "verify against current code"; treat its
+   * code claims as a hint to re-check, not ground truth. Omitted when fresh.
+   */
+  staleVsCode?: boolean;
 }
 
 export type MemoryTaskIntent =

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { ExternalDirMode } from '../runtime/exec/execPolicy.js';
+import { sanitizeCommandAllowlist } from '../runtime/exec/approvalGuard.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -66,6 +67,15 @@ export interface LLMConfig {
  * those are documented at their callsites.)
  */
 export interface CliKnobs {
+  // ---- planning / orchestration -----------------------------------------
+  /**
+   * NEXT-ACTION PLANNER (0.4.7). Default 'on'. A focused pre-flight reasoning
+   * call that decides the turn's strategy (answer-direct / investigate /
+   * fan-out / workflow) and concrete subtasks, then injects a decisive
+   * directive — replacing the keyword-only breadth hint. 'off' falls back to
+   * the breadthHint heuristic. Skipped for trivial prompts regardless.
+   */
+  nextActionPlanner?: 'on' | 'off';
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -143,6 +153,31 @@ export interface CliKnobs {
   sandboxWritePaths?: string[];
   /** Allow outbound network from the sandbox. Default false. */
   sandboxNetwork?: boolean;
+  /**
+   * CODEX-SANDBOX-FAILCLOSED (0.4.7) — what to do when `sandbox: 'on'` but no
+   * sandboxer is available on this platform (Linux without bwrap/firejail,
+   * Windows, etc.). `'deny'` (default) refuses to run rather than silently
+   * running unsandboxed; `'ask'` requires approval (fails closed where no
+   * approver exists, e.g. silent children); `'warn'` runs unsandboxed with a
+   * notice (the pre-0.4.7 behavior — opt back in explicitly).
+   */
+  sandboxUnavailable?: 'ask' | 'deny' | 'warn';
+  /**
+   * CODEX-EXEC-POLICY (0.4.7) — command prefixes the user pre-approves, so a
+   * `run_command` whose every segment matches one auto-approves without a prompt
+   * in any mode (e.g. `git status`, `npm test`). Prefixes match on a word
+   * boundary. Over-broad prefixes (bare `git`/`bash`/`sudo`/…) are rejected by
+   * CODEX-APPROVAL-GUARD. Default empty = no change to approval behavior.
+   */
+  commandAllowlist?: string[];
+  /**
+   * CODEX-WORKTREE-ISOLATION — filesystem isolation for spawned write/shell
+   * children. `auto` creates a detached git worktree when the parent workspace is
+   * inside a git repo and falls back to the shared root otherwise; `git-worktree`
+   * requires that worktree creation succeeds; `off` preserves legacy shared-root
+   * behavior. Read-only children always share the parent root.
+   */
+  childWorkspaceIsolation?: 'off' | 'auto' | 'git-worktree';
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -153,6 +188,13 @@ export interface CliKnobs {
   offloadMaxEntries?: number;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
+  /**
+   * CODEX-AGENT-LIFECYCLE (0.4.7) — cap on concurrently-live child agents
+   * (spawn slots). Spawning beyond this is refused until a child finishes,
+   * preventing unbounded fan-out + orphan drift. `0` disables the cap.
+   * Default 8.
+   */
+  maxConcurrentChildren?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
   autoChainMaxFollowups?: number;
   /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 40. */
@@ -440,6 +482,7 @@ export function selfHealConfig(parsed: Config): { config: Config; changed: boole
  */
 export interface ResolvedCliKnobs {
   recallMode: 'always' | 'gated' | 'off';
+  nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
   personaAnchor: 'on' | 'off';
   briefingMaxCharsPerSource: number;
@@ -468,11 +511,15 @@ export interface ResolvedCliKnobs {
   sandboxReadPaths: string[];
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
+  sandboxUnavailable: 'ask' | 'deny' | 'warn';
+  commandAllowlist: string[];
+  childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
   offloadMaxEntries: number;
   maxSpawnDepth: number;
+  maxConcurrentChildren: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
   scheduleTickMs: number;
@@ -502,6 +549,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   return {
     recallMode: c.recallMode ?? 'gated',
+    nextActionPlanner: c.nextActionPlanner ?? 'on',
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
@@ -530,11 +578,17 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxReadPaths: c.sandboxReadPaths ?? [],
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
+    sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
+    // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
+    // so a too-permissive config.json entry can never auto-approve everything.
+    commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
+    childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'off',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
     offloadMaxEntries: c.offloadMaxEntries ?? 64,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
+    maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
@@ -636,6 +690,5 @@ export function _resetCliKnobsCache(): void {
   cachedRawCli = undefined;
   cachedOverrides = {};
 }
-
 
 

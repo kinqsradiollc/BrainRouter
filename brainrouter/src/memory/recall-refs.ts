@@ -15,11 +15,15 @@
 export interface RecordRefsStore {
   getRecordSourceChunks?(userId: string, recordId: string): { id: string }[];
   getTreeNodeIdByChunkId?(userId: string, chunkId: string): string | null;
+  /** MEM-ACCURACY — true when the record's source code changed since capture. */
+  isRecordSourceStale?(userId: string, recordId: string): boolean;
 }
 
 export interface RecordRefs {
   sourceChunkIds: string[];
   treeNodeId: string | null;
+  /** MEM-ACCURACY — the code this record was derived from has since changed. */
+  staleVsCode: boolean;
 }
 
 /** Gather a record's source-chunk ids + covering tree node. Best-effort: a
@@ -41,7 +45,16 @@ export function gatherRecordRefs(store: RecordRefsStore, userId: string, recordI
       treeNodeId = null;
     }
   }
-  return { sourceChunkIds, treeNodeId };
+  // Only code-anchored records can be stale-vs-code; skip the query otherwise.
+  let staleVsCode = false;
+  if (sourceChunkIds.length > 0 && typeof store.isRecordSourceStale === "function") {
+    try {
+      staleVsCode = store.isRecordSourceStale(userId, recordId);
+    } catch {
+      staleVsCode = false;
+    }
+  }
+  return { sourceChunkIds, treeNodeId, staleVsCode };
 }
 
 /**
@@ -55,5 +68,8 @@ export function formatRefHint(refs: RecordRefs, maxShown = 2): string {
   const shown = refs.sourceChunkIds.slice(0, maxShown).join(", ");
   const more = refs.sourceChunkIds.length > maxShown ? `, +${refs.sourceChunkIds.length - maxShown}` : "";
   const tree = refs.treeNodeId ? ` · tree: ${refs.treeNodeId}` : "";
-  return `    ↳ source: ${shown}${more}${tree}`;
+  // MEM-ACCURACY — make code drift VISIBLE so the agent re-verifies instead of
+  // trusting a memory whose underlying file has since changed.
+  const stale = refs.staleVsCode ? " · ⚠ source changed since capture — verify against current code" : "";
+  return `    ↳ source: ${shown}${more}${tree}${stale}`;
 }

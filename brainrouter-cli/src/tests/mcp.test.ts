@@ -343,6 +343,42 @@ test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not',
   }
 });
 
+test('breadthHint: multi-target comparisons trigger fan-out (the live "why no spawn?" miss)', async () => {
+  const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  // The exact prompt that scored 0 and never fanned out — an inherently
+  // parallel "compare N codebases" task (one explorer per target).
+  const comparisons = [
+    'can you help me do a full compairison between our brainrouter-cli vs codex, grok-cli and openhuman?',
+    'compare brainrouter-cli vs codex',
+    'benchmark our recall pipeline against the alternatives',
+    'contrast the three approaches and tell me which is best',
+    'review codex, grok-cli and openhuman', // enumerated ≥3 targets + verb
+  ];
+  for (const p of comparisons) {
+    const r = shouldSuggestFanOut(p);
+    assert.ok(r.suggest, `expected fan-out for comparison: "${p}" (score=${r.intent.score}, signals=${r.intent.signals.join(',')})`);
+  }
+  // A trivial two-thing compare with an explicit self-veto must still NOT fan out.
+  assert.ok(!shouldSuggestFanOut('compare these two lines yourself, no fan-out').suggest);
+});
+
+test('breadthHint: analytical "pros and cons / against those" comparisons fan out, without false-firing on "guard against"', async () => {
+  const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  // The exact live miss + relational-comparison shapes (one child per peer).
+  for (const p of [
+    'what are our pros and cons of brainrouter against those in opensrc',
+    'how does our memory stack up against the others',
+    'evaluate our approach versus the alternatives',
+    'strengths and weaknesses of our recall vs the competition',
+  ]) {
+    assert.ok(shouldSuggestFanOut(p).suggest, `expected fan-out for: "${p}"`);
+  }
+  // "against" in a NON-comparison context must NOT trigger fan-out.
+  for (const p of ['guard against errors in the parser', 'warn against using the deprecated API']) {
+    assert.ok(!shouldSuggestFanOut(p).suggest, `expected NO fan-out for: "${p}"`);
+  }
+});
+
 test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even at high score', async () => {
   const { shouldSuggestFanOut, detectFanOutVeto } = await import('../prompt/breadthHint.js');
   // These prompts ALL score high on breadth (verb-object-broad, every,

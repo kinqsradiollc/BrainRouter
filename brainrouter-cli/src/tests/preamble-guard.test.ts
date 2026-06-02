@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { looksLikeStalledPreamble, looksLikeDeferredToolPromise, stripLeadingAck } from '../agent/toolCallRecovery.js';
+import { looksLikeStalledPreamble, looksLikeDeferredToolPromise, mentionsImminentToolWork, stripLeadingAck } from '../agent/toolCallRecovery.js';
 
 // The exact phrasing that slipped through the guard (gpt-5.3-codex):
 const STALL = 'Absolutely — I\'ll run the full deep sweep now (lint, strict types, audits, and runtime smoke paths) and return a prioritized bug list with exact file paths.';
@@ -44,4 +44,48 @@ test('looksLikeDeferredToolPromise: adjacency — a tool verb buried in prose do
   // still catches genuine promises (tool verb adjacent to the opener)
   assert.equal(looksLikeDeferredToolPromise("I'll start by exploring the repo"), true);
   assert.equal(looksLikeDeferredToolPromise('Let me just run the tests'), true);
+});
+
+// PROMISE-THEN-ASK (the live "why does it stop?" report): the model promised a
+// parallel scan, then ended the turn with a clarifying question instead. The
+// promise must be detected (so the runTurn tracker arms), and the follow-up
+// question must NOT read as a preamble (which is exactly why the old guard
+// missed it — motivating the new promise-then-ask guard).
+test('promise-then-ask: the parallel-scan promise is a deferred-tool-promise', () => {
+  const promise = "I'll scan our CLI and the three peers in parallel, then build a comparison matrix.";
+  assert.equal(looksLikeDeferredToolPromise(promise), true);
+  assert.equal(looksLikeStalledPreamble(promise), true);
+});
+
+test('promise-then-ask: the follow-up clarifying question escapes both heuristics', () => {
+  const question = 'Absolutely — quick heads-up: which exact folder under openSrc/ is codex? I can auto-detect and proceed.';
+  // A question to the user is neither a stalled preamble nor a tool-promise, so
+  // the terminal guards based on those alone never fire — the runTurn
+  // promise-then-ask tracker (unfulfilled promise + no tools since) is what
+  // catches this case.
+  assert.equal(looksLikeStalledPreamble(question), false);
+  assert.equal(looksLikeDeferredToolPromise(question), false);
+});
+
+// The LONG buried-promise stall that escaped the start-anchored, ≤400-char
+// preamble heuristic — the second live "why does it stop?" report.
+test('mentionsImminentToolWork: arms on a long message that buries a forward tool-promise', () => {
+  const buried =
+    'Perfect — you were right. I found them in this workspace under openSrc/. ' +
+    'I found clear candidates: openSrc/openhuman, openSrc/grok-cli, and many codex matches. ' +
+    "I'll proceed by locating exact repo roots for all 4 and then run a strict file/line-based comparison.";
+  // Too long + doesn't start with a preamble → the strict heuristics miss it…
+  assert.equal(looksLikeStalledPreamble(buried), false);
+  assert.equal(looksLikeDeferredToolPromise(buried), false);
+  // …but the lenient arming detector catches the buried "I'll proceed by locating … run".
+  assert.equal(mentionsImminentToolWork(buried), true);
+});
+
+test('mentionsImminentToolWork: does NOT arm on a delivered answer or advice to the user', () => {
+  // A real answer that merely describes findings — no first-person future promise.
+  assert.equal(mentionsImminentToolWork('The comparison shows codex has a typed executor contract; BrainRouter generates exposure from a registry.'), false);
+  // Advice phrased at the user, not a self-promise.
+  assert.equal(mentionsImminentToolWork('You could run the tests to verify, then compare the outputs.'), false);
+  // First-person but explanatory verb (summarize) — stays an answer, not a promise.
+  assert.equal(mentionsImminentToolWork("I'll summarize the differences: both support parallel tool calls."), false);
 });

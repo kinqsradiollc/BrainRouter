@@ -7,24 +7,29 @@ import { getCliKnobs } from '../../config/config.js';
 /**
  * Optional sandboxing for `run_command`.
  *
- * Activated by setting `BRAINROUTER_SANDBOX=on`. When inactive, commands run
- * exactly as before (with the existing user confirmation prompt). When
- * active, the command is wrapped in the platform's native sandboxer:
+ * Activated by `cli.sandbox: 'on'` (config.json — no env var). When inactive,
+ * commands run exactly as before (with the existing user confirmation prompt).
+ * When active, the command is wrapped in the platform's native sandboxer:
  *
  *   - macOS: `sandbox-exec -f <profile>` with a generated `.sb` profile that
  *            denies network by default, restricts writes to the workspace, and
  *            allows reads of `/usr`, `/bin`, `/etc`, the workspace, and any
- *            extra paths in `BRAINROUTER_SANDBOX_READ_PATHS`.
+ *            extra paths in `cli.sandboxReadPaths`.
  *   - Linux: `bwrap` (bubblewrap) when available; falls back to `firejail`.
  *            Sets up a fresh mount namespace with the workspace mounted rw and
  *            the rest of the FS bind-mounted ro.
- *   - Windows: no native sandbox in stdlib; falls back to unsandboxed run with
- *              a clear warning so the user knows the flag was honored as a no-op.
+ *   - Windows / no sandboxer: there is no portable sandbox. Rather than
+ *            SILENTLY running unsandboxed, `cli.sandboxUnavailable` decides:
+ *            `'deny'` (default) / `'ask'` refuse to run; `'warn'` runs
+ *            unsandboxed with a loud notice (CODEX-SANDBOX-FAILCLOSED).
  *
  * The sandbox is intentionally an *additional* layer on top of the existing
  * user-confirmation step — confirmation guards intent, sandboxing guards blast
  * radius if the user approves something they shouldn't have.
  */
+
+/** What to do when sandboxing was requested but is unavailable on this host. */
+export type SandboxUnavailableMode = 'ask' | 'deny' | 'warn';
 
 export interface SandboxConfig {
   enabled: boolean;
@@ -35,6 +40,56 @@ export interface SandboxConfig {
   writePaths: string[];
   /** If true, allow outbound network. Off by default. */
   allowNetwork: boolean;
+  /** CODEX-SANDBOX-FAILCLOSED — behavior when the sandboxer is missing. */
+  unavailableMode: SandboxUnavailableMode;
+}
+
+/**
+ * CODEX-SANDBOX-FAILCLOSED (0.4.7) — pure decision for the case where
+ * `sandbox: 'on'` but no sandboxer is available. Returns whether the command
+ * may still run and the notice to surface. The security property: never
+ * SILENTLY run unsandboxed when sandboxing was requested.
+ *
+ * - `'warn'` → run unsandboxed, but loudly (pre-0.4.7 behavior, opt-in).
+ * - `'deny'` → refuse to run (fail closed).
+ * - `'ask'`  → requires approval; this execution layer can't prompt, so it
+ *              fails closed here (a future interactive approval path can route
+ *              it). Either way it never runs unsandboxed without sign-off.
+ */
+export function decideUnavailableSandbox(
+  mode: SandboxUnavailableMode,
+  platformLabel: string,
+): { run: boolean; notice: string } {
+  const base = `sandbox: 'on' but no sandbox tool is available on ${platformLabel}`;
+  switch (mode) {
+    case 'warn':
+      return { run: true, notice: `${base} — command ran UNSANDBOXED (cli.sandboxUnavailable='warn').` };
+    case 'ask':
+      return { run: false, notice: `${base} — approval required and no approver in this context; refused (cli.sandboxUnavailable='ask').` };
+    default:
+      return { run: false, notice: `${base} — refused to run unsandboxed (cli.sandboxUnavailable='deny').` };
+  }
+}
+
+/**
+ * CODEX-SANDBOX-FAILCLOSED — recognise stderr that indicates the sandboxer
+ * itself denied the run (vs. an ordinary command failure), so the agent can
+ * report "blocked by sandbox" instead of misreading it as a normal error.
+ * Pure + signature-based (bwrap / firejail / sandbox-exec / seccomp).
+ */
+export function detectSandboxDenial(stderr: string): boolean {
+  if (!stderr) return false;
+  const s = stderr.toLowerCase();
+  return (
+    s.includes('bwrap:') ||
+    s.includes('sandbox-exec:') ||
+    s.includes('operation not permitted') ||
+    s.includes('permission denied') && s.includes('sandbox') ||
+    s.includes('seccomp') ||
+    s.includes('firejail:') ||
+    s.includes('cannot create new namespace') ||
+    s.includes('namespace creation failed')
+  );
 }
 
 export function resolveSandboxConfig(
@@ -48,7 +103,8 @@ export function resolveSandboxConfig(
   const readPaths = Array.from(new Set([...(persistedExtras?.readPaths ?? []), ...cfgReads]));
   const writePaths = Array.from(new Set([...(persistedExtras?.writePaths ?? []), ...cfgWrites]));
   const allowNetwork = knobs.sandboxNetwork;
-  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork };
+  const unavailableMode = knobs.sandboxUnavailable;
+  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode };
 }
 
 export interface SandboxRunResult {
@@ -58,6 +114,10 @@ export interface SandboxRunResult {
   sandboxed: boolean;
   sandboxTool?: 'sandbox-exec' | 'bwrap' | 'firejail' | 'none';
   notice?: string;
+  /** CODEX-SANDBOX-FAILCLOSED — true when the command never ran (refused). */
+  refused?: boolean;
+  /** CODEX-SANDBOX-FAILCLOSED — true when stderr looks like a sandbox denial. */
+  sandboxDenied?: boolean;
 }
 
 /**
@@ -75,26 +135,58 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
   if (process.platform === 'darwin') {
     const profilePath = writeMacSandboxProfile(config);
     const wrapped = ['sandbox-exec', '-f', profilePath, '/bin/sh', '-c', command];
-    return execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec');
+    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec');
+    r.sandboxDenied = detectSandboxDenial(r.stderr);
+    return r;
   }
 
   if (process.platform === 'linux') {
     if (await binaryAvailable('bwrap')) {
       const args = buildBwrapArgs(config, command);
-      return execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap');
+      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap');
+      r.sandboxDenied = detectSandboxDenial(r.stderr);
+      return r;
     }
     if (await binaryAvailable('firejail')) {
       const args = buildFirejailArgs(config, command);
-      return execShell('firejail', args, cwd, timeoutMs, true, 'firejail');
+      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail');
+      r.sandboxDenied = detectSandboxDenial(r.stderr);
+      return r;
     }
-    const fallback = await execShell('/bin/sh', ['-c', command], cwd, timeoutMs, false, 'none');
-    fallback.notice = 'BRAINROUTER_SANDBOX=on but neither bwrap nor firejail is installed — command ran UNSANDBOXED.';
-    return fallback;
+    return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Linux (no bwrap/firejail)');
   }
 
-  // Windows / other — no portable sandbox. Run unsandboxed with a notice.
+  // Windows / other — no portable sandbox in stdlib.
+  return handleUnavailableSandbox(config, command, cwd, timeoutMs, process.platform);
+}
+
+/**
+ * CODEX-SANDBOX-FAILCLOSED — sandboxing was requested but no sandboxer exists.
+ * Consult `cli.sandboxUnavailable`: `'warn'` runs unsandboxed (loudly); `'deny'`
+ * / `'ask'` refuse to run, returning a non-zero, clearly-noticed result instead
+ * of silently executing without the requested isolation.
+ */
+async function handleUnavailableSandbox(
+  config: SandboxConfig,
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  platformLabel: string,
+): Promise<SandboxRunResult> {
+  const verdict = decideUnavailableSandbox(config.unavailableMode, platformLabel);
+  if (!verdict.run) {
+    return {
+      stdout: '',
+      stderr: verdict.notice,
+      exitCode: 126, // "command found but could not be executed" — refused by policy
+      sandboxed: false,
+      sandboxTool: 'none',
+      notice: verdict.notice,
+      refused: true,
+    };
+  }
   const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none');
-  fallback.notice = `BRAINROUTER_SANDBOX=on but no sandbox tool is available on ${process.platform} — command ran UNSANDBOXED.`;
+  fallback.notice = verdict.notice;
   return fallback;
 }
 
