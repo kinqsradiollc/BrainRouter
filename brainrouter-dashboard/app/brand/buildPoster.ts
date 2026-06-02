@@ -91,16 +91,28 @@ export function buildPosterSVG(cfg: BrandConfig): string {
 
     const maxHl = Math.min(Math.round(w * (cfg.template === "quote" ? 0.072 : 0.06)), Math.round(h * 0.27));
     const hasSub = cfg.template !== "quote" && !!cfg.subhead.trim();
-    const hl = layoutText(cfg.headline, contentW, availH * (hasSub ? 0.62 : 0.9), maxHl, Math.round(maxHl * 0.34), 1.1);
-    const ebSize = Math.max(13, Math.round(hl.font * 0.3));
-    const sub = hasSub ? layoutText(cfg.subhead, contentW, availH * 0.32, Math.round(hl.font * 0.46), 15, 1.4) : { font: 0, lines: [] };
+    const hl = layoutText(cfg.headline, contentW, availH * (hasSub ? 0.56 : 0.86), maxHl, Math.round(maxHl * 0.34), 1.1);
+    let ebSize = Math.max(13, Math.round(hl.font * 0.3));
+    const sub = hasSub ? layoutText(cfg.subhead, contentW, availH * 0.3, Math.round(hl.font * 0.46), 15, 1.4) : { font: 0, lines: [] as string[] };
     const showEyebrow = cfg.template !== "quote" && !!cfg.eyebrow.trim();
 
-    const ebBlock = showEyebrow ? ebSize + hl.font * 0.5 : 0;
-    const hlBlock = hl.lines.length * hl.font * 1.1;
-    const subGap = sub.lines.length ? hl.font * 0.55 : 0;
-    const subBlock = sub.lines.length * sub.font * 1.4;
-    const stackH = ebBlock + hlBlock + subGap + subBlock;
+    let ebBlock = showEyebrow ? ebSize + hl.font * 0.5 : 0;
+    let hlBlock = hl.lines.length * hl.font * 1.1;
+    let subGap = sub.lines.length ? hl.font * 0.55 : 0;
+    let subBlock = sub.lines.length * sub.font * 1.4;
+    let stackH = ebBlock + hlBlock + subGap + subBlock;
+    // Guarantee the text block never overruns the footer: shrink it to fit the band.
+    if (stackH > availH) {
+      const k = availH / stackH;
+      hl.font = Math.max(10, Math.floor(hl.font * k));
+      if (sub.font) sub.font = Math.max(11, Math.floor(sub.font * k));
+      ebSize = Math.max(10, Math.floor(ebSize * k));
+      ebBlock = showEyebrow ? ebSize + hl.font * 0.5 : 0;
+      hlBlock = hl.lines.length * hl.font * 1.1;
+      subGap = sub.lines.length ? hl.font * 0.55 : 0;
+      subBlock = sub.lines.length * sub.font * 1.4;
+      stackH = ebBlock + hlBlock + subGap + subBlock;
+    }
     let y = availTop + Math.max(0, (availH - stackH) / 2);
 
     if (showEyebrow) {
