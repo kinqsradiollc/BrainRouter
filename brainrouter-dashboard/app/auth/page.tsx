@@ -116,7 +116,7 @@ export default function AuthPage() {
         width: "800px",
         height: "800px",
         borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(174, 147, 87, 0.04) 0%, rgba(0, 0, 0, 0) 70%)",
+        background: "radial-gradient(circle, rgba(52, 194, 142, 0.04) 0%, rgba(0, 0, 0, 0) 70%)",
         pointerEvents: "none",
         zIndex: 0
       }} />
@@ -184,7 +184,7 @@ export default function AuthPage() {
               left: 0,
               right: 0,
               bottom: 0,
-              backgroundImage: "radial-gradient(rgba(174, 147, 87, 0.08) 1px, transparent 0)",
+              backgroundImage: "radial-gradient(rgba(52, 194, 142, 0.08) 1px, transparent 0)",
               backgroundSize: "20px 20px",
               opacity: 0.5,
               zIndex: 0,
@@ -198,7 +198,7 @@ export default function AuthPage() {
               left: 0,
               right: 0,
               bottom: 0,
-              background: `radial-gradient(180px circle at ${coords.x}px ${coords.y}px, rgba(255, 240, 204, 0.12) 0%, rgba(174, 147, 87, 0.04) 50%, transparent 100%)`,
+              background: `radial-gradient(180px circle at ${coords.x}px ${coords.y}px, rgba(52, 194, 142, 0.12) 0%, rgba(52, 194, 142, 0.04) 50%, transparent 100%)`,
               opacity: isHovered ? 1 : 0,
               transition: "opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
               pointerEvents: "none",
@@ -212,10 +212,10 @@ export default function AuthPage() {
                 width: "44px",
                 height: "32px",
                 borderRadius: "6px",
-                background: "linear-gradient(135deg, #ae9357 0%, #ffd88a 50%, #ae9357 100%)",
+                background: "linear-gradient(135deg, #34C28E 0%, #34C28E 50%, #34C28E 100%)",
                 border: "1px solid rgba(255,255,255,0.1)",
                 position: "relative",
-                boxShadow: "inset 0 1px 2px rgba(255,255,255,0.2), 0 4px 10px rgba(174, 147, 87, 0.2)"
+                boxShadow: "var(--elev-inset)"
               }}>
                 {/* Chip grid lines */}
                 <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: "1px", background: "var(--border-strong)" }} />
