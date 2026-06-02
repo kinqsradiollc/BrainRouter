@@ -16,6 +16,7 @@ import {
   createReadAgentTranscriptTool,
   createCloseAgentTool,
   createRouteTaskTool,
+  createRunWorkflowTool,
 } from '../../orchestration/tools.js';
 
 export const LOCAL_TOOLS = [
@@ -216,6 +217,7 @@ export const LOCAL_TOOLS = [
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
   createRouteTaskTool(),
+  createRunWorkflowTool(),
   {
     name: 'ask_user_choice',
     description:

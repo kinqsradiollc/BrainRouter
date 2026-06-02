@@ -13,6 +13,7 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.4.8](0.4.8.md)** | 2026-06-02 | Shipped | Deterministic multi-phase workflow orchestration (PhasePlan engine, run_workflow + templates, planner auto-runs, durable/resumable runs, launcher + background) + brain body-limit fix |
 | **[0.4.7](0.4.7.md)** | 2026-06-02 | Shipped | Coding-agent parity (sandbox fail-closed, command-segment approval, MCP egress, worktree isolation, atomic patches), agentic autonomy + next-action planner, staleness-aware recall |
 | **[0.4.6](0.4.6.md)** | 2026-06-01 | Shipped | Structural refactor — concern-scoped modular layout (behavior-preserving, no user-facing change) |
 | **[0.4.5](0.4.5.md)** | 2026-06-01 | Shipped | Release hygiene, competitive catch-up, deep CLI polish + resilience |
