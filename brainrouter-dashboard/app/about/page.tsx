@@ -1,267 +1,184 @@
 "use client";
 
-import { motion, Variants } from "framer-motion";
+import { motion } from "framer-motion";
 import Link from "next/link";
 import { STATIC_PRESENTATION } from "../../lib/presentation";
+import { slideStagger, slideChild } from "../../components/home/landingData";
 
-const fadeInVariants: Variants = {
-  hidden: { opacity: 0, y: 15 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: "easeOut" } }
-};
+const GITHUB_URL = "https://github.com/kinqsradiollc/BrainRouter";
 
-const containerVariants = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.15 } }
-};
+type Surface = { tag: string; title: string; body: string; link?: { href: string; label: string } };
+
+const SURFACES: Surface[] = [
+  {
+    tag: "TERMINAL",
+    title: "brainrouter CLI",
+    body: "Memory-native coding agent: ~70 slash commands, an LLM-driven compactor, hookify guardrails, and durable per-session transcripts.",
+  },
+  {
+    tag: "MULTI-AGENT",
+    title: "Five bounded roles",
+    body: "explorer · architect · reviewer · worker · verifier. Each opens memory-first; large child outputs offload to a working canvas instead of polluting context.",
+  },
+  {
+    tag: "BROWSER",
+    title: "Web chat & dashboard",
+    body: "Talk to the agent and inspect recall, scenes, contradictions, evidence, and the knowledge graph — all over the same store.",
+    link: { href: "/chat", label: "/chat" },
+  },
+  {
+    tag: "PROTOCOL",
+    title: "MCP + HTTP API",
+    body: "Plug into any MCP host, or call the HTTP chat-completions route directly — every client inherits the same memory stack.",
+  },
+  {
+    tag: "MEMORY",
+    title: "Source-grounded recall",
+    body: "Turns are captured as source chunks, every memory cites the chunks it was distilled from, and recall drills from a compact hit down to the original source — with a staged blackboard, a summary tree, and a read-only vault behind it.",
+    link: { href: "/sources", label: "source chunks" },
+  },
+];
+
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--accent)", fontWeight: 600 }}>
+      {children}
+    </span>
+  );
+}
 
 export default function AboutPage() {
   return (
-    <div style={{
-      maxWidth: "800px",
-      margin: "40px auto 80px auto",
-      display: "flex",
-      flexDirection: "column",
-      gap: "48px"
-    }}>
-      
-      {/* Editorial Header */}
-      <motion.section 
+    <div style={{ maxWidth: "960px", margin: "8px auto 40px", display: "flex", flexDirection: "column", gap: "64px" }}>
+
+      {/* Hero — animates on mount (above the fold) */}
+      <motion.section
+        variants={slideStagger}
         initial="hidden"
-        animate="visible"
-        variants={containerVariants}
-        style={{ display: "flex", flexDirection: "column", gap: "16px", textAlign: "center" }}
+        animate="show"
+        style={{ display: "flex", flexDirection: "column", gap: "16px", alignItems: "center", textAlign: "center", paddingTop: "16px" }}
       >
-        <motion.span 
-          variants={fadeInVariants}
-          style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--color-golden-accent)", fontWeight: 700 }}
-        >
-          OPEN SOURCE & DECENTRALIZED
-        </motion.span>
-        <motion.h1 
-          variants={fadeInVariants}
-          className="serif-display" 
-          style={{ fontSize: "42px", margin: 0, fontWeight: 500, lineHeight: 1.1 }}
-        >
-          Architecting the Future of AI Memory
+        <motion.div variants={slideChild}><Eyebrow>Open source · Memory-first</Eyebrow></motion.div>
+        <motion.h1 variants={slideChild} style={{ fontSize: "clamp(32px, 4.4vw, 48px)", lineHeight: 1.08, letterSpacing: "-0.03em", fontWeight: 600, margin: 0, maxWidth: "16ch", color: "var(--text)" }}>
+          Why <span style={{ color: "var(--accent)" }}>BrainRouter</span> exists.
         </motion.h1>
-        <motion.p 
-          variants={fadeInVariants}
-          style={{ color: "var(--color-stone-text)", fontSize: "16px", maxWidth: "600px", margin: "8px auto 0 auto", lineHeight: 1.6 }}
-        >
-          We believe cognitive context shouldn't be locked inside proprietary corporate silos. BrainRouter is a secure, persistent long-term memory engine for AI agents that can be hosted in the cloud or run entirely locally.
+        <motion.p variants={slideChild} style={{ color: "var(--text-secondary)", fontSize: "17px", lineHeight: 1.65, maxWidth: "62ch", margin: "4px 0 0" }}>
+          AI agents forget. Every session starts from zero, so they re-learn the same facts and lose the thread of long projects. BrainRouter is a cognitive memory engine that models agent memory the way the mind works — short-term feeds long-term, unused facts fade, and the ones that get used are reinforced. Run it entirely on your own machine, or connect your agents to a hosted engine.
         </motion.p>
       </motion.section>
 
-      {/* Core Mission Grid */}
-      <motion.section 
+      {/* Principles */}
+      <motion.section
+        variants={slideStagger}
         initial="hidden"
-        animate="visible"
-        variants={containerVariants}
-        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "32px" }}
-        className="grid-symmetrical-4"
+        whileInView="show"
+        viewport={{ once: true, margin: "-80px" }}
+        style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}
       >
-        <motion.div 
-          variants={fadeInVariants}
-          className="card-premium"
-          style={{ display: "flex", flexDirection: "column", gap: "16px" }}
-        >
-          <div style={{
-            width: "36px",
-            height: "36px",
-            borderRadius: "8px",
-            background: "var(--overlay-bg-hover)",
-            border: "1px solid var(--border-hover-accent)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--color-golden-accent)"
-          }}>
-            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+        <motion.div variants={slideChild} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-panel)", padding: "24px", display: "flex", flexDirection: "column", gap: "14px" }}>
+          <div style={{ width: "38px", height: "38px", borderRadius: "10px", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
           </div>
-          <h3 className="serif-display" style={{ fontSize: "20px", margin: 0, fontWeight: 500 }}>Absolute Privacy</h3>
-          <p style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: "1.6", margin: 0 }}>
-            Your prompts, facts, rules, and contradictory states are saved in a secure, isolated database. No multi-tenant data leaks, no corporate surveillance.
+          <h3 style={{ fontSize: "19px", fontWeight: 600, margin: 0, color: "var(--text)" }}>Your memory, your machine</h3>
+          <p style={{ color: "var(--text-secondary)", fontSize: "14px", lineHeight: 1.6, margin: 0 }}>
+            Your prompts, facts, rules, and contradictions live in a database you control. Self-host the MCP server against your own storage and model endpoint — no data leaves your machine, no multi-tenant mixing.
           </p>
         </motion.div>
 
-        <motion.div 
-          variants={fadeInVariants}
-          className="card-premium"
-          style={{ display: "flex", flexDirection: "column", gap: "16px" }}
-        >
-          <div style={{
-            width: "36px",
-            height: "36px",
-            borderRadius: "8px",
-            background: "var(--overlay-bg-hover)",
-            border: "1px solid var(--border-hover-accent)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--color-golden-accent)"
-          }}>
-            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-              <path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16" />
+        <motion.div variants={slideChild} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-panel)", padding: "24px", display: "flex", flexDirection: "column", gap: "14px" }}>
+          <div style={{ width: "38px", height: "38px", borderRadius: "10px", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <polyline points="16 18 22 12 16 6" />
+              <polyline points="8 6 2 12 8 18" />
             </svg>
           </div>
-          <h3 className="serif-display" style={{ fontSize: "20px", margin: 0, fontWeight: 500 }}>Open Source Forever</h3>
-          <p style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: "1.6", margin: 0 }}>
-            The code is fully open-source and MIT licensed. Connect to our hosted engine, or run it as your own local MCP server, build custom hooks, plug it into Next.js, or modify the database adapters. You own your telemetry stack.
+          <h3 style={{ fontSize: "19px", fontWeight: 600, margin: 0, color: "var(--text)" }}>Open source, MIT</h3>
+          <p style={{ color: "var(--text-secondary)", fontSize: "14px", lineHeight: 1.6, margin: 0 }}>
+            The engine, CLI, and dashboard are MIT-licensed and fully open. Run your own MCP server, write hookify guardrails, swap the database adapter, or read exactly how recall works.
           </p>
           <a
-            href="https://github.com/kinqsradiollc/BrainRouter"
+            href={GITHUB_URL}
             target="_blank"
             rel="noopener noreferrer"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              color: "var(--color-golden-accent)",
-              fontSize: "13px",
-              fontWeight: 600,
-              textDecoration: "none",
-              marginTop: "8px",
-              transition: "opacity 0.2s ease"
-            }}
-            onMouseOver={(e) => e.currentTarget.style.opacity = "0.8"}
-            onMouseOut={(e) => e.currentTarget.style.opacity = "1"}
+            style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "var(--accent)", fontSize: "13px", fontWeight: 600, textDecoration: "none", marginTop: "2px", width: "fit-content" }}
           >
-            <span>View Source on GitHub</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="7" y1="17" x2="17" y2="7"></line>
-              <polyline points="7 7 17 7 17 17"></polyline>
+            <span>View source on GitHub</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="7" y1="17" x2="17" y2="7" />
+              <polyline points="7 7 17 7 17 17" />
             </svg>
           </a>
         </motion.div>
       </motion.section>
 
-      {/* What Ships Today */}
+      {/* What ships today */}
       <motion.section
+        variants={slideStagger}
         initial="hidden"
-        animate="visible"
-        variants={containerVariants}
+        whileInView="show"
+        viewport={{ once: true, margin: "-80px" }}
         style={{ display: "flex", flexDirection: "column", gap: "20px" }}
       >
-        <motion.div variants={fadeInVariants} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <span style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--color-golden-accent)", fontWeight: 700 }}>
-            WHAT SHIPS TODAY
-          </span>
-          <h2 className="serif-display" style={{ fontSize: "28px", margin: 0, fontWeight: 500 }}>
-            One Memory Engine. Three Surfaces.
+        <motion.div variants={slideChild} style={{ display: "flex", flexDirection: "column", gap: "10px", maxWidth: "640px" }}>
+          <Eyebrow>What ships today</Eyebrow>
+          <h2 style={{ fontSize: "clamp(24px, 3vw, 32px)", lineHeight: 1.12, letterSpacing: "-0.02em", fontWeight: 600, margin: 0, color: "var(--text)" }}>
+            One memory engine. Every surface.
           </h2>
-          <p style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: 1.6, margin: 0 }}>
-            BrainRouter is not a single product — it is a cognitive substrate that you can drive from a terminal, a browser, or any MCP-compatible agent. Every surface shares the same memory store, recall pipeline, and contradiction loop.
+          <p style={{ color: "var(--text-secondary)", fontSize: "15px", lineHeight: 1.6, margin: 0 }}>
+            BrainRouter is a cognitive substrate you can drive from a terminal, a browser, or any MCP-compatible agent. Every surface shares the same memory store, recall pipeline, and contradiction loop.
           </p>
         </motion.div>
 
-        <motion.div
-          variants={fadeInVariants}
-          style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}
-        >
-          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>TERMINAL</span>
-            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>brainrouter CLI</h3>
-            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
-              Memory-native coding agent with ~70 slash commands, an LLM-driven compactor, hookify guardrails, and durable per-session transcripts.
-            </p>
-          </div>
-
-          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>MULTI-AGENT</span>
-            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>Five Bounded Roles</h3>
-            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
-              explorer · architect · reviewer · worker · verifier. Each opens memory-first; large child outputs offload to a working canvas instead of polluting context.
-            </p>
-          </div>
-
-          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>BROWSER</span>
-            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>Web Chat & Dashboard</h3>
-            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
-              Talk to the agent at <Link href="/chat" style={{ color: "var(--color-golden-accent)" }}>/chat</Link>, inspect recall, scenes, contradictions, evidence, and the knowledge graph — all over the same store.
-            </p>
-          </div>
-
-          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>PROTOCOL</span>
-            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>MCP + HTTP API</h3>
-            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
-              Plug into any MCP host, or call the HTTP chat-completions route directly — every client inherits the same memory stack.
-            </p>
-          </div>
-
-          <div className="card-premium" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "11px", letterSpacing: "0.1em", color: "var(--color-golden-accent)", fontWeight: 700 }}>MEMORY DEPTH · 0.4.3</span>
-            <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, fontWeight: 500 }}>Source-Grounded Recall</h3>
-            <p style={{ color: "var(--color-stone-text)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
-              Turns are captured as <Link href="/sources" style={{ color: "var(--color-golden-accent)" }}>source chunks</Link>, every memory cites the chunks it was distilled from, and recall drills from a compact hit down to the original source — with a staged blackboard, a summary tree, and a read-only vault mirror behind it.
-            </p>
-          </div>
+        <motion.div variants={slideStagger} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "16px" }}>
+          {SURFACES.map((s) => (
+            <motion.div key={s.tag} variants={slideChild} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-panel)", padding: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.12em", color: "var(--accent)", fontWeight: 600 }}>{s.tag}</span>
+              <h3 style={{ fontSize: "17px", fontWeight: 600, margin: 0, color: "var(--text)" }}>{s.title}</h3>
+              <p style={{ color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
+                {s.body}
+              </p>
+              {s.link && (
+                <Link href={s.link.href} style={{ color: "var(--accent)", fontSize: "12px", fontFamily: "var(--font-mono)", textDecoration: "none", marginTop: "2px" }}>
+                  → {s.link.label}
+                </Link>
+              )}
+            </motion.div>
+          ))}
         </motion.div>
       </motion.section>
 
-      {/* The Self-Hosting Paradigm */}
-      <motion.section 
+      {/* Self-host or connect */}
+      <motion.section
+        variants={slideStagger}
         initial="hidden"
-        animate="visible"
-        variants={containerVariants}
-        style={{
-          background: "var(--color-pewter-accent)",
-          border: "1px solid var(--border-med)",
-          borderRadius: "16px",
-          padding: "40px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "24px"
-        }}
+        whileInView="show"
+        viewport={{ once: true, margin: "-80px" }}
+        style={{ background: "var(--surface-overlay)", border: "1px solid var(--border-med)", borderRadius: "16px", padding: "clamp(28px, 4vw, 44px)", display: "flex", flexDirection: "column", gap: "18px" }}
       >
-        <motion.h2 
-          variants={fadeInVariants}
-          className="serif-display" 
-          style={{ fontSize: "24px", margin: 0, fontWeight: 500 }}
-        >
-          Why Open Architecture is the Developer Standard
+        <motion.h2 variants={slideChild} style={{ fontSize: "clamp(22px, 2.6vw, 28px)", lineHeight: 1.15, letterSpacing: "-0.02em", fontWeight: 600, margin: 0, color: "var(--text)" }}>
+          Self-host it, or connect to the hosted engine.
         </motion.h2>
-        
-        <motion.p 
-          variants={fadeInVariants}
-          style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: "1.6", margin: 0 }}
-        >
-          BrainRouter is built on an open, modular architecture. It can bind natively to your local filesystem and workspace directories, or run as a fully-managed cloud node. We host secure cloud relays to seamlessly bridge local and browser-based AI pipelines.
+
+        <motion.p variants={slideChild} style={{ color: "var(--text-secondary)", fontSize: "15px", lineHeight: 1.65, margin: 0 }}>
+          BrainRouter runs as your own local MCP server, bound to your filesystem and workspace — or your agents can connect to a hosted memory engine over the HTTP API. Either way the memory model, recall pipeline, and contradiction loop are identical.
         </motion.p>
-        
+
         {!STATIC_PRESENTATION ? (
           <>
-            <motion.p
-              variants={fadeInVariants}
-              style={{ color: "var(--text-secondary)", fontSize: "14px", lineHeight: "1.6", margin: 0 }}
-            >
-              To manage your connected instances, track semantic context themes, and monitor contradictions, all you need is a secure <strong style={{ color: "var(--text)", fontWeight: 600 }}>Client API Key</strong>. This key authenticates your local desktop or web-based AI clients to securely interface with your memory core.
+            <motion.p variants={slideChild} style={{ color: "var(--text-secondary)", fontSize: "15px", lineHeight: 1.65, margin: 0 }}>
+              To connect a client to the hosted engine — to manage your instances, track context themes, and monitor contradictions — all you need is a secure <strong style={{ color: "var(--text)", fontWeight: 600 }}>Client API Key</strong> that authenticates your local or web AI clients to your memory core.
             </motion.p>
-
-            <motion.div
-              variants={fadeInVariants}
-              style={{ paddingTop: "8px" }}
-            >
+            <motion.div variants={slideChild} style={{ paddingTop: "4px" }}>
               <Link href="/auth">
                 <motion.button
                   className="button-gold"
-                  style={{
-                    padding: "12px 24px",
-                    borderRadius: "var(--radius-pill)",
-                    fontWeight: 600,
-                    fontSize: "14px",
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px"
-                  }}
+                  style={{ padding: "12px 24px", borderRadius: "var(--radius-pill)", fontWeight: 600, fontSize: "14px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "8px" }}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
-                  <span>Get Your Client API Key</span>
+                  <span>Get your Client API Key</span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <line x1="5" y1="12" x2="19" y2="12" />
                     <polyline points="12 5 19 12 12 19" />
@@ -271,55 +188,48 @@ export default function AboutPage() {
             </motion.div>
           </>
         ) : (
-          <motion.p
-            variants={fadeInVariants}
-            style={{ color: "var(--text-secondary)", fontSize: "14px", lineHeight: "1.6", margin: 0 }}
-          >
-            Clone the repository, point it at your own database and model endpoint, and run the MCP server locally — your memory core stays entirely on your machine. No account and no hosted relay required.
-          </motion.p>
+          <motion.div variants={slideChild} style={{ paddingTop: "4px" }}>
+            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+              <motion.button
+                className="button-gold"
+                style={{ padding: "12px 24px", borderRadius: "var(--radius-pill)", fontWeight: 600, fontSize: "14px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "8px" }}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <span>Clone &amp; self-host</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                  <polyline points="12 5 19 12 12 19" />
+                </svg>
+              </motion.button>
+            </a>
+          </motion.div>
         )}
       </motion.section>
 
       {/* Core Maintainer / Contact */}
       <motion.section
+        variants={slideStagger}
         initial="hidden"
-        whileInView="visible"
+        whileInView="show"
         viewport={{ once: true, margin: "-80px" }}
-        variants={containerVariants}
         style={{ display: "flex", flexDirection: "column", gap: "20px" }}
       >
-        <motion.div variants={fadeInVariants} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <span style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--accent)", fontWeight: 700 }}>
-            WHO BUILDS THIS
-          </span>
-          <h2 className="serif-display" style={{ fontSize: "28px", margin: 0, fontWeight: 500 }}>
-            Core Maintainer
+        <motion.div variants={slideChild} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <Eyebrow>Who builds this</Eyebrow>
+          <h2 style={{ fontSize: "clamp(24px, 3vw, 32px)", lineHeight: 1.12, letterSpacing: "-0.02em", fontWeight: 600, margin: 0, color: "var(--text)" }}>
+            Core maintainer
           </h2>
         </motion.div>
 
         <motion.div
-          variants={fadeInVariants}
-          className="card-premium"
-          style={{ display: "flex", flexDirection: "column", gap: "20px" }}
+          variants={slideChild}
+          style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-panel)", padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
             <div
               aria-hidden
-              style={{
-                width: "52px",
-                height: "52px",
-                borderRadius: "50%",
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "var(--accent-wash)",
-                border: "1px solid var(--border-hover-accent)",
-                color: "var(--accent)",
-                fontWeight: 700,
-                fontSize: "18px",
-                letterSpacing: "0.02em"
-              }}
+              style={{ width: "52px", height: "52px", borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", color: "var(--accent)", fontWeight: 700, fontSize: "18px", letterSpacing: "0.02em" }}
             >
               AD
             </div>
@@ -333,39 +243,19 @@ export default function AboutPage() {
             {[
               { kind: "mail", label: "anhdang@brainrouter.dev", href: "mailto:anhdang@brainrouter.dev" },
               { kind: "mail", label: "anhdang@kinqsradio.com", href: "mailto:anhdang@kinqsradio.com" },
-              { kind: "linkedin", label: "linkedin.com/in/tran-duc-anh-dang", href: "https://www.linkedin.com/in/tran-duc-anh-dang-392b7a231/" }
+              { kind: "linkedin", label: "linkedin.com/in/tran-duc-anh-dang", href: "https://www.linkedin.com/in/tran-duc-anh-dang-392b7a231/" },
             ].map((c) => (
               <a
                 key={c.href}
                 href={c.href}
                 {...(c.kind === "linkedin" ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "10px",
-                  color: "var(--text-secondary)",
-                  fontSize: "14px",
-                  textDecoration: "none",
-                  transition: "color 0.2s ease",
-                  width: "fit-content"
-                }}
+                style={{ display: "inline-flex", alignItems: "center", gap: "10px", color: "var(--text-secondary)", fontSize: "14px", textDecoration: "none", transition: "color 0.2s ease", width: "fit-content" }}
                 onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
                 onMouseOut={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
               >
                 <span
                   aria-hidden
-                  style={{
-                    width: "30px",
-                    height: "30px",
-                    flexShrink: 0,
-                    borderRadius: "8px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: "var(--surface-overlay)",
-                    border: "1px solid var(--border-med)",
-                    color: "var(--accent)"
-                  }}
+                  style={{ width: "30px", height: "30px", flexShrink: 0, borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-overlay)", border: "1px solid var(--border-med)", color: "var(--accent)" }}
                 >
                   {c.kind === "mail" ? (
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

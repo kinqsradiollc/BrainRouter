@@ -7,14 +7,15 @@ import { Citation } from "./Citation";
 import { MEMORY_STAGES, MEMORY_PROCESSES, SOURCES } from "./landingScience";
 
 /** ACT 2 — how human memory actually works: three stores + three processes. */
-export function SlideHumanMemory() {
+export function SlideHumanMemory({ id }: { id?: string } = {}) {
   return (
     <motion.section
+      id={id}
       variants={slideStagger}
       initial="hidden"
       whileInView="show"
       viewport={{ once: true, margin: "-90px" }}
-      style={{ display: "flex", flexDirection: "column", gap: "28px" }}
+      style={{ display: "flex", flexDirection: "column", gap: "28px", scrollMarginTop: "90px" }}
     >
       <SlideHeading
         eyebrow="How memory works"

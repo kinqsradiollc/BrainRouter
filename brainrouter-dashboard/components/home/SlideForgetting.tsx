@@ -9,13 +9,13 @@ const FACTS = ["uses pnpm", "dark theme", "strict TypeScript"];
 const driftVariants: Variants = {
   animate: (i: number) => ({
     opacity: [0, 1, 1, 0],
-    y: [10, 0, -4, -22],
+    y: [8, 0, -3, -16],
     transition: {
-      duration: 4.2,
-      times: [0, 0.2, 0.6, 1],
+      duration: 4,
+      times: [0, 0.22, 0.62, 1],
       repeat: Infinity,
       ease: "easeInOut",
-      delay: i * 0.5,
+      delay: i * 0.45,
     },
   }),
 };
@@ -88,21 +88,20 @@ export function SlideForgetting() {
           reply="Got it — noted your setup."
         />
 
-        {/* The void between sessions: facts drift up and evaporate */}
+        {/* The void between sessions: the learned facts fade out and evaporate */}
         <div
           aria-hidden
           style={{
-            flex: "0 0 150px",
-            position: "relative",
+            flex: "0 0 170px",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: "8px",
-            minHeight: "150px",
+            gap: "12px",
+            padding: "8px 0",
           }}
         >
-          <div style={{ position: "relative", width: "100%", height: "92px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "center", width: "100%" }}>
             {FACTS.map((f, i) => (
               <motion.span
                 key={f}
@@ -110,10 +109,6 @@ export function SlideForgetting() {
                 variants={driftVariants}
                 animate="animate"
                 style={{
-                  position: "absolute",
-                  left: "50%",
-                  top: `${10 + i * 26}px`,
-                  transform: "translateX(-50%)",
                   whiteSpace: "nowrap",
                   fontFamily: "var(--font-mono)",
                   fontSize: "11px",
@@ -121,14 +116,18 @@ export function SlideForgetting() {
                   background: "var(--surface-overlay)",
                   border: "1px solid var(--border-med)",
                   borderRadius: "var(--radius-chip)",
-                  padding: "3px 8px",
+                  padding: "4px 10px",
                 }}
               >
                 {f}
               </motion.span>
             ))}
           </div>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", textAlign: "center" }}>
+          <svg width="16" height="22" viewBox="0 0 16 22" fill="none" stroke="var(--text-muted)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="8" y1="2" x2="8" y2="17" />
+            <polyline points="3 12 8 17 13 12" />
+          </svg>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", textAlign: "center", lineHeight: 1.4 }}>
             session ends ·<br />memory wiped
           </span>
         </div>

@@ -28,14 +28,15 @@ const typeReveal: Variants = {
 };
 
 /** ACT 6 — the CLI: the whole brain, driven from a terminal. */
-export function SlideCli() {
+export function SlideCli({ id }: { id?: string } = {}) {
   return (
     <motion.section
+      id={id}
       variants={slideStagger}
       initial="hidden"
       whileInView="show"
       viewport={{ once: true, margin: "-90px" }}
-      style={{ display: "flex", flexDirection: "column", gap: "28px" }}
+      style={{ display: "flex", flexDirection: "column", gap: "28px", scrollMarginTop: "90px" }}
     >
       <SlideHeading
         eyebrow="The CLI"
