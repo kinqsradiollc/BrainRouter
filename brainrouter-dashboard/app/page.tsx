@@ -10,6 +10,7 @@ import { EcosystemSection } from "../components/home/EcosystemSection";
 import { HeroGraph } from "../components/home/HeroGraph";
 import { Glyph } from "../components/home/Glyph";
 import { useSnnSimulator } from "../components/home/useSnnSimulator";
+import { STATIC_PRESENTATION } from "../lib/presentation";
 
 
 export default function HomePage() {
@@ -100,24 +101,28 @@ export default function HomePage() {
             </p>
 
             <div style={{ display: "flex", gap: "12px", marginTop: "6px", flexWrap: "wrap" }}>
-              <Link href="/overview">
-                <PremiumButton variant="primary" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
-                  <span>Launch dashboard</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                    <polyline points="12 5 19 12 12 19" />
-                  </svg>
-                </PremiumButton>
-              </Link>
-              <Link href="/memories">
-                <PremiumButton variant="ghost" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
-                  <span>Inspect memories</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                    <polyline points="12 5 19 12 12 19" />
-                  </svg>
-                </PremiumButton>
-              </Link>
+              {!STATIC_PRESENTATION && (
+                <>
+                  <Link href="/overview">
+                    <PremiumButton variant="primary" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
+                      <span>Launch dashboard</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                        <polyline points="12 5 19 12 12 19" />
+                      </svg>
+                    </PremiumButton>
+                  </Link>
+                  <Link href="/memories">
+                    <PremiumButton variant="ghost" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
+                      <span>Inspect memories</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                        <polyline points="12 5 19 12 12 19" />
+                      </svg>
+                    </PremiumButton>
+                  </Link>
+                </>
+              )}
               <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
                 <PremiumButton variant="text" style={{ padding: "12px 18px", borderRadius: "10px", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
                   <svg style={{ width: "16px", height: "16px" }} viewBox="0 0 24 24" fill="currentColor">

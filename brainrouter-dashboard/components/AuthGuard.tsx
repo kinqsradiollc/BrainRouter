@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { isAuthenticated } from "../lib/client-auth";
+import { STATIC_PRESENTATION, isPresentationRoute } from "../lib/presentation";
 import { LoadingSpinner } from "./LoadingSpinner";
 
 interface AuthGuardProps {
@@ -15,6 +16,17 @@ export function AuthGuard({ children }: AuthGuardProps) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    // Static presentation mode: only the marketing routes exist. Everything
+    // else (auth + dashboard) redirects home — no API, no sign-in.
+    if (STATIC_PRESENTATION) {
+      if (!isPresentationRoute(pathname)) {
+        router.replace("/");
+        return;
+      }
+      setReady(true);
+      return;
+    }
+
     const authed = isAuthenticated();
     if (!authed && pathname !== "/auth" && pathname !== "/" && pathname !== "/about") {
       router.replace("/auth");
