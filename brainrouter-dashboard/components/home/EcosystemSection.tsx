@@ -7,6 +7,8 @@
  * Presentational only (no hooks) — renders inside the client landing page.
  */
 
+import { BorderBeam } from "./BorderBeam";
+
 const SURFACES = [
   {
     tag: "MCP SERVER",
@@ -82,7 +84,7 @@ export function EcosystemSection() {
           gap: "16px",
         }}
       >
-        {SURFACES.map((s) => (
+        {SURFACES.map((s, i) => (
           <div
             key={s.tag}
             style={{
@@ -94,8 +96,11 @@ export function EcosystemSection() {
               border: "1px solid var(--border)",
               borderRadius: "var(--radius-card)",
               boxShadow: "var(--elev-inset)",
+              position: "relative",
+              overflow: "hidden",
             }}
           >
+            <BorderBeam delay={i * 1.8} />
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div
                 aria-hidden

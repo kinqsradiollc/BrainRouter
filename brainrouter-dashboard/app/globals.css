@@ -977,3 +977,39 @@ html {
     gap: 28px;
   }
 }
+
+/* ─── Border beam ────────────────────────────────────────────────────────────
+   A Signal light that travels around a card border: a rotating conic gradient
+   masked to a 1px ring. Drop <BorderBeam/> inside a position:relative container.
+   Degrades to a faint static arc where @property is unsupported; the
+   prefers-reduced-motion guard above freezes the rotation. */
+@property --beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+.border-beam {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 1;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0deg,
+    transparent 55deg,
+    var(--accent) 90deg,
+    transparent 125deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.85;
+  animation: border-beam-spin 7s linear infinite;
+}
+@keyframes border-beam-spin {
+  to { --beam-angle: 360deg; }
+}
