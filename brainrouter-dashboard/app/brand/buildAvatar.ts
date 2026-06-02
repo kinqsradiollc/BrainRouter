@@ -8,7 +8,8 @@
 
 import { THEMES, ROLES, resolveAccent, type BrandConfig } from "./brandPresets";
 import { guillocheMarkup } from "./brandMark";
-import { FONT, MONO, esc } from "./brandShared";
+import { MONO } from "./brandShared";
+import { roleBadgeMarkup } from "./roleBadge";
 
 export function buildAvatarSVG(cfg: BrandConfig): string {
   const S = 1024;
@@ -61,20 +62,11 @@ export function buildAvatarSVG(cfg: BrandConfig): string {
     ring = shapeStroke(stroke, sw);
   }
 
-  // role badge
+  // role badge — sits over the bottom of the ring
   let badge = "";
   if (cfg.role !== "none") {
     const label = (ROLES[cfg.role] || "").toUpperCase();
-    const fs = 34;
-    const pad = 28;
-    const iconW = 46;
-    const pw = Math.round(label.length * fs * 0.62 + pad * 2 + iconW);
-    const ph = 66;
-    const bx = c - pw / 2;
-    const by = c + R - ph * 0.34;
-    badge += `<rect x="${bx.toFixed(0)}" y="${by.toFixed(0)}" width="${pw}" height="${ph}" rx="${ph / 2}" fill="${accent}" stroke="#fff" stroke-opacity="0.2"/>`;
-    badge += `<path d="M ${bx + pad} ${by + ph / 2} l 11 12 l 22 -24" fill="none" stroke="#06130E" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>`;
-    badge += `<text x="${bx + pad + iconW}" y="${by + ph / 2 + 1}" font-family="${FONT}" font-size="${fs}" font-weight="700" letter-spacing="0.06em" fill="#06130E" dominant-baseline="central">${esc(label)}</text>`;
+    badge = roleBadgeMarkup({ cx: c, cy: c + R - 28, fontSize: 36, accent, accentSoft: t.accentSoft, label, roleKey: cfg.role, style: "solid" }).svg;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs>${defs}</defs>${bg}${frame}${photo}${ring}${badge}</svg>`;
