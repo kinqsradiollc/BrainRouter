@@ -22,7 +22,7 @@ next prompt — so your agent stops re-learning the same things every session.
 
 - **MCP server (`brainrouter-mcp`)** — drop-in memory + skills + federation tools for any MCP-speaking client. [API reference](BRAINROUTER.md#mcp-api-reference).
 - **Terminal CLI (`brainrouter`)** — memory-native coding agent: slash commands, hookify guardrails, multi-agent orchestration (packs + worker threads), **deterministic multi-phase workflows** (`run_workflow` with `compare`/`review-wide`/`research` templates — durable, resumable, with a live run viewer), Codex-grade execution safety (fail-closed sandbox, command-segment approval, atomic patches, worktree isolation), cross-vendor federation, and a `/goal` autonomy loop.
-- **Dashboard (`brainrouter-dashboard`)** — Next.js web UI for browsing captured memories, focus scenes, contradictions, recall traces, working memory, timelines, persona, skills, brain-agent health, and a hosted chat.
+- **Dashboard (`brainrouter-dashboard`)** — Next.js web UI for browsing captured memories, focus scenes, contradictions, recall traces, working memory, timelines, persona, skills, brain-agent health, and a hosted chat. Its own dark **"Memory Instrument"** design language with a modern app shell (grouped sidebar + **⌘K command palette**), token-refresh auth (sessions persist across tabs), and an optional **static presentation mode** (`NEXT_PUBLIC_BRAINROUTER_STATIC_PRESENTATION=true`) that ships it as a backend-free product preview.
 
 ## Install
 
