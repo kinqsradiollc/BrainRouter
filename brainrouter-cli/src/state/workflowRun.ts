@@ -44,6 +44,27 @@ export interface WorkflowRun {
   updatedAt: string;
   steps: WorkflowRunStep[];
   currentStepId: string | null;
+  /**
+   * WF-PERSIST (0.4.8) — phase-aware execution ledger for runtime-driven
+   * (PhasePlan) workflows. Additive + optional: step-based runs leave it
+   * undefined and behave exactly as before.
+   */
+  phases?: WorkflowRunPhase[];
+}
+
+/** Status of one phase in a runtime-driven (PhasePlan) workflow run. */
+export type RunPhaseStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'interrupted';
+
+export interface WorkflowRunPhase {
+  id: string;
+  title: string;
+  status: RunPhaseStatus;
+  /** Child session ids spawned for this phase (drill-down + WF-RESUME cleanup). */
+  childIds: string[];
+  startedAt?: string;
+  endedAt?: string;
+  /** Pointer to the phase's aggregated synthesis output (offloaded, not inlined). */
+  aggregatedOutputRef?: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -199,6 +220,105 @@ export function staleRunSlugs(runs: WorkflowRun[], isAlive: (pid: number | null)
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// WF-PERSIST (0.4.8) — phase-aware run model (pure)
+// ──────────────────────────────────────────────────────────────────────────
+
+const PHASE_TERMINAL: ReadonlySet<RunPhaseStatus> = new Set(['completed', 'partial', 'failed', 'interrupted']);
+
+/**
+ * Overall run status derived from its phases:
+ *   - any pending/running phase → 'running'
+ *   - any interrupted phase     → 'interrupted'
+ *   - any failed phase          → 'failed'
+ *   - otherwise (all terminal, none failed/interrupted; `partial` ok) → 'completed'
+ * Empty never auto-completes (mirrors `computeRunStatus`).
+ */
+export function computePhaseRunStatus(phases: WorkflowRunPhase[]): RunStatus {
+  if (phases.length === 0) return 'running';
+  if (phases.some((p) => p.status === 'pending' || p.status === 'running')) return 'running';
+  if (phases.some((p) => p.status === 'interrupted')) return 'interrupted';
+  if (phases.some((p) => p.status === 'failed')) return 'failed';
+  return 'completed';
+}
+
+/**
+ * Pure transition: a new phases array with `phaseId` set to `status`, stamping
+ * startedAt on first `running` and endedAt on any terminal status, and merging
+ * `childIds` / `aggregatedOutputRef` when provided. Unknown phase ids are
+ * appended (title defaults to the id) so a plan that grew is never blocked.
+ */
+export function applyPhaseTransition(
+  phases: WorkflowRunPhase[],
+  phaseId: string,
+  status: RunPhaseStatus,
+  now: string,
+  opts: { childIds?: string[]; aggregatedOutputRef?: string; title?: string } = {},
+): WorkflowRunPhase[] {
+  const terminal = PHASE_TERMINAL.has(status);
+  let found = false;
+  const next = phases.map((p) => {
+    if (p.id !== phaseId) return p;
+    found = true;
+    return {
+      ...p,
+      status,
+      startedAt: p.startedAt ?? (status === 'running' || terminal ? now : p.startedAt),
+      endedAt: terminal ? now : p.endedAt,
+      childIds: opts.childIds ?? p.childIds,
+      aggregatedOutputRef: opts.aggregatedOutputRef ?? p.aggregatedOutputRef,
+    };
+  });
+  if (!found) {
+    next.push({
+      id: phaseId,
+      title: opts.title ?? phaseId,
+      status,
+      childIds: opts.childIds ?? [],
+      startedAt: status === 'running' || terminal ? now : undefined,
+      endedAt: terminal ? now : undefined,
+      aggregatedOutputRef: opts.aggregatedOutputRef,
+    });
+  }
+  return next;
+}
+
+/** Pure: flip any non-terminal (pending/running) phase to `interrupted` — used
+ *  by reconciliation when the owning process died mid-run. */
+export function interruptInFlightPhases(phases: WorkflowRunPhase[], now: string): WorkflowRunPhase[] {
+  return phases.map((p) =>
+    p.status === 'pending' || p.status === 'running'
+      ? { ...p, status: 'interrupted' as RunPhaseStatus, endedAt: p.endedAt ?? now }
+      : p,
+  );
+}
+
+/** Pure: single glyph per phase status, for the `/workflows` phase strip (WF-LAUNCH). */
+export function phaseRunGlyph(status: RunPhaseStatus): string {
+  switch (status) {
+    case 'completed': return '✓';
+    case 'running': return '▶';
+    case 'partial': return '◑';
+    case 'failed': return '✗';
+    case 'interrupted': return '⚠';
+    default: return '·';
+  }
+}
+
+/** Pure: the phase-status glyph strip, e.g. `✓◑▶·`. */
+export function formatPhaseGlyphs(run: WorkflowRun): string {
+  return (run.phases ?? []).map((p) => phaseRunGlyph(p.status)).join('');
+}
+
+/** Pure: compact phase progress (done/total + current phase title). */
+export function summarizePhases(run: WorkflowRun): { done: number; total: number; current: string | null } {
+  const phases = run.phases ?? [];
+  const total = phases.length;
+  const done = phases.filter((p) => p.status === 'completed' || p.status === 'partial').length;
+  const running = phases.find((p) => p.status === 'running');
+  return { done, total, current: running ? running.title : null };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // File-backed store
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -287,6 +407,74 @@ export function finishRun(workspaceRoot: string, slug: string, status: RunStatus
   return writeRun(workspaceRoot, { ...run, status, updatedAt: now });
 }
 
+/**
+ * WF-PERSIST — lazily create a **phase-aware** run for a runtime-driven workflow,
+ * seeding the given phases (all `pending`). Idempotent: returns the existing run
+ * untouched if one is already on disk. The PhasePlan executor (WF-TOOL) calls
+ * this once before execution, then `advanceRunPhase` per phase via the engine's
+ * `onPhaseStart`/`onPhaseComplete` hooks.
+ */
+export function ensurePhaseRun(
+  workspaceRoot: string,
+  slug: string,
+  phases: Array<{ id: string; title: string }>,
+  opts: { sessionKey?: string | null; pid?: number | null; now?: string; kind?: string } = {},
+): WorkflowRun {
+  const existing = readRun(workspaceRoot, slug);
+  if (existing) return existing;
+  const now = opts.now ?? new Date().toISOString();
+  const kind = opts.kind ?? readMetaKind(workspaceRoot, slug);
+  const run: WorkflowRun = {
+    slug,
+    kind,
+    status: 'running',
+    sessionKey: opts.sessionKey ?? null,
+    pid: opts.pid ?? null,
+    startedAt: now,
+    updatedAt: now,
+    steps: [],
+    currentStepId: null,
+    phases: phases.map((p) => ({ id: p.id, title: p.title, status: 'pending' as RunPhaseStatus, childIds: [] })),
+  };
+  return writeRun(workspaceRoot, run);
+}
+
+/**
+ * WF-PERSIST — advance one phase of a runtime-driven run (lazily creating an
+ * empty phase run if needed), merging `childIds`/`aggregatedOutputRef` and
+ * recomputing the overall run status from the phases.
+ */
+export function advanceRunPhase(
+  workspaceRoot: string,
+  slug: string,
+  phaseId: string,
+  status: RunPhaseStatus,
+  opts: {
+    childIds?: string[];
+    aggregatedOutputRef?: string;
+    title?: string;
+    sessionKey?: string | null;
+    pid?: number | null;
+    now?: string;
+  } = {},
+): WorkflowRun {
+  const now = opts.now ?? new Date().toISOString();
+  const run =
+    readRun(workspaceRoot, slug) ??
+    ensurePhaseRun(workspaceRoot, slug, [], { sessionKey: opts.sessionKey, pid: opts.pid, now });
+  const phases = applyPhaseTransition(run.phases ?? [], phaseId, status, now, {
+    childIds: opts.childIds,
+    aggregatedOutputRef: opts.aggregatedOutputRef,
+    title: opts.title,
+  });
+  return writeRun(workspaceRoot, {
+    ...run,
+    phases,
+    status: computePhaseRunStatus(phases),
+    updatedAt: now,
+  });
+}
+
 export function listRuns(workspaceRoot: string): WorkflowRun[] {
   // Runs live inside workflow dirs; scan the workflows root for run.json files.
   const root = getWorkflowsRoot(workspaceRoot);
@@ -311,8 +499,21 @@ export function listRuns(workspaceRoot: string): WorkflowRun[] {
  */
 export function reconcileStaleRuns(workspaceRoot: string, currentPid: number = process.pid): number {
   const slugs = staleRunSlugs(listRuns(workspaceRoot), (pid) => pid === currentPid);
+  const now = new Date().toISOString();
   for (const slug of slugs) {
-    finishRun(workspaceRoot, slug, 'interrupted');
+    const run = readRun(workspaceRoot, slug);
+    if (run?.phases && run.phases.length > 0) {
+      // Phase-aware run: also flip its in-flight phase(s) to interrupted so
+      // WF-RESUME knows exactly where execution stopped.
+      writeRun(workspaceRoot, {
+        ...run,
+        status: 'interrupted',
+        phases: interruptInFlightPhases(run.phases, now),
+        updatedAt: now,
+      });
+    } else {
+      finishRun(workspaceRoot, slug, 'interrupted', now);
+    }
   }
   return slugs.length;
 }
