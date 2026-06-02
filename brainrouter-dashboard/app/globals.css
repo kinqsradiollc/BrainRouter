@@ -179,14 +179,84 @@ a {
 
 .main-content {
   flex: 1;
-  padding: var(--spacing-32) var(--spacing-40);
-  max-width: var(--page-max-width);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Modern app frame: a thin sticky top bar (global chrome) + a full-width,
+   generously-padded content area. Replaces the old floating circle toolbar. */
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: 56px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 clamp(20px, 3vw, 40px);
+  background: color-mix(in srgb, var(--surface-base) 72%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-control);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+}
+.topbar-btn:hover {
+  color: var(--text);
+  background: var(--surface-overlay);
+  border-color: var(--border);
+}
+.topbar-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.topbar-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #06140E;
+  background: var(--accent);
+}
+.content-scroll {
+  flex: 1;
+  width: 100%;
+  max-width: 1600px;
   margin: 0 auto;
+  padding: 32px clamp(20px, 3vw, 40px) 72px;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-24);
-  width: 0;
-  min-width: 0;
 }
 
 @media (max-width: 1024px) {
@@ -623,14 +693,12 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 }
 
 .public-header-inner {
-  max-width: var(--page-max-width);
-  margin: 0 auto;
   width: 100%;
-  height: 68px;
+  height: 64px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 var(--spacing-24);
+  padding: 0 clamp(20px, 5vw, 96px);
 }
 
 .public-nav {
@@ -639,10 +707,14 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
   gap: var(--spacing-24);
 }
 
+.public-nav {
+  flex-wrap: nowrap;
+}
 .public-nav-link {
   color: var(--color-stone-text);
   font-weight: 500;
   font-size: 14px;
+  white-space: nowrap;
   transition: color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -653,9 +725,14 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .public-content {
   flex: 1;
   width: 100%;
-  max-width: var(--page-max-width);
-  margin: 0 auto;
-  padding: var(--spacing-32) var(--spacing-40);
+  padding: 48px clamp(20px, 5vw, 96px) 96px;
+}
+/* Sections inside Home center their own content at a comfortable wide max so
+   backgrounds go edge-to-edge (full-screen) but text stays readable. */
+.public-content > * {
+  max-width: 1536px;
+  margin-left: auto;
+  margin-right: auto;
 }
 @keyframes brainrouter-spin {
   to {
