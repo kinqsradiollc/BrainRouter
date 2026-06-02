@@ -45,16 +45,16 @@ export function PremiumButton({
   let variantStyle: React.CSSProperties = {};
   if (variant === "primary") {
     variantStyle = {
-      background: "linear-gradient(135deg, #ae9357 0%, #bd9d4f 50%, #d8be7c 100%)",
+      background: "linear-gradient(135deg, #34C28E 0%, #34C28E 50%, #34C28E 100%)",
       color: "#0b0c10",
       border: "1px solid transparent",
-      boxShadow: "0 4px 15px rgba(174, 147, 87, 0.25)"
+      boxShadow: "var(--elev-inset)"
     };
   } else if (variant === "ghost") {
     variantStyle = {
-      background: "rgba(174, 147, 87, 0.03)",
+      background: "rgba(52, 194, 142, 0.03)",
       color: "var(--color-golden-accent)",
-      border: "1px solid rgba(174, 147, 87, 0.25)",
+      border: "1px solid rgba(52, 194, 142, 0.25)",
       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)"
     };
   } else if (variant === "danger") {
@@ -96,7 +96,7 @@ export function PremiumButton({
         scale: 1.02,
         y: -1,
         boxShadow: variant === "primary" 
-          ? "0 6px 20px rgba(174, 147, 87, 0.4)" 
+          ? "var(--elev-inset)" 
           : (variant === "danger" 
               ? "0 4px 12px rgba(239, 68, 68, 0.15)"
               : (variant === "success"
@@ -105,7 +105,7 @@ export function PremiumButton({
         background: variant === "primary"
           ? "linear-gradient(135deg, #bca166 0%, #cca95c 50%, #e6cb8b 100%)"
           : (variant === "ghost"
-              ? "rgba(174, 147, 87, 0.12)"
+              ? "rgba(52, 194, 142, 0.12)"
               : (variant === "danger"
                   ? "rgba(239, 68, 68, 0.15)"
                   : (variant === "success"
