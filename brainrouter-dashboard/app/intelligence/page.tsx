@@ -59,7 +59,7 @@ export default function IntelligencePage() {
           title="Graph Intelligence"
           description="Analytics over the cognitive graph — which entities are most central, which bridge separate clusters, how the namespace breaks down, and how any two entities connect."
         />
-        {error && <p style={{ color: "#fca5a5", fontSize: "13px" }}>Could not load analytics: {error}</p>}
+        {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load analytics: {error}</p>}
         {!data && !error && <p style={{ color: stone, fontSize: "13px" }}>Loading…</p>}
         {data && data.nodeCount === 0 && (
           <p style={{ color: stone, fontSize: "13px" }}>The graph is empty — it grows as memories are captured and entities are linked.</p>

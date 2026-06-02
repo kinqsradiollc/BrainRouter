@@ -56,9 +56,9 @@ export default function AuthPage() {
   function passwordStrength(password: string) {
     const hasMixedCase = /[a-z]/.test(password) && /[A-Z]/.test(password);
     const hasSpecial = /[^a-zA-Z0-9]/.test(password);
-    if (password.length > 12 && hasMixedCase && hasSpecial) return { label: "Strong", color: "#22c55e", width: "100%" };
-    if (password.length >= 8 && hasMixedCase) return { label: "OK", color: "#f59e0b", width: "66%" };
-    return { label: "Weak", color: "#ef4444", width: "33%" };
+    if (password.length > 12 && hasMixedCase && hasSpecial) return { label: "Strong", color: "#34C28E", width: "100%" };
+    if (password.length >= 8 && hasMixedCase) return { label: "OK", color: "#D9A441", width: "66%" };
+    return { label: "Weak", color: "#E5675F", width: "33%" };
   }
 
   async function handleSignIn(e: React.FormEvent) {
@@ -428,7 +428,7 @@ export default function AuthPage() {
                     type="checkbox"
                     checked={rememberMe}
                     onChange={(e) => setRememberMe(e.target.checked)}
-                    style={{ accentColor: "#cc9166" }}
+                    style={{ accentColor: "#34C28E" }}
                   />
                   Remember me
                 </label>
@@ -470,9 +470,9 @@ export default function AuthPage() {
                     style={{ 
                       padding: "10px 14px", 
                       borderRadius: "var(--radius-md)", 
-                      background: "rgba(239, 68, 68, 0.08)", 
-                      border: "1px solid rgba(239, 68, 68, 0.2)",
-                      color: "#f87171",
+                      background: "rgba(229, 103, 95, 0.08)", 
+                      border: "1px solid rgba(229, 103, 95, 0.2)",
+                      color: "#E5675F",
                       fontSize: "13px"
                     }}
                   >
@@ -552,9 +552,9 @@ export default function AuthPage() {
                     style={{ 
                       padding: "10px 14px", 
                       borderRadius: "var(--radius-md)", 
-                      background: "rgba(239, 68, 68, 0.08)", 
-                      border: "1px solid rgba(239, 68, 68, 0.2)",
-                      color: "#f87171",
+                      background: "rgba(229, 103, 95, 0.08)", 
+                      border: "1px solid rgba(229, 103, 95, 0.2)",
+                      color: "#E5675F",
                       fontSize: "13px"
                     }}
                   >

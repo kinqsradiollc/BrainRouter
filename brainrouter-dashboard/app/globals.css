@@ -464,14 +464,14 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 }
 
 .pill-btn-danger {
-  background-color: rgba(239, 68, 68, 0.1);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background-color: rgba(229, 103, 95, 0.1);
+  color: #E5675F;
+  border: 1px solid rgba(229, 103, 95, 0.2);
 }
 
 .pill-btn-danger:hover {
-  background-color: rgba(239, 68, 68, 0.25);
-  border-color: #ef4444;
+  background-color: rgba(229, 103, 95, 0.25);
+  border-color: #E5675F;
   color: #ffffff;
 }
 
@@ -534,7 +534,7 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 }
 
 .button-gold-ghost:hover {
-  background: rgba(204, 145, 102, 0.08);
+  background: rgba(52, 194, 142, 0.08);
   border-color: var(--color-pure-white);
   transform: translateY(-1.5px);
 }

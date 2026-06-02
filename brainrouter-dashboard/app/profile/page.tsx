@@ -41,16 +41,16 @@ function highlightJson(json: string) {
         parts.push(":");
       } else {
         parts.push(
-          <span key={`str-${keyCounter++}`} style={{ color: "#34d399" }}>{matchText}</span>
+          <span key={`str-${keyCounter++}`} style={{ color: "#34C28E" }}>{matchText}</span>
         );
       }
     } else if (/true|false/.test(matchText)) {
       parts.push(
-        <span key={`bool-${keyCounter++}`} style={{ color: "#f43f5e", fontWeight: "bold" }}>{matchText}</span>
+        <span key={`bool-${keyCounter++}`} style={{ color: "#E5675F", fontWeight: "bold" }}>{matchText}</span>
       );
     } else if (/null/.test(matchText)) {
       parts.push(
-        <span key={`null-${keyCounter++}`} style={{ color: "#9ca3af", fontStyle: "italic" }}>{matchText}</span>
+        <span key={`null-${keyCounter++}`} style={{ color: "#6B7480", fontStyle: "italic" }}>{matchText}</span>
       );
     } else {
       parts.push(

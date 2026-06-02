@@ -82,7 +82,7 @@ export default function TreePage() {
           title="Memory Tree"
           description="The durable summary hierarchy — leaves roll up into sealed, summarized parents across source / topic / global scope. Click a node to drill into its children."
         />
-        {error && <p style={{ color: "#fca5a5", fontSize: "13px" }}>Could not load tree: {error}</p>}
+        {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load tree: {error}</p>}
         {!roots && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
         {roots && roots.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No tree nodes yet. They form as memory accumulates and buckets are sealed (0.4.3).</p>

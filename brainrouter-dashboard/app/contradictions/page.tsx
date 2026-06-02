@@ -138,12 +138,12 @@ export default function ContradictionsPage() {
                   width: "48px", 
                   height: "48px", 
                   borderRadius: "50%", 
-                  background: "rgba(16, 185, 129, 0.08)",
-                  border: "1px solid rgba(16, 185, 129, 0.2)",
+                  background: "rgba(52, 194, 142, 0.08)",
+                  border: "1px solid rgba(52, 194, 142, 0.2)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  color: "#10b981",
+                  color: "#34C28E",
                   marginBottom: "4px"
                 }}
               >

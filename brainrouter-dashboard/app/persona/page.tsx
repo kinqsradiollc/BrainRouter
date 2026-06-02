@@ -105,14 +105,14 @@ export default function PersonaPage() {
 
                 {/* Arrow SVG indicator */}
                 <div style={{ paddingLeft: "12px", height: "16px", display: "flex", alignItems: "center" }}>
-                  <svg width="8" height="16" viewBox="0 0 8 16" fill="none" stroke="rgba(204, 145, 102, 0.3)" strokeWidth="1.5">
+                  <svg width="8" height="16" viewBox="0 0 8 16" fill="none" stroke="rgba(52, 194, 142, 0.3)" strokeWidth="1.5">
                     <path d="M4 0v16M1 13l3 3 3-3" />
                   </svg>
                 </div>
 
                 {/* Funnel Stage 2 */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(204, 145, 102, 0.08)", border: "1px solid rgba(204, 145, 102, 0.2)", fontSize: "10px", color: "var(--color-golden-accent)", fontWeight: 600, justifyContent: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(52, 194, 142, 0.08)", border: "1px solid rgba(52, 194, 142, 0.2)", fontSize: "10px", color: "var(--color-golden-accent)", fontWeight: 600, justifyContent: "center" }}>
                     CF
                   </div>
                   <div>
@@ -123,14 +123,14 @@ export default function PersonaPage() {
 
                 {/* Arrow SVG indicator */}
                 <div style={{ paddingLeft: "12px", height: "16px", display: "flex", alignItems: "center" }}>
-                  <svg width="8" height="16" viewBox="0 0 8 16" fill="none" stroke="rgba(204, 145, 102, 0.3)" strokeWidth="1.5">
+                  <svg width="8" height="16" viewBox="0 0 8 16" fill="none" stroke="rgba(52, 194, 142, 0.3)" strokeWidth="1.5">
                     <path d="M4 0v16M1 13l3 3 3-3" />
                   </svg>
                 </div>
 
                 {/* Funnel Stage 3 */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "var(--color-golden-accent)", fontSize: "10px", color: "var(--color-midnight-ink)", fontWeight: 700, boxShadow: "0 0 10px rgba(204, 145, 102, 0.4)", justifyContent: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", width: "28px", height: "28px", borderRadius: "50%", background: "var(--color-golden-accent)", fontSize: "10px", color: "var(--color-midnight-ink)", fontWeight: 700, boxShadow: "var(--elev-inset)", justifyContent: "center" }}>
                     CI
                   </div>
                   <div>

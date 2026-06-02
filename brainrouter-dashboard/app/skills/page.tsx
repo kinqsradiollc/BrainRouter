@@ -49,7 +49,7 @@ export default function SkillsPage() {
         </div>
 
         {error && (
-          <div style={{ padding: "16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid #ef4444", borderRadius: "8px", color: "#f87171" }}>
+          <div style={{ padding: "16px", background: "rgba(229, 103, 95, 0.1)", border: "1px solid #E5675F", borderRadius: "8px", color: "#E5675F" }}>
             Failed to load skill activations: {error}
           </div>
         )}
@@ -124,7 +124,7 @@ export default function SkillsPage() {
                             height: "100%", 
                             background: isPrewarmed 
                               ? "linear-gradient(90deg, #34C28E 0%, #34C28E 100%)" 
-                              : "linear-gradient(90deg, #4b5563 0%, #9ca3af 100%)",
+                              : "linear-gradient(90deg, #3C434B 0%, #6B7480 100%)",
                             borderRadius: "9999px",
                             boxShadow: isPrewarmed ? "none" : "none",
                             transition: "width 0.5s ease-out"

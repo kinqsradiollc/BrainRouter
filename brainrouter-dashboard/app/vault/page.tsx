@@ -30,7 +30,7 @@ export default function VaultPage() {
           title="Vault"
           description="Read-only markdown mirror of records + tree nodes, with a hash ledger so re-export only rewrites what changed. The database stays authoritative."
         />
-        {error && <p style={{ color: "#fca5a5", fontSize: "13px" }}>Could not load vault: {error}</p>}
+        {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load vault: {error}</p>}
         {!exports && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
         {exports && exports.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No vault exports yet. Run <code>memory_vault_export</code> to mirror memory to markdown (0.4.3).</p>

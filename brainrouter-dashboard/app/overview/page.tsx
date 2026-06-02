@@ -88,13 +88,13 @@ export default function Page() {
                 gap: "8px",
                 padding: "10px 18px",
                 borderRadius: "10px",
-                background: "linear-gradient(135deg, #d97847 0%, #b8623a 100%)",
+                background: "linear-gradient(135deg, #34C28E 0%, #34C28E 100%)",
                 color: "#fff",
                 fontSize: "13px",
                 fontWeight: 500,
                 letterSpacing: "0.01em",
                 textDecoration: "none",
-                boxShadow: "0 4px 12px rgba(217, 120, 71, 0.25)",
+                boxShadow: "var(--shadow-sm)",
               }}
             >
               Open memory-augmented chat →
@@ -177,14 +177,14 @@ export default function Page() {
                 </div>
 
                 {(diagnosticsError || recentErrors.length > 0) && (
-                  <div style={{ marginTop: "4px", border: "1px solid rgba(239, 68, 68, 0.22)", borderRadius: "8px", background: "rgba(239, 68, 68, 0.06)", maxHeight: "180px", overflowY: "auto" }}>
+                  <div style={{ marginTop: "4px", border: "1px solid rgba(229, 103, 95, 0.22)", borderRadius: "8px", background: "rgba(229, 103, 95, 0.06)", maxHeight: "180px", overflowY: "auto" }}>
                     {diagnosticsError && (
-                      <div style={{ padding: "10px 12px", color: "#fca5a5", fontSize: "12px", borderBottom: recentErrors.length > 0 ? "1px solid rgba(239, 68, 68, 0.14)" : undefined }}>
+                      <div style={{ padding: "10px 12px", color: "#E5675F", fontSize: "12px", borderBottom: recentErrors.length > 0 ? "1px solid rgba(229, 103, 95, 0.14)" : undefined }}>
                         Diagnostics unavailable: {diagnosticsError}
                       </div>
                     )}
                     {recentErrors.map((operation) => (
-                      <div key={operation.id} style={{ padding: "10px 12px", borderBottom: "1px solid rgba(239, 68, 68, 0.12)" }}>
+                      <div key={operation.id} style={{ padding: "10px 12px", borderBottom: "1px solid rgba(229, 103, 95, 0.12)" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", fontSize: "12px" }}>
                           <span style={{ color: "var(--color-white-frost)", fontWeight: 500, overflowWrap: "anywhere" }}>{operation.operation}</span>
                           <span style={{ color: "var(--color-stone-text)", whiteSpace: "nowrap" }}>
@@ -221,7 +221,7 @@ export default function Page() {
                 API Status
               </h3>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px #10b981" }} />
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#34C28E", boxShadow: "0 0 8px #34C28E" }} />
                 <span style={{ fontSize: "14px", fontWeight: 500, color: "var(--color-pure-white)" }}>Server Connected</span>
               </div>
               <p style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5, margin: 0, marginTop: "8px" }}>

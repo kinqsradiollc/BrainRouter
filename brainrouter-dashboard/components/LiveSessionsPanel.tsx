@@ -53,7 +53,7 @@ export function LiveSessionsPanel({
         the last 2 minutes.
       </p>
       {error && (
-        <div style={{ color: "var(--color-danger, #c43232)", fontSize: "13px" }}>
+        <div style={{ color: "var(--color-danger, #E5675F)", fontSize: "13px" }}>
           Failed to load sessions: {error}
         </div>
       )}

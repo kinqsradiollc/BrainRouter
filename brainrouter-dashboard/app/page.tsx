@@ -314,7 +314,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 padding: "12px 16px",
                 fontFamily: "monospace",
                 fontSize: "11px",
-                color: "#10b981",
+                color: "#34C28E",
                 height: "100px",
                 overflowY: "auto",
                 display: "flex",
@@ -697,7 +697,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
 
                 {/* Contextual Focus */}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", background: "var(--overlay-bg)", padding: "10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)" }}>
-                  <span style={{ background: "#4f46e5", color: "#fff", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>CF</span>
+                  <span style={{ background: "#34C28E", color: "#fff", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>CF</span>
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px", width: "100%" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span style={{ color: "var(--color-stone-text)", fontSize: "10px", fontWeight: 600 }}>{activeExample.l2.title}</span>
@@ -995,7 +995,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 padding: "12px 16px",
                 fontFamily: "monospace",
                 fontSize: "11px",
-                color: "#10b981",
+                color: "#34C28E",
                 height: "140px",
                 overflowY: "auto",
                 display: "flex",
@@ -1040,8 +1040,8 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                     right: "50px",
                     bottom: "105px",
                     borderRadius: "12px",
-                    border: "2px dashed #818cf8",
-                    background: "rgba(129, 140, 248, 0.1)",
+                    border: "2px dashed #34C28E",
+                    background: "rgba(52, 194, 142, 0.1)",
                     pointerEvents: "none",
                     zIndex: 0
                   }}
@@ -1049,7 +1049,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
               )}
               
               {(learningStep === "consolidated" || learningStep === "decayed") && (
-                <div style={{ position: "absolute", top: "82px", left: "62px", color: "rgba(129, 140, 248, 0.8)", fontSize: "9px", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", zIndex: 1 }}>
+                <div style={{ position: "absolute", top: "82px", left: "62px", color: "rgba(52, 194, 142, 0.8)", fontSize: "9px", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", zIndex: 1 }}>
                   CONTEXTUAL FOCUS SCENE LIMITS
                 </div>
               )}
@@ -1073,7 +1073,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                           link.type === "distillation" 
                             ? "var(--color-golden-accent)" 
                             : link.type === "scene-member" 
-                              ? "#818cf8" 
+                              ? "#34C28E" 
                               : link.type === "prewarm"
                                 ? "rgba(217, 119, 6, 0.6)"
                                 : "rgba(255, 255, 255, 0.15)"
@@ -1120,24 +1120,24 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                   let shadowColor = "none";
                   
                   if (node.type === "dialogue") {
-                    fillColor = "#10b981";
-                    strokeColor = "#34d399";
-                    shadowColor = "rgba(16, 185, 129, 0.4)";
+                    fillColor = "#34C28E";
+                    strokeColor = "#34C28E";
+                    shadowColor = "rgba(52, 194, 142, 0.4)";
                   } else if (node.type === "cr") {
                     fillColor = "var(--color-porcelain-text)";
                     strokeColor = "var(--color-silver-text)";
                     shadowColor = "rgba(226, 227, 233, 0.2)";
                   } else if (node.type === "cf") {
-                    fillColor = "#4f46e5";
-                    strokeColor = "#818cf8";
-                    shadowColor = "rgba(79, 70, 229, 0.4)";
+                    fillColor = "#34C28E";
+                    strokeColor = "#34C28E";
+                    shadowColor = "rgba(52, 194, 142, 0.4)";
                   } else if (node.type === "ci") {
                     fillColor = "var(--color-golden-accent)";
                     strokeColor = "var(--color-white-frost)";
                     shadowColor = "var(--color-golden-accent)";
                   } else if (node.type === "skill") {
-                    fillColor = "#d97706";
-                    strokeColor = "#f59e0b";
+                    fillColor = "#D9A441";
+                    strokeColor = "#D9A441";
                     shadowColor = "rgba(217, 119, 6, 0.4)";
                   }
 
@@ -1202,10 +1202,10 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
               
               {/* Level Legend indicators */}
               <div style={{ position: "absolute", bottom: "10px", right: "12px", display: "flex", gap: "8px", background: "rgba(0,0,0,0.3)", padding: "4px 8px", borderRadius: "6px", fontSize: "8px", zIndex: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981" }}/> Dialogue</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#34C28E" }}/> Dialogue</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#fff" }}/> CR</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#4f46e5" }}/> CF (Scene)</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#d97706" }}/> Skill (Pre-Warm)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#34C28E" }}/> CF (Scene)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#D9A441" }}/> Skill (Pre-Warm)</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "var(--color-golden-accent)" }}/> CI (Identity)</div>
               </div>
 
@@ -1331,7 +1331,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
                       <span style={{ color: "var(--color-pure-white)" }}>Contradiction Auditor</span>
-                      <span style={{ color: "#ff6b6b", fontWeight: 500 }}>Conflict Check</span>
+                      <span style={{ color: "#E5675F", fontWeight: 500 }}>Conflict Check</span>
                     </div>
                     <div style={{ background: "var(--border-dim)", padding: "5px 8px", borderRadius: "4px", display: "flex", justifyContent: "space-between", border: "1px solid var(--border-dim)" }}>
                       <span style={{ color: "var(--color-pure-white)" }}>Focus Director & Skill Prewarm</span>
@@ -1392,7 +1392,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                       <span style={{ color: "var(--color-silver-text)" }}>Contextual Focus & Active Scenes</span>
                     </div>
                     <div style={{ display: "flex", gap: "6px" }}>
-                      <span style={{ background: "rgba(204, 145, 102, 0.15)", color: "var(--color-golden-accent)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>CI</span>
+                      <span style={{ background: "rgba(52, 194, 142, 0.15)", color: "var(--color-golden-accent)", padding: "1px 4px", borderRadius: "2px", fontSize: "9px", fontWeight: 700 }}>CI</span>
                       <span style={{ color: "var(--color-silver-text)" }}>Core Identity & Custom Constraints</span>
                     </div>
                   </div>

@@ -73,7 +73,7 @@ export default function TimelinePage() {
           </FilterBar.Row>
         </FilterBar>
 
-        {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
+        {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
 
         <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>
           {operations.length === 0 && !isLoading ? (

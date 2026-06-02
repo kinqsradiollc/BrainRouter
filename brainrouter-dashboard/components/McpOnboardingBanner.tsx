@@ -27,7 +27,7 @@ export function McpOnboardingBanner() {
   if (!visible || !user) return null;
 
   return (
-    <section className="card-premium" style={{ padding: "18px", border: "1px solid rgba(204,145,102,0.35)", display: "flex", flexDirection: "column", gap: "12px" }}>
+    <section className="card-premium" style={{ padding: "18px", border: "1px solid rgba(52, 194, 142,0.35)", display: "flex", flexDirection: "column", gap: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
         <div>
           <h2 style={{ margin: 0, color: "var(--color-pure-white)", fontSize: "18px" }}>Connect your MCP client</h2>

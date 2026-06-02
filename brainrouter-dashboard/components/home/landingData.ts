@@ -58,8 +58,8 @@ export const workflowExamples = [
     label: "Data Analyst",
     request: "\"Write a script to visualize the Q3 Revenue data.\"",
     l3: { title: "CORE PREFERENCES", detail: "Prefers Python & Pandas" },
-    l2: { title: "ACTIVE SKILL PRE-WARM (L2)", name: "Data-Visualization", potential: 3.2, hints: "Use seaborn, hex #cc9166 for accent curves..." },
-    l1: { title: "RECENT CONTEXT (L1)", detail: "Always use Hex #cc9166 in charts" },
+    l2: { title: "ACTIVE SKILL PRE-WARM (L2)", name: "Data-Visualization", potential: 3.2, hints: "Use seaborn, hex #34C28E for accent curves..." },
+    l1: { title: "RECENT CONTEXT (L1)", detail: "Always use Hex #34C28E in charts" },
     execution: "The AI outputs a perfect Python script using Pandas, and automatically styles the charts using seaborn and the golden hex code, avoiding generic blue defaults.",
     feedback: { metric: "What memory was useful?", action: "↑ Data-Visualization Spike (+1.0)" },
     distill: { metric: "What new facts happened?", action: "Data-Visualization potential refreshed" }
