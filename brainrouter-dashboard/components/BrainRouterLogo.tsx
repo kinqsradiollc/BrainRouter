@@ -6,22 +6,23 @@ import type { CSSProperties } from "react";
 /**
  * BrainRouterLogo — the BrainRouter brand mark + wordmark, generated in code.
  *
- * The mark distills the product motif (see home/HeroGraph): a small *memory
- * graph* — a Signal "recall" core node linked to heat-coloured satellite
- * memories (the Recall-Heat ramp). Crisp vector (SVG), scalable to any size,
- * with a subtle "breathing" pulse on the core (the live-recall signal) that
- * honours prefers-reduced-motion.
+ * The mark is a guilloché rosette: interwoven Signal rings (a 12-fold
+ * flower-of-life lattice) with six memory nodes routed around a glossy
+ * "recall" core. Procedurally drawn vector — intricate and hard to replicate,
+ * yet crisp at any size; the bright core keeps it legible down to ~24px.
  *
- * Reusable: pass showWordmark={false} for the mark alone (favicons, loaders,
- * empty states), animated={false} to freeze the pulse.
+ * Reusable: showWordmark={false} for the mark alone (favicons, loaders, empty
+ * states); animated={false} to freeze the subtle core pulse. Honors
+ * prefers-reduced-motion.
  */
 
-// Brand palette — Signal accent + the Recall-Heat ramp (kept literal so the
-// mark is self-contained, matching HeroGraph).
 const SIGNAL = "#34C28E";
-const HOT = "#E0A063";
-const WARM = "#C98F6E";
-const COOL = "#6B7480";
+const RING = 44; // outer containing ring radius (viewBox is -50..50)
+
+// flower-of-life lattice: two 6-circle rings, offset 30° → 12-fold interference
+const PETALS = Array.from({ length: 6 }, (_, i) => (i * 60 * Math.PI) / 180);
+const PETALS_OFFSET = Array.from({ length: 6 }, (_, i) => ((i * 60 + 30) * Math.PI) / 180);
+const onCircle = (a: number, dist: number) => ({ x: +(Math.cos(a) * dist).toFixed(2), y: +(Math.sin(a) * dist).toFixed(2) });
 
 export function BrainRouterLogo({
   size = 28,
@@ -41,6 +42,7 @@ export function BrainRouterLogo({
   style?: CSSProperties;
 }) {
   const uid = useId().replace(/:/g, "");
+  const grad = `${uid}-g`;
   const coreGrad = `${uid}-core`;
 
   return (
@@ -51,41 +53,49 @@ export function BrainRouterLogo({
       <svg
         width={size}
         height={size}
-        viewBox="0 0 40 40"
+        viewBox="-50 -50 100 100"
         fill="none"
         aria-hidden="true"
         style={{ display: "block", flexShrink: 0, overflow: "visible" }}
       >
         <defs>
-          <linearGradient id={coreGrad} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#5FD3A8" />
+          <linearGradient id={grad} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#7FE6BE" />
             <stop offset="1" stopColor={SIGNAL} />
           </linearGradient>
+          <radialGradient id={coreGrad} cx="0.38" cy="0.32" r="0.78">
+            <stop offset="0" stopColor="#7FE6BE" />
+            <stop offset="1" stopColor={SIGNAL} />
+          </radialGradient>
         </defs>
 
-        {/* edges — core routes out to each memory; opacity encodes strength */}
-        <g stroke={SIGNAL} strokeLinecap="round">
-          <line x1="20" y1="20" x2="8.5" y2="10.5" strokeWidth="1.6" strokeOpacity="0.5" />
-          <line x1="20" y1="20" x2="31.5" y2="11" strokeWidth="1.3" strokeOpacity="0.36" />
-          <line x1="20" y1="20" x2="30" y2="30.5" strokeWidth="1.6" strokeOpacity="0.5" />
-          <line x1="20" y1="20" x2="9.5" y2="30" strokeWidth="1.3" strokeOpacity="0.34" />
-        </g>
-        <line x1="8.5" y1="10.5" x2="9.5" y2="30" stroke="#FFFFFF" strokeWidth="1" strokeOpacity="0.1" strokeLinecap="round" />
+        {/* containing ring */}
+        <circle r={RING} stroke={SIGNAL} strokeWidth="1" strokeOpacity="0.32" />
 
-        {/* satellite memories (Recall-Heat ramp) */}
-        <circle cx="8.5" cy="10.5" r="3.6" fill={HOT} />
-        <circle cx="31.5" cy="11" r="2.9" fill={SIGNAL} fillOpacity="0.7" />
-        <circle cx="30" cy="30.5" r="3.2" fill={WARM} />
-        <circle cx="9.5" cy="30" r="2.5" fill={COOL} />
+        {/* primary lattice — gradient stroke */}
+        {PETALS.map((a, i) => {
+          const c = onCircle(a, 22);
+          return <circle key={`p${i}`} cx={c.x} cy={c.y} r={22} stroke={`url(#${grad})`} strokeWidth="1" strokeOpacity="0.6" />;
+        })}
+        {/* offset lattice — finer, builds the 12-fold interference */}
+        {PETALS_OFFSET.map((a, i) => {
+          const c = onCircle(a, 22);
+          return <circle key={`o${i}`} cx={c.x} cy={c.y} r={22} stroke={SIGNAL} strokeWidth="0.75" strokeOpacity="0.32" />;
+        })}
 
-        {/* breathing recall signal on the core */}
-        {animated && <circle className="brl-pulse" cx="20" cy="20" r="6.6" fill={SIGNAL} />}
+        {/* memory nodes routed around the ring */}
+        {PETALS.map((a, i) => {
+          const c = onCircle(a, RING);
+          return <circle key={`n${i}`} cx={c.x} cy={c.y} r={2.4} fill={SIGNAL} />;
+        })}
+
+        {/* breathing recall signal */}
+        {animated && <circle className="brl-pulse" r={7} fill={SIGNAL} />}
 
         {/* core "recall" node */}
-        <circle cx="20" cy="20" r="6.6" fill={`url(#${coreGrad})`} />
-        <circle cx="20" cy="20" r="6.6" fill="none" stroke="#FFFFFF" strokeOpacity="0.18" strokeWidth="1" />
-        {/* top highlight for dimension */}
-        <circle cx="20" cy="17.6" r="2.9" fill="#FFFFFF" fillOpacity="0.16" />
+        <circle r={7} fill={`url(#${coreGrad})`} />
+        <circle r={7} stroke="#fff" strokeOpacity="0.22" strokeWidth="0.8" />
+        <circle cx={-2.3} cy={-2.8} r={3} fill="#fff" fillOpacity="0.2" />
       </svg>
 
       {showWordmark && (
