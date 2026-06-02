@@ -8,7 +8,7 @@ feeds a long-term store, unused facts decay, used ones get reinforced.
 The goal: when your agent reads its prompt, it sees what's relevant and
 recent, not a wall of stale chunks.
 
-> **Version 0.4.2.** Memory engine + MCP server + a memory-native terminal
+> **Version 0.4.8.** Memory engine + MCP server + a memory-native terminal
 > CLI + a Next.js dashboard. This doc covers the engine and the MCP API; the
 > CLI deep dive is [brainrouter-docs/cli.md](brainrouter-docs/cli.md).
 
@@ -158,7 +158,7 @@ server env reference: [brainrouter-docs/configuration.md](brainrouter-docs/confi
 
 The repo ships [`brainrouter-cli/`](brainrouter-cli/) — a terminal agent
 built on the memory stack, with the brain as a first-class tool. Highlights
-as of 0.4.2:
+as of 0.4.8:
 
 - **Memory-native turns** — every turn opens with a recall briefing + pinned
   persona; cited records are reinforced automatically.
