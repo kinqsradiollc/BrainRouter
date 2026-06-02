@@ -268,9 +268,9 @@ export default function HomePage() {
                         fontSize: "9px", 
                         padding: "2px 6px", 
                         borderRadius: "10px", 
-                        background: isPrewarmed ? "rgba(174, 147, 87, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                        background: isPrewarmed ? "rgba(52, 194, 142, 0.15)" : "rgba(255, 255, 255, 0.05)",
                         color: isPrewarmed ? "var(--color-golden-accent)" : "var(--color-stone-text)",
-                        border: isPrewarmed ? "1px solid rgba(174, 147, 87, 0.2)" : "1px solid transparent"
+                        border: isPrewarmed ? "1px solid rgba(52, 194, 142, 0.2)" : "1px solid transparent"
                       }}>
                         {isPrewarmed ? "PRE-WARMED" : "DECAYED"}
                       </span>
@@ -298,8 +298,8 @@ export default function HomePage() {
                         width: "100%",
                         padding: "6px 0",
                         borderRadius: "6px",
-                        background: "rgba(174, 147, 87, 0.1)",
-                        border: "1px solid rgba(174, 147, 87, 0.2)",
+                        background: "rgba(52, 194, 142, 0.1)",
+                        border: "1px solid rgba(52, 194, 142, 0.2)",
                         color: "var(--color-golden-accent)",
                         fontSize: "11px",
                         fontWeight: 600,
@@ -307,10 +307,10 @@ export default function HomePage() {
                         transition: "all 0.2s ease"
                       }}
                       onMouseOver={e => {
-                        e.currentTarget.style.background = "rgba(174, 147, 87, 0.2)";
+                        e.currentTarget.style.background = "rgba(52, 194, 142, 0.2)";
                       }}
                       onMouseOut={e => {
-                        e.currentTarget.style.background = "rgba(174, 147, 87, 0.1)";
+                        e.currentTarget.style.background = "rgba(52, 194, 142, 0.1)";
                       }}
                     >
                       ⚡ Spike potential (+1.2)
@@ -940,7 +940,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 style={{
                   padding: "12px",
                   borderRadius: "8px",
-                  background: learningStep === "ingested" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  background: learningStep === "ingested" ? "rgba(52, 194, 142, 0.2)" : "rgba(255, 255, 255, 0.02)",
                   border: `1px solid ${learningStep === "ingested" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
                   color: learningStep === "ingested" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
                   fontSize: "12px",
@@ -964,7 +964,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 style={{
                   padding: "12px",
                   borderRadius: "8px",
-                  background: learningStep === "extracted" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  background: learningStep === "extracted" ? "rgba(52, 194, 142, 0.2)" : "rgba(255, 255, 255, 0.02)",
                   border: `1px solid ${learningStep === "extracted" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
                   color: learningStep === "extracted" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
                   fontSize: "12px",
@@ -989,7 +989,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 style={{
                   padding: "12px",
                   borderRadius: "8px",
-                  background: learningStep === "consolidated" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  background: learningStep === "consolidated" ? "rgba(52, 194, 142, 0.2)" : "rgba(255, 255, 255, 0.02)",
                   border: `1px solid ${learningStep === "consolidated" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
                   color: learningStep === "consolidated" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
                   fontSize: "12px",
@@ -1014,7 +1014,7 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
                 style={{
                   padding: "12px",
                   borderRadius: "8px",
-                  background: learningStep === "decayed" ? "rgba(174, 147, 87, 0.2)" : "rgba(255, 255, 255, 0.02)",
+                  background: learningStep === "decayed" ? "rgba(52, 194, 142, 0.2)" : "rgba(255, 255, 255, 0.02)",
                   border: `1px solid ${learningStep === "decayed" ? "var(--color-golden-accent)" : "var(--border-dim)"}`,
                   color: learningStep === "decayed" ? "var(--color-golden-accent)" : "var(--color-silver-text)",
                   fontSize: "12px",

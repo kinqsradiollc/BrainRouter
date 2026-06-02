@@ -487,7 +487,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
           onMouseOver={(e) => {
             e.currentTarget.style.color = "var(--color-pure-white)";
             e.currentTarget.style.borderColor = "var(--color-golden-accent)";
-            e.currentTarget.style.background = "rgba(174, 147, 87, 0.08)";
+            e.currentTarget.style.background = "rgba(52, 194, 142, 0.08)";
           }}
           onMouseOut={(e) => {
             e.currentTarget.style.color = "var(--color-stone-text)";

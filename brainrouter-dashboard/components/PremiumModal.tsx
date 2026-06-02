@@ -59,8 +59,8 @@ export function PremiumModal({ isOpen, onClose, title, children }: PremiumModalP
               flexDirection: "column",
               gap: "20px",
               background: "linear-gradient(135deg, rgba(20, 21, 26, 0.95) 0%, rgba(8, 9, 12, 0.98) 100%)",
-              border: "1px solid rgba(174, 147, 87, 0.2)",
-              boxShadow: "0 40px 80px rgba(0, 0, 0, 0.8), 0 0 40px rgba(174, 147, 87, 0.08)"
+              border: "1px solid rgba(52, 194, 142, 0.2)",
+              boxShadow: "0 40px 80px rgba(0, 0, 0, 0.8)"
             }}
           >
             {/* Header */}

@@ -23,8 +23,8 @@ export function PremiumCard({
   const hoverProps = (hoverEffect || onClick) ? {
     whileHover: { 
       y: -2, 
-      borderColor: "rgba(174, 147, 87, 0.2)",
-      boxShadow: "0 20px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(174, 147, 87, 0.04)",
+      borderColor: "rgba(52, 194, 142, 0.2)",
+      boxShadow: "0 20px 40px rgba(0, 0, 0, 0.6)",
       ...(props.whileHover as any)
     },
     whileTap: { scale: 0.99, ...(props.whileTap as any) },

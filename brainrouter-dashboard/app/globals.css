@@ -239,10 +239,12 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.025em;
 }
 
+/* "serif-display" is a legacy class name; the design language is all-Geist
+   (serif retired). Kept as an alias so existing markup needs no churn. */
 .serif-display {
-  font-family: var(--font-ivy-presto);
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 /* Navigation Links */
@@ -487,8 +489,10 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--color-midnight-ink);
   border: none;
   font-weight: 600;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: 0 4px 15px rgba(174, 147, 87, 0.2);
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  /* The Memory Instrument: no glows — a subtle inset top-highlight reads the
+     primary control as raised against color-stepped elevation. */
+  box-shadow: var(--elev-inset);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -496,9 +500,9 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .button-gold-primary:hover {
-  transform: translateY(-1.5px);
-  filter: brightness(1.1);
-  box-shadow: 0 6px 20px rgba(174, 147, 87, 0.35);
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow: var(--elev-inset);
 }
 
 .button-gold-ghost {
@@ -678,8 +682,8 @@ html {
 .markdown-content h3,
 .markdown-content h4 {
   color: var(--color-pure-white);
-  font-family: var(--font-ivy-presto), var(--font-inter), serif;
-  font-weight: 500;
+  font-family: var(--font-sans);
+  font-weight: 600;
   margin-top: 24px;
   margin-bottom: 12px;
   letter-spacing: 0.01em;

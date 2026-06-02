@@ -263,7 +263,7 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
               e.currentTarget.style.borderColor = "var(--color-golden-accent)";
               e.currentTarget.style.background = "var(--overlay-bg-hover)";
               e.currentTarget.style.transform = "scale(1.05)";
-              e.currentTarget.style.boxShadow = "0 8px 30px rgba(174, 147, 87, 0.15)";
+              e.currentTarget.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.45)";
             }}
             onMouseOut={(e) => {
               e.currentTarget.style.color = "var(--color-stone-text)";
