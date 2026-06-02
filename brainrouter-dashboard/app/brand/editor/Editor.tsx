@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { SIZES } from "../brandPresets";
 import { LOCKUPS, type LockupKey } from "../brandPresets";
@@ -9,7 +9,7 @@ import { useEditor } from "./useEditor";
 import { EditorCanvas } from "./EditorCanvas";
 import { buildEditorSVG } from "./buildEditorSVG";
 import { TEMPLATE_FACTORIES } from "./templates";
-import { downloadPNGFromSVG, downloadSVGString } from "./exportUtil";
+import { downloadPNGFromSVG, downloadSVGString } from "../exportUtil";
 
 /* ── tiny styled controls ──────────────────────────────────────────────── */
 const mono: CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--text-muted)", fontWeight: 600 };
@@ -184,9 +184,10 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
 export function Editor() {
   const ed = useEditor();
   const { doc, selId, setSelId, update, add, remove, loadTemplate } = ed;
+  const [scale, setScale] = useState(2);
 
   const exportName = `brainrouter-${doc.width}x${doc.height}`;
-  const doPNG = () => downloadPNGFromSVG(buildEditorSVG(doc), doc.width, doc.height, `${exportName}.png`);
+  const doPNG = () => downloadPNGFromSVG(buildEditorSVG(doc), doc.width, doc.height, `${exportName}.png`, scale);
   const doSVG = () => downloadSVGString(buildEditorSVG(doc), `${exportName}.svg`);
 
   const editText = (id: string) => {
@@ -229,9 +230,15 @@ export function Editor() {
           <option value="" disabled>Template…</option>
           {TEMPLATE_FACTORIES.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <select value={scale} onChange={(e) => setScale(Number(e.target.value))} title="PNG resolution" style={{ ...fieldBox, width: "auto", padding: "7px 8px" }}>
+            <option value={1}>1×</option>
+            <option value={2}>2× HD</option>
+            <option value={3}>3×</option>
+            <option value={4}>4×</option>
+          </select>
           <button style={tbBtn()} onClick={doSVG}>SVG</button>
-          <button style={tbBtn(true)} onClick={doPNG}>Download PNG</button>
+          <button style={tbBtn(true)} onClick={doPNG}>PNG {Math.round(doc.width * scale)}×{Math.round(doc.height * scale)}</button>
         </div>
       </div>
       {/* body */}

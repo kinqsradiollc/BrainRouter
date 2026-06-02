@@ -20,6 +20,7 @@ export default function BrandStudioPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
   const [cfg, setCfg] = useState<BrandConfig>(DEFAULT_CONFIG);
+  const [scale, setScale] = useState(2);
 
   // Admin-only: AuthGuard redirects unauthenticated users to /auth; authed
   // non-admins get bounced to /overview (mirrors the Users console).
@@ -120,9 +121,20 @@ export default function BrandStudioPage() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <select
+              value={scale}
+              onChange={(e) => setScale(Number(e.target.value))}
+              title="PNG resolution"
+              style={{ padding: "11px 12px", borderRadius: "10px", background: "var(--surface-overlay)", border: "1px solid var(--border-strong)", color: "var(--text)", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+            >
+              <option value={1}>1×</option>
+              <option value={2}>2× HD</option>
+              <option value={3}>3×</option>
+              <option value={4}>4×</option>
+            </select>
             <button
               type="button"
-              onClick={downloadPNG}
+              onClick={() => downloadPNG(scale)}
               disabled={busy}
               style={{
                 display: "inline-flex",
@@ -139,7 +151,7 @@ export default function BrandStudioPage() {
                 opacity: busy ? 0.7 : 1,
               }}
             >
-              {busy ? "Rendering…" : `Download PNG (${w}×${h})`}
+              {busy ? "Rendering…" : `Download PNG (${Math.round(w * scale)}×${Math.round(h * scale)})`}
             </button>
             <button
               type="button"
