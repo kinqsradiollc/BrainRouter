@@ -136,23 +136,25 @@ import { skillsRouter } from './api/routes/skills.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
 import { securityHeaders, corsMiddleware } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
+import { createRateLimiter } from './api/middleware/rateLimit.js';
+import { errorHandler } from './api/middleware/errorHandler.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
-const authAttempts = new Map<string, { count: number; resetAt: number }>();
+// Strict limiter for the credential endpoints — brute-force backstop.
+const authRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: "Too many authentication attempts",
+});
 
-function authRateLimit(req: Request, res: Response, next: () => void) {
-  const now = Date.now();
-  const key = req.ip ?? "unknown";
-  const current = authAttempts.get(key);
-  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + 15 * 60 * 1000 };
-  bucket.count += 1;
-  authAttempts.set(key, bucket);
-  if (bucket.count > 20) {
-    res.status(429).json({ error: "Too many authentication attempts" });
-    return;
-  }
-  next();
-}
+// Generous global limiter across the whole /api surface (runaway-client backstop).
+// Sized well above normal dashboard polling; tune or disable (max=0) via env.
+const GLOBAL_RATE_LIMIT_MAX = Number.parseInt(process.env.BRAINROUTER_RATE_LIMIT_MAX ?? "600", 10);
+const GLOBAL_RATE_LIMIT_WINDOW_MS = Number.parseInt(process.env.BRAINROUTER_RATE_LIMIT_WINDOW_MS ?? "60000", 10);
+const apiRateLimit = createRateLimiter({
+  windowMs: Number.isFinite(GLOBAL_RATE_LIMIT_WINDOW_MS) ? GLOBAL_RATE_LIMIT_WINDOW_MS : 60_000,
+  max: Number.isFinite(GLOBAL_RATE_LIMIT_MAX) ? GLOBAL_RATE_LIMIT_MAX : 600,
+});
 
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 function parseFlag(flag: string): string | undefined {
@@ -505,6 +507,7 @@ if (USE_HTTP) {
     res.json({ status: 'ok', transport: 'http', root: config.localRoot });
   });
 
+  app.use("/api", apiRateLimit);
   app.use("/api/auth/signin", authRateLimit);
   app.use("/api/auth/signup", authRateLimit);
   app.use("/api/auth", authRouter);
@@ -636,6 +639,11 @@ if (USE_HTTP) {
   // unhandled PayloadTooLargeError (which surfaced as a raw 500/crash). Registered
   // after the routes so a body-parser parse error from express.json() reaches it.
   app.use(payloadTooLargeHandler(jsonBodyLimit));
+
+  // API-ERRORS: terminal handler — one consistent { error, code } envelope for
+  // anything that bubbles past the routes; never leaks a stack/internal message
+  // to clients in production. Mounted LAST so specific handlers (413) run first.
+  app.use(errorHandler({ production: IS_PRODUCTION }));
 
   const httpServer = app.listen(PORT, () => {
     console.log(`\n🧠 BrainRouter MCP Server`);
