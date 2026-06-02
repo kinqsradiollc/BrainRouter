@@ -47,12 +47,13 @@ export function roleBadgeMarkup(opts: {
 }): { svg: string; w: number; h: number } {
   const { cx, cy, fontSize: fs, accent, label, roleKey, style } = opts;
   const ic = ROLE_ICONS[roleKey] || SPARKLE;
-  const iconSize = fs * 1.15;
+  const iconSize = fs * 1.1;
   const gap = fs * 0.5;
-  const padX = fs * 1.05;
-  const textW = label.length * fs * 0.62;
+  const padX = fs * 0.95;
+  // text width estimate for bold uppercase Geist incl. the 0.08em tracking
+  const textW = label.length * fs * 0.66 + Math.max(0, label.length - 1) * fs * 0.08;
   const w = Math.round(padX * 2 + iconSize + gap + textW);
-  const h = Math.round(fs * 2.1);
+  const h = Math.round(fs * 2.15);
   const x = cx - w / 2;
   const y = cy - h / 2;
   const fg = style === "solid" ? "#06130E" : accent;
