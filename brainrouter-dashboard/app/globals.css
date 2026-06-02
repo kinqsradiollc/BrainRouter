@@ -1013,3 +1013,56 @@ html {
 @keyframes border-beam-spin {
   to { --beam-angle: 360deg; }
 }
+
+/* ─── BrainRouter 3D logo mark (components/BrainRouterLogo.tsx) ───────────────
+   A translucent Signal cube built with real 3D transforms (preserve-3d) — a
+   reusable, dependency-free brand object. Sized via --brl-size, spin rate via
+   --brl-dur. Edges = hairline Signal; each face carries the brand node dot. */
+.brl-scene {
+  display: inline-block;
+  width: var(--brl-size, 28px);
+  height: var(--brl-size, 28px);
+  perspective: calc(var(--brl-size, 28px) * 3.4);
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.brl-cube {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transform: rotateX(-26deg) rotateY(-34deg);
+  animation: brl-spin var(--brl-dur, 9s) linear infinite;
+}
+.brl-cube.brl-static { animation: none; }
+.brl-face {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--accent);
+  background: var(--accent-wash);
+  border-radius: 3px;
+}
+.brl-face::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22%;
+  height: 22%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--accent);
+}
+.brl-front  { transform: translateZ(calc(var(--brl-size, 28px) / 2)); }
+.brl-back   { transform: rotateY(180deg) translateZ(calc(var(--brl-size, 28px) / 2)); }
+.brl-right  { transform: rotateY(90deg)  translateZ(calc(var(--brl-size, 28px) / 2)); }
+.brl-left   { transform: rotateY(-90deg) translateZ(calc(var(--brl-size, 28px) / 2)); }
+.brl-top    { transform: rotateX(90deg)  translateZ(calc(var(--brl-size, 28px) / 2)); }
+.brl-bottom { transform: rotateX(-90deg) translateZ(calc(var(--brl-size, 28px) / 2)); }
+@keyframes brl-spin {
+  from { transform: rotateX(-26deg) rotateY(0deg); }
+  to   { transform: rotateX(-26deg) rotateY(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brl-cube { animation: none; }
+}

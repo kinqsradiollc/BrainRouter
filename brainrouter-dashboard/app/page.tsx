@@ -100,13 +100,13 @@ export default function HomePage() {
         </motion.section>
 
         {/* The animated, scroll-driven narrative.
-            id anchors back the public nav (How It Works / Workflow / Features). */}
+            id anchors back the public nav (Memory / CLI / Features). */}
         <SlideForgetting />
-        <SlideHumanMemory id="how-it-works" />
+        <SlideHumanMemory id="memory" />
         <SlideMapping />
         <SlideRecall />
         <SlideReinforce />
-        <SlideCli id="workflow" />
+        <SlideCli id="cli" />
 
         {/* Where it runs — EcosystemSection carries id="features" */}
         <EcosystemSection />
@@ -159,7 +159,7 @@ export default function HomePage() {
                 <span>View on GitHub</span>
               </PremiumButton>
             </a>
-            <Link href="/#how-it-works" style={{ textDecoration: "none" }}>
+            <Link href="/#memory" style={{ textDecoration: "none" }}>
               <PremiumButton variant="text" style={{ padding: "12px 18px", borderRadius: "10px", fontSize: "14px" }}>
                 <span>How it works</span>
               </PremiumButton>
