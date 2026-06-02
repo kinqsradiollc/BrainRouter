@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { SIZES, type BrandConfig } from "./brandPresets";
-import { buildPosterSVG } from "./buildPoster";
+import { dimsFor, type BrandConfig } from "./brandPresets";
+import { buildSVG } from "./buildSVG";
 
 function triggerDownload(url: string, name: string) {
   const a = document.createElement("a");
@@ -14,24 +14,23 @@ function triggerDownload(url: string, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-/** Export the current poster as vector SVG, hi-res PNG (rasterized), or copy. */
+/** Export the current asset as vector SVG, hi-res PNG (rasterized), or copy. */
 export function useBrandExport(cfg: BrandConfig) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const base = `brainrouter-${cfg.preset}-${cfg.template}`;
+  const base = cfg.mode === "poster" ? `brainrouter-${cfg.preset}-${cfg.template}` : `brainrouter-${cfg.mode}`;
 
   const downloadSVG = () => {
-    const blob = new Blob([buildPosterSVG(cfg)], { type: "image/svg+xml;charset=utf-8" });
+    const blob = new Blob([buildSVG(cfg)], { type: "image/svg+xml;charset=utf-8" });
     triggerDownload(URL.createObjectURL(blob), `${base}.svg`);
   };
 
   const downloadPNG = async () => {
     setBusy(true);
     try {
-      const { w, h } = SIZES[cfg.preset];
-      const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(buildPosterSVG(cfg));
+      const { w, h } = dimsFor(cfg);
+      const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(buildSVG(cfg));
       const img = new Image();
-      img.decoding = "sync";
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
         img.onerror = () => reject(new Error("render failed"));
@@ -56,11 +55,11 @@ export function useBrandExport(cfg: BrandConfig) {
 
   const copySVG = async () => {
     try {
-      await navigator.clipboard.writeText(buildPosterSVG(cfg));
+      await navigator.clipboard.writeText(buildSVG(cfg));
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch {
-      /* clipboard blocked — no-op */
+      /* clipboard blocked */
     }
   };
 

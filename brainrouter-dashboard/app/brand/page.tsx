@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
-import { DEFAULT_CONFIG, SIZES, type BrandConfig } from "./brandPresets";
-import { buildPosterSVG } from "./buildPoster";
+import { DEFAULT_CONFIG, dimsFor, type BrandConfig } from "./brandPresets";
+import { buildSVG } from "./buildSVG";
 import { useBrandExport } from "./useBrandExport";
 import { BrandControls } from "./BrandControls";
 
@@ -20,7 +20,7 @@ export default function BrandStudioPage() {
   }, [user, router]);
 
   const set = (patch: Partial<BrandConfig>) => setCfg((c) => ({ ...c, ...patch }));
-  const svg = useMemo(() => buildPosterSVG(cfg), [cfg]);
+  const svg = useMemo(() => buildSVG(cfg), [cfg]);
   const previewSvg = useMemo(() => svg.replace("<svg ", '<svg style="display:block;width:100%;height:auto" '), [svg]);
   const { downloadSVG, downloadPNG, copySVG, busy, copied } = useBrandExport(cfg);
 
@@ -29,7 +29,7 @@ export default function BrandStudioPage() {
   }
   if (!user || !user.isAdmin) return null;
 
-  const { w, h } = SIZES[cfg.preset];
+  const { w, h } = dimsFor(cfg);
   const ar = w / h;
   const previewMaxW = ar < 1 ? Math.round(660 * ar) : ar > 2.4 ? 860 : 700;
 
