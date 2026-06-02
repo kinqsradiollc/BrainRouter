@@ -120,9 +120,12 @@ All four share the same memory store.
 the memory engine, CLI, MCP server, and dashboard are in active use. Recent
 milestones: Codex-grade coding-agent parity (0.4.7), deterministic multi-phase
 workflow orchestration + the next-action planner (0.4.8). **0.4.9 in progress:**
-the dashboard's own design language ("The Memory Instrument") plus an
-API-hardening pass (request validation, fail-closed JWT secret, security headers
-+ strict CORS).
+a full dashboard redesign + modernization in its own "Memory Instrument" design
+language — modern app shell (grouped sidebar, ⌘K command palette), full-bleed
+landing with presentation-slide scroll motion, token-refresh sessions, and an
+optional backend-free static preview mode — plus an API-hardening pass (request
+validation, fail-closed JWT secret, refresh tokens, security headers + strict
+CORS, rate limiting, security audit).
 
 See [ROADMAP.md](ROADMAP.md) for the live list.
 
