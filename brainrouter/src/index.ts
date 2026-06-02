@@ -134,6 +134,7 @@ import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
 import { skillsRouter } from './api/routes/skills.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
+import { securityHeaders, corsMiddleware } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -478,23 +479,11 @@ if (USE_HTTP) {
 
   const app = express();
   
-  // Custom CORS middleware to support cross-origin requests from Dashboard
-  app.use((req, res, next) => {
-    const allowedOrigin = process.env.BRAINROUTER_CORS_ORIGIN || "http://localhost:3000";
-    const requestOrigin = req.headers.origin;
-    if (!requestOrigin || requestOrigin === allowedOrigin) {
-      res.setHeader("Access-Control-Allow-Origin", requestOrigin ?? allowedOrigin);
-    }
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
-    if (req.method === "OPTIONS") {
-      res.sendStatus(200);
-      return;
-    }
-    next();
-  });
+  // API-HEADERS-CORS (0.4.9) — security headers + a strict CORS allowlist.
+  // BRAINROUTER_CORS_ORIGIN may be a comma-separated list; only listed origins
+  // are reflected and only they receive credentials.
+  app.use(securityHeaders({ production: IS_PRODUCTION }));
+  app.use(corsMiddleware());
 
   // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
