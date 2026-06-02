@@ -20,8 +20,9 @@ import {
   type PhaseRunner,
   type PhaseChildResult,
   type PhaseStatus,
+  type PhaseExecution,
 } from './phaseOrchestrator.js';
-import { ensurePhaseRun, advanceRunPhase, finishRun, type RunPhaseStatus } from '../state/workflowRun.js';
+import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../state/workflowRun.js';
 import { getCliKnobs } from '../config/config.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
@@ -131,10 +132,14 @@ export interface RunWorkflowDeps {
  * return a compact JSON summary. Returns `{ ok:false, ... }` on an invalid plan.
  */
 export async function runWorkflow(
-  args: { plan?: unknown; slug?: unknown; template?: unknown; templateArgs?: unknown; background?: unknown },
+  args: { plan?: unknown; slug?: unknown; template?: unknown; templateArgs?: unknown; background?: unknown; resume?: unknown },
   ctx: OrchestrationContext,
   deps: RunWorkflowDeps,
 ): Promise<string> {
+  // WF-RESUME — resume an interrupted run from its failed/interrupted phase.
+  if (typeof args?.resume === 'string' && args.resume.trim()) {
+    return resumeWorkflow(args.resume.trim(), ctx, deps);
+  }
   // Plan source: an explicit `plan`, or a built-in `template` + `templateArgs`
   // (WF-TEMPLATES). Either way it's validated by normalizePhasePlan below.
   let rawPlan = args?.plan;
@@ -156,22 +161,13 @@ export async function runWorkflow(
     ws,
     slug,
     plan.phases.map((p) => ({ id: p.id, title: p.title })),
-    { sessionKey: ctx.parentSessionKey ?? null, pid: process.pid, kind: 'workflow' },
+    { sessionKey: ctx.parentSessionKey ?? null, pid: process.pid, kind: 'workflow', planJson: JSON.stringify(plan) },
   );
 
   const runner =
     deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
 
-  const hooks = {
-    onPhaseStart: (phase: { id: string }) => {
-      advanceRunPhase(ws, slug, phase.id, 'running');
-    },
-    onPhaseComplete: (exec: { id: string; status: keyof typeof PHASE_TO_RUN_STATUS; children: Array<{ id: string }> }) => {
-      advanceRunPhase(ws, slug, exec.id, PHASE_TO_RUN_STATUS[exec.status], {
-        childIds: exec.children.map((c) => c.id),
-      });
-    },
-  };
+  const hooks = makeRunHooks(ws, slug);
 
   // WF-BG — background mode: kick the run off DETACHED so a long fan-out doesn't
   // block the REPL turn. The durable ledger (visible via /workflows + the bg
@@ -202,6 +198,83 @@ export async function runWorkflow(
       ok: true,
       slug,
       status: execution.status,
+      phases: execution.phases.map((p) => ({ id: p.id, status: p.status, children: p.children.length })),
+      output: execution.phases[execution.phases.length - 1]?.output ?? '',
+    },
+    null,
+    2,
+  );
+}
+
+const MAX_PERSISTED_OUTPUT = 8000;
+
+/** Shared run hooks: advance the durable ledger as phases start/finish, persisting
+ *  each phase's (bounded) synthesized output so WF-RESUME can feed it forward. */
+function makeRunHooks(ws: string, slug: string): {
+  onPhaseStart: (phase: { id: string }) => void;
+  onPhaseComplete: (exec: PhaseExecution) => void;
+} {
+  return {
+    onPhaseStart: (phase) => {
+      advanceRunPhase(ws, slug, phase.id, 'running');
+    },
+    onPhaseComplete: (exec) => {
+      advanceRunPhase(ws, slug, exec.id, PHASE_TO_RUN_STATUS[exec.status], {
+        childIds: exec.children.map((c) => c.id),
+        aggregatedOutputRef: exec.output.slice(0, MAX_PERSISTED_OUTPUT),
+      });
+    },
+  };
+}
+
+/**
+ * WF-RESUME — re-load an interrupted run from disk and continue from its
+ * failed/interrupted phase. Completed (and partial) phases are skipped and their
+ * persisted output feeds `{{input}}`; the remaining phases re-run.
+ */
+export async function resumeWorkflow(slug: string, ctx: OrchestrationContext, deps: RunWorkflowDeps): Promise<string> {
+  const ws = ctx.workspaceRoot;
+  const run = readRun(ws, slug);
+  if (!run) {
+    return JSON.stringify({ ok: false, error: `no workflow run "${slug}" to resume` }, null, 2);
+  }
+  if (!run.planJson) {
+    return JSON.stringify({ ok: false, error: `run "${slug}" has no persisted plan (started before WF-RESUME) — cannot resume` }, null, 2);
+  }
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(run.planJson);
+  } catch {
+    /* invalid JSON falls through to the unparseable error below */
+  }
+  const { plan } = normalizePhasePlan(parsed);
+  if (!plan) {
+    return JSON.stringify({ ok: false, error: `run "${slug}" plan is unparseable` }, null, 2);
+  }
+
+  // Completed/partial phases are done — skip them + feed their persisted output forward.
+  const completed = new Set<string>();
+  const priorOutputs = new Map<string, string>();
+  for (const p of run.phases ?? []) {
+    if (p.status === 'completed' || p.status === 'partial') {
+      completed.add(p.id);
+      if (p.aggregatedOutputRef) priorOutputs.set(p.id, p.aggregatedOutputRef);
+    }
+  }
+  const totalPhases = run.phases?.length ?? 0;
+  if (totalPhases > 0 && completed.size >= totalPhases) {
+    return JSON.stringify({ ok: true, slug, resumed: false, status: 'completed', note: 'nothing to resume — all phases already completed' }, null, 2);
+  }
+
+  const runner = deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
+  const execution = await executePhasePlan(plan, runner, makeRunHooks(ws, slug), { completed, priorOutputs });
+  return JSON.stringify(
+    {
+      ok: true,
+      slug,
+      resumed: true,
+      status: execution.status,
+      skipped: [...completed],
       phases: execution.phases.map((p) => ({ id: p.id, status: p.status, children: p.children.length })),
       output: execution.phases[execution.phases.length - 1]?.output ?? '',
     },
