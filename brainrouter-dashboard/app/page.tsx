@@ -4,13 +4,14 @@ import Link from "next/link";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { PremiumButton } from "../components/PremiumButton";
-import { containerVariants, itemVariants, pulseVariants, hoverScaleVariants, workflowExamples } from "../components/home/landingData";
+import { itemVariants, pulseVariants, hoverScaleVariants, workflowExamples } from "../components/home/landingData";
 import { useConsolidationDemo } from "../components/home/useConsolidationDemo";
 import { EcosystemSection } from "../components/home/EcosystemSection";
 import { HeroGraph } from "../components/home/HeroGraph";
 import { Glyph } from "../components/home/Glyph";
 import { useSnnSimulator } from "../components/home/useSnnSimulator";
 import { STATIC_PRESENTATION } from "../lib/presentation";
+import { ScrollBeam } from "../components/home/ScrollBeam";
 
 
 export default function HomePage() {
@@ -65,11 +66,10 @@ export default function HomePage() {
   } = useSnnSimulator();
 
   return (
-    <motion.div
+    <>
+      <ScrollBeam />
+      <div
       style={{ display: "flex", flexDirection: "column", gap: "52px", paddingBottom: "60px" }}
-      variants={containerVariants}
-      initial="hidden"
-      animate="show"
     >
       {/* Premium Hero Section */}
       <motion.section variants={itemVariants} style={{ position: "relative", paddingTop: "8px" }}>
@@ -146,6 +146,9 @@ export default function HomePage() {
       {/* Live Interactive SNN Simulator Monitor */}
       <motion.section
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{
           background: "rgba(255, 255, 255, 0.01)",
           border: "1px solid var(--border-med)",
@@ -341,6 +344,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
       <motion.section 
         id="workflow"
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{ display: "flex", flexDirection: "column", gap: "28px" }}
       >
         <div style={{ borderBottom: "1px solid var(--border-dim)", paddingBottom: "16px" }}>
@@ -449,6 +455,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
       {/* Direct execution pipeline visualization */}
       <motion.section 
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{ display: "flex", flexDirection: "column", gap: "28px" }}
       >
         <div style={{ borderBottom: "1px solid var(--border-dim)", paddingBottom: "16px" }}>
@@ -539,6 +548,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
       {/* Full Agent Workflow: Flowchart Layout */}
       <motion.section 
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{ display: "flex", flexDirection: "column", gap: "28px" }}
       >
         <div style={{ borderBottom: "1px solid var(--border-dim)", paddingBottom: "16px" }}>
@@ -861,6 +873,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
       <motion.section 
         id="how-it-works"
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{
           background: "rgba(255, 255, 255, 0.01)",
           border: "1px solid var(--border-med)",
@@ -1224,6 +1239,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
       <motion.section 
         id="features"
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{ display: "flex", flexDirection: "column", gap: "28px", marginTop: "40px", marginBottom: "40px" }}
       >
         <div style={{ borderBottom: "1px solid var(--border-dim)", paddingBottom: "16px" }}>
@@ -1444,6 +1462,9 @@ ${prewarmedSkills.map(s => `  [${s.name}] (activation ${s.potential.toFixed(2)})
       {/* Terminal CLI & Multi-Agent Orchestration */}
       <motion.section
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{
           background: "rgba(255, 255, 255, 0.01)",
           border: "1px solid var(--border-med)",
@@ -1521,6 +1542,9 @@ brainrouter › /memories consolidate
       {/* Advanced Capabilities Row: Model Routing & Skill Prewarming */}
       <motion.section 
         variants={itemVariants}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-100px" }}
         style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: "24px" }}
       >
         {/* Model Routing */}
@@ -1589,6 +1613,7 @@ brainrouter › /memories consolidate
           </div>
         </motion.div>
       </motion.section>
-    </motion.div>
+    </div>
+    </>
   );
 }
