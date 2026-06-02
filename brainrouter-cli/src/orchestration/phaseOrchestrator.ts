@@ -25,12 +25,8 @@ import {
   phaseExecutionOrder,
   renderPrompt,
 } from './phasePlan.js';
-import {
-  synthesizeChildren,
-  renderSynthesis,
-  type SynthChild,
-  type SynthesisRollup,
-} from './synthesis.js';
+import { synthesizePhase, type SynthChild, type SynthesisRollup } from './synthesis.js';
+import type { ReviewSynthesis } from './reviewSynthesis.js';
 
 const PHASE_OUTPUT_SEP = '\n\n---\n\n';
 
@@ -62,6 +58,8 @@ export interface PhaseExecution {
   children: PhaseChildResult[];
   /** Present when the phase synthesized (`synthesize !== 'none'`). */
   rollup?: SynthesisRollup;
+  /** Present for a `review-merge` phase that merged structured findings. */
+  review?: ReviewSynthesis;
   /** The phase's aggregated output — fed as `{{input}}` into downstream phases. */
   output: string;
 }
@@ -88,17 +86,11 @@ function phaseStatus(children: PhaseChildResult[]): PhaseStatus {
 function aggregateOutput(phase: WorkflowPhase, children: PhaseChildResult[]): {
   output: string;
   rollup?: SynthesisRollup;
+  review?: ReviewSynthesis;
 } {
-  // 'none' → pass the children's raw outputs straight through (concatenated).
-  if ((phase.synthesize ?? 'none') === 'none') {
-    const output = children
-      .map((c) => c.finalOutput?.trim())
-      .filter((t): t is string => Boolean(t))
-      .join(PHASE_OUTPUT_SEP);
-    return { output };
-  }
-  // 'role-rollup' (and, for now, 'review-merge' — WF-SYNTH refines the latter into
-  // findings-merge) → group by role + extract output-contract fields, render markdown.
+  // WF-SYNTH — delegate to the typed phase aggregator: none → concat,
+  // role-rollup → contract digest, review-merge → dedupe/threshold findings
+  // (falling back to role-rollup when no structured findings are present).
   const synthChildren: SynthChild[] = children.map((c) => ({
     id: c.id,
     role: c.role,
@@ -106,8 +98,8 @@ function aggregateOutput(phase: WorkflowPhase, children: PhaseChildResult[]): {
     finalOutput: c.finalOutput,
     error: c.error,
   }));
-  const rollup = synthesizeChildren(synthChildren);
-  return { output: renderSynthesis(rollup), rollup };
+  const po = synthesizePhase(synthChildren, phase.synthesize ?? 'none');
+  return { output: po.text, rollup: po.rollup, review: po.review };
 }
 
 /**
@@ -159,7 +151,7 @@ export async function executePhasePlan(
       }));
     }
 
-    const { output, rollup } = aggregateOutput(phase, children);
+    const { output, rollup, review } = aggregateOutput(phase, children);
     outputs.set(phase.id, output);
 
     const execution: PhaseExecution = {
@@ -168,6 +160,7 @@ export async function executePhasePlan(
       status: phaseStatus(children),
       children,
       rollup,
+      review,
       output,
     };
     executions.push(execution);

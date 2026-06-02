@@ -89,7 +89,7 @@ function reviewWideTemplate(args: Record<string, unknown>): TemplateResult {
             agent: {
               role: 'reviewer',
               access: 'read',
-              prompt: `Review "{{target}}" for ${focus}. Report concrete findings with file:line where possible; if it's clean, say so explicitly.`,
+              prompt: `Review "{{target}}" for ${focus}. After a brief prose summary, output a JSON array of findings so they can be merged: [{"file":"path","line":<number|null>,"severity":"high|medium|low","confidence":0-100,"summary":"..."}]. Return [] if it's clean.`,
             },
           },
           synthesize: 'review-merge',
