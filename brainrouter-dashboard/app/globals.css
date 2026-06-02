@@ -1014,15 +1014,18 @@ html {
   to { --beam-angle: 360deg; }
 }
 
-/* ─── BrainRouter 3D logo mark (components/BrainRouterLogo.tsx) ───────────────
-   The cube geometry (size, faces, perspective) is inline-styled in the
-   component so it renders without depending on any CSS custom property. CSS
-   owns only the spin keyframes and the reduced-motion stop. */
-.brl-cube { will-change: transform; }
-@keyframes brl-spin {
-  from { transform: rotateX(-26deg) rotateY(0deg); }
-  to   { transform: rotateX(-26deg) rotateY(360deg); }
+/* ─── BrainRouter logo mark (components/BrainRouterLogo.tsx) ──────────────────
+   A memory-graph SVG mark. CSS owns only the subtle "breathing" pulse on the
+   core recall node — the rest is static vector. */
+.brl-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: brl-breathe 2.8s ease-in-out infinite;
+}
+@keyframes brl-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.34; }
+  50%      { transform: scale(1.85); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .brl-cube { animation: none !important; transform: rotateX(-26deg) rotateY(-34deg) !important; }
+  .brl-pulse { animation: none; opacity: 0; }
 }
