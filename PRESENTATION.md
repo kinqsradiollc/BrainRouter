@@ -91,9 +91,14 @@ agent.
   warn/block guard on any tool call.
 - Multi-agent fan-out — `spawn_agents` runs explorers / architects /
   reviewers / workers / verifiers in parallel.
-- Durable workflow artifacts (`spec.md`, `tasks.md`, `walkthrough.md`).
-- LLM-driven `/compact` replaces verbose history with a structured
-  summary.
+- **Deterministic multi-phase workflows** — one `run_workflow` call fans
+  out per phase, barrier-waits, synthesizes, and feeds the result forward;
+  durable + crash-resumable, with `compare` / `review-wide` / `research`
+  templates and a next-action planner that triggers it automatically.
+- Codex-grade execution safety — fail-closed sandboxing, command-segment
+  approval, atomic `apply_patch`, per-child git worktree isolation.
+- Durable workflow artifacts (`spec.md`, `tasks.md`, `walkthrough.md`) and
+  an LLM-driven `/compact` that replaces verbose history with a summary.
 
 ---
 
@@ -111,12 +116,13 @@ All four share the same memory store.
 
 ## Status
 
-Pre-release, v0.3.x. Memory engine, CLI, and web chat are running. Next:
-
-- First tagged release + `npx brainrouter` install path.
-- Dashboard memory explorer (audit *why* a record surfaced).
-- Provider matrix verification (OpenAI, Anthropic, Gemini, local).
-- Web-chat parity with CLI (goal lifecycle, hookify, orchestration).
+**v0.4.8 shipped.** All four `@kinqs/brainrouter-*` packages are live on npm;
+the memory engine, CLI, MCP server, and dashboard are in active use. Recent
+milestones: Codex-grade coding-agent parity (0.4.7), deterministic multi-phase
+workflow orchestration + the next-action planner (0.4.8). **0.4.9 in progress:**
+the dashboard's own design language ("The Memory Instrument") plus an
+API-hardening pass (request validation, fail-closed JWT secret, security headers
++ strict CORS).
 
 See [ROADMAP.md](ROADMAP.md) for the live list.
 
