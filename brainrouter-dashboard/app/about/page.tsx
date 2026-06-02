@@ -7,13 +7,24 @@ import { slideStagger, slideChild } from "../../components/home/landingData";
 
 const GITHUB_URL = "https://github.com/kinqsradiollc/BrainRouter";
 
-type Surface = { tag: string; title: string; body: string; link?: { href: string; label: string } };
+type Surface = {
+  tag: string;
+  title: string;
+  body: string;
+  /** npm package (always shown — external link, safe in presentation mode). */
+  pkg?: { name: string; url: string };
+  /** Internal app route — only rendered as a link outside presentation mode. */
+  link?: { href: string; label: string };
+};
+
+const NPM = (name: string) => ({ name, url: `https://www.npmjs.com/package/${name}` });
 
 const SURFACES: Surface[] = [
   {
     tag: "TERMINAL",
     title: "brainrouter CLI",
     body: "Memory-native coding agent: ~70 slash commands, an LLM-driven compactor, hookify guardrails, and durable per-session transcripts.",
+    pkg: NPM("@kinqs/brainrouter-cli"),
   },
   {
     tag: "MULTI-AGENT",
@@ -30,6 +41,7 @@ const SURFACES: Surface[] = [
     tag: "PROTOCOL",
     title: "MCP + HTTP API",
     body: "Plug into any MCP host, or call the HTTP chat-completions route directly — every client inherits the same memory stack.",
+    pkg: NPM("@kinqs/brainrouter-mcp-server"),
   },
   {
     tag: "MEMORY",
@@ -131,6 +143,17 @@ export default function AboutPage() {
           </p>
         </motion.div>
 
+        <motion.div variants={slideChild} style={{ display: "flex", flexDirection: "column", gap: "8px", maxWidth: "640px" }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" }}>
+            Install from npm
+          </span>
+          <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-card)", padding: "12px 16px", overflowX: "auto" }}>
+            <code style={{ fontFamily: "var(--font-mono)", fontSize: "13px", color: "var(--text)", whiteSpace: "nowrap" }}>
+              <span style={{ color: "var(--text-muted)" }}>$ </span>npm install -g @kinqs/brainrouter-cli @kinqs/brainrouter-mcp-server
+            </code>
+          </div>
+        </motion.div>
+
         <motion.div variants={slideStagger} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "16px" }}>
           {SURFACES.map((s) => (
             <motion.div key={s.tag} variants={slideChild} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-panel)", padding: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -139,10 +162,27 @@ export default function AboutPage() {
               <p style={{ color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
                 {s.body}
               </p>
-              {s.link && (
-                <Link href={s.link.href} style={{ color: "var(--accent)", fontSize: "12px", fontFamily: "var(--font-mono)", textDecoration: "none", marginTop: "2px" }}>
-                  → {s.link.label}
-                </Link>
+              {(s.pkg || (!STATIC_PRESENTATION && s.link)) && (
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px 14px", marginTop: "auto", paddingTop: "10px", borderTop: "1px solid var(--border)" }}>
+                  {s.pkg && (
+                    <a
+                      href={s.pkg.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: "var(--text-muted)", fontSize: "12px", fontFamily: "var(--font-mono)", textDecoration: "none", transition: "color 0.18s ease" }}
+                      onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
+                      onMouseOut={(e) => (e.currentTarget.style.color = "var(--text-muted)")}
+                    >
+                      {s.pkg.name}
+                    </a>
+                  )}
+                  {/* internal app routes redirect to / in presentation mode — only link outside it */}
+                  {!STATIC_PRESENTATION && s.link && (
+                    <Link href={s.link.href} style={{ color: "var(--accent)", fontSize: "12px", fontFamily: "var(--font-mono)", textDecoration: "none" }}>
+                      → {s.link.label}
+                    </Link>
+                  )}
+                </div>
               )}
             </motion.div>
           ))}
