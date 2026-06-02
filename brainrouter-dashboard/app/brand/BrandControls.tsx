@@ -226,17 +226,17 @@ export function BrandControls({ cfg, set }: { cfg: BrandConfig; set: (patch: Par
             <Segmented<BgKey> cols={3} value={cfg.background} onChange={(v) => set({ background: v })} options={(Object.keys(BACKGROUNDS) as BgKey[]).map((k) => ({ v: k, label: BACKGROUNDS[k] }))} />
           </Group>
 
-          {cfg.template !== "minimal" && cfg.template !== "quote" && (
+          {cfg.template !== "minimal" && cfg.template !== "quote" && cfg.template !== "role" && (
             <Group label="Eyebrow">
               <TextInput value={cfg.eyebrow} onChange={(v) => set({ eyebrow: v })} placeholder="RELEASE" />
             </Group>
           )}
           {cfg.template !== "minimal" && (
-            <Group label="Headline">
+            <Group label={cfg.template === "role" ? "Name" : "Headline"}>
               <TextArea value={cfg.headline} onChange={(v) => set({ headline: v })} rows={2} />
             </Group>
           )}
-          <Group label={cfg.template === "minimal" ? "Tagline" : "Subhead"}>
+          <Group label={cfg.template === "minimal" ? "Tagline" : cfg.template === "role" ? "Title / handle" : "Subhead"}>
             <TextArea value={cfg.subhead} onChange={(v) => set({ subhead: v })} rows={2} />
           </Group>
 

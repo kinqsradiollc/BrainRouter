@@ -210,7 +210,7 @@ export function Editor() {
   }, [selId, doc.layers, remove, update]);
 
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-panel)", overflow: "hidden", display: "flex", flexDirection: "column", height: "calc(100vh - 200px)", minHeight: 540 }}>
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-panel)", overflow: "hidden", display: "flex", flexDirection: "column", height: "calc(100vh - 232px)", minHeight: 440 }}>
       {/* toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--surface-raised)", flexWrap: "wrap" }}>
         <span style={mono}>Add</span>

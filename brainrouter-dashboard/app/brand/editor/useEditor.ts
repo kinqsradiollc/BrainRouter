@@ -3,41 +3,48 @@
 import { useCallback, useState } from "react";
 import type { EditorDoc, Layer, Background, LayerType, ImageLayer } from "./types";
 import { releaseTemplate, newLayer, uid } from "./templates";
+import { normalizeLayer } from "./measure";
 
 /** Scale all layers proportionally — positions per-axis, sizes uniformly — so
- *  resizing the canvas or applying a template keeps the layout intact. */
+ *  resizing the canvas or applying a template keeps the layout intact. Each
+ *  result is normalized so its box matches what renders. */
 function rescaleLayers(layers: Layer[], sx: number, sy: number): Layer[] {
-  if (sx === 1 && sy === 1) return layers;
   const fs = Math.min(sx, sy);
   return layers.map((l) => {
+    if (sx === 1 && sy === 1) return normalizeLayer(l);
     const b = { x: Math.round(l.x * sx), y: Math.round(l.y * sy), w: Math.max(8, Math.round(l.w * sx)), h: Math.max(8, Math.round(l.h * sy)) };
-    if (l.type === "text") return { ...l, ...b, fontSize: Math.max(6, Math.round(l.fontSize * fs)) };
-    if (l.type === "image") return { ...l, ...b, radius: Math.round(l.radius * fs) };
-    if (l.type === "shape") return { ...l, ...b, radius: Math.round(l.radius * fs), strokeWidth: Math.round(l.strokeWidth * fs) };
-    return { ...l, ...b };
+    let scaled: Layer;
+    if (l.type === "text") scaled = { ...l, ...b, fontSize: Math.max(6, Math.round(l.fontSize * fs)) };
+    else if (l.type === "image") scaled = { ...l, ...b, radius: Math.round(l.radius * fs) };
+    else if (l.type === "shape") scaled = { ...l, ...b, radius: Math.round(l.radius * fs), strokeWidth: Math.round(l.strokeWidth * fs) };
+    else scaled = { ...l, ...b };
+    return normalizeLayer(scaled);
   });
 }
 
 export function useEditor() {
-  const [doc, setDoc] = useState<EditorDoc>(() => releaseTemplate());
+  const [doc, setDoc] = useState<EditorDoc>(() => {
+    const d = releaseTemplate();
+    return { ...d, layers: d.layers.map(normalizeLayer) };
+  });
   const [selId, setSelId] = useState<string | null>(null);
 
   const update = useCallback((id: string, patch: Partial<Layer>) => {
-    setDoc((d) => ({ ...d, layers: d.layers.map((l) => (l.id === id ? ({ ...l, ...patch } as Layer) : l)) }));
+    setDoc((d) => ({ ...d, layers: d.layers.map((l) => (l.id === id ? normalizeLayer({ ...l, ...patch } as Layer) : l)) }));
   }, []);
   const updateDoc = useCallback((patch: Partial<EditorDoc>) => setDoc((d) => ({ ...d, ...patch })), []);
   const setBg = useCallback((patch: Partial<Background>) => setDoc((d) => ({ ...d, background: { ...d.background, ...patch } })), []);
 
   const add = useCallback((type: LayerType) => {
     setDoc((d) => {
-      const l = newLayer(type, d);
+      const l = normalizeLayer(newLayer(type, d));
       setSelId(l.id);
       return { ...d, layers: [...d.layers, l] };
     });
   }, []);
   const addImage = useCallback((src: string) => {
     setDoc((d) => {
-      const l = { ...(newLayer("image", d) as ImageLayer), src };
+      const l = normalizeLayer({ ...(newLayer("image", d) as ImageLayer), src });
       setSelId(l.id);
       return { ...d, layers: [...d.layers, l] };
     });
@@ -50,7 +57,7 @@ export function useEditor() {
     setDoc((d) => {
       const l = d.layers.find((x) => x.id === id);
       if (!l) return d;
-      const copy = { ...l, id: uid(), x: l.x + 24, y: l.y + 24, name: l.name + " copy" } as Layer;
+      const copy = normalizeLayer({ ...l, id: uid(), x: l.x + 24, y: l.y + 24, name: l.name + " copy" } as Layer);
       setSelId(copy.id);
       return { ...d, layers: [...d.layers, copy] };
     });

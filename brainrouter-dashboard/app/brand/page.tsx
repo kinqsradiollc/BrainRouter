@@ -30,7 +30,6 @@ export default function BrandStudioPage() {
 
   const set = (patch: Partial<BrandConfig>) => setCfg((c) => ({ ...c, ...patch }));
   const svg = useMemo(() => buildSVG(cfg), [cfg]);
-  const previewSvg = useMemo(() => svg.replace("<svg ", '<svg style="display:block;width:100%;height:auto" '), [svg]);
   const { downloadSVG, downloadPNG, copySVG, busy, copied } = useBrandExport(cfg);
 
   if (isLoading) {
@@ -41,6 +40,10 @@ export default function BrandStudioPage() {
   const { w, h } = dimsFor(cfg);
   const ar = w / h;
   const previewMaxW = ar < 1 ? Math.round(660 * ar) : ar > 2.4 ? 860 : 700;
+  const previewHtml = svg.replace(
+    "<svg ",
+    `<svg style="display:block;width:auto;height:auto;max-width:min(100%, ${previewMaxW}px);max-height:70vh;margin:0 auto;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.4)" `
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1400px" }}>
@@ -115,8 +118,8 @@ export default function BrandStudioPage() {
             }}
           >
             <div
-              style={{ width: "100%", maxWidth: `${previewMaxW}px`, borderRadius: "12px", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}
-              dangerouslySetInnerHTML={{ __html: previewSvg }}
+              style={{ width: "100%", display: "flex", justifyContent: "center" }}
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
             />
           </div>
 

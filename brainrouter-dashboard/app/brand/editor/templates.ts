@@ -68,8 +68,24 @@ export function quoteTemplate(): EditorDoc {
   return d;
 }
 
+export function roleCardTemplate(): EditorDoc {
+  const d = blankDoc(1080, 1350);
+  const cx = 540;
+  const bw = 380, bh = 92, bx = cx - bw / 2, by = 300;
+  d.layers = [
+    { ...baseAt(cx - 54, 150, 108, 108), type: "logo", name: "Logo", lockup: "mark", color: ACCENT },
+    { ...baseAt(bx, by, bw, bh), type: "shape", name: "Badge", shape: "rect", fill: ACCENT, stroke: "none", strokeWidth: 0, radius: bh / 2 },
+    txt({ x: bx, y: by + 24, w: bw, text: "FOUNDER", fontSize: 40, weight: 700, color: "#06130E", align: "center", letterSpacing: 3 }),
+    txt({ x: 100, y: 470, w: 880, text: "Your Name", fontSize: 96, weight: 600, color: "#ECEFF2", align: "center", letterSpacing: -2 }),
+    txt({ x: 120, y: 624, w: 840, text: "Founding Engineer · BrainRouter", fontSize: 34, weight: 400, color: "#9BA3AC", align: "center", letterSpacing: 0 }),
+    txt({ x: 120, y: 1252, w: 840, text: "brainrouter.dev", fontSize: 26, weight: 500, color: "#5E6670", align: "center", fontFamily: "mono" }),
+  ];
+  return d;
+}
+
 export const TEMPLATE_FACTORIES: { key: string; label: string; make: () => EditorDoc }[] = [
   { key: "release", label: "Release card", make: releaseTemplate },
+  { key: "role", label: "Role card", make: roleCardTemplate },
   { key: "quote", label: "Quote", make: quoteTemplate },
   { key: "blank", label: "Blank", make: () => blankDoc(1200, 630) },
 ];

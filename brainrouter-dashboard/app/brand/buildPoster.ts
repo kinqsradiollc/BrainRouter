@@ -48,16 +48,15 @@ export function buildPosterSVG(cfg: BrandConfig): string {
   const topH = Math.round(minD * 0.072);
   const my = P + topH / 2;
   let top = "";
-  if (cfg.lockup !== "wordmark" || cfg.template !== "minimal") {
-    if (cfg.template !== "minimal") {
-      const lk = lockupMarkup({ x: P, y: my, h: topH, accent, textColor: t.text, lockup: cfg.lockup });
-      top += lk.svg;
-    }
+  // role card & minimal place their own centered logo in the body
+  if (cfg.template !== "minimal" && cfg.template !== "role") {
+    const lk = lockupMarkup({ x: P, y: my, h: topH, accent, textColor: t.text, lockup: cfg.lockup });
+    top += lk.svg;
   }
-  // pills (version, role) top-right, stacked
+  // pills (version, role) top-right, stacked — role card shows the role as its hero badge instead
   const pills: { text: string; mono?: boolean }[] = [];
   if (cfg.showVersion && cfg.version.trim()) pills.push({ text: cfg.version, mono: true });
-  if (cfg.role !== "none") pills.push({ text: ROLES[cfg.role] });
+  if (cfg.role !== "none" && cfg.template !== "role") pills.push({ text: ROLES[cfg.role] });
   if (cfg.template !== "minimal") {
     let py = P;
     for (const pill of pills) {
@@ -82,6 +81,34 @@ export function buildPosterSVG(cfg: BrandConfig): string {
     body += `<g transform="translate(${gx.toFixed(1)} ${h / 2})">${lk.svg}</g>`;
     if (cfg.subhead.trim())
       body += `<text x="${w / 2}" y="${h / 2 + md * 0.85}" font-family="${MONO}" font-size="${Math.round(md * 0.13)}" letter-spacing="0.12em" fill="${t.sub}" text-anchor="middle">${esc(cfg.subhead.toUpperCase())}</text>`;
+  } else if (cfg.template === "role") {
+    // Role card — centered: logo · big role badge · name (headline) · title (subhead)
+    const cxc = w / 2;
+    const roleLabel = (ROLES[cfg.role === "none" ? "founder" : cfg.role] || "Member").toUpperCase();
+    const mLogo = Math.round(minD * 0.13);
+    const badgeFs = Math.max(16, Math.round(minD * 0.038));
+    const badgeH = Math.round(badgeFs * 2.2);
+    const badgeW = Math.round(roleLabel.length * badgeFs * 0.64 + badgeFs * 2.6);
+    const nameMax = Math.min(Math.round(w * 0.085), Math.round(h * 0.16));
+    const name = layoutText(cfg.headline || "Your Name", w - 2 * P, h * 0.3, nameMax, Math.round(nameMax * 0.4), 1.05);
+    const titleFs = Math.max(14, Math.round(name.font * 0.4));
+    const title = cfg.subhead.trim() ? layoutText(cfg.subhead, w - 2 * P, h * 0.16, titleFs, 14, 1.35) : { font: 0, lines: [] as string[] };
+    const g = Math.round(minD * 0.045);
+    const nameBlock = name.lines.length * name.font * 1.05;
+    const titleBlock = title.lines.length ? title.lines.length * title.font * 1.35 : 0;
+    const stackH = mLogo + g + badgeH + g + nameBlock + (titleBlock ? g * 0.5 + titleBlock : 0);
+    let yy = Math.max(P, (h - stackH) / 2);
+    body += guillocheMarkup({ cx: cxc, cy: yy + mLogo / 2, scale: mLogo / 88, accent });
+    yy += mLogo + g;
+    body += `<rect x="${(cxc - badgeW / 2).toFixed(0)}" y="${yy}" width="${badgeW}" height="${badgeH}" rx="${badgeH / 2}" fill="${accent}"/>`;
+    body += `<text x="${cxc}" y="${yy + badgeH / 2}" font-family="${FONT}" font-size="${badgeFs}" font-weight="700" letter-spacing="0.08em" fill="#06130E" text-anchor="middle" dominant-baseline="central">${esc(roleLabel)}</text>`;
+    yy += badgeH + g;
+    body += `<text x="${cxc}" y="${(yy + name.font).toFixed(1)}" font-family="${FONT}" font-size="${name.font}" font-weight="600" letter-spacing="-0.02em" fill="${t.text}" text-anchor="middle">${tspans(name.lines, cxc, name.font * 1.05)}</text>`;
+    yy += nameBlock;
+    if (title.lines.length) {
+      yy += g * 0.5;
+      body += `<text x="${cxc}" y="${(yy + title.font).toFixed(1)}" font-family="${FONT}" font-size="${title.font}" font-weight="400" fill="${t.sub}" text-anchor="middle">${tspans(title.lines, cxc, title.font * 1.35)}</text>`;
+    }
   } else {
     const footerH = Math.round(minD * 0.05);
     const availTop = P + topH + Math.round(minD * 0.05);

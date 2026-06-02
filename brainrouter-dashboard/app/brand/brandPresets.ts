@@ -76,6 +76,7 @@ export type BgKey = keyof typeof BACKGROUNDS;
 export const TEMPLATES = {
   release: "Release",
   feature: "Feature",
+  role: "Role card",
   quote: "Quote",
   minimal: "Logo lockup",
 } as const;
@@ -88,11 +89,17 @@ export const ROLES: Record<string, string> = {
   none: "None",
   founder: "Founder",
   cofounder: "Co-founder",
-  core: "Core team",
+  founding_engineer: "Founding Engineer",
+  core: "Core Team",
+  engineer: "Engineer",
+  designer: "Designer",
+  advisor: "Advisor",
+  investor: "Investor",
   ambassador: "Ambassador",
-  verified: "Verified",
   partner: "Partner",
-  early: "Early adopter",
+  contributor: "Contributor",
+  verified: "Verified",
+  early: "Early Adopter",
 };
 export type RoleKey = keyof typeof ROLES;
 

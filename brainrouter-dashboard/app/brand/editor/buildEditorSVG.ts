@@ -25,7 +25,7 @@ function renderText(l: TextLayer, defs: { s: string }): string {
     attr = ` stroke="${l.effectColor}" stroke-width="${Math.max(1, l.fontSize * 0.06).toFixed(1)}" paint-order="stroke" stroke-linejoin="round"`;
   }
   const spans = lines.map((ln, i) => `<tspan x="${tx.toFixed(1)}" dy="${i === 0 ? 0 : lh.toFixed(1)}">${esc(ln)}</tspan>`).join("");
-  return `<text x="${tx.toFixed(1)}" y="${(l.y + l.fontSize).toFixed(1)}" font-family="${ff}" font-size="${l.fontSize}" font-weight="${l.weight}" letter-spacing="${l.letterSpacing}" fill="${l.color}" text-anchor="${anchor}"${attr}>${spans}</text>`;
+  return `<text x="${tx.toFixed(1)}" y="${(l.y + l.fontSize * 0.82).toFixed(1)}" font-family="${ff}" font-size="${l.fontSize}" font-weight="${l.weight}" letter-spacing="${l.letterSpacing}" fill="${l.color}" text-anchor="${anchor}"${attr}>${spans}</text>`;
 }
 
 function renderImage(l: ImageLayer, defs: { s: string }): string {
