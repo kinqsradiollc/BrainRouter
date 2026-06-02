@@ -15,6 +15,8 @@ type Surface = {
   pkg?: { name: string; url: string };
   /** Internal app route — only rendered as a link outside presentation mode. */
   link?: { href: string; label: string };
+  /** Not shipped yet — shows a "Coming soon" badge, no link/pkg. */
+  comingSoon?: boolean;
 };
 
 const NPM = (name: string) => ({ name, url: `https://www.npmjs.com/package/${name}` });
@@ -25,6 +27,12 @@ const SURFACES: Surface[] = [
     title: "brainrouter CLI",
     body: "Memory-native coding agent: ~70 slash commands, an LLM-driven compactor, hookify guardrails, and durable per-session transcripts.",
     pkg: NPM("@kinqs/brainrouter-cli"),
+  },
+  {
+    tag: "DESKTOP",
+    title: "BrainRouter Desktop",
+    body: "The memory-native coding agent as a native desktop app — the same memory graph, multi-agent runs, and workflows, in a full UI.",
+    comingSoon: true,
   },
   {
     tag: "MULTI-AGENT",
@@ -157,7 +165,14 @@ export default function AboutPage() {
         <motion.div variants={slideStagger} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "16px" }}>
           {SURFACES.map((s) => (
             <motion.div key={s.tag} variants={slideChild} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-panel)", padding: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.12em", color: "var(--accent)", fontWeight: 600 }}>{s.tag}</span>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.12em", color: "var(--accent)", fontWeight: 600 }}>{s.tag}</span>
+                {s.comingSoon && (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "9px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--accent)", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", borderRadius: "var(--radius-pill)", padding: "2px 8px", whiteSpace: "nowrap" }}>
+                    Coming soon
+                  </span>
+                )}
+              </div>
               <h3 style={{ fontSize: "17px", fontWeight: 600, margin: 0, color: "var(--text)" }}>{s.title}</h3>
               <p style={{ color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.55, margin: 0 }}>
                 {s.body}
