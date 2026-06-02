@@ -128,7 +128,7 @@ export default function UsersPage() {
         </div>
 
         {/* Info Card */}
-        <PremiumCard level={3} style={{ border: "1px solid rgba(174, 147, 87, 0.15)" }}>
+        <PremiumCard level={3} style={{ border: "1px solid rgba(52, 194, 142, 0.15)" }}>
           <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, color: "var(--color-pure-white)", fontWeight: 500 }}>
             Open Signup Subsystem Active
           </h3>
@@ -254,7 +254,7 @@ export default function UsersPage() {
                           title="Rotate the user's API key — their current key will stop working"
                           style={{
                             width: "30px", height: "30px", borderRadius: "8px",
-                            border: "1px solid rgba(174,147,87,0.3)",
+                            border: "1px solid rgba(52, 194, 142,0.3)",
                             background: "transparent", cursor: resettingUserId === u.userId ? "default" : "pointer",
                             display: "inline-flex", alignItems: "center", justifyContent: "center",
                             opacity: resettingUserId === u.userId ? 0.4 : 1,

@@ -36,7 +36,7 @@ function highlightJson(json: string) {
       if (/:$/.test(matchText)) {
         const keyText = matchText.slice(0, -1);
         parts.push(
-          <span key={`key-${keyCounter++}`} style={{ color: "#d8be7c", fontWeight: 600 }}>{keyText}</span>
+          <span key={`key-${keyCounter++}`} style={{ color: "#34C28E", fontWeight: 600 }}>{keyText}</span>
         );
         parts.push(":");
       } else {
@@ -271,7 +271,7 @@ export default function ProfilePage() {
                         border: "none",
                         outline: "none",
                         transition: "all 0.2s ease",
-                        background: activeTab === "http" ? "rgba(174, 147, 87, 0.2)" : "transparent",
+                        background: activeTab === "http" ? "rgba(52, 194, 142, 0.2)" : "transparent",
                         color: activeTab === "http" ? "var(--color-golden-accent)" : "var(--color-stone-text)"
                       }}
                     >
@@ -288,7 +288,7 @@ export default function ProfilePage() {
                         border: "none",
                         outline: "none",
                         transition: "all 0.2s ease",
-                        background: activeTab === "stdio" ? "rgba(174, 147, 87, 0.2)" : "transparent",
+                        background: activeTab === "stdio" ? "rgba(52, 194, 142, 0.2)" : "transparent",
                         color: activeTab === "stdio" ? "var(--color-golden-accent)" : "var(--color-stone-text)"
                       }}
                     >
