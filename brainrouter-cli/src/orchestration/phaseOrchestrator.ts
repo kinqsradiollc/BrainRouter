@@ -75,6 +75,16 @@ export interface ExecuteHooks {
   onPhaseComplete?: (execution: PhaseExecution) => void;
 }
 
+/**
+ * WF-RESUME — resume context for re-running an interrupted plan: phases already
+ * `completed` are skipped (not re-spawned), and their persisted outputs are
+ * pre-seeded so a downstream phase's `{{input}}` still resolves.
+ */
+export interface ResumeState {
+  completed: Set<string>;
+  priorOutputs: Map<string, string>;
+}
+
 function phaseStatus(children: PhaseChildResult[]): PhaseStatus {
   if (children.length === 0) return 'failed';
   const failed = children.filter((c) => c.status !== 'completed' || Boolean(c.error)).length;
@@ -114,13 +124,28 @@ export async function executePhasePlan(
   plan: PhasePlan,
   runner: PhaseRunner,
   hooks: ExecuteHooks = {},
+  resume?: ResumeState,
 ): Promise<PhasePlanExecution> {
   const order = phaseExecutionOrder(plan);
   const outputs = new Map<string, string>();
+  // WF-RESUME — pre-seed completed phases' outputs so downstream {{input}} resolves.
+  if (resume) for (const [id, out] of resume.priorOutputs) outputs.set(id, out);
   const executions: PhaseExecution[] = [];
 
   for (let i = 0; i < order.length; i++) {
     const phase = order[i];
+    // WF-RESUME — a phase already completed in a prior run is recorded as done
+    // (with its persisted output) and NOT re-spawned.
+    if (resume?.completed.has(phase.id)) {
+      executions.push({
+        id: phase.id,
+        title: phase.title,
+        status: 'completed',
+        children: [],
+        output: outputs.get(phase.id) ?? '',
+      });
+      continue;
+    }
     hooks.onPhaseStart?.(phase, i, order.length);
 
     // Build {{input}} from the synthesized output of the phases this one consumes.
