@@ -17,13 +17,8 @@ export function PublicHeader() {
   return (
     <header className="public-header">
       <div className="public-header-inner">
-        <Link href="/" className="logo">
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <BrainRouterLogo size={26} />
-            <span className="serif-display" style={{ fontSize: "20px", color: "var(--text)", fontWeight: 600 }}>
-              BrainRouter
-            </span>
-          </div>
+        <Link href="/" className="logo" aria-label="BrainRouter — home">
+          <BrainRouterLogo size={26} />
         </Link>
 
         <nav className="public-nav">
