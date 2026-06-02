@@ -51,8 +51,8 @@ export function releaseTemplate(): EditorDoc {
   d.layers = [
     { ...baseAt(64, 52, 280, 58), type: "logo", name: "Logo", lockup: "full", color: ACCENT },
     txt({ x: 64, y: 222, w: 720, text: "RELEASE", fontSize: 22, weight: 600, color: ACCENT, fontFamily: "mono", letterSpacing: 3 }),
-    txt({ x: 64, y: 248, w: 850, text: "Cognitive memory for autonomous AI agents.", fontSize: 60, weight: 600, color: "#ECEFF2", letterSpacing: -2 }),
-    txt({ x: 64, y: 484, w: 820, text: "Short-term feeds long-term, unused facts fade, cited ones are reinforced.", fontSize: 26, weight: 400, color: "#9BA3AC", letterSpacing: 0 }),
+    txt({ x: 64, y: 248, w: 850, text: "Cognitive memory for\nautonomous AI agents.", fontSize: 60, weight: 600, color: "#ECEFF2", letterSpacing: -2 }),
+    txt({ x: 64, y: 488, w: 820, text: "Short-term feeds long-term, unused facts fade,\ncited ones are reinforced.", fontSize: 26, weight: 400, color: "#9BA3AC", letterSpacing: 0 }),
     txt({ x: 64, y: 562, w: 400, text: "brainrouter.dev", fontSize: 21, weight: 500, color: "#5E6670", fontFamily: "mono" }),
   ];
   return d;
@@ -62,7 +62,7 @@ export function quoteTemplate(): EditorDoc {
   const d = blankDoc(1080, 1080);
   d.layers = [
     { ...baseAt(440, 96, 200, 52), type: "logo", name: "Logo", lockup: "mark", color: ACCENT },
-    txt({ x: 120, y: 380, w: 840, text: "Your agent shouldn’t start from zero every morning.", fontSize: 76, weight: 600, color: "#ECEFF2", align: "center", letterSpacing: -2 }),
+    txt({ x: 120, y: 380, w: 840, text: "Your agent shouldn’t start\nfrom zero every morning.", fontSize: 76, weight: 600, color: "#ECEFF2", align: "center", letterSpacing: -2 }),
     txt({ x: 120, y: 940, w: 840, text: "BRAINROUTER · MEMORY-FIRST AI", fontSize: 24, weight: 600, color: ACCENT, align: "center", fontFamily: "mono", letterSpacing: 2 }),
   ];
   return d;

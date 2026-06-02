@@ -6,14 +6,13 @@
 
 import type { EditorDoc, Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer } from "./types";
 import { guillocheMarkup } from "../brandMark";
-import { FONT, MONO, esc, wrapHard, lockupMarkup } from "../brandShared";
+import { FONT, MONO, esc, lockupMarkup } from "../brandShared";
 
 function renderText(l: TextLayer, defs: { s: string }): string {
   const ff = l.fontFamily === "mono" ? MONO : FONT;
   const anchor = l.align === "left" ? "start" : l.align === "center" ? "middle" : "end";
   const tx = l.align === "left" ? l.x : l.align === "center" ? l.x + l.w / 2 : l.x + l.w;
-  const maxChars = Math.max(1, Math.floor(l.w / (l.fontSize * 0.56 + Math.max(0, l.letterSpacing))));
-  const lines = wrapHard(l.text || " ", maxChars);
+  const lines = (l.text && l.text.length ? l.text : " ").split("\n");
   const lh = l.fontSize * l.lineHeight;
   let attr = "";
   if (l.effect === "shadow") {

@@ -128,18 +128,20 @@ export function EditorCanvas({
         {editing && editing.type === "text" && (
           <textarea
             autoFocus
+            wrap="off"
             value={editing.text}
             onChange={(e) => onChange(editing.id, { text: e.target.value })}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
             onBlur={() => setEditingId(null)}
             onKeyDown={(e) => {
-              if (e.key === "Escape" || (e.key === "Enter" && !e.shiftKey)) {
+              if (e.key === "Escape") {
                 e.preventDefault();
                 setEditingId(null);
               }
             }}
             style={{
+              whiteSpace: "pre",
               position: "absolute",
               left: editing.x * sc,
               top: editing.y * sc,
