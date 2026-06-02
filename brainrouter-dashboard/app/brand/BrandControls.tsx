@@ -12,7 +12,6 @@ import {
   AVATAR_SHAPES,
   RINGS,
   type BrandConfig,
-  type Mode,
   type PresetKey,
   type ThemeKey,
   type AccentKey,
@@ -189,19 +188,6 @@ const roleOpts = (Object.keys(ROLES) as RoleKey[]).map((k) => ({ v: k, label: RO
 export function BrandControls({ cfg, set }: { cfg: BrandConfig; set: (patch: Partial<BrandConfig>) => void }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-      <Group label="Asset type">
-        <Segmented<Mode>
-          cols={3}
-          value={cfg.mode}
-          onChange={(v) => set({ mode: v })}
-          options={[
-            { v: "poster", label: "Poster" },
-            { v: "avatar", label: "Avatar" },
-            { v: "logo", label: "Logo" },
-          ]}
-        />
-      </Group>
-
       {/* ───────── POSTER ───────── */}
       {cfg.mode === "poster" && (
         <>

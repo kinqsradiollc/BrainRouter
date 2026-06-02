@@ -7,7 +7,7 @@
  * picture frames, and standalone logo exports.
  */
 
-export type Mode = "poster" | "avatar" | "logo";
+export type Mode = "poster" | "avatar" | "logo" | "canvas";
 
 export type SizeGroup = "Social" | "Banner";
 export interface SizeDef {

@@ -3,10 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
-import { DEFAULT_CONFIG, dimsFor, type BrandConfig } from "./brandPresets";
+import { DEFAULT_CONFIG, dimsFor, type BrandConfig, type Mode } from "./brandPresets";
 import { buildSVG } from "./buildSVG";
 import { useBrandExport } from "./useBrandExport";
 import { BrandControls } from "./BrandControls";
+import { Editor } from "./editor/Editor";
+
+const MODES: [Mode, string][] = [
+  ["poster", "Poster"],
+  ["avatar", "Avatar / PFP"],
+  ["logo", "Logo"],
+  ["canvas", "Canvas editor"],
+];
 
 export default function BrandStudioPage() {
   const { user, isLoading } = useAuth();
@@ -48,6 +56,32 @@ export default function BrandStudioPage() {
         </p>
       </div>
 
+      {/* mode switcher */}
+      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        {MODES.map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => set({ mode: m })}
+            style={{
+              padding: "9px 16px",
+              borderRadius: "10px",
+              fontSize: "14px",
+              fontWeight: 600,
+              cursor: "pointer",
+              background: cfg.mode === m ? "var(--accent-wash)" : "var(--surface-raised)",
+              border: `1px solid ${cfg.mode === m ? "var(--border-hover-accent)" : "var(--border)"}`,
+              color: cfg.mode === m ? "var(--accent)" : "var(--text-secondary)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {cfg.mode === "canvas" ? (
+        <Editor />
+      ) : (
       <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 340px) minmax(0, 1fr)", gap: "24px", alignItems: "start" }}>
         {/* controls */}
         <div
@@ -145,6 +179,7 @@ export default function BrandStudioPage() {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
