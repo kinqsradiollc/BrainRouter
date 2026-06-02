@@ -228,6 +228,7 @@ export function createRunWorkflowTool() {
       type: 'object',
       properties: {
         slug: { type: 'string', description: 'Optional run slug (defaults from the plan title).' },
+        background: { type: 'boolean', description: 'Run detached so the turn is not blocked by a long fan-out; track via /workflows or the background panel. Default false.' },
         template: { type: 'string', enum: ['compare', 'review-wide', 'research'], description: 'Built-in workflow shape — pass this + templateArgs INSTEAD of an explicit plan. compare {targets[],criteria?,goal?} · review-wide {paths[],focus?} · research {question,angles?}.' },
         templateArgs: { type: 'object', description: 'Arguments for the chosen template, e.g. { targets: ["optionA","optionB"] } or { paths: ["src/a","src/b"] }.' },
         plan: {
