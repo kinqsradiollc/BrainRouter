@@ -18,7 +18,7 @@ export interface MockSkill {
 export function useSnnSimulator() {
   const [mockSkills, setMockSkills] = useState<MockSkill[]>([
     { name: "UI-Styling", potential: 0.15, threshold: 0.3, hints: "Always inject Tailwind responsive grids..." },
-    { name: "Data-Visualization", potential: 0.25, threshold: 0.3, hints: "Use seaborn, hex #cc9166 for accent curves..." },
+    { name: "Data-Visualization", potential: 0.25, threshold: 0.3, hints: "Use seaborn, hex #34C28E for accent curves..." },
     { name: "Customer-Relations", potential: 0.05, threshold: 0.3, hints: "Include subscription tier & de-escalation checklist..." }
   ]);
   const [consoleLogs, setConsoleLogs] = useState<string[]>([

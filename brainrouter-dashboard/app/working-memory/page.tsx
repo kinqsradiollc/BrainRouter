@@ -138,7 +138,7 @@ export default function WorkingMemoryPage() {
             </>
           )}
 
-          {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
+          {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
         </FilterBar>
 
         <FilterBar>
@@ -214,7 +214,7 @@ export default function WorkingMemoryPage() {
                           color: "var(--color-golden-accent)",
                           fontSize: "14px",
                           fontWeight: 600,
-                          background: "rgba(204, 145, 102, 0.1)",
+                          background: "rgba(52, 194, 142, 0.1)",
                           padding: "2px 8px",
                           borderRadius: "4px"
                         }}>
@@ -273,8 +273,8 @@ export default function WorkingMemoryPage() {
                             transition={{ type: "spring", stiffness: 80, damping: 15 }}
                             style={{
                               height: "100%",
-                              background: pct > 80 ? "#ef4444" : "var(--color-golden-accent)",
-                              boxShadow: pct > 80 ? "0 0 6px #ef4444" : "0 0 6px var(--color-golden-accent)"
+                              background: pct > 80 ? "#E5675F" : "var(--color-golden-accent)",
+                              boxShadow: pct > 80 ? "0 0 6px #E5675F" : "0 0 6px var(--color-golden-accent)"
                             }}
                           />
                         </div>

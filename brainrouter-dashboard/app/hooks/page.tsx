@@ -78,7 +78,7 @@ export default function HooksPage() {
                 Register hook
               </PremiumButton>
             </FilterBar.Row>
-            {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
+            {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
           </FilterBar>
         )}
 

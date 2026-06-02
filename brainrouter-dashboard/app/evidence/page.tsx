@@ -69,7 +69,7 @@ export default function EvidencePage() {
           </FilterBar.Row>
         </FilterBar>
 
-        {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
+        {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: "18px", alignItems: "start" }}>
           <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>
@@ -103,7 +103,7 @@ export default function EvidencePage() {
           <aside className="table-container" style={{ padding: "18px", minHeight: "220px" }}>
             <div style={{ fontSize: "12px", color: "var(--color-ash-text)", textTransform: "uppercase", marginBottom: "12px" }}>Parent Memory</div>
             {selectedError ? (
-              <div style={{ color: "#ef4444", fontSize: "13px" }}>{selectedError}</div>
+              <div style={{ color: "#E5675F", fontSize: "13px" }}>{selectedError}</div>
             ) : selectedMemory ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                 <div style={{ fontSize: "12px", color: "var(--color-golden-accent)", fontWeight: 700 }}>{selectedMemory.type}</div>

@@ -12,8 +12,8 @@ export function MemoryBadge({ score }: MemoryBadgeProps) {
   const isDecaying = score >= 5;
 
   let badgeStyle = {
-    background: "linear-gradient(90deg, rgba(204, 145, 102, 0.15) 0%, rgba(204, 145, 102, 0.03) 100%)",
-    borderColor: "rgba(204, 145, 102, 0.4)",
+    background: "linear-gradient(90deg, rgba(52, 194, 142, 0.15) 0%, rgba(52, 194, 142, 0.03) 100%)",
+    borderColor: "rgba(52, 194, 142, 0.4)",
     color: "var(--color-pure-white)",
     text: "Cited Active"
   };
@@ -52,7 +52,7 @@ export function MemoryBadge({ score }: MemoryBadgeProps) {
         fontWeight: 600,
         fontFamily: "var(--font-inter)",
         letterSpacing: "0.02em",
-        boxShadow: isActive ? "0 0 10px rgba(204, 145, 102, 0.1)" : "none",
+        boxShadow: isActive ? "var(--elev-inset)" : "none",
         cursor: "default",
         userSelect: "none"
       }}
@@ -64,7 +64,7 @@ export function MemoryBadge({ score }: MemoryBadgeProps) {
           height: "5px", 
           borderRadius: "50%", 
           marginRight: "6px",
-          background: isActive ? "var(--color-golden-accent)" : isDecaying ? "#ef4444" : "var(--color-silver-text)",
+          background: isActive ? "var(--color-golden-accent)" : isDecaying ? "#E5675F" : "var(--color-silver-text)",
           boxShadow: isActive ? "0 0 6px var(--color-golden-accent)" : "none"
         }} 
       />

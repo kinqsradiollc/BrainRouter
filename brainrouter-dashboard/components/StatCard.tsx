@@ -15,8 +15,8 @@ export function StatCard({ title, value }: StatCardProps) {
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ 
         y: -4, 
-        borderColor: "rgba(204, 145, 102, 0.3)",
-        boxShadow: "0 12px 30px rgba(0, 0, 0, 0.6), 0 0 15px rgba(204, 145, 102, 0.05)"
+        borderColor: "rgba(52, 194, 142, 0.3)",
+        boxShadow: "0 12px 30px rgba(0, 0, 0, 0.6)"
       }}
       transition={{ 
         type: "spring", 

@@ -427,7 +427,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
                       minWidth: "18px",
                       height: "18px",
                       borderRadius: "9999px",
-                      background: "#dc2626",
+                      background: "#E5675F",
                       color: "#fff",
                       display: "inline-flex",
                       alignItems: "center",
@@ -508,7 +508,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
           <div style={{ padding: "10px", borderTop: "1px solid var(--border-dim)" }}>
             <div style={{ fontSize: "11px", color: "var(--color-ash-text)" }}>OPERATIONAL MODE</div>
             <div style={{ fontSize: "12px", color: "var(--color-pure-white)", fontWeight: 500, display: "flex", alignItems: "center", gap: "6px", marginTop: "4px" }}>
-              <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }}></span>
+              <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#34C28E", display: "inline-block" }}></span>
               SQLite Active
             </div>
           </div>
@@ -520,9 +520,9 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
                 width: "8px", 
                 height: "8px", 
                 borderRadius: "50%", 
-                background: "#10b981", 
+                background: "#34C28E", 
                 display: "inline-block",
-                boxShadow: "0 0 8px #10b981"
+                boxShadow: "0 0 8px #34C28E"
               }}
             />
           </div>

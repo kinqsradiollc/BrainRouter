@@ -28,7 +28,7 @@ export function MemoryCard({ memory, selected = false, onSelect, onEdit, onDelet
               type="checkbox"
               checked={selected}
               onChange={(event) => onSelect(memory.recordId, event.target.checked)}
-              style={{ accentColor: "#cc9166" }}
+              style={{ accentColor: "#34C28E" }}
               aria-label={`Select memory ${memory.recordId}`}
             />
           )}
