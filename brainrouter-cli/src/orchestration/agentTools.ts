@@ -228,6 +228,8 @@ export function createRunWorkflowTool() {
       type: 'object',
       properties: {
         slug: { type: 'string', description: 'Optional run slug (defaults from the plan title).' },
+        template: { type: 'string', enum: ['compare', 'review-wide', 'research'], description: 'Built-in workflow shape — pass this + templateArgs INSTEAD of an explicit plan. compare {targets[],criteria?,goal?} · review-wide {paths[],focus?} · research {question,angles?}.' },
+        templateArgs: { type: 'object', description: 'Arguments for the chosen template, e.g. { targets: ["optionA","optionB"] } or { paths: ["src/a","src/b"] }.' },
         plan: {
           type: 'object',
           properties: {
@@ -281,7 +283,8 @@ export function createRunWorkflowTool() {
           required: ['phases'],
         },
       },
-      required: ['plan'],
+      // Provide EITHER `plan` (explicit) OR `template`+`templateArgs`.
+      required: [],
     },
   };
 }

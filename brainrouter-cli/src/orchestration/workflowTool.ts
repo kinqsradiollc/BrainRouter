@@ -14,6 +14,7 @@
 
 import type { OrchestrationContext } from './tools.js';
 import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
+import { buildTemplatePlan } from './workflowTemplates.js';
 import {
   executePhasePlan,
   type PhaseRunner,
@@ -130,11 +131,21 @@ export interface RunWorkflowDeps {
  * return a compact JSON summary. Returns `{ ok:false, ... }` on an invalid plan.
  */
 export async function runWorkflow(
-  args: { plan?: unknown; slug?: unknown },
+  args: { plan?: unknown; slug?: unknown; template?: unknown; templateArgs?: unknown },
   ctx: OrchestrationContext,
   deps: RunWorkflowDeps,
 ): Promise<string> {
-  const { plan, errors } = normalizePhasePlan(args?.plan);
+  // Plan source: an explicit `plan`, or a built-in `template` + `templateArgs`
+  // (WF-TEMPLATES). Either way it's validated by normalizePhasePlan below.
+  let rawPlan = args?.plan;
+  if (!rawPlan && typeof args?.template === 'string') {
+    const built = buildTemplatePlan(args.template, args.templateArgs ?? {});
+    if (!built.plan) {
+      return JSON.stringify({ ok: false, error: `template "${args.template}" failed`, details: built.errors }, null, 2);
+    }
+    rawPlan = built.plan;
+  }
+  const { plan, errors } = normalizePhasePlan(rawPlan);
   if (!plan) {
     return JSON.stringify({ ok: false, error: 'invalid workflow plan', details: errors }, null, 2);
   }
