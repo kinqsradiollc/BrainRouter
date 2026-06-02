@@ -13,6 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.4.8** | Shipped — 2026-06-02 | [`brainrouter-changelog/0.4.8.md`](brainrouter-changelog/0.4.8.md) |
 | **0.4.7** | Shipped — 2026-06-02 | [`brainrouter-changelog/0.4.7.md`](brainrouter-changelog/0.4.7.md) |
 | **0.4.6** | Shipped — 2026-06-01 | [`brainrouter-changelog/0.4.6.md`](brainrouter-changelog/0.4.6.md) |
 | **0.4.5** | Shipped — 2026-06-01 | [`brainrouter-changelog/0.4.5.md`](brainrouter-changelog/0.4.5.md) |

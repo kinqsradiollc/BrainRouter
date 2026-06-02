@@ -11,6 +11,7 @@
  */
 
 import { parseChildOutput } from "./outputContracts.js";
+import { mergeAndFilterFindings, renderReviewReport, type ReviewFinding, type ReviewSynthesis } from "./reviewSynthesis.js";
 
 export interface SynthChild {
   id: string;
@@ -98,4 +99,108 @@ export function renderSynthesis(rollup: SynthesisRollup): string {
     }
   }
   return lines.join("\n");
+}
+
+// ── WF-SYNTH (0.4.8) — phase-level synthesis + typed hand-off ─────────────────
+
+export type PhaseSynthesisMode = "none" | "role-rollup" | "review-merge";
+
+/** Typed aggregation of a phase's children, plus the rendered text fed forward
+ *  as `{{input}}` to downstream phases. */
+export interface PhaseOutput {
+  mode: PhaseSynthesisMode;
+  text: string;
+  /** Present for `role-rollup` (and `review-merge` when it fell back). */
+  rollup?: SynthesisRollup;
+  /** Present for `review-merge` when structured findings were merged. */
+  review?: ReviewSynthesis;
+}
+
+const FINDING_CONFIDENCE_THRESHOLD = 50;
+
+function coerceFinding(x: Record<string, unknown>, reviewer?: string): ReviewFinding | null {
+  const summary =
+    typeof x.summary === "string" ? x.summary.trim() : typeof x.message === "string" ? x.message.trim() : "";
+  const file = typeof x.file === "string" ? x.file.trim() : "";
+  if (!summary || !file) return null; // need file + summary to count as a finding
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const conf = num(x.confidence);
+  return {
+    file,
+    line: num(x.line),
+    lineEnd: num(x.lineEnd),
+    severity: typeof x.severity === "string" ? x.severity : "info",
+    confidence: conf === null ? 50 : Math.max(0, Math.min(100, conf)),
+    summary,
+    reviewer: typeof x.reviewer === "string" ? x.reviewer : reviewer,
+    rootCause: typeof x.rootCause === "string" ? x.rootCause : undefined,
+  };
+}
+
+/**
+ * Tolerant extraction of structured review findings from a child's freeform
+ * output. Reviewers are prompted to emit a fenced ```json [ {file,line,severity,
+ * confidence,summary}, ... ] ``` block (or a `{"findings":[...]}`); this scans
+ * the first fenced block, then a bare array/object, and coerces finding-shaped
+ * items. Returns `[]` when nothing parseable is present — so `review-merge`
+ * degrades to a role rollup rather than inventing findings.
+ */
+export function extractReviewFindings(text: string | undefined, reviewer?: string): ReviewFinding[] {
+  if (!text) return [];
+  const candidates: string[] = [];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) candidates.push(fenced[1]);
+  const arr = text.match(/\[[\s\S]*\]/);
+  if (arr) candidates.push(arr[0]);
+  const obj = text.match(/\{[\s\S]*\}/);
+  if (obj) candidates.push(obj[0]);
+  for (const c of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(c.trim());
+    } catch {
+      continue;
+    }
+    const list: unknown = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).findings)
+        ? (parsed as Record<string, unknown>).findings
+        : null;
+    if (!Array.isArray(list)) continue;
+    const findings = list
+      .filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === "object")
+      .map((x) => coerceFinding(x, reviewer))
+      .filter((f): f is ReviewFinding => f !== null);
+    if (findings.length > 0) return findings;
+  }
+  return [];
+}
+
+/**
+ * Aggregate a phase's children into a typed `PhaseOutput`:
+ *   - `none`         → raw child outputs concatenated.
+ *   - `role-rollup`  → group-by-role contract digest (`synthesizeChildren`).
+ *   - `review-merge` → extract + dedupe + threshold findings across reviewers
+ *                      (`mergeAndFilterFindings`); falls back to `role-rollup`
+ *                      when no structured findings are present.
+ */
+export function synthesizePhase(children: SynthChild[], mode: PhaseSynthesisMode): PhaseOutput {
+  if (mode === "none") {
+    const text = children
+      .map((c) => c.finalOutput?.trim())
+      .filter((t): t is string => Boolean(t))
+      .join("\n\n---\n\n");
+    return { mode, text };
+  }
+  if (mode === "review-merge") {
+    const findings = children.flatMap((c) => extractReviewFindings(c.finalOutput, c.role));
+    if (findings.length > 0) {
+      const review = mergeAndFilterFindings(findings, FINDING_CONFIDENCE_THRESHOLD);
+      return { mode, text: renderReviewReport(review, FINDING_CONFIDENCE_THRESHOLD), review };
+    }
+    const rollup = synthesizeChildren(children); // graceful fallback — no findings to merge
+    return { mode, text: renderSynthesis(rollup), rollup };
+  }
+  const rollup = synthesizeChildren(children);
+  return { mode, text: renderSynthesis(rollup), rollup };
 }

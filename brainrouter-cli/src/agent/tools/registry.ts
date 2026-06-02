@@ -57,6 +57,8 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'read_agent_transcript', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'close_agent', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'route_task', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // WF-TOOL — run_workflow launches a fan-out of child agents (child_write), like spawn_*.
+  { name: 'run_workflow', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   // --- write tier: + structured file edits --------------------------------
   { name: 'write_file', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'edit_file', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
