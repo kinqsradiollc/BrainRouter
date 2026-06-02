@@ -47,6 +47,23 @@ export interface ChildSessionRecord {
   autoChainFollowups?: string[];
   /** 0.4.x-1 — true when spawned with an operator overlay (a bespoke one-off agent). */
   synthetic?: boolean;
+  /**
+   * CODEX-WORKTREE-ISOLATION — filesystem root used by the child when it differs
+   * from the parent's workspace root. Parent session bookkeeping remains in the
+   * parent workspace; transcript reads use this root when present.
+   */
+  childWorkspaceRoot?: string;
+  childLaunchCwd?: string;
+  childWorkspaceIsolation?: {
+    kind: 'git-worktree';
+    sourceRoot: string;
+    worktreeRoot: string;
+  };
+  childWorkspaceNotice?: string;
+  /** CODEX-WORKTREE-CLEANUP — capped diff of the child's isolated-worktree changes, captured at teardown. */
+  worktreeDiff?: string;
+  /** CODEX-WORKTREE-CLEANUP — number of files the child changed in its worktree. */
+  worktreeChangedFiles?: number;
 }
 
 interface SessionsFile {

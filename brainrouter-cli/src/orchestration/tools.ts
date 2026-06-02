@@ -21,6 +21,7 @@ import {
   type ChildSessionRecord,
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
+import { countRunningChildren, spawnSlotDecision } from './spawnSlots.js';
 import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
@@ -34,6 +35,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
+import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -90,6 +92,21 @@ export interface OrchestrationContext {
    * terminal is attached.
    */
   confirmDelegation?: (info: { role: string; access: AccessMode; prompt: string }) => Promise<boolean>;
+  /**
+   * CODEX-PARENT-APPROVAL — child agents run silently, so risky tool prompts
+   * are routed back through the parent/UI instead of being denied solely because
+   * the child cannot read from the terminal.
+   */
+  confirmToolApproval?: (info: {
+    childId: string;
+    role: string;
+    tool: string;
+    command?: string;
+    path?: string;
+    summary?: string;
+    reason: string;
+    dangerous?: boolean;
+  }) => Promise<boolean>;
   // MAS-P2-M3 parent-context accessors. Each returns the parent's
   // runtime state at spawn time — all optional so callers can adopt
   // incrementally. When omitted, the snapshot field stays undefined
@@ -643,6 +660,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   if (currentDepth >= maxDepth) {
     throw new Error(`Spawn depth cap reached (${currentDepth}/${maxDepth}). Reduce agent nesting or raise cli.maxSpawnDepth in ~/.config/brainrouter/config.json.`);
   }
+  // CODEX-AGENT-LIFECYCLE — spawn slots: cap the number of children THIS parent
+  // has running concurrently (breadth) so it can't fan out unbounded agents that
+  // exhaust the LLM semaphore and leave orphans drifting. Scoped to the parent's
+  // session key (Codex's per-controller slots) and counts `running` only, so an
+  // orphan `pending` from a crashed spawn never wedges the cap.
+  {
+    const mine = listSessions(ctx.workspaceRoot).filter((s) => s.parentSessionKey === ctx.parentSessionKey);
+    const running = countRunningChildren(mine);
+    const slot = spawnSlotDecision(running, getCliKnobs().maxConcurrentChildren);
+    if (!slot.allow) throw new Error(slot.reason);
+  }
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
   const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
@@ -671,7 +699,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     }
   }
 
-  const childLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
+  const requestedChildLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
   const childTimeoutMs = childTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
     role: role.name,
@@ -682,6 +710,23 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     tier: childTier,
     depth: currentDepth + 1,
   });
+  const childWorkspace = prepareChildWorkspace({
+    parentWorkspaceRoot: ctx.workspaceRoot,
+    parentLaunchCwd: requestedChildLaunchCwd,
+    childId: record.id,
+    access,
+    mode: getCliKnobs().childWorkspaceIsolation,
+  });
+  const childWorkspaceRoot = childWorkspace.workspaceRoot;
+  const childLaunchCwd = childWorkspace.launchCwd;
+  if (childWorkspace.isolated || childWorkspace.notice) {
+    updateSession(ctx.workspaceRoot, record.id, {
+      childWorkspaceRoot: childWorkspace.isolated ? childWorkspaceRoot : undefined,
+      childLaunchCwd,
+      childWorkspaceIsolation: childWorkspace.isolation,
+      childWorkspaceNotice: childWorkspace.notice,
+    });
+  }
 
   const childKey = childSessionKey(ctx.parentSessionKey, record.id);
   const seededIds: string[] = Array.isArray(args.seedRecordIds)
@@ -722,17 +767,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     outputContract: getOutputContract(role.name)?.id ?? null,
   });
   updateSession(ctx.workspaceRoot, record.id, { parentContext: snapshot });
-  appendTranscriptEntry(ctx.workspaceRoot, childKey, {
+  appendTranscriptEntry(childWorkspaceRoot, childKey, {
     role: 'system',
     name: 'parent_context',
     content: JSON.stringify(snapshot),
   });
 
   const basePrompt = buildSystemPrompt({
-    workspaceRoot: ctx.workspaceRoot,
+    workspaceRoot: childWorkspaceRoot,
     launchCwd: childLaunchCwd,
     sessionKey: childKey,
-    instructionSummary: loadWorkspaceInstructionSummary(ctx.workspaceRoot),
+    instructionSummary: loadWorkspaceInstructionSummary(childWorkspaceRoot),
   });
   let systemPromptOverride = buildRolePrompt(role, basePrompt, '');
   if (seededIds.length > 0) {
@@ -756,7 +801,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     args.effort === 'low' || args.effort === 'medium' || args.effort === 'high' ? args.effort : undefined;
 
   const childAgent = new Agent(ctx.mcpClient, ctx.llmConfig, {
-    workspaceRoot: ctx.workspaceRoot,
+    workspaceRoot: childWorkspaceRoot,
     launchCwd: childLaunchCwd,
     sessionKey: childKey,
     // The role overlay is already embedded inside `systemPromptOverride` via
@@ -784,6 +829,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     disallowedTools: childDisallowedTools,
     // 0.4.x-5: per-child reasoning-effort override.
     effortOverride,
+    confirmToolApproval: ctx.confirmToolApproval
+      ? (info) => ctx.confirmToolApproval!({ childId: record.id, role: role.name, ...info })
+      : undefined,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
 
@@ -996,6 +1044,23 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       }
     } finally {
       runningPromises.delete(record.id);
+      // CODEX-WORKTREE-CLEANUP — tear down the child's git worktree when it
+      // finishes (success or failure). Captures a capped diff into the record
+      // first so the child's work isn't silently lost, then removes the
+      // worktree + prunes git's admin entry (no more unbounded $TMPDIR growth).
+      if (childWorkspace.isolation) {
+        try {
+          const cleanup = removeChildWorktree(childWorkspace.isolation);
+          const patch: Partial<ChildSessionRecord> = {};
+          if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
+          if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
+          if (Object.keys(patch).length > 0) {
+            try { updateSession(ctx.workspaceRoot, record.id, patch); } catch { /* record may be closed */ }
+          }
+        } catch (cleanupErr: any) {
+          console.error(`[BrainRouter] child ${record.id} worktree cleanup threw:`, cleanupErr?.message ?? cleanupErr);
+        }
+      }
     }
   })();
   // ORCH-FIX — backstop: a child promise must NEVER reject unhandled (that would
@@ -1013,7 +1078,18 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   if (args.wait) {
     return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? childTimeoutMs }, ctx);
   }
-  return JSON.stringify({ id: record.id, role: role.name, access, status: 'running', workdir: childLaunchCwd, timeoutMs: childTimeoutMs }, null, 2);
+  return JSON.stringify({
+    id: record.id,
+    role: role.name,
+    access,
+    status: 'running',
+    workdir: childLaunchCwd,
+    workspaceRoot: childWorkspaceRoot,
+    isolatedWorkspace: childWorkspace.isolated,
+    isolation: childWorkspace.isolation,
+    notice: childWorkspace.notice,
+    timeoutMs: childTimeoutMs,
+  }, null, 2);
 }
 
 function handleList(ctx: OrchestrationContext): string {
@@ -1069,7 +1145,8 @@ function handleReadTranscript(args: any, ctx: OrchestrationContext): string {
   const record = getSession(ctx.workspaceRoot, id);
   if (!record) throw new Error(`No child session with id ${id}.`);
   const childKey = childSessionKey(record.parentSessionKey, record.id);
-  const entries = readTranscriptEntries(ctx.workspaceRoot, childKey, limit);
+  const transcriptRoot = record.childWorkspaceRoot ?? ctx.workspaceRoot;
+  const entries = readTranscriptEntries(transcriptRoot, childKey, limit);
   return JSON.stringify({ id, entries }, null, 2);
 }
 
@@ -1077,7 +1154,18 @@ function handleClose(args: any, ctx: OrchestrationContext): string {
   const id = String(args.id ?? '');
   const record = getSession(ctx.workspaceRoot, id);
   if (!record) throw new Error(`No child session with id ${id}.`);
-  const next = updateSession(ctx.workspaceRoot, id, { status: 'closed', completedAt: new Date().toISOString() });
+  // CODEX-WORKTREE-CLEANUP — explicit close also removes a lingering worktree
+  // (e.g. a wait:false child the parent never drained). Idempotent: the spawn
+  // finally usually removed it already, and removeChildWorktree no-ops if gone.
+  const patch: Partial<ChildSessionRecord> = { status: 'closed', completedAt: new Date().toISOString() };
+  if (record.childWorkspaceIsolation) {
+    try {
+      const cleanup = removeChildWorktree(record.childWorkspaceIsolation);
+      if (cleanup.diff && !record.worktreeDiff) patch.worktreeDiff = cleanup.diff;
+      if (typeof cleanup.changedFiles === 'number' && record.worktreeChangedFiles == null) patch.worktreeChangedFiles = cleanup.changedFiles;
+    } catch { /* best-effort */ }
+  }
+  const next = updateSession(ctx.workspaceRoot, id, patch);
   return JSON.stringify(summarize(next, true), null, 2);
 }
 
@@ -1114,6 +1202,10 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     followUps: record.autoChainFollowups ?? undefined,
     // MAS-P4-T3: per-child accounting (tokens, calls, offloaded chars, wall-clock).
     usage: record.usage ?? undefined,
+    workspaceRoot: record.childWorkspaceRoot ?? undefined,
+    workdir: record.childLaunchCwd ?? undefined,
+    isolation: record.childWorkspaceIsolation ?? undefined,
+    isolationNotice: record.childWorkspaceNotice ?? undefined,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     completedAt: record.completedAt,

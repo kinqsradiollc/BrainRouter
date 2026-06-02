@@ -18,8 +18,10 @@ Inspect or switch the live posture with `/policy` (see below).
 |---|---|---|
 | **Access mode** | `read` · `write` · `shell` | The capability ceiling. `read` = read-only tools only. `write` = adds file edits + child-agent spawns. `shell` = adds command execution. |
 | **Sandbox** | `on` · `off` | Whether shell commands run inside the OS sandbox wrapper (when available). |
+| **Sandbox-unavailable** | `deny` · `ask` · `warn` | What to do when sandboxing is `on` but no sandboxer exists on this host (Linux without `bwrap`/`firejail`, Windows). `deny` (default) refuses to run; `ask` requires approval (fails closed where none exists); `warn` runs unsandboxed with a loud notice. Never runs unsandboxed *silently*. |
 | **External-dir writes** | `deny` · `ask` · `allow` | Whether the structured file tools (`write_file` / `edit_file` / `apply_patch`) may write **outside** the workspace root. Path containment is enforced by realpath, so symlink escapes are caught. |
 | **Egress allowlist** | list of hosts (`[]` = unrestricted) | Per-host gate on outbound `fetch_url`. An **empty** list means all hosts are permitted; a non-empty list denies any host not on it. |
+| **Command allowlist** | list of command prefixes (`[]` = none) | `cli.commandAllowlist` — `run_command` calls whose **every** segment (`&&`/`\|`/`;`-split) matches a prefix auto-approve without a prompt in any mode (e.g. `git status`, `npm test`). The destructive floor still wins — a dangerous segment never auto-approves. Over-broad prefixes (bare `git`/`bash`/`sudo`/…) are rejected when set. |
 
 How a given tool maps to a gated action:
 

@@ -1,4 +1,5 @@
 import { getCliKnobs } from '../config/config.js';
+import { registryParallelSafeLocal } from './tools/registry.js';
 
 // 0.3.8-R4 — Single source of truth for which tool calls are safe to
 // dispatch concurrently within one LLM response.
@@ -42,16 +43,11 @@ import { getCliKnobs } from '../config/config.js';
  *     message" UX — previously batched task_agent calls serialized end-to-end
  *     waits, which defeated the point of batching.
  */
-const PARALLEL_SAFE_LOCAL_TOOLS = new Set<string>([
-  'read_file',
-  'list_dir',
-  'grep_search',
-  'glob_files',
-  'fetch_url',
-  'web_search',
-  'task_agent',
-  'delegate_agent',
-]);
+// CODEX-TOOL-REGISTRY — GENERATED from the single tool registry
+// (`agent/tools/registry.ts`, entries with `parallelSafe: true`) so the
+// concurrency whitelist can't drift from each tool's declared action kind /
+// exposure. (MCP read tools are a separate, dynamically-named surface — below.)
+const PARALLEL_SAFE_LOCAL_TOOLS = registryParallelSafeLocal();
 
 /**
  * MCP read tools — bare tool names (without the `mcp_<server>_` prefix)

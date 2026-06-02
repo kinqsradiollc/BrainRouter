@@ -18,6 +18,8 @@
  * — do not remove existing entries without a replacement.
  */
 
+import { evaluateCommandPolicy } from './commandPolicy.js';
+
 const DANGEROUS_PATTERNS: RegExp[] = [
   // Recursive / forced deletions
   /\brm\s+(?:-[a-zA-Z]*[rRfF][a-zA-Z]*|--recursive\b|--force\b)/,
@@ -119,7 +121,7 @@ export type RunCommandApproval = 'auto-approve' | 'ask' | 'deny-silent';
 export function resolveRunCommandApproval(
   prefs: { executionMode: 'planning' | 'fast' },
   command: string,
-  opts: { silent: boolean; goalActive?: boolean },
+  opts: { silent: boolean; goalActive?: boolean; allowlist?: string[] },
 ): RunCommandApproval {
   const fastMode = prefs.executionMode === 'fast';
   const goalActive = opts.goalActive === true;
@@ -128,10 +130,19 @@ export function resolveRunCommandApproval(
   // user's prior /mode preference takes over again.
   const autoApproveSafe = fastMode || goalActive;
   const dangerous = isDangerousCommand(command);
+  // CODEX-EXEC-POLICY — a command whose EVERY segment is on the user's
+  // `cli.commandAllowlist` is pre-approved in any mode (the user explicitly
+  // opted those prefixes in). The dangerous floor still wins — a dangerous
+  // segment is never auto-approved, allowlist or not. Default allowlist is
+  // empty, so this is inert unless the user configures it.
+  const allowlist = opts.allowlist ?? [];
+  const preApproved = !dangerous && allowlist.length > 0 && evaluateCommandPolicy(command, allowlist).allAllowlisted;
   if (opts.silent) {
     if (dangerous) return 'deny-silent';
+    if (preApproved) return 'auto-approve';
     return autoApproveSafe ? 'auto-approve' : 'deny-silent';
   }
+  if (preApproved) return 'auto-approve';
   if (autoApproveSafe && !dangerous) return 'auto-approve';
   return 'ask';
 }

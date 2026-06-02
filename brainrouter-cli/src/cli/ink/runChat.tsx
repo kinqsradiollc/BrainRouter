@@ -17,6 +17,7 @@ import { resolveSandboxConfig, runShell } from '../../runtime/exec/sandbox.js';
 import { parseBangCommand } from '../../runtime/exec/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { reconcileOrphanWorktrees } from '../../orchestration/worktreeIsolation.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '../../state/checkpointStore.js';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
@@ -244,6 +245,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // only writes the JSON file when there were actual stale entries
       // to flip — subsequent calls are pure reads.
       reconcileStale(agent.workspaceRoot);
+      // CODEX-WORKTREE-CLEANUP — also GC orphan child worktrees left under
+      // $TMPDIR by a crashed prior process (git worktree prune + rm untracked
+      // dirs). Best-effort + idempotent, mirrors reconcileStale.
+      try { reconcileOrphanWorktrees(agent.workspaceRoot); } catch { /* best-effort */ }
       // MAS-P5-T3: same treatment for worker threads — a `running` worker
       // from a dead CLI process can't resume mid-turn, so flip it to failed.
       reconcileStaleWorkers(agent.workspaceRoot);
@@ -489,6 +494,20 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     // start time wins, slightly under-counting concurrent invocations).
     const toolStartTimes = new Map<string, number>();
     const toolArgsSnapshot = new Map<string, Record<string, any>>();
+    // In-flight LOCAL tool calls, so a parallel batch shows ALL of them running
+    // at once instead of the status line being overwritten by whichever
+    // onToolStart fired last. Mirrors the child-fleet row treatment below —
+    // parallelism is the point, so surface it. Labels are the formatted calls
+    // (`Read(README.md)`); same-label parallel calls are tracked as duplicates.
+    const inFlightToolLabels: string[] = [];
+    const renderInFlightStatus = () => {
+      if (isQuiet()) return;
+      if (inFlightToolLabels.length === 0) { tickStatus('Thinking'); return; }
+      if (inFlightToolLabels.length === 1) { controller!.push.setStatus(inFlightToolLabels[0]); return; }
+      const shown = inFlightToolLabels.slice(0, 4).join(', ');
+      const more = inFlightToolLabels.length > 4 ? ` +${inFlightToolLabels.length - 4} more` : '';
+      controller!.push.setStatus(`${inFlightToolLabels.length} tools running in parallel: ${shown}${more}`);
+    };
     // Stash child tool args between onChildToolStart and onChildToolEnd so the
     // end row can render `Read(foo.ts)` instead of just `read_file`. Keyed by
     // `${childId}:${tool}` so two children running the same tool don't collide.
@@ -559,9 +578,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           turnToolCalls++;
           toolStartTimes.set(name, Date.now());
           toolArgsSnapshot.set(name, args ?? {});
-          if (!isQuiet()) {
-            controller!.push.setStatus(formatToolCall(name, args));
-          }
+          // Track this call as in-flight and render the WHOLE set, so a
+          // parallel batch shows "4 tools running in parallel: …" rather than
+          // the last call clobbering the status line.
+          inFlightToolLabels.push(formatToolCall(name, args));
+          renderInFlightStatus();
         },
         onToolEnd: (name, result) => {
           // Quiet mode hides successes (the prose response covers them).
@@ -575,11 +596,16 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           toolArgsSnapshot.delete(name);
           const durationMs = startedAt ? Date.now() - startedAt : undefined;
           const header = formatToolCall(name, args);
+          // Drop this call from the in-flight set, then refresh the status so a
+          // parallel batch visibly counts down (4 running → 3 → … → Thinking)
+          // instead of jumping straight to idle while siblings are still going.
+          const fi = inFlightToolLabels.indexOf(header);
+          if (fi >= 0) inFlightToolLabels.splice(fi, 1);
           controller!.push.tool(header, result.success, {
             preview: !isQuiet() ? result.preview : undefined,
             durationMs,
           });
-          tickStatus('Thinking');
+          renderInFlightStatus();
         },
         onPlanUpdate: (items, explanation) => {
           // Explanation rides on the plan entry itself (renders as a dim-italic

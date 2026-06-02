@@ -13,7 +13,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
-| **[0.4.4](0.4.4.md)** | — | In flight | Memory pipeline tightening (exact provenance, blackboard-default admission, recall refs, parser code chunks, benchmark modes) + unified exec policy |
+| **[0.4.7](0.4.7.md)** | 2026-06-02 | Shipped | Coding-agent parity (sandbox fail-closed, command-segment approval, MCP egress, worktree isolation, atomic patches), agentic autonomy + next-action planner, staleness-aware recall |
+| **[0.4.6](0.4.6.md)** | 2026-06-01 | Shipped | Structural refactor — concern-scoped modular layout (behavior-preserving, no user-facing change) |
+| **[0.4.5](0.4.5.md)** | 2026-06-01 | Shipped | Release hygiene, competitive catch-up, deep CLI polish + resilience |
+| **[0.4.4](0.4.4.md)** | 2026-05-31 | Shipped | Memory pipeline tightening (exact provenance, blackboard-default admission, recall refs, parser code chunks, benchmark modes) + unified exec policy |
 | **[0.4.3](0.4.3.md)** | 2026-05-30 | Shipped | Memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening |
 | **[0.4.2](0.4.2.md)** | 2026-05-30 | Shipped | Federation Stage 5, CLI multi-agent Phases 5–6, durable workflows + `/workflows` viewer, full CLI parity, version centralization |
 | **[0.4.1](0.4.1.md)** | 2026-05-29 | Shipped | Federation handoff, multi-agent ownership/budgeting, A1–A5, brain-side job queue + agent registry |
