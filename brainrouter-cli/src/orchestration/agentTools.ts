@@ -214,6 +214,79 @@ export function createWaitAgentsTool() {
 }
 
 /**
+ * WF-TOOL (0.4.8) — `run_workflow`. One call hands the runtime a declarative
+ * multi-phase plan; the runtime fans out, barrier-waits, synthesizes, and feeds
+ * each phase forward deterministically (the agent does NOT orchestrate
+ * spawn/wait/synthesize itself).
+ */
+export function createRunWorkflowTool() {
+  return {
+    name: 'run_workflow',
+    description:
+      'Run a deterministic multi-phase workflow in ONE call. Hand over a declarative plan; the runtime fans out a child agent per phase entry, waits for the WHOLE phase, synthesizes it, then feeds that into the next phase — you do not orchestrate spawn/wait/synthesize yourself. Use for "review each of these → summarize", "compare A vs B vs C → recommend", or multi-stage research. Each phase has EITHER an explicit `agents` list OR a `fanOut` over targets (one clone per target, {{target}} substituted). A later phase consumes an earlier one via `inputFrom` (its synthesis replaces {{input}}).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Optional run slug (defaults from the plan title).' },
+        plan: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            phases: {
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: 'Unique phase id.' },
+                  title: { type: 'string' },
+                  agents: {
+                    type: 'array',
+                    description: 'Explicit, heterogeneous agents. Mutually exclusive with fanOut.',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        role: { type: 'string', description: 'explorer|architect|reviewer|worker|verifier (omit to auto-route).' },
+                        prompt: { type: 'string' },
+                        access: { type: 'string', enum: ['read', 'write', 'shell'] },
+                      },
+                      required: ['prompt'],
+                    },
+                  },
+                  fanOut: {
+                    type: 'object',
+                    description: 'Spawn one clone of `agent` per `over` target ({{target}} substituted). Mutually exclusive with agents.',
+                    properties: {
+                      over: { type: 'array', items: { type: 'string' }, minItems: 1 },
+                      agent: {
+                        type: 'object',
+                        properties: {
+                          role: { type: 'string' },
+                          prompt: { type: 'string', description: 'May contain {{target}}.' },
+                          access: { type: 'string', enum: ['read', 'write', 'shell'] },
+                        },
+                        required: ['prompt'],
+                      },
+                    },
+                    required: ['over', 'agent'],
+                  },
+                  inputFrom: { type: 'array', items: { type: 'string' }, description: 'Prior phase id(s); their synthesis is injected as {{input}}.' },
+                  synthesize: { type: 'string', enum: ['role-rollup', 'review-merge', 'none'], description: 'How to aggregate this phase (default none).' },
+                  dependsOn: { type: 'array', items: { type: 'string' }, description: 'Phase id(s) that must finish first (default: declaration order).' },
+                },
+                required: ['id'],
+              },
+            },
+          },
+          required: ['phases'],
+        },
+      },
+      required: ['plan'],
+    },
+  };
+}
+
+/**
  * MAS-P2-M2 — `route_task` tool. Returns a typed 4-tier policy
  * decision (answer-direct / direct-tool / spawn-inline / spawn-worker)
  * with the recommended tool, agent id (when inline), confidence, and
