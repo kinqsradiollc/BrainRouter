@@ -14,7 +14,7 @@
  */
 import { listWorkers } from '../state/workerStore.js';
 import { listSessions } from '../orchestration/orchestrator.js';
-import { listRuns } from '../state/workflowRun.js';
+import { listRuns, summarizePhases } from '../state/workflowRun.js';
 
 export type BackgroundTaskKind = 'agent' | 'worker' | 'workflow';
 
@@ -41,7 +41,14 @@ export function collectRunningTasks(workspaceRoot: string): BackgroundTask[] {
   } catch { /* skip */ }
   try {
     for (const r of listRuns(workspaceRoot)) {
-      if (r.status === 'running') tasks.push({ kind: 'workflow', id: r.slug, label: r.slug });
+      if (r.status !== 'running') continue;
+      // WF-BG — surface phase progress for phase-aware (run_workflow) runs.
+      let label = r.slug;
+      if (r.phases && r.phases.length > 0) {
+        const { done, total } = summarizePhases(r);
+        label = `${r.slug} · phase ${done}/${total}`;
+      }
+      tasks.push({ kind: 'workflow', id: r.slug, label });
     }
   } catch { /* skip */ }
   return tasks;
