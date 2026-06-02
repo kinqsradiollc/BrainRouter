@@ -191,11 +191,11 @@ a {
   position: sticky;
   top: 0;
   z-index: 50;
-  height: 56px;
+  height: 60px;
   flex-shrink: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 540px) 1fr;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
   padding: 0 clamp(20px, 3vw, 40px);
   background: color-mix(in srgb, var(--surface-base) 72%, transparent);
@@ -203,7 +203,41 @@ a {
   -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border);
 }
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+/* Centered search field (the ⌘K trigger) — a real field, not a tiny pill. */
+.topbar-search {
+  grid-column: 2;
+  justify-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  width: 100%;
+  padding: 0 12px 0 14px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color .16s var(--ease), background .16s var(--ease), color .16s var(--ease);
+}
+.topbar-search:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+.topbar-search:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
 .topbar-right {
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 8px;

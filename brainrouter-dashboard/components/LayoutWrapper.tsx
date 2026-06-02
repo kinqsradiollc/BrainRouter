@@ -82,7 +82,7 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
       <Sidebar isCollapsed={isCollapsed} onToggleCollapse={handleToggleCollapse} />
       <main className="main-content">
         <header className="app-topbar">
-          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <div className="topbar-left">
             {isCollapsed && (
               <button onClick={handleToggleCollapse} className="topbar-btn" title="Expand sidebar" aria-label="Expand sidebar">
                 <svg style={{ width: 18, height: 18 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -93,24 +93,20 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               BrainRouter · Console
             </span>
-            <button
-              onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
-              title="Search (⌘K)"
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 8,
-                height: 32, padding: "0 10px 0 12px", marginLeft: 8,
-                borderRadius: "var(--radius-control)", cursor: "pointer",
-                background: "var(--surface-raised)", border: "1px solid var(--border)",
-                color: "var(--text-muted)", fontSize: 13, minWidth: 0,
-              }}
-            >
-              <svg style={{ width: 15, height: 15, flexShrink: 0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              <span style={{ whiteSpace: "nowrap" }}>Search</span>
-              <kbd style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, padding: "1px 5px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--surface-overlay)", color: "var(--text-muted)" }}>⌘K</kbd>
-            </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
+            className="topbar-search"
+            title="Search (⌘K)"
+          >
+            <svg style={{ width: 16, height: 16, flexShrink: 0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Search pages and actions…</span>
+            <kbd style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--surface-overlay)", color: "var(--text-muted)", flexShrink: 0 }}>⌘K</kbd>
+          </button>
 
           <div className="topbar-right">
             <button onClick={toggleTheme} className="topbar-btn" title={theme === "light" ? "Switch to dark" : "Switch to light"} aria-label="Toggle theme">
