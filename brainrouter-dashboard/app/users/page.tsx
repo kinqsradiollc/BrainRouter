@@ -211,7 +211,7 @@ export default function UsersPage() {
                           color: u.status === "active" ? "#34C28E" : "var(--color-ash-text)"
                         }}
                       >
-                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: u.status === "active" ? "#34C28E" : "var(--color-ash-text)", boxShadow: u.status === "active" ? "0 0 6px #34C28E" : "none" }} />
+                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: u.status === "active" ? "#34C28E" : "var(--color-ash-text)", boxShadow: "none" }} />
                         {u.status}
                       </span>
                     </td>

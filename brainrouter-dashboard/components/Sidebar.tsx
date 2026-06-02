@@ -361,7 +361,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
             animate={{ opacity: 1 }}
             style={{ color: "var(--color-ash-text)", fontSize: "11px", letterSpacing: "0.05em", marginTop: "4px", paddingLeft: "20px", whiteSpace: "nowrap" }}
           >
-            MEMORY ENGINE v1.2
+MEMORY ENGINE
           </motion.div>
         )}
       </div>

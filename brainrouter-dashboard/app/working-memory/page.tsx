@@ -274,7 +274,7 @@ export default function WorkingMemoryPage() {
                             style={{
                               height: "100%",
                               background: pct > 80 ? "#E5675F" : "var(--color-golden-accent)",
-                              boxShadow: pct > 80 ? "0 0 6px #E5675F" : "0 0 6px var(--color-golden-accent)"
+                              boxShadow: "none"
                             }}
                           />
                         </div>

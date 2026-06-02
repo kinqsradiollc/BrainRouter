@@ -238,7 +238,7 @@ export default function AuthPage() {
                   height: "6px",
                   borderRadius: "50%",
                   background: loading ? "var(--color-stone-text)" : "var(--color-golden-accent)",
-                  boxShadow: loading ? "none" : "0 0 8px var(--color-golden-accent)"
+                  boxShadow: "none"
                 }} />
                 <span style={{ fontSize: "9px", fontWeight: 600, color: "var(--color-white-frost)", letterSpacing: "0.07em", textTransform: "uppercase" }}>
                   {loading ? "syncing" : "vault core active"}

@@ -18,9 +18,8 @@ export function PublicHeader() {
                 width: "8px", 
                 height: "8px", 
                 borderRadius: "50%", 
-                background: "var(--color-golden-accent)",
-                boxShadow: "0 0 10px var(--color-golden-accent)" 
-              }} 
+                background: "var(--color-golden-accent)"
+              }}
             />
             <span className="serif-display" style={{ fontSize: "20px", color: "var(--color-pure-white)", fontWeight: 500 }}>
               BrainRouter
