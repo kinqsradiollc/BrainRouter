@@ -45,9 +45,13 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Marketing routes always render the full-bleed public shell — even when
+  // signed in — so Home/About are never trapped inside the dashboard frame.
+  // Protected routes fall back to the public shell only when unauthenticated
+  // (AuthGuard redirects those to /auth).
   const isPublicRoute = pathname === "/" || pathname === "/about" || pathname === "/auth";
 
-  if (!isAuthenticated || (isPublicRoute && pathname === "/auth")) {
+  if (isPublicRoute || !isAuthenticated) {
     return (
       <div className="public-shell">
         <PublicHeader />
