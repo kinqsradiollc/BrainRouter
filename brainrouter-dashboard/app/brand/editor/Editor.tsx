@@ -94,7 +94,7 @@ function LayersPanel({ ed }: { ed: ReturnType<typeof useEditor> }) {
 
 /* ── inspector ─────────────────────────────────────────────────────────── */
 function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
-  const { doc, selId, update, setBg, updateDoc } = ed;
+  const { doc, selId, update, setBg, updateDoc, setCanvasSize } = ed;
   const l = selId ? doc.layers.find((x) => x.id === selId) : null;
   const up = (patch: Partial<Layer>) => l && update(l.id, patch);
 
@@ -105,7 +105,7 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
         {!l && (
           <>
             <Row label="Canvas size">
-              <select value={`${doc.width}x${doc.height}`} onChange={(e) => { const [w, h] = e.target.value.split("x").map(Number); updateDoc({ width: w, height: h }); }} style={fieldBox}>
+              <select value={`${doc.width}x${doc.height}`} onChange={(e) => { const [w, h] = e.target.value.split("x").map(Number); setCanvasSize(w, h); }} style={fieldBox}>
                 {Object.keys(SIZES).map((k) => <option key={k} value={`${SIZES[k].w}x${SIZES[k].h}`}>{SIZES[k].label} · {SIZES[k].note}</option>)}
                 {!Object.keys(SIZES).some((k) => SIZES[k].w === doc.width && SIZES[k].h === doc.height) && <option value={`${doc.width}x${doc.height}`}>Custom · {doc.width}×{doc.height}</option>}
               </select>
@@ -183,7 +183,7 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
 /* ── editor ────────────────────────────────────────────────────────────── */
 export function Editor() {
   const ed = useEditor();
-  const { doc, selId, setSelId, update, add, remove, load } = ed;
+  const { doc, selId, setSelId, update, add, remove, loadTemplate } = ed;
 
   const exportName = `brainrouter-${doc.width}x${doc.height}`;
   const doPNG = () => downloadPNGFromSVG(buildEditorSVG(doc), doc.width, doc.height, `${exportName}.png`);
@@ -225,7 +225,7 @@ export function Editor() {
         <button style={tbBtn()} onClick={() => add("shape")}>Shape</button>
         <label style={{ ...tbBtn() }}>Image<input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) readImage(f, (src) => ed.addImage(src)); e.currentTarget.value = ""; }} /></label>
         <div style={{ width: 1, height: 22, background: "var(--border)", margin: "0 4px" }} />
-        <select onChange={(e) => { const f = TEMPLATE_FACTORIES.find((x) => x.key === e.target.value); if (f) load(f.make()); }} value="" style={{ ...fieldBox, width: "auto", padding: "7px 10px" }}>
+        <select onChange={(e) => { const f = TEMPLATE_FACTORIES.find((x) => x.key === e.target.value); if (f) loadTemplate(f.make); }} value="" style={{ ...fieldBox, width: "auto", padding: "7px 10px" }}>
           <option value="" disabled>Template…</option>
           {TEMPLATE_FACTORIES.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>

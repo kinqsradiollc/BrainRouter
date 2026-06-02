@@ -4,6 +4,20 @@ import { useCallback, useState } from "react";
 import type { EditorDoc, Layer, Background, LayerType, ImageLayer } from "./types";
 import { releaseTemplate, newLayer, uid } from "./templates";
 
+/** Scale all layers proportionally — positions per-axis, sizes uniformly — so
+ *  resizing the canvas or applying a template keeps the layout intact. */
+function rescaleLayers(layers: Layer[], sx: number, sy: number): Layer[] {
+  if (sx === 1 && sy === 1) return layers;
+  const fs = Math.min(sx, sy);
+  return layers.map((l) => {
+    const b = { x: Math.round(l.x * sx), y: Math.round(l.y * sy), w: Math.max(8, Math.round(l.w * sx)), h: Math.max(8, Math.round(l.h * sy)) };
+    if (l.type === "text") return { ...l, ...b, fontSize: Math.max(6, Math.round(l.fontSize * fs)) };
+    if (l.type === "image") return { ...l, ...b, radius: Math.round(l.radius * fs) };
+    if (l.type === "shape") return { ...l, ...b, radius: Math.round(l.radius * fs), strokeWidth: Math.round(l.strokeWidth * fs) };
+    return { ...l, ...b };
+  });
+}
+
 export function useEditor() {
   const [doc, setDoc] = useState<EditorDoc>(() => releaseTemplate());
   const [selId, setSelId] = useState<string | null>(null);
@@ -52,10 +66,16 @@ export function useEditor() {
       return { ...d, layers: a };
     });
   }, []);
-  const load = useCallback((nd: EditorDoc) => {
-    setDoc(nd);
+  const setCanvasSize = useCallback((w: number, h: number) => {
+    setDoc((d) => (w < 8 || h < 8 || (w === d.width && h === d.height) ? { ...d, width: w, height: h } : { ...d, width: w, height: h, layers: rescaleLayers(d.layers, w / d.width, h / d.height) }));
+  }, []);
+  const loadTemplate = useCallback((make: () => EditorDoc) => {
+    setDoc((d) => {
+      const t = make();
+      return { ...d, background: { ...t.background }, layers: rescaleLayers(t.layers, d.width / t.width, d.height / t.height) };
+    });
     setSelId(null);
   }, []);
 
-  return { doc, selId, setSelId, update, updateDoc, setBg, add, addImage, remove, duplicate, reorder, load };
+  return { doc, selId, setSelId, update, updateDoc, setBg, add, addImage, remove, duplicate, reorder, setCanvasSize, loadTemplate };
 }
