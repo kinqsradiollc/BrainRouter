@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "./ThemeProvider";
+import { useAuth } from "./AuthProvider";
 
 export function PublicHeader() {
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
+  const { isAuthenticated } = useAuth();
 
   return (
     <header className="public-header">
@@ -101,9 +103,9 @@ export function PublicHeader() {
             )}
           </button>
 
-          <Link href="/auth">
+          <Link href={isAuthenticated ? "/overview" : "/auth"}>
             <button className="pill-btn button-gold-primary" style={{ padding: "8px 18px", borderRadius: "var(--radius-pill)", fontSize: "13px", fontWeight: 600 }}>
-              Sign In
+              {isAuthenticated ? "Open dashboard" : "Sign In"}
             </button>
           </Link>
         </nav>
