@@ -2,6 +2,8 @@ import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
+import { validate } from "../middleware/validate.js";
+import { z } from "zod";
 
 export const contradictionsRouter = Router();
 contradictionsRouter.use(requireAnyAuth);
@@ -23,8 +25,15 @@ contradictionsRouter.get("/", (req: AuthedRequest, res) => {
   }
 });
 
-contradictionsRouter.post("/:id/resolve", (req: AuthedRequest, res) => {
-  const status = req.body?.status === "dismissed" ? "dismissed" : "resolved";
-  memoryEngine.resolveContradiction(String(req.params.id), req.userId!, status);
-  res.json({ success: true });
-});
+contradictionsRouter.post(
+  "/:id/resolve",
+  validate({
+    params: z.object({ id: z.string().min(1) }),
+    body: z.object({ status: z.enum(["resolved", "dismissed"]).optional() }),
+  }),
+  (req: AuthedRequest, res) => {
+    const status = req.body?.status === "dismissed" ? "dismissed" : "resolved";
+    memoryEngine.resolveContradiction(String(req.params.id), req.userId!, status);
+    res.json({ success: true });
+  },
+);
