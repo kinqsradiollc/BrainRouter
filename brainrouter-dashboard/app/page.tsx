@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { PremiumButton } from "../components/PremiumButton";
 import { containerVariants, itemVariants, pulseVariants, hoverScaleVariants, workflowExamples } from "../components/home/landingData";
 import { useConsolidationDemo } from "../components/home/useConsolidationDemo";
+import { EcosystemSection } from "../components/home/EcosystemSection";
 import { useSnnSimulator } from "../components/home/useSnnSimulator";
 
 
@@ -98,8 +99,8 @@ export default function HomePage() {
               width: "8px", 
               height: "8px", 
               borderRadius: "50%", 
-              background: "var(--color-golden-accent)",
-              boxShadow: "0 0 10px var(--color-golden-accent)"
+              background: "var(--accent)",
+              boxShadow: "none"
             }} 
           />
           <span style={{ fontSize: "12px", letterSpacing: "0.05em", color: "var(--color-golden-accent)", fontWeight: 500 }}>
@@ -186,6 +187,8 @@ export default function HomePage() {
           </a>
         </div>
       </motion.section>
+
+      <EcosystemSection />
 
       {/* Live Interactive SNN Simulator Monitor */}
       <motion.section
