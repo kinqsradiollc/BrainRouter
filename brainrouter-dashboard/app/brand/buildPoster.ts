@@ -97,9 +97,9 @@ export function buildPosterSVG(cfg: BrandConfig): string {
     const titleFs = Math.max(14, Math.round(name.font * 0.34));
     const title = cfg.subhead.trim() ? layoutText(cfg.subhead, w - 2 * P, h * 0.16, titleFs, 14, 1.35) : { font: 0, lines: [] as string[] };
     const g = Math.round(minD * 0.04);
-    const nameBlock = name.lines.length * name.font * 1.04;
-    const titleBlock = title.lines.length ? title.lines.length * title.font * 1.35 : 0;
-    const stackH = badgeH + g + nameBlock + (titleBlock ? g * 0.5 + titleBlock : 0);
+    const nameBlock = (name.lines.length - 1) * name.font * 1.04 + name.font * 1.32;
+    const titleBlock = title.lines.length ? (title.lines.length - 1) * title.font * 1.35 + title.font * 1.2 : 0;
+    const stackH = badgeH + g + nameBlock + (titleBlock ? g + titleBlock : 0);
     let yy = Math.max(P + cornerH + g, (h - stackH) / 2);
 
     body += roleBadgeMarkup({ cx: cxc, cy: yy + badgeH / 2, fontSize: badgeFs, accent, accentSoft: t.accentSoft, label: roleLabel, roleKey, style: "glass" }).svg;
@@ -109,7 +109,7 @@ export function buildPosterSVG(cfg: BrandConfig): string {
     body += `<text x="${cxc}" y="${(yy + name.font).toFixed(1)}" font-family="${FONT}" font-size="${name.font}" font-weight="700" letter-spacing="-0.02em" fill="${t.text}" text-anchor="middle" filter="url(#nameSh)">${tspans(name.lines, cxc, name.font * 1.04)}</text>`;
     yy += nameBlock;
     if (title.lines.length) {
-      yy += g * 0.5;
+      yy += g;
       body += `<text x="${cxc}" y="${(yy + title.font).toFixed(1)}" font-family="${FONT}" font-size="${title.font}" font-weight="500" fill="${t.sub}" text-anchor="middle">${tspans(title.lines, cxc, title.font * 1.35)}</text>`;
     }
   } else {
