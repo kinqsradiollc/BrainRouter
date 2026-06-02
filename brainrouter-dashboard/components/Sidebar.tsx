@@ -239,6 +239,16 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
     return true;
   });
 
+  // Group the routes into labelled sections instead of one flat 20-item wall.
+  const NAV_GROUPS: { title: string; hrefs: string[] }[] = [
+    { title: "Workspace", hrefs: ["/chat", "/overview"] },
+    { title: "Memory", hrefs: ["/memories", "/scenes", "/persona", "/working-memory", "/blackboard", "/vault"] },
+    { title: "Graph & Recall", hrefs: ["/recall-inspector", "/timeline", "/intelligence", "/tree"] },
+    { title: "Integrity", hrefs: ["/contradictions", "/evidence", "/sources"] },
+    { title: "System", hrefs: ["/hooks", "/skills", "/profile", "/users"] },
+  ];
+  const linkByHref = new Map<string, (typeof visibleLinks)[number]>(visibleLinks.map((l) => [l.href, l]));
+
   useEffect(() => {
     if (!user) return;
     client.getContradictions({ limit: 20 })
@@ -322,9 +332,9 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
       )}
 
       {/* Brand Header */}
-      <div 
-        style={{ 
-          marginBottom: "40px", 
+      <div
+        style={{
+          marginBottom: "16px",
           display: "flex", 
           flexDirection: "column", 
           alignItems: isCollapsed ? "center" : "flex-start",
@@ -366,99 +376,66 @@ MEMORY ENGINE
         )}
       </div>
 
-      {/* Navigation List */}
-      <nav style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        {visibleLinks.map((link) => {
-          const isActive = pathname === link.href;
+      {/* Grouped, scrollable navigation */}
+      <nav style={{ display: "flex", flexDirection: "column", gap: isCollapsed ? "4px" : "2px", flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", marginRight: "-8px", paddingRight: "8px" }}>
+        {NAV_GROUPS.map((group) => {
+          const groupLinks = group.hrefs.map((h) => linkByHref.get(h)).filter(Boolean) as typeof visibleLinks;
+          if (groupLinks.length === 0) return null;
           return (
-            <Link 
-              key={link.href} 
-              href={link.href} 
-              style={{ position: "relative" }}
-              title={isCollapsed ? link.label : undefined}
-            >
-              <div 
-                className={`nav-link${isActive ? " active" : ""}`}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: isCollapsed ? "center" : "flex-start",
-                  gap: isCollapsed ? "0" : "12px",
-                  zIndex: 2,
-                  position: "relative",
-                  background: "transparent",
-                  borderLeft: isCollapsed ? "none" : (isActive ? "2px solid var(--color-golden-accent)" : "2px solid transparent"),
-                  borderRight: isCollapsed && isActive ? "2px solid var(--color-golden-accent)" : "none",
-                  paddingLeft: isCollapsed ? "0" : (isActive ? "14px" : "16px"),
-                  height: "44px",
-                  borderRadius: isActive ? "0 9999px 9999px 0" : "9999px",
-                  color: isActive ? "var(--color-pure-white)" : "var(--color-stone-text)",
-                  transition: "all 0.2s ease"
-                }}
-              >
-                {/* Custom SVG Icon Container */}
-                <span style={{ 
-                  color: isActive ? "var(--color-golden-accent)" : "var(--color-ash-text)",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: isCollapsed ? "100%" : "auto"
-                }}>
-                  {link.icon}
-                </span>
-
-                {/* Text label */}
-                {!isCollapsed && (
-                  <motion.span
-                    initial={{ opacity: 0, width: 0 }}
-                    animate={{ opacity: 1, width: "auto" }}
-                    exit={{ opacity: 0, width: 0 }}
-                    style={{ whiteSpace: "nowrap" }}
-                  >
-                    {link.label}
-                  </motion.span>
-                )}
-
-                {link.href === "/contradictions" && openContradictions > 0 && (
-                  <span
-                    style={{
-                      marginLeft: "auto",
-                      minWidth: "18px",
-                      height: "18px",
-                      borderRadius: "9999px",
-                      background: "#E5675F",
-                      color: "#fff",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "10px",
-                      fontWeight: 700,
-                      padding: "0 5px",
-                    }}
-                  >
-                    {openContradictions}
-                  </span>
-                )}
-
-                {/* Animated active background pills using layoutId */}
-                {isActive && (
-                  <motion.div
-                    layoutId="active-pill"
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      background: "var(--nav-active-pill)",
-                      borderRadius: isCollapsed ? "var(--radius-pill)" : "0 9999px 9999px 0",
-                      zIndex: -1
-                    }}
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
-              </div>
-            </Link>
+            <div key={group.title} style={{ display: "flex", flexDirection: "column", gap: "2px", marginBottom: "8px" }}>
+              {!isCollapsed ? (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--text-muted)", padding: "12px 12px 4px" }}>
+                  {group.title}
+                </div>
+              ) : (
+                <div style={{ height: "1px", background: "var(--border-dim)", margin: "6px 10px" }} />
+              )}
+              {groupLinks.map((link) => {
+                const isActive = pathname === link.href;
+                return (
+                  <Link key={link.href} href={link.href} style={{ position: "relative" }} title={isCollapsed ? link.label : undefined}>
+                    <div
+                      className={`nav-link${isActive ? " active" : ""}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: isCollapsed ? "center" : "flex-start",
+                        gap: isCollapsed ? "0" : "11px",
+                        zIndex: 2,
+                        position: "relative",
+                        background: "transparent",
+                        borderLeft: isCollapsed ? "none" : (isActive ? "2px solid var(--accent)" : "2px solid transparent"),
+                        borderRight: isCollapsed && isActive ? "2px solid var(--accent)" : "none",
+                        paddingLeft: isCollapsed ? "0" : (isActive ? "13px" : "15px"),
+                        height: "36px",
+                        borderRadius: isActive ? "0 8px 8px 0" : "8px",
+                        color: isActive ? "var(--text)" : "var(--text-secondary)",
+                        fontSize: "13.5px",
+                        fontWeight: isActive ? 500 : 400,
+                        transition: "color .16s var(--ease), background .16s var(--ease)",
+                      }}
+                    >
+                      <span style={{ color: isActive ? "var(--accent)" : "var(--text-muted)", display: "inline-flex", alignItems: "center", justifyContent: "center", width: isCollapsed ? "100%" : "auto", flexShrink: 0 }}>
+                        {link.icon}
+                      </span>
+                      {!isCollapsed && <span style={{ whiteSpace: "nowrap" }}>{link.label}</span>}
+                      {link.href === "/contradictions" && openContradictions > 0 && !isCollapsed && (
+                        <span style={{ marginLeft: "auto", minWidth: "18px", height: "18px", borderRadius: "9999px", background: "var(--danger)", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, padding: "0 5px" }}>
+                          {openContradictions}
+                        </span>
+                      )}
+                      {isActive && (
+                        <motion.div
+                          layoutId="active-pill"
+                          style={{ position: "absolute", inset: 0, background: "var(--accent-wash)", borderRadius: isCollapsed ? "8px" : "0 8px 8px 0", zIndex: -1 }}
+                          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                        />
+                      )}
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
           );
         })}
       </nav>
