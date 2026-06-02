@@ -15,7 +15,8 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
-import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns } from '../../state/workflowRun.js';
+import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns, summarizePhases, formatPhaseGlyphs } from '../../state/workflowRun.js';
+import { buildWorkflowRunKickoff, parseTemplateArgs, renderPhaseTimelineLines } from './workflowLaunch.js';
 import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
@@ -680,7 +681,21 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       // `/workflow` carries actions on the current pointer / a named slug.
       const sub = (args[0] ?? '').toLowerCase();
       if (!sub) {
-        console.log(chalk.red('\nUsage: /workflow switch <slug> | pause | resume <slug>\n'));
+        console.log(chalk.red('\nUsage: /workflow run <template> [jsonArgs] | switch <slug> | pause | resume <slug>\n'));
+        return true;
+      }
+      if (sub === 'run') {
+        // WF-LAUNCH — kick off a workflow from a template. Builds + validates the
+        // plan, then runs a turn where the agent fires one run_workflow call.
+        const template = (args[1] ?? '').trim();
+        const templateArgs = parseTemplateArgs(args.slice(2).join(' '));
+        const kick = buildWorkflowRunKickoff(template, templateArgs);
+        if (!kick.ok) {
+          console.log(chalk.red(`\n${kick.error}\n`));
+          return true;
+        }
+        console.log(chalk.green(`\n▶  Running workflow "${kick.title}"…\n`));
+        ctx.repl.runAgentTurn(kick.prompt);
         return true;
       }
       if (sub === 'switch') {
@@ -775,7 +790,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         return true;
       }
       console.log(chalk.red(`\nUnknown /workflow subcommand: "${sub}".`));
-      console.log(chalk.gray('  Subcommands: switch <slug> | pause | resume <slug>\n'));
+      console.log(chalk.gray('  Subcommands: run <template> [jsonArgs] | switch <slug> | pause | resume <slug>\n'));
       return true;
     }
     case '/workflows':
@@ -815,6 +830,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
             const note = s.note ? chalk.gray(` — ${s.note}`) : '';
             console.log(`    ${stepGlyph(s.status)} ${s.title}${dur}${note}`);
           }
+          // WF-LAUNCH — phase-aware (run_workflow) runs render their phase timeline.
+          for (const line of renderPhaseTimelineLines(run)) console.log(chalk.gray(`  ${line}`));
         }
         console.log();
         return true;
@@ -834,7 +851,14 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           console.log(`    ${w.title}`);
           // PARITY-W2: live run line when a run ledger exists for this workflow.
           const run = readRun(agent.workspaceRoot, w.slug);
-          if (run) {
+          if (run && run.phases && run.phases.length > 0) {
+            // WF-LAUNCH — phase-aware run: show the phase glyph strip + phase count.
+            const ps = summarizePhases(run);
+            const cur = ps.current ? chalk.gray(` · ${ps.current}`) : '';
+            console.log(
+              `    ${chalk.gray('run:')} ${runStatusColor(run.status)} ${chalk.gray(formatPhaseGlyphs(run))} ${chalk.gray(`${ps.done}/${ps.total} phases`)}${cur}`,
+            );
+          } else if (run) {
             const { done, total, current } = summarizeRun(run);
             const cur = current ? chalk.gray(` · ${current}`) : '';
             console.log(
