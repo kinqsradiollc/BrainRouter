@@ -134,6 +134,7 @@ import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
 import { skillsRouter } from './api/routes/skills.js';
 import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
+import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
 const authAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -495,7 +496,11 @@ if (USE_HTTP) {
     next();
   });
 
-  app.use(express.json());
+  // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
+  // transcripts, multi-record recall/sync). body-parser's stock 100kb default
+  // rejected large but legitimate requests; override via BRAINROUTER_MAX_BODY_SIZE.
+  const jsonBodyLimit = resolveJsonBodyLimit();
+  app.use(express.json({ limit: jsonBodyLimit }));
   if (USING_FALLBACK_JWT_SECRET) {
     console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
   }
@@ -631,6 +636,11 @@ if (USE_HTTP) {
       res.sendFile(path.join(dashboardDist, "index.html"));
     });
   }
+
+  // BRAIN-BODY-LIMIT — map an oversized JSON body to a clean 413 instead of an
+  // unhandled PayloadTooLargeError (which surfaced as a raw 500/crash). Registered
+  // after the routes so a body-parser parse error from express.json() reaches it.
+  app.use(payloadTooLargeHandler(jsonBodyLimit));
 
   const httpServer = app.listen(PORT, () => {
     console.log(`\n🧠 BrainRouter MCP Server`);
