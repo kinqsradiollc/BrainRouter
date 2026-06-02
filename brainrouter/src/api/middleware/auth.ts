@@ -9,6 +9,20 @@ const configuredJwtSecret = process.env.BRAINROUTER_JWT_SECRET?.trim();
 const generatedJwtSecret = randomBytes(32).toString("hex");
 export const USING_FALLBACK_JWT_SECRET = !configuredJwtSecret;
 export const JWT_SECRET = configuredJwtSecret || generatedJwtSecret;
+export const IS_PRODUCTION = (process.env.NODE_ENV ?? "").toLowerCase() === "production";
+
+/**
+ * API-AUTHN (0.4.9) — fail closed on a missing JWT secret in production. Pure
+ * (unit-testable); the boot path throws on a non-null result. In development we
+ * only warn — a random per-boot secret is fine for local sessions.
+ */
+export function jwtSecretBootError(isProd: boolean, usingFallback: boolean): string | null {
+  if (isProd && usingFallback) {
+    return "BRAINROUTER_JWT_SECRET is required in production (NODE_ENV=production) — refusing to start with a random, non-persistent secret.";
+  }
+  return null;
+}
+
 if (USING_FALLBACK_JWT_SECRET) {
   console.error("[BrainRouter] WARNING: BRAINROUTER_JWT_SECRET not set. Using random secret — sessions will not survive restarts.");
 }
