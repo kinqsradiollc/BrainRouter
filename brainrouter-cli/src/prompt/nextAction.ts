@@ -14,6 +14,8 @@
  * (it owns the LLMConfig); everything here is unit-testable with no I/O.
  */
 
+import { normalizePhasePlan, type PhasePlan } from '../orchestration/phasePlan.js';
+
 export type NextActionStrategy = 'answer-direct' | 'investigate' | 'fan-out' | 'workflow';
 
 export interface NextActionPlan {
@@ -22,6 +24,10 @@ export interface NextActionPlan {
   reasoning: string;
   /** For fan-out/workflow: the concrete parallel subtasks (one child each). */
   subtasks: string[];
+  /** WF-PLANNER (0.4.8) — when strategy='workflow' and the planner produced a
+   *  VALID PhasePlan, the prepared plan the runtime tells the model to hand to
+   *  `run_workflow` (one call). Absent when the planner gave no usable plan. */
+  phasePlan?: PhasePlan;
 }
 
 const VALID: ReadonlySet<string> = new Set(['answer-direct', 'investigate', 'fan-out', 'workflow']);
@@ -49,7 +55,8 @@ export function buildNextActionMessages(prompt: string, contextSummary?: string)
     '- "fan-out": the task has ≥3 INDEPENDENT parts that can run in parallel (compare N projects, audit N modules, review N files) → one child agent per part.',
     '- "workflow": a multi-PHASE pipeline where later phases depend on earlier ones (research → design → implement → verify).',
     'For fan-out/workflow, list the concrete subtasks (one per independent unit of work / phase) — these become child-agent prompts. Discover targets from the workspace; never ask the user for paths you can find.',
-    'Respond with ONLY minified JSON: {"strategy":"...","reasoning":"<=20 words","subtasks":["...",...]}. subtasks=[] for answer-direct/investigate.',
+    'For "workflow" ONLY, ALSO emit a `phasePlan` the runtime can execute directly. Shape: {"title":"...","phases":[{"id":"...","title":"...","fanOut":{"over":["t1","t2"],"agent":{"role":"reviewer","prompt":"... {{target}} ..."}},"synthesize":"role-rollup"},{"id":"synth","agents":[{"role":"architect","prompt":"... {{input}} ..."}],"inputFrom":["<earlier phase id>"],"dependsOn":["<earlier phase id>"]}]}. Each phase has EITHER fanOut (one child per target, {{target}} substituted) OR agents; a later phase reads an earlier one via inputFrom ({{input}} substituted). Omit phasePlan if you are not confident.',
+    'Respond with ONLY minified JSON: {"strategy":"...","reasoning":"<=20 words","subtasks":["...",...],"phasePlan":{...}}. subtasks=[] and no phasePlan for answer-direct/investigate.',
   ].join('\n');
   const user = contextSummary
     ? `User request:\n${prompt}\n\nWorkspace context:\n${contextSummary}`
@@ -78,11 +85,19 @@ export function parseNextActionPlan(text: string | null | undefined): NextAction
   const subtasks = Array.isArray(raw?.subtasks)
     ? raw.subtasks.map((s: unknown) => String(s ?? '').trim()).filter(Boolean).slice(0, 8)
     : [];
-  return {
+  const plan: NextActionPlan = {
     strategy: strategy as NextActionStrategy,
     reasoning: String(raw?.reasoning ?? '').trim().slice(0, 240),
     subtasks,
   };
+  // WF-PLANNER — when the planner proposed a workflow plan, validate it and
+  // attach only if it passes normalizePhasePlan; otherwise fall back to the
+  // subtasks directive (the planner's plan was unusable).
+  if (plan.strategy === 'workflow' && raw?.phasePlan && typeof raw.phasePlan === 'object') {
+    const { plan: phasePlan } = normalizePhasePlan(raw.phasePlan);
+    if (phasePlan) plan.phasePlan = phasePlan;
+  }
+  return plan;
 }
 
 /**
@@ -106,6 +121,22 @@ export function nextActionDirective(plan: NextActionPlan): string {
       '## Next-action plan (decided): investigate',
       `Rationale: ${plan.reasoning}`,
       'Your FIRST action MUST be tool calls — read the relevant workspace files now (parallel `read_file`/`list_dir`/`glob_files`). Do NOT answer from memory and do NOT ask the user for paths you can discover yourself.',
+    ].join('\n');
+  }
+  // WF-PLANNER — the planner prepared a validated PhasePlan: tell the model to
+  // fire it in ONE run_workflow call (the runtime fans out / waits / synthesizes
+  // / feeds forward), rather than hand-orchestrating spawn/wait/synthesize.
+  if (plan.strategy === 'workflow' && plan.phasePlan) {
+    return [
+      '## Next-action plan (decided): workflow',
+      `Rationale: ${plan.reasoning}`,
+      'A multi-phase workflow plan has been PREPARED. Your FIRST action MUST be a SINGLE `run_workflow` call with this exact plan — do not spawn agents manually, do not answer single-threaded:',
+      '',
+      '```json',
+      JSON.stringify({ plan: plan.phasePlan }),
+      '```',
+      '',
+      'The runtime executes every phase (fan-out → wait → synthesize → feed forward). After it returns, deliver the merged result.',
     ].join('\n');
   }
   const verb = plan.strategy === 'workflow' ? 'a multi-phase workflow' : 'a parallel fan-out';
