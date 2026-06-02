@@ -121,7 +121,8 @@ authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
     displayName: user.displayName,
     email: user.email,
     isAdmin: user.isAdmin,
-    apiKey: user.apiKey,
+    // API-AUTHN (0.4.9) — /me must NOT expose the raw API key; it is returned
+    // only at signup / signin / rotate-key. /me is read repeatedly.
     createdAt: user.createdAt,
     status: user.status,
     mcpPath: path.resolve(process.cwd(), "dist/index.js")

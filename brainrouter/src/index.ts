@@ -133,7 +133,7 @@ import { evidenceRouter } from './api/routes/evidence.js';
 import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
 import { skillsRouter } from './api/routes/skills.js';
-import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
+import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -501,6 +501,12 @@ if (USE_HTTP) {
   // rejected large but legitimate requests; override via BRAINROUTER_MAX_BODY_SIZE.
   const jsonBodyLimit = resolveJsonBodyLimit();
   app.use(express.json({ limit: jsonBodyLimit }));
+  // API-AUTHN (0.4.9) — fail closed in production if no JWT secret is configured.
+  const jwtBootErr = jwtSecretBootError(IS_PRODUCTION, USING_FALLBACK_JWT_SECRET);
+  if (jwtBootErr) {
+    console.error(`[BrainRouter] FATAL: ${jwtBootErr}`);
+    throw new Error(jwtBootErr);
+  }
   if (USING_FALLBACK_JWT_SECRET) {
     console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
   }
