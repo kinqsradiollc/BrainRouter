@@ -105,14 +105,18 @@ Headlines don't scream — hierarchy comes from weight + color, not 90px type
 | `--radius-card` | 10px | cards, panels, nodes |
 | `--radius-panel` | 12px | large containers, modals |
 
-**Elevation = color-steps, never drop-shadow glows.** Base → raised → overlay climb
-by lightness. Pressable surfaces (buttons, nodes) get a 1px inner top-highlight to
-feel tactile, and borders are hairline-tinted — no outer glow, no "lifted card"
-soft shadow.
+**Elevation = color-steps + a *subtle neutral* depth shadow — never a coloured
+glow.** Base → raised → overlay climb by lightness, and a soft neutral drop adds the
+real depth that keeps surfaces from reading flat/dated (flatness is what reads
+"old"). Pressable surfaces (buttons, nodes) also get a 1px inner top-highlight to
+feel tactile; borders stay hairline-tinted. The hard rule remains: **no *accent*
+glow, no neon halo** — depth shadows are neutral black only.
 
 ```
---elev-inset:   inset 0 1px 0 rgba(255,255,255,0.05);   /* pressable top highlight */
---elev-overlay: 0 8px 24px -12px rgba(0,0,0,0.6);        /* popovers/modals ONLY, tinted */
+--elev-inset:  inset 0 1px 0 rgba(255,255,255,0.05);                                  /* pressable top highlight */
+--shadow-sm:   0 1px 2px rgba(0,0,0,0.35), 0 1px 1px rgba(0,0,0,0.22);                 /* resting cards */
+--shadow-md:   0 6px 16px -6px rgba(0,0,0,0.5), 0 2px 6px -2px rgba(0,0,0,0.32);       /* hover / raised */
+--shadow-lg:   0 24px 60px -20px rgba(0,0,0,0.62), 0 8px 20px -8px rgba(0,0,0,0.4);    /* popovers, modals, hero panel */
 ```
 
 ---
