@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "./AuthProvider";
+import { STATIC_PRESENTATION } from "../lib/presentation";
 
 export function PublicHeader() {
   const pathname = usePathname();
@@ -103,11 +104,14 @@ export function PublicHeader() {
             )}
           </button>
 
-          <Link href={isAuthenticated ? "/overview" : "/auth"}>
-            <button className="pill-btn button-gold-primary" style={{ padding: "8px 18px", borderRadius: "var(--radius-pill)", fontSize: "13px", fontWeight: 600 }}>
-              {isAuthenticated ? "Open dashboard" : "Sign In"}
-            </button>
-          </Link>
+          {/* Auth CTA hidden in static presentation mode (sign-in disabled). */}
+          {!STATIC_PRESENTATION && (
+            <Link href={isAuthenticated ? "/overview" : "/auth"}>
+              <button className="pill-btn button-gold-primary" style={{ padding: "8px 18px", borderRadius: "var(--radius-pill)", fontSize: "13px", fontWeight: 600 }}>
+                {isAuthenticated ? "Open dashboard" : "Sign In"}
+              </button>
+            </Link>
+          )}
         </nav>
       </div>
     </header>

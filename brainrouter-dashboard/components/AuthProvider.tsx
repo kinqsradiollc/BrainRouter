@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { getClient } from "../lib/client";
 import { isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, setRefreshToken, signOut, clearAll } from "../lib/client-auth";
+import { STATIC_PRESENTATION } from "../lib/presentation";
 
 interface AuthUser {
   userId: string;
@@ -41,6 +42,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   const fetchUser = async () => {
+    // Presentation mode: never hit the auth API — there is no session.
+    if (STATIC_PRESENTATION) {
+      setIsAuthenticated(false);
+      setUser(null);
+      setIsLoading(false);
+      return;
+    }
     if (!checkIsAuthenticated()) {
       setIsAuthenticated(false);
       setUser(null);
