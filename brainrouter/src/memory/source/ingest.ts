@@ -23,12 +23,14 @@ export function ingestSource(
   doc: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string },
   text: string,
   opts?: ChunkOptions,
-): { document: SourceDocument; chunks: SourceChunk[] } {
+): { document: SourceDocument; chunks: SourceChunk[]; created: boolean } {
   const document = store.createSourceDocument(doc);
   // Idempotent: if this document already has chunks (re-ingest of identical
   // content via the user+hash dedup), reuse them — don't double-chunk.
+  // `created` tells callers whether real chunking work happened this call (so
+  // observability can avoid recording a no-op job on idempotent re-ingest).
   const existing = store.getSourceChunksByDocument(document.id);
-  if (existing.length > 0) return { document, chunks: existing };
+  if (existing.length > 0) return { document, chunks: existing, created: false };
   const chunks = store.addSourceChunks(document.id, chunkSource(text, opts));
-  return { document, chunks };
+  return { document, chunks, created: true };
 }
