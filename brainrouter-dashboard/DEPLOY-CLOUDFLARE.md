@@ -8,9 +8,10 @@ Cloudflare Worker using [Static Assets](https://developers.cloudflare.com/worker
 
 ## Cloudflare project settings
 
-All of the dashboard's shared deps (`@kinqs/brainrouter-types` / `-sdk` /
-`-hooks`) are **published to npm**, so you can build straight from the dashboard
-subdirectory — **Recommended**:
+The dashboard is part of an npm **workspace**; its shared deps
+(`@kinqs/brainrouter-types` / `-sdk` / `-hooks`) live in `packages/*`. You can
+build straight from the dashboard subdirectory — **Recommended** — because
+`build:cf` builds those workspace packages before the dashboard:
 
 | Setting | Value |
 | --- | --- |
@@ -20,20 +21,28 @@ subdirectory — **Recommended**:
 | **Build output directory** *(Pages)* | `out` |
 | **Environment variables** | `NEXT_PUBLIC_API_URL=https://your-api` (+ `NEXT_PUBLIC_BRAINROUTER_STATIC_PRESENTATION=true` for the marketing-only preview) |
 
-> **Two things that break the deploy if you skip them:**
-> - The default `npm run build` (plain `next build`) produces a `.next` **server**
->   build, not the static export the Worker serves. Use **`build:cf`** (sets
->   `CLOUDFLARE_BUILD=1` → `output: "export"` → `./out`).
+> **Use `build:cf`, never the default `npm run build`** — two reasons:
+> - Plain `next build` produces a `.next` **server** build, not the static export
+>   the Worker serves. `build:cf` sets `CLOUDFLARE_BUILD=1` → `output: "export"` →
+>   `./out`.
+> - It also **never builds the workspace packages** — the subtle one. Cloudflare
+>   runs `npm ci` from the **repo root** (where the lockfile lives), so npm
+>   **symlinks the local `packages/*` over the npm copies**, and those have no
+>   `dist/` (gitignored) until built. The dashboard then resolves an empty
+>   `@kinqs/brainrouter-hooks` and fails with
+>   *`Can't resolve '@kinqs/brainrouter-hooks'`*. `build:cf` runs
+>   `npm --prefix .. run build:packages` (`types → sdk → hooks`) first, so the
+>   symlinked packages have a `dist/` by the time `next build` resolves them.
 > - `wrangler deploy` must run **inside `brainrouter-dashboard/`** (where
 >   `wrangler.jsonc` + `out/` are). Running it at the repo root fails with
 >   *"detection logic has been run in the root of a workspace…"*. Keeping **Root
 >   directory = `brainrouter-dashboard`** makes both the build and `npx wrangler
 >   deploy` run there automatically.
 
-### Alternative: build the whole monorepo from the repo root
+### Alternative: build from the repo root
 
-If you'd rather build everything from source (no reliance on the published
-packages):
+Equivalent — if you prefer the repo root as the build directory (both paths build
+the workspace packages from source, this one just centralizes it):
 
 | Setting | Value |
 | --- | --- |

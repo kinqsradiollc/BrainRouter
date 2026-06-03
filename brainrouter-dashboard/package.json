@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "build:cf": "CLOUDFLARE_BUILD=1 next build",
+    "build:cf": "npm --prefix .. run build:packages && CLOUDFLARE_BUILD=1 next build",
     "cf:preview": "npm run build:cf && wrangler dev",
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },

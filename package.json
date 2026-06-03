@@ -12,7 +12,7 @@
     "build": "npm run build:packages && npm run build:apps",
     "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
     "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard",
-    "cf:build": "npm run build:packages && npm run build:cf -w dashboard",
+    "cf:build": "npm run build:cf -w dashboard",
     "cf:deploy": "cd brainrouter-dashboard && npx wrangler deploy",
     "test": "npm run test -ws --if-present",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
