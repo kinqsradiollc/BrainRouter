@@ -22,6 +22,7 @@ dist/
 build/
 out/
 .next/
+.wrangler/
 
 # Synthesized at publish time from brainrouter-changelog/ via
 # brainrouter-cli/package.json#sync-changelog. Source of truth is the

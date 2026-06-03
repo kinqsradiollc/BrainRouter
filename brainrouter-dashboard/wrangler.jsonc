@@ -1,0 +1,31 @@
+{
+  // BrainRouter dashboard — deployed to Cloudflare Workers as Static Assets.
+  // The Next.js app is exported to ./out (see `npm run build:cf`) and served
+  // directly by the Worker's asset server; there is no server-side code, so no
+  // `main` Worker entrypoint is needed. Docs: ./DEPLOY-CLOUDFLARE.md
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "brainrouter-dashboard",
+  "compatibility_date": "2025-09-23",
+  "assets": {
+    "directory": "./out",
+    // Next export writes per-route HTML (e.g. /overview.html); the asset server
+    // resolves /overview → /overview.html. Unknown paths get the 404 page.
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  }
+}
