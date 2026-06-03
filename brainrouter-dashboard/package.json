@@ -11,9 +11,9 @@
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },
   "dependencies": {
-    "@kinqs/brainrouter-hooks": "*",
-    "@kinqs/brainrouter-sdk": "*",
-    "@kinqs/brainrouter-types": "*",
+    "@kinqs/brainrouter-hooks": "^0.4.9",
+    "@kinqs/brainrouter-sdk": "^0.4.9",
+    "@kinqs/brainrouter-types": "^0.4.9",
     "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.39.0",
     "geist": "^1.7.2",
