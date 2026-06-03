@@ -1,7 +1,7 @@
 {
   "name": "brainrouter-monorepo",
   "private": true,
-  "version": "0.4.9",
+  "version": "0.4.10",
   "workspaces": [
     "packages/*",
     "brainrouter",
@@ -13,7 +13,7 @@
     "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
     "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard",
     "cf:build": "npm run build:cf -w dashboard",
-    "cf:deploy": "cd brainrouter-dashboard && npx wrangler deploy",
+    "cf:deploy": "npm run cf:deploy -w dashboard",
     "test": "npm run test -ws --if-present",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
     "cli:nobuild": "node brainrouter-cli/dist/index.js"
@@ -27,7 +27,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@kinqs/brainrouter-mcp-server": "^0.4.9",
+    "@kinqs/brainrouter-mcp-server": "^0.4.10",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   }
