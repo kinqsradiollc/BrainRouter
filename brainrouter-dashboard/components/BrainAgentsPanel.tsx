@@ -98,7 +98,12 @@ export function BrainAgentsPanel() {
               <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                 <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: statusColor(a.lastJobStatus), flexShrink: 0 }} />
                 <span style={{ color: "var(--color-white-frost)", fontWeight: 500, overflowWrap: "anywhere" }}>{a.id}</span>
-                <span style={{ color: "var(--color-stone-text)", fontSize: "11px" }}>{a.modelClass}</span>
+                <span
+                  title={a.modelClass === "none" ? "Deterministic step — no LLM" : `Model class: ${a.modelClass}`}
+                  style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.06em", textTransform: "uppercase", color: a.modelClass === "none" ? "var(--text-muted)" : "var(--accent)", background: a.modelClass === "none" ? "var(--surface-overlay)" : "var(--accent-wash)", border: "1px solid var(--border)", borderRadius: "var(--radius-chip)", padding: "1px 6px" }}
+                >
+                  {a.modelClass === "none" ? "mechanical" : a.modelClass}
+                </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--color-stone-text)", fontSize: "12px", whiteSpace: "nowrap" }}>
                 <span>{a.lastJobStatus} · {ageLabel(a.lastJobCompletedAt)}</span>
