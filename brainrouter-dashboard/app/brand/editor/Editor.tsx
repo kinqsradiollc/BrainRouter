@@ -232,6 +232,14 @@ export function Editor() {
   const ed = useEditor();
   const { doc, selId, setSelId, update, add, remove, loadTemplate, setCanvasSize, fitContent } = ed;
   const [scale, setScale] = useState(2);
+  // View controls: zoom (null = fit-to-window) + overlay toggles.
+  const FITW = 860, FITH = 560;
+  const fit = Math.min(FITW / doc.width, FITH / doc.height, 1);
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [showGrid, setShowGrid] = useState(false);
+  const [showSafe, setShowSafe] = useState(true);
+  const sc = zoom ?? fit;
+  const setZoomClamped = (z: number) => setZoom(Math.max(0.1, Math.min(4, z)));
 
   const exportName = `brainrouter-${doc.width}x${doc.height}`;
   const doPNG = () => downloadPNGFromSVG(buildEditorSVG(doc), doc.width, doc.height, `${exportName}.png`, scale);
@@ -276,8 +284,16 @@ export function Editor() {
           {Object.keys(SIZES).map((k) => <option key={k} value={`${SIZES[k].w}x${SIZES[k].h}`}>{SIZES[k].label} · {SIZES[k].w}×{SIZES[k].h}</option>)}
           {!Object.keys(SIZES).some((k) => SIZES[k].w === doc.width && SIZES[k].h === doc.height) && <option value={`${doc.width}x${doc.height}`}>Custom · {doc.width}×{doc.height}</option>}
         </select>
-        <button style={tbBtn()} onClick={fitContent} title="Scale & centre all layers to fit the frame">Fit</button>
+        <button style={tbBtn()} onClick={fitContent} title="Scale & centre all layers to fit the frame">Fit content</button>
+        <button style={tbBtn(showGrid)} onClick={() => setShowGrid((v) => !v)} title="Rule-of-thirds grid + safe margin">Grid</button>
+        <button style={tbBtn(showSafe)} onClick={() => setShowSafe((v) => !v)} title="Show where the profile photo covers content + the device-crop safe area">Safe zones</button>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {/* zoom — click the % to fit to window; ⌘/Ctrl + scroll over the canvas also zooms */}
+          <div style={{ display: "flex", alignItems: "center", gap: 2, border: "1px solid var(--border-strong)", borderRadius: 8, padding: 2 }}>
+            <button style={{ ...tbBtn(), padding: "5px 10px", border: "none", background: "transparent", fontSize: 15 }} onClick={() => setZoomClamped(sc * 0.8)} title="Zoom out">−</button>
+            <button style={{ ...tbBtn(), padding: "5px 4px", border: "none", background: "transparent", minWidth: 50, fontVariantNumeric: "tabular-nums" }} onClick={() => setZoom(null)} title="Fit to window">{Math.round(sc * 100)}%</button>
+            <button style={{ ...tbBtn(), padding: "5px 10px", border: "none", background: "transparent", fontSize: 15 }} onClick={() => setZoomClamped(sc * 1.25)} title="Zoom in">+</button>
+          </div>
           <select value={scale} onChange={(e) => setScale(Number(e.target.value))} title="PNG resolution" style={{ ...fieldBox, width: "auto", padding: "7px 8px" }}>
             <option value={1}>1×</option>
             <option value={2}>2× HD</option>
@@ -291,7 +307,7 @@ export function Editor() {
       {/* body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <LayersPanel ed={ed} />
-        <EditorCanvas doc={doc} selId={selId} onSelect={setSelId} onChange={update} guides={false} />
+        <EditorCanvas doc={doc} selId={selId} onSelect={setSelId} onChange={update} guides={showGrid} safeZones={showSafe} zoom={zoom} onZoom={setZoomClamped} maxW={FITW} maxH={FITH} />
         <Inspector ed={ed} />
       </div>
     </div>
