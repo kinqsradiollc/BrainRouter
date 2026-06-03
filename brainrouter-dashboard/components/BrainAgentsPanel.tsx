@@ -14,6 +14,7 @@ import type { BrainAgentStatus } from "@kinqs/brainrouter-types";
 import { BASE_URL } from "../lib/client";
 import { getApiKey, getJwt } from "../lib/client-auth";
 import { PremiumCard } from "./PremiumCard";
+import { useIsMobile } from "../lib/useIsMobile";
 
 function statusColor(status: string): string {
   switch (status) {
@@ -45,6 +46,9 @@ function ageLabel(iso: string | null): string {
 export function BrainAgentsPanel() {
   const [agents, setAgents] = useState<BrainAgentStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Phones: stack each agent row so the metrics don't crush the agent name
+  // into a one-character-per-line column.
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     let alive = true;
@@ -93,7 +97,7 @@ export function BrainAgentsPanel() {
           {agents.map((a) => (
             <div
               key={a.id}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)", fontSize: "13px" }}
+              style={{ display: "flex", flexDirection: isMobile ? "column" : "row", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", gap: isMobile ? "4px" : "12px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)", fontSize: "13px" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                 <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: statusColor(a.lastJobStatus), flexShrink: 0 }} />
@@ -105,7 +109,7 @@ export function BrainAgentsPanel() {
                   {a.modelClass === "none" ? "mechanical" : a.modelClass}
                 </span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--color-stone-text)", fontSize: "12px", whiteSpace: "nowrap" }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px 12px", color: "var(--color-stone-text)", fontSize: "12px", whiteSpace: "nowrap", maxWidth: "100%" }}>
                 <span>{a.lastJobStatus} · {ageLabel(a.lastJobCompletedAt)}</span>
                 <span>{a.successRate24h == null ? "—" : `${Math.round(a.successRate24h * 100)}%`}</span>
                 <span style={{ color: a.pendingJobs > 0 ? "#D9A441" : "var(--color-stone-text)" }}>{a.pendingJobs} pending</span>
