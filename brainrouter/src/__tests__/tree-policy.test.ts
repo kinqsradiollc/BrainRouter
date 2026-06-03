@@ -27,8 +27,8 @@ describe("tree domain policy", () => {
 });
 
 describe("readTreePolicy", () => {
-  it("defaults to 3 / 5 / 6 with no env", () => {
-    expect(readTreePolicy({})).toEqual({ minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, globalRollupThreshold: 3 });
+  it("defaults to 3 / 5 / 6 / 2 with no env", () => {
+    expect(readTreePolicy({})).toEqual({ minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, idleSealFloor: 2, globalRollupThreshold: 3 });
   });
 
   it("honours valid env overrides", () => {
@@ -37,15 +37,16 @@ describe("readTreePolicy", () => {
         BRAINROUTER_TREE_MIN_SCENE_RECORDS: "2",
         BRAINROUTER_TREE_LEAF_PER_PASS: "10",
         BRAINROUTER_TREE_SEAL_THRESHOLD: "4",
+        BRAINROUTER_TREE_IDLE_SEAL_FLOOR: "3",
         BRAINROUTER_TREE_GLOBAL_ROLLUP: "5",
       }),
-    ).toEqual({ minSceneRecords: 2, leafPerPass: 10, sealThreshold: 4, globalRollupThreshold: 5 });
+    ).toEqual({ minSceneRecords: 2, leafPerPass: 10, sealThreshold: 4, idleSealFloor: 3, globalRollupThreshold: 5 });
   });
 
   it("falls back to defaults on invalid / non-positive values", () => {
     expect(
-      readTreePolicy({ BRAINROUTER_TREE_LEAF_PER_PASS: "0", BRAINROUTER_TREE_SEAL_THRESHOLD: "abc" }),
-    ).toEqual({ minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, globalRollupThreshold: 3 });
+      readTreePolicy({ BRAINROUTER_TREE_LEAF_PER_PASS: "0", BRAINROUTER_TREE_SEAL_THRESHOLD: "abc", BRAINROUTER_TREE_IDLE_SEAL_FLOOR: "0" }),
+    ).toEqual({ minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, idleSealFloor: 2, globalRollupThreshold: 3 });
   });
 });
 

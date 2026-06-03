@@ -8,7 +8,7 @@ import * as treeOps from "./tree/treeOps.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
-import { MemoryJobRunner } from "./scheduler/runner.js";
+import { MemoryJobRunner, recordInlineJob } from "./scheduler/runner.js";
 import { enqueueAgentJob } from "./scheduler/jobs.js";
 import { chunkSource } from "./source/chunker.js";
 import { chunkCode } from "./source/code-chunker.js";
@@ -248,10 +248,13 @@ export class MemoryEngine {
         : undefined,
     });
 
-    // Relevance judge sits behind a flag (off by default) — opt in with
-    // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true. Falls back to the shared
-    // BRAINROUTER_LLM_* settings unless explicitly overridden so a single
-    // LLM credential covers extraction, synthesis, and judging.
+    // Relevance judge is opt-in (off by default) — enable with
+    // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true, since it adds a per-query LLM
+    // call. Falls back to the shared BRAINROUTER_LLM_* settings unless
+    // explicitly overridden so a single LLM credential covers extraction,
+    // synthesis, and judging. When enabled it runs INLINE inside recall; the
+    // engine records a throttled observability job (see `recall`) so the agent
+    // no longer shows "idle · never" while it's actually working.
     const relevanceJudge = new RelevanceJudgeService({
       enabled: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENABLED === "true",
       endpoint: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT
@@ -321,6 +324,8 @@ export class MemoryEngine {
   // vault ~hourly (every 12th pass) since it rescans records each run.
   private maintenanceLastAt = 0;
   private maintenancePass = 0;
+  /** MEM-10b — throttle for the relevance_judge observability heartbeat. */
+  private relevanceJudgeLastJobAt = 0;
 
   /**
    * 0.4.3 (MEM-10) — auto-enqueue the maintenance depth agents. Called
@@ -341,6 +346,8 @@ export class MemoryEngine {
     if (process.env.BRAINROUTER_JOB_MAINTENANCE === "off") return { enqueued: {}, skipped: true };
     const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
     const VAULT_MAINTENANCE_EVERY = 12; // ~hourly at the 5-min cadence
+    const BENCH_MAINTENANCE_EVERY = 288; // ~daily at the 5-min cadence
+    const benchScheduleEnabled = (process.env.BRAINROUTER_BENCH_SCHEDULE ?? "").trim().toLowerCase() !== "off";
     const now = Date.now();
     if (!force && now - this.maintenanceLastAt < MAINTENANCE_INTERVAL_MS) return { enqueued: {}, skipped: true };
     this.maintenanceLastAt = now;
@@ -361,11 +368,24 @@ export class MemoryEngine {
         enqueued.vault_exporter++;
       }
       // 0.4.3 — grow the scene-tree (leaf per mature scene); when a bucket of
-      // unsealed leaves fills, enqueue tree_sealer to seal it into a parent.
-      const tree = this.autobuildSceneTree(userId);
-      if (tree.sealableBucket) {
-        enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
-        enqueued.tree_sealer++;
+      // unsealed leaves fills OR settles, enqueue tree_sealer to seal it into a
+      // parent. Wrapped so a tree failure can't abort the rest of the pass.
+      try {
+        const tree = this.autobuildSceneTree(userId);
+        if (tree.sealableBucket) {
+          enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
+          enqueued.tree_sealer++;
+        }
+      } catch (err: any) {
+        console.error("[BrainRouter] scene-tree autobuild failed:", err?.message ?? err);
+      }
+      // MEM-10b — periodically run the retrieval benchmark so benchmark_eval
+      // isn't permanently idle. Expensive (up to ~5 min) so daily by default,
+      // with an early pass for first-run visibility; disable via
+      // BRAINROUTER_BENCH_SCHEDULE=off.
+      if (benchScheduleEnabled && (pass === 2 || (pass > 0 && pass % BENCH_MAINTENANCE_EVERY === 0))) {
+        enqueueAgentJob(this.store, "benchmark_eval", { userId });
+        enqueued.benchmark_eval = (enqueued.benchmark_eval ?? 0) + 1;
       }
       // BRAIN-P4-T5 — roll accumulated global roots into a higher global digest.
       try {
@@ -419,8 +439,16 @@ export class MemoryEngine {
       leafed++;
     }
 
-    const unsealed = store.getUnsealedSceneLeaves(userId, policy.sealThreshold) as Array<{ id: string }>;
-    const sealableBucket = unsealed.length >= policy.sealThreshold ? unsealed.map((n) => n.id) : null;
+    // Eager seal once a full bucket accumulates; otherwise seal a SETTLED bucket
+    // (this pass added no new leaf) down to idleSealFloor — so realistic users
+    // with only a handful of mature scenes still get their leaves sealed, and
+    // tree_sealer + tree_digest actually run instead of waiting forever for a
+    // full bucket of `sealThreshold`.
+    const fetchLimit = Math.max(policy.sealThreshold, 24);
+    const unsealed = store.getUnsealedSceneLeaves(userId, fetchLimit) as Array<{ id: string }>;
+    const eager = unsealed.length >= policy.sealThreshold;
+    const settled = leafed === 0 && unsealed.length >= policy.idleSealFloor;
+    const sealableBucket = eager || settled ? unsealed.map((n) => n.id) : null;
     return { leafed, sealableBucket };
   }
 
@@ -477,14 +505,32 @@ export class MemoryEngine {
   public get recall() {
     return async (params: Parameters<MemoryRecallPipeline['recall']>[0]) => {
       const result = await this.recallPipeline.recall(params);
-      
+
+      // MEM-10b — the relevance judge runs INLINE inside recall (request-scoped),
+      // so it never produced a job row → it showed "idle · never". Record a
+      // throttled observability heartbeat when the judge actually ran (the
+      // recall strategy is tagged "+judge"), so the agent reflects real activity
+      // without flooding the job table on every query.
+      if (typeof result.recallStrategy === "string" && result.recallStrategy.includes("judge")) {
+        const now = Date.now();
+        if (now - this.relevanceJudgeLastJobAt > 5 * 60_000) {
+          this.relevanceJudgeLastJobAt = now;
+          recordInlineJob(
+            this.store,
+            "relevance_judge",
+            { userId: params.userId, source: "recall" },
+            { strategy: result.recallStrategy, kept: result.recalledCognitiveMemories?.length ?? 0 },
+          );
+        }
+      }
+
       const persona = this.getPersona(params.userId);
       if (persona) {
         const existing = result.appendSystemContext ?? "";
         result.appendSystemContext = `<user-persona>\n${persona.personaMd}\n</user-persona>\n\n` + existing;
         result.coreIdentitySummary = persona.personaMd;
       }
-      
+
       return result;
     };
   }

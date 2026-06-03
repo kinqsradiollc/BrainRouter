@@ -9,7 +9,7 @@ import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { detectFocusShift } from "./pipeline/focus-direction-shift.js";
 import { shouldRunFocusDistill, shouldRunIdentityDistill } from "./scheduler.js";
-import { runAsJob } from "./scheduler/runner.js";
+import { runAsJob, recordInlineJob } from "./scheduler/runner.js";
 import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "./pipeline/apply-dedup.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
@@ -152,7 +152,7 @@ export class MemoryCapturePipeline {
       const text = redactSensitiveMemoryText(msg.content ?? "");
       if (text.trim().length < MIN_SOURCE_CHARS) continue;
       try {
-        ingestSource(
+        const { document, chunks, created } = ingestSource(
           sourceStore,
           {
             userId,
@@ -166,6 +166,17 @@ export class MemoryCapturePipeline {
           },
           text,
         );
+        // MEM-10b — chunking runs inline here (not via the job queue); record an
+        // observable source_chunker job when real chunks were written so the
+        // agent shows activity instead of "idle · never". Skip idempotent reuse.
+        if (created && chunks.length > 0) {
+          recordInlineJob(
+            this.store,
+            "source_chunker",
+            { userId, documentIds: [document.id], source: "capture-ingest" },
+            { documentId: document.id, chunkIds: chunks.map((c) => c.id), chunksWritten: chunks.length },
+          );
+        }
       } catch (err: any) {
         console.error("[BrainRouter] MEM-2′ source ingest failed:", err?.message ?? err);
       }
@@ -291,6 +302,21 @@ export class MemoryCapturePipeline {
         }
         // duplicate / rejected → held on the blackboard, not committed.
       }
+      // MEM-10b — admission (stage → reconcile → admit) runs inline here, not via
+      // the blackboard_reconciler job queue; record an observable job so the
+      // agent reflects the reconciliation it actually performed each capture.
+      recordInlineJob(
+        this.store,
+        "blackboard_reconciler",
+        { userId, source: "capture-admission" },
+        {
+          staged: staged.length,
+          reconciled: decisions.filter((d) => d.status === "reconciled").length,
+          duplicate: decisions.filter((d) => d.status === "duplicate").length,
+          rejected: decisions.filter((d) => d.status === "rejected").length,
+          survivors: survivors.length,
+        },
+      );
       return {
         survivors,
         markCommitted: (recordId: string) => {
