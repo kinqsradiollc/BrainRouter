@@ -19,6 +19,20 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
   },
+  icons: {
+    icon: [
+      { url: "/ico.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
+    ],
+    apple: "/apple-touch-icon.png",
+    shortcut: "/favicon.ico",
+  },
+  manifest: "/site.webmanifest",
+};
+
+export const viewport = {
+  themeColor: "#06120D",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
