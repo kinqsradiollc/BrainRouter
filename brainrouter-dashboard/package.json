@@ -6,14 +6,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "build:cf": "npm --prefix .. run build:packages && CLOUDFLARE_BUILD=1 next build",
-    "cf:preview": "npm run build:cf && wrangler dev",
+    "build:cf": "npm --prefix .. run build:packages && opennextjs-cloudflare build",
+    "cf:preview": "npm run build:cf && opennextjs-cloudflare preview",
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },
   "dependencies": {
     "@kinqs/brainrouter-hooks": "^0.4.9",
     "@kinqs/brainrouter-sdk": "^0.4.9",
     "@kinqs/brainrouter-types": "^0.4.9",
+    "@opennextjs/cloudflare": "^1.19.11",
     "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.39.0",
     "geist": "^1.7.2",

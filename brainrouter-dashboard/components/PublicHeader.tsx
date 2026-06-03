@@ -98,7 +98,7 @@ export function PublicHeader() {
             )}
           </button>
 
-          {/* Auth CTA hidden in static presentation mode (sign-in disabled). */}
+          {/* Auth CTA hidden in presentation-only mode (sign-in disabled). */}
           {!STATIC_PRESENTATION && (
             <Link href={isAuthenticated ? "/overview" : "/auth"}>
               <button className="pill-btn button-gold-primary" style={{ padding: "8px 18px", borderRadius: "var(--radius-pill)", fontSize: "13px", fontWeight: 600 }}>

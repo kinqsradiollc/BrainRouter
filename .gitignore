@@ -22,6 +22,7 @@ dist/
 build/
 out/
 .next/
+.open-next/
 .wrangler/
 
 # Synthesized at publish time from brainrouter-changelog/ via

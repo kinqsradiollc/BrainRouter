@@ -16,7 +16,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Static presentation mode: only the marketing routes exist. Everything
+    // Presentation-only mode: only the marketing routes exist. Everything
     // else (auth + dashboard) redirects home — no API, no sign-in.
     if (STATIC_PRESENTATION) {
       if (!isPresentationRoute(pathname)) {
