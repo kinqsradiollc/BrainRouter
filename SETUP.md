@@ -440,6 +440,7 @@ without further challenge.)
 ```bash
 cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish
 cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/hooks     && npm publish
 cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish
 cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish
 ```
@@ -482,6 +483,7 @@ npm whoami
 # Then publish each one, passing a fresh 6-digit code per command:
 cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish --otp=PASTE_6_DIGIT_CODE
 cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish --otp=PASTE_6_DIGIT_CODE
+cd /Users/anhdang/Documents/Github/BrainRouter/packages/hooks     && npm publish --otp=PASTE_6_DIGIT_CODE
 cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish --otp=PASTE_6_DIGIT_CODE
 cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish --otp=PASTE_6_DIGIT_CODE
 ```
