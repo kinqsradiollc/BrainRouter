@@ -1,20 +1,48 @@
 {
   "name": "@kinqs/brainrouter-hooks",
   "version": "0.4.9",
-  "private": true,
+  "description": "BrainRouter React hooks — data + state hooks for building a UI on top of a BrainRouter MCP server (pairs with @kinqs/brainrouter-sdk).",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
   },
   "dependencies": {
-    "@kinqs/brainrouter-sdk": "*",
-    "@kinqs/brainrouter-types": "*",
-    "react": "^18.3.1"
+    "@kinqs/brainrouter-sdk": "^0.4.9",
+    "@kinqs/brainrouter-types": "^0.4.9"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1 || ^19.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.4",
-    "@types/react": "^18.3.3"
+    "@types/react": "^19.0.0",
+    "react": "^19.2.6",
+    "typescript": "^5.5.4"
+  },
+  "keywords": [
+    "brainrouter",
+    "react",
+    "hooks",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "packages/hooks"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
