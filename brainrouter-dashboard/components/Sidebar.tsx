@@ -216,6 +216,17 @@ const links = [
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       </svg>
     )
+  },
+  {
+    href: "/brand",
+    label: "Brand Studio",
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <circle cx="8.5" cy="8.5" r="1.5" />
+        <path d="m21 15-5-5L5 21" />
+      </svg>
+    )
   }
 ] as const;
 
@@ -235,7 +246,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
   };
 
   const visibleLinks = links.filter((link) => {
-    if (link.href === "/users" && !user?.isAdmin) return false;
+    if ((link.href === "/users" || link.href === "/brand") && !user?.isAdmin) return false;
     return true;
   });
 
@@ -245,7 +256,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
     { title: "Memory", hrefs: ["/memories", "/scenes", "/persona", "/working-memory", "/blackboard", "/vault"] },
     { title: "Graph & Recall", hrefs: ["/recall-inspector", "/timeline", "/intelligence", "/tree"] },
     { title: "Integrity", hrefs: ["/contradictions", "/evidence", "/sources"] },
-    { title: "System", hrefs: ["/hooks", "/skills", "/profile", "/users"] },
+    { title: "System", hrefs: ["/hooks", "/skills", "/profile", "/users", "/brand"] },
   ];
   const linkByHref = new Map<string, (typeof visibleLinks)[number]>(visibleLinks.map((l) => [l.href, l]));
 
