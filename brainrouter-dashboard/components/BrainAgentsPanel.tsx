@@ -18,13 +18,13 @@ import { PremiumCard } from "./PremiumCard";
 function statusColor(status: string): string {
   switch (status) {
     case "done":
-      return "#10b981";
+      return "#34C28E";
     case "running":
       return "#38bdf8";
     case "pending":
-      return "#eab308";
+      return "#D9A441";
     case "failed":
-      return "#ef4444";
+      return "#E5675F";
     case "cancelled":
       return "var(--color-stone-text)";
     default:
@@ -86,7 +86,7 @@ export function BrainAgentsPanel() {
         The memory pipeline stages as observable jobs — last run, 24h success rate, and pending work. (BRAIN-P1)
       </p>
       {error && (
-        <p style={{ color: "#fca5a5", fontSize: "12px", margin: 0 }}>Could not load brain agents: {error}</p>
+        <p style={{ color: "#E5675F", fontSize: "12px", margin: 0 }}>Could not load brain agents: {error}</p>
       )}
       {agents && agents.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0", marginTop: "4px" }}>
@@ -98,12 +98,17 @@ export function BrainAgentsPanel() {
               <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                 <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: statusColor(a.lastJobStatus), flexShrink: 0 }} />
                 <span style={{ color: "var(--color-white-frost)", fontWeight: 500, overflowWrap: "anywhere" }}>{a.id}</span>
-                <span style={{ color: "var(--color-stone-text)", fontSize: "11px" }}>{a.modelClass}</span>
+                <span
+                  title={a.modelClass === "none" ? "Deterministic step — no LLM" : `Model class: ${a.modelClass}`}
+                  style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.06em", textTransform: "uppercase", color: a.modelClass === "none" ? "var(--text-muted)" : "var(--accent)", background: a.modelClass === "none" ? "var(--surface-overlay)" : "var(--accent-wash)", border: "1px solid var(--border)", borderRadius: "var(--radius-chip)", padding: "1px 6px" }}
+                >
+                  {a.modelClass === "none" ? "mechanical" : a.modelClass}
+                </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--color-stone-text)", fontSize: "12px", whiteSpace: "nowrap" }}>
                 <span>{a.lastJobStatus} · {ageLabel(a.lastJobCompletedAt)}</span>
                 <span>{a.successRate24h == null ? "—" : `${Math.round(a.successRate24h * 100)}%`}</span>
-                <span style={{ color: a.pendingJobs > 0 ? "#eab308" : "var(--color-stone-text)" }}>{a.pendingJobs} pending</span>
+                <span style={{ color: a.pendingJobs > 0 ? "#D9A441" : "var(--color-stone-text)" }}>{a.pendingJobs} pending</span>
               </div>
             </div>
           ))}

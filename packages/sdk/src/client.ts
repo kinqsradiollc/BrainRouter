@@ -20,6 +20,7 @@ import {
   MemoryStatsResponse,
   MemoryWithEvidenceResponse,
   OperationsResponse,
+  RefreshResponse,
   PublicUserRecord,
   ScenesResponse,
   SigninRequest,
@@ -60,84 +61,74 @@ export class BrainRouterClient {
   constructor(
     private baseUrl = "",
     private apiKey = "",
-    private token = ""
+    private token = "",
+    /** Optional refresh hook: called once on a 401; return a fresh access token
+     *  to transparently replay the request, or null to let the error surface. */
+    private onUnauthorized?: () => Promise<string | null>
   ) {}
 
   withApiKey(apiKey: string) {
-    return new BrainRouterClient(this.baseUrl, apiKey, this.token);
+    return new BrainRouterClient(this.baseUrl, apiKey, this.token, this.onUnauthorized);
   }
 
   withToken(token: string) {
-    return new BrainRouterClient(this.baseUrl, this.apiKey, token);
+    return new BrainRouterClient(this.baseUrl, this.apiKey, token, this.onUnauthorized);
   }
 
-  private headers(): Record<string, string> {
-    if (this.token) return { Authorization: `Bearer ${this.token}` };
-    if (this.apiKey) return { Authorization: `Bearer ${this.apiKey}` };
-    return {};
+  /** Wire (or replace) the refresh hook on an existing client. */
+  withOnUnauthorized(hook: () => Promise<string | null>) {
+    this.onUnauthorized = hook;
+    return this;
   }
 
-  private async get<T>(path: string, params?: object): Promise<T> {
-    const query = params
-      ? new URLSearchParams(
-          Object.entries(params)
-            .filter((entry): entry is [string, string | number | boolean] => {
-              const value = entry[1];
-              return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
-            })
-            .map(([key, value]) => [key, String(value)] as [string, string])
-        ).toString()
-      : "";
-    const res = await fetch(`${this.baseUrl}${path}${query ? `?${query}` : ""}`, { headers: this.headers() });
+  private headers(tokenOverride?: string): Record<string, string> {
+    const bearer = tokenOverride || this.token || this.apiKey;
+    return bearer ? { Authorization: `Bearer ${bearer}` } : {};
+  }
+
+  private qs(params?: object): string {
+    if (!params) return "";
+    const query = new URLSearchParams(
+      Object.entries(params)
+        .filter((entry): entry is [string, string | number | boolean] => {
+          const value = entry[1];
+          return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+        })
+        .map(([key, value]) => [key, String(value)] as [string, string])
+    ).toString();
+    return query ? `?${query}` : "";
+  }
+
+  /** Single fetch path for every verb, with one transparent refresh-and-retry on 401. */
+  private async request<T>(method: string, path: string, opts?: { query?: object; body?: unknown }): Promise<T> {
+    const url = `${this.baseUrl}${path}${this.qs(opts?.query)}`;
+    const hasBody = opts?.body !== undefined;
+    const fire = (tokenOverride?: string) =>
+      fetch(url, {
+        method,
+        headers: { ...(hasBody ? { "Content-Type": "application/json" } : {}), ...this.headers(tokenOverride) },
+        body: hasBody ? JSON.stringify(opts!.body) : undefined,
+      });
+
+    let res = await fire();
+    if (res.status === 401 && this.onUnauthorized && (this.token || this.apiKey)) {
+      const fresh = await this.onUnauthorized();
+      if (fresh) {
+        this.token = fresh;
+        res = await fire(fresh);
+      }
+    }
     if (!res.ok) throw await this.toError(res);
+    if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...this.headers() },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw await this.toError(res);
-    return res.json() as Promise<T>;
-  }
-
-  private async put<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", ...this.headers() },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw await this.toError(res);
-    return res.json() as Promise<T>;
-  }
-
-  private async patch<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", ...this.headers() },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw await this.toError(res);
-    return res.json() as Promise<T>;
-  }
-
-  private async deleteReq<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { method: "DELETE", headers: this.headers() });
-    if (!res.ok) throw await this.toError(res);
-    return res.json() as Promise<T>;
-  }
-
-  private async deleteWithBody<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json", ...this.headers() },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw await this.toError(res);
-    return res.json() as Promise<T>;
-  }
+  private get<T>(path: string, params?: object): Promise<T> { return this.request<T>("GET", path, { query: params }); }
+  private post<T>(path: string, body: unknown): Promise<T> { return this.request<T>("POST", path, { body }); }
+  private put<T>(path: string, body: unknown): Promise<T> { return this.request<T>("PUT", path, { body }); }
+  private patch<T>(path: string, body: unknown): Promise<T> { return this.request<T>("PATCH", path, { body }); }
+  private deleteReq<T>(path: string): Promise<T> { return this.request<T>("DELETE", path); }
+  private deleteWithBody<T>(path: string, body: unknown): Promise<T> { return this.request<T>("DELETE", path, { body }); }
 
   private async toError(res: Response) {
     const body = await res.text();
@@ -155,6 +146,8 @@ export class BrainRouterClient {
   signIn(body: SigninRequest) { return this.post<SigninResponse>("/api/auth/signin", body); }
   signUp(body: SignupRequest) { return this.post<SignupResponse>("/api/auth/signup", body); }
   me() { return this.get<MeResponse>("/api/auth/me"); }
+  refresh(refreshToken: string) { return this.post<RefreshResponse>("/api/auth/refresh", { refreshToken }); }
+  signOut() { return this.post<{ success: boolean }>("/api/auth/signout", {}); }
   updateMe(body: { displayName: string }) { return this.put<{ success: boolean }>("/api/auth/me", body); }
   rotateApiKey() { return this.post<{ apiKey: string }>("/api/auth/rotate-key", {}); }
 

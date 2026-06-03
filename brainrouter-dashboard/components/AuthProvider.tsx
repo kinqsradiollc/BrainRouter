@@ -2,7 +2,8 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { getClient } from "../lib/client";
-import { isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, signOut, clearAll } from "../lib/client-auth";
+import { isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, setRefreshToken, signOut, clearAll } from "../lib/client-auth";
+import { STATIC_PRESENTATION } from "../lib/presentation";
 
 interface AuthUser {
   userId: string;
@@ -17,7 +18,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isAdmin: boolean;
   refreshUser: () => Promise<void>;
-  login: (jwt: string, apiKey?: string, rememberMe?: boolean) => Promise<void>;
+  login: (jwt: string, apiKey?: string, rememberMe?: boolean, refreshToken?: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -41,6 +42,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   const fetchUser = async () => {
+    // Presentation mode: never hit the auth API — there is no session.
+    if (STATIC_PRESENTATION) {
+      setIsAuthenticated(false);
+      setUser(null);
+      setIsLoading(false);
+      return;
+    }
     if (!checkIsAuthenticated()) {
       setIsAuthenticated(false);
       setUser(null);
@@ -71,14 +79,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const login = async (jwt: string, apiKey?: string, rememberMe = false) => {
+  const login = async (jwt: string, apiKey?: string, rememberMe = false, refreshToken?: string) => {
     setIsLoading(true);
     setJwt(jwt, rememberMe);
+    if (refreshToken) setRefreshToken(refreshToken);
     if (apiKey) setApiKey(apiKey);
     await fetchUser();
   };
 
   const logout = () => {
+    // Best-effort server revoke, then clear local tokens + redirect.
+    try {
+      getClient().signOut().catch(() => {});
+    } catch {
+      /* ignore */
+    }
     signOut();
     setUser(null);
     setIsAuthenticated(false);

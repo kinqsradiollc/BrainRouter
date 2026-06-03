@@ -1,17 +1,22 @@
 {
   "name": "dashboard",
   "private": true,
-  "version": "0.4.8",
+  "version": "0.4.9",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "build:cf": "CLOUDFLARE_BUILD=1 next build",
+    "cf:preview": "npm run build:cf && wrangler dev",
+    "cf:deploy": "npm run build:cf && wrangler deploy"
   },
   "dependencies": {
     "@kinqs/brainrouter-hooks": "*",
     "@kinqs/brainrouter-sdk": "*",
     "@kinqs/brainrouter-types": "*",
+    "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.39.0",
+    "geist": "^1.7.2",
     "katex": "^0.17.0",
     "mermaid": "^11.15.0",
     "next": "15.5.18",
@@ -25,6 +30,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "wrangler": "^4.0.0"
   }
 }

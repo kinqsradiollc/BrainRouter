@@ -36,21 +36,21 @@ function highlightJson(json: string) {
       if (/:$/.test(matchText)) {
         const keyText = matchText.slice(0, -1);
         parts.push(
-          <span key={`key-${keyCounter++}`} style={{ color: "#d8be7c", fontWeight: 600 }}>{keyText}</span>
+          <span key={`key-${keyCounter++}`} style={{ color: "#34C28E", fontWeight: 600 }}>{keyText}</span>
         );
         parts.push(":");
       } else {
         parts.push(
-          <span key={`str-${keyCounter++}`} style={{ color: "#34d399" }}>{matchText}</span>
+          <span key={`str-${keyCounter++}`} style={{ color: "#34C28E" }}>{matchText}</span>
         );
       }
     } else if (/true|false/.test(matchText)) {
       parts.push(
-        <span key={`bool-${keyCounter++}`} style={{ color: "#f43f5e", fontWeight: "bold" }}>{matchText}</span>
+        <span key={`bool-${keyCounter++}`} style={{ color: "#E5675F", fontWeight: "bold" }}>{matchText}</span>
       );
     } else if (/null/.test(matchText)) {
       parts.push(
-        <span key={`null-${keyCounter++}`} style={{ color: "#9ca3af", fontStyle: "italic" }}>{matchText}</span>
+        <span key={`null-${keyCounter++}`} style={{ color: "#6B7480", fontStyle: "italic" }}>{matchText}</span>
       );
     } else {
       parts.push(
@@ -271,7 +271,7 @@ export default function ProfilePage() {
                         border: "none",
                         outline: "none",
                         transition: "all 0.2s ease",
-                        background: activeTab === "http" ? "rgba(174, 147, 87, 0.2)" : "transparent",
+                        background: activeTab === "http" ? "rgba(52, 194, 142, 0.2)" : "transparent",
                         color: activeTab === "http" ? "var(--color-golden-accent)" : "var(--color-stone-text)"
                       }}
                     >
@@ -288,7 +288,7 @@ export default function ProfilePage() {
                         border: "none",
                         outline: "none",
                         transition: "all 0.2s ease",
-                        background: activeTab === "stdio" ? "rgba(174, 147, 87, 0.2)" : "transparent",
+                        background: activeTab === "stdio" ? "rgba(52, 194, 142, 0.2)" : "transparent",
                         color: activeTab === "stdio" ? "var(--color-golden-accent)" : "var(--color-stone-text)"
                       }}
                     >
@@ -330,7 +330,7 @@ export default function ProfilePage() {
                               brainrouter: {
                                 type: "sse",
                                 url: `${BASE_URL}/mcp`,
-                                serverURL: `${BASE_URL}/mcp`,
+                                // serverURL: `${BASE_URL}/mcp`,
                                 headers: {
                                   Authorization: `Bearer ${reveal ? cachedApiKey : maskKey(cachedApiKey)}`
                                 }

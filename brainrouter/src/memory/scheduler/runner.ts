@@ -71,6 +71,29 @@ export async function runAsJob<T>(
   }
 }
 
+/**
+ * MEM-10b — record an already-completed inline operation as an observable
+ * brain-agent job, synchronously (enqueue → start → complete). Unlike
+ * `runAsJob`, this does NOT wrap/own the work — the stage already ran inline on
+ * the hot path; this only leaves an audit row so the agent shows activity in the
+ * status panel instead of "idle · never". Best-effort: any failure is logged and
+ * swallowed so observability can never break the path it instruments.
+ */
+export function recordInlineJob(
+  store: IMemoryStore,
+  agentId: string,
+  input: unknown,
+  summary?: unknown,
+): void {
+  try {
+    const job = store.enqueueMemoryJob({ kind: agentId, input, maxAttempts: 1 });
+    store.startMemoryJob(job.id);
+    store.completeMemoryJob(job.id, summary ?? { ok: true });
+  } catch (err: any) {
+    console.error(`[BrainRouter] recordInlineJob(${agentId}) failed:`, err?.message ?? err);
+  }
+}
+
 export interface MemoryJobRunnerOptions {
   /** How often to poll for eligible jobs. Default 3000ms. */
   intervalMs?: number;

@@ -60,7 +60,7 @@ export default function RecallInspectorPage() {
               {isLoading ? "Running…" : "Explain recall"}
             </button>
           </FilterBar.Row>
-          {error && <div style={{ color: "#ef4444", fontSize: "13px" }}>{error}</div>}
+          {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
         </FilterBar>
 
         {explanation && (
@@ -110,7 +110,7 @@ export default function RecallInspectorPage() {
                           gap: "8px",
                           padding: "6px 10px",
                           borderRadius: "9999px",
-                          background: node.fired ? "rgba(204, 145, 102, 0.08)" : "var(--color-pewter-accent)",
+                          background: node.fired ? "rgba(52, 194, 142, 0.08)" : "var(--color-pewter-accent)",
                           border: node.fired ? "1px solid var(--color-golden-accent)" : "1px solid var(--border-dim)",
                           minWidth: 0,
                           fontSize: "12px",
@@ -122,7 +122,7 @@ export default function RecallInspectorPage() {
                             height: "6px",
                             borderRadius: "50%",
                             background: node.fired ? "var(--color-golden-accent)" : "var(--color-stone-text)",
-                            boxShadow: node.fired ? "0 0 6px var(--color-golden-accent)" : "none",
+                            boxShadow: "none",
                             flexShrink: 0,
                           }}
                         />

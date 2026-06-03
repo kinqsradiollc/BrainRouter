@@ -45,31 +45,31 @@ export function PremiumButton({
   let variantStyle: React.CSSProperties = {};
   if (variant === "primary") {
     variantStyle = {
-      background: "linear-gradient(135deg, #ae9357 0%, #bd9d4f 50%, #d8be7c 100%)",
+      background: "linear-gradient(135deg, #34C28E 0%, #34C28E 50%, #34C28E 100%)",
       color: "#0b0c10",
       border: "1px solid transparent",
-      boxShadow: "0 4px 15px rgba(174, 147, 87, 0.25)"
+      boxShadow: "var(--elev-inset)"
     };
   } else if (variant === "ghost") {
     variantStyle = {
-      background: "rgba(174, 147, 87, 0.03)",
+      background: "rgba(52, 194, 142, 0.03)",
       color: "var(--color-golden-accent)",
-      border: "1px solid rgba(174, 147, 87, 0.25)",
+      border: "1px solid rgba(52, 194, 142, 0.25)",
       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)"
     };
   } else if (variant === "danger") {
     variantStyle = {
-      background: "rgba(239, 68, 68, 0.05)",
-      color: "#f87171",
-      border: "1px solid rgba(239, 68, 68, 0.25)",
-      boxShadow: "0 2px 8px rgba(239, 68, 68, 0.05)"
+      background: "rgba(229, 103, 95, 0.05)",
+      color: "#E5675F",
+      border: "1px solid rgba(229, 103, 95, 0.25)",
+      boxShadow: "0 2px 8px rgba(229, 103, 95, 0.05)"
     };
   } else if (variant === "success") {
     variantStyle = {
-      background: "rgba(16, 185, 129, 0.05)",
-      color: "#34d399",
-      border: "1px solid rgba(16, 185, 129, 0.25)",
-      boxShadow: "0 2px 8px rgba(16, 185, 129, 0.05)"
+      background: "rgba(52, 194, 142, 0.05)",
+      color: "#34C28E",
+      border: "1px solid rgba(52, 194, 142, 0.25)",
+      boxShadow: "var(--elev-inset)"
     };
   } else if (variant === "text") {
     variantStyle = {
@@ -96,27 +96,27 @@ export function PremiumButton({
         scale: 1.02,
         y: -1,
         boxShadow: variant === "primary" 
-          ? "0 6px 20px rgba(174, 147, 87, 0.4)" 
-          : (variant === "danger" 
-              ? "0 4px 12px rgba(239, 68, 68, 0.15)"
+          ? "var(--elev-inset)" 
+          : (variant === "danger"
+              ? "var(--shadow-md)"
               : (variant === "success"
-                  ? "0 4px 12px rgba(16, 185, 129, 0.15)"
+                  ? "var(--shadow-md)"
                   : "var(--card-shadow-hover)")),
         background: variant === "primary"
-          ? "linear-gradient(135deg, #bca166 0%, #cca95c 50%, #e6cb8b 100%)"
+          ? "linear-gradient(135deg, #34C28E 0%, #34C28E 50%, #34C28E 100%)"
           : (variant === "ghost"
-              ? "rgba(174, 147, 87, 0.12)"
+              ? "rgba(52, 194, 142, 0.12)"
               : (variant === "danger"
-                  ? "rgba(239, 68, 68, 0.15)"
+                  ? "rgba(229, 103, 95, 0.15)"
                   : (variant === "success"
-                      ? "rgba(16, 185, 129, 0.15)"
+                      ? "rgba(52, 194, 142, 0.15)"
                       : "var(--overlay-bg-hover)"))),
         borderColor: variant === "ghost"
           ? "var(--color-golden-accent)"
           : (variant === "danger"
-              ? "#ef4444"
+              ? "#E5675F"
               : (variant === "success"
-                  ? "#10b981"
+                  ? "#34C28E"
                   : (variant === "text"
                       ? "var(--border-strong)"
                       : "transparent"))),

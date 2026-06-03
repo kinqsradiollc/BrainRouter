@@ -56,9 +56,9 @@ export default function AuthPage() {
   function passwordStrength(password: string) {
     const hasMixedCase = /[a-z]/.test(password) && /[A-Z]/.test(password);
     const hasSpecial = /[^a-zA-Z0-9]/.test(password);
-    if (password.length > 12 && hasMixedCase && hasSpecial) return { label: "Strong", color: "#22c55e", width: "100%" };
-    if (password.length >= 8 && hasMixedCase) return { label: "OK", color: "#f59e0b", width: "66%" };
-    return { label: "Weak", color: "#ef4444", width: "33%" };
+    if (password.length > 12 && hasMixedCase && hasSpecial) return { label: "Strong", color: "#34C28E", width: "100%" };
+    if (password.length >= 8 && hasMixedCase) return { label: "OK", color: "#D9A441", width: "66%" };
+    return { label: "Weak", color: "#E5675F", width: "33%" };
   }
 
   async function handleSignIn(e: React.FormEvent) {
@@ -68,7 +68,7 @@ export default function AuthPage() {
     try {
       const client = getClient();
       const data = await client.signIn(signin);
-      await login(data.jwt, data.apiKey, rememberMe);
+      await login(data.jwt, data.apiKey, rememberMe, data.refreshToken);
       router.replace("/overview");
     } catch (err) {
       setError(authErrorMessage(err));
@@ -89,7 +89,7 @@ export default function AuthPage() {
         password: signup.password,
         displayName: signup.displayName || undefined,
       });
-      await login(data.jwt);
+      await login(data.jwt, undefined, true, data.refreshToken);
       router.replace("/overview");
     } catch (err) {
       setError(authErrorMessage(err));
@@ -116,7 +116,7 @@ export default function AuthPage() {
         width: "800px",
         height: "800px",
         borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(174, 147, 87, 0.04) 0%, rgba(0, 0, 0, 0) 70%)",
+        background: "radial-gradient(circle, rgba(52, 194, 142, 0.04) 0%, rgba(0, 0, 0, 0) 70%)",
         pointerEvents: "none",
         zIndex: 0
       }} />
@@ -184,7 +184,7 @@ export default function AuthPage() {
               left: 0,
               right: 0,
               bottom: 0,
-              backgroundImage: "radial-gradient(rgba(174, 147, 87, 0.08) 1px, transparent 0)",
+              backgroundImage: "radial-gradient(rgba(52, 194, 142, 0.08) 1px, transparent 0)",
               backgroundSize: "20px 20px",
               opacity: 0.5,
               zIndex: 0,
@@ -198,7 +198,7 @@ export default function AuthPage() {
               left: 0,
               right: 0,
               bottom: 0,
-              background: `radial-gradient(180px circle at ${coords.x}px ${coords.y}px, rgba(255, 240, 204, 0.12) 0%, rgba(174, 147, 87, 0.04) 50%, transparent 100%)`,
+              background: `radial-gradient(180px circle at ${coords.x}px ${coords.y}px, rgba(52, 194, 142, 0.12) 0%, rgba(52, 194, 142, 0.04) 50%, transparent 100%)`,
               opacity: isHovered ? 1 : 0,
               transition: "opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
               pointerEvents: "none",
@@ -212,10 +212,10 @@ export default function AuthPage() {
                 width: "44px",
                 height: "32px",
                 borderRadius: "6px",
-                background: "linear-gradient(135deg, #ae9357 0%, #ffd88a 50%, #ae9357 100%)",
+                background: "linear-gradient(135deg, #34C28E 0%, #34C28E 50%, #34C28E 100%)",
                 border: "1px solid rgba(255,255,255,0.1)",
                 position: "relative",
-                boxShadow: "inset 0 1px 2px rgba(255,255,255,0.2), 0 4px 10px rgba(174, 147, 87, 0.2)"
+                boxShadow: "var(--elev-inset)"
               }}>
                 {/* Chip grid lines */}
                 <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: "1px", background: "var(--border-strong)" }} />
@@ -238,7 +238,7 @@ export default function AuthPage() {
                   height: "6px",
                   borderRadius: "50%",
                   background: loading ? "var(--color-stone-text)" : "var(--color-golden-accent)",
-                  boxShadow: loading ? "none" : "0 0 8px var(--color-golden-accent)"
+                  boxShadow: "none"
                 }} />
                 <span style={{ fontSize: "9px", fontWeight: 600, color: "var(--color-white-frost)", letterSpacing: "0.07em", textTransform: "uppercase" }}>
                   {loading ? "syncing" : "vault core active"}
@@ -428,7 +428,7 @@ export default function AuthPage() {
                     type="checkbox"
                     checked={rememberMe}
                     onChange={(e) => setRememberMe(e.target.checked)}
-                    style={{ accentColor: "#cc9166" }}
+                    style={{ accentColor: "#34C28E" }}
                   />
                   Remember me
                 </label>
@@ -470,9 +470,9 @@ export default function AuthPage() {
                     style={{ 
                       padding: "10px 14px", 
                       borderRadius: "var(--radius-md)", 
-                      background: "rgba(239, 68, 68, 0.08)", 
-                      border: "1px solid rgba(239, 68, 68, 0.2)",
-                      color: "#f87171",
+                      background: "rgba(229, 103, 95, 0.08)", 
+                      border: "1px solid rgba(229, 103, 95, 0.2)",
+                      color: "#E5675F",
                       fontSize: "13px"
                     }}
                   >
@@ -552,9 +552,9 @@ export default function AuthPage() {
                     style={{ 
                       padding: "10px 14px", 
                       borderRadius: "var(--radius-md)", 
-                      background: "rgba(239, 68, 68, 0.08)", 
-                      border: "1px solid rgba(239, 68, 68, 0.2)",
-                      color: "#f87171",
+                      background: "rgba(229, 103, 95, 0.08)", 
+                      border: "1px solid rgba(229, 103, 95, 0.2)",
+                      color: "#E5675F",
                       fontSize: "13px"
                     }}
                   >

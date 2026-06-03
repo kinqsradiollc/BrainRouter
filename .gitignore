@@ -22,6 +22,7 @@ dist/
 build/
 out/
 .next/
+.wrangler/
 
 # Synthesized at publish time from brainrouter-changelog/ via
 # brainrouter-cli/package.json#sync-changelog. Source of truth is the
@@ -40,54 +41,23 @@ brainrouter-cli/changelog/
 
 # Per-user tooling state (Claude Code, brainrouter migration leftovers)
 .claude/
+.brainrouter/
 .brainrouter.migrated/
+brainrouter/memory.db
+brainrouter/mcp_server.log
+brainrouter/benchmark/data/longmemeval_s_cleaned.json
 
 # Top-level test/ scratchpad for LLM-scaffolded throwaway demos
 # (not the package-local test folders under brainrouter-cli/, brainrouter/, etc.)
 /test/
 
 # Local Projects
-.brainrouter/
 projects
 conceptCode
 brainrouter/brain.db
 TENCENTDB_AGENT_MEMORY.md
-brainrouter/benchmark/data/longmemeval_s_cleaned.json
 
-brainrouter/memory.db
-brainrouter/mcp_server.log
-
-openSrc/agentmemory
-openSrc/claude-code
-openSrc/codex
-openSrc/hermes-agent
-openSrc/langchain
-openSrc/openai-node
-openSrc/prototypes
-openSrc/TencentDB-Agent-Memory
-openSrc/openclaw
-openSrc/antigravity-cli
-openSrc/OmniVoice
-openSrc/agentscope
-openSrc/chrome-devtools-mcp
-openSrc/local-deep-research
-openSrc/pi-intercom
-openSrc/DeepSeek-TUI
-openSrc/codegraph
-openSrc/opencode
-openSrc/bruno
-openSrc/openhuman
-openSrc/semble
-openSrc/deer-flow
-openSrc/grok-cli
-openSrc/vibekit
-openSrc/AutoResearchClaw
-openSrc/claude-code-openSource
-openSrc/DeepSeek-Reasonix
-
-# Local agent reference doc for openSrc/ vendored projects — useful but
-# personal (machine-specific paths, evolving notes) so it stays out of git.
-openSrc/REFERENCES.md
+openSrc/*
 
 CodexImplementationPlan.md
 CodexTasks.md
@@ -110,3 +80,6 @@ MEMORY_IMPROVEMENT.md
 CLI_IMRPOVEMENT.md
 COMPARISION.md
 040_COMPARISON.md
+045_CODEX_CLI_CODE_COMPARISON.md
+
+AWSPrep

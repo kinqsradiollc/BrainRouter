@@ -1,44 +1,82 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&display=swap");
+/* Fonts: Geist + Geist Mono are wired via the `geist` package in app/layout.tsx — no web-font CDN. */
 
+/* ============================================================================
+ * BrainRouter — "The Memory Instrument"  (dark-primary; light is the override)
+ * Canonical tokens first; legacy var names are remapped to the new values so
+ * existing components restyle automatically.
+ * ========================================================================== */
 :root {
-  /* Colors - Light Theme Default */
-  --color-midnight-ink: #f5f6f8;
-  --color-obsidian-surface: #ffffff;
-  --color-charcoal-canvas: #ffffff;
-  --color-pewter-accent: #eef1f4;
-  --color-slate-gray: #e2e6ea;
-  --color-ash-text: #6c757d;
-  --color-stone-text: #495057;
-  --color-silver-text: #2d3748;
-  --color-porcelain-text: #1a202c;
-  --color-white-frost: #1a202c;
-  --color-pure-white: #0f172a;
-  --color-golden-accent: #8b5a2b;
-  --gradient-golden-gradient: linear-gradient(103deg, rgb(139, 90, 43), rgb(180, 130, 70) 40%, rgb(139, 90, 43) 70%, rgba(139, 90, 43, 0));
+  /* ---- Canonical design tokens ---- */
+  --surface-base: #0B0D0F;
+  --surface-raised: #14171A;
+  --surface-overlay: #1E2227;
+  --text: #ECEFF2;
+  --text-secondary: #9BA3AC;
+  --text-muted: #5E6670;
+  --accent: #34C28E;
+  --accent-press: #28A87C;
+  --accent-wash: rgba(52, 194, 142, 0.14);
+  --heat-hot: #E0A063;
+  --heat-warm: #C98F6E;
+  --heat-cool: #6B7480;
+  --heat-cold: #3C434B;
+  --danger: #E5675F;
+  --warn: #D9A441;
+  --ok: #34C28E;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-chip: 4px;
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Depth — NEUTRAL (never an accent glow). Subtle layered drop for real
+     elevation; flat surfaces read dated. Tuned for the dark canvas. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 1px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 6px 16px -6px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.62), 0 8px 20px -8px rgba(0, 0, 0, 0.4);
+  /* Atmosphere — a single faint Signal aura for marketing hero/headers only. */
+  --aura-signal: radial-gradient(900px 480px at 12% -8%, rgba(52, 194, 142, 0.10), transparent 60%);
 
-  /* Theme-specific Colors & Overlays */
-  --sidebar-bg: rgba(255, 255, 255, 0.75);
-  --sidebar-border: rgba(0, 0, 0, 0.15);
-  --border-dim: rgba(0, 0, 0, 0.18);
-  --border-med: rgba(0, 0, 0, 0.25);
-  --border-strong: rgba(0, 0, 0, 0.35);
-  --border-hover-accent: rgba(139, 90, 43, 0.4);
-  --border-hover-accent-strong: rgba(139, 90, 43, 0.6);
-  --overlay-bg: rgba(0, 0, 0, 0.03);
-  --overlay-bg-hover: rgba(180, 124, 80, 0.08);
-  --overlay-bg-hover-strong: rgba(0, 0, 0, 0.05);
-  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  --card-shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.1), 0 0 15px rgba(180, 124, 80, 0.02);
-  --table-tr-hover: rgba(0, 0, 0, 0.015);
-  --nav-active-bg: linear-gradient(90deg, rgba(180, 124, 80, 0.12) 0%, rgba(180, 124, 80, 0.02) 100%);
-  --nav-active-pill: linear-gradient(90deg, rgba(180, 124, 80, 0.18) 0%, rgba(235, 205, 150, 0.08) 40%, rgba(180, 124, 80, 0.12) 70%, rgba(180, 124, 80, 0) 100%);
-  --shadow-focus-accent: rgba(180, 124, 80, 0.2);
-  --radial-spotlight: radial-gradient(800px circle at var(--x, 50%) var(--y, 50%), rgba(180, 124, 80, 0.06), transparent 45%);
-  --select-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%238b5a2b' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'%3E%3C/path%3E%3C/svg%3E");
+  /* ---- Legacy aliases → new values (whole-app restyle) ---- */
+  --color-midnight-ink: var(--surface-base);
+  --color-obsidian-surface: var(--surface-raised);
+  --color-charcoal-canvas: var(--surface-raised);
+  --color-pewter-accent: var(--surface-overlay);
+  --color-slate-gray: #2A2F36;
+  --color-ash-text: var(--text-muted);
+  --color-stone-text: var(--text-secondary);
+  --color-silver-text: var(--text-secondary);
+  --color-porcelain-text: var(--text);
+  --color-white-frost: var(--text);
+  --color-pure-white: var(--text);
+  --color-golden-accent: var(--accent);
+  --gradient-golden-gradient: linear-gradient(0deg, var(--accent), var(--accent));
 
-  /* Typography Fonts */
-  --font-inter: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-ivy-presto: 'Playfair Display', serif;
+  --sidebar-bg: rgba(20, 23, 26, 0.72);
+  --sidebar-border: var(--border);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-dim: rgba(255, 255, 255, 0.06);
+  --border-med: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-hover-accent: rgba(52, 194, 142, 0.35);
+  --border-hover-accent-strong: rgba(52, 194, 142, 0.55);
+  --overlay-bg: rgba(255, 255, 255, 0.03);
+  --overlay-bg-hover: var(--accent-wash);
+  --overlay-bg-hover-strong: rgba(255, 255, 255, 0.05);
+  --card-shadow: var(--shadow-sm);
+  --card-shadow-hover: var(--shadow-md);
+  --table-tr-hover: var(--accent-wash);
+  --nav-active-bg: var(--accent-wash);
+  --nav-active-pill: var(--accent-wash);
+  --shadow-focus-accent: var(--accent-wash);
+  --radial-spotlight: none;
+  --select-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2334C28E' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'%3E%3C/path%3E%3C/svg%3E");
+
+  /* Fonts (legacy names → new families; serif retired) */
+  --font-inter: var(--font-sans);
+  --font-ivy-presto: var(--font-sans);
 
   /* Spacing */
   --spacing-4: 4px;
@@ -52,51 +90,43 @@
   --spacing-40: 40px;
 
   /* Border Radii */
-  --radius-sm: 2px;
+  --radius-sm: 4px;
   --radius-md: 10px;
-  --radius-lg: 10px;
+  --radius-lg: 12px;
   --radius-pill: 9999px;
-  
+
   /* Layout Constants */
-  --page-max-width: 1216px;
+  --page-max-width: 1400px;
   --element-gap: 6px;
 }
 
-[data-theme="dark"] {
-  /* Colors - Dark Theme Override */
-  --color-midnight-ink: #000000;
-  --color-obsidian-surface: #030304;
-  --color-charcoal-canvas: #08080a;
-  --color-pewter-accent: #121317;
-  --color-slate-gray: #1c1d22;
-  --color-ash-text: #5e616e;
-  --color-stone-text: #777a88;
-  --color-silver-text: #acafb9;
-  --color-porcelain-text: #cdcdcd;
-  --color-white-frost: #e2e3e9;
-  --color-pure-white: #ffffff;
-  --color-golden-accent: #cc9166;
-  --gradient-golden-gradient: linear-gradient(103deg, rgb(174, 147, 87), rgb(255, 240, 204) 40%, rgb(174, 147, 87) 70%, rgba(189, 157, 79, 0));
-
-  /* Theme-specific Colors & Overlays */
-  --sidebar-bg: rgba(11, 12, 16, 0.65);
-  --sidebar-border: rgba(226, 227, 233, 0.06);
-  --border-dim: rgba(226, 227, 233, 0.04);
-  --border-med: rgba(226, 227, 233, 0.08);
-  --border-strong: rgba(226, 227, 233, 0.15);
-  --border-hover-accent: rgba(204, 145, 102, 0.25);
-  --border-hover-accent-strong: rgba(204, 145, 102, 0.4);
-  --overlay-bg: rgba(18, 19, 23, 0.6);
-  --overlay-bg-hover: rgba(174, 147, 87, 0.1);
-  --overlay-bg-hover-strong: rgba(18, 19, 23, 0.95);
-  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-  --card-shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.6), 0 0 15px rgba(204, 145, 102, 0.03);
-  --table-tr-hover: rgba(226, 227, 233, 0.02);
-  --nav-active-bg: linear-gradient(90deg, rgba(174, 147, 87, 0.12) 0%, rgba(174, 147, 87, 0.02) 100%);
-  --nav-active-pill: linear-gradient(90deg, rgba(174, 147, 87, 0.2) 0%, rgba(255, 240, 204, 0.08) 40%, rgba(174, 147, 87, 0.15) 70%, rgba(189, 157, 79, 0) 100%);
-  --shadow-focus-accent: rgba(204, 145, 102, 0.2);
-  --radial-spotlight: radial-gradient(800px circle at var(--x, 50%) var(--y, 50%), rgba(204, 145, 102, 0.08), transparent 45%);
-  --select-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23cc9166' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'%3E%3C/path%3E%3C/svg%3E");
+:root[data-theme="light"] {
+  /* Light override — canonical tokens; legacy aliases cascade off these. */
+  --surface-base: #FAFAFA;
+  --surface-raised: #FFFFFF;
+  --surface-overlay: #F3F4F6;
+  --text: #16191C;
+  --text-secondary: #4B535B;
+  --text-muted: #8A929B;
+  --accent: #1E9E73;
+  --accent-press: #18815E;
+  --accent-wash: rgba(30, 158, 115, 0.12);
+  --border: rgba(16, 19, 22, 0.10);
+  --border-dim: rgba(16, 19, 22, 0.07);
+  --border-med: rgba(16, 19, 22, 0.12);
+  --border-strong: rgba(16, 19, 22, 0.18);
+  --border-hover-accent: rgba(30, 158, 115, 0.35);
+  --border-hover-accent-strong: rgba(30, 158, 115, 0.55);
+  --overlay-bg: rgba(16, 19, 22, 0.03);
+  --overlay-bg-hover-strong: rgba(16, 19, 22, 0.05);
+  --color-slate-gray: #E2E6EA;
+  --sidebar-bg: rgba(255, 255, 255, 0.80);
+  --elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --shadow-sm: 0 1px 2px rgba(16, 19, 22, 0.06), 0 1px 1px rgba(16, 19, 22, 0.04);
+  --shadow-md: 0 6px 16px -6px rgba(16, 19, 22, 0.12), 0 2px 6px -2px rgba(16, 19, 22, 0.08);
+  --shadow-lg: 0 24px 60px -20px rgba(16, 19, 22, 0.16), 0 8px 20px -8px rgba(16, 19, 22, 0.10);
+  --aura-signal: radial-gradient(900px 480px at 12% -8%, rgba(30, 158, 115, 0.08), transparent 60%);
+  --select-bg-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%231E9E73' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'%3E%3C/path%3E%3C/svg%3E");
 }
 
 * {
@@ -149,14 +179,118 @@ a {
 
 .main-content {
   flex: 1;
-  padding: var(--spacing-32) var(--spacing-40);
-  max-width: var(--page-max-width);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Modern app frame: a thin sticky top bar (global chrome) + a full-width,
+   generously-padded content area. Replaces the old floating circle toolbar. */
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: 60px;
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 540px) 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 0 clamp(20px, 3vw, 40px);
+  background: color-mix(in srgb, var(--surface-base) 72%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+/* Centered search field (the ⌘K trigger) — a real field, not a tiny pill. */
+.topbar-search {
+  grid-column: 2;
+  justify-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  width: 100%;
+  padding: 0 12px 0 14px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color .16s var(--ease), background .16s var(--ease), color .16s var(--ease);
+}
+.topbar-search:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+.topbar-search:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.topbar-right {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-control);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+}
+.topbar-btn:hover {
+  color: var(--text);
+  background: var(--surface-overlay);
+  border-color: var(--border);
+}
+.topbar-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.topbar-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #06140E;
+  background: var(--accent);
+}
+.content-scroll {
+  flex: 1;
+  width: 100%;
+  max-width: 1600px;
   margin: 0 auto;
+  padding: 32px clamp(20px, 3vw, 40px) 72px;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-24);
-  width: 0;
-  min-width: 0;
 }
 
 @media (max-width: 1024px) {
@@ -198,32 +332,40 @@ a {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, rgba(204, 145, 102, 0.03) 0%, transparent 100%);
+  background: transparent;
   pointer-events: none;
 }
 
 .card:hover {
   border-color: var(--border-hover-accent);
   box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
 }
 
 .card-elevated {
   background-color: var(--color-pewter-accent);
 }
 
-/* Typography elements */
+/* Typography elements — a real, tight, modern scale (weight + tracking carry
+   hierarchy, not size). Inline fontSize overrides still win where set. */
 h1, h2, h3, h4, h5, h6 {
   color: var(--color-pure-white);
   font-family: var(--font-inter);
-  font-weight: 600;
   margin-top: 0;
-  letter-spacing: -0.025em;
+  text-wrap: balance;
 }
+h1 { font-size: 30px; line-height: 1.15; font-weight: 650; letter-spacing: -0.022em; }
+h2 { font-size: 22px; line-height: 1.2;  font-weight: 620; letter-spacing: -0.018em; }
+h3 { font-size: 17px; line-height: 1.3;  font-weight: 600; letter-spacing: -0.012em; }
+h4 { font-size: 15px; line-height: 1.35; font-weight: 600; letter-spacing: -0.008em; }
+h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0; }
 
+/* "serif-display" is a legacy class name; the design language is all-Geist
+   (serif retired). Kept as an alias so existing markup needs no churn. */
 .serif-display {
-  font-family: var(--font-ivy-presto);
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 /* Navigation Links */
@@ -426,14 +568,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .pill-btn-danger {
-  background-color: rgba(239, 68, 68, 0.1);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background-color: rgba(229, 103, 95, 0.1);
+  color: #E5675F;
+  border: 1px solid rgba(229, 103, 95, 0.2);
 }
 
 .pill-btn-danger:hover {
-  background-color: rgba(239, 68, 68, 0.25);
-  border-color: #ef4444;
+  background-color: rgba(229, 103, 95, 0.25);
+  border-color: #E5675F;
   color: #ffffff;
 }
 
@@ -468,8 +610,10 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--color-midnight-ink);
   border: none;
   font-weight: 600;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: 0 4px 15px rgba(174, 147, 87, 0.2);
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  /* The Memory Instrument: no glows — a subtle inset top-highlight reads the
+     primary control as raised against color-stepped elevation. */
+  box-shadow: var(--elev-inset);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -477,9 +621,9 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .button-gold-primary:hover {
-  transform: translateY(-1.5px);
-  filter: brightness(1.1);
-  box-shadow: 0 6px 20px rgba(174, 147, 87, 0.35);
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow: var(--elev-inset);
 }
 
 .button-gold-ghost {
@@ -494,7 +638,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .button-gold-ghost:hover {
-  background: rgba(204, 145, 102, 0.08);
+  background: rgba(52, 194, 142, 0.08);
   border-color: var(--color-pure-white);
   transform: translateY(-1.5px);
 }
@@ -583,14 +727,12 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .public-header-inner {
-  max-width: var(--page-max-width);
-  margin: 0 auto;
   width: 100%;
-  height: 68px;
+  height: 64px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 var(--spacing-24);
+  padding: 0 clamp(20px, 5vw, 96px);
 }
 
 .public-nav {
@@ -599,10 +741,14 @@ h1, h2, h3, h4, h5, h6 {
   gap: var(--spacing-24);
 }
 
+.public-nav {
+  flex-wrap: nowrap;
+}
 .public-nav-link {
   color: var(--color-stone-text);
   font-weight: 500;
   font-size: 14px;
+  white-space: nowrap;
   transition: color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -613,9 +759,14 @@ h1, h2, h3, h4, h5, h6 {
 .public-content {
   flex: 1;
   width: 100%;
-  max-width: var(--page-max-width);
-  margin: 0 auto;
-  padding: var(--spacing-32) var(--spacing-40);
+  padding: 48px clamp(20px, 5vw, 96px) 96px;
+}
+/* Sections inside Home center their own content at a comfortable wide max so
+   backgrounds go edge-to-edge (full-screen) but text stays readable. */
+.public-content > * {
+  max-width: 1536px;
+  margin-left: auto;
+  margin-right: auto;
 }
 @keyframes brainrouter-spin {
   to {
@@ -633,15 +784,15 @@ html {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #000;
+  background: var(--surface-base);
   z-index: 9999;
 }
 
 .loading-spinner-ring {
   width: 40px;
   height: 40px;
-  border: 3px solid rgba(204, 145, 102, 0.18);
-  border-top-color: #cc9166;
+  border: 3px solid var(--accent-wash);
+  border-top-color: var(--accent);
   border-radius: 9999px;
   animation: brainrouter-spin 0.8s linear infinite;
 }
@@ -659,8 +810,8 @@ html {
 .markdown-content h3,
 .markdown-content h4 {
   color: var(--color-pure-white);
-  font-family: var(--font-ivy-presto), var(--font-inter), serif;
-  font-weight: 500;
+  font-family: var(--font-sans);
+  font-weight: 600;
   margin-top: 24px;
   margin-bottom: 12px;
   letter-spacing: 0.01em;
@@ -787,4 +938,94 @@ html {
 
 .markdown-content--chat > *:first-child {
   margin-top: 0 !important;
+}
+
+/* ─── DASH-MOTION-A11Y ──────────────────────────────────────────────────────
+   Keyboard focus: a visible Signal ring on focus-visible only (so mouse clicks
+   don't get an outline, but tab navigation always does). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Respect the OS "reduce motion" preference: near-instant transitions and no
+   decorative animation/transform for users who ask for it. Pairs with framer's
+   <MotionConfig reducedMotion="user">, which covers JS-driven animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Marketing hero: text-left + product motif-right, collapses to one column. */
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 48px;
+  align-items: center;
+  padding: 8px 0 8px;
+}
+@media (max-width: 900px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+}
+
+/* ─── Border beam ────────────────────────────────────────────────────────────
+   A Signal light that travels around a card border: a rotating conic gradient
+   masked to a 1px ring. Drop <BorderBeam/> inside a position:relative container.
+   Degrades to a faint static arc where @property is unsupported; the
+   prefers-reduced-motion guard above freezes the rotation. */
+@property --beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+.border-beam {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 1;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0deg,
+    transparent 55deg,
+    var(--accent) 90deg,
+    transparent 125deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.85;
+  animation: border-beam-spin 7s linear infinite;
+}
+@keyframes border-beam-spin {
+  to { --beam-angle: 360deg; }
+}
+
+/* ─── BrainRouter logo mark (components/BrainRouterLogo.tsx) ──────────────────
+   A memory-graph SVG mark. CSS owns only the subtle "breathing" pulse on the
+   core recall node — the rest is static vector. */
+.brl-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: brl-breathe 2.8s ease-in-out infinite;
+}
+@keyframes brl-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.34; }
+  50%      { transform: scale(1.85); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brl-pulse { animation: none; opacity: 0; }
 }

@@ -49,7 +49,7 @@ export default function SkillsPage() {
         </div>
 
         {error && (
-          <div style={{ padding: "16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid #ef4444", borderRadius: "8px", color: "#f87171" }}>
+          <div style={{ padding: "16px", background: "rgba(229, 103, 95, 0.1)", border: "1px solid #E5675F", borderRadius: "8px", color: "#E5675F" }}>
             Failed to load skill activations: {error}
           </div>
         )}
@@ -73,13 +73,13 @@ export default function SkillsPage() {
                     key={act.skillName}
                     style={{
                       background: "rgba(255, 255, 255, 0.02)",
-                      border: isPrewarmed ? "1px solid rgba(174, 147, 87, 0.3)" : "1px solid var(--border-dim)",
+                      border: isPrewarmed ? "1px solid rgba(52, 194, 142, 0.3)" : "1px solid var(--border-dim)",
                       borderRadius: "12px",
                       padding: "20px",
                       display: "flex",
                       flexDirection: "column",
                       gap: "12px",
-                      boxShadow: isPrewarmed ? "0 4px 20px rgba(174, 147, 87, 0.05)" : "none",
+                      boxShadow: isPrewarmed ? "var(--elev-inset)" : "none",
                       transition: "all 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
                     }}
                     onMouseOver={(e) => {
@@ -101,9 +101,9 @@ export default function SkillsPage() {
                           fontWeight: 600,
                           padding: "2px 8px",
                           borderRadius: "9999px",
-                          background: isPrewarmed ? "rgba(174, 147, 87, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                          background: isPrewarmed ? "rgba(52, 194, 142, 0.15)" : "rgba(255, 255, 255, 0.05)",
                           color: isPrewarmed ? "var(--color-golden-accent)" : "var(--color-ash-text)",
-                          border: isPrewarmed ? "1px solid rgba(174, 147, 87, 0.3)" : "1px solid transparent",
+                          border: isPrewarmed ? "1px solid rgba(52, 194, 142, 0.3)" : "1px solid transparent",
                         }}
                       >
                         {isPrewarmed ? "PRE-WARMED" : "INACTIVE"}
@@ -123,10 +123,10 @@ export default function SkillsPage() {
                             width: `${percentage}%`, 
                             height: "100%", 
                             background: isPrewarmed 
-                              ? "linear-gradient(90deg, #ae9357 0%, #ecd08c 100%)" 
-                              : "linear-gradient(90deg, #4b5563 0%, #9ca3af 100%)",
+                              ? "linear-gradient(90deg, #34C28E 0%, #34C28E 100%)" 
+                              : "linear-gradient(90deg, #3C434B 0%, #6B7480 100%)",
                             borderRadius: "9999px",
-                            boxShadow: isPrewarmed ? "0 0 8px rgba(174, 147, 87, 0.5)" : "none",
+                            boxShadow: isPrewarmed ? "none" : "none",
                             transition: "width 0.5s ease-out"
                           }} 
                         />

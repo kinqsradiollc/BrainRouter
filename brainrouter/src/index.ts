@@ -133,25 +133,28 @@ import { evidenceRouter } from './api/routes/evidence.js';
 import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
 import { skillsRouter } from './api/routes/skills.js';
-import { USING_FALLBACK_JWT_SECRET } from './api/middleware/auth.js';
+import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
+import { securityHeaders, corsMiddleware } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
+import { createRateLimiter } from './api/middleware/rateLimit.js';
+import { errorHandler } from './api/middleware/errorHandler.js';
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
-const authAttempts = new Map<string, { count: number; resetAt: number }>();
+// Strict limiter for the credential endpoints — brute-force backstop.
+const authRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: "Too many authentication attempts",
+});
 
-function authRateLimit(req: Request, res: Response, next: () => void) {
-  const now = Date.now();
-  const key = req.ip ?? "unknown";
-  const current = authAttempts.get(key);
-  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + 15 * 60 * 1000 };
-  bucket.count += 1;
-  authAttempts.set(key, bucket);
-  if (bucket.count > 20) {
-    res.status(429).json({ error: "Too many authentication attempts" });
-    return;
-  }
-  next();
-}
+// Generous global limiter across the whole /api surface (runaway-client backstop).
+// Sized well above normal dashboard polling; tune or disable (max=0) via env.
+const GLOBAL_RATE_LIMIT_MAX = Number.parseInt(process.env.BRAINROUTER_RATE_LIMIT_MAX ?? "600", 10);
+const GLOBAL_RATE_LIMIT_WINDOW_MS = Number.parseInt(process.env.BRAINROUTER_RATE_LIMIT_WINDOW_MS ?? "60000", 10);
+const apiRateLimit = createRateLimiter({
+  windowMs: Number.isFinite(GLOBAL_RATE_LIMIT_WINDOW_MS) ? GLOBAL_RATE_LIMIT_WINDOW_MS : 60_000,
+  max: Number.isFinite(GLOBAL_RATE_LIMIT_MAX) ? GLOBAL_RATE_LIMIT_MAX : 600,
+});
 
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 function parseFlag(flag: string): string | undefined {
@@ -478,29 +481,23 @@ if (USE_HTTP) {
 
   const app = express();
   
-  // Custom CORS middleware to support cross-origin requests from Dashboard
-  app.use((req, res, next) => {
-    const allowedOrigin = process.env.BRAINROUTER_CORS_ORIGIN || "http://localhost:3000";
-    const requestOrigin = req.headers.origin;
-    if (!requestOrigin || requestOrigin === allowedOrigin) {
-      res.setHeader("Access-Control-Allow-Origin", requestOrigin ?? allowedOrigin);
-    }
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
-    if (req.method === "OPTIONS") {
-      res.sendStatus(200);
-      return;
-    }
-    next();
-  });
+  // API-HEADERS-CORS (0.4.9) — security headers + a strict CORS allowlist.
+  // BRAINROUTER_CORS_ORIGIN may be a comma-separated list; only listed origins
+  // are reflected and only they receive credentials.
+  app.use(securityHeaders({ production: IS_PRODUCTION }));
+  app.use(corsMiddleware());
 
   // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
   // rejected large but legitimate requests; override via BRAINROUTER_MAX_BODY_SIZE.
   const jsonBodyLimit = resolveJsonBodyLimit();
   app.use(express.json({ limit: jsonBodyLimit }));
+  // API-AUTHN (0.4.9) — fail closed in production if no JWT secret is configured.
+  const jwtBootErr = jwtSecretBootError(IS_PRODUCTION, USING_FALLBACK_JWT_SECRET);
+  if (jwtBootErr) {
+    console.error(`[BrainRouter] FATAL: ${jwtBootErr}`);
+    throw new Error(jwtBootErr);
+  }
   if (USING_FALLBACK_JWT_SECRET) {
     console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
   }
@@ -510,6 +507,7 @@ if (USE_HTTP) {
     res.json({ status: 'ok', transport: 'http', root: config.localRoot });
   });
 
+  app.use("/api", apiRateLimit);
   app.use("/api/auth/signin", authRateLimit);
   app.use("/api/auth/signup", authRateLimit);
   app.use("/api/auth", authRouter);
@@ -642,6 +640,11 @@ if (USE_HTTP) {
   // after the routes so a body-parser parse error from express.json() reaches it.
   app.use(payloadTooLargeHandler(jsonBodyLimit));
 
+  // API-ERRORS: terminal handler — one consistent { error, code } envelope for
+  // anything that bubbles past the routes; never leaks a stack/internal message
+  // to clients in production. Mounted LAST so specific handlers (413) run first.
+  app.use(errorHandler({ production: IS_PRODUCTION }));
+
   const httpServer = app.listen(PORT, () => {
     console.log(`\n🧠 BrainRouter MCP Server`);
     console.log(`   Transport : HTTP (Streamable)`);
@@ -650,9 +653,23 @@ if (USE_HTTP) {
     console.log(`   Root      : ${config.localRoot}\n`);
   });
 
-  process.on('SIGINT', () => {
+  // Fast, idempotent shutdown on SIGINT *and* SIGTERM (the latter is what
+  // `tsx watch` sends on a file change). Without this the open keep-alive
+  // connections + background sweeper intervals keep the event loop alive, so
+  // `httpServer.close()`'s callback never fires and the dev watcher has to
+  // force-kill after 5s. We drop connections immediately and hold a short hard
+  // deadline so the process always exits well before any force-kill.
+  let shuttingDown = false;
+  const shutdownHttp = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const hardExit = setTimeout(() => process.exit(0), 700);
+    hardExit.unref();
+    try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
     httpServer.close(() => process.exit(0));
-  });
+  };
+  process.on('SIGINT', shutdownHttp);
+  process.on('SIGTERM', shutdownHttp);
 
 } else {
   // ── stdio transport (default) ───────────────────────────────────────────────
@@ -708,8 +725,15 @@ if (USE_HTTP) {
   await server.connect(transport);
   console.error('BrainRouter MCP server running on stdio');
 
-  process.on('SIGINT', async () => {
-    await server.close();
+  let stdioShuttingDown = false;
+  const shutdownStdio = async () => {
+    if (stdioShuttingDown) return;
+    stdioShuttingDown = true;
+    const hardExit = setTimeout(() => process.exit(0), 700);
+    hardExit.unref();
+    try { await server.close(); } catch { /* ignore */ }
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', shutdownStdio);
+  process.on('SIGTERM', shutdownStdio);
 }

@@ -26,7 +26,7 @@ export function SceneCard({ scene, onEvict }: SceneCardProps) {
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ 
         y: -3,
-        borderColor: "rgba(204, 145, 102, 0.2)"
+        borderColor: "rgba(52, 194, 142, 0.2)"
       }}
       transition={{ type: "spring", stiffness: 260, damping: 20 }}
       style={{
@@ -76,7 +76,7 @@ export function SceneCard({ scene, onEvict }: SceneCardProps) {
             height: "100%", 
             borderRadius: "9999px", 
             background: "var(--color-golden-accent)",
-            boxShadow: "0 0 8px var(--color-golden-accent)"
+            boxShadow: "none"
           }}
         />
       </div>
@@ -127,8 +127,8 @@ export function SceneCard({ scene, onEvict }: SceneCardProps) {
               fontSize: "11px",
               borderRadius: "4px",
               cursor: "pointer",
-              border: "1px solid rgba(239, 68, 68, 0.2)",
-              background: "rgba(239, 68, 68, 0.08)",
+              border: "1px solid rgba(229, 103, 95, 0.2)",
+              background: "rgba(229, 103, 95, 0.08)",
               textTransform: "uppercase",
               fontWeight: 600,
               letterSpacing: "0.02em"

@@ -62,13 +62,22 @@ export interface TreePolicy {
   minSceneRecords: number;
   /** Max leaves built per maintenance pass — bounds work per tick. */
   leafPerPass: number;
-  /** Unsealed topic leaves that trigger a seal into the parent domain. */
+  /** Unsealed topic leaves that EAGERLY trigger a seal into the parent domain. */
   sealThreshold: number;
+  /**
+   * MEM-10b — once a bucket of unsealed topic leaves has *settled* (a
+   * maintenance pass added no new leaf), seal it even if it never reached
+   * `sealThreshold`. Most users only ever accumulate a handful of distinct
+   * mature scenes, so without this floor a bucket of (say) 4 leaves would sit
+   * unsealed forever and tree_sealer/tree_digest would never run. Set to a high
+   * value to require full buckets; min 1.
+   */
+  idleSealFloor: number;
   /** BRAIN-P4-T5 — unsealed global-domain roots that trigger a global rollup digest. */
   globalRollupThreshold: number;
 }
 
-const DEFAULTS: TreePolicy = { minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, globalRollupThreshold: 3 };
+const DEFAULTS: TreePolicy = { minSceneRecords: 3, leafPerPass: 5, sealThreshold: 6, idleSealFloor: 2, globalRollupThreshold: 3 };
 
 /**
  * Read the (env-overridable) tree-build thresholds. Invalid/blank values fall
@@ -76,6 +85,7 @@ const DEFAULTS: TreePolicy = { minSceneRecords: 3, leafPerPass: 5, sealThreshold
  *   BRAINROUTER_TREE_MIN_SCENE_RECORDS  (default 3)
  *   BRAINROUTER_TREE_LEAF_PER_PASS      (default 5)
  *   BRAINROUTER_TREE_SEAL_THRESHOLD     (default 6)
+ *   BRAINROUTER_TREE_IDLE_SEAL_FLOOR    (default 2)
  *   BRAINROUTER_TREE_GLOBAL_ROLLUP      (default 3)
  */
 export function readTreePolicy(env: NodeJS.ProcessEnv = process.env): TreePolicy {
@@ -87,6 +97,7 @@ export function readTreePolicy(env: NodeJS.ProcessEnv = process.env): TreePolicy
     minSceneRecords: num("BRAINROUTER_TREE_MIN_SCENE_RECORDS", DEFAULTS.minSceneRecords),
     leafPerPass: num("BRAINROUTER_TREE_LEAF_PER_PASS", DEFAULTS.leafPerPass),
     sealThreshold: num("BRAINROUTER_TREE_SEAL_THRESHOLD", DEFAULTS.sealThreshold),
+    idleSealFloor: num("BRAINROUTER_TREE_IDLE_SEAL_FLOOR", DEFAULTS.idleSealFloor),
     globalRollupThreshold: num("BRAINROUTER_TREE_GLOBAL_ROLLUP", DEFAULTS.globalRollupThreshold),
   };
 }

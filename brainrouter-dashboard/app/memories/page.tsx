@@ -158,7 +158,7 @@ export default function MemoriesPage() {
           )}
         </FilterBar>
 
-        {error && <div style={{ color: "#f87171", fontSize: "13px" }}>{error}</div>}
+        {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
 
         <div style={{ display: "grid", gap: "14px" }}>
           {memories.map((memory) => (

@@ -74,7 +74,7 @@ export function InfiniteScrollSentinel({ hasMore, isFetchingMore, onLoadMore }: 
               height: "7px",
               borderRadius: "50%",
               background: "currentColor",
-              boxShadow: "0 0 10px rgba(174, 147, 87, 0.35)"
+              boxShadow: "none"
             }}
           />
         ))}

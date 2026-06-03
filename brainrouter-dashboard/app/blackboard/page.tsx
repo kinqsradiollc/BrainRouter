@@ -15,8 +15,8 @@ const STATUS_COLOR: Record<string, string> = {
   pending: "var(--color-stone-text)",
   reconciled: "var(--color-golden-accent)",
   duplicate: "#a78bfa",
-  committed: "#4ade80",
-  rejected: "#fca5a5",
+  committed: "#34C28E",
+  rejected: "#E5675F",
 };
 
 export default function BlackboardPage() {
@@ -38,7 +38,7 @@ export default function BlackboardPage() {
           title="Blackboard"
           description="Extracted memory candidates staged for review — reconciled (dedup/score), then committed to cognitive records or rejected."
         />
-        {error && <p style={{ color: "#fca5a5", fontSize: "13px" }}>Could not load blackboard: {error}</p>}
+        {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load blackboard: {error}</p>}
         {!items && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
         {items && items.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No staged candidates. Items appear here before they commit to long-term memory (0.4.3).</p>
@@ -55,7 +55,7 @@ export default function BlackboardPage() {
                 </span>
               </div>
               <p style={{ color: "var(--color-white-frost)", fontSize: "13px", margin: 0, overflowWrap: "anywhere" }}>{it.candidate?.content}</p>
-              {it.committedRecordId && <span style={{ color: "#4ade80", fontSize: "11px" }}>→ committed: {it.committedRecordId}</span>}
+              {it.committedRecordId && <span style={{ color: "#34C28E", fontSize: "11px" }}>→ committed: {it.committedRecordId}</span>}
             </div>
           ))}
         </div>

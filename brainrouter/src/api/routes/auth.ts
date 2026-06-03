@@ -2,10 +2,14 @@ import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { memoryEngine } from "../../memory/engine.js";
-import { hashPassword, signJwt, verifyPassword } from "../auth/crypto.js";
+import { hashPassword, signJwt, verifyJwt, verifyPassword } from "../auth/crypto.js";
 import { JWT_SECRET, requireJwt, type AuthedRequest } from "../middleware/auth.js";
 
-const jwtExpiry = Number.parseInt(process.env.BRAINROUTER_JWT_EXPIRES_SECS ?? "86400", 10);
+// Short-lived access token (default 1h) + long-lived refresh token (default 30d).
+// The client silently mints a fresh access token from the refresh token, so the
+// session persists across tabs and browser restarts without re-login.
+const jwtExpiry = Number.parseInt(process.env.BRAINROUTER_JWT_EXPIRES_SECS ?? "3600", 10);
+const refreshExpiry = Number.parseInt(process.env.BRAINROUTER_REFRESH_EXPIRES_SECS ?? "2592000", 10);
 
 function createJwt(user: { userId: string; isAdmin: boolean; email: string; displayName: string }) {
   return signJwt(
@@ -16,8 +20,14 @@ function createJwt(user: { userId: string; isAdmin: boolean; email: string; disp
       displayName: user.displayName,
     },
     JWT_SECRET,
-    Number.isFinite(jwtExpiry) ? jwtExpiry : 86400,
+    Number.isFinite(jwtExpiry) ? jwtExpiry : 3600,
   );
+}
+
+/** Opaque-ish refresh token: a signed JWT carrying only the user id + a refresh
+ *  marker, so /refresh can verify it without a server-side store. */
+function createRefreshToken(userId: string) {
+  return signJwt({ userId, type: "refresh" }, JWT_SECRET, Number.isFinite(refreshExpiry) ? refreshExpiry : 2592000);
 }
 
 function userIdFromEmail(email: string): string {
@@ -60,7 +70,7 @@ authRouter.post("/signin", async (req, res) => {
   }
 
   const jwt = createJwt(user);
-  res.json({ jwt, userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName, apiKey: user.apiKey });
+  res.json({ jwt, refreshToken: createRefreshToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName, apiKey: user.apiKey });
 });
 
 authRouter.post("/signup", async (req, res) => {
@@ -104,10 +114,36 @@ authRouter.post("/signup", async (req, res) => {
     }
 
     const jwt = createJwt(user);
-    res.status(201).json({ jwt, userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
+    res.status(201).json({ jwt, refreshToken: createRefreshToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
   } catch (error: any) {
     res.status(400).json({ error: error?.message ?? "Failed to create user" });
   }
+});
+
+authRouter.post("/refresh", (req, res) => {
+  const refreshToken = String(req.body?.refreshToken ?? "");
+  if (!refreshToken) {
+    res.status(400).json({ error: "refreshToken is required" });
+    return;
+  }
+  const payload = verifyJwt(refreshToken, JWT_SECRET);
+  if (!payload || payload.type !== "refresh" || typeof payload.userId !== "string") {
+    res.status(401).json({ error: "Invalid or expired refresh token" });
+    return;
+  }
+  const user = memoryEngine.getUserById(payload.userId);
+  if (!user || user.status === "disabled") {
+    res.status(401).json({ error: "Account not found or disabled" });
+    return;
+  }
+  // Rotate: hand back a fresh access token AND a fresh refresh token.
+  res.json({ jwt: createJwt(user), refreshToken: createRefreshToken(user.userId) });
+});
+
+authRouter.post("/signout", (_req, res) => {
+  // Stateless tokens: the client discards both. Server-side revocation would
+  // need a refresh-token denylist (future hardening).
+  res.json({ success: true });
 });
 
 authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
@@ -121,7 +157,8 @@ authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
     displayName: user.displayName,
     email: user.email,
     isAdmin: user.isAdmin,
-    apiKey: user.apiKey,
+    // API-AUTHN (0.4.9) — /me must NOT expose the raw API key; it is returned
+    // only at signup / signin / rotate-key. /me is read repeatedly.
     createdAt: user.createdAt,
     status: user.status,
     mcpPath: path.resolve(process.cwd(), "dist/index.js")

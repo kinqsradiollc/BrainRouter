@@ -371,7 +371,7 @@ export default function ChatPage() {
   const errorBoxStyle: React.CSSProperties = {
     alignSelf: "center",
     maxWidth: "720px",
-    background: "rgba(204, 145, 102, 0.08)",
+    background: "rgba(52, 194, 142, 0.08)",
     border: "1px solid var(--color-golden-accent)",
     color: "var(--color-golden-accent)",
     borderRadius: "10px",

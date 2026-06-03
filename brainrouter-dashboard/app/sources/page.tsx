@@ -69,7 +69,7 @@ export default function SourcesPage() {
           description="Captured source documents chunked for citable, source-grounded recall. Conversation transcripts are auto-captured every turn and hidden by default (toggle below); prune old ones with the memory_prune_sources tool. Click a document to drill into its chunks."
         />
 
-        {error && <p style={{ color: "#fca5a5", fontSize: "13px" }}>Could not load sources: {error}</p>}
+        {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load sources: {error}</p>}
         {!docs && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading sources…</p>}
         {docs && docs.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>

@@ -23,10 +23,21 @@ export interface SigninRequest {
 
 export interface SigninResponse {
   jwt: string;
+  /** Long-lived refresh token; mint a fresh `jwt` via POST /api/auth/refresh. */
+  refreshToken?: string;
   userId: string;
   isAdmin: boolean;
   displayName: string;
   apiKey: string;
+}
+
+export interface RefreshRequest {
+  refreshToken: string;
+}
+
+export interface RefreshResponse {
+  jwt: string;
+  refreshToken: string;
 }
 
 export interface SignupRequest {
@@ -37,6 +48,7 @@ export interface SignupRequest {
 
 export interface SignupResponse {
   jwt: string;
+  refreshToken?: string;
   userId: string;
   isAdmin: boolean;
   displayName: string;

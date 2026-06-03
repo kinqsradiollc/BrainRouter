@@ -128,7 +128,7 @@ export default function UsersPage() {
         </div>
 
         {/* Info Card */}
-        <PremiumCard level={3} style={{ border: "1px solid rgba(174, 147, 87, 0.15)" }}>
+        <PremiumCard level={3} style={{ border: "1px solid rgba(52, 194, 142, 0.15)" }}>
           <h3 className="serif-display" style={{ fontSize: "18px", margin: 0, color: "var(--color-pure-white)", fontWeight: 500 }}>
             Open Signup Subsystem Active
           </h3>
@@ -142,11 +142,11 @@ export default function UsersPage() {
           <span style={{ fontSize: "12px", color: "var(--color-silver-text)", fontWeight: 600 }}>Action Legend:</span>
           <div style={{ display: "flex", gap: "16px", fontSize: "12px", color: "var(--color-stone-text)" }}>
              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E5675F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
                Disable
              </span>
              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34C28E" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                Enable
              </span>
              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -154,7 +154,7 @@ export default function UsersPage() {
                Rotate Key
              </span>
              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E5675F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                Delete
              </span>
           </div>
@@ -208,10 +208,10 @@ export default function UsersPage() {
                           gap: "6px",
                           fontSize: "12px",
                           fontWeight: 500,
-                          color: u.status === "active" ? "#10b981" : "var(--color-ash-text)"
+                          color: u.status === "active" ? "#34C28E" : "var(--color-ash-text)"
                         }}
                       >
-                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: u.status === "active" ? "#10b981" : "var(--color-ash-text)", boxShadow: u.status === "active" ? "0 0 6px #10b981" : "none" }} />
+                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: u.status === "active" ? "#34C28E" : "var(--color-ash-text)", boxShadow: "none" }} />
                         {u.status}
                       </span>
                     </td>
@@ -232,8 +232,8 @@ export default function UsersPage() {
                             display: "inline-flex", alignItems: "center", justifyContent: "center",
                             opacity: u.userId === meId ? 0.35 : 1,
                             transition: "all 0.15s ease",
-                            borderColor: u.status === "active" ? "rgba(239,68,68,0.35)" : "rgba(16,185,129,0.35)",
-                            color: u.status === "active" ? "#f87171" : "#34d399",
+                            borderColor: u.status === "active" ? "rgba(229, 103, 95,0.35)" : "rgba(52, 194, 142,0.35)",
+                            color: u.status === "active" ? "#E5675F" : "#34C28E",
                           }}
                         >
                           {u.status === "active" ? (
@@ -254,7 +254,7 @@ export default function UsersPage() {
                           title="Rotate the user's API key — their current key will stop working"
                           style={{
                             width: "30px", height: "30px", borderRadius: "8px",
-                            border: "1px solid rgba(174,147,87,0.3)",
+                            border: "1px solid rgba(52, 194, 142,0.3)",
                             background: "transparent", cursor: resettingUserId === u.userId ? "default" : "pointer",
                             display: "inline-flex", alignItems: "center", justifyContent: "center",
                             opacity: resettingUserId === u.userId ? 0.4 : 1,
@@ -277,12 +277,12 @@ export default function UsersPage() {
                           title={u.userId === meId ? "Cannot delete yourself" : "Permanently delete this user"}
                           style={{
                             width: "30px", height: "30px", borderRadius: "8px",
-                            border: "1px solid rgba(239,68,68,0.25)",
+                            border: "1px solid rgba(229, 103, 95,0.25)",
                             background: "transparent", cursor: u.userId === meId ? "default" : "pointer",
                             display: "inline-flex", alignItems: "center", justifyContent: "center",
                             opacity: u.userId === meId ? 0.35 : 1,
                             transition: "all 0.15s ease",
-                            color: "#f87171",
+                            color: "#E5675F",
                           }}
                         >
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -309,7 +309,7 @@ export default function UsersPage() {
         </div>
 
         {error && (
-          <div style={{ color: "#f87171", fontSize: "13px" }}>{error}</div>
+          <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>
         )}
 
         {/* Generated Key Modal */}
@@ -371,7 +371,7 @@ export default function UsersPage() {
                 type="checkbox"
                 checked={createForm.isAdmin}
                 onChange={(event) => setCreateForm((current) => ({ ...current, isAdmin: event.target.checked }))}
-                style={{ accentColor: "#cc9166" }}
+                style={{ accentColor: "#34C28E" }}
               />
               Admin user
             </label>
