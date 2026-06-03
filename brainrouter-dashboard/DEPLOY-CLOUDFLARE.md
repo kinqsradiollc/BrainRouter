@@ -16,22 +16,34 @@ subdirectory — **Recommended**:
 | --- | --- |
 | **Root directory** | `brainrouter-dashboard` |
 | **Build command** | `npm run build:cf` |
-| **Build output directory** | `out` |
+| **Deploy command** *(Workers Builds)* | `npx wrangler deploy` |
+| **Build output directory** *(Pages)* | `out` |
 | **Environment variables** | `NEXT_PUBLIC_API_URL=https://your-api` (+ `NEXT_PUBLIC_BRAINROUTER_STATIC_PRESENTATION=true` for the marketing-only preview) |
 
-> The default `npm run build` (plain `next build`) **won't** work — it produces a
-> `.next` server build, not a static export. Use **`build:cf`** (which sets
-> `CLOUDFLARE_BUILD=1` → `output: "export"` → `./out`).
+> **Two things that break the deploy if you skip them:**
+> - The default `npm run build` (plain `next build`) produces a `.next` **server**
+>   build, not the static export the Worker serves. Use **`build:cf`** (sets
+>   `CLOUDFLARE_BUILD=1` → `output: "export"` → `./out`).
+> - `wrangler deploy` must run **inside `brainrouter-dashboard/`** (where
+>   `wrangler.jsonc` + `out/` are). Running it at the repo root fails with
+>   *"detection logic has been run in the root of a workspace…"*. Keeping **Root
+>   directory = `brainrouter-dashboard`** makes both the build and `npx wrangler
+>   deploy` run there automatically.
 
 ### Alternative: build the whole monorepo from the repo root
 
 If you'd rather build everything from source (no reliance on the published
-packages), set **Root directory = `/`**, **Build command = `npm run cf:build`**
-(builds `types → sdk → hooks` then the dashboard static export), **Output =
-`brainrouter-dashboard/out`**.
+packages):
 
-(For a Worker via `wrangler` instead of Pages: from `brainrouter-dashboard/`, run
-`npm run build:cf` then `wrangler deploy` — its `wrangler.jsonc` serves `./out`.)
+| Setting | Value |
+| --- | --- |
+| **Root directory** | `/` (repo root) |
+| **Build command** | `npm run cf:build` (builds `types → sdk → hooks` then the dashboard static export) |
+| **Deploy command** *(Workers Builds)* | `npm run cf:deploy` (= `cd brainrouter-dashboard && npx wrangler deploy`) |
+| **Build output directory** *(Pages)* | `brainrouter-dashboard/out` |
+
+(`cf:deploy` exists so the deploy step `cd`s into the project — running
+`wrangler` from the workspace root errors.)
 
 ## How it's wired
 
