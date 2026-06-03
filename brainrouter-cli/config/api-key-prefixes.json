@@ -6,9 +6,10 @@
     "  - foreignModelPrefixes: model-id prefixes that suggest the user picked a foreign-vendor model while the active endpoint is api.openai.com itself. Catches the `anthropic/claude-*` foot-gun.",
     "Loaded by brainrouter-cli/src/runtime/configLoader.ts at startup."
   ],
-  "lastUpdated": "2026-05-27",
+  "lastUpdated": "2026-06-03",
   "known": [
     { "prefix": "sk-", "vendor": "OpenAI" },
+    { "prefix": "fe_oa_", "vendor": "FreeModel" },
     { "prefix": "sk-or-v1-", "vendor": "OpenRouter" },
     { "prefix": "sk-proj-", "vendor": "OpenAI (scoped project key)" },
     { "prefix": "dsk-", "vendor": "DeepSeek" }

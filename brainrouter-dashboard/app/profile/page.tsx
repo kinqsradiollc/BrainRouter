@@ -330,7 +330,7 @@ export default function ProfilePage() {
                               brainrouter: {
                                 type: "sse",
                                 url: `${BASE_URL}/mcp`,
-                                serverURL: `${BASE_URL}/mcp`,
+                                // serverURL: `${BASE_URL}/mcp`,
                                 headers: {
                                   Authorization: `Bearer ${reveal ? cachedApiKey : maskKey(cachedApiKey)}`
                                 }
