@@ -50,11 +50,11 @@ function txt(o: Partial<TextLayer> & { x: number; y: number; w: number; text: st
   return { ...baseAt(o.x, o.y, o.w, o.fontSize ? Math.round(o.fontSize * 1.3) : 80), type: "text", name: o.name || "Text", text: o.text, fontFamily: o.fontFamily || "sans", fontSize: o.fontSize || 56, weight: o.weight ?? 600, color: o.color || "#ECEFF2", align: o.align || "left", letterSpacing: o.letterSpacing ?? -1, lineHeight: o.lineHeight ?? 1.1, effect: o.effect || "none", effectColor: o.effectColor || "#000000" };
 }
 
-/** Role badge pill. Pass `cx` to centre it horizontally (width is content-derived). */
-function badge(o: { y: number; h: number; label: string; roleKey: string; cx?: number; x?: number; style?: "glass" | "solid"; color?: string }): BadgeLayer {
+/** Role badge pill. Pass `cx` to centre, `x2` to right-align (width is content-derived). */
+function badge(o: { y: number; h: number; label: string; roleKey: string; cx?: number; x?: number; x2?: number; style?: "glass" | "solid"; color?: string }): BadgeLayer {
   const tmp: BadgeLayer = { ...baseAt(0, o.y, 0, o.h), type: "badge", name: "Badge", label: o.label, roleKey: o.roleKey, style: o.style || "solid", color: o.color || ACCENT };
   const w = badgeWidth(tmp);
-  const x = o.cx != null ? Math.round(o.cx - w / 2) : o.x ?? 0;
+  const x = o.x2 != null ? Math.round(o.x2 - w) : o.cx != null ? Math.round(o.cx - w / 2) : o.x ?? 0;
   return { ...tmp, x, w };
 }
 
@@ -93,6 +93,25 @@ export function roleCardTemplate(): EditorDoc {
   return d;
 }
 
+/** Landscape role card for LinkedIn / Facebook / X covers. Horizontal layout:
+ *  brand mark top-left, identity block on the right — deliberately keeping the
+ *  lower-left clear, where the platform overlays the profile photo. */
+export function roleBannerTemplate(): EditorDoc {
+  const d = blankDoc(1584, 396); // LinkedIn cover; maps cleanly to other banners
+  // Clean gradient — the whole identity block is right-aligned (avatar overlays
+  // the lower-LEFT), so a right-side rosette would clash; gradient keeps it tidy.
+  d.background = { type: "gradient", color: "#0B0D0F", from: "#191D22", to: "#0A0C0E", angle: 8, accent: ACCENT, src: null };
+  const R = 1512; // shared right edge for the block
+  d.layers = [
+    { ...baseAt(1263, 50, 249, 44), type: "logo", name: "Logo", lockup: "full", color: ACCENT },
+    badge({ x2: R, y: 124, h: 66, label: "FOUNDER", roleKey: "founder", style: "solid" }),
+    txt({ x: 412, y: 198, w: 1100, text: "Your Name", fontSize: 82, weight: 600, color: "#ECEFF2", align: "right", letterSpacing: -2 }),
+    txt({ x: 512, y: 298, w: 1000, text: "Founding Engineer · BrainRouter", fontSize: 28, weight: 400, color: "#9BA3AC", align: "right" }),
+    txt({ x: 812, y: 348, w: 700, text: "brainrouter.dev", fontSize: 21, weight: 500, color: "#5E6670", fontFamily: "mono", align: "right" }),
+  ];
+  return d;
+}
+
 export function featureTemplate(): EditorDoc {
   const d = blankDoc(1200, 630);
   d.layers = [
@@ -117,7 +136,8 @@ export function lockupTemplate(): EditorDoc {
 export const TEMPLATE_FACTORIES: { key: string; label: string; make: () => EditorDoc }[] = [
   { key: "release", label: "Release card", make: releaseTemplate },
   { key: "feature", label: "Feature card", make: featureTemplate },
-  { key: "role", label: "Role card", make: roleCardTemplate },
+  { key: "role", label: "Role card (portrait)", make: roleCardTemplate },
+  { key: "roleBanner", label: "Role banner (wide)", make: roleBannerTemplate },
   { key: "quote", label: "Quote", make: quoteTemplate },
   { key: "lockup", label: "Logo lockup", make: lockupTemplate },
   { key: "blank", label: "Blank", make: () => blankDoc(1200, 630) },

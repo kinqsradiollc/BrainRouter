@@ -8,6 +8,7 @@
  */
 
 import type { Layer, TextLayer, LogoLayer, BadgeLayer } from "./types";
+import { lockupWidth } from "../brandShared";
 
 export function measuredTextBox(l: TextLayer): { w: number; h: number } {
   const lines = (l.text && l.text.length ? l.text : " ").split("\n");
@@ -23,13 +24,10 @@ export function measuredTextBox(l: TextLayer): { w: number; h: number } {
   };
 }
 
+/** Logo box = the lockup's true rendered width (shared with the renderer so the
+ *  selection box hugs the logo in every mode: full / wordmark / mark). */
 export function logoWidth(l: LogoLayer): number {
-  const fs = l.h * 0.66;
-  const gap = l.h * 0.3;
-  const wm = fs * 0.6 * 11; // ≈ "BrainRouter"
-  if (l.lockup === "mark") return Math.round(l.h);
-  if (l.lockup === "wordmark") return Math.round(wm);
-  return Math.round(l.h + gap + wm);
+  return lockupWidth(l.h, l.lockup);
 }
 
 /** Badge pill width — mirrors roleBadgeMarkup's own width estimate so the box

@@ -69,6 +69,21 @@ export function tspans(lines: string[], x: number, lineH: number): string {
  * Logo lockup composed at height `h`, left edge at `x`, vertically centred on
  * `y`. Returns markup + the rendered width (for centering/measuring).
  */
+/**
+ * Rendered width of the logo lockup at height `h` — the single source of truth
+ * shared by `lockupMarkup` (centering) and the editor's selection box, so the
+ * box hugs the actual logo in every mode. The mark is square (width = h);
+ * "BrainRouter" in Geist 600 (-0.02em tracking) measures ≈ 4.85× the font size
+ * (fontSize = round(h·0.66)), not the looser 6.6× the old estimate used.
+ */
+export function lockupWidth(h: number, lockup: LockupKey): number {
+  if (lockup === "mark") return Math.round(h);
+  const fs = Math.round(h * 0.66);
+  const textW = fs * 4.85;
+  if (lockup === "wordmark") return Math.round(textW);
+  return Math.round(h + h * 0.3 + textW); // mark + gap + wordmark
+}
+
 export function lockupMarkup(opts: {
   x: number;
   y: number;
@@ -81,16 +96,13 @@ export function lockupMarkup(opts: {
   const gap = h * 0.3;
   let svg = "";
   let cursor = x;
-  let width = 0;
   if (lockup !== "wordmark") {
     svg += guillocheMarkup({ cx: x + h / 2, cy: y, scale: h / 88, accent });
     cursor = x + h + gap;
-    width = h;
   }
   if (lockup !== "mark") {
     const fs = Math.round(h * 0.66);
     svg += `<text x="${cursor.toFixed(1)}" y="${y}" font-family="${FONT}" font-size="${fs}" font-weight="600" letter-spacing="-0.02em" fill="${textColor}" dominant-baseline="central">BrainRouter</text>`;
-    width = (lockup === "full" ? h + gap : 0) + fs * 0.6 * 11;
   }
-  return { svg, width };
+  return { svg, width: lockupWidth(h, lockup) };
 }

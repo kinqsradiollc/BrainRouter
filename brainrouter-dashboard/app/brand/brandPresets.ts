@@ -34,6 +34,33 @@ export const SIZES: Record<string, SizeDef> = {
 };
 export type PresetKey = keyof typeof SIZES;
 
+/**
+ * Per-platform "don't put anything important here" guides (all fractions of the
+ * canvas W/H, so they scale with any matching size). `avatar` is the circle the
+ * platform overlays the profile photo / logo into (covers whatever's under it);
+ * `safe` is the area that survives device cropping (content outside may be cut).
+ * Approximate + directional — exact pixels vary by platform/device. Editor-only,
+ * never exported.
+ */
+export interface SafeZone {
+  avatar?: { cx: number; cy: number; r: number };
+  safe?: { x: number; y: number; w: number; h: number };
+  note: string;
+}
+export const SAFE_ZONES: Record<string, SafeZone> = {
+  x_header: { avatar: { cx: 0.06, cy: 1.0, r: 0.3 }, note: "Your avatar covers the lower-left." },
+  linkedin_personal: { avatar: { cx: 0.085, cy: 1.0, r: 0.42 }, note: "Profile photo + name sit over the lower-left — keep key content right/centre." },
+  linkedin_company: { avatar: { cx: 0.1, cy: 1.0, r: 0.62 }, note: "Company logo sits lower-left." },
+  facebook_cover: { avatar: { cx: 0.06, cy: 1.0, r: 0.28 }, safe: { x: 0.1, y: 0.06, w: 0.8, h: 0.88 }, note: "Profile photo covers lower-left; sides crop on mobile." },
+  youtube: { safe: { x: 0.198, y: 0.353, w: 0.604, h: 0.294 }, note: "Only the centre is visible on every device (TV/desktop/mobile)." },
+  story: { safe: { x: 0.06, y: 0.14, w: 0.88, h: 0.72 }, note: "Top & bottom are covered by the app UI." },
+};
+/** Safe-zone for an exact W×H if it matches a known platform size, else null. */
+export function safeZoneForSize(w: number, h: number): SafeZone | null {
+  for (const k of Object.keys(SIZES)) if (SIZES[k].w === w && SIZES[k].h === h) return SAFE_ZONES[k] ?? null;
+  return null;
+}
+
 export interface Theme {
   label: string;
   bg: string;
