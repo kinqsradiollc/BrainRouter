@@ -93,6 +93,21 @@ export function roleCardTemplate(): EditorDoc {
   return d;
 }
 
+/** Landscape role card for LinkedIn / Facebook / X covers. Horizontal layout:
+ *  brand mark top-left, identity block on the right — deliberately keeping the
+ *  lower-left clear, where the platform overlays the profile photo. */
+export function roleBannerTemplate(): EditorDoc {
+  const d = blankDoc(1584, 396); // LinkedIn cover; maps cleanly to other banners
+  d.layers = [
+    { ...baseAt(72, 50, 430, 44), type: "logo", name: "Logo", lockup: "full", color: ACCENT },
+    badge({ x: 386, y: 126, h: 66, label: "FOUNDER", roleKey: "founder", style: "solid" }),
+    txt({ x: 386, y: 200, w: 1100, text: "Your Name", fontSize: 82, weight: 600, color: "#ECEFF2", letterSpacing: -2 }),
+    txt({ x: 388, y: 298, w: 1100, text: "Founding Engineer · BrainRouter", fontSize: 28, weight: 400, color: "#9BA3AC" }),
+    txt({ x: 388, y: 348, w: 800, text: "brainrouter.dev", fontSize: 21, weight: 500, color: "#5E6670", fontFamily: "mono" }),
+  ];
+  return d;
+}
+
 export function featureTemplate(): EditorDoc {
   const d = blankDoc(1200, 630);
   d.layers = [
@@ -117,7 +132,8 @@ export function lockupTemplate(): EditorDoc {
 export const TEMPLATE_FACTORIES: { key: string; label: string; make: () => EditorDoc }[] = [
   { key: "release", label: "Release card", make: releaseTemplate },
   { key: "feature", label: "Feature card", make: featureTemplate },
-  { key: "role", label: "Role card", make: roleCardTemplate },
+  { key: "role", label: "Role card (portrait)", make: roleCardTemplate },
+  { key: "roleBanner", label: "Role banner (wide)", make: roleBannerTemplate },
   { key: "quote", label: "Quote", make: quoteTemplate },
   { key: "lockup", label: "Logo lockup", make: lockupTemplate },
   { key: "blank", label: "Blank", make: () => blankDoc(1200, 630) },
