@@ -6,29 +6,16 @@ interface PageHeaderProps {
   children?: React.ReactNode;
 }
 
+// Class-based (see .page-header rules in globals.css) so the title scales down
+// and the action slot wraps under the heading on mobile without a client hook.
 export function PageHeader({ title, description, children }: PageHeaderProps) {
   return (
-    <div style={{ 
-      borderBottom: "1px solid rgba(226, 227, 233, 0.05)", 
-      paddingBottom: "20px",
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "flex-end",
-      gap: "24px"
-    }}>
-      <div>
-        <h1 className="serif-display" style={{ fontSize: "40px", margin: 0, fontWeight: 400 }}>
-          {title}
-        </h1>
-        <p style={{ color: "var(--color-stone-text)", fontSize: "14px", margin: "8px 0 0 0", letterSpacing: "0.01em" }}>
-          {description}
-        </p>
+    <div className="page-header">
+      <div className="page-header__text">
+        <h1 className="serif-display page-header__title">{title}</h1>
+        <p className="page-header__desc">{description}</p>
       </div>
-      {children && (
-        <div style={{ display: "flex", gap: "12px", alignItems: "center", flexShrink: 0 }}>
-          {children}
-        </div>
-      )}
+      {children && <div className="page-header__actions">{children}</div>}
     </div>
   );
 }

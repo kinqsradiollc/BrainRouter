@@ -61,7 +61,7 @@ export default function SkillsPage() {
               description="Activate skill-specific tools (e.g. by using an active skill inside recall or capture) to see activation potential build up." 
             />
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))", gap: "20px" }}>
               {activations.map((act) => {
                 const maxPotential = 4.0;
                 const percentage = Math.min(100, (act.potential / maxPotential) * 100);

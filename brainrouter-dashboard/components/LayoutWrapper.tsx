@@ -6,8 +6,9 @@ import { PublicHeader } from "./PublicHeader";
 import { CommandPalette } from "./CommandPalette";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "./ThemeProvider";
+import { useIsMobile } from "../lib/useIsMobile";
 
 export function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -37,6 +38,20 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
       return next;
     });
   };
+
+  // Mobile: the sidebar becomes an off-canvas drawer toggled from the top bar.
+  const isMobile = useIsMobile(768);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Close the drawer on navigation and whenever we grow back to desktop.
+  useEffect(() => { setMobileNavOpen(false); }, [pathname]);
+  useEffect(() => { if (!isMobile) setMobileNavOpen(false); }, [isMobile]);
+  // Lock background scroll while the drawer is open.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const locked = isMobile && mobileNavOpen;
+    document.body.style.overflow = locked ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [isMobile, mobileNavOpen]);
 
   if (isLoading) {
     return (
@@ -79,9 +94,48 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
   // Authenticated view: sidebar + modern app frame (sticky top bar + content)
   return (
     <div className="dashboard-shell">
-      <Sidebar isCollapsed={isCollapsed} onToggleCollapse={handleToggleCollapse} />
+      <Sidebar
+        isCollapsed={isCollapsed}
+        onToggleCollapse={handleToggleCollapse}
+        isMobile={isMobile}
+        mobileOpen={mobileNavOpen}
+        onNavigate={() => setMobileNavOpen(false)}
+      />
+      {isMobile && mobileNavOpen && (
+        <div
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden
+          style={{ position: "fixed", inset: 0, zIndex: 250, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)" }}
+        />
+      )}
       <main className="main-content">
-        <header className="app-topbar">
+        <header className={`app-topbar${isMobile ? " app-topbar--mobile" : ""}`}>
+          {isMobile ? (
+            <>
+              <div className="topbar-left">
+                <button onClick={() => setMobileNavOpen(true)} className="topbar-btn" aria-label="Open menu" title="Menu">
+                  <svg style={{ width: 20, height: 20 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" />
+                  </svg>
+                </button>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, letterSpacing: "0.04em", color: "var(--text)", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  BrainRouter
+                </span>
+              </div>
+              <div className="topbar-right">
+                <button onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))} className="topbar-btn" aria-label="Search" title="Search (⌘K)">
+                  <svg style={{ width: 18, height: 18 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </button>
+                <button onClick={toggleTheme} className="topbar-btn" title={theme === "light" ? "Switch to dark" : "Switch to light"} aria-label="Toggle theme">
+                  {theme === "light" ? moon : sun}
+                </button>
+                <Link href="/profile" className="topbar-avatar" title={user?.email} aria-label="Profile">{initials}</Link>
+              </div>
+            </>
+          ) : (
+            <>
           <div className="topbar-left">
             {isCollapsed && (
               <button onClick={handleToggleCollapse} className="topbar-btn" title="Expand sidebar" aria-label="Expand sidebar">
@@ -129,6 +183,8 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
               </span>
             </div>
           </div>
+            </>
+          )}
         </header>
 
         <div className="content-scroll">{children}</div>

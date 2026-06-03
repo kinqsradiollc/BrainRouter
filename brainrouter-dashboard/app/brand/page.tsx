@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
+import { useIsMobile } from "../../lib/useIsMobile";
 import { DEFAULT_CONFIG, dimsFor, type BrandConfig, type Mode } from "./brandPresets";
 import { buildSVG } from "./buildSVG";
 import { useBrandExport } from "./useBrandExport";
@@ -20,6 +21,7 @@ export default function BrandStudioPage() {
   const router = useRouter();
   const [cfg, setCfg] = useState<BrandConfig>(DEFAULT_CONFIG);
   const [scale, setScale] = useState(2);
+  const isMobile = useIsMobile();
 
   // Admin-only: AuthGuard redirects unauthenticated users to /auth; authed
   // non-admins get bounced to /overview (mirrors the Users console).
@@ -85,7 +87,7 @@ export default function BrandStudioPage() {
       {cfg.mode === "canvas" ? (
         <Editor />
       ) : (
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 340px) minmax(0, 1fr)", gap: "24px", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(300px, 340px) minmax(0, 1fr)", gap: "24px", alignItems: "start" }}>
         {/* controls */}
         <div
           style={{

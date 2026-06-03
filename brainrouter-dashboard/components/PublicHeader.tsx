@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "./AuthProvider";
+import { useIsMobile } from "../lib/useIsMobile";
 import { STATIC_PRESENTATION } from "../lib/presentation";
 import { BrainRouterLogo } from "./BrainRouterLogo";
 
@@ -13,6 +15,21 @@ export function PublicHeader() {
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
   const { isAuthenticated } = useAuth();
+  const isMobile = useIsMobile(768);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Collapse the mobile menu on navigation and when we grow back to desktop.
+  useEffect(() => { setMenuOpen(false); }, [pathname]);
+  useEffect(() => { if (!isMobile) setMenuOpen(false); }, [isMobile]);
+
+  // Shared link set — rendered inline on desktop and stacked in the mobile panel.
+  const NAV: { label: string; href: string; external?: boolean; active?: boolean }[] = [
+    { label: "Home", href: "/", active: pathname === "/" },
+    { label: "Memory", href: "/#memory" },
+    { label: "CLI", href: "/#cli" },
+    { label: "Features", href: "/#features" },
+    { label: "Docs", href: DOCS_URL, external: true },
+    { label: "About", href: "/about", active: pathname === "/about" },
+  ];
 
   return (
     <header className="public-header">
@@ -107,7 +124,55 @@ export function PublicHeader() {
             </Link>
           )}
         </nav>
+
+        {/* Mobile menu trigger — CSS hides this on desktop and hides .public-nav here. */}
+        <button
+          className="public-menu-btn"
+          onClick={() => setMenuOpen((o) => !o)}
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+          aria-expanded={menuOpen}
+          style={{ background: "transparent", border: "1px solid var(--border-med)", borderRadius: "8px", width: "40px", height: "40px", color: "var(--color-stone-text)", cursor: "pointer", alignItems: "center", justifyContent: "center" }}
+        >
+          {menuOpen ? (
+            <svg style={{ width: 20, height: 20 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          ) : (
+            <svg style={{ width: 20, height: 20 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>
+          )}
+        </button>
       </div>
+
+      {menuOpen && (
+        <div className="public-menu-panel">
+          {NAV.map((item) =>
+            item.external ? (
+              <a key={item.label} href={item.href} target="_blank" rel="noopener noreferrer" className="public-menu-link">
+                {item.label}
+              </a>
+            ) : (
+              <Link key={item.label} href={item.href} className={`public-menu-link${item.active ? " active" : ""}`}>
+                {item.label}
+              </Link>
+            )
+          )}
+          <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" className="public-menu-link">
+            GitHub
+          </a>
+          <button
+            onClick={toggleTheme}
+            className="public-menu-link"
+            style={{ background: "transparent", border: "none", textAlign: "left", cursor: "pointer", font: "inherit", width: "100%" }}
+          >
+            {theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+          </button>
+          {!STATIC_PRESENTATION && (
+            <Link href={isAuthenticated ? "/overview" : "/auth"} style={{ marginTop: "6px" }}>
+              <button className="pill-btn button-gold-primary" style={{ width: "100%", padding: "12px 18px", borderRadius: "var(--radius-pill)", fontSize: "14px", fontWeight: 600 }}>
+                {isAuthenticated ? "Open dashboard" : "Sign In"}
+              </button>
+            </Link>
+          )}
+        </div>
+      )}
     </header>
   );
 }

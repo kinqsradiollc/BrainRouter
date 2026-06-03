@@ -19,6 +19,7 @@ import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { Markdown } from "../../components/Markdown";
 import { PageHeader } from "../../components/PageHeader";
+import { useIsMobile } from "../../lib/useIsMobile";
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -61,6 +62,7 @@ export default function ChatPage() {
   const [captureMode, setCaptureMode] = useState<"full" | "sensory" | "off">("sensory");
   const [distilling, setDistilling] = useState<boolean>(false);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const isMobile = useIsMobile();
   const sessionKeyRef = useRef<string>("web:anonymous");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // AbortController lives on a ref so a fresh submit can cancel the previous
@@ -254,7 +256,7 @@ export default function ChatPage() {
   const transcriptStyle: React.CSSProperties = {
     flex: 1,
     overflowY: "auto",
-    padding: "32px",
+    padding: isMobile ? "16px 2px" : "32px",
     display: "flex",
     flexDirection: "column",
     gap: "16px",
@@ -292,7 +294,7 @@ export default function ChatPage() {
   };
   const composerStyle: React.CSSProperties = {
     borderTop: "1px solid var(--border-dim)",
-    padding: "20px 32px",
+    padding: isMobile ? "14px 8px" : "20px 32px",
     background: "var(--color-obsidian-surface)",
   };
   const composerInnerStyle: React.CSSProperties = {
@@ -381,7 +383,7 @@ export default function ChatPage() {
 
   return (
     <div style={pageStyle}>
-      <div style={{ padding: "32px 32px 16px" }}>
+      <div style={{ padding: isMobile ? "16px 4px 8px" : "32px 32px 16px" }}>
         <PageHeader
           title="Memory-Augmented Chat"
           description="Talk to BrainRouter with your own memory. Every turn is recalled before responding and captured back after."

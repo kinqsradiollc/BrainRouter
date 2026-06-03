@@ -192,7 +192,7 @@ export default function WorkingMemoryPage() {
                 description="This session's working memory currently contains no offloaded context, references, or steps."
               />
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))", gap: "20px" }}>
                 {context.steps.map((step) => {
                   const capacity = context.state.contextWindowTokens || 120000;
                   const pct = Math.min(100, Math.max(0, (step.tokenEstimate / capacity) * 100));

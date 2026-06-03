@@ -5,9 +5,14 @@ import { slideStagger, slideChild } from "./landingData";
 import { SlideHeading } from "./SlideHeading";
 import { Citation } from "./Citation";
 import { MAPPING, SOURCES } from "./landingScience";
+import { useIsMobile } from "../../lib/useIsMobile";
 
 /** ACT 3 — the validation: each memory-science store maps to a BrainRouter layer. */
 export function SlideMapping() {
+  // On phones the 3-column "science → process → layer" grid can't fit the long
+  // mono layer names, so each row stacks vertically instead.
+  const isMobile = useIsMobile();
+  const rowColumns = isMobile ? "1fr" : "1fr 120px 1fr";
   return (
     <motion.section
       variants={slideStagger}
@@ -22,22 +27,24 @@ export function SlideMapping() {
         lede="Four stores, the same shape as the mind: where each memory lives, which layer owns it, and the process that hands it across."
       />
 
-      {/* Column headers */}
-      <motion.div
-        variants={slideChild}
-        style={{ display: "grid", gridTemplateColumns: "1fr 120px 1fr", gap: "14px", alignItems: "center" }}
-      >
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--text-muted)", textAlign: "right" }}>Human memory</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--text-muted)", textAlign: "center" }}>Process</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--accent)", textAlign: "left" }}>BrainRouter</span>
-      </motion.div>
+      {/* Column headers — desktop only; meaningless once the rows stack. */}
+      {!isMobile && (
+        <motion.div
+          variants={slideChild}
+          style={{ display: "grid", gridTemplateColumns: "1fr 120px 1fr", gap: "14px", alignItems: "center" }}
+        >
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--text-muted)", textAlign: "right" }}>Human memory</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--text-muted)", textAlign: "center" }}>Process</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--accent)", textAlign: "left" }}>BrainRouter</span>
+        </motion.div>
+      )}
 
       <motion.div variants={slideStagger} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
         {MAPPING.map((row, i) => (
           <motion.div
             key={row.layer}
             variants={slideChild}
-            style={{ display: "grid", gridTemplateColumns: "1fr 120px 1fr", gap: "14px", alignItems: "stretch" }}
+            style={{ display: "grid", gridTemplateColumns: rowColumns, gap: "14px", alignItems: "stretch" }}
           >
             {/* science side */}
             <div
@@ -46,7 +53,7 @@ export function SlideMapping() {
                 border: "1px solid var(--border-med)",
                 borderRadius: "var(--radius-card)",
                 padding: "14px 16px",
-                textAlign: "right",
+                textAlign: isMobile ? "center" : "right",
                 display: "flex",
                 flexDirection: "column",
                 gap: "3px",
@@ -92,7 +99,7 @@ export function SlideMapping() {
                 border: "1px solid var(--border-hover-accent)",
                 borderRadius: "var(--radius-card)",
                 padding: "14px 16px",
-                textAlign: "left",
+                textAlign: isMobile ? "center" : "left",
                 display: "flex",
                 flexDirection: "column",
                 gap: "3px",

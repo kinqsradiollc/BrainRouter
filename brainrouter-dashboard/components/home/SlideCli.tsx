@@ -53,6 +53,10 @@ export function SlideCli({ id }: { id?: string } = {}) {
           borderRadius: "var(--radius-panel)",
           overflow: "hidden",
           boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+          // Without this the nowrap command lines push min-content width up the
+          // flex chain and overflow the page on phones; 0 lets it shrink to fit.
+          minWidth: 0,
+          maxWidth: "100%",
         }}
       >
         {/* chrome */}
@@ -63,10 +67,11 @@ export function SlideCli({ id }: { id?: string } = {}) {
           <span style={{ marginLeft: "8px", fontFamily: "var(--font-mono)", fontSize: "11px", color: "rgba(255,255,255,0.4)" }}>brainrouter — memory-native agent</span>
         </div>
 
-        {/* body: lines type in on scroll */}
+        {/* body: lines type in on scroll. Long commands scroll horizontally
+            inside the terminal instead of stretching the page. */}
         <motion.div
           variants={termStagger}
-          style={{ padding: "18px 20px 20px", fontFamily: "var(--font-mono)", fontSize: "13px", lineHeight: 1.5, display: "flex", flexDirection: "column", gap: "10px" }}
+          style={{ padding: "18px 20px 20px", fontFamily: "var(--font-mono)", fontSize: "13px", lineHeight: 1.5, display: "flex", flexDirection: "column", gap: "10px", minWidth: 0, overflowX: "auto" }}
         >
           {CLI_SESSION.map((l) => (
             <motion.div key={l.cmd} variants={lineFade} style={{ display: "flex", flexDirection: "column", gap: "2px" }}>

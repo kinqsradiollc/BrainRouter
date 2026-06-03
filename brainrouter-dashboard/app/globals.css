@@ -293,23 +293,10 @@ a {
   gap: var(--spacing-24);
 }
 
-@media (max-width: 1024px) {
-  .dashboard-shell {
-    flex-direction: column;
-  }
-  .sidebar {
-    width: 100%;
-    height: auto;
-    position: relative;
-    min-width: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--sidebar-border);
-    padding: var(--spacing-16);
-  }
-  .main-content {
-    width: 100%;
-  }
-}
+/* Sidebar responsiveness is handled in components/LayoutWrapper.tsx + Sidebar.tsx:
+   a sticky left rail at ≥768px, an off-canvas drawer below it (see the mobile
+   block near the end of this file). The old flex-direction:column stack was
+   removed — it fought the inline-styled rail and broke tablet layout. */
 
 /* Cards & Surface Elevators */
 .card {
@@ -760,6 +747,10 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
   flex: 1;
   width: 100%;
   padding: 48px clamp(20px, 5vw, 96px) 96px;
+  /* Decorative hero auras use negative insets that bleed past the viewport on
+     narrow screens; clip horizontally (clip ≠ scroll container, so vertical
+     page scroll and the sticky header are unaffected). */
+  overflow-x: clip;
 }
 /* Sections inside Home center their own content at a comfortable wide max so
    backgrounds go edge-to-edge (full-screen) but text stays readable. */
@@ -1028,4 +1019,103 @@ html {
 }
 @media (prefers-reduced-motion: reduce) {
   .brl-pulse { animation: none; opacity: 0; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * MOBILE  —  phone / small-tablet layer
+ *
+ * The shell's sidebar→drawer + topbar restructure are JS-driven (useIsMobile,
+ * 768px). This block owns the CSS-only side: spacing, type scale, grid
+ * collapse, the topbar flex override, and the public marketing menu.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* The public marketing-header menu button is desktop-hidden by default. */
+.public-menu-btn { display: none; }
+
+.public-menu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px clamp(16px, 5vw, 28px) 18px;
+  background: var(--sidebar-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--sidebar-border);
+  box-shadow: var(--shadow-md);
+}
+.public-menu-link {
+  display: block;
+  padding: 12px 8px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-stone-text);
+  border-radius: var(--radius-control);
+  border-bottom: 1px solid var(--border-dim);
+}
+.public-menu-link:last-of-type { border-bottom: none; }
+.public-menu-link:hover,
+.public-menu-link.active { color: var(--color-pure-white); background: var(--overlay-bg); }
+
+/* Top bar: drop the rigid 3-column grid for a simple two-cluster flex row. */
+.app-topbar--mobile {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  grid-template-columns: none;
+}
+
+/* Shared PageHeader (components/PageHeader.tsx). */
+.page-header {
+  border-bottom: 1px solid rgba(226, 227, 233, 0.05);
+  padding-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+}
+.page-header__title { font-size: 40px; margin: 0; font-weight: 400; }
+.page-header__desc { color: var(--color-stone-text); font-size: 14px; margin: 8px 0 0 0; letter-spacing: 0.01em; }
+.page-header__actions { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+
+@media (max-width: 768px) {
+  /* Marketing header swaps inline nav for the hamburger + drop panel. */
+  .public-nav { display: none; }
+  .public-menu-btn { display: inline-flex; }
+  .public-header-inner { height: 60px; }
+
+  /* Tighter chrome + content padding; never let a page scroll sideways. */
+  .app-topbar { height: 56px; padding: 0 12px; }
+  .content-scroll {
+    padding: 18px 16px 56px;
+    gap: var(--spacing-16);
+    overflow-x: clip;
+  }
+  .public-content { padding: 28px 18px 64px; }
+
+  /* Type scale steps down a notch so headings don't dominate small screens. */
+  h1 { font-size: 25px; }
+  h2 { font-size: 19px; }
+  .markdown-content h1 { font-size: 21px; }
+  .markdown-content h2 { font-size: 18px; }
+
+  /* Any remaining multi-column class grids collapse to a single column. */
+  .grid,
+  .grid-asymmetric,
+  .grid-symmetrical-4 { grid-template-columns: 1fr; }
+
+  /* Roomier tap targets, lighter table cells. */
+  .table th, .table td { padding: 12px 14px; }
+  .nav-link { padding: var(--spacing-12); }
+
+  /* PageHeader: title shrinks and the action slot wraps under the heading. */
+  .page-header { flex-direction: column; align-items: stretch; gap: 14px; }
+  .page-header__title { font-size: 26px; }
+  .page-header__actions { flex-wrap: wrap; }
+}
+
+@media (max-width: 480px) {
+  .content-scroll { padding: 14px 12px 48px; gap: var(--spacing-12); }
+  .public-content { padding: 22px 14px 56px; }
+  h1 { font-size: 23px; }
 }

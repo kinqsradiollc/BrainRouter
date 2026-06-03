@@ -233,10 +233,19 @@ const links = [
 interface SidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  /** Below the mobile breakpoint the rail renders as an off-canvas drawer. */
+  isMobile?: boolean;
+  /** Drawer open state (mobile only). */
+  mobileOpen?: boolean;
+  /** Called when a nav link / close button is tapped, so the drawer can close. */
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
+export function Sidebar({ isCollapsed: isCollapsedProp, onToggleCollapse, isMobile = false, mobileOpen = false, onNavigate }: SidebarProps) {
   const pathname = usePathname();
+  // On mobile the drawer always shows the full rail — the icon-only collapsed
+  // state is a desktop affordance. Everything below reads this effective value.
+  const isCollapsed = isMobile ? false : isCollapsedProp;
   const { user, logout } = useAuth();
   const client = useMemo(() => getClient(), []);
   const [openContradictions, setOpenContradictions] = useState(0);
@@ -270,30 +279,61 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
   }, [client, user]);
 
   return (
-    <motion.aside 
+    <motion.aside
       className="sidebar"
-      animate={{
-        width: isCollapsed ? 0 : 260,
-        minWidth: isCollapsed ? 0 : 260
-      }}
+      aria-hidden={isMobile && !mobileOpen}
+      animate={isMobile
+        ? { x: mobileOpen ? 0 : "-101%", width: 300, minWidth: 300 }
+        : { x: 0, width: isCollapsed ? 0 : 260, minWidth: isCollapsed ? 0 : 260 }}
       transition={{ type: "spring", stiffness: 220, damping: 26 }}
       style={{
-        position: "sticky",
+        position: isMobile ? "fixed" : "sticky",
         top: 0,
-        height: "100vh",
+        left: 0,
+        height: isMobile ? "100dvh" : "100vh",
+        maxWidth: isMobile ? "84vw" : undefined,
         display: "flex",
         flexDirection: "column",
         padding: isCollapsed ? "0px" : "24px 16px",
-        background: "var(--sidebar-bg)",
+        background: isMobile ? "var(--surface-raised)" : "var(--sidebar-bg)",
         backdropFilter: "blur(16px)",
         WebkitBackdropFilter: "blur(16px)",
-        borderRight: isCollapsed ? "0px solid transparent" : "1px solid var(--sidebar-border)",
-        zIndex: 100,
+        borderRight: isCollapsed && !isMobile ? "0px solid transparent" : "1px solid var(--sidebar-border)",
+        boxShadow: isMobile ? "var(--shadow-lg)" : undefined,
+        zIndex: isMobile ? 300 : 100,
         overflow: "hidden"
       }}
     >
-      {/* Collapse Toggle Button (Visible only when expanded) */}
-      {!isCollapsed && (
+      {/* Mobile drawer close (✕) — only in off-canvas mode. */}
+      {isMobile && (
+        <button
+          onClick={onNavigate}
+          aria-label="Close menu"
+          style={{
+            position: "absolute",
+            top: "20px",
+            right: "16px",
+            width: "34px",
+            height: "34px",
+            borderRadius: "8px",
+            background: "var(--surface-overlay)",
+            border: "1px solid var(--border-med)",
+            color: "var(--text-secondary)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            zIndex: 110,
+          }}
+        >
+          <svg style={{ width: "18px", height: "18px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      )}
+
+      {/* Collapse Toggle Button (Visible only when expanded, desktop only) */}
+      {!isCollapsed && !isMobile && (
         <button
           onClick={onToggleCollapse}
           style={{
@@ -404,7 +444,7 @@ MEMORY ENGINE
               {groupLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
-                  <Link key={link.href} href={link.href} style={{ position: "relative" }} title={isCollapsed ? link.label : undefined}>
+                  <Link key={link.href} href={link.href} onClick={onNavigate} style={{ position: "relative" }} title={isCollapsed ? link.label : undefined}>
                     <div
                       className={`nav-link${isActive ? " active" : ""}`}
                       style={{
