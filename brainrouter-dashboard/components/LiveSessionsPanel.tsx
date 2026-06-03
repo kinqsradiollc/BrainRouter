@@ -88,7 +88,10 @@ function SessionTable({
     alignItems: "center",
   };
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
+    // The fixed-column grid can't shrink below ~500px; on phones it scrolls
+    // horizontally inside the panel instead of overflowing the card.
+    <div style={{ overflowX: "auto", minWidth: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", minWidth: includeUsage ? 540 : 430 }}>
       <div
         style={{
           ...rowStyle,
@@ -131,6 +134,7 @@ function SessionTable({
           </span>
         </div>
       ))}
+    </div>
     </div>
   );
 }

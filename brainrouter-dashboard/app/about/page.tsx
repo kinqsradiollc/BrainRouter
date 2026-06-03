@@ -151,11 +151,11 @@ export default function AboutPage() {
           </p>
         </motion.div>
 
-        <motion.div variants={slideChild} style={{ display: "flex", flexDirection: "column", gap: "8px", maxWidth: "640px" }}>
+        <motion.div variants={slideChild} style={{ display: "flex", flexDirection: "column", gap: "8px", maxWidth: "640px", minWidth: 0 }}>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" }}>
             Install from npm
           </span>
-          <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-card)", padding: "12px 16px", overflowX: "auto" }}>
+          <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-med)", borderRadius: "var(--radius-card)", padding: "12px 16px", overflowX: "auto", minWidth: 0, maxWidth: "100%" }}>
             <code style={{ fontFamily: "var(--font-mono)", fontSize: "13px", color: "var(--text)", whiteSpace: "nowrap" }}>
               <span style={{ color: "var(--text-muted)" }}>$ </span>npm install -g @kinqs/brainrouter-cli @kinqs/brainrouter-mcp-server
             </code>

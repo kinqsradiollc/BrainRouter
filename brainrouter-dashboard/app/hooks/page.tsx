@@ -82,7 +82,7 @@ export default function HooksPage() {
           </FilterBar>
         )}
 
-        <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="table-container" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
           {hooks.length === 0 && !isLoading ? (
             <EmptyState title="No Hooks Registered" description="Host integration status appears here after registration or lifecycle events." />
           ) : (

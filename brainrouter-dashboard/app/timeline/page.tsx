@@ -75,7 +75,7 @@ export default function TimelinePage() {
 
         {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
 
-        <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="table-container" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
           {operations.length === 0 && !isLoading ? (
             <EmptyState title="No Operations" description="Memory operations will appear here after capture, recall, or governance activity." />
           ) : (

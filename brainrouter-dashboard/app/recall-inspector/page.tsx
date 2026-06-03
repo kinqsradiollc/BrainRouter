@@ -167,7 +167,7 @@ export default function RecallInspectorPage() {
           </div>
         )}
 
-        <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="table-container" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
           {memories.length === 0 ? (
             <EmptyState title="No Recall Results" description="Run an explain query to inspect ranked memories." />
           ) : (

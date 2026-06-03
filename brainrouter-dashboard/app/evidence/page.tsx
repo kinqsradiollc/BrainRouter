@@ -72,7 +72,7 @@ export default function EvidencePage() {
         {error && <div style={{ color: "#E5675F", fontSize: "13px" }}>{error}</div>}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: "18px", alignItems: "start" }}>
-          <div className="table-container" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-container" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
             {evidence.length === 0 && !isLoading ? (
               <EmptyState title="No Evidence" description="Evidence rows will appear here after references are attached to memories." />
             ) : (
