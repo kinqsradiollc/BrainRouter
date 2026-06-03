@@ -2,21 +2,15 @@
 
 import type { CSSProperties } from "react";
 import {
-  SIZES,
   THEMES,
   ACCENTS,
-  BACKGROUNDS,
-  TEMPLATES,
   LOCKUPS,
   ROLES,
   AVATAR_SHAPES,
   RINGS,
   type BrandConfig,
-  type PresetKey,
   type ThemeKey,
   type AccentKey,
-  type BgKey,
-  type TemplateKey,
   type LockupKey,
   type RoleKey,
   type AvatarShape,
@@ -84,28 +78,6 @@ function Segmented<T extends string>({
         );
       })}
     </div>
-  );
-}
-
-function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
-  return (
-    <input
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      style={{ width: "100%", padding: "9px 12px", borderRadius: "var(--radius-control)", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "13px", fontFamily: "var(--font-sans)", outline: "none" }}
-    />
-  );
-}
-
-function TextArea({ value, onChange, rows = 2 }: { value: string; onChange: (v: string) => void; rows?: number }) {
-  return (
-    <textarea
-      value={value}
-      rows={rows}
-      onChange={(e) => onChange(e.target.value)}
-      style={{ width: "100%", padding: "9px 12px", borderRadius: "var(--radius-control)", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "13px", lineHeight: 1.5, fontFamily: "var(--font-sans)", outline: "none", resize: "vertical" }}
-    />
   );
 }
 
@@ -188,69 +160,6 @@ const roleOpts = (Object.keys(ROLES) as RoleKey[]).map((k) => ({ v: k, label: RO
 export function BrandControls({ cfg, set }: { cfg: BrandConfig; set: (patch: Partial<BrandConfig>) => void }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-      {/* ───────── POSTER ───────── */}
-      {cfg.mode === "poster" && (
-        <>
-          <Group label="Social formats">
-            <Segmented<PresetKey>
-              cols={1}
-              value={cfg.preset}
-              onChange={(v) => set({ preset: v })}
-              options={(Object.keys(SIZES) as PresetKey[]).filter((k) => SIZES[k].group === "Social").map((k) => ({ v: k, label: SIZES[k].label, note: SIZES[k].note }))}
-            />
-          </Group>
-          <Group label="Banner & cover formats">
-            <Segmented<PresetKey>
-              cols={1}
-              value={cfg.preset}
-              onChange={(v) => set({ preset: v })}
-              options={(Object.keys(SIZES) as PresetKey[]).filter((k) => SIZES[k].group === "Banner").map((k) => ({ v: k, label: SIZES[k].label, note: SIZES[k].note }))}
-            />
-          </Group>
-
-          <Group label="Template">
-            <Segmented<TemplateKey> value={cfg.template} onChange={(v) => set({ template: v })} options={(Object.keys(TEMPLATES) as TemplateKey[]).map((k) => ({ v: k, label: TEMPLATES[k] }))} />
-          </Group>
-
-          {cfg.template !== "quote" && cfg.template !== "minimal" && (
-            <Group label="Alignment">
-              <Segmented<"left" | "center"> value={cfg.align} onChange={(v) => set({ align: v })} options={[{ v: "left", label: "Left" }, { v: "center", label: "Center" }]} />
-            </Group>
-          )}
-
-          <Group label="Logo lockup">
-            <Segmented<LockupKey> cols={3} value={cfg.lockup} onChange={(v) => set({ lockup: v })} options={(Object.keys(LOCKUPS) as LockupKey[]).map((k) => ({ v: k, label: LOCKUPS[k] }))} />
-          </Group>
-
-          <Group label="Background">
-            <Segmented<BgKey> cols={3} value={cfg.background} onChange={(v) => set({ background: v })} options={(Object.keys(BACKGROUNDS) as BgKey[]).map((k) => ({ v: k, label: BACKGROUNDS[k] }))} />
-          </Group>
-
-          {cfg.template !== "minimal" && cfg.template !== "quote" && cfg.template !== "role" && (
-            <Group label="Eyebrow">
-              <TextInput value={cfg.eyebrow} onChange={(v) => set({ eyebrow: v })} placeholder="RELEASE" />
-            </Group>
-          )}
-          {cfg.template !== "minimal" && (
-            <Group label={cfg.template === "role" ? "Name" : "Headline"}>
-              <TextArea value={cfg.headline} onChange={(v) => set({ headline: v })} rows={2} />
-            </Group>
-          )}
-          <Group label={cfg.template === "minimal" ? "Tagline" : cfg.template === "role" ? "Title / handle" : "Subhead"}>
-            <TextArea value={cfg.subhead} onChange={(v) => set({ subhead: v })} rows={2} />
-          </Group>
-
-          <Group label="Version">
-            <TextInput value={cfg.version} onChange={(v) => set({ version: v })} placeholder="v0.4.9" />
-            <Toggle label="Show version badge" checked={cfg.showVersion} onChange={(v) => set({ showVersion: v })} />
-          </Group>
-
-          <Group label="Role badge">
-            <Segmented<RoleKey> cols={3} value={cfg.role} onChange={(v) => set({ role: v })} options={roleOpts} />
-          </Group>
-        </>
-      )}
-
       {/* ───────── AVATAR ───────── */}
       {cfg.mode === "avatar" && (
         <>

@@ -9,7 +9,7 @@ import { downloadSVGString, downloadPNGFromSVG, copyText } from "./exportUtil";
 export function useBrandExport(cfg: BrandConfig) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const base = cfg.mode === "poster" ? `brainrouter-${cfg.preset}-${cfg.template}` : `brainrouter-${cfg.mode}`;
+  const base = `brainrouter-${cfg.mode}`;
 
   const downloadSVG = () => downloadSVGString(buildSVG(cfg), `${base}.svg`);
 

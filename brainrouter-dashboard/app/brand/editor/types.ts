@@ -5,7 +5,7 @@
 
 import type { LockupKey } from "../brandPresets";
 
-export type LayerType = "text" | "image" | "logo" | "shape";
+export type LayerType = "text" | "image" | "logo" | "shape" | "badge";
 
 interface BaseLayer {
   id: string;
@@ -56,7 +56,19 @@ export interface ShapeLayer extends BaseLayer {
   radius: number;
 }
 
-export type Layer = TextLayer | ImageLayer | LogoLayer | ShapeLayer;
+export interface BadgeLayer extends BaseLayer {
+  type: "badge";
+  /** Pill label, e.g. "FOUNDER". */
+  label: string;
+  /** Role key → which icon (founder/founding_engineer/verified/…). */
+  roleKey: string;
+  /** "glass" = translucent fill + accent border + accent text; "solid" = accent fill + dark text. */
+  style: "glass" | "solid";
+  /** Accent colour driving fill/border/text. */
+  color: string;
+}
+
+export type Layer = TextLayer | ImageLayer | LogoLayer | ShapeLayer | BadgeLayer;
 
 export interface Background {
   type: "solid" | "gradient" | "grid" | "rosette" | "transparent" | "image";

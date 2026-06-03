@@ -10,10 +10,9 @@ import { BrandControls } from "./BrandControls";
 import { Editor } from "./editor/Editor";
 
 const MODES: [Mode, string][] = [
-  ["poster", "Poster"],
+  ["canvas", "Poster studio"],
   ["avatar", "Avatar / PFP"],
   ["logo", "Logo"],
-  ["canvas", "Canvas editor"],
 ];
 
 export default function BrandStudioPage() {
@@ -56,7 +55,7 @@ export default function BrandStudioPage() {
           </span>
         </div>
         <p style={{ color: "var(--text-secondary)", fontSize: "14px", margin: 0, maxWidth: "62ch", lineHeight: 1.55 }}>
-          Generate on-brand social posters, banners, and release cards — version badges, the guilloché mark, and the Memory-Instrument palette, baked in. Everything is vector: export crisp <strong style={{ color: "var(--text)", fontWeight: 600 }}>SVG</strong> or hi-res <strong style={{ color: "var(--text)", fontWeight: 600 }}>PNG</strong>.
+          The <strong style={{ color: "var(--text)", fontWeight: 600 }}>Poster studio</strong> is a freeform canvas — start from a release, feature, role, quote or lockup template, then drag, resize, restyle, and add your own layers. The guilloché mark, role badges, and the Memory-Instrument palette are baked in. Everything is vector: export crisp <strong style={{ color: "var(--text)", fontWeight: 600 }}>SVG</strong> or hi-res <strong style={{ color: "var(--text)", fontWeight: 600 }}>PNG</strong>.
         </p>
       </div>
 

@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { SIZES } from "../brandPresets";
-import { LOCKUPS, type LockupKey } from "../brandPresets";
-import type { Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer, Background } from "./types";
+import { LOCKUPS, ROLES, type LockupKey } from "../brandPresets";
+import type { Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer, BadgeLayer, Background } from "./types";
 import { useEditor } from "./useEditor";
 import { EditorCanvas } from "./EditorCanvas";
 import { buildEditorSVG } from "./buildEditorSVG";
@@ -14,6 +14,7 @@ import { downloadPNGFromSVG, downloadSVGString } from "../exportUtil";
 /* ── tiny styled controls ──────────────────────────────────────────────── */
 const mono: CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--text-muted)", fontWeight: 600 };
 const fieldBox: CSSProperties = { width: "100%", padding: "7px 9px", borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13, outline: "none", fontFamily: "var(--font-sans)" };
+const actBtn: CSSProperties = { padding: "6px 4px", borderRadius: 6, fontSize: 11.5, cursor: "pointer", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontWeight: 500 };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -29,8 +30,19 @@ function Num({ value, onChange, min, max, step }: { value: number; onChange: (v:
 function Range({ value, onChange, min, max, step }: { value: number; onChange: (v: number) => void; min: number; max: number; step?: number }) {
   return <input type="range" value={value} min={min} max={max} step={step ?? 1} onChange={(e) => onChange(Number(e.target.value))} style={{ width: "100%", accentColor: "var(--accent)" }} />;
 }
+/** Memory-Instrument palette — quick on-brand picks under every colour input. */
+const SWATCHES = ["#34C28E", "#ECEFF2", "#9BA3AC", "#5E6670", "#14171A", "#0B0D0F", "#E0A063", "#3C434B"];
 function Color({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return <input type="color" value={value?.startsWith("#") ? value : "#34c28e"} onChange={(e) => onChange(e.target.value)} style={{ width: "100%", height: 34, padding: 2, borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", cursor: "pointer" }} />;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <input type="color" value={value?.startsWith("#") ? value : "#34c28e"} onChange={(e) => onChange(e.target.value)} style={{ width: "100%", height: 34, padding: 2, borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", cursor: "pointer" }} />
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+        {SWATCHES.map((c) => (
+          <button key={c} type="button" title={c} onClick={() => onChange(c)} style={{ width: 18, height: 18, borderRadius: 4, background: c, border: value?.toLowerCase() === c.toLowerCase() ? "2px solid var(--accent)" : "1px solid var(--border)", cursor: "pointer", padding: 0 }} />
+        ))}
+      </div>
+    </div>
+  );
 }
 function Seg<T extends string>({ value, onChange, opts }: { value: T; onChange: (v: T) => void; opts: { v: T; label: string }[] }) {
   return (
@@ -74,7 +86,7 @@ function LayersPanel({ ed }: { ed: ReturnType<typeof useEditor> }) {
         {[...doc.layers].reverse().map((l) => (
           <div key={l.id} onClick={() => setSelId(l.id)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 8px", borderRadius: 6, cursor: "pointer", background: l.id === selId ? "var(--accent-wash)" : "transparent", border: `1px solid ${l.id === selId ? "var(--border-hover-accent)" : "transparent"}` }}>
             <button title={l.visible ? "Hide" : "Show"} onClick={(e) => { e.stopPropagation(); update(l.id, { visible: !l.visible }); }} style={{ background: "none", border: "none", color: l.visible ? "var(--text-secondary)" : "var(--text-muted)", cursor: "pointer", padding: 0 }}>{ic(l.visible ? "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" : "M2 12s3.5-7 10-7 10 7 10 7M1 1l22 22")}</button>
-            <span style={{ flex: 1, fontSize: 12.5, color: l.visible ? "var(--text)" : "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.type === "text" ? (l as TextLayer).text.slice(0, 18) || "Text" : l.name}</span>
+            <span style={{ flex: 1, fontSize: 12.5, color: l.visible ? "var(--text)" : "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.type === "text" ? (l as TextLayer).text.slice(0, 18) || "Text" : l.type === "badge" ? (l as BadgeLayer).label || "Badge" : l.name}</span>
             <button title="Lock" onClick={(e) => { e.stopPropagation(); update(l.id, { locked: !l.locked }); }} style={{ background: "none", border: "none", color: l.locked ? "var(--accent)" : "var(--text-muted)", cursor: "pointer", padding: 0 }}>{ic(l.locked ? "M5 11V7a7 7 0 0 1 14 0M5 11h14v10H5z" : "M7 11V7a5 5 0 0 1 9.9-1M5 11h14v10H5z")}</button>
           </div>
         ))}
@@ -133,6 +145,33 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
 
         {l && (
           <>
+            {/* Arrange — position, size, align to the frame */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <Row label="X"><Num value={Math.round(l.x)} onChange={(v) => up({ x: v })} /></Row>
+              <Row label="Y"><Num value={Math.round(l.y)} onChange={(v) => up({ y: v })} /></Row>
+            </div>
+            {(l.type === "image" || l.type === "shape") && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <Row label="Width"><Num value={Math.round(l.w)} min={8} onChange={(v) => up({ w: v })} /></Row>
+                <Row label="Height"><Num value={Math.round(l.h)} min={8} onChange={(v) => up({ h: v })} /></Row>
+              </div>
+            )}
+            <Row label="Align to canvas">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4 }}>
+                  <button type="button" style={actBtn} onClick={() => up({ x: 0 })}>Left</button>
+                  <button type="button" style={actBtn} onClick={() => up({ x: Math.round((doc.width - l.w) / 2) })}>Center</button>
+                  <button type="button" style={actBtn} onClick={() => up({ x: Math.round(doc.width - l.w) })}>Right</button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4 }}>
+                  <button type="button" style={actBtn} onClick={() => up({ y: 0 })}>Top</button>
+                  <button type="button" style={actBtn} onClick={() => up({ y: Math.round((doc.height - l.h) / 2) })}>Middle</button>
+                  <button type="button" style={actBtn} onClick={() => up({ y: Math.round(doc.height - l.h) })}>Bottom</button>
+                </div>
+              </div>
+            </Row>
+            <div style={{ height: 1, background: "var(--border)", margin: "2px 0" }} />
+
             {l.type === "text" && (() => { const t = l as TextLayer; return <>
               <Row label="Text"><textarea value={t.text} rows={2} onChange={(e) => up({ text: e.target.value })} style={{ ...fieldBox, resize: "vertical" }} /></Row>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -160,6 +199,14 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
               <Row label="Color"><Color value={lg.color} onChange={(v) => up({ color: v })} /></Row>
             </>; })()}
 
+            {l.type === "badge" && (() => { const bd = l as BadgeLayer; return <>
+              <Row label="Label"><input value={bd.label} onChange={(e) => up({ label: e.target.value })} style={fieldBox} /></Row>
+              <Row label="Role icon"><select value={bd.roleKey} onChange={(e) => up({ roleKey: e.target.value })} style={fieldBox}>{Object.keys(ROLES).map((k) => <option key={k} value={k}>{ROLES[k]}</option>)}</select></Row>
+              <Row label="Style"><Seg<"glass" | "solid"> value={bd.style} onChange={(v) => up({ style: v })} opts={[{ v: "solid", label: "Solid" }, { v: "glass", label: "Glass" }]} /></Row>
+              <Row label="Color"><Color value={bd.color} onChange={(v) => up({ color: v })} /></Row>
+              <Row label={`Size ${Math.round(bd.h / 2.15)}`}><Range value={Math.round(bd.h / 2.15)} min={16} max={120} onChange={(v) => up({ h: Math.round(v * 2.15) })} /></Row>
+            </>; })()}
+
             {l.type === "shape" && (() => { const sh = l as ShapeLayer; return <>
               <Row label="Shape"><Seg<"rect" | "ellipse" | "line"> value={sh.shape} onChange={(v) => up({ shape: v })} opts={[{ v: "rect", label: "Rect" }, { v: "ellipse", label: "Ellipse" }, { v: "line", label: "Line" }]} /></Row>
               {sh.shape !== "line" && <Row label="Fill"><Color value={sh.fill === "none" ? "#34c28e" : sh.fill} onChange={(v) => up({ fill: v })} /></Row>}
@@ -183,7 +230,7 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
 /* ── editor ────────────────────────────────────────────────────────────── */
 export function Editor() {
   const ed = useEditor();
-  const { doc, selId, setSelId, update, add, remove, loadTemplate } = ed;
+  const { doc, selId, setSelId, update, add, remove, loadTemplate, setCanvasSize, fitContent } = ed;
   const [scale, setScale] = useState(2);
 
   const exportName = `brainrouter-${doc.width}x${doc.height}`;
@@ -216,6 +263,7 @@ export function Editor() {
         <span style={mono}>Add</span>
         <button style={tbBtn()} onClick={() => add("text")}>Text</button>
         <button style={tbBtn()} onClick={() => add("logo")}>Logo</button>
+        <button style={tbBtn()} onClick={() => add("badge")}>Badge</button>
         <button style={tbBtn()} onClick={() => add("shape")}>Shape</button>
         <label style={{ ...tbBtn() }}>Image<input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) readImage(f, (src) => ed.addImage(src)); e.currentTarget.value = ""; }} /></label>
         <div style={{ width: 1, height: 22, background: "var(--border)", margin: "0 4px" }} />
@@ -223,6 +271,12 @@ export function Editor() {
           <option value="" disabled>Template…</option>
           {TEMPLATE_FACTORIES.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
+        <div style={{ width: 1, height: 22, background: "var(--border)", margin: "0 4px" }} />
+        <select value={`${doc.width}x${doc.height}`} onChange={(e) => { const [w, h] = e.target.value.split("x").map(Number); setCanvasSize(w, h); }} title="Canvas size" style={{ ...fieldBox, width: "auto", padding: "7px 8px" }}>
+          {Object.keys(SIZES).map((k) => <option key={k} value={`${SIZES[k].w}x${SIZES[k].h}`}>{SIZES[k].label} · {SIZES[k].w}×{SIZES[k].h}</option>)}
+          {!Object.keys(SIZES).some((k) => SIZES[k].w === doc.width && SIZES[k].h === doc.height) && <option value={`${doc.width}x${doc.height}`}>Custom · {doc.width}×{doc.height}</option>}
+        </select>
+        <button style={tbBtn()} onClick={fitContent} title="Scale & centre all layers to fit the frame">Fit</button>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <select value={scale} onChange={(e) => setScale(Number(e.target.value))} title="PNG resolution" style={{ ...fieldBox, width: "auto", padding: "7px 8px" }}>
             <option value={1}>1×</option>

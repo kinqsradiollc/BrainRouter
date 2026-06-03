@@ -7,7 +7,7 @@
  * picture frames, and standalone logo exports.
  */
 
-export type Mode = "poster" | "avatar" | "logo" | "canvas";
+export type Mode = "canvas" | "avatar" | "logo";
 
 export type SizeGroup = "Social" | "Banner";
 export interface SizeDef {
@@ -142,7 +142,7 @@ export interface BrandConfig {
 }
 
 export const DEFAULT_CONFIG: BrandConfig = {
-  mode: "poster",
+  mode: "canvas",
   preset: "og",
   template: "release",
   align: "left",

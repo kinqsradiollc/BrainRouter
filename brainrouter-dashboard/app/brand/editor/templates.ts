@@ -1,6 +1,7 @@
 /** Editor doc factories: blank canvas, layer constructors, and seed templates. */
 
-import type { EditorDoc, Layer, LayerType, TextLayer, ImageLayer, LogoLayer, ShapeLayer } from "./types";
+import type { EditorDoc, Layer, LayerType, TextLayer, ImageLayer, LogoLayer, ShapeLayer, BadgeLayer } from "./types";
+import { badgeWidth } from "./measure";
 
 let _c = 0;
 export function uid(): string {
@@ -39,11 +40,22 @@ export function newLayer(type: LayerType, doc: EditorDoc): Layer {
   if (type === "logo") {
     return { ...baseAt(Math.round(cx - 140), Math.round(cy - 36), 280, 72), type: "logo", name: "Logo", lockup: "full", color: ACCENT } satisfies LogoLayer;
   }
+  if (type === "badge") {
+    return { ...baseAt(Math.round(cx - 120), Math.round(cy - 43), 240, 86), type: "badge", name: "Badge", label: "FOUNDER", roleKey: "founder", style: "solid", color: ACCENT } satisfies BadgeLayer;
+  }
   return { ...baseAt(Math.round(cx - 120), Math.round(cy - 80), 240, 160), type: "shape", name: "Shape", shape: "rect", fill: ACCENT, stroke: "none", strokeWidth: 0, radius: 16 } satisfies ShapeLayer;
 }
 
 function txt(o: Partial<TextLayer> & { x: number; y: number; w: number; text: string }): TextLayer {
   return { ...baseAt(o.x, o.y, o.w, o.fontSize ? Math.round(o.fontSize * 1.3) : 80), type: "text", name: o.name || "Text", text: o.text, fontFamily: o.fontFamily || "sans", fontSize: o.fontSize || 56, weight: o.weight ?? 600, color: o.color || "#ECEFF2", align: o.align || "left", letterSpacing: o.letterSpacing ?? -1, lineHeight: o.lineHeight ?? 1.1, effect: o.effect || "none", effectColor: o.effectColor || "#000000" };
+}
+
+/** Role badge pill. Pass `cx` to centre it horizontally (width is content-derived). */
+function badge(o: { y: number; h: number; label: string; roleKey: string; cx?: number; x?: number; style?: "glass" | "solid"; color?: string }): BadgeLayer {
+  const tmp: BadgeLayer = { ...baseAt(0, o.y, 0, o.h), type: "badge", name: "Badge", label: o.label, roleKey: o.roleKey, style: o.style || "solid", color: o.color || ACCENT };
+  const w = badgeWidth(tmp);
+  const x = o.cx != null ? Math.round(o.cx - w / 2) : o.x ?? 0;
+  return { ...tmp, x, w };
 }
 
 export function releaseTemplate(): EditorDoc {
@@ -71,11 +83,9 @@ export function quoteTemplate(): EditorDoc {
 export function roleCardTemplate(): EditorDoc {
   const d = blankDoc(1080, 1350);
   const cx = 540;
-  const bw = 380, bh = 92, bx = cx - bw / 2, by = 300;
   d.layers = [
     { ...baseAt(cx - 54, 150, 108, 108), type: "logo", name: "Logo", lockup: "mark", color: ACCENT },
-    { ...baseAt(bx, by, bw, bh), type: "shape", name: "Badge", shape: "rect", fill: ACCENT, stroke: "none", strokeWidth: 0, radius: bh / 2 },
-    txt({ x: bx, y: by + 24, w: bw, text: "FOUNDER", fontSize: 40, weight: 700, color: "#06130E", align: "center", letterSpacing: 3 }),
+    badge({ cx, y: 300, h: 92, label: "FOUNDER", roleKey: "founder", style: "solid" }),
     txt({ x: 100, y: 470, w: 880, text: "Your Name", fontSize: 96, weight: 600, color: "#ECEFF2", align: "center", letterSpacing: -2 }),
     txt({ x: 120, y: 624, w: 840, text: "Founding Engineer · BrainRouter", fontSize: 34, weight: 400, color: "#9BA3AC", align: "center", letterSpacing: 0 }),
     txt({ x: 120, y: 1252, w: 840, text: "brainrouter.dev", fontSize: 26, weight: 500, color: "#5E6670", align: "center", fontFamily: "mono" }),
@@ -83,9 +93,32 @@ export function roleCardTemplate(): EditorDoc {
   return d;
 }
 
+export function featureTemplate(): EditorDoc {
+  const d = blankDoc(1200, 630);
+  d.layers = [
+    { ...baseAt(64, 52, 280, 58), type: "logo", name: "Logo", lockup: "full", color: ACCENT },
+    txt({ x: 64, y: 222, w: 720, text: "FEATURE", fontSize: 22, weight: 600, color: ACCENT, fontFamily: "mono", letterSpacing: 3 }),
+    txt({ x: 64, y: 248, w: 940, text: "Recall that ranks itself —\nretrieve, rerank, judge, expand.", fontSize: 56, weight: 600, color: "#ECEFF2", letterSpacing: -2 }),
+    txt({ x: 64, y: 500, w: 900, text: "A four-stage pipeline so agents read only what matters.", fontSize: 25, weight: 400, color: "#9BA3AC" }),
+    txt({ x: 64, y: 562, w: 400, text: "brainrouter.dev", fontSize: 21, weight: 500, color: "#5E6670", fontFamily: "mono" }),
+  ];
+  return d;
+}
+
+export function lockupTemplate(): EditorDoc {
+  const d = blankDoc(1200, 630);
+  d.layers = [
+    { ...baseAt(328, 252, 543, 96), type: "logo", name: "Logo", lockup: "full", color: ACCENT },
+    txt({ x: 200, y: 392, w: 800, text: "MEMORY-FIRST AI", fontSize: 26, weight: 500, color: "#9BA3AC", align: "center", letterSpacing: 4, fontFamily: "mono" }),
+  ];
+  return d;
+}
+
 export const TEMPLATE_FACTORIES: { key: string; label: string; make: () => EditorDoc }[] = [
   { key: "release", label: "Release card", make: releaseTemplate },
+  { key: "feature", label: "Feature card", make: featureTemplate },
   { key: "role", label: "Role card", make: roleCardTemplate },
   { key: "quote", label: "Quote", make: quoteTemplate },
+  { key: "lockup", label: "Logo lockup", make: lockupTemplate },
   { key: "blank", label: "Blank", make: () => blankDoc(1200, 630) },
 ];

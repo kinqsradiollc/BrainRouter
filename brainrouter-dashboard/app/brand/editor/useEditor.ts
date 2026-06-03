@@ -5,18 +5,16 @@ import type { EditorDoc, Layer, Background, LayerType, ImageLayer } from "./type
 import { releaseTemplate, newLayer, uid } from "./templates";
 import { normalizeLayer } from "./measure";
 
-/** Scale all layers proportionally — positions per-axis, sizes uniformly — so
- *  resizing the canvas or applying a template keeps the layout intact. Each
- *  result is normalized so its box matches what renders. */
-function rescaleLayers(layers: Layer[], sx: number, sy: number): Layer[] {
-  const fs = Math.min(sx, sy);
+/** Apply a single uniform scale + translation to every layer (positions, sizes,
+ *  font size, radii, strokes all scale by the same factor → never distorted).
+ *  Each result is normalized so its box matches what renders. */
+function transformLayers(layers: Layer[], s: number, offX: number, offY: number): Layer[] {
   return layers.map((l) => {
-    if (sx === 1 && sy === 1) return normalizeLayer(l);
-    const b = { x: Math.round(l.x * sx), y: Math.round(l.y * sy), w: Math.max(8, Math.round(l.w * sx)), h: Math.max(8, Math.round(l.h * sy)) };
+    const b = { x: Math.round(l.x * s + offX), y: Math.round(l.y * s + offY), w: Math.max(8, Math.round(l.w * s)), h: Math.max(8, Math.round(l.h * s)) };
     let scaled: Layer;
-    if (l.type === "text") scaled = { ...l, ...b, fontSize: Math.max(6, Math.round(l.fontSize * fs)) };
-    else if (l.type === "image") scaled = { ...l, ...b, radius: Math.round(l.radius * fs) };
-    else if (l.type === "shape") scaled = { ...l, ...b, radius: Math.round(l.radius * fs), strokeWidth: Math.round(l.strokeWidth * fs) };
+    if (l.type === "text") scaled = { ...l, ...b, fontSize: Math.max(6, Math.round(l.fontSize * s)) };
+    else if (l.type === "image") scaled = { ...l, ...b, radius: Math.round(l.radius * s) };
+    else if (l.type === "shape") scaled = { ...l, ...b, radius: Math.round(l.radius * s), strokeWidth: Math.max(0, Math.round(l.strokeWidth * s)) };
     else scaled = { ...l, ...b };
     return normalizeLayer(scaled);
   });
@@ -74,15 +72,41 @@ export function useEditor() {
     });
   }, []);
   const setCanvasSize = useCallback((w: number, h: number) => {
-    setDoc((d) => (w < 8 || h < 8 || (w === d.width && h === d.height) ? { ...d, width: w, height: h } : { ...d, width: w, height: h, layers: rescaleLayers(d.layers, w / d.width, h / d.height) }));
+    setDoc((d) => {
+      if (w < 8 || h < 8 || (w === d.width && h === d.height)) return { ...d, width: w, height: h };
+      // Uniform scale about the centre so the design fits the new frame without
+      // distortion and stays centred — the predictable "resize the poster" move.
+      const s = Math.min(w / d.width, h / d.height);
+      return { ...d, width: w, height: h, layers: transformLayers(d.layers, s, (w - d.width * s) / 2, (h - d.height * s) / 2) };
+    });
   }, []);
   const loadTemplate = useCallback((make: () => EditorDoc) => {
-    setDoc((d) => {
-      const t = make();
-      return { ...d, background: { ...t.background }, layers: rescaleLayers(t.layers, d.width / t.width, d.height / t.height) };
-    });
+    // Adopt the template's native canvas + layout verbatim (just normalized) so
+    // each poster renders exactly as designed rather than squished into the
+    // current aspect ratio. Resize afterwards if a different format is needed.
+    const t = make();
+    setDoc({ width: t.width, height: t.height, background: { ...t.background }, layers: t.layers.map(normalizeLayer) });
     setSelId(null);
   }, []);
 
-  return { doc, selId, setSelId, update, updateDoc, setBg, add, addImage, remove, duplicate, reorder, setCanvasSize, loadTemplate };
+  /** Uniformly scale + centre every visible layer to fit ~88% of the frame.
+   *  The one-click tidy after resizing the canvas or moving things around. */
+  const fitContent = useCallback(() => {
+    setDoc((d) => {
+      const ls = d.layers.filter((l) => l.visible);
+      if (!ls.length) return d;
+      const minX = Math.min(...ls.map((l) => l.x));
+      const minY = Math.min(...ls.map((l) => l.y));
+      const maxX = Math.max(...ls.map((l) => l.x + l.w));
+      const maxY = Math.max(...ls.map((l) => l.y + l.h));
+      const bw = Math.max(1, maxX - minX);
+      const bh = Math.max(1, maxY - minY);
+      const s = Math.min((d.width * 0.88) / bw, (d.height * 0.88) / bh);
+      const offX = (d.width - bw * s) / 2 - minX * s;
+      const offY = (d.height - bh * s) / 2 - minY * s;
+      return { ...d, layers: transformLayers(d.layers, s, offX, offY) };
+    });
+  }, []);
+
+  return { doc, selId, setSelId, update, updateDoc, setBg, add, addImage, remove, duplicate, reorder, setCanvasSize, loadTemplate, fitContent };
 }

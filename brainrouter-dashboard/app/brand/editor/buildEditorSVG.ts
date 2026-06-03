@@ -4,9 +4,18 @@
  * WYSIWYG + vector. Pure (no React).
  */
 
-import type { EditorDoc, Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer } from "./types";
+import type { EditorDoc, Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer, BadgeLayer } from "./types";
 import { guillocheMarkup } from "../brandMark";
 import { FONT, MONO, esc, lockupMarkup } from "../brandShared";
+import { roleBadgeMarkup } from "../roleBadge";
+
+/** Translucent wash of a hex colour, for the glass badge fill. */
+function softFill(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "rgba(52,194,142,0.16)";
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},0.16)`;
+}
 
 function renderText(l: TextLayer, defs: { s: string }): string {
   const ff = l.fontFamily === "mono" ? MONO : FONT;
@@ -47,12 +56,27 @@ function renderShape(l: ShapeLayer): string {
   return `<rect x="${l.x}" y="${l.y}" width="${l.w}" height="${l.h}" rx="${l.radius}" ${common}/>`;
 }
 
+function renderBadge(l: BadgeLayer): string {
+  const fs = l.h / 2.15;
+  return roleBadgeMarkup({
+    cx: l.x + l.w / 2,
+    cy: l.y + l.h / 2,
+    fontSize: fs,
+    accent: l.color,
+    accentSoft: softFill(l.color),
+    label: l.label && l.label.length ? l.label : "FOUNDER",
+    roleKey: l.roleKey,
+    style: l.style,
+  }).svg;
+}
+
 function renderLayer(l: Layer, defs: { s: string }): string {
   if (!l.visible) return "";
   let inner = "";
   if (l.type === "text") inner = renderText(l, defs);
   else if (l.type === "image") inner = renderImage(l, defs);
   else if (l.type === "logo") inner = renderLogo(l);
+  else if (l.type === "badge") inner = renderBadge(l);
   else inner = renderShape(l);
   const cx = l.x + l.w / 2;
   const cy = l.y + l.h / 2;
