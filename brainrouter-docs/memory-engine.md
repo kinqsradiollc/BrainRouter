@@ -134,7 +134,7 @@ finalScore(r)        = rrfScore(r) * 30 * 0.7
 | **Freshness boost** | 1.15× at age 0 → 1.0× at age 1 day. New captures surface immediately. |
 | **Intent affinity** | `detectTaskIntent(query)` maps verbs (debug, fix, design) to per-type multipliers. |
 | **Skill boost** | Score ×1.2 when `record.skill_tag` matches active skill. |
-| **Neural sparks** | 2-hop spreading activation — records firing above threshold join the candidate pool. |
+| **Neural sparks** | 2-hop spreading activation — records firing above threshold join the candidate pool. On by default; set `BRAINROUTER_NEURAL_SPARK_ENABLED=false` to disable propagation, Hebbian strengthening, and synaptic decay/pruning (recall falls back to the plain scored/reranked set). |
 | **Reranker** | Cross-encoder (Cohere / vLLM `/v1/rerank`) replaces top-K ordering when configured. |
 | **Relevance judge** | LLM-as-judge stage that filters the reranked finalists. Each candidate gets a binary verdict + reason; rejects are dropped. Off by default — opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`. Adds one LLM round-trip; on failure the reranker output passes through unchanged. Survives LM Studio's idle-model auto-unload by detecting the "model is unloaded" 400, waiting 1.5s, and retrying once (mirrors `ModelLLMRunner`). |
 

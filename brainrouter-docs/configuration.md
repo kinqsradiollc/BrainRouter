@@ -429,6 +429,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_GRAPH_ENABLED` | `true` | 2-hop graph extraction + BFS expansion. |
 | `BRAINROUTER_GRAPH_TIMEOUT_MS` | `120000` | Graph-extraction LLM timeout. |
 | `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | `60000` | Contradiction-check timeout. |
+| `BRAINROUTER_NEURAL_SPARK_ENABLED` | `true` | 2-hop spreading activation (firing/propagation, Hebbian LTP, LTD decay+prune). When `false`, recall ranks on the plain scored/reranked set. |
 | `BRAINROUTER_ACE_ARCHIVE_THRESHOLD` | `10` | Uncited surfaces before pruning. |
 | `BRAINROUTER_FOCUS_TRIGGER_N` | `10` | New records before scene distillation fires. |
 | `BRAINROUTER_IDENTITY_TRIGGER_N` | `50` | New records before identity distillation fires. |

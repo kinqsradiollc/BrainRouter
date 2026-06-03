@@ -11,6 +11,11 @@ export class NeuralSparkEngine {
   private readonly ltpStep = 0.15;
   private readonly decayFactor = 0.90; // Default decay multiplier (LTD)
   private readonly pruneThreshold = 0.10;
+  // Spreading activation is on by default. Set BRAINROUTER_NEURAL_SPARK_ENABLED=false
+  // to disable propagation, Hebbian strengthening, and synaptic decay/pruning;
+  // recall then ranks on the plain scored/reranked candidate set. Mirrors the
+  // opt-out semantics of BRAINROUTER_GRAPH_ENABLED.
+  private readonly enabled = process.env.BRAINROUTER_NEURAL_SPARK_ENABLED !== "false";
 
   constructor(private store: IMemoryStore) {}
 
@@ -19,6 +24,10 @@ export class NeuralSparkEngine {
    * Runs a 2-hop BFS.
    */
   public propagateSparks(userId: string, initialNodes: SparkNode[]): SparkNode[] {
+    // Disabled: hand the seed nodes back untouched so recall ranks on the
+    // pre-spark scores — no neighbors pulled in, no firing boost.
+    if (!this.enabled) return initialNodes;
+
     const activeNodes = new Map<string, SparkNode>(
       initialNodes.map(node => [node.id, { ...node, fired: false }])
     );
@@ -77,6 +86,7 @@ export class NeuralSparkEngine {
    * Hebbian Spine updates (LTP) for cited pairs
    */
   public strengthenSpines(userId: string, citedIds: string[]): void {
+    if (!this.enabled) return;
     if (citedIds.length < 2) return;
 
     const pairs: Array<{ source: string; target: string }> = [];
@@ -93,6 +103,7 @@ export class NeuralSparkEngine {
    * Synaptic decay & pruning (LTD)
    */
   public decayAndPrune(userId: string): void {
+    if (!this.enabled) return;
     this.store.decayConnections(userId, this.decayFactor);
     this.store.pruneConnections(userId, this.pruneThreshold);
   }

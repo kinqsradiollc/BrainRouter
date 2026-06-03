@@ -2,10 +2,11 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { memoryEngine } from '../memory/engine.js';
+import { getMemoryConsolidationDir, resolveConsolidationWorkspace } from './memory_consolidate_paths.js';
 
 /**
  * MCP-side memory consolidation. Collapses recall records into per-type
- * markdown files under `<workspace>/.brainrouter/memories/` so the user
+ * markdown files under `~/.brainrouter/workspaces/<encoded>/memories/` so the user
  * has a human-readable view of what the cognitive memory engine has
  * learned across sessions.
  *
@@ -19,14 +20,14 @@ export const memoryConsolidateToolSchema = {
   description:
     'Read recent memory records and write them to per-type markdown files ' +
     '(user.md, feedback.md, project.md, reference.md, raw_memories.md, MEMORY.md) ' +
-    'under <workspacePath>/.brainrouter/memories/. Use this at session end or on demand ' +
+    'under ~/.brainrouter/workspaces/<encoded>/memories/. Use this at session end or on demand ' +
     'to produce a human-readable consolidation of what the agent learned.',
   inputSchema: {
     type: 'object',
     properties: {
       userId: { type: 'string', description: 'User identifier for isolation' },
       sessionKey: { type: 'string', description: 'Session identifier' },
-      workspacePath: { type: 'string', description: 'Absolute path to the workspace where files will be written.' },
+      workspacePath: { type: 'string', description: 'Absolute path to the real project workspace. Do not pass BrainRouter transient work directories.' },
       query: { type: 'string', description: 'Optional query to filter records before consolidation. Defaults to "*".' },
       limit: { type: 'number', description: 'Max records to consider (default 200).' },
     },
@@ -59,6 +60,7 @@ export async function handleMemoryConsolidate(args: unknown, options?: { default
   const query = params.query ?? '*';
 
   try {
+    const workspaceRoot = resolveConsolidationWorkspace(params.workspacePath);
     const result = await memoryEngine.recall({
       userId: effectiveUserId,
       sessionKey: params.sessionKey,
@@ -67,7 +69,7 @@ export async function handleMemoryConsolidate(args: unknown, options?: { default
     const records = extractRecords((result as any) ?? {});
     if (records.length > limit) records.length = limit;
 
-    const dir = path.join(params.workspacePath, '.brainrouter', 'memories');
+    const dir = getMemoryConsolidationDir(workspaceRoot);
     fs.mkdirSync(path.join(dir, 'rollout_summaries'), { recursive: true });
 
     const buckets: Record<MemoryType, MemoryRecord[]> = { user: [], feedback: [], project: [], reference: [], raw: [] };
@@ -84,11 +86,11 @@ export async function handleMemoryConsolidate(args: unknown, options?: { default
     for (const t of ['user', 'feedback', 'project', 'reference', 'raw'] as MemoryType[]) {
       const file = path.join(dir, t === 'raw' ? 'raw_memories.md' : `${t}.md`);
       fs.writeFileSync(file, renderTypeFile(t, buckets[t]), 'utf8');
-      filesWritten.push(path.relative(params.workspacePath, file));
+      filesWritten.push(file);
     }
     const indexFile = path.join(dir, 'MEMORY.md');
     fs.writeFileSync(indexFile, renderIndex(records, buckets), 'utf8');
-    filesWritten.push(path.relative(params.workspacePath, indexFile));
+    filesWritten.push(indexFile);
 
     return {
       content: [{
@@ -97,7 +99,8 @@ export async function handleMemoryConsolidate(args: unknown, options?: { default
           totalRecords: records.length,
           perType: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, v.length])),
           files: filesWritten,
-          dir: path.relative(params.workspacePath, dir),
+          dir,
+          workspaceRoot,
         }, null, 2),
       }],
     };

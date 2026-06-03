@@ -4,11 +4,11 @@
 // ─────────────────────────────────────────────
 
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'fs';
 import { resolve, dirname, join, basename, isAbsolute, win32, posix } from 'path';
 import { fileURLToPath } from 'url';
 import type { RegistryConfig, BrainRouterConfig } from './types.js';
+import { getBrainrouterHome } from './brainrouter-home.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -56,7 +56,7 @@ export function isForeignAbsolutePath(workspacePath: string | undefined): boolea
 
 function fallbackWorkspacePath(workspacePath: string): string {
   const workspaceHash = createHash('sha256').update(workspacePath).digest('hex').slice(0, 16);
-  return join(homedir(), '.brainrouter', 'fallback-workspaces', workspaceHash);
+  return join(getBrainrouterHome(), 'fallback-workspaces', workspaceHash);
 }
 
 export function getSafeWorkspacePath(workspacePath: string): string {

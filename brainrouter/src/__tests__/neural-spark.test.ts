@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import { NeuralSparkEngine } from "../memory/pipeline/neural-spark.js";
 
@@ -137,5 +137,66 @@ describe("Neural Spark Engine & Spreading Activation", () => {
 
     expect(abConn?.weight).toBeCloseTo(0.72);
     expect(acConn).toBeUndefined(); // Pruned!
+  });
+
+  describe("kill switch — BRAINROUTER_NEURAL_SPARK_ENABLED=false", () => {
+    // Flag is read in the constructor, so set it before instantiating and
+    // clear it afterwards so the default-on tests above stay unaffected.
+    afterEach(() => {
+      delete process.env.BRAINROUTER_NEURAL_SPARK_ENABLED;
+    });
+
+    it("returns seed nodes untouched without propagating or firing", () => {
+      process.env.BRAINROUTER_NEURAL_SPARK_ENABLED = "false";
+      const store = new MockMemoryStore() as any as IMemoryStore;
+      const engine = new NeuralSparkEngine(store);
+
+      // Same A -> B -> C network that fires through 2 hops when enabled.
+      store.upsertConnection("user-1", "node-A", "node-B", 0.8);
+      store.upsertConnection("user-1", "node-B", "node-C", 0.9);
+
+      const initialNodes = [
+        { id: "node-A", potential: 1.0, fired: false },
+        { id: "node-B", potential: 0.0, fired: false },
+        { id: "node-C", potential: 0.0, fired: false },
+      ];
+
+      const results = engine.propagateSparks("user-1", initialNodes);
+
+      // Nodes come back exactly as seeded — no neighbor excited, nothing fired.
+      expect(results).toBe(initialNodes);
+      expect(results.every(n => !n.fired)).toBe(true);
+      expect(results.find(n => n.id === "node-B")?.potential).toBe(0.0);
+      expect(results.find(n => n.id === "node-C")?.potential).toBe(0.0);
+    });
+
+    it("does not strengthen co-cited pairs (LTP off)", () => {
+      process.env.BRAINROUTER_NEURAL_SPARK_ENABLED = "false";
+      const store = new MockMemoryStore() as any as IMemoryStore;
+      const engine = new NeuralSparkEngine(store);
+
+      store.upsertConnection("user-1", "node-A", "node-B", 0.5);
+      store.upsertConnection("user-1", "node-B", "node-A", 0.5);
+
+      engine.strengthenSpines("user-1", ["node-A", "node-B"]);
+
+      const abConn = store.getConnectionsForSource("user-1", "node-A").find(c => c.targetId === "node-B");
+      expect(abConn?.weight).toBeCloseTo(0.5); // unchanged
+    });
+
+    it("does not decay or prune connections (LTD off)", () => {
+      process.env.BRAINROUTER_NEURAL_SPARK_ENABLED = "false";
+      const store = new MockMemoryStore() as any as IMemoryStore;
+      const engine = new NeuralSparkEngine(store);
+
+      store.upsertConnection("user-1", "node-A", "node-B", 0.8);
+      store.upsertConnection("user-1", "node-A", "node-C", 0.1); // would be pruned when enabled
+
+      engine.decayAndPrune("user-1");
+
+      const connections = store.getConnectionsForSource("user-1", "node-A");
+      expect(connections.find(c => c.targetId === "node-B")?.weight).toBeCloseTo(0.8); // not decayed
+      expect(connections.find(c => c.targetId === "node-C")?.weight).toBeCloseTo(0.1); // not pruned
+    });
   });
 });

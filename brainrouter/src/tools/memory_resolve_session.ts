@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { getBrainrouterHome } from '../brainrouter-home.js';
 import { getSafeWorkspacePath } from '../resolver.js';
 
 /**
@@ -19,7 +19,7 @@ import { getSafeWorkspacePath } from '../resolver.js';
  */
 function getMcpCacheDir(workspacePath: string): string {
   const hash = createHash('sha256').update(workspacePath).digest('hex').slice(0, 12);
-  const dir = path.join(os.homedir(), '.brainrouter', 'mcp-cache', hash);
+  const dir = path.join(getBrainrouterHome(), 'mcp-cache', hash);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
