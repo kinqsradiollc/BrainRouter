@@ -1013,3 +1013,19 @@ html {
 @keyframes border-beam-spin {
   to { --beam-angle: 360deg; }
 }
+
+/* ─── BrainRouter logo mark (components/BrainRouterLogo.tsx) ──────────────────
+   A memory-graph SVG mark. CSS owns only the subtle "breathing" pulse on the
+   core recall node — the rest is static vector. */
+.brl-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: brl-breathe 2.8s ease-in-out infinite;
+}
+@keyframes brl-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.34; }
+  50%      { transform: scale(1.85); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brl-pulse { animation: none; opacity: 0; }
+}

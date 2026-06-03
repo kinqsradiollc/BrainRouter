@@ -47,12 +47,14 @@ const CAPABILITIES = [
 export function EcosystemSection() {
   return (
     <section
+      id="features"
       style={{
         display: "flex",
         flexDirection: "column",
         gap: "32px",
         padding: "64px 0",
         borderTop: "1px solid var(--border)",
+        scrollMarginTop: "90px",
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxWidth: "720px" }}>

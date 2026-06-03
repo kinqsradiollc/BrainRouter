@@ -5,6 +5,9 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "./AuthProvider";
 import { STATIC_PRESENTATION } from "../lib/presentation";
+import { BrainRouterLogo } from "./BrainRouterLogo";
+
+const DOCS_URL = "https://github.com/kinqsradiollc/BrainRouter/tree/HEAD/brainrouter-docs";
 
 export function PublicHeader() {
   const pathname = usePathname();
@@ -14,42 +17,33 @@ export function PublicHeader() {
   return (
     <header className="public-header">
       <div className="public-header-inner">
-        <Link href="/" className="logo">
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <div 
-              style={{ 
-                width: "8px", 
-                height: "8px", 
-                borderRadius: "50%", 
-                background: "var(--color-golden-accent)"
-              }}
-            />
-            <span className="serif-display" style={{ fontSize: "20px", color: "var(--color-pure-white)", fontWeight: 500 }}>
-              BrainRouter
-            </span>
-          </div>
+        <Link href="/" className="logo" aria-label="BrainRouter — home">
+          <BrainRouterLogo size={26} />
         </Link>
 
         <nav className="public-nav">
           <Link href="/" className={`public-nav-link ${pathname === "/" ? "active" : ""}`}>
             Home
           </Link>
-          <Link href="/about" className={`public-nav-link ${pathname === "/about" ? "active" : ""}`}>
-            About Us
+          <Link href="/#memory" className="public-nav-link">
+            Memory
+          </Link>
+          <Link href="/#cli" className="public-nav-link">
+            CLI
           </Link>
           <Link href="/#features" className="public-nav-link">
             Features
           </Link>
-          <Link href="/#how-it-works" className="public-nav-link">
-            How It Works
+          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="public-nav-link">
+            Docs
+          </a>
+          <Link href="/about" className={`public-nav-link ${pathname === "/about" ? "active" : ""}`}>
+            About
           </Link>
-          <Link href="/#workflow" className="public-nav-link">
-            Workflow
-          </Link>
-          <a 
-            href="https://github.com/kinqsradiollc/BrainRouter" 
-            target="_blank" 
-            rel="noopener noreferrer" 
+          <a
+            href="https://github.com/kinqsradiollc/BrainRouter"
+            target="_blank"
+            rel="noopener noreferrer"
             className="public-nav-link"
             style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
           >
