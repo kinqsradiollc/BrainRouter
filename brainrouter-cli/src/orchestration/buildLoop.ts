@@ -52,9 +52,17 @@ export function verifyLooksGreen(output: string): boolean {
   );
 }
 
-/** A review that flags a `blocker` finding blocks the auto-merge. */
+/** A review that flags a `blocker` finding blocks the auto-merge. Neutralizes the
+ *  NEGATED/benign mentions a severity-ordered reviewer routinely writes ("no
+ *  blockers", "blocker: none", "0 blockers", "no blocking issues") so they don't
+ *  falsely hold the merge — only an affirmative blocker counts. */
 export function reviewHasBlocker(output: string): boolean {
-  return /\bblocker\b/i.test(output ?? '');
+  const stripped = (output ?? '')
+    .toLowerCase()
+    .replace(/\b(?:no|zero|0|without|none)\s+blockers?\b/g, ' ')
+    .replace(/\bblockers?\s*[:=]?\s*(?:none|n\/a|0|nil|nothing|free)\b/g, ' ')
+    .replace(/\bno\s+blocking\b/g, ' ');
+  return /\bblocker\b/.test(stripped);
 }
 
 /** One held fan-out slice: its child id, the preserved recovery patch, and a label. */

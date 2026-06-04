@@ -340,6 +340,11 @@ test('BUILD-LOOP P2 verifyLooksGreen / reviewHasBlocker heuristics', () => {
   assert.equal(verifyLooksGreen('5 passed, 1 failed'), false, 'a real failure is still red');
   assert.equal(reviewHasBlocker('blocker: null deref at auth.ts:12'), true);
   assert.equal(reviewHasBlocker('minor: rename var; nit: spacing'), false);
+  // Review fix — negated/benign mentions must NOT hold the merge (false positives).
+  assert.equal(reviewHasBlocker('No blockers found. Two minor nits.'), false, '"no blockers" is not a blocker');
+  assert.equal(reviewHasBlocker('blocker: none — looks good'), false, '"blocker: none" is not a blocker');
+  assert.equal(reviewHasBlocker('0 blockers, 1 major'), false, '"0 blockers" is not a blocker');
+  assert.equal(reviewHasBlocker('blocker: slice B breaks slice A'), true, 'an affirmative blocker still holds');
 });
 
 test('BUILD-LOOP P2 (review) isSharedWorktreeOf accepts same-repo worktree, rejects foreign/arbitrary paths', async () => {
@@ -474,11 +479,16 @@ test('CODEX-WORKTREE-MERGEBACK (A3) pruneWorktreePatches removes patches past th
   });
 });
 
-test('BUILD-LOOP P2.5 mergeBackLine: merged / not-merged / held-for-review notices', () => {
-  assert.match(mergeBackLine({ changedFiles: 3, applied: true }, 'a1', false), /3 file\(s\) merged into your tree/);
-  assert.match(mergeBackLine({ changedFiles: 2, applied: false, applyError: 'drift' }, 'a1', false), /NOT merged \(drift\).*\/agents diff a1/);
-  assert.match(mergeBackLine({ changedFiles: 2, applied: false }, 'a1', true), /HELD for review.*\/agents diff a1 apply/);
-  assert.equal(mergeBackLine({ changedFiles: 0 }, 'a1', true), '', 'no changes → no notice');
+test('BUILD-LOOP P2.5 mergeBackLine: merged / not-merged / held notices by reason', () => {
+  assert.match(mergeBackLine({ changedFiles: 3, applied: true }, 'a1', null), /3 file\(s\) merged into your tree/);
+  assert.match(mergeBackLine({ changedFiles: 2, applied: false, applyError: 'drift' }, 'a1', null), /NOT merged \(drift\).*\/agents diff a1/);
+  // 'review' (the knob): the user applies explicitly.
+  assert.match(mergeBackLine({ changedFiles: 2, applied: false }, 'a1', 'review'), /HELD for review \(cli\.worktreeMergeReview\).*\/agents diff a1 apply/);
+  // 'fanout' (a build slice): the synthesis gate owns the merge — no manual-apply step.
+  const fan = mergeBackLine({ changedFiles: 2, applied: false }, 'a1', 'fanout');
+  assert.match(fan, /HELD.*synthesis gate/);
+  assert.doesNotMatch(fan, /agents diff a1 apply/);
+  assert.equal(mergeBackLine({ changedFiles: 0 }, 'a1', 'review'), '', 'no changes → no notice');
 });
 
 // Produce a real HELD slice patch (the fan-out worker's preserved worktree).

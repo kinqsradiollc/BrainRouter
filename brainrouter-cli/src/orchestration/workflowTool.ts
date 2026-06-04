@@ -12,7 +12,7 @@
  * fake runner.
  */
 
-import { worktreePatchFile, type OrchestrationContext } from './tools.js';
+import type { OrchestrationContext } from './tools.js';
 import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
 import { buildTemplatePlan } from './workflowTemplates.js';
 import {
@@ -25,7 +25,7 @@ import {
 } from './phaseOrchestrator.js';
 import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../state/workflowRun.js';
 import { getCliKnobs } from '../config/config.js';
-import { prepareSharedWorktree } from './worktreeIsolation.js';
+import { prepareSharedWorktree, worktreePatchFile } from './worktreeIsolation.js';
 import { finalizeBuildLoop, finalizeFanOutBuild, type FanOutSlice } from './buildLoop.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to

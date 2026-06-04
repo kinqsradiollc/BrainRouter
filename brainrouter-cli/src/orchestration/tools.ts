@@ -36,7 +36,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
-import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, type ChildWorkspaceResolution } from './worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, worktreePatchFile, type WorktreeHoldReason, type ChildWorkspaceResolution } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
@@ -989,13 +989,14 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       let mergeLine = '';
       if (childWorkspace.isolation && !worktreeSettled) {
         try {
-          // BUILD-LOOP P2.5 — HOLD the child's changes for review (don't auto-merge)
-          // when `cli.worktreeMergeReview` is on, or when the build orchestrator asked
-          // (fan-out slice: `holdWorktree`). The work is still captured as a recovery
-          // patch and surfaced via `/agents diff <id>` for an explicit apply.
-          const heldForReview = args.holdWorktree === true || getCliKnobs().worktreeMergeReview === 'on';
+          // BUILD-LOOP P2.5 — HOLD the child's changes (don't auto-merge) when it's a
+          // build fan-out slice (`holdWorktree` → the synthesis gate owns the merge) or
+          // when `cli.worktreeMergeReview` is on (the user applies). Either way the work
+          // is captured as a recovery patch and surfaced via `/agents diff <id>`.
+          const holdReason: WorktreeHoldReason | null =
+            args.holdWorktree === true ? 'fanout' : getCliKnobs().worktreeMergeReview === 'on' ? 'review' : null;
           const cleanup = removeChildWorktree(childWorkspace.isolation, {
-            applyBack: !heldForReview,
+            applyBack: !holdReason,
             patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
           });
           worktreeSettled = true;
@@ -1006,9 +1007,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
               applied: cleanup.applied,
               patchPath: cleanup.patchPath,
               applyError: cleanup.applyError,
-              heldForReview,
+              heldForReview: !!holdReason,
             };
-            mergeLine = mergeBackLine(cleanup, record.id, heldForReview);
+            mergeLine = mergeBackLine(cleanup, record.id, holdReason);
           }
         } catch (mergeErr: any) {
           console.error(`[BrainRouter] child ${record.id} merge-back threw (isolated):`, mergeErr?.message ?? mergeErr);
@@ -1261,13 +1262,6 @@ async function offloadChildOutput(
   });
   if (res.isError) return undefined;
   return res.parsed?.refNodeId ?? res.parsed?.nodeId ?? res.parsed?.ref ?? undefined;
-}
-
-// CODEX-WORKTREE-MERGEBACK — where a child's full recovery patch is persisted so
-// its work survives the throwaway worktree's removal (and can be re-applied with
-// `git apply <path>`). Lives under the per-workspace CLI state dir, not the repo.
-export function worktreePatchFile(workspaceRoot: string, childId: string): string {
-  return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
 }
 
 // CODEX-WORKTREE-MERGEBACK — persist a worktree-cleanup result onto the child
