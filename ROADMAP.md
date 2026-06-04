@@ -41,7 +41,7 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 - [x] P1 — `build` workflow template + `/build <task>` command *(shipped in 0.4.11 prep; on `main`)*
 - [ ] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits)
 - [ ] P2.5 — review-gated merge: a reviewer reads each worktree's full diff before merge-back; merge only on verify-green + review-approve (+ cross-worktree synthesis review on fan-out; `cli.worktreeMergeReview` extends it to ad-hoc workers)
-- [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
+- [x] P3 — escalation: `cli.buildLoop` knob + planner classifier *(PR — branch `feat/build-loop-p3-escalation`)*
 - [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
 - [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
 
