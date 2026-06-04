@@ -9,9 +9,11 @@
  * patch (the 0.4.11 no-loss fallback) the user can apply via `/agents diff` /
  * `git apply` — nothing half-merged ever lands in the tree.
  */
+import fs from 'node:fs';
 import path from 'node:path';
-import { removeChildWorktree, type ChildWorktreeIsolation } from './worktreeIsolation.js';
+import { removeChildWorktree, applyPatchFile, type ChildWorktreeIsolation } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
+import { parsePatchFiles, planSynthesisMerge, type WorktreeChangeSet } from './mergeGate.js';
 import type { PhasePlanExecution } from './phaseOrchestrator.js';
 
 export interface BuildLoopMergeOutcome {
@@ -53,6 +55,69 @@ export function verifyLooksGreen(output: string): boolean {
 /** A review that flags a `blocker` finding blocks the auto-merge. */
 export function reviewHasBlocker(output: string): boolean {
   return /\bblocker\b/i.test(output ?? '');
+}
+
+/** One held fan-out slice: its child id, the preserved recovery patch, and a label. */
+export interface FanOutSlice {
+  id: string;
+  label?: string;
+  /** Absolute path to the slice's held recovery patch (absent ⇒ produced no changes). */
+  patchPath?: string;
+}
+
+export interface FanOutBuildOutcome {
+  mergedSlices: Array<{ id: string; label?: string; files: number }>;
+  heldSlices: Array<{ id: string; label?: string; reason: string }>;
+  overlaps: Array<{ file: string; ids: string[] }>;
+  reviewApproved: boolean;
+  reason: string;
+}
+
+/**
+ * BUILD-LOOP P2.5 — gated merge of a FAN-OUT build's held slice worktrees.
+ *
+ * Each slice ran in its own worktree and was HELD (preserved as a recovery patch,
+ * never auto-merged). Here we run the cross-worktree synthesis gate: a reviewer
+ * `blocker` holds everything; otherwise non-overlapping slices merge in order
+ * (check-then-apply), and a slice that would touch a file an earlier slice already
+ * claimed — or whose patch no longer applies cleanly — is HELD with the conflict
+ * named. Nothing half-merged ever lands; held slices stay recoverable via
+ * `/agents diff <id>`.
+ */
+export function finalizeFanOutBuild(
+  workspaceRoot: string,
+  slices: FanOutSlice[],
+  reviewOutput: string,
+): FanOutBuildOutcome {
+  const reviewApproved = !reviewHasBlocker(reviewOutput);
+  const labelById = new Map(slices.map((s) => [s.id, s.label] as const));
+  const patchById = new Map<string, string>();
+  const changeSets: WorktreeChangeSet[] = [];
+  for (const s of slices) {
+    if (!s.patchPath || !fs.existsSync(s.patchPath)) continue; // slice produced no changes
+    let text = '';
+    try { text = fs.readFileSync(s.patchPath, 'utf8'); } catch { continue; }
+    patchById.set(s.id, s.patchPath);
+    changeSets.push({ id: s.id, files: parsePatchFiles(text), label: s.label });
+  }
+
+  const plan = planSynthesisMerge(changeSets, { synthesisBlocker: !reviewApproved });
+
+  const mergedSlices: FanOutBuildOutcome['mergedSlices'] = [];
+  const heldSlices: FanOutBuildOutcome['heldSlices'] = plan.hold.map((h) => ({ id: h.id, label: labelById.get(h.id), reason: h.reason }));
+  for (const id of plan.merge) {
+    const patchPath = patchById.get(id);
+    const files = changeSets.find((c) => c.id === id)?.files.length ?? 0;
+    const res = patchPath ? applyPatchFile(workspaceRoot, patchPath) : { ok: false, error: 'patch missing' };
+    if (res.ok) mergedSlices.push({ id, label: labelById.get(id), files });
+    else heldSlices.push({ id, label: labelById.get(id), reason: `patch did not apply cleanly (${res.error ?? 'conflict'}) — preserved as a patch` });
+  }
+
+  const reason = !reviewApproved
+    ? `synthesis review flagged a blocker — all ${changeSets.length} slice(s) held (apply manually with /agents diff)`
+    : `synthesis ok → merged ${mergedSlices.length}/${changeSets.length} slice(s)${heldSlices.length ? `, held ${heldSlices.length} (overlap/conflict — /agents diff)` : ''}`;
+
+  return { mergedSlices, heldSlices, overlaps: plan.overlaps, reviewApproved, reason };
 }
 
 export function finalizeBuildLoop(

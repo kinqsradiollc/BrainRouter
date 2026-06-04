@@ -80,6 +80,27 @@ test('BUILD-LOOP build: requires a task', () => {
   assert.match(buildTemplatePlan('build', {}).errors[0], /task/);
 });
 
+test('BUILD-LOOP P2.5 build fan-out: >1 slices → implement fans out + a synthesis review phase', () => {
+  const plan = assertValid('build', {
+    task: 'add metrics',
+    slices: ['add /metrics endpoint', 'add the Prometheus registry', 'wire the dashboard panel'],
+  });
+  assert.deepEqual(plan.phases.map((p) => p.id), ['plan', 'implement', 'review']);
+  // Implement fans out one worker per slice; no single-worktree verify phase.
+  assert.equal(plan.phases[1].fanOut?.over.length, 3);
+  assert.equal(plan.phases[1].fanOut?.agent.role, 'worker');
+  assert.equal(plan.phases[1].fanOut?.agent.access, 'write');
+  assert.match(plan.phases[1].fanOut!.agent.prompt, /\{\{target\}\}/);
+  // The final phase is the cross-worktree synthesis reviewer over the combined set.
+  assert.equal(plan.phases[2].id, 'review');
+  assert.equal(plan.phases[2].agents?.[0].role, 'reviewer');
+  assert.deepEqual(plan.phases[2].inputFrom, ['implement']);
+  assert.match(plan.phases[2].agents![0].prompt, /COMBINED|same file|blocker/i);
+  // A single slice falls back to the normal single-worktree build (verify kept).
+  const single = assertValid('build', { task: 'x', slices: ['only one'] });
+  assert.deepEqual(single.phases.map((p) => p.id), ['plan', 'implement', 'verify', 'review']);
+});
+
 test('BUILD-LOOP build: run_workflow executes the 4-phase loop end-to-end', async () => {
   const ws = tmpWs();
   const raw = await runWorkflow(

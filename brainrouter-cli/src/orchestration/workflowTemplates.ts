@@ -169,6 +169,58 @@ function researchTemplate(args: Record<string, unknown>): TemplateResult {
 function buildTemplate(args: Record<string, unknown>): TemplateResult {
   const task = str(args.task ?? args.goal ?? args.prompt);
   if (!task) return { plan: null, errors: ['build: `task` (non-empty string) is required'] };
+
+  // BUILD-LOOP P2.5 — FAN-OUT build: >1 independent slices → one worker per slice,
+  // each in its OWN held worktree, then a cross-worktree SYNTHESIS review over the
+  // combined change-set before the gated merge (`finalizeFanOutBuild`). The merge
+  // gate is structural (overlap-aware) + the reviewer's blocker verdict; per-slice
+  // test-run verify is deferred (slices aren't applied until the gated merge).
+  const slices = stringArray(args.slices);
+  if (slices.length > 1) {
+    return {
+      plan: {
+        title: `build (fan-out ×${slices.length}): ${task.slice(0, 40)}`,
+        phases: [
+          {
+            id: 'plan',
+            title: 'Plan',
+            agents: [{
+              role: 'architect',
+              access: 'read',
+              prompt: `Task: ${task}\n\nThe work is split into ${slices.length} INDEPENDENT slices:\n${slices.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nProduce a SHORT shared plan + per-slice guidance so the slices stay consistent (shared naming/contracts, no duplicated work, no two slices editing the same file). No code yet.`,
+            }],
+          },
+          {
+            id: 'implement',
+            title: 'Implement',
+            fanOut: {
+              over: slices,
+              agent: {
+                role: 'worker',
+                access: 'write',
+                prompt: `Overall task: ${task}\n\nShared plan:\n\n{{input}}\n\nYOUR slice ONLY: {{target}}\n\nImplement just your slice. Keep edits minimal and scoped to your slice's own files — do NOT touch files another slice owns. Report exactly which files you changed.`,
+              },
+            },
+            inputFrom: ['plan'],
+            dependsOn: ['plan'],
+          },
+          {
+            id: 'review',
+            title: 'Synthesis review',
+            agents: [{
+              role: 'reviewer',
+              access: 'read',
+              prompt: `Task: ${task}\n\nThe parallel slices each implemented part of it:\n\n{{input}}\n\nReview the COMBINED change-set for cross-slice problems a per-slice review can't see: two slices editing the same file, inconsistent contracts/naming between slices, duplicated work, or gaps between slices. Findings-first, severity-ordered (blocker / major / minor / nit). Say "blocker" if any slice must NOT merge as-is.`,
+            }],
+            inputFrom: ['implement'],
+            dependsOn: ['implement'],
+          },
+        ],
+      },
+      errors: [],
+    };
+  }
+
   return {
     plan: {
       title: `build: ${task.slice(0, 48)}`,

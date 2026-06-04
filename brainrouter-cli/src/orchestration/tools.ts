@@ -36,7 +36,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
-import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, type ChildWorkspaceResolution } from './worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, type ChildWorkspaceResolution } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
@@ -85,7 +85,7 @@ export interface OrchestrationContext {
    * Lets the REPL surface "✓ agent X completed" so the user knows when to act,
    * instead of seeing tool events and then silence.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }) => void;
+  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string; heldForReview?: boolean } }) => void;
   /**
    * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
    * `handleSpawn` calls this to ask the user (returns true to allow).
@@ -985,12 +985,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // auto-chain review/verify. Doing it in `finally` instead would merge AFTER
       // an auto-chained reviewer already read a stale (un-merged) parent tree.
       // Best-effort: a throw must not turn a succeeded child into a failure.
-      let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } | undefined;
+      let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string; heldForReview?: boolean } | undefined;
       let mergeLine = '';
       if (childWorkspace.isolation && !worktreeSettled) {
         try {
+          // BUILD-LOOP P2.5 — HOLD the child's changes for review (don't auto-merge)
+          // when `cli.worktreeMergeReview` is on, or when the build orchestrator asked
+          // (fan-out slice: `holdWorktree`). The work is still captured as a recovery
+          // patch and surfaced via `/agents diff <id>` for an explicit apply.
+          const heldForReview = args.holdWorktree === true || getCliKnobs().worktreeMergeReview === 'on';
           const cleanup = removeChildWorktree(childWorkspace.isolation, {
-            applyBack: true,
+            applyBack: !heldForReview,
             patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
           });
           worktreeSettled = true;
@@ -1001,10 +1006,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
               applied: cleanup.applied,
               patchPath: cleanup.patchPath,
               applyError: cleanup.applyError,
+              heldForReview,
             };
-            mergeLine = cleanup.applied
-              ? `\n\n— worktree: ${cleanup.changedFiles} file(s) merged into your tree`
-              : `\n\n— worktree: ${cleanup.changedFiles} file(s) NOT merged (${cleanup.applyError ?? 'conflict'}) — recover with /agents diff ${record.id}`;
+            mergeLine = mergeBackLine(cleanup, record.id, heldForReview);
           }
         } catch (mergeErr: any) {
           console.error(`[BrainRouter] child ${record.id} merge-back threw (isolated):`, mergeErr?.message ?? mergeErr);
@@ -1262,7 +1266,7 @@ async function offloadChildOutput(
 // CODEX-WORKTREE-MERGEBACK — where a child's full recovery patch is persisted so
 // its work survives the throwaway worktree's removal (and can be re-applied with
 // `git apply <path>`). Lives under the per-workspace CLI state dir, not the repo.
-function worktreePatchFile(workspaceRoot: string, childId: string): string {
+export function worktreePatchFile(workspaceRoot: string, childId: string): string {
   return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
 }
 

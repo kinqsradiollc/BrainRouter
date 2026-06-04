@@ -294,6 +294,27 @@ export interface RemoveChildWorktreeResult {
 }
 
 /**
+ * BUILD-LOOP P2.5 (0.4.12) — the one-line worktree-merge notice appended to a
+ * child's completion preview. Pure. `heldForReview` (the `cli.worktreeMergeReview`
+ * gate, or a build fan-out slice) reports the changes as HELD for explicit apply
+ * rather than merged; otherwise it reports the merge / non-merge as in 0.4.11.
+ */
+export function mergeBackLine(
+  cleanup: Pick<RemoveChildWorktreeResult, 'changedFiles' | 'applied' | 'applyError'>,
+  childId: string,
+  heldForReview: boolean,
+): string {
+  const n = cleanup.changedFiles ?? 0;
+  if (!n) return '';
+  if (heldForReview) {
+    return `\n\n— worktree: ${n} file(s) HELD for review (cli.worktreeMergeReview) — inspect \`/agents diff ${childId}\`, apply \`/agents diff ${childId} apply\``;
+  }
+  return cleanup.applied
+    ? `\n\n— worktree: ${n} file(s) merged into your tree`
+    : `\n\n— worktree: ${n} file(s) NOT merged (${cleanup.applyError ?? 'conflict'}) — recover with /agents diff ${childId}`;
+}
+
+/**
  * Capture a child worktree's changes, optionally merge them back onto the parent
  * tree, then remove the worktree. This is BOTH halves of the isolation contract:
  *

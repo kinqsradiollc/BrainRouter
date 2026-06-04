@@ -187,6 +187,10 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
 - **Never:** merge on a red verify; merge unreviewed code when review is enabled;
   tear down `W` before its work is either merged or saved as a patch; force the
   loop on a trivial / single-file change under `escalate`.
+- **Deferred (P2.5 → future):** a fan-out build gates on the **synthesis review +
+  structural overlap + check-then-apply**; it does NOT yet run a per-slice test-run
+  **verify** (the slices aren't applied until the gated merge, so a meaningful test
+  run would need a combined-tree assembly step). Single-worktree builds keep verify.
 
 ## Success Criteria (Definition of Done)
 
@@ -199,10 +203,12 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
       verify + review pass.
 - [ ] A **`block`/`request-changes` review verdict** stops the merge (work
       preserved as a patch + findings surfaced), even when verify is green.
-- [ ] **Fan-out:** each worktree is reviewed independently; a cross-worktree
-      synthesis reviewer runs before any merge; conflicting worktrees fall back to
-      preserved patches. With `cli.worktreeMergeReview: 'on'`, an ad-hoc
-      `/spawn worker` is also merge-reviewed before landing.
+- [x] **Fan-out:** a fan-out build (`slices[]`) runs one held worktree per slice; a
+      cross-worktree synthesis reviewer reads the combined change-set + an
+      overlap-aware gated merge runs before any merge; conflicting worktrees fall
+      back to preserved patches. With `cli.worktreeMergeReview: 'on'`, an ad-hoc
+      `/spawn worker` is held for review before landing. *(P2.5; per-slice test-run
+      verify on the combined tree is deferred — see Boundaries)*
 - [x] `cli.buildLoop: 'off'` → only `/build` triggers it; `'escalate'` → a
       single-file fix stays single-agent while a multi-file feature enters the
       loop; `'always'` → every implementation verb enters it. *(P3)*
