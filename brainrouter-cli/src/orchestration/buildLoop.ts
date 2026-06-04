@@ -14,6 +14,7 @@ import path from 'node:path';
 import { removeChildWorktree, applyPatchFile, type ChildWorktreeIsolation } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
 import { parsePatchFiles, planSynthesisMerge, type WorktreeChangeSet } from './mergeGate.js';
+import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
 import type { PhasePlanExecution } from './phaseOrchestrator.js';
 
 export interface BuildLoopMergeOutcome {
@@ -50,6 +51,94 @@ export function verifyLooksGreen(output: string): boolean {
     /\b(all|tests?)\b.*\b(green|ok)\b/.test(t) ||
     /✓|✔/.test(raw)
   );
+}
+
+/**
+ * BUILD-LOOP P5 (0.4.12) — the repair plan re-run when a build's Verify is red:
+ * Implement → Verify → Review in the SAME shared worktree (the worker still has its
+ * prior edits), with the verifier's failure fed to the worker. Static shape, so it
+ * always validates. Pure.
+ */
+export function buildRepairPlan(verifyFailure: string, attempt: number): PhasePlan {
+  const { plan } = normalizePhasePlan({
+    title: `build-repair-${attempt}`,
+    phases: [
+      {
+        id: 'implement',
+        title: 'Repair',
+        agents: [{
+          role: 'worker',
+          access: 'write',
+          prompt: `The verifier reported a FAILURE on attempt ${attempt}:\n\n${verifyFailure}\n\nYou are in the worktree with your earlier changes intact. Diagnose and FIX the cause so the build + tests pass. Keep edits minimal and scoped. Report what you changed.`,
+        }],
+      },
+      {
+        id: 'verify',
+        title: 'Verify',
+        agents: [{
+          role: 'verifier',
+          access: 'shell',
+          prompt: `What was just changed:\n\n{{input}}\n\nRe-run the project's build + the smallest useful test/typecheck set. Report a clear PASS/FAIL with evidence (commands, exit codes, trimmed failing output).`,
+        }],
+        inputFrom: ['implement'],
+        dependsOn: ['implement'],
+      },
+      {
+        id: 'review',
+        title: 'Review',
+        agents: [{
+          role: 'reviewer',
+          access: 'read',
+          prompt: `The changes so far:\n\n{{input}}\n\nReview for correctness, regressions, and missed requirements. Findings-first, severity-ordered (blocker / major / minor / nit).`,
+        }],
+        inputFrom: ['implement'],
+        dependsOn: ['implement'],
+      },
+    ],
+  });
+  // The static shape above always normalizes; the non-null assertion documents that.
+  return plan!;
+}
+
+export interface RepairResult {
+  execution: PhasePlanExecution;
+  attempts: number;
+  /** True when Verify ended green (either initially or after a repair). */
+  green: boolean;
+}
+
+/**
+ * BUILD-LOOP P5 — bounded loop-until-green. While Verify is red and repair budget
+ * remains, re-run a repair plan (via `runPlan`, which executes it in the build's
+ * shared worktree) and splice its Implement/Verify/Review outputs back over the
+ * execution, so the final gate (`finalizeBuildLoop`) sees the latest state. Stops on
+ * the first green Verify or when `maxRepairs` is exhausted. `maxRepairs <= 0` is a
+ * no-op (the default — disabled). The actual phase execution is injected, so this is
+ * unit-testable with a fake runner.
+ */
+export async function repairUntilGreen(
+  initial: PhasePlanExecution,
+  maxRepairs: number,
+  runPlan: (plan: PhasePlan) => Promise<PhasePlanExecution>,
+): Promise<RepairResult> {
+  let execution = initial;
+  let attempts = 0;
+  const isGreen = (exec: PhasePlanExecution): boolean => {
+    const verify = exec.phases.find((p) => p.id === 'verify');
+    return verify ? verifyLooksGreen(verify.output) : true;
+  };
+  while (attempts < maxRepairs && !isGreen(execution)) {
+    attempts++;
+    const verify = execution.phases.find((p) => p.id === 'verify');
+    const repair = await runPlan(buildRepairPlan(verify?.output ?? '', attempts));
+    const byId = new Map(repair.phases.map((p) => [p.id, p] as const));
+    execution = {
+      ...execution,
+      phases: execution.phases.map((p) => byId.get(p.id) ?? p),
+      status: repair.status,
+    };
+  }
+  return { execution, attempts, green: isGreen(execution) };
 }
 
 /** A review that flags a `blocker` finding blocks the auto-merge. Neutralizes the

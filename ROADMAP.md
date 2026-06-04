@@ -43,7 +43,7 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 - [x] P2.5 — review-gated merge: the single-worktree gate landed with P2; P2.5 adds **fan-out builds** (`build` template `slices[]` → one held worktree per slice) + a **cross-worktree synthesis review** with overlap-aware gated merge (`finalizeFanOutBuild`), and the **`cli.worktreeMergeReview`** knob extending the hold-for-review gate to ad-hoc `/spawn` workers *(PR — branch `feat/build-loop-p25-merge-gate`)*
 - [x] P3 — escalation: `cli.buildLoop` knob + planner classifier *(merged)*
 - [x] P4 — surface the active phase in `/ps` · `/agents` · statusline (active-run ledger → `▶ <phase> (n/total)`; new opt-in `phase` statusline segment) *(PR — branch `feat/build-loop-p4-active-phase`)*
-- [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
+- [x] P5 — bounded **loop-until-green** build self-repair: opt-in `cli.buildLoopMaxRepairs` (default **0 = disabled**); when >0 a red Verify re-runs Implement→Verify→Review in the same worktree up to N times until green (`repairUntilGreen`) *(PR — branch `feat/build-loop-p5-loop-until-green`)*. Per-agent thread durability tracked separately (CODEX-THREAD-FORK).
 
 ### Carried from 0.4.11
 
