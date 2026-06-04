@@ -81,6 +81,7 @@ import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, eg
 import { isPathWithinRoots } from '../runtime/exec/pathPolicy.js';
 import { runPostEditCheck } from '../runtime/postEditCheck.js';
 import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../runtime/autoReindex.js';
+import { gitChurnSignal } from '../runtime/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtime/resultHandoff.js';
@@ -2973,10 +2974,20 @@ export class Agent {
         lastSignature: this.reindexSignatures.get(resolved),
       };
       if (!shouldReindex(gate)) return '';
+      // B7 (MEM-CHURN) — capture the file's recent git churn at index time so the
+      // brain can decay memories anchored to volatile files faster. Best-effort;
+      // null (non-git / untracked) is omitted so the brain leaves decay unchanged.
+      const churn = gitChurnSignal(this.workspaceRoot, resolved);
       const res = await callMcpTool<{ status?: string; chunks?: number; staleMarked?: boolean }>(
         this.mcpClient,
         'memory_reindex_source',
-        { file: resolved, content, language: languageHint(resolved) },
+        {
+          file: resolved,
+          content,
+          language: languageHint(resolved),
+          commitCount90d: churn.commitCount90d ?? undefined,
+          lastCommitDate: churn.lastCommitDate ?? undefined,
+        },
       );
       // Leave the signature unrecorded on failure so it retries on the next
       // touch; only mark it once the brain confirms it saw this content.

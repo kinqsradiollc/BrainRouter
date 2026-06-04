@@ -1618,7 +1618,7 @@ export class MemoryEngine {
    */
   public reindexCodeSource(
     userId: string,
-    input: { filePath: string; content: string; language?: string; title?: string },
+    input: { filePath: string; content: string; language?: string; title?: string; commitCount90d?: number | null; lastCommitDate?: string | null },
   ): { status: "fresh" | "reindexed" | "unsupported"; documentId?: string; staleMarked: number; chunks: number } {
     const store = this.store as Partial<{
       lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null;
@@ -1626,7 +1626,12 @@ export class MemoryEngine {
       reviveSourceDocument(documentId: string): void;
       createSourceDocument(input: any): SourceDocument;
       addSourceChunks(documentId: string, chunks: any[]): SourceChunk[];
+      setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): void;
     }>;
+    // B7 (MEM-CHURN) — stamp the captured churn signal onto whichever document
+    // this reindex resolves to (fresh / revived / new). NULL when not provided.
+    const stampChurn = (documentId: string) =>
+      store.setSourceDocumentChurn?.(documentId, input.commitCount90d ?? null, input.lastCommitDate ?? null);
     if (
       typeof store.lookupDocumentByPathHash !== "function" ||
       typeof store.createSourceDocument !== "function" ||
@@ -1638,6 +1643,7 @@ export class MemoryEngine {
     const hash = createHash("sha1").update(input.content ?? "").digest("hex");
     const existing = store.lookupDocumentByPathHash(userId, input.filePath, hash);
     if (existing && !existing.stale) {
+      stampChurn(existing.id); // churn can change even when content doesn't
       return { status: "fresh", documentId: existing.id, staleMarked: 0, chunks: 0 };
     }
 
@@ -1647,6 +1653,7 @@ export class MemoryEngine {
     // it rather than duplicate; its chunks + edges are still intact.
     if (existing) {
       store.reviveSourceDocument?.(existing.id);
+      stampChurn(existing.id);
       return { status: "reindexed", documentId: existing.id, staleMarked, chunks: 0 };
     }
 
@@ -1659,6 +1666,7 @@ export class MemoryEngine {
       title: input.title ?? input.filePath,
     });
     const stored = store.addSourceChunks(doc.id, chunkCode(input.content ?? "", { filePath: input.filePath, language: input.language }));
+    stampChurn(doc.id);
     return { status: "reindexed", documentId: doc.id, staleMarked, chunks: stored.length };
   }
 

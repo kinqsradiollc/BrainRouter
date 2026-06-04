@@ -30,6 +30,8 @@ export const memoryReindexSourceToolSchema = {
       file: { type: "string", description: "File path (used as the document URI)." },
       content: { type: "string", description: "Current full file content." },
       language: { type: "string", description: "Optional language/extension hint for chunking (e.g. ts, python)." },
+      commitCount90d: { type: "number", description: "B7 (MEM-CHURN) — commits touching this file in the last 90 days; high churn decays its memories faster." },
+      lastCommitDate: { type: "string", description: "B7 (MEM-CHURN) — ISO date of the file's most recent commit." },
     },
     required: ["file", "content"],
   },
@@ -40,6 +42,8 @@ const schema = z.object({
   file: z.string().min(1),
   content: z.string(),
   language: z.string().optional(),
+  commitCount90d: z.number().int().min(0).optional(),
+  lastCommitDate: z.string().optional(),
 });
 
 export async function handleMemoryReindexSource(args: any, options?: { defaultUserId?: string }) {
@@ -50,6 +54,8 @@ export async function handleMemoryReindexSource(args: any, options?: { defaultUs
       filePath: params.file,
       content: params.content,
       language: params.language,
+      commitCount90d: params.commitCount90d ?? null,
+      lastCommitDate: params.lastCommitDate ?? null,
     });
     return toolResult(result);
   } catch (err) {

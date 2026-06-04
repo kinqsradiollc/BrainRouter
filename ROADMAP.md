@@ -44,7 +44,7 @@ Live checklist — ticked as each part ships.
 - [ ] C1 — spawn-child loop continuation (parent loop stops while a child runs)
 - [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
 - [x] B6 — `/memory verify` reconciliation sweep (fresh / re-anchorable / archivable; `--apply` archives confirmed-dead)
-- [ ] B7 — churn-weighted decay
+- [x] B7 — churn-weighted decay (capture `git log` churn at index time → faster decay for memories on volatile files; null-safe)
 - [ ] Release: version bump · changelog · roadmap · dist-manifest sync · publish
 
 ### 0.4.12 — The Build Loop · spec `docs/specs/build-loop-workflow.md`

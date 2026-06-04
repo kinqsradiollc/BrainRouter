@@ -1000,6 +1000,12 @@ export class SqliteMemoryStore implements IMemoryStore {
     // and a fresh document is re-ingested. Stale chunks are excluded from
     // find_related so recall reflects the current file.
     this.ensureColumn("source_documents", "stale", "INTEGER NOT NULL DEFAULT 0");
+    // B7 (MEM-CHURN, 0.4.11) — per-file churn captured at index time (commit count
+    // in the last 90d + last commit date), folded into recall decay so memories
+    // anchored to volatile files age out faster. NULL until the indexer populates it
+    // — so existing stores + non-code memories are unaffected.
+    this.ensureColumn("source_documents", "commit_count_90d", "INTEGER DEFAULT NULL");
+    this.ensureColumn("source_documents", "last_commit_date", "TEXT DEFAULT NULL");
 
     // MEM-29 — one-time backfill of the chunk FTS for stores created before this
     // index existed. Triggers keep it in sync going forward; this only fires on
@@ -1084,6 +1090,35 @@ export class SqliteMemoryStore implements IMemoryStore {
       "SELECT 1 FROM source_documents WHERE user_id = ? AND uri = ? AND COALESCE(stale, 0) = 0 LIMIT 1",
     ).get(userId, uri);
     return !!row;
+  }
+
+  /** B7 (MEM-CHURN) — record a document's recent-churn signal (captured at index time). */
+  public setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): void {
+    this.db.prepare(
+      "UPDATE source_documents SET commit_count_90d = ?, last_commit_date = ? WHERE id = ?",
+    ).run(commitCount90d, lastCommitDate, documentId);
+  }
+
+  /**
+   * B7 (MEM-CHURN) — max recent-churn across each record's anchored source files,
+   * for a batch of record ids. Records with no code anchor or zero churn are
+   * OMITTED (callers then leave their decay unchanged). One query for the set.
+   */
+  public getRecordsMaxChurn(userId: string, recordIds: string[]): Map<string, number> {
+    const out = new Map<string, number>();
+    if (recordIds.length === 0) return out;
+    const placeholders = recordIds.map(() => "?").join(",");
+    const rows = this.db.prepare(
+      `SELECT l.record_id AS rid, MAX(COALESCE(d.commit_count_90d, 0)) AS churn
+         FROM cognitive_source_links l
+         JOIN source_chunks sc ON sc.id = l.chunk_id
+         JOIN source_documents d ON d.id = sc.document_id
+        WHERE l.user_id = ? AND l.record_id IN (${placeholders})
+        GROUP BY l.record_id
+        HAVING churn > 0`,
+    ).all(userId, ...recordIds) as any[];
+    for (const r of rows) out.set(String(r.rid), Number(r.churn));
+    return out;
   }
 
   /** List a user's source documents (newest first) + their chunk counts — powers the dashboard Sources view. */

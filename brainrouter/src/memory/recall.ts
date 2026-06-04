@@ -12,6 +12,7 @@ import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "./recall-
 import { isExternalTimeoutError } from "./llm-response.js";
 import {
   effectivePriorityScore,
+  churnAdjustedHalfLife,
   baseScoreFromRrf,
   normalizePriority,
   capPriority,
@@ -92,8 +93,11 @@ export function readRecallSelection(env: NodeJS.ProcessEnv = process.env): Recal
   return { diversity, lambda };
 }
 
-function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }): number {
-  const halfLife = getMemoryTypeConfig(memory.type).halfLifeDays;
+function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
+  // B7 (MEM-CHURN) — shorten the half-life for memories anchored to high-churn
+  // files. `churn` undefined / 0 → the base half-life, so existing data and every
+  // non-code memory are scored exactly as before.
+  const halfLife = churnAdjustedHalfLife(getMemoryTypeConfig(memory.type).halfLifeDays, churnCommitCount90d);
   const ageDays = (Date.now() - new Date(memory.created_time).getTime()) / 86_400_000;
   // AUG-A3 — score-composition math lives in the modular `reranker/` package.
   return effectivePriorityScore({
@@ -343,6 +347,11 @@ export class MemoryRecallPipeline {
     const citationBoosts: Record<string, number> = {};
     let skillBoostApplied = false;
 
+    // B7 (MEM-CHURN) — one churn lookup for the whole candidate set; records with
+    // no code anchor or zero churn are absent → their decay stays unchanged.
+    const churnByRecord = (this.store as Partial<{ getRecordsMaxChurn(userId: string, recordIds: string[]): Map<string, number> }>)
+      .getRecordsMaxChurn?.(userId, Array.from(rrfMap.keys())) ?? new Map<string, number>();
+
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // AUG-A3 — weighting / boosting helpers from the modular `reranker/`.
       const baseScore = baseScoreFromRrf(rrfScore);
@@ -351,7 +360,7 @@ export class MemoryRecallPipeline {
       // boilerplate can't out-rank fresh, on-topic findings. No-op for the
       // task-specific types (no recallPriorityCap set).
       const priorityScore = capPriority(
-        normalizePriority(effectivePriority(record as CognitiveFtsResult)),
+        normalizePriority(effectivePriority(record as CognitiveFtsResult, churnByRecord.get(record.record_id))),
         getMemoryTypeConfig(record.type).recallPriorityCap,
       );
       let finalScore = blendBaseAndPriority(baseScore, priorityScore);
