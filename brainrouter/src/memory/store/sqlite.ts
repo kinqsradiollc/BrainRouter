@@ -1073,6 +1073,19 @@ export class SqliteMemoryStore implements IMemoryStore {
     return row ? this.rowToSourceDocument(row) : null;
   }
 
+  /**
+   * B6 (0.4.11) — true if a NON-stale source document still exists at this uri.
+   * `/memory verify` uses it to tell a re-anchorable memory (its file changed →
+   * a fresh doc exists at the uri) from a dead-anchor one (only stale docs left →
+   * the file is gone), so apply only archives the confirmed-dead.
+   */
+  public hasFreshSourceDocument(userId: string, uri: string): boolean {
+    const row = this.db.prepare(
+      "SELECT 1 FROM source_documents WHERE user_id = ? AND uri = ? AND COALESCE(stale, 0) = 0 LIMIT 1",
+    ).get(userId, uri);
+    return !!row;
+  }
+
   /** List a user's source documents (newest first) + their chunk counts — powers the dashboard Sources view. */
   public getSourceDocuments(userId: string, limit = 100): Array<SourceDocument & { chunkCount: number }> {
     const rows = this.db.prepare(

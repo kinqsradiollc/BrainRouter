@@ -43,7 +43,7 @@ Live checklist — ticked as each part ships.
 - [x] A7 — config.json auto-hydrates missing `cli.*` knobs (visible + editable; excludes /theme·/effort·/quiet)
 - [ ] C1 — spawn-child loop continuation (parent loop stops while a child runs)
 - [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
-- [ ] B6 — `/memory verify` reconciliation sweep
+- [x] B6 — `/memory verify` reconciliation sweep (fresh / re-anchorable / archivable; `--apply` archives confirmed-dead)
 - [ ] B7 — churn-weighted decay
 - [ ] Release: version bump · changelog · roadmap · dist-manifest sync · publish
 
