@@ -208,7 +208,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
       { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
-      { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,goal,plan)' },
+      { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,phase,goal,plan)' },
       { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
       { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (alias: max)' },
       { cmd: '/tier [name]', desc: "Show or pin the model tier on the provider's tier ladder" },

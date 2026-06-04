@@ -15,6 +15,7 @@ import { listRoles } from '../../orchestration/roles.js';
 import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
 import { formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '../../orchestration/orchestrator.js';
 import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
+import { activeRun, formatActivePhase } from '../../state/workflowRun.js';
 import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDetach.js';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
@@ -889,6 +890,15 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         return true;
       }
       console.log(chalk.bold('\nChild Agent Sessions:'));
+      // BUILD-LOOP P4 — when a run_workflow/build is progressing, head the list with
+      // its active phase so the child agents below are seen in that context.
+      {
+        const active = activeRun(agent.workspaceRoot);
+        if (active) {
+          const ph = formatActivePhase(active);
+          console.log(chalk.magenta(`  ⟳ workflow ${active.slug}${ph ? ` · ${ph}` : ''}`));
+        }
+      }
       if (sessions.length === 0) {
         console.log(chalk.yellow('  No child agents yet. Use /spawn <role> <prompt> to start one.'));
       } else {
