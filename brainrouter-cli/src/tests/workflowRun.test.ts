@@ -165,4 +165,4 @@ test('BUILD-LOOP P4 activeRun: the running run (newest-first), null when none ru
   assert.ok(active, 'a running run is found');
   assert.equal(active!.slug, 'live-run');
   assert.equal(formatActivePhase(active!), 'Implement (2/2)');
-})
+});
