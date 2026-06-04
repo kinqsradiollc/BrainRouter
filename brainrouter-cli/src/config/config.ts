@@ -172,12 +172,24 @@ export interface CliKnobs {
   commandAllowlist?: string[];
   /**
    * CODEX-WORKTREE-ISOLATION — filesystem isolation for spawned write/shell
-   * children. `auto` creates a detached git worktree when the parent workspace is
-   * inside a git repo and falls back to the shared root otherwise; `git-worktree`
-   * requires that worktree creation succeeds; `off` preserves legacy shared-root
-   * behavior. Read-only children always share the parent root.
+   * children. Default `auto`: creates a detached git worktree when the parent
+   * workspace is inside a git repo, and falls back to the shared root otherwise
+   * (so it never breaks a non-git workspace). On a child's CLEAN completion its
+   * changes are merged back onto the parent tree (CODEX-WORKTREE-MERGEBACK) — a
+   * patch that doesn't apply cleanly is preserved for manual `git apply` instead
+   * of smearing conflict markers. `git-worktree` is the strict variant (errors
+   * if worktree creation fails); `off` preserves the legacy shared-root behavior
+   * (children edit the parent tree directly). Read-only children always share
+   * the parent root.
    */
   childWorkspaceIsolation?: 'off' | 'auto' | 'git-worktree';
+  /**
+   * A5.1 (0.4.11) — base directory for child-agent git worktrees. Empty (default)
+   * = `<BRAINROUTER_HOME>/worktrees` (i.e. `~/.brainrouter/worktrees`). Set an
+   * absolute path to relocate them onto a fast/scratch disk or outside backups.
+   * Replaces the old `$TMPDIR/brainrouter-worktrees` location.
+   */
+  worktreeRoot?: string;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -424,6 +436,54 @@ export function saveConfig(config: Config): void {
 }
 
 /**
+ * CONFIG-HYDRATE (0.4.11) — knobs that ALSO live in the per-workspace preference
+ * store and layer `config.cli` > preference > default. Writing THEIR default into
+ * the file would shadow the preference and silently disable `/theme` · `/effort` ·
+ * `/quiet`, so hydration deliberately leaves them out (they stay dynamic).
+ */
+const PREFERENCE_LAYERED_KNOBS = new Set<string>(['theme', 'effort', 'quiet']);
+
+/**
+ * CONFIG-HYDRATE (0.4.11) — fill in every SAFE `cli.*` knob's default the config
+ * is missing, so the file is self-documenting + editable. Pure (no I/O). Skips
+ * the preference-layered knobs above and any knob whose default is `undefined`
+ * (optional / no default). Returns how many keys were added.
+ */
+export function hydrateCliDefaults(config: Config): { config: Config; added: number } {
+  const defaults = resolveCliKnobs(undefined) as unknown as Record<string, unknown>;
+  const cli: Record<string, unknown> = { ...(config.cli ?? {}) };
+  let added = 0;
+  for (const [key, value] of Object.entries(defaults)) {
+    if (PREFERENCE_LAYERED_KNOBS.has(key)) continue;
+    if (value === undefined) continue;
+    if (!(key in cli)) { cli[key] = value; added += 1; }
+  }
+  if (added > 0) config.cli = cli as Config['cli'];
+  return { config, added };
+}
+
+/**
+ * CONFIG-HYDRATE (0.4.11) — populate the on-disk config.json with any missing
+ * safe `cli.*` defaults, then write it back. Operates on the RAW file (NOT the
+ * env-backfilled `loadConfig` result, so a shell API key is never persisted) and
+ * only writes when something was actually added. Call at a deliberate launch
+ * (interactive boot) — NOT inside `loadConfig`, which must stay side-effect-free
+ * on reads. Returns the number of knobs added (0 = nothing written).
+ */
+export function hydrateConfigDefaultsOnDisk(): number {
+  if (!fs.existsSync(CONFIG_FILE)) return 0;
+  let parsed: Config;
+  try {
+    parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) as Config;
+  } catch {
+    return 0; // malformed — leave it for loadConfig to surface
+  }
+  const { config, added } = hydrateCliDefaults(parsed);
+  if (added > 0) saveConfig(config);
+  return added;
+}
+
+/**
  * Self-heal structural gaps in a parsed config. Pure (no I/O — the caller
  * persists when `changed`), so it's unit-testable in isolation. Ensures
  * `servers`/`activeServer` exist, and when `activeServer` is empty or names a
@@ -514,6 +574,7 @@ export interface ResolvedCliKnobs {
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
+  worktreeRoot: string;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -582,7 +643,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
-    childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'off',
+    childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
+    worktreeRoot: c.worktreeRoot ?? '',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

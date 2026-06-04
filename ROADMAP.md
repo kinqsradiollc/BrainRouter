@@ -1,236 +1,83 @@
 # BrainRouter Roadmap
 
-This is the top-level planning index. Keep it short. Detailed release
-plans live in [`brainrouter-roadmap/`](brainrouter-roadmap/), and shipped
-changes live in [`CHANGELOG.md`](CHANGELOG.md).
+Top-level planning index — kept short. Shipped detail lives in
+[`CHANGELOG.md`](CHANGELOG.md) + [`brainrouter-changelog/`](brainrouter-changelog/);
+design specs in [`docs/specs/`](docs/specs/).
 
 ---
 
-## Current Status
+## Shipped
 
-| Track | Version | State | Read next |
-|---|---|---|---|
-| Latest | **0.4.10** | Shipped — 2026-06-03 — **Memory-home hardening + a mobile dashboard + a real Cloudflare runtime.** `BRAINROUTER_HOME` override (single home-dir resolver for all on-disk state); `memory_consolidate` writes under `~/.brainrouter/workspaces/<encoded>/memories/` instead of polluting `<workspace>/.brainrouter/` (+ a transient-work-dir guard); `BRAINROUTER_NEURAL_SPARK_ENABLED` opt-out for spreading activation. **Dashboard:** full **mobile responsiveness** (clipped tables / code blocks / session list / stacked brain-agent rows) and a switch to **`@opennextjs/cloudflare`** — deploy as a real Next.js **Worker runtime** (SSR + bindings + observability) instead of a static export. **Web favicon** (favicon.ico + apple-touch + PWA icons + manifest from the guilloché mark). **`@kinqs/brainrouter-hooks` published** to npm (React as a widened peer). | [`brainrouter-changelog/0.4.10.md`](brainrouter-changelog/0.4.10.md) |
-| Previous | **0.4.9** | Shipped — 2026-06-03 — **Dashboard redesign + modernization** to BrainRouter's own design language ("The Memory Instrument" — retire the slash/Inter/serif/golden copycat; one Signal accent `#34C28E` + Recall-Heat ramp; Geist + Geist Mono; color-stepped elevation, no glows): whole-app token restyle, a two-column hero with a memory-graph product motif, an ecosystem section featuring MCP + CLI + dashboard, one-accent colour normalization, a **modern app shell** (sticky top bar + user chip, **grouped sidebar**, **⌘K command palette**), **full-bleed Home**, and presentation-slide **scroll motion** (a following scroll-beam, in-view reveals, card border-beams) + `prefers-reduced-motion`/focus a11y. **Auth/session:** access + **refresh tokens** (30d) with silent renewal + cross-tab persistence; `/api/auth/refresh` + `/signout`. **Static presentation mode** (`NEXT_PUBLIC_BRAINROUTER_STATIC_PRESENTATION`) — ship the dashboard as a backend-free product preview. **API hardening:** fail-closed JWT secret, `/me` key-leak fix, security headers + strict CORS, reusable zod validation, dual rate-limiting + terminal error envelope, security audit (`SECURITY.md`, vuln-free). Plus a graceful-shutdown fix so `tsx watch` restarts cleanly. Plus an admin **Brand Studio** (a true-vector freeform Canvas editor — layers / templates / role badges + role banners, canvas zoom, platform safe-zone guides, SVG + hi-res-PNG export), **brain agents made observable + activated** (MEM-10b — settled-bucket tree seal/digest, inline-work job records for source-chunker / blackboard / relevance-judge, a scheduled benchmark), an animated **memory-science Home** + rewritten /about + code-generated guilloché mark, and a **Cloudflare Workers** static-export deploy. | [`brainrouter-changelog/0.4.9.md`](brainrouter-changelog/0.4.9.md) |
-| Previous | **0.4.8** | Shipped — 2026-06-02 — **Deterministic multi-phase workflow orchestration** (PhasePlan engine: fan out per phase → barrier → synthesize → feed forward; durable + crash-resumable runs; `run_workflow` + `compare`/`review-wide`/`research` templates; next-action planner auto-prepares + fires a plan; `/workflow run` launcher + live phase timeline; background runs) + **brain body-limit fix** (configurable JSON limit + clean 413); 11 PRs, full suite green | [`brainrouter-changelog/0.4.8.md`](brainrouter-changelog/0.4.8.md) |
-| Previous | **0.4.7** | Shipped — 2026-06-02 — **Codex coding-agent parity** (sandbox fail-closed, command-segment exec policy, over-broad-allowlist guard, atomic apply-patch, MCP egress gating, worktree isolation + cleanup, one tool registry, spawn slots) + **agentic autonomy** (next-action planner, fan-out + follow-through, parallel-running display, promise-then-stall guards) + **staleness-aware recall** (flag/down-rank memories whose source changed); 16 PRs, full suite green | [`brainrouter-changelog/0.4.7.md`](brainrouter-changelog/0.4.7.md) |
-| Previous | **0.4.6** | Shipped — 2026-06-01 — **structural refactor** (behavior-preserving modularization of the engine / CLI / dashboard monoliths into concern-scoped modules: `runtime/exec/`, `agent/applyPatch`, `agent/tools`, engine domain ops, ChatApp components, dashboard demo hooks; 14 PRs, full suite green, zero behavior change) | [`brainrouter-changelog/0.4.6.md`](brainrouter-changelog/0.4.6.md) |
-| Previous | **0.4.5** | Shipped — 2026-06-01 — **release hygiene** (READMEs/deps/policy doc/benchmarks) + **competitive catch-up** (auto code-reindex, browser-verify artifacts, repo-scale metrics, richer headless events) + **CLI polish** (lesson conflict/supersede/staleness, blackboard restore + `/blackboard`, consistent per-user RBAC, transient-LLM retry incl. 5xx/gateway, `/fg` + unified `/ps` + `/stop <id>`, `/agents create` validation + `--dry-run`, width-aware tables, offload footer segment, composer history + flag-suggestions + tab-to-end cursor) | [`brainrouter-changelog/0.4.5.md`](brainrouter-changelog/0.4.5.md) |
-| Previous | **0.4.4** | Shipped — 2026-05-31 — memory pipeline tightening + unified exec policy (POLICY-1/2/3) + **code-aware retrieval** (`find_related`, code reranking, symbol + import graph, index freshness) + **memory that learns** (lessons, skill extraction, reflect) + **multi-agent resilience** (ORCH-FIX) + **edit→verify** (post-edit checks + LSP semantic nav) + crash-checkpoint/offline-queue + graph analytics + MCP-registry/plugin packaging | [`brainrouter-changelog/0.4.4.md`](brainrouter-changelog/0.4.4.md) |
-| Previous | **0.4.3** | Shipped — 2026-05-30 — memory depth MEM-1…14 + CLI-1…15, full brain-agent wiring, recall overhaul + hardening | [`brainrouter-changelog/0.4.3.md`](brainrouter-changelog/0.4.3.md) |
-| Previous | **0.4.2** | Shipped — 2026-05-30 | [`brainrouter-changelog/0.4.2.md`](brainrouter-changelog/0.4.2.md) |
-| Shipped | **0.4.1** | Shipped — 2026-05-29 | [`brainrouter-changelog/0.4.1.md`](brainrouter-changelog/0.4.1.md) |
-| Shipped | **0.4.0** | Shipped — 2026-05-28 | [`brainrouter-changelog/0.4.0.md`](brainrouter-changelog/0.4.0.md) |
-| Previous | **0.3.9** | Shipped — 2026-05-28 | [`CHANGELOG.md`](CHANGELOG.md#039---2026-05-28) |
-| Previous | **0.3.8** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#038---2026-05-26) |
-| Previous | **0.3.7** | Shipped — 2026-05-26 | [`CHANGELOG.md`](CHANGELOG.md#037---2026-05-26) |
+Latest: **0.4.11** (2026-06-04) — worktree isolation that merges back, a
+self-hydrating `config.json`, and memory hygiene (`/memory verify` +
+churn-weighted decay).
 
----
-
-## Release Sequence
-
-| Release | Theme | Status |
+| Version | Theme | Date |
 |---|---|---|
-| **[0.3.6](brainrouter-roadmap/0.3.6.md)** | CLI UX tranche, multi-workflow, relevance judge, context budget | Shipped — 2026-05-25 |
-| **[0.3.7](brainrouter-roadmap/0.3.7.md)** | Terminal UI redesign, in-terminal config wizard, full Ink chat REPL, CLI/server env separation, multi-agent registry foundations | Shipped — 2026-05-26 |
-| **[0.3.8](brainrouter-roadmap/0.3.8.md)** | CLI delegation reliability and quick wins | Shipped — 2026-05-26 |
-| **[0.3.9](brainrouter-roadmap/0.3.9.md)** | Memory briefing + cache-first loop + CLI knobs → `config.json` | Shipped — 2026-05-28 |
-| **[0.4.0](brainrouter-roadmap/0.4.0.md)** | Persona injection + Federation Stages 1-3 + CLI multi-agent Phase 2 + brain-side design pass | Shipped — 2026-05-28 |
-| **[0.4.1](brainrouter-roadmap/0.4.x.md)** | A1-A4 augmentations + CLI multi-agent Phase 3-4 + Brain Phase 1 (job queue + agent registry) | Shipped — 2026-05-29 |
-| **[0.4.2](brainrouter-roadmap/0.4.x.md)** | Federation Stage 5, CLI multi-agent Phases 5-6, durable workflows + live `/workflows` viewer, **full CLI parity**, version centralization, docs + MCP API reference | Shipped — 2026-05-30 |
-| **[0.4.3](brainrouter-roadmap/0.4.x.md)** | **Feature-complete.** Memory depth MEM-1…14 (capture→provenance→drill-down, blackboard, tree, vault, AST chunker, benchmark gate, job kinds, governance, redaction, RBAC schema) ✓; CLI-1…15 ✓ (`/rewind`, transcript debugger, `/context` memory/offloads/prefix, headless JSONL, cost segment, `/verify detect`+`run`, exec-policy gate, `/agents create`, grouped `/inbox`+`--watch`, `/bg`). Depth-only follow-ups (LSP diagnostics, full policy routing, interactive wizard, in-flight detach) → 0.4.4. CLI-16 packaging → P3 | Shipped — 2026-05-30 |
-| **[0.4.4](brainrouter-roadmap/0.4.x.md)** | **Memory pipeline tightening** — exact chunk-level provenance, blackboard-default admission, recall expansion refs, parser-backed code chunks, benchmark tree/AST modes, tree source/topic/global policy split — plus **unified exec-policy rollout** (POLICY-1/2), AST code chunks + code-recall benchmark, tree topic-routing/global rollup, and small CLI ergonomics | Shipped — 2026-05-31 |
-| **[0.4.5](brainrouter-changelog/0.4.5.md)** | **Release hygiene + competitive catch-up + CLI polish** — READMEs/deps/policy-doc/benchmarks, auto code-reindex, browser-verify artifacts, repo-scale metrics, richer headless events; lesson conflict/supersede/staleness, blackboard restore, consistent per-user RBAC, transient-LLM retry (5xx/gateway), `/fg`+`/ps`+`/stop <id>`, `/agents create` validation+dry-run, width-aware tables, offload footer, composer history+flag-suggest+tab-cursor | Shipped — 2026-06-01 |
-| **[0.4.6](brainrouter-changelog/0.4.6.md)** | **Structural refactor** — behavior-preserving modularization of the engine / CLI / dashboard monoliths into concern-scoped modules (`runtime/exec/`, `agent/applyPatch`, `agent/tools`, engine domain ops, ChatApp components, dashboard demo hooks); 14 PRs, full suite green, zero behavior change | Shipped — 2026-06-01 |
-| **[0.4.7](brainrouter-changelog/0.4.7.md)** | **Codex coding-agent parity** (sandbox fail-closed, command-segment exec policy, approval guard, atomic apply-patch, MCP egress gating, worktree isolation + cleanup, one tool registry, spawn slots) + **agentic autonomy** (next-action planner, fan-out follow-through, parallel-running display, anti-stall guards) + **staleness-aware recall**; 16 PRs, full suite green | Shipped — 2026-06-02 |
-| **[0.4.8](brainrouter-changelog/0.4.8.md)** | **Deterministic multi-phase workflow orchestration** (PhasePlan engine: fan out per phase → barrier → synthesize → feed forward; `run_workflow` + compare/review-wide/research templates; planner auto-prepares + fires a plan; durable + crash-resumable runs; `/workflow run` launcher + phase timeline; background runs) + brain body-limit fix; 11 PRs, full suite green | Shipped — 2026-06-02 |
-| **[0.4.9](docs/design/themes/brainrouter.md)** | **Dashboard redesign + modernization** ("The Memory Instrument" design language; two-column hero w/ memory-graph motif; ecosystem section; one-accent colour; modern app shell — top bar + grouped sidebar + ⌘K palette; full-bleed Home; presentation-slide scroll motion — following beam, in-view reveals, card border-beams; reduced-motion/focus a11y) + **auth/session** (refresh tokens, silent renewal, cross-tab; `/refresh` + `/signout`) + **static presentation mode** (backend-free preview) + **API hardening** (fail-closed JWT, `/me` leak fix, security headers + strict CORS, zod validation, rate-limiting + error envelope, `SECURITY.md`, vuln-free) + graceful dev-shutdown fix | In progress — styling approved |
-| **[0.5.0](brainrouter-roadmap/0.5.0.md)** | Fullscreen TUI, plugin marketplace, **CLI parity (extensibility polish)** | Sketched |
+| 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
+| 0.4.10 | Memory-home hardening · mobile dashboard · Cloudflare Worker runtime | 2026-06-03 |
+| 0.4.9 | Dashboard redesign ("The Memory Instrument") · auth refresh tokens · API hardening | 2026-06-03 |
+| 0.4.8 | Deterministic multi-phase workflow orchestration (PhasePlan engine) | 2026-06-02 |
+| 0.4.7 | Coding-agent parity · agentic autonomy · staleness-aware recall | 2026-06-02 |
+| 0.4.6 | Behavior-preserving structural refactor | 2026-06-01 |
+| 0.4.5 | Release hygiene · competitive catch-up · CLI polish | 2026-06-01 |
+| ≤ 0.4.4 | Memory depth + pipeline + multi-agent foundations | → changelog |
+
+Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
-## What Each Upcoming Release Means
+## Active tracks
 
-> Shipped releases (0.3.x, 0.4.0, 0.4.1) live in [`CHANGELOG.md`](CHANGELOG.md)
-> and `brainrouter-changelog/`. This section only describes work that is
-> still ahead.
+Live checklist — ticked as each part ships.
 
-### 0.4.3 — Memory depth (source chunks → tree) + CLI debugging & ops
+### Deferred from 0.4.11 → next
 
-Shipped so far: `/rewind --files` file restore, `/context` window-fill header,
-the agent transcript debugger (`/agents tree` / `why` / `transcript` /
-`replay`), the `source_documents` + `source_chunks` foundation, **token-aware
-capture wired into the turn pipeline → batch-level provenance** (records cite
-their source chunks; `memory_verify` returns excerpts) **→ `memory_fetch_source_chunk`
-drill-down**, the **blackboard commit pipeline** (`memory_blackboard_review`),
-**AST-aware code chunking**, a **governance dry-run** (`memory_governance_plan`),
-**repair telemetry** + a **prompt-cache hit line** in `/context`, and the
-**command-registry taxonomy guard**.
+- [ ] C1 — spawn-child loop continuation (the parent loop stops when a child runs past the 30s drain timeout; proper fix = async auto-resume on child completion)
+- [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
 
-**Post feature-complete hardening (investigation batch):** cost-telemetry
-`$0.00` fix (pricing **family-fallback** resolution + `inputCacheHit` NaN); the
-**`/status` crash (#59)** + in-memory config self-heal (no read-time writes);
-a **recall-quality overhaul** — correct security-intent detection, per-type
-**priority caps** so never-decaying boilerplate can't out-rank fresh findings,
-and a local **lexical-relevance + MMR-diversity** selection on the no-reranker
-path (zero added latency); and **provenance-safe transcript retention**
-(`memory_prune_sources`) with the `/sources` view hiding transcripts by default.
+### 0.4.12 — The Build Loop · spec `docs/specs/build-loop-workflow.md`
 
-**Brain agents fully wired (BRAIN-P1 follow-through):** the six "idle · never"
-depth agents now have real executors (on-demand via `memory_agent_run`) — vault
-export, blackboard reconcile+commit, tree seal, source re-chunk, and a
-self-retrieval `benchmark_eval`, and `tree_digest` (LLM re-summary of tree
-parents, **auto-chained off tree_sealer**). A throttled maintenance pass on the
-job runner auto-schedules vault export, blackboard reconcile, and `tree_sealer`
-(fed by a **scene-tree autobuild over cognitive records**). With `tree_digest`
-in, **every Brain Agent has a real executor** — the tree flow runs on its own:
-scene-leaf → seal → LLM re-summary.
+An opt-in plan → implement → verify → review → merge engineering loop on the
+0.4.11 isolation substrate. Single-agent stays the default; `/build` is the
+explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
-**CLI — full set**
+- [x] P1 — `build` workflow template + `/build <task>` command
+- [ ] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits)
+- [ ] P2.5 — review-gated merge: a reviewer reads each worktree's full diff before merge-back; merge only on verify-green + review-approve (+ cross-worktree synthesis review on fan-out; `cli.worktreeMergeReview` extends it to ad-hoc workers)
+- [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
+- [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
+- [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
 
-- **Background & detachment ✓:** `/bg <prompt>` runs a detached background
-  worker (reuses the proven worker-thread infra; managed via `/workers` + `/ps`).
-  *(Detaching an already-in-flight foreground turn is a deeper turn-loop change.)*
-- **Debugging & explainability ✓:** `/context memory` decision view (planned →
-  used → skipped sources + injected records); `/context prefix` component-drift
-  view (system / memory-anchor; tool-list capture later); repair telemetry
-  (scavenged / truncation / storm counts in `/context`).
-- **Cost ✓:** opt-in `cost` status segment (turn USD + cache-hit %) + a
-  `/context` prompt-cache hit-ratio line.
-- **Headless ✓:** `brainrouter run --format jsonl` — a versioned, stable
-  per-event stream (turn_start / status / tool / child / text / turn_end+cost /
-  error) for CI and external orchestrators.
-- **Safety ✓:** unified `decideExecutionPolicy` module; the `run_command` shell
-  gate routes through it. *(file-edit / child / network routing later.)*
-- **Verification ✓:** `/verify detect` (project profile + recipe) and `/verify
-  run` (executes build/test/lint). *(post-edit LSP diagnostics needs live servers.)*
-- **Ergonomics ✓:** command-registry taxonomy guard; `/context offloads`;
-  grouped `/inbox` + `--watch` + inline handoff-accept; `/agents create`
-  (validate → write). *(interactive create wizard = optional follow-up.)*
-- **Packaging (after 0.4.3 stabilizes):** shell completions, Homebrew tap,
-  one-line installer.
+### Future — design drafted
 
-**Brain-side memory — full set** *(depth before breadth)*
-
-- **Source layer ✓:** `source_documents` + `source_chunks` tables + store.
-- **Token-aware capture ✓:** chunk sources on every turn; extracted records
-  cite their source-chunk ids; `memory_verify` returns source excerpts.
-  *(Batch-level provenance; per-record attribution refines later.)*
-- **Blackboard commit pipeline ✓:** stage extraction candidates → reconcile /
-  conflict-check → commit to cognitive records with an audit trail.
-  *(Pipeline + `memory_blackboard_review` tool; live-extraction rerouting later.)*
-- **Memory tree ✓:** durable source/topic/global summary hierarchy (append leaf
-  → seal bucket → summarize parent → walk/drill via `memory_tree_walk`), generic
-  mechanics in `tree/tree.ts` kept separate from policy. *(deterministic +
-  LLM re-summary (`tree_digest`) and scene-autobuild now wired; source/topic/
-  global policy split → 0.4.4.)*
-- **AST-aware code chunking ✓** (TS/JS/Python/Rust, line-based fallback) and a
-  read-only **vault mirror ✓** (`memory_vault_export` — markdown + hash ledger,
-  idempotent, redacted; DB authoritative).
-- **Recall drill-down ✓:** `memory_fetch_source_chunk` (full chunk + parent doc
-  + neighbours) **and** `memory_tree_walk` (walk roots / drill a node).
-- **Retrieval benchmark harness:** one command, fixed datasets, FTS / hybrid /
-  rerank / tree / AST modes, JSON + markdown summary, regression thresholds,
-  CI-friendly.
-- **Brain jobs:** new kinds for chunking, blackboard reconcile, tree
-  seal/digest, vault export, and benchmark eval.
-- **Governance & hygiene:** a governance dry-run ✓ (`memory_governance_plan` —
-  preview what would archive/delete by filter); an offload reclaimer (retention
-  + orphan cleanup); uniform redaction ✓ across source chunks, blackboard
-  candidates, offload previews, and vault exports.
-
-Cross-cutting ✓: every new table carries `user_id` + `workspace_tag` scope
-columns so team/RBAC can arrive later without migration; 0.4.3 stays
-local-first (columns NULL until federation populates them). Carried infra:
-git-worktree session isolation.
-
-### 0.4.4 — Memory pipeline tightening + unified trust
-
-0.4.3 shipped the memory *depth primitives* and wired every brain agent. 0.4.4
-makes them **precise and unavoidable** rather than available-but-optional —
-the theme is *tighten, don't invent*. (The CLI multi-agent + parity feature
-bar this builds on top of shipped across 0.4.0–0.4.2.)
-
-- **Exact chunk-level provenance.** Replace batch-level record→chunk linking
-  with per-candidate chunk ids/spans, surfaced in `memory_verify` + recall.
-- **Blackboard-default admission.** Route extraction candidates *through* the
-  blackboard (stage → reconcile/conflict-check → commit) instead of writing
-  cognitive records directly — staged, audited memory by default.
-- **Recall expansion refs inline.** Every compact recall hit carries
-  source-chunk / tree-node / provenance handles so a client can drill down
-  without a second blind query.
-- **Parser-backed code chunking.** Swap the heuristic regex chunker for a
-  tree-sitter/LSP adapter (TS/JS/Python/Rust) with a line-based fallback, and
-  benchmark code recall against the heuristic baseline.
-- **Benchmark honesty.** Add the advertised-but-missing tree/AST (and
-  rerank/judge) modes to the retrieval harness; publish numbers; make the
-  strict summary a release gate.
-- **Tree policy split.** Separate generic tree mechanics from source/topic/
-  global domain policy; document + schedule the three domains.
-- **Unified exec policy.** Route file-write / edit / apply_patch / child-spawn
-  / background / network through the one `decideExecutionPolicy` surface (only
-  the shell tool does today), with approval audit events.
-- **Governance & retention (P2):** extend the governance dry-run to source
-  chunks / tree nodes / vault exports / offloads; add an offload reclaimer;
-  broaden redaction regression fixtures.
-- **CLI ergonomics:** `/reload-skills`; optional carried follow-ups
-  (interactive `/agents create` wizard, in-flight `/bg` detach, post-edit LSP
-  diagnostics) ride along if capacity allows.
-
-### 0.5.0 — Power User Surface
-
-- Fullscreen `/focus` TUI.
-- Plugin marketplace and trust/signature model.
-- Cross-harness handoff UX on top of federation.
-- **Brain-side Phase 6:** engineering sync providers (Git, GitHub, local docs,
-  terminal logs) and proactive situation reports. Tasks: `BRAIN-P6-TN`.
-
-### CLI Parity (rolling — 0.4.2 → 0.5.0)
-
-Bringing the CLI up to the leading agentic-CLI feature bar. Grouped by
-area; each item lands in the version noted.
-
-- **Workflows & orchestration (0.4.2 — shipped).** Durable workflow run
-  engine (per-step `run.json` ledger); a `/workflows` viewer showing live run
-  status + step timeline (not just artifact folders); and above-prompt
-  notifications when a background run finishes while you're idle.
-- **Review & quality (0.4.2 — shipped).** `/review --fix` applies + verifies
-  the surviving findings; first-class `/simplify` (behavior-preserving
-  cleanup).
-- **Effort & model (0.4.2 — shipped).** `/effort xhigh` (alias `max`);
-  `/model --session` (this-session-only switch); `cli.fallbackModel` runtime
-  fallback on model-not-found.
-- **Timeline & context (0.4.2 — shipped).** `/rewind` to fork from an earlier
-  turn; `/context` token breakdown (per-skill / per-tool / per-briefing).
-- **Background & shell UX (0.4.2 shipped `!`; `/bg` → 0.4.3).** The `!` shell
-  escape from the composer shipped in 0.4.2; `/bg` (push the in-flight
-  response to the background) needs turn-detachment infra and moves to 0.4.3.
-- **Extensibility polish (0.5.0).** `/reload-skills`; `disallowed-tools` in
-  skill/command frontmatter; a message-display hook; first-use approval for
-  third-party MCP servers; and real modal vim editing in the composer.
-
-*Out of scope:* remote control / mobile push and first-party browser
-control (would arrive only via an external MCP server, not core).
+- [ ] Per-session isolation (two terminals on one repo) — `docs/specs/per-session-isolation.md`
 
 ---
 
-## Documentation Map
+## 0.5.0 — Power-user surface
+
+- [ ] Fullscreen `/focus` TUI + plugin marketplace + trust/signature model.
+- [ ] Brain Phase 6 — engineering sync providers (Git / GitHub / docs / logs) + proactive situation reports.
+- [ ] Dashboard per-agent recall view + drill-down.
+
+---
+
+## Wishlist (post-0.5.0)
+
+- Docker image for the MCP server.
+- Dashboard memory explorer with recall-score explanations.
+- Dashboard parity with CLI goals / hooks / workflows.
+- Verified provider matrix (OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Ollama).
+- `@kinqs/brainrouter-sdk` 1.0 public API lock.
+
+---
+
+## Documentation map
 
 | File | Purpose |
 |---|---|
-| [`brainrouter-roadmap/README.md`](brainrouter-roadmap/README.md) | Roadmap index and release table |
-| [`brainrouter-roadmap/0.3.9.md`](brainrouter-roadmap/0.3.9.md) | Pre-0.4 memory, cache, repair, cost, and config plan |
-| [`brainrouter-roadmap/0.3.8.md`](brainrouter-roadmap/0.3.8.md) | CLI delegation reliability plan |
-| [`CHANGELOG.md`](CHANGELOG.md) | Current shipped/in-flight changes |
-| [`brainrouter-changelog/README.md`](brainrouter-changelog/README.md) | Per-version changelog index |
-
----
-
-## Wishlist After 0.5.0
-
-- Docker image for the MCP server.
-- Dashboard memory explorer with recall score explanations.
-- Dashboard parity with CLI goal, hook, and multi-agent workflows.
-- Verified provider matrix for OpenAI, Anthropic, Gemini, OpenRouter,
-  LM Studio, and Ollama.
-- `@kinqs/brainrouter-sdk` 1.0 public API lock.
+| [`CHANGELOG.md`](CHANGELOG.md) | Shipped changes |
+| [`brainrouter-changelog/`](brainrouter-changelog/) | Per-version changelog detail |
+| [`brainrouter-roadmap/`](brainrouter-roadmap/) | Per-release plans |
+| [`docs/specs/`](docs/specs/) | Design specs (per-session isolation, build loop) |

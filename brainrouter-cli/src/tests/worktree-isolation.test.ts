@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees } from '../orchestration/worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile } from '../orchestration/worktreeIsolation.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
-import { getSession } from '../orchestration/orchestrator.js';
+import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
+import { getCliStateDir, getBrainrouterHome } from '../state/cliState.js';
 import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 
 function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -89,8 +91,8 @@ test('CODEX-WORKTREE-ISOLATION git-worktree mode fails closed outside git', asyn
 
 test('CODEX-WORKTREE-ISOLATION spawn_agent routes mutating child into isolated workspace metadata', async () => {
   await withGitWorkspace(async (workspace) => {
-    // CODEX-WORKTREE-CLEANUP flipped the default to 'off' (opt-in), so this
-    // test must explicitly enable isolation to exercise the routing.
+    // 'auto' is the default as of CODEX-WORKTREE-MERGEBACK; set it explicitly so
+    // the routing assertion stays independent of config/default drift.
     setCliKnobOverride({ childWorkspaceIsolation: 'auto' });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Response(JSON.stringify({
@@ -134,12 +136,12 @@ test('CODEX-WORKTREE-ISOLATION spawn_agent routes mutating child into isolated w
   });
 });
 
-test('CODEX-WORKTREE-CLEANUP default is off (opt-in) — no isolation by default', async () => {
+test('CODEX-WORKTREE-MERGEBACK default is auto — isolation on by default', async () => {
   // Fresh temp home → no config.json → documented defaults.
   await withTempWorkspaceAsync(async () => {
     _resetCliKnobsCache();
     try {
-      assert.equal(getCliKnobs().childWorkspaceIsolation, 'off');
+      assert.equal(getCliKnobs().childWorkspaceIsolation, 'auto');
     } finally {
       _resetCliKnobsCache();
     }
@@ -174,6 +176,55 @@ test('CODEX-WORKTREE-CLEANUP removeChildWorktree is a no-op for non-isolated chi
   assert.deepEqual(removeChildWorktree(undefined), { ok: true });
 });
 
+test('CODEX-WORKTREE-MERGEBACK applyBack merges a clean child change onto the parent tree', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-merge-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    // Child edits a tracked file AND adds a new file inside its worktree.
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 42;\n', 'utf8');
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'NEW.md'), 'from child\n', 'utf8');
+    const patchFile = path.join(workspace, '.test-patches', 'merge.patch');
+    const out = removeChildWorktree(resolved.isolation, { applyBack: true, patchFile });
+    assert.equal(out.ok, true);
+    assert.equal(out.changedFiles, 2, 'edited index.ts + added NEW.md');
+    assert.equal(out.applied, true, 'clean patch applied to the parent tree');
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'full recovery patch persisted to disk');
+    // The parent working tree now reflects the child's work (merge-back).
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 42;\n');
+    assert.equal(fs.readFileSync(path.join(workspace, 'NEW.md'), 'utf8'), 'from child\n');
+  });
+});
+
+test('CODEX-WORKTREE-MERGEBACK applyBack preserves the patch + leaves the parent tree untouched on conflict', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-conflict-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    // Child edits index.ts in its worktree…
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 2; // child\n', 'utf8');
+    // …while the parent independently edits the SAME line (drift → conflict).
+    fs.writeFileSync(path.join(workspace, 'src', 'index.ts'), 'export const x = 3; // parent\n', 'utf8');
+    const patchFile = path.join(workspace, '.test-patches', 'conflict.patch');
+    const out = removeChildWorktree(resolved.isolation, { applyBack: true, patchFile });
+    assert.equal(out.applied, false, 'conflicting patch is NOT applied');
+    assert.ok(out.applyError, 'applyError explains why the merge-back was skipped');
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'patch preserved for manual `git apply`');
+    // Parent keeps ITS version — no conflict markers smeared into the tree.
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 3; // parent\n');
+  });
+});
+
 test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git no longer tracks', async () => {
   await withGitWorkspace(async (workspace) => {
     const resolved = prepareChildWorkspace({
@@ -193,5 +244,102 @@ test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git
     const removed = reconcileOrphanWorktrees(workspace);
     assert.ok(removed >= 1, 'at least the orphan dir was reclaimed');
     assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+  });
+});
+
+test('A5 (0.4.11) worktrees live under BRAINROUTER_HOME/worktrees, not $TMPDIR', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-loc-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    try {
+      assert.ok(resolved.isolation, 'worktree created');
+      const worktreesBase = fs.realpathSync(path.join(getBrainrouterHome(), 'worktrees'));
+      assert.ok(
+        resolved.workspaceRoot.startsWith(worktreesBase),
+        `worktree ${resolved.workspaceRoot} should live under ${worktreesBase}`,
+      );
+      assert.equal(resolved.workspaceRoot.includes('brainrouter-worktrees'), false, 'no longer under the old $TMPDIR base');
+    } finally {
+      git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+      fs.rmSync(resolved.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test('A5.1 (0.4.11) cli.worktreeRoot relocates the worktree base', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const customBase = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'br-custom-wt-')));
+    setCliKnobOverride({ worktreeRoot: customBase });
+    let resolved: ReturnType<typeof prepareChildWorkspace> | undefined;
+    try {
+      resolved = prepareChildWorkspace({
+        parentWorkspaceRoot: workspace,
+        parentLaunchCwd: workspace,
+        childId: `agent-custom-${Date.now()}`,
+        access: 'write',
+        mode: 'auto',
+      });
+      assert.ok(resolved.isolation);
+      assert.ok(
+        resolved.workspaceRoot.startsWith(customBase),
+        `worktree ${resolved.workspaceRoot} should live under the custom base ${customBase}`,
+      );
+    } finally {
+      if (resolved?.workspaceRoot) {
+        git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+        fs.rmSync(resolved.workspaceRoot, { recursive: true, force: true });
+      }
+      _resetCliKnobsCache();
+      fs.rmSync(customBase, { recursive: true, force: true });
+    }
+  });
+});
+
+test('CODEX-WORKTREE-MERGEBACK (A2) applyPatchFile applies a clean patch + rejects a conflicting one', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-a2-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 7;\n', 'utf8');
+    const patchFile = path.join(workspace, '.test-patches', 'a2.patch');
+    // Capture WITHOUT applying so we can apply it manually (the /agents diff path).
+    const out = removeChildWorktree(resolved.isolation, { applyBack: false, patchFile });
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'recovery patch persisted');
+    // Clean apply onto the parent (still at x = 1).
+    const ok = applyPatchFile(workspace, out.patchPath!);
+    assert.equal(ok.ok, true, ok.error);
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 7;\n');
+    // Re-applying now conflicts (tree is x = 7; the patch context expects x = 1).
+    const again = applyPatchFile(workspace, out.patchPath!);
+    assert.equal(again.ok, false, 'second apply rejected on context drift');
+    assert.ok(again.error, 'reports why it was rejected');
+  });
+});
+
+test('CODEX-WORKTREE-MERGEBACK (A3) pruneWorktreePatches removes patches past the retention window', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const dir = path.join(getCliStateDir(workspace), 'worktree-patches');
+    fs.mkdirSync(dir, { recursive: true });
+    const fresh = path.join(dir, 'agent-fresh.patch');
+    const old = path.join(dir, 'agent-old.patch');
+    fs.writeFileSync(fresh, 'diff --git a/x b/x\n', 'utf8');
+    fs.writeFileSync(old, 'diff --git a/y b/y\n', 'utf8');
+    // Backdate the old patch 10 days (> the 7-day default retention).
+    const tenDaysAgoSec = (Date.now() - 10 * 24 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(old, tenDaysAgoSec, tenDaysAgoSec);
+    const removed = pruneWorktreePatches(workspace);
+    assert.equal(removed, 1, 'exactly the stale patch was pruned');
+    assert.equal(fs.existsSync(old), false, 'old patch removed');
+    assert.equal(fs.existsSync(fresh), true, 'fresh patch kept');
   });
 });

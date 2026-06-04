@@ -37,6 +37,7 @@ import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
 import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
+import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -84,7 +85,7 @@ export interface OrchestrationContext {
    * Lets the REPL surface "✓ agent X completed" so the user knows when to act,
    * instead of seeing tool events and then silence.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }) => void;
   /**
    * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
    * `handleSpawn` calls this to ask the user (returns true to allow).
@@ -845,6 +846,10 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   updateSession(ctx.workspaceRoot, record.id, { status: 'running' });
 
   const promise = (async () => {
+    // CODEX-WORKTREE-MERGEBACK — guards against double cleanup: the success path
+    // merges the worktree back BEFORE the completion notice + auto-chain; the
+    // `finally` then only runs for the failure/throw path (capture + preserve).
+    let worktreeSettled = false;
     try {
       // Track per-tool start times so the paired onChildToolEnd carries a
       // real duration — the REPL renders this on the child's end row.
@@ -956,17 +961,49 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // The REPL renders this in a multi-line `agent-result` scrollback
       // block so the body wraps freely. Configurable via env var for power
       // users who want to cap it tighter on small terminals.
+      // CODEX-WORKTREE-MERGEBACK — merge the child's isolated work back onto the
+      // parent tree HERE (clean completion), before the completion notice and any
+      // auto-chain review/verify. Doing it in `finally` instead would merge AFTER
+      // an auto-chained reviewer already read a stale (un-merged) parent tree.
+      // Best-effort: a throw must not turn a succeeded child into a failure.
+      let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } | undefined;
+      let mergeLine = '';
+      if (childWorkspace.isolation && !worktreeSettled) {
+        try {
+          const cleanup = removeChildWorktree(childWorkspace.isolation, {
+            applyBack: true,
+            patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
+          });
+          worktreeSettled = true;
+          applyWorktreeCleanup(ctx.workspaceRoot, record.id, cleanup);
+          if (cleanup.changedFiles) {
+            worktreeSummary = {
+              changedFiles: cleanup.changedFiles,
+              applied: cleanup.applied,
+              patchPath: cleanup.patchPath,
+              applyError: cleanup.applyError,
+            };
+            mergeLine = cleanup.applied
+              ? `\n\n— worktree: ${cleanup.changedFiles} file(s) merged into your tree`
+              : `\n\n— worktree: ${cleanup.changedFiles} file(s) NOT merged (${cleanup.applyError ?? 'conflict'}) — recover with /agents diff ${record.id}`;
+          }
+        } catch (mergeErr: any) {
+          console.error(`[BrainRouter] child ${record.id} merge-back threw (isolated):`, mergeErr?.message ?? mergeErr);
+        }
+      }
+
       const AGENT_PREVIEW_MAX = Math.max(400, getCliKnobs().agentPreviewChars);
-      const previewBody = output
+      const previewBody = (output
         ? (output.length <= AGENT_PREVIEW_MAX
             ? output
             : extractChildPreview(output, AGENT_PREVIEW_MAX))
-        : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX);
+        : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX)) + mergeLine;
       ctx.onChildComplete?.({
         childId: record.id,
         role: role.name,
         status: 'completed',
         preview: previewBody,
+        worktree: worktreeSummary,
       });
 
       // Auto-chain (MAS-P4-T4): when a worker finishes, optionally chain a
@@ -1055,15 +1092,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // finishes (success or failure). Captures a capped diff into the record
       // first so the child's work isn't silently lost, then removes the
       // worktree + prunes git's admin entry (no more unbounded $TMPDIR growth).
-      if (childWorkspace.isolation) {
+      // CODEX-WORKTREE-MERGEBACK — only reached when the success-path merge-back
+      // did NOT run (the child failed/threw, or merge-back itself threw). Capture
+      // + PRESERVE the child's work as a recovery patch (no apply — a non-clean
+      // child must never auto-mutate the parent tree), then remove the worktree.
+      if (childWorkspace.isolation && !worktreeSettled) {
         try {
-          const cleanup = removeChildWorktree(childWorkspace.isolation);
-          const patch: Partial<ChildSessionRecord> = {};
-          if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
-          if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
-          if (Object.keys(patch).length > 0) {
-            try { updateSession(ctx.workspaceRoot, record.id, patch); } catch { /* record may be closed */ }
-          }
+          const cleanup = removeChildWorktree(childWorkspace.isolation, {
+            applyBack: false,
+            patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
+          });
+          applyWorktreeCleanup(ctx.workspaceRoot, record.id, cleanup);
         } catch (cleanupErr: any) {
           console.error(`[BrainRouter] child ${record.id} worktree cleanup threw:`, cleanupErr?.message ?? cleanupErr);
         }
@@ -1167,9 +1206,15 @@ function handleClose(args: any, ctx: OrchestrationContext): string {
   const patch: Partial<ChildSessionRecord> = { status: 'closed', completedAt: new Date().toISOString() };
   if (record.childWorkspaceIsolation) {
     try {
-      const cleanup = removeChildWorktree(record.childWorkspaceIsolation);
+      // Capture-only on manual close (no applyBack): the spawn lifecycle already
+      // merged a cleanly-completed child. Close just GCs a lingering worktree and
+      // preserves any unmerged work as a recovery patch for `git apply`.
+      const cleanup = removeChildWorktree(record.childWorkspaceIsolation, {
+        patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
+      });
       if (cleanup.diff && !record.worktreeDiff) patch.worktreeDiff = cleanup.diff;
       if (typeof cleanup.changedFiles === 'number' && record.worktreeChangedFiles == null) patch.worktreeChangedFiles = cleanup.changedFiles;
+      if (cleanup.patchPath && !record.worktreePatchPath) patch.worktreePatchPath = cleanup.patchPath;
     } catch { /* best-effort */ }
   }
   const next = updateSession(ctx.workspaceRoot, id, patch);
@@ -1195,6 +1240,32 @@ async function offloadChildOutput(
   return res.parsed?.refNodeId ?? res.parsed?.nodeId ?? res.parsed?.ref ?? undefined;
 }
 
+// CODEX-WORKTREE-MERGEBACK — where a child's full recovery patch is persisted so
+// its work survives the throwaway worktree's removal (and can be re-applied with
+// `git apply <path>`). Lives under the per-workspace CLI state dir, not the repo.
+function worktreePatchFile(workspaceRoot: string, childId: string): string {
+  return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
+}
+
+// CODEX-WORKTREE-MERGEBACK — persist a worktree-cleanup result onto the child
+// record (capped diff + change count + recovery patch path + apply outcome).
+// Shared by the success path (merge-back) and the failure/teardown path.
+function applyWorktreeCleanup(
+  workspaceRoot: string,
+  childId: string,
+  cleanup: { diff?: string; changedFiles?: number; patchPath?: string; applied?: boolean; applyError?: string },
+): void {
+  const patch: Partial<ChildSessionRecord> = {};
+  if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
+  if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
+  if (cleanup.patchPath) patch.worktreePatchPath = cleanup.patchPath;
+  if (typeof cleanup.applied === 'boolean') patch.worktreeApplied = cleanup.applied;
+  if (cleanup.applyError) patch.worktreeApplyError = cleanup.applyError;
+  if (Object.keys(patch).length > 0) {
+    try { updateSession(workspaceRoot, childId, patch); } catch { /* record may be closed */ }
+  }
+}
+
 function summarize(record: ChildSessionRecord, includeOutput = false): Record<string, unknown> {
   const base: Record<string, unknown> = {
     id: record.id,
@@ -1218,9 +1289,21 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     completedAt: record.completedAt,
     summary: formatSessionSummary(record),
   };
+  // CODEX-WORKTREE-MERGEBACK — surface the child's isolated-worktree changes so the
+  // parent can see + recover them. With merge-back the edits land in the parent tree
+  // (`applied: true`); otherwise the full patch waits at `patchPath` for `git apply`.
+  if (record.worktreeChangedFiles != null || record.worktreePatchPath || record.worktreeApplyError) {
+    base.worktree = {
+      changedFiles: record.worktreeChangedFiles ?? undefined,
+      applied: record.worktreeApplied ?? undefined,
+      patchPath: record.worktreePatchPath ?? undefined,
+      applyError: record.worktreeApplyError ?? undefined,
+    };
+  }
   if (includeOutput) {
     if (record.finalOutput) base.finalOutput = record.finalOutput;
     if (record.error) base.error = record.error;
+    if (record.worktreeDiff) base.worktreeDiff = record.worktreeDiff;
     // MAS-P3-P3.2: when the role has an output contract, surface the parsed
     // fields (or the unparsed/missing signal) so `wait_agent --json` /
     // `wait_agents --json` callers get structured output, not just prose.

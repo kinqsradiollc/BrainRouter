@@ -21,7 +21,7 @@ export type RunEvent =
   | { type: "tool_start"; name: string }
   | { type: "tool_end"; name: string; ok: boolean; summary: string }
   | { type: "child_tool"; childId: string; role: string; tool: string; ok?: boolean; summary?: string }
-  | { type: "child_complete"; childId: string; role: string; status: "completed" | "failed"; error?: string }
+  | { type: "child_complete"; childId: string; role: string; status: "completed" | "failed"; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }
   | { type: "text"; text: string }
   | { type: "turn_end"; sessionKey: string; durationMs: number; usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }; costUsd?: number }
   | { type: "error"; message: string }

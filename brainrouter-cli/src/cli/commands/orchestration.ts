@@ -5,6 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
 import { formatInboxPane } from '../../runtime/inboxView.js';
@@ -745,6 +746,72 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log();
         return true;
       }
+      // A2 (0.4.11): `/agents diff <id> [show|apply|discard]` — review, apply, or
+      // discard the recovery patch captured from an isolated child's worktree.
+      // With merge-back a clean child's edits already landed (applied) and the
+      // patch is a backup; a conflicting child's edits wait here for a manual
+      // apply. Closes the loop the completion notice points at.
+      if (args[0] === 'diff' && args[1]) {
+        const action = (args[2] ?? 'show').toLowerCase();
+        const match = listSessions(agent.workspaceRoot).find((s) => s.id === args[1] || s.id.startsWith(args[1]));
+        if (!match) {
+          console.log(chalk.red(`\nNo child session matches "${args[1]}". Run /agents tree to list.\n`));
+          return true;
+        }
+        const patchPath = match.worktreePatchPath;
+        const hasPatch = !!patchPath && fs.existsSync(patchPath);
+        const changed = match.worktreeChangedFiles ?? 0;
+        // Apply from the child's source repo root so the patch's repo-relative
+        // paths line up (workspaceRoot may be a subdir of the repo).
+        const applyCwd = match.childWorkspaceIsolation?.sourceRoot ?? agent.workspaceRoot;
+
+        if (action === 'apply') {
+          if (!hasPatch) {
+            console.log(chalk.red(`\n  No recovery patch on disk for ${match.id}${patchPath ? " (GC'd or discarded)" : ''}.\n`));
+            return true;
+          }
+          const { applyPatchFile } = await import('../../orchestration/worktreeIsolation.js');
+          const res = applyPatchFile(applyCwd, patchPath!);
+          if (!res.ok) {
+            console.log(chalk.yellow(`\n  Patch does not apply cleanly: ${res.error}`));
+            console.log(chalk.gray(`  Resolve it by hand: git apply --3way ${patchPath}\n`));
+            return true;
+          }
+          updateSession(agent.workspaceRoot, match.id, { worktreeApplied: true, worktreeApplyError: undefined });
+          console.log(chalk.green(`\n  ✓ Applied ${changed} file(s) from ${match.id} onto your tree.\n`));
+          return true;
+        }
+
+        if (action === 'discard') {
+          if (hasPatch) { try { fs.rmSync(patchPath!, { force: true }); } catch { /* noop */ } }
+          console.log(chalk.yellow(`\n  ✓ Discarded the recovery patch for ${match.id}.\n`));
+          return true;
+        }
+
+        // Default: show.
+        console.log(chalk.bold(`\n🩹 Worktree changes — ${match.id} (${match.role}) · ${match.status}`));
+        if (!match.worktreeChangedFiles && !match.worktreeDiff && !patchPath) {
+          console.log(chalk.gray('  No isolated-worktree changes recorded for this agent.\n'));
+          return true;
+        }
+        const state = match.worktreeApplied
+          ? chalk.green('merged into your tree')
+          : match.worktreeApplyError
+            ? chalk.yellow(`NOT merged (${match.worktreeApplyError})`)
+            : chalk.gray('not applied');
+        console.log(`  ${chalk.cyan('files')}   ${changed}`);
+        console.log(`  ${chalk.cyan('status')}  ${state}`);
+        console.log(`  ${chalk.cyan('patch')}   ${patchPath ? chalk.gray(hasPatch ? patchPath : `${patchPath} (gone — GC'd or discarded)`) : chalk.gray('(none)')}`);
+        if (match.worktreeDiff) {
+          console.log(chalk.bold('\n  preview:'));
+          for (const line of match.worktreeDiff.split('\n')) console.log(`    ${chalk.gray(line)}`);
+        }
+        const hints: string[] = [];
+        if (hasPatch && !match.worktreeApplied) hints.push(`/agents diff ${match.id} apply`);
+        if (hasPatch) hints.push(`/agents diff ${match.id} discard`);
+        console.log(hints.length ? chalk.gray(`\n  ${hints.join('  ·  ')}\n`) : '');
+        return true;
+      }
       if (args[0] === 'defs') {
         const defs = listAgentDefs(agent.workspaceRoot);
         console.log(chalk.bold('\nAgent Definitions:'));
@@ -911,6 +978,24 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       } catch (err: any) {
         console.log(chalk.red(`\nFailed to start background worker: ${err?.message ?? err}\n`));
       }
+      return true;
+    }
+    case '/build':
+    {
+      // BUILD-LOOP (0.4.12 P1) — run the plan → implement → verify → review loop
+      // for one task via the `build` workflow template. Single-agent stays the
+      // default; this is the explicit opt-in trigger.
+      const task = args.join(' ').trim();
+      if (!task) {
+        console.log(chalk.red('\nUsage: /build <task>\n'));
+        console.log(chalk.gray('  Runs a plan → implement → verify → review loop. The worker implements in an isolated worktree (merged back on clean completion).\n'));
+        return true;
+      }
+      ctx.repl.runAgentTurn(
+        `Run the build loop for this task using the run_workflow tool with template "build" and templateArgs ${JSON.stringify({ task })}. ` +
+        `It runs four phases — plan (architect) → implement (worker) → verify (verifier) → review (reviewer). ` +
+        `When it finishes, report: what changed, the verify PASS/FAIL, and the review verdict.`,
+      );
       return true;
     }
     case '/spawn':

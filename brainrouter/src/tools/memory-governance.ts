@@ -93,6 +93,18 @@ export const memoryGovernanceToolSchemas = [
     },
   },
   {
+    name: "memory_verify",
+    description: "Reconcile code-anchored memories against the CURRENT source index. Classifies each anchored memory as fresh, re-anchorable (its file changed — a reindex can refresh the anchor), or archivable (its source file is gone → confirmed-dead). Read-only by default; apply=true archives ONLY the confirmed-dead ones (recoverable expiry, not deletion). Returns counts + a sample. Non-code memories are ignored.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        userId: { type: "string" },
+        apply: { type: "boolean", description: "Archive the confirmed-dead (archivable) memories. Default false (report only)." },
+        limit: { type: "number", description: "Max memories to scan. Default 1000." },
+      },
+    },
+  },
+  {
     name: "memory_audit",
     description: "List memory audit log entries for a user.",
     inputSchema: {
@@ -249,6 +261,17 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
       const storage = params.scope === "cognitive" ? undefined : memoryEngine.governanceStoragePlan(uid);
       // Back-compat: a bare cognitive plan returns its result unchanged.
       return toolResult(params.scope === "cognitive" ? cognitive : { scope: params.scope, cognitive, storage });
+    }
+    case "memory_verify": {
+      const params = z.object({
+        ...baseUser,
+        apply: z.boolean().optional().default(false),
+        limit: z.number().int().min(1).max(5000).optional(),
+      }).parse(args ?? {});
+      return toolResult(memoryEngine.verifyMemories(effectiveUserId(params.userId, options?.defaultUserId), {
+        apply: params.apply,
+        limit: params.limit,
+      }));
     }
     case "memory_audit": {
       const params = z.object({

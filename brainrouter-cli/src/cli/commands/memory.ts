@@ -26,8 +26,21 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
   const { command, args, agent, mcpClient } = ctx;
   switch (command) {
     case '/memory': {
+      // B6 (0.4.11) — `/memory verify [--apply]` reconciles code-anchored memories
+      // against the current source index (fresh / re-anchorable / archivable).
+      // Read-only unless `--apply`, which archives the confirmed-dead anchors.
+      if ((args[0] ?? '').toLowerCase() === 'verify') {
+        const apply = args.includes('--apply');
+        await printMcpCall(
+          mcpClient,
+          'memory_verify',
+          { apply },
+          apply ? 'Memory verify — applying (archiving confirmed-dead anchors)' : 'Memory verify — read-only sweep',
+        );
+        return true;
+      }
       const query = args.join(' ').trim();
-      if (!query) { console.log(chalk.red('\nUsage: /memory <query>\n')); return true; }
+      if (!query) { console.log(chalk.red('\nUsage: /memory <query>   ·   /memory verify [--apply]\n')); return true; }
       await printMemoryCards(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey }, `Memory search · "${query}"`);
       return true;
     }

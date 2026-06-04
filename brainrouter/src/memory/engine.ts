@@ -837,6 +837,72 @@ export class MemoryEngine {
   }
 
   /**
+   * B6 (0.4.11) — `/memory verify`: reconcile code-anchored memories against the
+   * CURRENT source index. Each anchored record is classified:
+   *   - `fresh`        — its source is not stale.
+   *   - `reanchorable` — stale, but a fresh document still exists at the file
+   *                      (the file CHANGED; a reindex can refresh the anchor).
+   *   - `archivable`   — stale AND no fresh document at the file (the source is
+   *                      GONE → a confirmed-dead anchor).
+   * Read-only by default. `apply` archives the `archivable` records ONLY
+   * (recoverable expiry — never the merely-stale ones, which may still be valid).
+   * Non-code memories (no source provenance) are ignored.
+   */
+  public verifyMemories(
+    userId: string,
+    opts?: { apply?: boolean; limit?: number },
+  ): {
+    total: number;
+    fresh: number;
+    reanchorable: number;
+    archivable: number;
+    archived: number;
+    sample: Array<{ recordId: string; status: "fresh" | "reanchorable" | "archivable"; filePath: string | null }>;
+  } {
+    const store = this.store as Partial<{
+      getRecordSourceChunks(userId: string, recordId: string): SourceChunk[];
+      isRecordSourceStale(userId: string, recordId: string): boolean;
+      hasFreshSourceDocument(userId: string, uri: string): boolean;
+      archiveCognitiveRecord(userId: string, recordId: string): void;
+    }>;
+    const result = {
+      total: 0, fresh: 0, reanchorable: 0, archivable: 0, archived: 0,
+      sample: [] as Array<{ recordId: string; status: "fresh" | "reanchorable" | "archivable"; filePath: string | null }>,
+    };
+    if (typeof store.getRecordSourceChunks !== "function" || typeof store.isRecordSourceStale !== "function") {
+      return result; // store lacks the source-provenance capability
+    }
+    const limit = Math.max(1, Math.min(5000, opts?.limit ?? 1000));
+    const records = this.store.listMemories(userId, { archived: false }).slice(0, limit);
+    for (const rec of records) {
+      const chunks = store.getRecordSourceChunks(userId, rec.recordId);
+      if (!chunks || chunks.length === 0) continue; // not code-anchored
+      result.total += 1;
+      if (!store.isRecordSourceStale(userId, rec.recordId)) {
+        result.fresh += 1;
+        continue;
+      }
+      const uris = [...new Set(chunks.map((c) => c.filePath).filter((u): u is string => !!u))];
+      // No freshness check available → never archive on uncertainty (re-anchorable).
+      const hasFresh = typeof store.hasFreshSourceDocument === "function"
+        ? uris.some((u) => store.hasFreshSourceDocument!(userId, u))
+        : true;
+      if (hasFresh) {
+        result.reanchorable += 1;
+        if (result.sample.length < 25) result.sample.push({ recordId: rec.recordId, status: "reanchorable", filePath: uris[0] ?? null });
+      } else {
+        result.archivable += 1;
+        if (opts?.apply && typeof store.archiveCognitiveRecord === "function") {
+          store.archiveCognitiveRecord(userId, rec.recordId);
+          result.archived += 1;
+        }
+        if (result.sample.length < 25) result.sample.push({ recordId: rec.recordId, status: "archivable", filePath: uris[0] ?? null });
+      }
+    }
+    return result;
+  }
+
+  /**
    * MEM-33 (0.4.4) — distill a reusable skill (SOP) from a successful session
    * and store it. The LLM gate emits `<no-skill/>` for exploratory/trivial runs
    * (→ nothing stored). A real skill is stored as a durable `lesson` tagged
@@ -1552,7 +1618,7 @@ export class MemoryEngine {
    */
   public reindexCodeSource(
     userId: string,
-    input: { filePath: string; content: string; language?: string; title?: string },
+    input: { filePath: string; content: string; language?: string; title?: string; commitCount90d?: number | null; lastCommitDate?: string | null },
   ): { status: "fresh" | "reindexed" | "unsupported"; documentId?: string; staleMarked: number; chunks: number } {
     const store = this.store as Partial<{
       lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null;
@@ -1560,7 +1626,12 @@ export class MemoryEngine {
       reviveSourceDocument(documentId: string): void;
       createSourceDocument(input: any): SourceDocument;
       addSourceChunks(documentId: string, chunks: any[]): SourceChunk[];
+      setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): void;
     }>;
+    // B7 (MEM-CHURN) — stamp the captured churn signal onto whichever document
+    // this reindex resolves to (fresh / revived / new). NULL when not provided.
+    const stampChurn = (documentId: string) =>
+      store.setSourceDocumentChurn?.(documentId, input.commitCount90d ?? null, input.lastCommitDate ?? null);
     if (
       typeof store.lookupDocumentByPathHash !== "function" ||
       typeof store.createSourceDocument !== "function" ||
@@ -1572,6 +1643,7 @@ export class MemoryEngine {
     const hash = createHash("sha1").update(input.content ?? "").digest("hex");
     const existing = store.lookupDocumentByPathHash(userId, input.filePath, hash);
     if (existing && !existing.stale) {
+      stampChurn(existing.id); // churn can change even when content doesn't
       return { status: "fresh", documentId: existing.id, staleMarked: 0, chunks: 0 };
     }
 
@@ -1581,6 +1653,7 @@ export class MemoryEngine {
     // it rather than duplicate; its chunks + edges are still intact.
     if (existing) {
       store.reviveSourceDocument?.(existing.id);
+      stampChurn(existing.id);
       return { status: "reindexed", documentId: existing.id, staleMarked, chunks: 0 };
     }
 
@@ -1593,6 +1666,7 @@ export class MemoryEngine {
       title: input.title ?? input.filePath,
     });
     const stored = store.addSourceChunks(doc.id, chunkCode(input.content ?? "", { filePath: input.filePath, language: input.language }));
+    stampChurn(doc.id);
     return { status: "reindexed", documentId: doc.id, staleMarked, chunks: stored.length };
   }
 
