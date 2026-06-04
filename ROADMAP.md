@@ -39,7 +39,7 @@ Live checklist — ticked as each part ships.
 - [x] A4 — per-session isolation spec (`docs/specs/per-session-isolation.md`)
 - [x] **A5 — relocate worktrees to `~/.brainrouter/worktrees/` (realpath'd base kills the `$TMPDIR` /var→/private/var drift behind `Path escapes workspace root`)**
 - [x] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
-- [ ] A6 — auto-chain / auto-delegation actually fire (turn-end guardrail; some runs still ask)
+- [x] A6 — RESOLVED (decision): auto-chain stays OFF by default (rate-limit-safe); enable per workspace via `/auto-chain review|both`
 - [x] A7 — config.json auto-hydrates missing `cli.*` knobs (visible + editable; excludes /theme·/effort·/quiet)
 - [ ] C1 — spawn-child loop continuation (parent loop stops while a child runs)
 - [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
