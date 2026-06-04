@@ -24,6 +24,8 @@ import {
 } from './phaseOrchestrator.js';
 import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../state/workflowRun.js';
 import { getCliKnobs } from '../config/config.js';
+import { prepareSharedWorktree } from './worktreeIsolation.js';
+import { finalizeBuildLoop } from './buildLoop.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */
@@ -61,13 +63,19 @@ export function defaultPhaseRunner(
   ctx: OrchestrationContext,
   dispatch: OrchestrationDispatch,
   maxConcurrent: number,
+  opts?: { workspaceRootOverride?: string },
 ): PhaseRunner {
   return async (agents, phase) => {
     const results: PhaseChildResult[] = [];
     let idx = 0;
     for (const wave of chunkIntoWaves(agents, maxConcurrent)) {
       const spawnArgs = {
-        agents: wave.map((a) => ({ role: a.role, prompt: a.prompt, access: a.access, label: a.label })),
+        // BUILD-LOOP P2 — every phase child runs in the shared worktree when set,
+        // so verify/review operate on the worker's actual edits.
+        agents: wave.map((a) => ({
+          role: a.role, prompt: a.prompt, access: a.access, label: a.label,
+          ...(opts?.workspaceRootOverride ? { workspaceRootOverride: opts.workspaceRootOverride } : {}),
+        })),
       };
       let ids: string[] = [];
       try {
@@ -157,15 +165,28 @@ export async function runWorkflow(
 
   const slug = workflowSlug(args, plan);
   const ws = ctx.workspaceRoot;
+  // BUILD-LOOP P2 — a synchronous `build` run executes implement/verify/review in
+  // ONE shared worktree, then merges it back gated on verify-green + review-ok.
+  // (Skipped for background runs and when a test injects its own runner.) Tagging
+  // the run `kind:'build'` lets WF-RESUME re-attach the same shared worktree + gate
+  // instead of falling back to ungated per-child merge-back.
+  const isBuildRun = args?.template === 'build' && !deps.runner && args?.background !== true;
   ensurePhaseRun(
     ws,
     slug,
     plan.phases.map((p) => ({ id: p.id, title: p.title })),
-    { sessionKey: ctx.parentSessionKey ?? null, pid: process.pid, kind: 'workflow', planJson: JSON.stringify(plan) },
+    { sessionKey: ctx.parentSessionKey ?? null, pid: process.pid, kind: isBuildRun ? 'build' : 'workflow', planJson: JSON.stringify(plan) },
   );
 
+  const buildLoop = isBuildRun ? prepareSharedWorktree(ws, slug) : null;
+
   const runner =
-    deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
+    deps.runner ?? defaultPhaseRunner(
+      ctx,
+      deps.dispatch,
+      getCliKnobs().maxConcurrentChildren ?? 8,
+      buildLoop ? { workspaceRootOverride: buildLoop.workspaceRoot } : undefined,
+    );
 
   const hooks = makeRunHooks(ws, slug);
 
@@ -193,6 +214,9 @@ export async function runWorkflow(
 
   const execution = await executePhasePlan(plan, runner, hooks);
 
+  // BUILD-LOOP P2 — gate + merge the shared worktree (or preserve it as a patch).
+  const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
+
   return JSON.stringify(
     {
       ok: true,
@@ -200,6 +224,7 @@ export async function runWorkflow(
       status: execution.status,
       phases: execution.phases.map((p) => ({ id: p.id, status: p.status, children: p.children.length })),
       output: execution.phases[execution.phases.length - 1]?.output ?? '',
+      ...(buildMerge ? { buildMerge } : {}),
     },
     null,
     2,
@@ -266,8 +291,18 @@ export async function resumeWorkflow(slug: string, ctx: OrchestrationContext, de
     return JSON.stringify({ ok: true, slug, resumed: false, status: 'completed', note: 'nothing to resume — all phases already completed' }, null, 2);
   }
 
-  const runner = deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
+  // BUILD-LOOP P2 — a resumed `build` run re-attaches a shared worktree + the merge
+  // gate (mirroring the fresh path) so re-run phases stay isolated and nothing
+  // merges back ungated. (A test-injected runner skips it.)
+  const buildLoop = run.kind === 'build' && !deps.runner ? prepareSharedWorktree(ws, slug) : null;
+  const runner = deps.runner ?? defaultPhaseRunner(
+    ctx,
+    deps.dispatch,
+    getCliKnobs().maxConcurrentChildren ?? 8,
+    buildLoop ? { workspaceRootOverride: buildLoop.workspaceRoot } : undefined,
+  );
   const execution = await executePhasePlan(plan, runner, makeRunHooks(ws, slug), { completed, priorOutputs });
+  const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
   return JSON.stringify(
     {
       ok: true,
@@ -277,6 +312,7 @@ export async function resumeWorkflow(slug: string, ctx: OrchestrationContext, de
       skipped: [...completed],
       phases: execution.phases.map((p) => ({ id: p.id, status: p.status, children: p.children.length })),
       output: execution.phases[execution.phases.length - 1]?.output ?? '',
+      ...(buildMerge ? { buildMerge } : {}),
     },
     null,
     2,

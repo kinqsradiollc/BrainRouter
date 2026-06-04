@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile } from '../orchestration/worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile, prepareSharedWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd } from '../orchestration/worktreeIsolation.js';
+import { finalizeBuildLoop, verifyLooksGreen, reviewHasBlocker } from '../orchestration/buildLoop.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
 import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
 import { getCliStateDir, getBrainrouterHome } from '../state/cliState.js';
@@ -323,6 +324,135 @@ test('CODEX-WORKTREE-MERGEBACK (A2) applyPatchFile applies a clean patch + rejec
     const again = applyPatchFile(workspace, out.patchPath!);
     assert.equal(again.ok, false, 'second apply rejected on context drift');
     assert.ok(again.error, 'reports why it was rejected');
+  });
+});
+
+test('BUILD-LOOP P2 verifyLooksGreen / reviewHasBlocker heuristics', () => {
+  assert.equal(verifyLooksGreen('Ran node --test. All tests passed. Verdict: PASS'), true);
+  assert.equal(verifyLooksGreen('2 tests failed. Verdict: FAIL'), false);
+  assert.equal(verifyLooksGreen('✓ build ok'), true);
+  // Review fix — benign "no failure" phrasings must NOT read as red (false negatives).
+  assert.equal(verifyLooksGreen('Tests: 12 passed, 0 failed'), true, '"0 failed" is green');
+  assert.equal(verifyLooksGreen('Test run complete: no failures.'), true, '"no failures" is green');
+  assert.equal(verifyLooksGreen('Tests run: 10, Failures: 0, Errors: 0'), true, '"Failures: 0" is green');
+  assert.equal(verifyLooksGreen('BUILD SUCCESSFUL in 3s'), true, '"successful" is green');
+  // A real failure still trips it even alongside a "0 failed" count.
+  assert.equal(verifyLooksGreen('5 passed, 1 failed'), false, 'a real failure is still red');
+  assert.equal(reviewHasBlocker('blocker: null deref at auth.ts:12'), true);
+  assert.equal(reviewHasBlocker('minor: rename var; nit: spacing'), false);
+});
+
+test('BUILD-LOOP P2 (review) isSharedWorktreeOf accepts same-repo worktree, rejects foreign/arbitrary paths', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const shared = prepareSharedWorktree(workspace, 'guard')!;
+    try {
+      assert.equal(isSharedWorktreeOf(workspace, shared.workspaceRoot), true, 'a worktree of this repo is accepted');
+      assert.equal(isSharedWorktreeOf(workspace, workspace), true, 'the repo root itself shares the common dir');
+      // An arbitrary dir outside any related repo is rejected (escape-hatch closed).
+      await withTempWorkspaceAsync(async (foreign) => {
+        assert.equal(isSharedWorktreeOf(workspace, foreign), false, 'non-repo path rejected');
+        assert.equal(isSharedWorktreeOf(workspace, path.join(foreign, 'does-not-exist')), false, 'missing path rejected');
+      });
+      // launch cwd maps a subdir into the worktree, falls back to root otherwise.
+      assert.equal(path.basename(sharedWorktreeLaunchCwd(workspace, path.join(workspace, 'src'), shared.workspaceRoot)), 'src');
+      assert.equal(sharedWorktreeLaunchCwd(workspace, '/nonexistent/sub', shared.workspaceRoot), shared.workspaceRoot);
+    } finally {
+      git(workspace, ['worktree', 'remove', '--force', shared.workspaceRoot]);
+      fs.rmSync(shared.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUILD-LOOP P2 (review) prepareSharedWorktree resets a reused dirty worktree to a clean HEAD', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const first = prepareSharedWorktree(workspace, 'reuse')!;
+    try {
+      // Simulate a crashed prior run: leave uncommitted edits + an untracked file behind.
+      fs.writeFileSync(path.join(first.workspaceRoot, 'src', 'index.ts'), 'export const DIRTY = true;\n', 'utf8');
+      fs.writeFileSync(path.join(first.workspaceRoot, 'untracked.tmp'), 'junk\n', 'utf8');
+      // A new run with the SAME slug reuses the path but must start clean.
+      const second = prepareSharedWorktree(workspace, 'reuse')!;
+      assert.equal(second.workspaceRoot, first.workspaceRoot, 'same slug → same worktree path');
+      assert.equal(fs.readFileSync(path.join(second.workspaceRoot, 'src', 'index.ts'), 'utf8'), 'export const x = 1;\n', 'reset to clean HEAD');
+      assert.equal(fs.existsSync(path.join(second.workspaceRoot, 'untracked.tmp')), false, 'untracked leftovers cleaned');
+      // The leftover edits were preserved to a recovery patch (no silent loss).
+      const patchDir = path.join(getCliStateDir(workspace), 'worktree-patches');
+      const leftovers = fs.existsSync(patchDir) ? fs.readdirSync(patchDir).filter((f) => f.startsWith('leftover-')) : [];
+      assert.ok(leftovers.length >= 1, 'leftover edits preserved as a recovery patch');
+    } finally {
+      git(workspace, ['worktree', 'remove', '--force', first.workspaceRoot]);
+      fs.rmSync(first.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUILD-LOOP P2 (review) finalizeBuildLoop reports a clean no-op when the build produced no changes', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const shared = prepareSharedWorktree(workspace, 'noop')!;
+    // No edits in the worktree; verify green + review ok.
+    const exec: any = { status: 'completed', phases: [
+      { id: 'implement', title: 'Implement', status: 'completed', output: 'nothing to change', children: [] },
+      { id: 'verify', title: 'Verify', status: 'completed', output: 'All tests passed. Verdict: PASS', children: [] },
+      { id: 'review', title: 'Review', status: 'completed', output: 'no findings', children: [] },
+    ] };
+    const out = finalizeBuildLoop(workspace, 'noop', shared, exec);
+    assert.equal(out.merged, true, out.reason);
+    assert.equal(out.changedFiles ?? 0, 0);
+    assert.match(out.reason, /no file changes|no-op/i);
+    assert.doesNotMatch(out.reason, /did not apply cleanly/);
+  });
+});
+
+test('BUILD-LOOP P2 prepareSharedWorktree creates a shared worktree; null outside git', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const shared = prepareSharedWorktree(workspace, 'run1');
+    assert.ok(shared, 'created inside a git repo');
+    try {
+      assert.ok(path.basename(shared!.workspaceRoot).startsWith('build-'), 'worktree named build-*');
+      assert.notEqual(shared!.workspaceRoot, fs.realpathSync(workspace));
+      assert.equal(fs.readFileSync(path.join(shared!.workspaceRoot, 'README.md'), 'utf8'), 'root\n', 'checked out at HEAD');
+    } finally {
+      git(workspace, ['worktree', 'remove', '--force', shared!.workspaceRoot]);
+      fs.rmSync(shared!.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+  await withTempWorkspaceAsync(async (workspace) => {
+    assert.equal(prepareSharedWorktree(workspace, 'x'), null, 'null outside a git repo');
+  });
+});
+
+test('BUILD-LOOP P2 finalizeBuildLoop merges on verify-green + review-ok', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const shared = prepareSharedWorktree(workspace, 'green')!;
+    // The worker "implemented" inside the shared worktree.
+    fs.writeFileSync(path.join(shared.workspaceRoot, 'src', 'index.ts'), 'export const x = 99;\n', 'utf8');
+    const exec: any = { status: 'completed', phases: [
+      { id: 'implement', title: 'Implement', status: 'completed', output: 'edited src/index.ts', children: [] },
+      { id: 'verify', title: 'Verify', status: 'completed', output: 'ran node --test. Verdict: PASS', children: [] },
+      { id: 'review', title: 'Review', status: 'completed', output: 'nit: spacing — no blockers', children: [] },
+    ] };
+    const out = finalizeBuildLoop(workspace, 'green', shared, exec);
+    assert.equal(out.verifyGreen, true);
+    assert.equal(out.reviewApproved, true);
+    assert.equal(out.merged, true, out.reason);
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 99;\n', 'merged into the parent tree');
+  });
+});
+
+test('BUILD-LOOP P2 finalizeBuildLoop preserves a patch on red verify (no merge)', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const shared = prepareSharedWorktree(workspace, 'red')!;
+    fs.writeFileSync(path.join(shared.workspaceRoot, 'src', 'index.ts'), 'export const x = 7;\n', 'utf8');
+    const exec: any = { status: 'completed', phases: [
+      { id: 'implement', title: 'Implement', status: 'completed', output: 'edited it', children: [] },
+      { id: 'verify', title: 'Verify', status: 'completed', output: '1 test failed. Verdict: FAIL', children: [] },
+      { id: 'review', title: 'Review', status: 'completed', output: 'looks fine', children: [] },
+    ] };
+    const out = finalizeBuildLoop(workspace, 'red', shared, exec);
+    assert.equal(out.verifyGreen, false);
+    assert.equal(out.merged, false);
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'work preserved as a recovery patch');
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 1;\n', 'parent tree untouched');
   });
 });
 

@@ -36,7 +36,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
-import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, type ChildWorkspaceResolution } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
@@ -718,13 +718,32 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     tier: childTier,
     depth: currentDepth + 1,
   });
-  const childWorkspace = prepareChildWorkspace({
-    parentWorkspaceRoot: ctx.workspaceRoot,
-    parentLaunchCwd: requestedChildLaunchCwd,
-    childId: record.id,
-    access,
-    mode: getCliKnobs().childWorkspaceIsolation,
-  });
+  // BUILD-LOOP P2 (0.4.12) — when the build orchestrator passes an explicit
+  // `workspaceRootOverride` (the ONE worktree shared by a build run's
+  // implement/verify/review children), the child runs IN that worktree with NO
+  // per-child isolation handle — so it never merges back on its own; the build
+  // loop owns the shared worktree's lifecycle + the gated merge at the end.
+  // The override is honored ONLY when it's a git worktree of the SAME repo as the
+  // parent workspace — never an arbitrary path — so a child's writes can't be
+  // redirected outside the workspace (ownership + write-validation key off
+  // `workspaceRoot`). Anything else falls through to normal per-child isolation.
+  const sharedRootOverride = typeof args.workspaceRootOverride === 'string' && args.workspaceRootOverride.trim()
+    ? args.workspaceRootOverride.trim()
+    : undefined;
+  const sharedRootValid = sharedRootOverride ? isSharedWorktreeOf(ctx.workspaceRoot, sharedRootOverride) : false;
+  const childWorkspace: ChildWorkspaceResolution = (sharedRootOverride && sharedRootValid)
+    ? (() => {
+        const root = fs.realpathSync(sharedRootOverride);
+        // Map the requested cwd into the shared worktree (fall back to its root).
+        return { workspaceRoot: root, launchCwd: sharedWorktreeLaunchCwd(ctx.workspaceRoot, requestedChildLaunchCwd, root), isolated: true };
+      })()
+    : prepareChildWorkspace({
+        parentWorkspaceRoot: ctx.workspaceRoot,
+        parentLaunchCwd: requestedChildLaunchCwd,
+        childId: record.id,
+        access,
+        mode: getCliKnobs().childWorkspaceIsolation,
+      });
   const childWorkspaceRoot = childWorkspace.workspaceRoot;
   const childLaunchCwd = childWorkspace.launchCwd;
   if (childWorkspace.isolated || childWorkspace.notice) {

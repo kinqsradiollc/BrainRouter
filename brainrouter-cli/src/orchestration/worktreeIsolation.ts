@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { AccessMode } from './roles.js';
-import { getBrainrouterHome } from '../state/cliState.js';
+import { getBrainrouterHome, getCliStateDir } from '../state/cliState.js';
 import { getCliKnobs } from '../config/config.js';
 
 export type ChildWorkspaceIsolationMode = 'off' | 'auto' | 'git-worktree';
@@ -143,6 +143,110 @@ export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildW
       worktreeRoot: realWorktreeRoot,
     },
   };
+}
+
+/**
+ * BUILD-LOOP P2 (0.4.12) — create ONE detached worktree shared by a build run's
+ * implement → verify → review children, so the verifier runs against the worker's
+ * ACTUAL edits (not a fresh HEAD checkout) and the reviewer reads that same diff.
+ * The caller passes the returned `workspaceRoot` as each child's
+ * `workspaceRootOverride`, and at the end merges it back via `removeChildWorktree`
+ * (gated on verify-green + review-ok). Returns null when the workspace isn't a git
+ * repo (caller falls back to the shared parent tree, ungated).
+ */
+export function prepareSharedWorktree(
+  parentWorkspaceRoot: string,
+  label: string,
+): { workspaceRoot: string; isolation: ChildWorktreeIsolation } | null {
+  let root: string;
+  try {
+    root = fs.realpathSync(parentWorkspaceRoot);
+  } catch {
+    return null;
+  }
+  const repoRoot = gitRoot(root);
+  if (!repoRoot || !isInside(repoRoot, root)) return null;
+  const worktreeRoot = defaultWorktreePath(repoRoot, `build-${safeName(label)}`);
+  if (!fs.existsSync(worktreeRoot)) {
+    try {
+      fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
+    } catch {
+      return null;
+    }
+    const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, 'HEAD']);
+    if (!created.ok) return null;
+  } else {
+    // BUILD-LOOP P2 (review) — a worktree left behind by a prior run with the same
+    // slug (crash, or a reused task) must NOT seed the new run with a dirty tree.
+    // Reset it to a clean detached HEAD at the repo's CURRENT HEAD, preserving any
+    // leftover edits to a recovery patch first so a crashed run's work is never
+    // silently destroyed.
+    resetStaleWorktree(repoRoot, worktreeRoot);
+  }
+  let real = worktreeRoot;
+  try { real = fs.realpathSync(worktreeRoot); } catch { /* use the raw path */ }
+  return { workspaceRoot: real, isolation: { kind: 'git-worktree', sourceRoot: repoRoot, worktreeRoot: real } };
+}
+
+/** Reset a reused build worktree to a clean detached HEAD at the repo's current
+ *  HEAD, after best-effort preserving any leftover tracked edits to a patch. */
+function resetStaleWorktree(repoRoot: string, worktreeRoot: string): void {
+  try {
+    const status = runGit(worktreeRoot, ['status', '--porcelain']);
+    if (status.ok && status.stdout.trim()) {
+      const diff = runGit(worktreeRoot, ['diff', 'HEAD']);
+      if (diff.ok && diff.stdout.trim()) {
+        try {
+          const dir = path.join(getCliStateDir(repoRoot), 'worktree-patches');
+          fs.mkdirSync(dir, { recursive: true });
+          const token = `${path.basename(worktreeRoot)}-${Date.now().toString(36)}`;
+          fs.writeFileSync(path.join(dir, `leftover-${safeName(token)}.patch`), diff.stdout, 'utf8');
+        } catch { /* best-effort preservation — the reset below is what matters */ }
+      }
+    }
+  } catch { /* ignore — proceed to reset */ }
+  const head = runGit(repoRoot, ['rev-parse', 'HEAD']);
+  runGit(worktreeRoot, ['reset', '--hard', head.ok && head.stdout.trim() ? head.stdout.trim() : 'HEAD']);
+  runGit(worktreeRoot, ['clean', '-fd']);
+}
+
+/**
+ * BUILD-LOOP P2 (review) — is `candidate` a git worktree of the SAME repository as
+ * `parentWorkspaceRoot`? The build orchestrator's `workspaceRootOverride` MUST be a
+ * shared worktree of this repo, never an arbitrary path — otherwise a caller could
+ * redirect a child's writes outside the workspace (ownership + write-validation are
+ * computed relative to the child's `workspaceRoot`). Compares the resolved
+ * `--git-common-dir` of both; returns false on any mismatch / non-repo / error.
+ */
+export function isSharedWorktreeOf(parentWorkspaceRoot: string, candidate: string): boolean {
+  const commonDir = (dir: string): string | null => {
+    const res = runGit(dir, ['rev-parse', '--git-common-dir']);
+    if (!res.ok) return null;
+    const out = res.stdout.trim();
+    if (!out) return null;
+    const abs = path.isAbsolute(out) ? out : path.join(dir, out);
+    try { return fs.realpathSync(abs); } catch { return path.resolve(abs); }
+  };
+  try {
+    if (!fs.existsSync(candidate)) return false;
+    const a = commonDir(fs.realpathSync(candidate));
+    const b = commonDir(fs.realpathSync(parentWorkspaceRoot));
+    return a !== null && b !== null && a === b;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * BUILD-LOOP P2 (review) — map a child's requested launch cwd into the shared
+ * worktree (so a command expecting to run from a subdirectory still does), falling
+ * back to the worktree root when the mapped dir doesn't exist or the repo can't be
+ * resolved. Mirrors the per-child isolation cwd mapping.
+ */
+export function sharedWorktreeLaunchCwd(parentWorkspaceRoot: string, parentLaunchCwd: string, worktreeRoot: string): string {
+  const repoRoot = gitRoot(parentWorkspaceRoot);
+  if (!repoRoot) return worktreeRoot;
+  return launchCwdInWorktree(repoRoot, parentLaunchCwd, worktreeRoot);
 }
 
 export interface ChildWorktreeIsolation {
