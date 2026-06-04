@@ -429,6 +429,54 @@ export function saveConfig(config: Config): void {
 }
 
 /**
+ * CONFIG-HYDRATE (0.4.11) — knobs that ALSO live in the per-workspace preference
+ * store and layer `config.cli` > preference > default. Writing THEIR default into
+ * the file would shadow the preference and silently disable `/theme` · `/effort` ·
+ * `/quiet`, so hydration deliberately leaves them out (they stay dynamic).
+ */
+const PREFERENCE_LAYERED_KNOBS = new Set<string>(['theme', 'effort', 'quiet']);
+
+/**
+ * CONFIG-HYDRATE (0.4.11) — fill in every SAFE `cli.*` knob's default the config
+ * is missing, so the file is self-documenting + editable. Pure (no I/O). Skips
+ * the preference-layered knobs above and any knob whose default is `undefined`
+ * (optional / no default). Returns how many keys were added.
+ */
+export function hydrateCliDefaults(config: Config): { config: Config; added: number } {
+  const defaults = resolveCliKnobs(undefined) as unknown as Record<string, unknown>;
+  const cli: Record<string, unknown> = { ...(config.cli ?? {}) };
+  let added = 0;
+  for (const [key, value] of Object.entries(defaults)) {
+    if (PREFERENCE_LAYERED_KNOBS.has(key)) continue;
+    if (value === undefined) continue;
+    if (!(key in cli)) { cli[key] = value; added += 1; }
+  }
+  if (added > 0) config.cli = cli as Config['cli'];
+  return { config, added };
+}
+
+/**
+ * CONFIG-HYDRATE (0.4.11) — populate the on-disk config.json with any missing
+ * safe `cli.*` defaults, then write it back. Operates on the RAW file (NOT the
+ * env-backfilled `loadConfig` result, so a shell API key is never persisted) and
+ * only writes when something was actually added. Call at a deliberate launch
+ * (interactive boot) — NOT inside `loadConfig`, which must stay side-effect-free
+ * on reads. Returns the number of knobs added (0 = nothing written).
+ */
+export function hydrateConfigDefaultsOnDisk(): number {
+  if (!fs.existsSync(CONFIG_FILE)) return 0;
+  let parsed: Config;
+  try {
+    parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) as Config;
+  } catch {
+    return 0; // malformed — leave it for loadConfig to surface
+  }
+  const { config, added } = hydrateCliDefaults(parsed);
+  if (added > 0) saveConfig(config);
+  return added;
+}
+
+/**
  * Self-heal structural gaps in a parsed config. Pure (no I/O — the caller
  * persists when `changed`), so it's unit-testable in isolation. Ensures
  * `servers`/`activeServer` exist, and when `activeServer` is empty or names a

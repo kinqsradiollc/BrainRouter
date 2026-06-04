@@ -40,6 +40,7 @@ Live checklist — ticked as each part ships.
 - [ ] **A5 — relocate worktrees to `~/.brainrouter/worktrees/` + fix `Path escapes workspace root` (P0 — isolation broken in real use)**
 - [ ] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
 - [ ] A6 — auto-chain / auto-delegation actually fire (turn-end guardrail; some runs still ask)
+- [x] A7 — config.json auto-hydrates missing `cli.*` knobs (visible + editable; excludes /theme·/effort·/quiet)
 - [ ] B6 — `/memory verify` reconciliation sweep
 - [ ] B7 — churn-weighted decay
 - [ ] Release: version bump · changelog · roadmap · dist-manifest sync · publish

@@ -90,7 +90,7 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride } from './config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk } from './config/config.js';
 import { redactText } from './state/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
@@ -177,7 +177,14 @@ program
       }
     }
 
+    // CONFIG-HYDRATE — self-fill config.json with any missing safe cli.* knobs so
+    // every setting is visible + editable (and new knobs appear on the next launch).
+    // Runs only at this deliberate interactive boot, not on every config read.
+    const addedKnobs = hydrateConfigDefaultsOnDisk();
     const config = loadConfig();
+    if (addedKnobs > 0) {
+      console.error(`[BrainRouter] config.json updated — added ${addedKnobs} default setting${addedKnobs === 1 ? '' : 's'} you can now edit (run /debug-config to see them).`);
+    }
 
     // 0.3.7 — multi-MCP support. Third-party MCPs are additive and all
     // connect concurrently. BrainRouter MCPs are different: users may store
