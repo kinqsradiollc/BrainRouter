@@ -37,6 +37,7 @@ import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
 import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
+import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -1057,10 +1058,21 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // worktree + prunes git's admin entry (no more unbounded $TMPDIR growth).
       if (childWorkspace.isolation) {
         try {
-          const cleanup = removeChildWorktree(childWorkspace.isolation);
+          // CODEX-WORKTREE-MERGEBACK — merge the child's work back onto the parent
+          // tree on CLEAN completion only. A failed/errored child's partial edits
+          // stay isolated (recoverable from the persisted patch), never auto-applied.
+          const fresh = getSession(ctx.workspaceRoot, record.id);
+          const cleanExit = fresh?.status === 'completed';
+          const cleanup = removeChildWorktree(childWorkspace.isolation, {
+            applyBack: cleanExit,
+            patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
+          });
           const patch: Partial<ChildSessionRecord> = {};
           if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
           if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
+          if (cleanup.patchPath) patch.worktreePatchPath = cleanup.patchPath;
+          if (typeof cleanup.applied === 'boolean') patch.worktreeApplied = cleanup.applied;
+          if (cleanup.applyError) patch.worktreeApplyError = cleanup.applyError;
           if (Object.keys(patch).length > 0) {
             try { updateSession(ctx.workspaceRoot, record.id, patch); } catch { /* record may be closed */ }
           }
@@ -1167,9 +1179,15 @@ function handleClose(args: any, ctx: OrchestrationContext): string {
   const patch: Partial<ChildSessionRecord> = { status: 'closed', completedAt: new Date().toISOString() };
   if (record.childWorkspaceIsolation) {
     try {
-      const cleanup = removeChildWorktree(record.childWorkspaceIsolation);
+      // Capture-only on manual close (no applyBack): the spawn lifecycle already
+      // merged a cleanly-completed child. Close just GCs a lingering worktree and
+      // preserves any unmerged work as a recovery patch for `git apply`.
+      const cleanup = removeChildWorktree(record.childWorkspaceIsolation, {
+        patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
+      });
       if (cleanup.diff && !record.worktreeDiff) patch.worktreeDiff = cleanup.diff;
       if (typeof cleanup.changedFiles === 'number' && record.worktreeChangedFiles == null) patch.worktreeChangedFiles = cleanup.changedFiles;
+      if (cleanup.patchPath && !record.worktreePatchPath) patch.worktreePatchPath = cleanup.patchPath;
     } catch { /* best-effort */ }
   }
   const next = updateSession(ctx.workspaceRoot, id, patch);
@@ -1195,6 +1213,13 @@ async function offloadChildOutput(
   return res.parsed?.refNodeId ?? res.parsed?.nodeId ?? res.parsed?.ref ?? undefined;
 }
 
+// CODEX-WORKTREE-MERGEBACK — where a child's full recovery patch is persisted so
+// its work survives the throwaway worktree's removal (and can be re-applied with
+// `git apply <path>`). Lives under the per-workspace CLI state dir, not the repo.
+function worktreePatchFile(workspaceRoot: string, childId: string): string {
+  return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
+}
+
 function summarize(record: ChildSessionRecord, includeOutput = false): Record<string, unknown> {
   const base: Record<string, unknown> = {
     id: record.id,
@@ -1218,9 +1243,21 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
     completedAt: record.completedAt,
     summary: formatSessionSummary(record),
   };
+  // CODEX-WORKTREE-MERGEBACK — surface the child's isolated-worktree changes so the
+  // parent can see + recover them. With merge-back the edits land in the parent tree
+  // (`applied: true`); otherwise the full patch waits at `patchPath` for `git apply`.
+  if (record.worktreeChangedFiles != null || record.worktreePatchPath || record.worktreeApplyError) {
+    base.worktree = {
+      changedFiles: record.worktreeChangedFiles ?? undefined,
+      applied: record.worktreeApplied ?? undefined,
+      patchPath: record.worktreePatchPath ?? undefined,
+      applyError: record.worktreeApplyError ?? undefined,
+    };
+  }
   if (includeOutput) {
     if (record.finalOutput) base.finalOutput = record.finalOutput;
     if (record.error) base.error = record.error;
+    if (record.worktreeDiff) base.worktreeDiff = record.worktreeDiff;
     // MAS-P3-P3.2: when the role has an output contract, surface the parsed
     // fields (or the unparsed/missing signal) so `wait_agent --json` /
     // `wait_agents --json` callers get structured output, not just prose.

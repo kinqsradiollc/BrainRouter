@@ -172,10 +172,15 @@ export interface CliKnobs {
   commandAllowlist?: string[];
   /**
    * CODEX-WORKTREE-ISOLATION — filesystem isolation for spawned write/shell
-   * children. `auto` creates a detached git worktree when the parent workspace is
-   * inside a git repo and falls back to the shared root otherwise; `git-worktree`
-   * requires that worktree creation succeeds; `off` preserves legacy shared-root
-   * behavior. Read-only children always share the parent root.
+   * children. Default `auto`: creates a detached git worktree when the parent
+   * workspace is inside a git repo, and falls back to the shared root otherwise
+   * (so it never breaks a non-git workspace). On a child's CLEAN completion its
+   * changes are merged back onto the parent tree (CODEX-WORKTREE-MERGEBACK) — a
+   * patch that doesn't apply cleanly is preserved for manual `git apply` instead
+   * of smearing conflict markers. `git-worktree` is the strict variant (errors
+   * if worktree creation fails); `off` preserves the legacy shared-root behavior
+   * (children edit the parent tree directly). Read-only children always share
+   * the parent root.
    */
   childWorkspaceIsolation?: 'off' | 'auto' | 'git-worktree';
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
@@ -582,7 +587,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
-    childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'off',
+    childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

@@ -89,8 +89,8 @@ test('CODEX-WORKTREE-ISOLATION git-worktree mode fails closed outside git', asyn
 
 test('CODEX-WORKTREE-ISOLATION spawn_agent routes mutating child into isolated workspace metadata', async () => {
   await withGitWorkspace(async (workspace) => {
-    // CODEX-WORKTREE-CLEANUP flipped the default to 'off' (opt-in), so this
-    // test must explicitly enable isolation to exercise the routing.
+    // 'auto' is the default as of CODEX-WORKTREE-MERGEBACK; set it explicitly so
+    // the routing assertion stays independent of config/default drift.
     setCliKnobOverride({ childWorkspaceIsolation: 'auto' });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Response(JSON.stringify({
@@ -134,12 +134,12 @@ test('CODEX-WORKTREE-ISOLATION spawn_agent routes mutating child into isolated w
   });
 });
 
-test('CODEX-WORKTREE-CLEANUP default is off (opt-in) — no isolation by default', async () => {
+test('CODEX-WORKTREE-MERGEBACK default is auto — isolation on by default', async () => {
   // Fresh temp home → no config.json → documented defaults.
   await withTempWorkspaceAsync(async () => {
     _resetCliKnobsCache();
     try {
-      assert.equal(getCliKnobs().childWorkspaceIsolation, 'off');
+      assert.equal(getCliKnobs().childWorkspaceIsolation, 'auto');
     } finally {
       _resetCliKnobsCache();
     }
@@ -172,6 +172,55 @@ test('CODEX-WORKTREE-CLEANUP removeChildWorktree captures the diff then removes 
 test('CODEX-WORKTREE-CLEANUP removeChildWorktree is a no-op for non-isolated children', () => {
   assert.deepEqual(removeChildWorktree(null), { ok: true });
   assert.deepEqual(removeChildWorktree(undefined), { ok: true });
+});
+
+test('CODEX-WORKTREE-MERGEBACK applyBack merges a clean child change onto the parent tree', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-merge-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    // Child edits a tracked file AND adds a new file inside its worktree.
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 42;\n', 'utf8');
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'NEW.md'), 'from child\n', 'utf8');
+    const patchFile = path.join(workspace, '.test-patches', 'merge.patch');
+    const out = removeChildWorktree(resolved.isolation, { applyBack: true, patchFile });
+    assert.equal(out.ok, true);
+    assert.equal(out.changedFiles, 2, 'edited index.ts + added NEW.md');
+    assert.equal(out.applied, true, 'clean patch applied to the parent tree');
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'full recovery patch persisted to disk');
+    // The parent working tree now reflects the child's work (merge-back).
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 42;\n');
+    assert.equal(fs.readFileSync(path.join(workspace, 'NEW.md'), 'utf8'), 'from child\n');
+  });
+});
+
+test('CODEX-WORKTREE-MERGEBACK applyBack preserves the patch + leaves the parent tree untouched on conflict', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-conflict-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    // Child edits index.ts in its worktree…
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 2; // child\n', 'utf8');
+    // …while the parent independently edits the SAME line (drift → conflict).
+    fs.writeFileSync(path.join(workspace, 'src', 'index.ts'), 'export const x = 3; // parent\n', 'utf8');
+    const patchFile = path.join(workspace, '.test-patches', 'conflict.patch');
+    const out = removeChildWorktree(resolved.isolation, { applyBack: true, patchFile });
+    assert.equal(out.applied, false, 'conflicting patch is NOT applied');
+    assert.ok(out.applyError, 'applyError explains why the merge-back was skipped');
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'patch preserved for manual `git apply`');
+    // Parent keeps ITS version — no conflict markers smeared into the tree.
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 3; // parent\n');
+  });
 });
 
 test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git no longer tracks', async () => {

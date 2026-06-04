@@ -64,6 +64,12 @@ export interface ChildSessionRecord {
   worktreeDiff?: string;
   /** CODEX-WORKTREE-CLEANUP — number of files the child changed in its worktree. */
   worktreeChangedFiles?: number;
+  /** CODEX-WORKTREE-MERGEBACK — path to the full (uncapped) recovery patch of the child's worktree changes. */
+  worktreePatchPath?: string;
+  /** CODEX-WORKTREE-MERGEBACK — true when those changes were applied back onto the parent working tree. */
+  worktreeApplied?: boolean;
+  /** CODEX-WORKTREE-MERGEBACK — why merge-back was skipped/failed; the patch remains at worktreePatchPath for manual `git apply`. */
+  worktreeApplyError?: string;
 }
 
 interface SessionsFile {
