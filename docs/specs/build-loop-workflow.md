@@ -87,6 +87,44 @@ Verify + Review gates pass.
 - A red verify or a blocker review **stops the merge** and leaves `W`'s work as a
   recovery patch — same no-loss fallback as 0.4.11, surfaced via `/agents diff`.
 
+### Pre-merge review gate (review each worktree before it lands)
+
+Review is **not advisory — it is the gate on the merge.** Before any worktree `W`
+merges back, a dedicated **reviewer agent reads `W`'s full diff** and returns:
+
+```
+verdict: approve | request-changes | block   (+ severity-ordered findings)
+```
+
+The merge applies **iff verify is green AND the verdict is `approve`**. On
+`request-changes` / `block` (or a red verify), `W`'s work is preserved as a
+recovery patch (the 0.4.11 no-loss fallback) and the findings surface via
+`/agents diff <id>` — nothing lands in your tree.
+
+**Fan-out (multiple workers → multiple worktrees).** Two layers:
+1. **Per-worktree reviewer** — each `W` gets its own reviewer that sees only that
+   worktree's diff (focused, parallel).
+2. **Cross-worktree synthesis reviewer** — one reviewer then reads the *combined*
+   change-set and catches what a per-worktree review structurally can't: two
+   slices editing the same file, inconsistent contracts between slices, duplicated
+   work. Merge order: synthesis passes → merge each approved worktree in turn;
+   conflicting ones fall back to a preserved patch.
+
+**Beyond `/build` — a general policy.** The gate lives in the merge-back lifecycle,
+not just the build loop, via:
+
+`cli.worktreeMergeReview: 'off' | 'on'`  (default **`off`**)
+
+- **`off`** — an ad-hoc `/spawn worker` merges back as in 0.4.11 (review only
+  happens inside a `/build`).
+- **`on`** — *every* isolated write-child's merge-back is gated by a quick reviewer,
+  so even a one-off delegated worker is reviewed before its edits land.
+
+The build loop's Review phase IS this gate; the knob extends the same gate to
+spawns that aren't part of a `/build`. A separate **read-access** reviewer (not the
+parent) gives an independent, role-primed (memory-first, severity-ordered) verdict
+and keeps each worktree's merge decision auditable.
+
 ### Escalation (opt-in)
 
 A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`**):
@@ -110,8 +148,13 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
   the end. This is the core new code; everything else is composition.
 - **Extend** `prompt/nextAction.ts` with a `build` strategy + the escalation
   classifier (multi-file/feature detection), gated by `cli.buildLoop`.
-- **Config** `cli.buildLoop` knob (+ interface doc + `resolveCliKnobs` default +
-  `/debug-config`).
+- **New** the **pre-merge review gate** — a reviewer child per worktree + a
+  cross-worktree synthesis reviewer; the merge applies only on verify-green +
+  review-`approve`. Lives in the merge-back lifecycle so the `cli.worktreeMergeReview`
+  knob can extend it to ad-hoc spawns.
+- **Config** `cli.buildLoop` knob, `cli.worktreeMergeReview` knob, and
+  `cli.worktreeRoot` (custom worktree path, shared with 0.4.11 A5.1) — each with
+  interface doc + `resolveCliKnobs` default + `/debug-config`.
 - **Reuse unchanged**: roles, the phase engine's wave/barrier/synthesis, WF-RESUME
   persistence, the 0.4.11 check-then-apply + recovery-patch + `/agents diff`.
 
@@ -119,8 +162,11 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
 
 - The `build` template + `/build` command.
 - The phase-scoped shared worktree (Implement→Verify→Review on one `W`).
-- Verify-green + review-ok merge gate, with the 0.4.11 no-loss fallback.
-- `cli.buildLoop` escalation knob (default `escalate`).
+- The **pre-merge review gate**: per-worktree reviewer + cross-worktree synthesis
+  reviewer; merge only on verify-green + review-`approve`, with the 0.4.11 no-loss
+  fallback.
+- `cli.buildLoop` escalation knob (default `escalate`) + `cli.worktreeMergeReview`
+  (default `off`, extends the gate to ad-hoc spawns) + `cli.worktreeRoot` (A5.1).
 - Planner escalation classifier for multi-file/feature tasks.
 
 ## Out of Scope
@@ -151,6 +197,12 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
       `/agents diff <id>`; nothing lands in the user's tree.
 - [ ] A **clean run** lands the changes in the user's tree exactly once, after
       verify + review pass.
+- [ ] A **`block`/`request-changes` review verdict** stops the merge (work
+      preserved as a patch + findings surfaced), even when verify is green.
+- [ ] **Fan-out:** each worktree is reviewed independently; a cross-worktree
+      synthesis reviewer runs before any merge; conflicting worktrees fall back to
+      preserved patches. With `cli.worktreeMergeReview: 'on'`, an ad-hoc
+      `/spawn worker` is also merge-reviewed before landing.
 - [ ] `cli.buildLoop: 'off'` → only `/build` triggers it; `'escalate'` → a
       single-file fix stays single-agent while a multi-file feature enters the
       loop; `'always'` → every implementation verb enters it.

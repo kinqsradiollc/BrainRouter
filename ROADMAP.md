@@ -38,6 +38,7 @@ Live checklist — ticked as each part ships.
 - [x] A2 — `/agents diff <id>` show · apply · discard
 - [x] A4 — per-session isolation spec (`docs/specs/per-session-isolation.md`)
 - [ ] **A5 — relocate worktrees to `~/.brainrouter/worktrees/` + fix `Path escapes workspace root` (P0 — isolation broken in real use)**
+- [ ] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
 - [ ] A6 — auto-chain / auto-delegation actually fire (turn-end guardrail; some runs still ask)
 - [ ] B6 — `/memory verify` reconciliation sweep
 - [ ] B7 — churn-weighted decay
@@ -50,7 +51,8 @@ An opt-in plan → implement → verify → review → merge engineering loop on
 explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 - [x] P1 — `build` workflow template + `/build <task>` command
-- [ ] P2 — phase-scoped shared worktree + verify-green / review-ok merge gate
+- [ ] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits)
+- [ ] P2.5 — review-gated merge: a reviewer reads each worktree's full diff before merge-back; merge only on verify-green + review-approve (+ cross-worktree synthesis review on fan-out; `cli.worktreeMergeReview` extends it to ad-hoc workers)
 - [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
 - [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
 - [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
