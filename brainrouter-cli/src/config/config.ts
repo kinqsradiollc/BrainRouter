@@ -199,6 +199,17 @@ export interface CliKnobs {
    * `always` = any implementation request (even a one-file change) runs the loop.
    */
   buildLoop?: 'off' | 'escalate' | 'always';
+  /**
+   * BUILD-LOOP P2.5 (0.4.12) — extend the build loop's pre-merge review gate to
+   * ad-hoc isolated write-children. `off` (default) = an isolated `/spawn worker`
+   * merges its clean changes back automatically (0.4.11 behavior). `on` = the
+   * child's changes are HELD as a reviewable recovery patch instead of
+   * auto-merging, so even a one-off delegated worker is reviewed (via
+   * `/agents diff <id>`) and applied explicitly (`/agents diff <id> apply`) before
+   * anything lands in your tree. (Build-loop fan-out slices are always held +
+   * gated regardless of this knob.)
+   */
+  worktreeMergeReview?: 'off' | 'on';
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -585,6 +596,7 @@ export interface ResolvedCliKnobs {
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
   buildLoop: 'off' | 'escalate' | 'always';
+  worktreeMergeReview: 'off' | 'on';
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -656,6 +668,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
     worktreeRoot: c.worktreeRoot ?? '',
     buildLoop: c.buildLoop ?? 'escalate',
+    worktreeMergeReview: c.worktreeMergeReview ?? 'off',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile, prepareSharedWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd } from '../orchestration/worktreeIsolation.js';
-import { finalizeBuildLoop, verifyLooksGreen, reviewHasBlocker } from '../orchestration/buildLoop.js';
+import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile, prepareSharedWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine } from '../orchestration/worktreeIsolation.js';
+import { finalizeBuildLoop, finalizeFanOutBuild, verifyLooksGreen, reviewHasBlocker } from '../orchestration/buildLoop.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
 import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
 import { getCliStateDir, getBrainrouterHome } from '../state/cliState.js';
@@ -340,6 +340,11 @@ test('BUILD-LOOP P2 verifyLooksGreen / reviewHasBlocker heuristics', () => {
   assert.equal(verifyLooksGreen('5 passed, 1 failed'), false, 'a real failure is still red');
   assert.equal(reviewHasBlocker('blocker: null deref at auth.ts:12'), true);
   assert.equal(reviewHasBlocker('minor: rename var; nit: spacing'), false);
+  // Review fix — negated/benign mentions must NOT hold the merge (false positives).
+  assert.equal(reviewHasBlocker('No blockers found. Two minor nits.'), false, '"no blockers" is not a blocker');
+  assert.equal(reviewHasBlocker('blocker: none — looks good'), false, '"blocker: none" is not a blocker');
+  assert.equal(reviewHasBlocker('0 blockers, 1 major'), false, '"0 blockers" is not a blocker');
+  assert.equal(reviewHasBlocker('blocker: slice B breaks slice A'), true, 'an affirmative blocker still holds');
 });
 
 test('BUILD-LOOP P2 (review) isSharedWorktreeOf accepts same-repo worktree, rejects foreign/arbitrary paths', async () => {
@@ -471,5 +476,66 @@ test('CODEX-WORKTREE-MERGEBACK (A3) pruneWorktreePatches removes patches past th
     assert.equal(removed, 1, 'exactly the stale patch was pruned');
     assert.equal(fs.existsSync(old), false, 'old patch removed');
     assert.equal(fs.existsSync(fresh), true, 'fresh patch kept');
+  });
+});
+
+test('BUILD-LOOP P2.5 mergeBackLine: merged / not-merged / held notices by reason', () => {
+  assert.match(mergeBackLine({ changedFiles: 3, applied: true }, 'a1', null), /3 file\(s\) merged into your tree/);
+  assert.match(mergeBackLine({ changedFiles: 2, applied: false, applyError: 'drift' }, 'a1', null), /NOT merged \(drift\).*\/agents diff a1/);
+  // 'review' (the knob): the user applies explicitly.
+  assert.match(mergeBackLine({ changedFiles: 2, applied: false }, 'a1', 'review'), /HELD for review \(cli\.worktreeMergeReview\).*\/agents diff a1 apply/);
+  // 'fanout' (a build slice): the synthesis gate owns the merge — no manual-apply step.
+  const fan = mergeBackLine({ changedFiles: 2, applied: false }, 'a1', 'fanout');
+  assert.match(fan, /HELD.*synthesis gate/);
+  assert.doesNotMatch(fan, /agents diff a1 apply/);
+  assert.equal(mergeBackLine({ changedFiles: 0 }, 'a1', 'review'), '', 'no changes → no notice');
+});
+
+// Produce a real HELD slice patch (the fan-out worker's preserved worktree).
+async function makeHeldSlice(workspace: string, sliceId: string, file: string, content: string): Promise<{ id: string; patchPath?: string }> {
+  const wt = prepareSharedWorktree(workspace, sliceId)!;
+  fs.mkdirSync(path.dirname(path.join(wt.workspaceRoot, file)), { recursive: true });
+  fs.writeFileSync(path.join(wt.workspaceRoot, file), content, 'utf8');
+  const patchFile = path.join(getCliStateDir(workspace), 'worktree-patches', `${sliceId}.patch`);
+  const cleanup = removeChildWorktree(wt.isolation, { applyBack: false, patchFile });
+  return { id: sliceId, patchPath: cleanup.patchPath };
+}
+
+test('BUILD-LOOP P2.5 finalizeFanOutBuild merges non-overlapping slices', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const s1 = await makeHeldSlice(workspace, 'slice-a', 'src/a.ts', 'export const a = 1;\n');
+    const s2 = await makeHeldSlice(workspace, 'slice-b', 'src/b.ts', 'export const b = 2;\n');
+    const out = finalizeFanOutBuild(workspace, [s1, s2], 'no findings, looks consistent');
+    assert.equal(out.reviewApproved, true);
+    assert.equal(out.mergedSlices.length, 2, out.reason);
+    assert.equal(out.heldSlices.length, 0);
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'a.ts'), 'utf8'), 'export const a = 1;\n');
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'b.ts'), 'utf8'), 'export const b = 2;\n');
+  });
+});
+
+test('BUILD-LOOP P2.5 finalizeFanOutBuild holds an overlapping slice (first writer wins)', async () => {
+  await withGitWorkspace(async (workspace) => {
+    // Both slices edit the SAME tracked file → overlap; first merges, second held.
+    const s1 = await makeHeldSlice(workspace, 'ov-1', 'src/index.ts', 'export const x = 11;\n');
+    const s2 = await makeHeldSlice(workspace, 'ov-2', 'src/index.ts', 'export const x = 22;\n');
+    const out = finalizeFanOutBuild(workspace, [s1, s2], 'consistent');
+    assert.deepEqual(out.mergedSlices.map((m) => m.id), ['ov-1']);
+    assert.equal(out.heldSlices.length, 1);
+    assert.equal(out.heldSlices[0].id, 'ov-2');
+    assert.equal(out.overlaps.length, 1);
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 11;\n', 'first writer landed, not clobbered');
+  });
+});
+
+test('BUILD-LOOP P2.5 finalizeFanOutBuild: a synthesis blocker holds every slice', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const s1 = await makeHeldSlice(workspace, 'blk-a', 'src/a.ts', 'export const a = 1;\n');
+    const s2 = await makeHeldSlice(workspace, 'blk-b', 'src/b.ts', 'export const b = 2;\n');
+    const out = finalizeFanOutBuild(workspace, [s1, s2], 'blocker: slice B breaks the contract slice A relies on');
+    assert.equal(out.reviewApproved, false);
+    assert.equal(out.mergedSlices.length, 0, out.reason);
+    assert.equal(out.heldSlices.length, 2);
+    assert.equal(fs.existsSync(path.join(workspace, 'src', 'a.ts')), false, 'nothing merged on a blocker');
   });
 });

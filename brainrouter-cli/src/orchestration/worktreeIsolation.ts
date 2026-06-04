@@ -294,6 +294,47 @@ export interface RemoveChildWorktreeResult {
 }
 
 /**
+ * Where a child's full recovery patch is persisted, under the per-workspace CLI
+ * state dir (NOT the repo). Lets the parent re-apply the child's work with
+ * `git apply <path>` (or `/agents diff <id>`) even after the throwaway worktree is
+ * gone. Shared by the spawn merge-back, teardown, and the build-loop finalize — so
+ * it lives here (a leaf module) rather than in `tools.ts`, which avoids a runtime
+ * import cycle (`tools` ↔ `workflowTool`).
+ */
+export function worktreePatchFile(workspaceRoot: string, childId: string): string {
+  return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
+}
+
+/** Why an isolated child's clean changes were HELD instead of merged back:
+ *  `review` = the `cli.worktreeMergeReview` knob (user applies); `fanout` = a build
+ *  fan-out slice (the build loop's synthesis gate owns the merge). */
+export type WorktreeHoldReason = 'review' | 'fanout';
+
+/**
+ * BUILD-LOOP P2.5 (0.4.12) — the one-line worktree-merge notice appended to a
+ * child's completion preview. Pure. A `hold` reason reports the changes as HELD
+ * with the right next step for that reason; otherwise it reports the merge /
+ * non-merge as in 0.4.11.
+ */
+export function mergeBackLine(
+  cleanup: Pick<RemoveChildWorktreeResult, 'changedFiles' | 'applied' | 'applyError'>,
+  childId: string,
+  hold?: WorktreeHoldReason | null,
+): string {
+  const n = cleanup.changedFiles ?? 0;
+  if (!n) return '';
+  if (hold === 'review') {
+    return `\n\n— worktree: ${n} file(s) HELD for review (cli.worktreeMergeReview) — inspect \`/agents diff ${childId}\`, apply \`/agents diff ${childId} apply\``;
+  }
+  if (hold === 'fanout') {
+    return `\n\n— worktree: ${n} file(s) HELD — the build loop's synthesis gate decides the merge (recover with \`/agents diff ${childId}\` if needed)`;
+  }
+  return cleanup.applied
+    ? `\n\n— worktree: ${n} file(s) merged into your tree`
+    : `\n\n— worktree: ${n} file(s) NOT merged (${cleanup.applyError ?? 'conflict'}) — recover with /agents diff ${childId}`;
+}
+
+/**
  * Capture a child worktree's changes, optionally merge them back onto the parent
  * tree, then remove the worktree. This is BOTH halves of the isolation contract:
  *
