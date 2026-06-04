@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees } from '../orchestration/worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile } from '../orchestration/worktreeIsolation.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
 import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
 import { getCliStateDir } from '../state/cliState.js';
@@ -243,6 +243,32 @@ test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git
     const removed = reconcileOrphanWorktrees(workspace);
     assert.ok(removed >= 1, 'at least the orphan dir was reclaimed');
     assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+  });
+});
+
+test('CODEX-WORKTREE-MERGEBACK (A2) applyPatchFile applies a clean patch + rejects a conflicting one', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-a2-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation, 'precondition: isolated worktree created');
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'src', 'index.ts'), 'export const x = 7;\n', 'utf8');
+    const patchFile = path.join(workspace, '.test-patches', 'a2.patch');
+    // Capture WITHOUT applying so we can apply it manually (the /agents diff path).
+    const out = removeChildWorktree(resolved.isolation, { applyBack: false, patchFile });
+    assert.ok(out.patchPath && fs.existsSync(out.patchPath), 'recovery patch persisted');
+    // Clean apply onto the parent (still at x = 1).
+    const ok = applyPatchFile(workspace, out.patchPath!);
+    assert.equal(ok.ok, true, ok.error);
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'index.ts'), 'utf8'), 'export const x = 7;\n');
+    // Re-applying now conflicts (tree is x = 7; the patch context expects x = 1).
+    const again = applyPatchFile(workspace, out.patchPath!);
+    assert.equal(again.ok, false, 'second apply rejected on context drift');
+    assert.ok(again.error, 'reports why it was rejected');
   });
 });
 

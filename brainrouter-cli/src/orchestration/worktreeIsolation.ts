@@ -265,6 +265,24 @@ export function removeChildWorktree(
 }
 
 /**
+ * CODEX-WORKTREE-MERGEBACK (A2) — manually apply a persisted recovery patch onto
+ * a tree (backs `/agents diff <id> apply`). Gated by `git apply --check` first so
+ * a non-applying patch never mutates the tree (no smeared conflict markers).
+ * Returns `ok` + a human reason on failure; never throws.
+ */
+export function applyPatchFile(cwd: string, patchFile: string): { ok: boolean; error?: string } {
+  try {
+    if (!fs.existsSync(patchFile)) return { ok: false, error: 'patch file not found' };
+    const check = runGit(cwd, ['apply', '--check', '--whitespace=nowarn', patchFile]);
+    if (!check.ok) return { ok: false, error: check.stderr.trim() || 'patch does not apply cleanly' };
+    const applied = runGit(cwd, ['apply', '--whitespace=nowarn', patchFile]);
+    return applied.ok ? { ok: true } : { ok: false, error: applied.stderr.trim() || 'git apply failed' };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'git apply threw' };
+  }
+}
+
+/**
  * Startup reconcile: prune git's stale worktree admin entries and delete any
  * leftover `brainrouter-worktrees/<repo>/*` dirs that git no longer tracks
  * (orphans from a crashed prior process). Best-effort; returns how many dirs it
