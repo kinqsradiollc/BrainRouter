@@ -175,7 +175,10 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
 - Non-git workspaces (the loop degrades to the shared tree, no isolated `W`).
 - Durable/resumable per-agent threads (tracked separately; a build run is still
   resumable at the *phase* level via WF-RESUME).
-- Auto-fixing a red verify (the loop reports; it doesn't loop-until-green in v1).
+- Auto-fixing a red verify is **off by default** (the loop reports + preserves a
+  patch). P5 adds an **opt-in** bounded loop-until-green: `cli.buildLoopMaxRepairs`
+  (default `0` = disabled); when `> 0`, a red Verify re-runs Implement→Verify→Review
+  in the same worktree up to N times (single-worktree builds only).
 
 ## Boundaries
 

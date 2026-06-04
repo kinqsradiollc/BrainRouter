@@ -210,6 +210,16 @@ export interface CliKnobs {
    * gated regardless of this knob.)
    */
   worktreeMergeReview?: 'off' | 'on';
+  /**
+   * BUILD-LOOP P5 (0.4.12) — bounded loop-until-green build self-repair. `0`
+   * (default) = DISABLED: a `/build` whose Verify is red preserves the work as a
+   * recovery patch (no retry), the 0.4.12 P2 behavior. `> 0` = OPT-IN: when Verify
+   * comes back red, re-run Implement→Verify→Review in the SAME shared worktree —
+   * feeding the verifier's failure back to the worker — up to this many times, then
+   * stop on the first green verify (or give up + preserve the patch). Single-worktree
+   * builds only; fan-out builds are not retried.
+   */
+  buildLoopMaxRepairs?: number;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -597,6 +607,7 @@ export interface ResolvedCliKnobs {
   worktreeRoot: string;
   buildLoop: 'off' | 'escalate' | 'always';
   worktreeMergeReview: 'off' | 'on';
+  buildLoopMaxRepairs: number;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -669,6 +680,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     worktreeRoot: c.worktreeRoot ?? '',
     buildLoop: c.buildLoop ?? 'escalate',
     worktreeMergeReview: c.worktreeMergeReview ?? 'off',
+    buildLoopMaxRepairs: Math.max(0, Math.floor(c.buildLoopMaxRepairs ?? 0)),
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

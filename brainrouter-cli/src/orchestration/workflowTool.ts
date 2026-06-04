@@ -26,7 +26,7 @@ import {
 import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../state/workflowRun.js';
 import { getCliKnobs } from '../config/config.js';
 import { prepareSharedWorktree, worktreePatchFile } from './worktreeIsolation.js';
-import { finalizeBuildLoop, finalizeFanOutBuild, type FanOutSlice } from './buildLoop.js';
+import { finalizeBuildLoop, finalizeFanOutBuild, repairUntilGreen, type FanOutSlice } from './buildLoop.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */
@@ -233,7 +233,19 @@ export async function runWorkflow(
     );
   }
 
-  const execution = await executePhasePlan(plan, runner, hooks);
+  let execution = await executePhasePlan(plan, runner, hooks);
+
+  // BUILD-LOOP P5 — opt-in bounded loop-until-green. A single-worktree build whose
+  // Verify came back red re-runs Implement→Verify→Review in the SAME shared worktree
+  // (feeding the failure back) up to `cli.buildLoopMaxRepairs` times, stopping on the
+  // first green. Default 0 = disabled → no retry (the P2 behavior). Fan-out excluded.
+  const maxRepairs = getCliKnobs().buildLoopMaxRepairs ?? 0;
+  let buildRepairs: { attempts: number; green: boolean } | undefined;
+  if (buildLoop && maxRepairs > 0) {
+    const repaired = await repairUntilGreen(execution, maxRepairs, (p) => executePhasePlan(p, runner, hooks));
+    execution = repaired.execution;
+    if (repaired.attempts > 0) buildRepairs = { attempts: repaired.attempts, green: repaired.green };
+  }
 
   // BUILD-LOOP P2 — gate + merge the shared worktree (or preserve it as a patch).
   const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
@@ -249,6 +261,7 @@ export async function runWorkflow(
       output: execution.phases[execution.phases.length - 1]?.output ?? '',
       ...(buildMerge ? { buildMerge } : {}),
       ...(fanOutMerge ? { fanOutMerge } : {}),
+      ...(buildRepairs ? { buildRepairs } : {}),
     },
     null,
     2,
