@@ -85,7 +85,7 @@ export interface OrchestrationContext {
    * Lets the REPL surface "✓ agent X completed" so the user knows when to act,
    * instead of seeing tool events and then silence.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }) => void;
   /**
    * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
    * `handleSpawn` calls this to ask the user (returns true to allow).
@@ -846,6 +846,10 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   updateSession(ctx.workspaceRoot, record.id, { status: 'running' });
 
   const promise = (async () => {
+    // CODEX-WORKTREE-MERGEBACK — guards against double cleanup: the success path
+    // merges the worktree back BEFORE the completion notice + auto-chain; the
+    // `finally` then only runs for the failure/throw path (capture + preserve).
+    let worktreeSettled = false;
     try {
       // Track per-tool start times so the paired onChildToolEnd carries a
       // real duration — the REPL renders this on the child's end row.
@@ -957,17 +961,49 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // The REPL renders this in a multi-line `agent-result` scrollback
       // block so the body wraps freely. Configurable via env var for power
       // users who want to cap it tighter on small terminals.
+      // CODEX-WORKTREE-MERGEBACK — merge the child's isolated work back onto the
+      // parent tree HERE (clean completion), before the completion notice and any
+      // auto-chain review/verify. Doing it in `finally` instead would merge AFTER
+      // an auto-chained reviewer already read a stale (un-merged) parent tree.
+      // Best-effort: a throw must not turn a succeeded child into a failure.
+      let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } | undefined;
+      let mergeLine = '';
+      if (childWorkspace.isolation && !worktreeSettled) {
+        try {
+          const cleanup = removeChildWorktree(childWorkspace.isolation, {
+            applyBack: true,
+            patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
+          });
+          worktreeSettled = true;
+          applyWorktreeCleanup(ctx.workspaceRoot, record.id, cleanup);
+          if (cleanup.changedFiles) {
+            worktreeSummary = {
+              changedFiles: cleanup.changedFiles,
+              applied: cleanup.applied,
+              patchPath: cleanup.patchPath,
+              applyError: cleanup.applyError,
+            };
+            mergeLine = cleanup.applied
+              ? `\n\n— worktree: ${cleanup.changedFiles} file(s) merged into your tree`
+              : `\n\n— worktree: ${cleanup.changedFiles} file(s) NOT merged (${cleanup.applyError ?? 'conflict'}) — recover with /agents diff ${record.id}`;
+          }
+        } catch (mergeErr: any) {
+          console.error(`[BrainRouter] child ${record.id} merge-back threw (isolated):`, mergeErr?.message ?? mergeErr);
+        }
+      }
+
       const AGENT_PREVIEW_MAX = Math.max(400, getCliKnobs().agentPreviewChars);
-      const previewBody = output
+      const previewBody = (output
         ? (output.length <= AGENT_PREVIEW_MAX
             ? output
             : extractChildPreview(output, AGENT_PREVIEW_MAX))
-        : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX);
+        : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX)) + mergeLine;
       ctx.onChildComplete?.({
         childId: record.id,
         role: role.name,
         status: 'completed',
         preview: previewBody,
+        worktree: worktreeSummary,
       });
 
       // Auto-chain (MAS-P4-T4): when a worker finishes, optionally chain a
@@ -1056,26 +1092,17 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // finishes (success or failure). Captures a capped diff into the record
       // first so the child's work isn't silently lost, then removes the
       // worktree + prunes git's admin entry (no more unbounded $TMPDIR growth).
-      if (childWorkspace.isolation) {
+      // CODEX-WORKTREE-MERGEBACK — only reached when the success-path merge-back
+      // did NOT run (the child failed/threw, or merge-back itself threw). Capture
+      // + PRESERVE the child's work as a recovery patch (no apply — a non-clean
+      // child must never auto-mutate the parent tree), then remove the worktree.
+      if (childWorkspace.isolation && !worktreeSettled) {
         try {
-          // CODEX-WORKTREE-MERGEBACK — merge the child's work back onto the parent
-          // tree on CLEAN completion only. A failed/errored child's partial edits
-          // stay isolated (recoverable from the persisted patch), never auto-applied.
-          const fresh = getSession(ctx.workspaceRoot, record.id);
-          const cleanExit = fresh?.status === 'completed';
           const cleanup = removeChildWorktree(childWorkspace.isolation, {
-            applyBack: cleanExit,
+            applyBack: false,
             patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
           });
-          const patch: Partial<ChildSessionRecord> = {};
-          if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
-          if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
-          if (cleanup.patchPath) patch.worktreePatchPath = cleanup.patchPath;
-          if (typeof cleanup.applied === 'boolean') patch.worktreeApplied = cleanup.applied;
-          if (cleanup.applyError) patch.worktreeApplyError = cleanup.applyError;
-          if (Object.keys(patch).length > 0) {
-            try { updateSession(ctx.workspaceRoot, record.id, patch); } catch { /* record may be closed */ }
-          }
+          applyWorktreeCleanup(ctx.workspaceRoot, record.id, cleanup);
         } catch (cleanupErr: any) {
           console.error(`[BrainRouter] child ${record.id} worktree cleanup threw:`, cleanupErr?.message ?? cleanupErr);
         }
@@ -1218,6 +1245,25 @@ async function offloadChildOutput(
 // `git apply <path>`). Lives under the per-workspace CLI state dir, not the repo.
 function worktreePatchFile(workspaceRoot: string, childId: string): string {
   return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
+}
+
+// CODEX-WORKTREE-MERGEBACK — persist a worktree-cleanup result onto the child
+// record (capped diff + change count + recovery patch path + apply outcome).
+// Shared by the success path (merge-back) and the failure/teardown path.
+function applyWorktreeCleanup(
+  workspaceRoot: string,
+  childId: string,
+  cleanup: { diff?: string; changedFiles?: number; patchPath?: string; applied?: boolean; applyError?: string },
+): void {
+  const patch: Partial<ChildSessionRecord> = {};
+  if (cleanup.diff) patch.worktreeDiff = cleanup.diff;
+  if (typeof cleanup.changedFiles === 'number') patch.worktreeChangedFiles = cleanup.changedFiles;
+  if (cleanup.patchPath) patch.worktreePatchPath = cleanup.patchPath;
+  if (typeof cleanup.applied === 'boolean') patch.worktreeApplied = cleanup.applied;
+  if (cleanup.applyError) patch.worktreeApplyError = cleanup.applyError;
+  if (Object.keys(patch).length > 0) {
+    try { updateSession(workspaceRoot, childId, patch); } catch { /* record may be closed */ }
+  }
 }
 
 function summarize(record: ChildSessionRecord, includeOutput = false): Record<string, unknown> {

@@ -445,7 +445,7 @@ program
         },
         onChildToolStart: (e) => emit({ type: 'child_tool', childId: e.childId, role: e.role, tool: e.tool }),
         onChildToolEnd: (e) => emit({ type: 'child_tool', childId: e.childId, role: e.role, tool: e.tool, ok: e.ok, summary: e.summary }),
-        onChildComplete: (e) => emit({ type: 'child_complete', childId: e.childId, role: e.role, status: e.status, error: e.error }),
+        onChildComplete: (e) => emit({ type: 'child_complete', childId: e.childId, role: e.role, status: e.status, error: e.error, worktree: e.worktree }),
         // HEADLESS-EVENTS (0.4.5) — richer taxonomy for jsonl consumers.
         onMemoryEvent: (e) => { const ev = memoryRunEvent(e as any); if (ev) emit(ev); },
         onApproval: (e) => emit({ type: 'approval', tool: e.tool, action: e.action, decision: e.decision, reason: e.reason }),

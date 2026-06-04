@@ -280,7 +280,7 @@ export interface RunTurnCallbacks {
    * supplied). Lets the REPL signal "Agent X is done" so the user isn't
    * staring at silence after the tool stream stops.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }) => void;
   /**
    * Optional: paired live child tool events surfaced from spawn_agent
    * children up to the parent REPL. Lets the UI render explicit

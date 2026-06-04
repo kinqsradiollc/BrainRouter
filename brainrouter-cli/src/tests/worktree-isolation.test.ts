@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees } from '../orchestration/worktreeIsolation.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
-import { getSession } from '../orchestration/orchestrator.js';
+import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
+import { getCliStateDir } from '../state/cliState.js';
 import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 
 function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -242,5 +243,23 @@ test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git
     const removed = reconcileOrphanWorktrees(workspace);
     assert.ok(removed >= 1, 'at least the orphan dir was reclaimed');
     assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+  });
+});
+
+test('CODEX-WORKTREE-MERGEBACK (A3) pruneWorktreePatches removes patches past the retention window', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const dir = path.join(getCliStateDir(workspace), 'worktree-patches');
+    fs.mkdirSync(dir, { recursive: true });
+    const fresh = path.join(dir, 'agent-fresh.patch');
+    const old = path.join(dir, 'agent-old.patch');
+    fs.writeFileSync(fresh, 'diff --git a/x b/x\n', 'utf8');
+    fs.writeFileSync(old, 'diff --git a/y b/y\n', 'utf8');
+    // Backdate the old patch 10 days (> the 7-day default retention).
+    const tenDaysAgoSec = (Date.now() - 10 * 24 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(old, tenDaysAgoSec, tenDaysAgoSec);
+    const removed = pruneWorktreePatches(workspace);
+    assert.equal(removed, 1, 'exactly the stale patch was pruned');
+    assert.equal(fs.existsSync(old), false, 'old patch removed');
+    assert.equal(fs.existsSync(fresh), true, 'fresh patch kept');
   });
 });

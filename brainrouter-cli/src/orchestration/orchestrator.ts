@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { getCliStateFile, readJsonFile, writeJsonFile } from '../state/cliState.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { getCliStateDir, getCliStateFile, readJsonFile, writeJsonFile } from '../state/cliState.js';
 import { resolveRole, type AccessMode } from './roles.js';
 import type { Tier } from './agentRegistry.js';
 
@@ -139,6 +141,33 @@ export function updateSession(workspaceRoot: string, id: string, patch: Partial<
   return merged;
 }
 
+/** CODEX-WORKTREE-MERGEBACK (A3) — recovery-patch retention window. */
+const WORKTREE_PATCH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * CODEX-WORKTREE-MERGEBACK (A3) — prune isolated-child recovery patches older
+ * than the retention window. They're written under
+ * `<cliStateDir>/worktree-patches/<childId>.patch` on every isolated-child
+ * teardown; without GC they accumulate forever (the worktree-DIR reconcile only
+ * cleans `$TMPDIR`). fs-only + best-effort; returns how many it removed.
+ */
+export function pruneWorktreePatches(workspaceRoot: string, maxAgeMs: number = WORKTREE_PATCH_RETENTION_MS): number {
+  let removed = 0;
+  try {
+    const dir = path.join(getCliStateDir(workspaceRoot), 'worktree-patches');
+    if (!fs.existsSync(dir)) return 0;
+    const now = Date.now();
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.patch')) continue;
+      const full = path.join(dir, name);
+      try {
+        if (now - fs.statSync(full).mtimeMs > maxAgeMs) { fs.rmSync(full, { force: true }); removed++; }
+      } catch { /* skip this entry */ }
+    }
+  } catch { /* best-effort */ }
+  return removed;
+}
+
 export function reconcileStale(workspaceRoot: string): number {
   const data = readFile(workspaceRoot);
   let changed = 0;
@@ -150,6 +179,9 @@ export function reconcileStale(workspaceRoot: string): number {
     }
   }
   if (changed > 0) writeFile(workspaceRoot, data);
+  // CODEX-WORKTREE-MERGEBACK (A3) — opportunistic GC of stale recovery patches;
+  // cheap (fs-only) so it's fine to run on every reconcile (startup, /agents, /ps).
+  pruneWorktreePatches(workspaceRoot);
   return changed;
 }
 
