@@ -203,9 +203,9 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
       synthesis reviewer runs before any merge; conflicting worktrees fall back to
       preserved patches. With `cli.worktreeMergeReview: 'on'`, an ad-hoc
       `/spawn worker` is also merge-reviewed before landing.
-- [ ] `cli.buildLoop: 'off'` → only `/build` triggers it; `'escalate'` → a
+- [x] `cli.buildLoop: 'off'` → only `/build` triggers it; `'escalate'` → a
       single-file fix stays single-agent while a multi-file feature enters the
-      loop; `'always'` → every implementation verb enters it.
+      loop; `'always'` → every implementation verb enters it. *(P3)*
 - [ ] The active phase is visible in `/ps` / `/agents` and the statusline.
 - [ ] A killed build run reconciles on next boot (WF-RESUME) and `W` is GC'd
       (reuses the 0.4.11 worktree + patch reconcile).

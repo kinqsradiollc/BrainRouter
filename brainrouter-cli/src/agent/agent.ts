@@ -966,8 +966,11 @@ export class Agent {
       if (getCliKnobs().nextActionPlanner !== 'off' && !shouldSkipPlanner(prompt)) {
         try {
           callbacks.onToolStart('next-action-planner', {});
-          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt), []);
-          const plan = parseNextActionPlan(planResp?.content);
+          // BUILD-LOOP P3 — the `cli.buildLoop` knob lets the planner escalate a
+          // code-writing task into the `build` workflow (off | escalate | always).
+          const buildLoop = getCliKnobs().buildLoop;
+          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), []);
+          const plan = parseNextActionPlan(planResp?.content, { buildLoop });
           if (plan) {
             planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
             const directive = nextActionDirective(plan);

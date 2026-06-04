@@ -39,9 +39,9 @@ An opt-in plan → implement → verify → review → merge engineering loop on
 explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 - [x] P1 — `build` workflow template + `/build <task>` command *(shipped in 0.4.11 prep; on `main`)*
-- [x] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits) *(PR → review)*
+- [x] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits) *(PR #300 → review)*
 - [~] P2.5 — review-gated merge: the merge gate (apply only on verify-green + review-no-blocker, else preserve a recovery patch) **landed with P2** (`finalizeBuildLoop`). Remaining: cross-worktree synthesis reviewer on fan-out + `cli.worktreeMergeReview` for ad-hoc workers
-- [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
+- [x] P3 — escalation: `cli.buildLoop` knob + planner classifier *(merged)*
 - [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
 - [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
 
