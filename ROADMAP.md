@@ -41,6 +41,8 @@ Live checklist — ticked as each part ships.
 - [x] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
 - [ ] A6 — auto-chain / auto-delegation actually fire (turn-end guardrail; some runs still ask)
 - [x] A7 — config.json auto-hydrates missing `cli.*` knobs (visible + editable; excludes /theme·/effort·/quiet)
+- [ ] C1 — spawn-child loop continuation (parent loop stops while a child runs)
+- [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
 - [ ] B6 — `/memory verify` reconciliation sweep
 - [ ] B7 — churn-weighted decay
 - [ ] Release: version bump · changelog · roadmap · dist-manifest sync · publish
