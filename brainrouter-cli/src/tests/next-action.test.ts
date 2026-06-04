@@ -78,9 +78,18 @@ test('BUILD-LOOP P3 parseNextActionPlan honors "build" only when enabled; downgr
   assert.equal(enabled!.strategy, 'build');
   assert.equal(enabled!.subtasks[0], 'add a /metrics endpoint with tests');
   assert.equal(parseNextActionPlan(json, { buildLoop: 'always' })!.strategy, 'build');
-  // off / default → defense-in-depth downgrade to a single-thread investigate.
-  assert.equal(parseNextActionPlan(json, { buildLoop: 'off' })!.strategy, 'investigate');
-  assert.equal(parseNextActionPlan(json)!.strategy, 'investigate');
+  // off / default → defense-in-depth downgrade to a single-thread investigate,
+  // and the build task must NOT leak into investigate's subtasks (contract:
+  // answer-direct/investigate carry none).
+  const downgraded = parseNextActionPlan(json, { buildLoop: 'off' });
+  assert.equal(downgraded!.strategy, 'investigate');
+  assert.deepEqual(downgraded!.subtasks, []);
+  assert.deepEqual(parseNextActionPlan(json)!.subtasks, []);
+  // The contract also holds for a directly-emitted investigate with stray subtasks.
+  assert.deepEqual(
+    parseNextActionPlan('{"strategy":"investigate","reasoning":"x","subtasks":["stray"]}')!.subtasks,
+    [],
+  );
 });
 
 test('BUILD-LOOP P3 nextActionDirective: "build" fires one run_workflow build call; never arms fan-out', () => {

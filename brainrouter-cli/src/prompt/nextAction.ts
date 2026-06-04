@@ -122,9 +122,14 @@ export function parseNextActionPlan(
   // is off (it was never offered, but weaker models improvise), downgrade to a
   // single-thread "investigate" so the loop only ever runs when enabled.
   if (strategy === 'build' && (opts?.buildLoop ?? 'off') === 'off') strategy = 'investigate';
-  const subtasks = Array.isArray(raw?.subtasks)
+  const parsedSubtasks = Array.isArray(raw?.subtasks)
     ? raw.subtasks.map((s: unknown) => String(s ?? '').trim()).filter(Boolean).slice(0, 8)
     : [];
+  // CONTRACT: answer-direct / investigate carry NO subtasks (the planner is told
+  // "subtasks=[] for answer-direct/investigate"). Enforce it here so a stray
+  // model-emitted list — or a build→investigate downgrade above — can't leak a
+  // task into a single-thread strategy (which would mislabel it "investigate (1 subtasks)").
+  const subtasks = strategy === 'investigate' || strategy === 'answer-direct' ? [] : parsedSubtasks;
   const plan: NextActionPlan = {
     strategy: strategy as NextActionStrategy,
     reasoning: String(raw?.reasoning ?? '').trim().slice(0, 240),
