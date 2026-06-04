@@ -27,27 +27,28 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
-## Active tracks
+## Active tracks — 0.4.12 · branch `release/0.4.12`
 
-Live checklist — ticked as each part ships.
+Every feature lands as its **own PR into `release/0.4.12`**, merged after code
+review. Live checklist — ticked as each PR merges.
 
-### Deferred from 0.4.11 → next
-
-- [ ] C1 — spawn-child loop continuation (the parent loop stops when a child runs past the 30s drain timeout; proper fix = async auto-resume on child completion)
-- [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
-
-### 0.4.12 — The Build Loop · spec `docs/specs/build-loop-workflow.md`
+### The Build Loop · spec `docs/specs/build-loop-workflow.md`
 
 An opt-in plan → implement → verify → review → merge engineering loop on the
 0.4.11 isolation substrate. Single-agent stays the default; `/build` is the
 explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
-- [x] P1 — `build` workflow template + `/build <task>` command
+- [x] P1 — `build` workflow template + `/build <task>` command *(shipped in 0.4.11 prep; on `main`)*
 - [ ] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits)
 - [ ] P2.5 — review-gated merge: a reviewer reads each worktree's full diff before merge-back; merge only on verify-green + review-approve (+ cross-worktree synthesis review on fan-out; `cli.worktreeMergeReview` extends it to ad-hoc workers)
 - [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
 - [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
 - [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
+
+### Carried from 0.4.11
+
+- [ ] C1 — spawn-child loop continuation (the parent loop stops when a child runs past the 30s drain timeout; proper fix = async auto-resume on child completion)
+- [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
 
 ### Future — design drafted
 
