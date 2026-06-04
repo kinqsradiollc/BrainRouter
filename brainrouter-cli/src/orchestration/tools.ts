@@ -36,7 +36,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
-import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, type ChildWorkspaceResolution } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
@@ -718,13 +718,23 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     tier: childTier,
     depth: currentDepth + 1,
   });
-  const childWorkspace = prepareChildWorkspace({
-    parentWorkspaceRoot: ctx.workspaceRoot,
-    parentLaunchCwd: requestedChildLaunchCwd,
-    childId: record.id,
-    access,
-    mode: getCliKnobs().childWorkspaceIsolation,
-  });
+  // BUILD-LOOP P2 (0.4.12) — when the build orchestrator passes an explicit
+  // `workspaceRootOverride` (the ONE worktree shared by a build run's
+  // implement/verify/review children), the child runs IN that worktree with NO
+  // per-child isolation handle — so it never merges back on its own; the build
+  // loop owns the shared worktree's lifecycle + the gated merge at the end.
+  const sharedRootOverride = typeof args.workspaceRootOverride === 'string' && args.workspaceRootOverride.trim()
+    ? args.workspaceRootOverride.trim()
+    : undefined;
+  const childWorkspace: ChildWorkspaceResolution = (sharedRootOverride && fs.existsSync(sharedRootOverride))
+    ? { workspaceRoot: fs.realpathSync(sharedRootOverride), launchCwd: fs.realpathSync(sharedRootOverride), isolated: true }
+    : prepareChildWorkspace({
+        parentWorkspaceRoot: ctx.workspaceRoot,
+        parentLaunchCwd: requestedChildLaunchCwd,
+        childId: record.id,
+        access,
+        mode: getCliKnobs().childWorkspaceIsolation,
+      });
   const childWorkspaceRoot = childWorkspace.workspaceRoot;
   const childLaunchCwd = childWorkspace.launchCwd;
   if (childWorkspace.isolated || childWorkspace.notice) {

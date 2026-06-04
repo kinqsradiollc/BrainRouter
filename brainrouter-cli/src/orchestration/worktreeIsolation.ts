@@ -145,6 +145,42 @@ export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildW
   };
 }
 
+/**
+ * BUILD-LOOP P2 (0.4.12) — create ONE detached worktree shared by a build run's
+ * implement → verify → review children, so the verifier runs against the worker's
+ * ACTUAL edits (not a fresh HEAD checkout) and the reviewer reads that same diff.
+ * The caller passes the returned `workspaceRoot` as each child's
+ * `workspaceRootOverride`, and at the end merges it back via `removeChildWorktree`
+ * (gated on verify-green + review-ok). Returns null when the workspace isn't a git
+ * repo (caller falls back to the shared parent tree, ungated).
+ */
+export function prepareSharedWorktree(
+  parentWorkspaceRoot: string,
+  label: string,
+): { workspaceRoot: string; isolation: ChildWorktreeIsolation } | null {
+  let root: string;
+  try {
+    root = fs.realpathSync(parentWorkspaceRoot);
+  } catch {
+    return null;
+  }
+  const repoRoot = gitRoot(root);
+  if (!repoRoot || !isInside(repoRoot, root)) return null;
+  const worktreeRoot = defaultWorktreePath(repoRoot, `build-${safeName(label)}`);
+  if (!fs.existsSync(worktreeRoot)) {
+    try {
+      fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
+    } catch {
+      return null;
+    }
+    const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, 'HEAD']);
+    if (!created.ok) return null;
+  }
+  let real = worktreeRoot;
+  try { real = fs.realpathSync(worktreeRoot); } catch { /* use the raw path */ }
+  return { workspaceRoot: real, isolation: { kind: 'git-worktree', sourceRoot: repoRoot, worktreeRoot: real } };
+}
+
 export interface ChildWorktreeIsolation {
   kind: 'git-worktree';
   sourceRoot: string;
