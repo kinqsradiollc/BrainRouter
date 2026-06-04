@@ -3,6 +3,7 @@ import { formatBudget, readGoal } from '../state/goalStore.js';
 import { readPlan } from '../state/taskStore.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
+import { activeRun, formatActivePhase } from '../state/workflowRun.js';
 import { costUsd } from '../runtime/pricing.js';
 
 /**
@@ -29,6 +30,7 @@ import { costUsd } from '../runtime/pricing.js';
  *   - `dirty`    — `*` when the working tree has uncommitted changes
  *   - `pr`       — github PR identifier (cached upstream of this helper)
  *   - `workflow` — current workflow slug if any
+ *   - `phase`    — active build/workflow phase (run_workflow/build), hidden when idle
  *   - `goal`     — goal status + budget usage if any
  *   - `plan`     — completed/total plan items if a plan exists
  *
@@ -54,6 +56,7 @@ export const SEGMENT_NAMES = [
   'dirty',
   'pr',
   'workflow',
+  'phase',
   'goal',
   'plan',
   'brain',
@@ -214,6 +217,20 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
         const slug = getCurrentWorkflow(inputs.workspaceRoot, inputs.sessionKey);
         if (!slug) return undefined;
         return `wf:${slug}`;
+      } catch {
+        return undefined;
+      }
+    }
+    case 'phase': {
+      // BUILD-LOOP P4 — the live phase of the workspace's active run_workflow/build
+      // run (e.g. "▶ Implement (2/4)"). Sourced from the durable run ledger, not the
+      // workflow-folder pointer, so it shows during a `/build` regardless of the
+      // `workflow` segment. Hidden when no run is progressing.
+      try {
+        const run = activeRun(inputs.workspaceRoot);
+        if (!run) return undefined;
+        const label = formatActivePhase(run);
+        return label ? `▶ ${label}` : undefined;
       } catch {
         return undefined;
       }

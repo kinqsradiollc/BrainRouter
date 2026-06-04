@@ -42,7 +42,7 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 - [x] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits) *(PR #300 → review)*
 - [x] P2.5 — review-gated merge: the single-worktree gate landed with P2; P2.5 adds **fan-out builds** (`build` template `slices[]` → one held worktree per slice) + a **cross-worktree synthesis review** with overlap-aware gated merge (`finalizeFanOutBuild`), and the **`cli.worktreeMergeReview`** knob extending the hold-for-review gate to ad-hoc `/spawn` workers *(PR — branch `feat/build-loop-p25-merge-gate`)*
 - [x] P3 — escalation: `cli.buildLoop` knob + planner classifier *(merged)*
-- [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
+- [x] P4 — surface the active phase in `/ps` · `/agents` · statusline (active-run ledger → `▶ <phase> (n/total)`; new opt-in `phase` statusline segment) *(PR — branch `feat/build-loop-p4-active-phase`)*
 - [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
 
 ### Carried from 0.4.11
