@@ -348,11 +348,11 @@ test('breadthHint: multi-target comparisons trigger fan-out (the live "why no sp
   // The exact prompt that scored 0 and never fanned out — an inherently
   // parallel "compare N codebases" task (one explorer per target).
   const comparisons = [
-    'can you help me do a full compairison between our brainrouter-cli vs codex, grok-cli and openhuman?',
-    'compare brainrouter-cli vs codex',
+    'can you help me do a full compairison between our brainrouter-cli vs projectA, projectB and projectC?',
+    'compare brainrouter-cli vs projectA',
     'benchmark our recall pipeline against the alternatives',
     'contrast the three approaches and tell me which is best',
-    'review codex, grok-cli and openhuman', // enumerated ≥3 targets + verb
+    'review projectA, projectB and projectC', // enumerated ≥3 targets + verb
   ];
   for (const p of comparisons) {
     const r = shouldSuggestFanOut(p);
@@ -366,7 +366,7 @@ test('breadthHint: analytical "pros and cons / against those" comparisons fan ou
   const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
   // The exact live miss + relational-comparison shapes (one child per peer).
   for (const p of [
-    'what are our pros and cons of brainrouter against those in opensrc',
+    'what are our pros and cons of brainrouter against those in the peer set',
     'how does our memory stack up against the others',
     'evaluate our approach versus the alternatives',
     'strengths and weaknesses of our recall vs the competition',

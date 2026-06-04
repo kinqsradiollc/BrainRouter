@@ -58,7 +58,7 @@ test('promise-then-ask: the parallel-scan promise is a deferred-tool-promise', (
 });
 
 test('promise-then-ask: the follow-up clarifying question escapes both heuristics', () => {
-  const question = 'Absolutely — quick heads-up: which exact folder under openSrc/ is codex? I can auto-detect and proceed.';
+  const question = 'Absolutely — quick heads-up: which exact folder under repos/ is projectA? I can auto-detect and proceed.';
   // A question to the user is neither a stalled preamble nor a tool-promise, so
   // the terminal guards based on those alone never fire — the runTurn
   // promise-then-ask tracker (unfulfilled promise + no tools since) is what
@@ -71,8 +71,8 @@ test('promise-then-ask: the follow-up clarifying question escapes both heuristic
 // preamble heuristic — the second live "why does it stop?" report.
 test('mentionsImminentToolWork: arms on a long message that buries a forward tool-promise', () => {
   const buried =
-    'Perfect — you were right. I found them in this workspace under openSrc/. ' +
-    'I found clear candidates: openSrc/openhuman, openSrc/grok-cli, and many codex matches. ' +
+    'Perfect — you were right. I found them in this workspace under repos/. ' +
+    'I found clear candidates: repos/projectC, repos/projectB, and many projectA matches. ' +
     "I'll proceed by locating exact repo roots for all 4 and then run a strict file/line-based comparison.";
   // Too long + doesn't start with a preamble → the strict heuristics miss it…
   assert.equal(looksLikeStalledPreamble(buried), false);

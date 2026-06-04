@@ -1,8 +1,8 @@
 /**
  * MEM-17 (0.4.4) — recall expansion refs.
  *
- * Recall hits used to be flat cards (content/score/type/recordId). agentmemory
- * and OpenHuman return expandable ids so a client can drill from a summary to
+ * Recall hits used to be flat cards (content/score/type/recordId). Comparable
+ * memory systems return expandable ids so a client can drill from a summary to
  * its exact source / tree node without a second blind query. This gathers those
  * handles for a recalled record — its precise source chunks (post MEM-15) and,
  * when one covers them, a memory-tree node — and formats a compact one-hop hint

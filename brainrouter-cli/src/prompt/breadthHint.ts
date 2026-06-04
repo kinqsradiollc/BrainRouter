@@ -55,7 +55,7 @@ const PHRASE_SIGNALS: Array<{ pattern: RegExp; weight: number; label: string }> 
   // graph") — it only tips a task that already has another signal.
   { pattern: /\b[\w./-]+,\s+[\w./-]+\s+and\s+[\w./-]+/i, weight: 1.0, label: 'enumerated-targets' },
   // An action verb applied to an enumerated list of ≥3 targets
-  // ("review codex, grok-cli and openhuman") — a clean one-child-per-target
+  // ("review projectA, projectB and projectC") — a clean one-child-per-target
   // fan-out shape. Clears the threshold alone; the action verb keeps
   // explanatory prose lists ("explain how it fuses fts, vector and graph") out.
   { pattern: /\b(compare|review|test|audit|analy[sz]e|evaluate|benchmark|inspect|assess|explore|implement|build|check)\b[^.?!]{0,40}?\b[\w./-]+,\s+[\w./-]+\s+and\s+[\w./-]+/i, weight: 2.0, label: 'verb-enumerated' },

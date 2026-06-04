@@ -15,7 +15,7 @@ test('NEXT-ACTION shouldSkipPlanner skips trivial/social prompts, runs on real t
   for (const p of [
     'who has the best cli?',
     'compare our memory vs agentmem vs tencent',
-    'what are the pros and cons of brainrouter against those in opensrc',
+    'what are the pros and cons of brainrouter against those in the peer set',
     'refactor the recall pipeline to add a graph stage',
   ]) {
     assert.equal(shouldSkipPlanner(p), false, `should plan: "${p}"`);
@@ -23,16 +23,16 @@ test('NEXT-ACTION shouldSkipPlanner skips trivial/social prompts, runs on real t
 });
 
 test('NEXT-ACTION buildNextActionMessages produces a system+user pair stating the four strategies', () => {
-  const msgs = buildNextActionMessages('compare A vs B vs C', 'workspace has openSrc/');
+  const msgs = buildNextActionMessages('compare A vs B vs C', 'workspace has repos/');
   assert.equal(msgs.length, 2);
   assert.equal(msgs[0].role, 'system');
   for (const s of ['answer-direct', 'investigate', 'fan-out', 'workflow']) assert.match(msgs[0].content, new RegExp(s));
   assert.match(msgs[1].content, /compare A vs B vs C/);
-  assert.match(msgs[1].content, /openSrc\//); // context threaded in
+  assert.match(msgs[1].content, /repos\//); // context threaded in
 });
 
 test('NEXT-ACTION parseNextActionPlan tolerates prose-wrapped/fenced JSON and validates strategy', () => {
-  const fenced = 'Sure!\n```json\n{"strategy":"fan-out","reasoning":"3 independent repos","subtasks":["read openSrc/codex","read openSrc/grok-cli","read openSrc/openhuman"]}\n```';
+  const fenced = 'Sure!\n```json\n{"strategy":"fan-out","reasoning":"3 independent repos","subtasks":["read repos/projectA","read repos/projectB","read repos/projectC"]}\n```';
   const plan = parseNextActionPlan(fenced);
   assert.ok(plan);
   assert.equal(plan!.strategy, 'fan-out');
@@ -62,11 +62,11 @@ test('NEXT-ACTION nextActionDirective: decisive per strategy; empty for answer-d
   const fanOut = nextActionDirective({
     strategy: 'fan-out',
     reasoning: '3 repos',
-    subtasks: ['inspect openSrc/codex', 'inspect openSrc/grok-cli', 'inspect openSrc/openhuman'],
+    subtasks: ['inspect repos/projectA', 'inspect repos/projectB', 'inspect repos/projectC'],
   });
   assert.match(fanOut, /Next-action plan \(decided\): fan-out/);
   assert.match(fanOut, /spawn_agents/);
-  assert.match(fanOut, /openSrc\/codex/);
+  assert.match(fanOut, /repos\/projectA/);
   assert.match(fanOut, /do not ask the user/i);
   assert.match(fanOut, /Do NOT answer single-threaded/);
 });

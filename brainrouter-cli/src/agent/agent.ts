@@ -1615,7 +1615,7 @@ export class Agent {
         // Promise-then-ask guardrail. The model announced tool work earlier this
         // turn (a deferred-tool-promise) but ran NO tools since and is now ending
         // the turn — typically by asking the user a clarifying question it could
-        // have answered itself (e.g. "which folders are codex/grok-cli?" when a
+        // have answered itself (e.g. "which folders are projectA/projectB?" when a
         // glob would reveal them). The preamble guard misses this because the
         // FINAL message is a question, not a preamble. Fire one bounded nudge
         // that steers toward DISCOVERY over asking. Bounded by the shared
