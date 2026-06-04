@@ -34,7 +34,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
   '/doctor', '/policy', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
+  '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain', '/blackboard',
   '/init', '/login', '/sessions', '/resume', '/rewind', '/model', '/mcp',
@@ -162,6 +162,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/handoff list | accept [fromPrefix]', desc: 'List / adopt an inbound goal handoff.' },
       { cmd: '/agent <id> [--full]', desc: 'Detail + recent transcript of a child' },
       { cmd: '/spawn <role> <prompt>', desc: 'Spawn a child agent' },
+      { cmd: '/build <task>', desc: 'Run the build loop: plan → implement → verify → review' },
       { cmd: '/wait <id> [ms]', desc: 'Wait for a child to finish' },
       { cmd: '/kill <agent-id>', desc: 'Stop a running child' },
       { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker (alias for /auto-chain review|off)' },

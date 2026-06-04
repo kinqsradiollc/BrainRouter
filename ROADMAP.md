@@ -47,7 +47,7 @@ An opt-in plan → implement → verify → review → merge engineering loop on
 0.4.11 isolation substrate. Single-agent stays the default; `/build` is the
 explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
-- [ ] P1 — `build` workflow template + `/build <task>` command
+- [x] P1 — `build` workflow template + `/build <task>` command
 - [ ] P2 — phase-scoped shared worktree + verify-green / review-ok merge gate
 - [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
 - [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline

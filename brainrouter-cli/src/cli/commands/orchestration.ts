@@ -980,6 +980,24 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       }
       return true;
     }
+    case '/build':
+    {
+      // BUILD-LOOP (0.4.12 P1) — run the plan → implement → verify → review loop
+      // for one task via the `build` workflow template. Single-agent stays the
+      // default; this is the explicit opt-in trigger.
+      const task = args.join(' ').trim();
+      if (!task) {
+        console.log(chalk.red('\nUsage: /build <task>\n'));
+        console.log(chalk.gray('  Runs a plan → implement → verify → review loop. The worker implements in an isolated worktree (merged back on clean completion).\n'));
+        return true;
+      }
+      ctx.repl.runAgentTurn(
+        `Run the build loop for this task using the run_workflow tool with template "build" and templateArgs ${JSON.stringify({ task })}. ` +
+        `It runs four phases — plan (architect) → implement (worker) → verify (verifier) → review (reviewer). ` +
+        `When it finishes, report: what changed, the verify PASS/FAIL, and the review verdict.`,
+      );
+      return true;
+    }
     case '/spawn':
     {
       const role = args[0];

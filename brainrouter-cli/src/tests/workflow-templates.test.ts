@@ -58,6 +58,41 @@ test('WF-TEMPLATES research: default angles when none given; requires a question
   assert.equal(buildTemplatePlan('research', {}).plan, null); // missing question
 });
 
+test('BUILD-LOOP build: plan → implement → verify → review, 4 phases, validates', () => {
+  const plan = assertValid('build', { task: 'add input validation to login()' });
+  assert.equal(plan.phases.length, 4);
+  assert.deepEqual(plan.phases.map((p) => p.id), ['plan', 'implement', 'verify', 'review']);
+  // Least-privilege access per phase.
+  assert.equal(plan.phases[0].agents?.[0].role, 'architect');
+  assert.equal(plan.phases[1].agents?.[0].role, 'worker');
+  assert.equal(plan.phases[1].agents?.[0].access, 'write');
+  assert.equal(plan.phases[2].agents?.[0].role, 'verifier');
+  assert.equal(plan.phases[2].agents?.[0].access, 'shell');
+  assert.equal(plan.phases[3].agents?.[0].role, 'reviewer');
+  // Implement follows Plan; Verify + Review both consume the worker's output.
+  assert.deepEqual(plan.phases[1].dependsOn, ['plan']);
+  assert.deepEqual(plan.phases[2].inputFrom, ['implement']);
+  assert.deepEqual(plan.phases[3].inputFrom, ['implement']);
+});
+
+test('BUILD-LOOP build: requires a task', () => {
+  assert.equal(buildTemplatePlan('build', {}).plan, null);
+  assert.match(buildTemplatePlan('build', {}).errors[0], /task/);
+});
+
+test('BUILD-LOOP build: run_workflow executes the 4-phase loop end-to-end', async () => {
+  const ws = tmpWs();
+  const raw = await runWorkflow(
+    { template: 'build', templateArgs: { task: 'do a thing' } },
+    ctx(ws),
+    { dispatch: async () => '{}', runner: fakeRunner },
+  );
+  const out = JSON.parse(raw);
+  assert.equal(out.ok, true);
+  assert.equal(out.status, 'completed');
+  assert.equal(out.phases.length, 4);
+});
+
 test('WF-TEMPLATES unknown template name → error listing known templates', () => {
   const r = buildTemplatePlan('nope', {});
   assert.equal(r.plan, null);

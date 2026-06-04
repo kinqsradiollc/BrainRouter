@@ -19,7 +19,7 @@ export interface TemplateResult {
   errors: string[];
 }
 
-export const WORKFLOW_TEMPLATES = ['compare', 'review-wide', 'research'] as const;
+export const WORKFLOW_TEMPLATES = ['compare', 'review-wide', 'research', 'build'] as const;
 export type WorkflowTemplateName = (typeof WORKFLOW_TEMPLATES)[number];
 
 function stringArray(v: unknown): string[] {
@@ -155,6 +155,72 @@ function researchTemplate(args: Record<string, unknown>): TemplateResult {
   };
 }
 
+/**
+ * `build` (0.4.12 P1) — the engineering loop for ONE task: plan → implement →
+ * verify → review, run through the existing phase engine. The worker (Implement)
+ * gets the 0.4.11 isolated worktree + merge-back on clean completion.
+ *
+ * P1 NOTE: Verify + Review run as their own children (review reads the worker's
+ * reported changes via {{input}}). Making Verify run the tests against the
+ * worker's EXACT pre-merge tree — and gating the merge on verify-green /
+ * review-ok — is P2 (the phase-scoped shared worktree). Until then this ships
+ * the visible, runnable pipeline structure.
+ */
+function buildTemplate(args: Record<string, unknown>): TemplateResult {
+  const task = str(args.task ?? args.goal ?? args.prompt);
+  if (!task) return { plan: null, errors: ['build: `task` (non-empty string) is required'] };
+  return {
+    plan: {
+      title: `build: ${task.slice(0, 48)}`,
+      phases: [
+        {
+          id: 'plan',
+          title: 'Plan',
+          agents: [{
+            role: 'architect',
+            access: 'read',
+            prompt: `Task: ${task}\n\nProduce a SHORT implementation plan: the files to touch, the approach, and the smallest first vertical slice. No code yet — just the plan the worker will follow.`,
+          }],
+        },
+        {
+          id: 'implement',
+          title: 'Implement',
+          agents: [{
+            role: 'worker',
+            access: 'write',
+            prompt: `Task: ${task}\n\nPlan to follow:\n\n{{input}}\n\nImplement it. Keep edits minimal and scoped. Report exactly which files you changed and anything the verifier should run.`,
+          }],
+          inputFrom: ['plan'],
+          dependsOn: ['plan'],
+        },
+        {
+          id: 'verify',
+          title: 'Verify',
+          agents: [{
+            role: 'verifier',
+            access: 'shell',
+            prompt: `Task: ${task}\n\nWhat the worker implemented:\n\n{{input}}\n\nRun the project's build + the smallest useful test/typecheck set. Report a clear PASS/FAIL with evidence (commands, exit codes, trimmed failing output).`,
+          }],
+          inputFrom: ['implement'],
+          dependsOn: ['implement'],
+        },
+        {
+          id: 'review',
+          title: 'Review',
+          agents: [{
+            role: 'reviewer',
+            access: 'read',
+            prompt: `Task: ${task}\n\nThe worker's changes:\n\n{{input}}\n\nReview for correctness, regressions, and missed requirements. Findings-first, severity-ordered (blocker / major / minor / nit).`,
+          }],
+          inputFrom: ['implement'],
+          dependsOn: ['implement'],
+        },
+      ],
+    },
+    errors: [],
+  };
+}
+
 /** Build a `PhasePlan` from a named template + its args. */
 export function buildTemplatePlan(name: string, args: unknown): TemplateResult {
   const a = (args && typeof args === 'object' && !Array.isArray(args) ? args : {}) as Record<string, unknown>;
@@ -165,6 +231,8 @@ export function buildTemplatePlan(name: string, args: unknown): TemplateResult {
       return reviewWideTemplate(a);
     case 'research':
       return researchTemplate(a);
+    case 'build':
+      return buildTemplate(a);
     default:
       return { plan: null, errors: [`unknown template "${name}". Known: ${WORKFLOW_TEMPLATES.join(', ')}`] };
   }
