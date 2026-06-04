@@ -8,12 +8,13 @@ design specs in [`docs/specs/`](docs/specs/).
 
 ## Shipped
 
-Latest: **0.4.10** (2026-06-03) — memory-home hardening, a mobile dashboard, a
-real Cloudflare (OpenNext) Worker runtime, the web favicon, and
-`@kinqs/brainrouter-hooks` published.
+Latest: **0.4.11** (2026-06-04) — worktree isolation that merges back, a
+self-hydrating `config.json`, and memory hygiene (`/memory verify` +
+churn-weighted decay).
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
 | 0.4.10 | Memory-home hardening · mobile dashboard · Cloudflare Worker runtime | 2026-06-03 |
 | 0.4.9 | Dashboard redesign ("The Memory Instrument") · auth refresh tokens · API hardening | 2026-06-03 |
 | 0.4.8 | Deterministic multi-phase workflow orchestration (PhasePlan engine) | 2026-06-02 |
@@ -30,22 +31,10 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 Live checklist — ticked as each part ships.
 
-### 0.4.11 — Child worktree isolation, finished · branch `release/0.4.11`
+### Deferred from 0.4.11 → next
 
-- [x] Worktree merge-back + default `childWorkspaceIsolation` → `auto`
-- [x] A1 — merge-back surfaced in the child-completion notice (+ fixes auto-chain reading a pre-merge tree)
-- [x] A3 — recovery-patch GC / retention
-- [x] A2 — `/agents diff <id>` show · apply · discard
-- [x] A4 — per-session isolation spec (`docs/specs/per-session-isolation.md`)
-- [x] **A5 — relocate worktrees to `~/.brainrouter/worktrees/` (realpath'd base kills the `$TMPDIR` /var→/private/var drift behind `Path escapes workspace root`)**
-- [x] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
-- [x] A6 — RESOLVED (decision): auto-chain stays OFF by default (rate-limit-safe); enable per workspace via `/auto-chain review|both`
-- [x] A7 — config.json auto-hydrates missing `cli.*` knobs (visible + editable; excludes /theme·/effort·/quiet)
-- [ ] C1 — spawn-child loop continuation (parent loop stops while a child runs)
+- [ ] C1 — spawn-child loop continuation (the parent loop stops when a child runs past the 30s drain timeout; proper fix = async auto-resume on child completion)
 - [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
-- [x] B6 — `/memory verify` reconciliation sweep (fresh / re-anchorable / archivable; `--apply` archives confirmed-dead)
-- [x] B7 — churn-weighted decay (capture `git log` churn at index time → faster decay for memories on volatile files; null-safe)
-- [ ] Release: version bump · changelog · roadmap · dist-manifest sync · publish
 
 ### 0.4.12 — The Build Loop · spec `docs/specs/build-loop-workflow.md`
 

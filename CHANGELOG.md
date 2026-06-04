@@ -13,6 +13,7 @@ in [`brainrouter-changelog/`](brainrouter-changelog/).
 
 | Version | State | Full notes |
 |---|---|---|
+| **0.4.11** | Shipped — 2026-06-04 — **Worktree isolation that merges back** (`childWorkspaceIsolation: auto` default; spawned write/shell children merge their work onto your tree on clean completion, else a recoverable patch via `/agents diff`; worktrees relocated to `~/.brainrouter/worktrees/`; `cli.worktreeRoot`) + **self-hydrating `config.json`** (all `cli.*` knobs visible/editable) + **memory hygiene** (`/memory verify` reconciliation; churn-weighted decay) | [`brainrouter-changelog/0.4.11.md`](brainrouter-changelog/0.4.11.md) |
 | **0.4.10** | Shipped — 2026-06-03 | [`brainrouter-changelog/0.4.10.md`](brainrouter-changelog/0.4.10.md) |
 | **0.4.9** | Shipped — 2026-06-03 | [`brainrouter-changelog/0.4.9.md`](brainrouter-changelog/0.4.9.md) |
 | **0.4.8** | Shipped — 2026-06-02 | [`brainrouter-changelog/0.4.8.md`](brainrouter-changelog/0.4.8.md) |
