@@ -15,6 +15,7 @@ test('CONFIG-HYDRATE fills safe cli.* defaults + excludes preference-layered kno
   assert.equal(config.cli?.maxConcurrentChildren, 8);
   assert.equal(config.cli?.llmMaxConcurrent, 4);
   assert.equal(config.cli?.childWorkspaceIsolation, 'auto');
+  assert.equal(config.cli?.buildLoop, 'escalate'); // BUILD-LOOP P3 — auto-hydrated safe default
   // Preference-layered knobs left OUT so /theme · /effort · /quiet stay dynamic.
   const cli = config.cli as Record<string, unknown>;
   assert.equal('theme' in cli, false);

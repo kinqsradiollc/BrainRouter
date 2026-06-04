@@ -52,6 +52,56 @@ test('NEXT-ACTION planWantsFanOut only for fan-out/workflow with ≥2 subtasks',
   assert.equal(planWantsFanOut({ strategy: 'answer-direct', reasoning: '', subtasks: [] }), false);
 });
 
+test('BUILD-LOOP P3 buildNextActionMessages offers "build" only when the knob is on, scaled by mode', () => {
+  // off (default) → four strategies, no "build".
+  const off = buildNextActionMessages('add a retry flag to the http client', undefined, 'off');
+  assert.doesNotMatch(off[0].content, /"build"/);
+  for (const s of ['answer-direct', 'investigate', 'fan-out', 'workflow']) assert.match(off[0].content, new RegExp(s));
+  // default arg behaves like off (keeps the legacy four-strategy prompt).
+  assert.doesNotMatch(buildNextActionMessages('x y z task here')[0].content, /"build"/);
+  // escalate → "build" offered, reserved for MULTIPLE-file / feature-scale work.
+  const esc = buildNextActionMessages('implement OAuth across the auth module', undefined, 'escalate');
+  assert.match(esc[0].content, /"build"/);
+  assert.match(esc[0].content, /MULTIPLE files/);
+  assert.match(esc[0].content, /single-file edit stays "investigate"/);
+  // always → "build" offered for ANY code change.
+  const always = buildNextActionMessages('rename one variable', undefined, 'always');
+  assert.match(always[0].content, /"build"/);
+  assert.match(always[0].content, /ANYTHING in this workspace/);
+});
+
+test('BUILD-LOOP P3 parseNextActionPlan honors "build" only when enabled; downgrades to investigate when off', () => {
+  const json = '{"strategy":"build","reasoning":"multi-file feature","subtasks":["add a /metrics endpoint with tests"]}';
+  // enabled → build survives, task carried in subtasks[0].
+  const enabled = parseNextActionPlan(json, { buildLoop: 'escalate' });
+  assert.ok(enabled);
+  assert.equal(enabled!.strategy, 'build');
+  assert.equal(enabled!.subtasks[0], 'add a /metrics endpoint with tests');
+  assert.equal(parseNextActionPlan(json, { buildLoop: 'always' })!.strategy, 'build');
+  // off / default → defense-in-depth downgrade to a single-thread investigate.
+  assert.equal(parseNextActionPlan(json, { buildLoop: 'off' })!.strategy, 'investigate');
+  assert.equal(parseNextActionPlan(json)!.strategy, 'investigate');
+});
+
+test('BUILD-LOOP P3 nextActionDirective: "build" fires one run_workflow build call; never arms fan-out', () => {
+  const withTask = nextActionDirective({
+    strategy: 'build',
+    reasoning: 'feature spans multiple files',
+    subtasks: ['add a /metrics endpoint with tests'],
+  });
+  assert.match(withTask, /Next-action plan \(decided\): build/);
+  assert.match(withTask, /SINGLE `run_workflow` call/);
+  assert.match(withTask, /"template":"build"/);
+  assert.match(withTask, /add a \/metrics endpoint with tests/);
+  assert.match(withTask, /do NOT hand-edit files directly/);
+  // No subtasks → directive still emits a build call with a placeholder + fill instruction.
+  const noTask = nextActionDirective({ strategy: 'build', reasoning: 'implement it', subtasks: [] });
+  assert.match(noTask, /"template":"build"/);
+  assert.match(noTask, /Replace the `task` placeholder/);
+  // "build" is a single workflow run, not a manual fan-out.
+  assert.equal(planWantsFanOut({ strategy: 'build', reasoning: '', subtasks: ['one task'] }), false);
+});
+
 test('NEXT-ACTION nextActionDirective: decisive per strategy; empty for answer-direct', () => {
   assert.equal(nextActionDirective({ strategy: 'answer-direct', reasoning: 'trivial', subtasks: [] }), '');
 

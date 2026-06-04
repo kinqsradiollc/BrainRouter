@@ -190,6 +190,15 @@ export interface CliKnobs {
    * Replaces the old `$TMPDIR/brainrouter-worktrees` location.
    */
   worktreeRoot?: string;
+  /**
+   * BUILD-LOOP P3 (0.4.12) — when the next-action planner may escalate a coding
+   * request into the plan→implement→verify→review→merge `build` workflow.
+   * `off` = never auto-escalate (the loop only runs via the explicit `/build`
+   * command); `escalate` (default) = the planner routes multi-file / feature-scale
+   * implementation tasks into the build loop, single edits stay single-agent;
+   * `always` = any implementation request (even a one-file change) runs the loop.
+   */
+  buildLoop?: 'off' | 'escalate' | 'always';
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -575,6 +584,7 @@ export interface ResolvedCliKnobs {
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
+  buildLoop: 'off' | 'escalate' | 'always';
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -645,6 +655,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
     childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
     worktreeRoot: c.worktreeRoot ?? '',
+    buildLoop: c.buildLoop ?? 'escalate',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
