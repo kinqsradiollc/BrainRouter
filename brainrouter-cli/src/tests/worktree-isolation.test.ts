@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile } from '../orchestration/worktreeIsolation.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
 import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
-import { getCliStateDir } from '../state/cliState.js';
+import { getCliStateDir, getBrainrouterHome } from '../state/cliState.js';
 import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 
 function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -243,6 +244,59 @@ test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git
     const removed = reconcileOrphanWorktrees(workspace);
     assert.ok(removed >= 1, 'at least the orphan dir was reclaimed');
     assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+  });
+});
+
+test('A5 (0.4.11) worktrees live under BRAINROUTER_HOME/worktrees, not $TMPDIR', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-loc-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    try {
+      assert.ok(resolved.isolation, 'worktree created');
+      const worktreesBase = fs.realpathSync(path.join(getBrainrouterHome(), 'worktrees'));
+      assert.ok(
+        resolved.workspaceRoot.startsWith(worktreesBase),
+        `worktree ${resolved.workspaceRoot} should live under ${worktreesBase}`,
+      );
+      assert.equal(resolved.workspaceRoot.includes('brainrouter-worktrees'), false, 'no longer under the old $TMPDIR base');
+    } finally {
+      git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+      fs.rmSync(resolved.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test('A5.1 (0.4.11) cli.worktreeRoot relocates the worktree base', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const customBase = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'br-custom-wt-')));
+    setCliKnobOverride({ worktreeRoot: customBase });
+    let resolved: ReturnType<typeof prepareChildWorkspace> | undefined;
+    try {
+      resolved = prepareChildWorkspace({
+        parentWorkspaceRoot: workspace,
+        parentLaunchCwd: workspace,
+        childId: `agent-custom-${Date.now()}`,
+        access: 'write',
+        mode: 'auto',
+      });
+      assert.ok(resolved.isolation);
+      assert.ok(
+        resolved.workspaceRoot.startsWith(customBase),
+        `worktree ${resolved.workspaceRoot} should live under the custom base ${customBase}`,
+      );
+    } finally {
+      if (resolved?.workspaceRoot) {
+        git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+        fs.rmSync(resolved.workspaceRoot, { recursive: true, force: true });
+      }
+      _resetCliKnobsCache();
+      fs.rmSync(customBase, { recursive: true, force: true });
+    }
   });
 });
 

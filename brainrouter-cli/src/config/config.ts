@@ -183,6 +183,13 @@ export interface CliKnobs {
    * the parent root.
    */
   childWorkspaceIsolation?: 'off' | 'auto' | 'git-worktree';
+  /**
+   * A5.1 (0.4.11) — base directory for child-agent git worktrees. Empty (default)
+   * = `<BRAINROUTER_HOME>/worktrees` (i.e. `~/.brainrouter/worktrees`). Set an
+   * absolute path to relocate them onto a fast/scratch disk or outside backups.
+   * Replaces the old `$TMPDIR/brainrouter-worktrees` location.
+   */
+  worktreeRoot?: string;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -567,6 +574,7 @@ export interface ResolvedCliKnobs {
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
+  worktreeRoot: string;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -636,6 +644,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
     childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
+    worktreeRoot: c.worktreeRoot ?? '',
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

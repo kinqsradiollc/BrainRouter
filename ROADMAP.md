@@ -37,8 +37,8 @@ Live checklist — ticked as each part ships.
 - [x] A3 — recovery-patch GC / retention
 - [x] A2 — `/agents diff <id>` show · apply · discard
 - [x] A4 — per-session isolation spec (`docs/specs/per-session-isolation.md`)
-- [ ] **A5 — relocate worktrees to `~/.brainrouter/worktrees/` + fix `Path escapes workspace root` (P0 — isolation broken in real use)**
-- [ ] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
+- [x] **A5 — relocate worktrees to `~/.brainrouter/worktrees/` (realpath'd base kills the `$TMPDIR` /var→/private/var drift behind `Path escapes workspace root`)**
+- [x] A5.1 — `cli.worktreeRoot` knob so the worktree path is user-customizable
 - [ ] A6 — auto-chain / auto-delegation actually fire (turn-end guardrail; some runs still ask)
 - [x] A7 — config.json auto-hydrates missing `cli.*` knobs (visible + editable; excludes /theme·/effort·/quiet)
 - [ ] B6 — `/memory verify` reconciliation sweep

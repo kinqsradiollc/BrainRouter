@@ -1,8 +1,9 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { AccessMode } from './roles.js';
+import { getBrainrouterHome } from '../state/cliState.js';
+import { getCliKnobs } from '../config/config.js';
 
 export type ChildWorkspaceIsolationMode = 'off' | 'auto' | 'git-worktree';
 
@@ -61,9 +62,27 @@ function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'child';
 }
 
+/**
+ * A5 (0.4.11) — base dir for child worktrees. Default `<BRAINROUTER_HOME>/worktrees`
+ * (≈ `~/.brainrouter/worktrees`), realpath-resolved so there's no `/var`→`/private/var`
+ * symlink drift like the old `$TMPDIR/brainrouter-worktrees`. Override with the
+ * `cli.worktreeRoot` knob (absolute path); an unwritable override falls back to
+ * the default.
+ */
+function worktreeBase(): string {
+  const custom = getCliKnobs().worktreeRoot?.trim();
+  if (custom) {
+    try {
+      fs.mkdirSync(custom, { recursive: true });
+      return fs.realpathSync(custom);
+    } catch { /* unwritable custom path → fall back to the default home base */ }
+  }
+  return path.join(getBrainrouterHome(), 'worktrees'); // getBrainrouterHome() is already realpath'd
+}
+
 function defaultWorktreePath(repoRoot: string, childId: string): string {
   const repoName = safeName(path.basename(repoRoot));
-  return path.join(os.tmpdir(), 'brainrouter-worktrees', repoName, safeName(childId));
+  return path.join(worktreeBase(), repoName, safeName(childId));
 }
 
 function launchCwdInWorktree(repoRoot: string, parentLaunchCwd: string, worktreeRoot: string): string {
@@ -284,9 +303,9 @@ export function applyPatchFile(cwd: string, patchFile: string): { ok: boolean; e
 
 /**
  * Startup reconcile: prune git's stale worktree admin entries and delete any
- * leftover `brainrouter-worktrees/<repo>/*` dirs that git no longer tracks
- * (orphans from a crashed prior process). Best-effort; returns how many dirs it
- * removed. Mirrors `reconcileStale` for session records.
+ * leftover `<worktreeBase>/<repo>/*` dirs that git no longer tracks (orphans
+ * from a crashed prior process). Best-effort; returns how many dirs it removed.
+ * Mirrors `reconcileStale` for session records.
  */
 export function reconcileOrphanWorktrees(workspaceRoot: string): number {
   let removed = 0;
@@ -294,7 +313,7 @@ export function reconcileOrphanWorktrees(workspaceRoot: string): number {
     const repoRoot = gitRoot(workspaceRoot);
     if (!repoRoot) return 0;
     runGit(repoRoot, ['worktree', 'prune']);
-    const base = path.join(os.tmpdir(), 'brainrouter-worktrees', safeName(path.basename(repoRoot)));
+    const base = path.join(worktreeBase(), safeName(path.basename(repoRoot)));
     if (!fs.existsSync(base)) return 0;
     const tracked = new Set(
       (runGit(repoRoot, ['worktree', 'list', '--porcelain']).stdout.match(/^worktree (.+)$/gm) ?? [])
