@@ -99,13 +99,28 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   },
 };
 
+/**
+ * Map an unknown/custom role name to the best-fit built-in by keyword, defaulting
+ * to the safe read-only `explorer`. Models (esp. in `run_workflow` phase plans)
+ * routinely invent descriptive roles like `security-auditor` or `qa-engineer`;
+ * before this they made `resolveRole` THROW, which failed the spawn → the phase →
+ * the whole workflow. Degrading keeps the run alive with a sensible role. Pure.
+ */
+export function bestFitRoleName(name: string): string {
+  const n = (name ?? '').toLowerCase();
+  if (/review|audit|critiq|inspect|secur/.test(n)) return 'reviewer';
+  if (/verif|test|qa\b|validat|\bcheck/.test(n)) return 'verifier';
+  if (/architect|\bplan|design|spec\b/.test(n)) return 'architect';
+  if (/work|implement|build|coder?|\bdev|engineer|fix|author|writer?/.test(n)) return 'worker';
+  return 'explorer'; // safe read-only default
+}
+
 export function resolveRole(name: string): AgentRole {
-  const role = BUILT_IN_ROLES[name];
-  if (!role) {
-    const known = Object.keys(BUILT_IN_ROLES).join(', ');
-    throw new Error(`Unknown agent role "${name}". Known roles: ${known}.`);
-  }
-  return role;
+  const exact = BUILT_IN_ROLES[(name ?? '').trim()];
+  if (exact) return exact;
+  // Unknown/custom role → best-fit built-in instead of throwing (don't kill a
+  // workflow just because the model named an agent `security-auditor`).
+  return BUILT_IN_ROLES[bestFitRoleName(name)];
 }
 
 export function listRoles(): AgentRole[] {
