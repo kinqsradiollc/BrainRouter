@@ -179,8 +179,11 @@ export function extractChildPreview(output: string, maxChars: number): string {
 // handleTaskAgent (call-time); kept out of the schema-creator bodies to
 // avoid the ESM circular-import TDZ between tools.ts and agent.ts (agent.ts
 // constructs the LOCAL_TOOLS array eagerly at module load).
-const DEFAULT_TASK_AGENT_TIMEOUT_MS = 120_000;
-const DEFAULT_CHILD_AGENT_TIMEOUT_MS = 10 * 60_000;
+// 0 = NO wall-clock timeout (children run to completion; inner loops are already
+// bounded by maxToolLoops + the per-call LLM/MCP/shell timeouts + reconnect). A
+// positive `timeoutMs` arg or `cli.childAgentTimeoutMs` re-enables a hard cap.
+const DEFAULT_TASK_AGENT_TIMEOUT_MS = 0;
+const DEFAULT_CHILD_AGENT_TIMEOUT_MS = 0;
 
 const ORCHESTRATION_TOOL_NAMES = new Set([
   'task_agent',
@@ -274,10 +277,16 @@ function resolveChildLaunchCwd(ctx: OrchestrationContext, rawWorkdir: unknown): 
 function childTimeoutMsFromArgs(args: any): number {
   const knobValue = getCliKnobs().childAgentTimeoutMs;
   const raw = Number(args?.timeoutMs ?? knobValue ?? DEFAULT_CHILD_AGENT_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_CHILD_AGENT_TIMEOUT_MS;
+  // 0 / invalid / negative ⇒ NO wall-clock timeout; a positive value caps the child.
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
 async function withChildDeadline<T>(promise: Promise<T>, timeoutMs: number, childId: string): Promise<T> {
+  // No wall-clock timeout (the default): await the child to completion. Its inner
+  // loops are already bounded, so it can't hang forever, and a legitimately-long
+  // child (slow model, reconnects, big review) is no longer killed at an arbitrary
+  // deadline.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return await promise;
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
@@ -687,7 +696,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   // creating the session. `no-children` denies outright; `ask-*` policies
   // prompt the interactive parent (and fail closed in headless runs).
   const delegationPolicy = resolveDelegationPolicy(readPreferences(ctx.workspaceRoot));
-  const gate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
+  const rawGate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
+  // Auto-chain follow-ups (the reviewer/verifier the user opted into via
+  // `/auto-chain review|verify|both`) are PRE-AUTHORIZED — they must not re-prompt
+  // "approve this delegation?" on every worker completion. A hard `deny` policy
+  // ("no-children") still blocks them.
+  const gate = args.autoChainFollowup === true && rawGate === 'ask' ? 'auto' : rawGate;
   if (gate === 'deny') {
     throw new Error(
       `Delegation is disabled (policy "no-children"). The agent may not spawn child agents. ` +
@@ -1054,6 +1068,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
               label: `auto-${followRole}-${record.id}`,
               access: followRole === 'verifier' ? 'shell' : 'read',
               seedRecordIds: seededIds,
+              // Pre-authorized by the user's /auto-chain setting → no approval prompt.
+              autoChainFollowup: true,
             },
             ctx,
           );

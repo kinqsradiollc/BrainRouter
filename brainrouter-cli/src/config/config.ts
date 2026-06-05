@@ -325,7 +325,13 @@ export interface CliKnobs {
   lspServers?: Record<string, string>;
 
   // ---- orchestration ----------------------------------------------------
-  /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
+  /**
+   * Per-child-agent wall-clock timeout in ms. Default **0 = NO wall-clock timeout**
+   * — a child runs to completion (the inner loops are already bounded by
+   * `maxToolLoops`, the per-call LLM/MCP/shell timeouts, and the reconnect loop, so
+   * the outer wall-clock only ever killed legitimately-long children). Set a
+   * positive value to re-enable a hard cap.
+   */
   childAgentTimeoutMs?: number;
   /** Character budget for the in-REPL child-agent result preview. Default 2500. */
   agentPreviewChars?: number;
@@ -717,7 +723,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     autoReindex: c.autoReindex ?? true,
     browserSmoke: c.browserSmoke ?? '',
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
-    childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
+    childAgentTimeoutMs: c.childAgentTimeoutMs ?? 0, // 0 = no wall-clock timeout (run to completion)
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
     workspaceOverride: c.workspaceOverride,
