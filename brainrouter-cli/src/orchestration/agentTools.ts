@@ -18,7 +18,7 @@ export function createSpawnAgentTool() {
         label: { type: 'string', description: 'Optional short label for the child run.' },
         access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
         wait: { type: 'boolean', description: 'If true, block until the child completes and return its final output. Default: false.' },
-        timeoutMs: { type: 'integer', description: 'Optional child wall-clock timeout in milliseconds. Also bounds wait=true. Default 120000 when wait=true; otherwise 600000.' },
+        timeoutMs: { type: 'integer', description: 'Optional parent wait timeout in milliseconds when wait=true. 0 or omitted waits until completion; timeout returns an envelope and leaves the child running.' },
         workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
         seedRecordIds: {
           type: 'array',
@@ -69,7 +69,7 @@ export function createTaskAgentTool() {
         prompt: { type: 'string', description: 'The bounded task prompt for the child agent.' },
         label: { type: 'string', description: 'Optional short label for the child run.' },
         access: { type: 'string', enum: ['read', 'write', 'shell'], description: 'Override the role default access mode. Default: role default.' },
-        timeoutMs: { type: 'integer', description: 'Optional timeout in milliseconds. Default 120000.' },
+        timeoutMs: { type: 'integer', description: 'Optional parent wait timeout in milliseconds. 0 or omitted waits until completion; timeout returns an envelope and leaves the child running.' },
         workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
         seedRecordIds: {
           type: 'array',
@@ -128,7 +128,7 @@ export function createWaitAgentTool() {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Child agent id returned by spawn_agent.' },
-        timeoutMs: { type: 'integer', description: 'Maximum wait time in ms. Default 120000.' },
+        timeoutMs: { type: 'integer', description: 'Maximum wait time in ms. Default 120000. Use 0 to wait until completion.' },
       },
       required: ['id'],
     },
@@ -206,7 +206,7 @@ export function createWaitAgentsTool() {
       type: 'object',
       properties: {
         ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
-        timeoutMs: { type: 'integer', description: 'Maximum total wait. Default 240000.' },
+        timeoutMs: { type: 'integer', description: 'Maximum total wait. Default 240000. Use 0 to wait until all children complete.' },
       },
       required: ['ids'],
     },

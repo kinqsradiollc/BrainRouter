@@ -14,7 +14,8 @@ import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
-import { shouldRetryLlm } from '../state/checkpointStore.js';
+import { isConnectivityError, isRetryableServerError } from '../state/checkpointStore.js';
+import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -39,7 +40,7 @@ import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.
 import { ownershipWriteViolation } from '../orchestration/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
-import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './workspaceFs.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
 export { applyPatchEnvelope } from './applyPatch.js';
@@ -791,6 +792,7 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    this.lastTurnPendingChildIds = []; // C1 — reset; set if a child drain times out this turn
     // HEADLESS-EVENTS — bridge the code-index callback to executeLocalTool.
     this.codeIndexListener = callbacks.onCodeIndex ?? null;
     // 0.4.x-3b — new turn: re-resolve the file-snapshot ordinal on first mutation.
@@ -966,8 +968,11 @@ export class Agent {
       if (getCliKnobs().nextActionPlanner !== 'off' && !shouldSkipPlanner(prompt)) {
         try {
           callbacks.onToolStart('next-action-planner', {});
-          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt), []);
-          const plan = parseNextActionPlan(planResp?.content);
+          // BUILD-LOOP P3 — the `cli.buildLoop` knob lets the planner escalate a
+          // code-writing task into the `build` workflow (off | escalate | always).
+          const buildLoop = getCliKnobs().buildLoop;
+          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), []);
+          const plan = parseNextActionPlan(planResp?.content, { buildLoop });
           if (plan) {
             planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
             const directive = nextActionDirective(plan);
@@ -1242,18 +1247,45 @@ export class Agent {
       // limits (429), and overload errors — not just client-side connectivity.
       // Context-overflow and model-not-found errors are neither, so they fall
       // straight through to the dedicated recovery in the catch below.
-      const LLM_MAX_ATTEMPTS = 3;
+      // RECONNECT (0.4.12) — Codex-style: a transient failure (timeout / disconnect
+      // / 5xx / 429) RECONNECTS with exponential backoff (honoring Retry-After) up to
+      // `llmMaxReconnects`, rather than dying on the first hiccup. AND — if the
+      // machine is genuinely OFFLINE — it keeps waiting for the link to return WITHOUT
+      // spending the reconnect budget, so a dropped connection auto-resumes once the
+      // network is back (a long background worker no longer dies on a Wi-Fi blip).
+      const maxReconnects = Math.max(1, getCliKnobs().llmMaxReconnects);
+      const OFFLINE_MAX_WAITS = 120; // generous: keep waiting for the network to return
+      const llmEndpoint = this.llmConfig?.endpoint ?? '';
       const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
-        for (let attempt = 1; ; attempt++) {
+        let attempt = 0;
+        let offlineWaits = 0;
+        for (;;) {
           try {
             return await invokeLlm();
           } catch (err: any) {
-            if (!shouldRetryLlm(err, attempt, LLM_MAX_ATTEMPTS)) throw err;
-            const delayMs = attempt === 1 ? 600 : 1800;
+            // Only transient transport / server failures reconnect; deterministic
+            // errors (4xx, context overflow, model-not-found) fall straight through.
+            const serverSide = isRetryableServerError(err);
+            if (!serverSide && !isConnectivityError(err)) throw err;
+            // A connectivity error may just be the network being down — probe; while
+            // offline, wait for it to come back without consuming the retry budget.
+            const online = serverSide ? true : await probeConnectivity(llmEndpoint);
+            if (!online) {
+              if (offlineWaits >= OFFLINE_MAX_WAITS) throw err;
+              offlineWaits += 1;
+              const delay = reconnectBackoffMs(Math.min(offlineWaits, 6), { capMs: 15_000 });
+              callbacks.onStatusUpdate(`Waiting for connection… offline — retrying in ${(delay / 1000).toFixed(1)}s (${offlineWaits})`);
+              await new Promise((r) => setTimeout(r, delay));
+              continue;
+            }
+            attempt += 1;
+            if (attempt > maxReconnects) throw err;
+            const retryAfterMs = typeof err?.retryAfterMs === 'number' ? err.retryAfterMs : undefined;
+            const delay = reconnectBackoffMs(attempt, { retryAfterMs });
             callbacks.onStatusUpdate(
-              `Transient error reaching the model (${String(err?.message ?? err).slice(0, 80)}) — retrying ${attempt}/${LLM_MAX_ATTEMPTS - 1} in ${(delayMs / 1000).toFixed(1)}s...`,
+              `Reconnecting… ${attempt}/${maxReconnects} — ${String(err?.message ?? err).slice(0, 60)} (in ${(delay / 1000).toFixed(1)}s)`,
             );
-            await new Promise((r) => setTimeout(r, delayMs));
+            await new Promise((r) => setTimeout(r, delay));
           }
         }
       };
@@ -1541,6 +1573,9 @@ export class Agent {
 
           const timeouts = parseChildDrainTimeouts(waitResultText);
           if (timeouts.length > 0) {
+            // C1 — record the timed-out ids so the REPL can poll them and
+            // auto-resume once they settle (instead of waiting for a manual /continue).
+            this.lastTurnPendingChildIds = timeouts.map((t) => t.id).filter((id) => id && id !== '(unknown)');
             finalAnswer = formatChildDrainTimeoutAnswer(timeouts);
             exitedCleanly = true;
             break;
@@ -2368,41 +2403,11 @@ export class Agent {
       case 'grep_search': {
         const wsRoot = fs.realpathSync(this.workspaceRoot);
         const root = resolveHere(args.path || '.');
-        const results: Array<{ path: string; line: number; text: string }> = [];
-        
-        const search = (dir: string) => {
-          if (results.length >= 50) return;
-          const files = fs.readdirSync(dir);
-          for (const file of files) {
-            if (IGNORED_DIRS.has(file)) continue;
-            const full = path.join(dir, file);
-            if (!isPathInside(wsRoot, fs.realpathSync(full))) continue;
-            const stat = fs.statSync(full);
-            if (stat.isDirectory()) {
-              search(full);
-            } else if (stat.isFile()) {
-              try {
-                const content = fs.readFileSync(full, 'utf8');
-                const lines = content.split('\n');
-                for (let i = 0; i < lines.length; i++) {
-                  if (lines[i].includes(args.query)) {
-                    results.push({
-                      path: path.relative(wsRoot, full),
-                      line: i + 1,
-                      text: lines[i].trim()
-                    });
-                    if (results.length >= 50) return;
-                  }
-                }
-              } catch {
-                // Ignore binary or unreadable files
-              }
-            }
-          }
-        };
-
-        search(root);
-        return JSON.stringify(results, null, 2);
+        const query = String(args.query ?? '');
+        if (!query) throw new Error('Missing parameter "query" for grep_search.');
+        // grepSearch: regex match (not literal `includes`) + accepts a file OR a
+        // directory (the old inline version crashed with ENOTDIR on a file path).
+        return JSON.stringify(grepSearch(query, root, wsRoot), null, 2);
       }
       case 'glob_files': {
         const pattern = args.pattern;
@@ -3142,6 +3147,11 @@ export class Agent {
   /** Count of tool calls executed during the most recent runTurn. The goal */
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
+
+  /** C1 — child ids whose drain TIMED OUT this turn (the parent answered before they
+   *  finished). The REPL polls these and auto-resumes once they settle. Empty when
+   *  nothing timed out. */
+  public lastTurnPendingChildIds: string[] = [];
 
   /** Goal lifecycle transition the LLM triggered during the most recent turn, if any. */
   public lastGoalTransition: 'complete' | 'blocked' | undefined;
@@ -4075,7 +4085,13 @@ export async function callOpenAI(
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${errText}`);
+    // RECONNECT — attach the structured status + any `Retry-After` so the resilient
+    // loop classifies it (429/5xx → reconnect) and honors the server's backoff.
+    const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${errText}`);
+    apiErr.status = res.status;
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+    throw apiErr;
   }
 
   const data = await res.json() as any;

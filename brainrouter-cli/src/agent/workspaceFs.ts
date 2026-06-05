@@ -10,7 +10,15 @@ import path from 'node:path';
  */
 
 /** Directories never descended into during a glob walk. */
-export const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', '.DS_Store', '.next']);
+// Non-source trees skipped by glob_files / grep_search. Besides build + VCS dirs,
+// this skips `.claude` (which can hold full repo COPIES under `.claude/worktrees/`)
+// and `.brainrouter*` (CLI state + its own worktrees) — walking those made
+// glob/grep crawl for 20s+ and surface confusing duplicate matches. Real
+// source/peer dirs (incl. vendored `openSrc/`) are NOT ignored.
+export const IGNORED_DIRS = new Set([
+  'node_modules', '.git', 'dist', '.DS_Store', '.next', '.open-next',
+  '.claude', '.brainrouter', '.brainrouter.migrated', 'coverage', '.turbo', '.cache',
+]);
 
 export function isPathInside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
@@ -138,5 +146,55 @@ export function globFiles(pattern: string, workspaceRoot?: string, dir?: string)
       }
     }
   }
+  return results;
+}
+
+export interface GrepHit { path: string; line: number; text: string; }
+
+/**
+ * Search workspace files for a REGULAR-EXPRESSION query, line by line. `query` is a
+ * JS regex (so `a|b` alternation works — the old literal `includes` matched the raw
+ * string with the pipe and silently found nothing); an invalid pattern falls back to
+ * a literal substring match. `root` may be a single FILE (grepped directly — the old
+ * code `readdirSync`'d it and crashed with ENOTDIR) or a directory (recursed,
+ * skipping `IGNORED_DIRS`). Caps at `max` hits (default 50). Pure-ish (fs reads).
+ */
+export function grepSearch(query: string, root: string, wsRoot: string, max = 50): GrepHit[] {
+  let matcher: (line: string) => boolean;
+  try {
+    const re = new RegExp(query);
+    matcher = (line) => re.test(line);
+  } catch {
+    matcher = (line) => line.includes(query);
+  }
+  const results: GrepHit[] = [];
+  const scanFile = (full: string): void => {
+    try {
+      const lines = fs.readFileSync(full, 'utf8').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (matcher(lines[i])) {
+          results.push({ path: path.relative(wsRoot, full), line: i + 1, text: lines[i].trim() });
+          if (results.length >= max) return;
+        }
+      }
+    } catch {
+      /* binary / unreadable — skip */
+    }
+  };
+  const search = (dir: string): void => {
+    if (results.length >= max) return;
+    for (const file of fs.readdirSync(dir)) {
+      if (IGNORED_DIRS.has(file)) continue;
+      const full = path.join(dir, file);
+      if (!isPathInside(wsRoot, fs.realpathSync(full))) continue;
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) search(full);
+      else if (stat.isFile()) { scanFile(full); if (results.length >= max) return; }
+    }
+  };
+  const rootStat = fs.existsSync(root) ? fs.statSync(root) : null;
+  if (rootStat?.isFile()) scanFile(root);
+  else if (rootStat?.isDirectory()) search(root);
+  else throw new Error(`grep_search path not found: ${path.relative(wsRoot, root) || root}`);
   return results;
 }

@@ -185,15 +185,23 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // built-in pricing row (`runtime/pricing.ts`), overridable via
       // `~/.config/brainrouter/pricing.json` for users who want exact
       // billing parity with their actual contract.
-      const { buildCostSummary } = await import('../../runtime/pricing.js');
+      const { buildCostSummary, costUsd } = await import('../../runtime/pricing.js');
+      const costModel = agent.getModel();
+      // COST-CHILDREN — the SESSION cost INCLUDES child agents (a fan-out is often the
+      // bulk of the spend, yet was invisible here). Their usage records carry no
+      // per-child model, so they're priced at the active model; their prompt tokens
+      // count as uncached (children don't share the parent's prefix cache).
+      const childCostUsd = (childPrompt + childCompletion) > 0
+        ? costUsd(costModel, { cachedTokens: 0, missedTokens: childPrompt, completionTokens: childCompletion })
+        : 0;
       const cost = buildCostSummary({
-        model: agent.getModel(),
+        model: costModel,
         turnCachedTokens: agent.lastTurnUsage.cachedTokens,
         turnMissedTokens: agent.lastTurnUsage.missedTokens,
         turnCompletionTokens: agent.lastTurnUsage.completionTokens,
         sessionCachedTokens: agent.sessionUsage.cachedTokens,
-        sessionMissedTokens: agent.sessionUsage.missedTokens,
-        sessionCompletionTokens: agent.sessionUsage.completionTokens,
+        sessionMissedTokens: agent.sessionUsage.missedTokens + childPrompt,
+        sessionCompletionTokens: agent.sessionUsage.completionTokens + childCompletion,
       });
       const bandColor = (band: 'green' | 'yellow' | 'red' | 'mono'): (s: string) => string => {
         if (band === 'green') return chalk.green;
@@ -203,7 +211,10 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       };
       console.log(chalk.bold('\nCost (built-in pricing — overridable at ~/.config/brainrouter/pricing.json)'));
       console.log(`  Turn:        ${bandColor(cost.turnBadge.band)(cost.turnBadge.text)}  ${chalk.gray(`(model: ${agent.getModel()})`)}`);
-      console.log(`  Session:     ${bandColor(cost.sessionBadge.band)(cost.sessionBadge.text)}`);
+      console.log(`  Session:     ${bandColor(cost.sessionBadge.band)(cost.sessionBadge.text)}  ${chalk.gray('(parent + children)')}`);
+      if (childCostUsd > 0) {
+        console.log(chalk.gray(`               incl. ~$${childCostUsd.toFixed(childCostUsd >= 0.01 ? 3 : 4)} from ${children.length} child agent${children.length === 1 ? '' : 's'} (est. at ${costModel})`));
+      }
       if (cost.sessionCacheSavedUsd > 0) {
         console.log(`  Cache saved: ${chalk.green(`$${cost.sessionCacheSavedUsd.toFixed(4)}`)} ${chalk.gray('this session vs. no-cache baseline.')}`);
       }

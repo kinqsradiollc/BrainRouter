@@ -18,6 +18,11 @@ import {
   readRun,
   listRuns,
   reconcileStaleRuns,
+  ensurePhaseRun,
+  advanceRunPhase,
+  activeRun,
+  formatActivePhase,
+  type WorkflowRun,
   type WorkflowRunStep,
 } from '../state/workflowRun.js';
 
@@ -133,4 +138,31 @@ test('PARITY-W1 reconcileStaleRuns: dead-pid running → interrupted; alive unto
   assert.equal(readRun(ws, dead)!.status, 'interrupted');
   assert.equal(readRun(ws, alive)!.status, 'running');
   assert.equal(listRuns(ws).length, 2);
+});
+
+// ── BUILD-LOOP P4: active phase ───────────────────────────────────────────────
+
+test('BUILD-LOOP P4 formatActivePhase: running phase name + 1-based position; null when idle', () => {
+  const run = (phases: Array<[string, string]>): WorkflowRun =>
+    ({ phases: phases.map(([id, status]) => ({ id, title: id.toUpperCase(), status })) } as unknown as WorkflowRun);
+  assert.equal(formatActivePhase(run([['plan', 'completed'], ['implement', 'running'], ['verify', 'pending']])), 'IMPLEMENT (2/3)');
+  assert.equal(formatActivePhase(run([['plan', 'running']])), 'PLAN (1/1)');
+  // No running phase (all done, or none started) → null.
+  assert.equal(formatActivePhase(run([['plan', 'completed'], ['implement', 'completed']])), null);
+  assert.equal(formatActivePhase({ phases: [] } as unknown as WorkflowRun), null);
+});
+
+test('BUILD-LOOP P4 activeRun: the running run (newest-first), null when none running', () => {
+  const ws = tmpWs();
+  assert.equal(activeRun(ws), null, 'no runs → null');
+  // A finished run + a running run; activeRun returns the running one.
+  ensurePhaseRun(ws, 'done-run', [{ id: 'p1', title: 'P1' }], { kind: 'build', pid: process.pid });
+  advanceRunPhase(ws, 'done-run', 'p1', 'completed');
+  ensurePhaseRun(ws, 'live-run', [{ id: 'a', title: 'Plan' }, { id: 'b', title: 'Implement' }], { kind: 'build', pid: process.pid });
+  advanceRunPhase(ws, 'live-run', 'a', 'completed');
+  advanceRunPhase(ws, 'live-run', 'b', 'running');
+  const active = activeRun(ws);
+  assert.ok(active, 'a running run is found');
+  assert.equal(active!.slug, 'live-run');
+  assert.equal(formatActivePhase(active!), 'Implement (2/2)');
 });

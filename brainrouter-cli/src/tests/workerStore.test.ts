@@ -18,7 +18,18 @@ import {
 
 function ws(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'br-workers-'));
-  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const home = mkdtempSync(join(tmpdir(), 'br-workers-home-'));
+  const previousHome = process.env.BRAINROUTER_HOME;
+  process.env.BRAINROUTER_HOME = home;
+  return {
+    dir,
+    cleanup: () => {
+      if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
+      else process.env.BRAINROUTER_HOME = previousHome;
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    },
+  };
 }
 
 test('MAS-P5-T3 canSpawnWorker: workers cannot spawn workers (MAX_WORKER_DEPTH=1)', () => {

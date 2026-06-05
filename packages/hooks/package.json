@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-hooks",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "description": "BrainRouter React hooks — data + state hooks for building a UI on top of a BrainRouter MCP server (pairs with @kinqs/brainrouter-sdk).",
   "type": "module",
   "main": "dist/index.js",
@@ -13,8 +13,8 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@kinqs/brainrouter-sdk": "^0.4.11",
-    "@kinqs/brainrouter-types": "^0.4.11"
+    "@kinqs/brainrouter-sdk": "^0.4.12",
+    "@kinqs/brainrouter-types": "^0.4.12"
   },
   "peerDependencies": {
     "react": "^18.3.1 || ^19.0.0"

@@ -8,12 +8,12 @@ design specs in [`docs/specs/`](docs/specs/).
 
 ## Shipped
 
-Latest: **0.4.11** (2026-06-04) — worktree isolation that merges back, a
-self-hydrating `config.json`, and memory hygiene (`/memory verify` +
-churn-weighted decay).
+Latest published: **0.4.11** (2026-06-04). **0.4.12** (The Build Loop) is
+**feature-complete on `release/0.4.12`** — release prep pending.
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 (feature-complete) |
 | 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
 | 0.4.10 | Memory-home hardening · mobile dashboard · Cloudflare Worker runtime | 2026-06-03 |
 | 0.4.9 | Dashboard redesign ("The Memory Instrument") · auth refresh tokens · API hardening | 2026-06-03 |
@@ -27,27 +27,41 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
-## Active tracks
+## 0.4.12 — The Build Loop · branch `release/0.4.12` (feature-complete)
 
-Live checklist — ticked as each part ships.
+All feature work below is **merged into `release/0.4.12`**; what remains is
+release prep (version bump + changelog + publish) and optional REPL polish.
 
-### Deferred from 0.4.11 → next
-
-- [ ] C1 — spawn-child loop continuation (the parent loop stops when a child runs past the 30s drain timeout; proper fix = async auto-resume on child completion)
-- [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
-
-### 0.4.12 — The Build Loop · spec `docs/specs/build-loop-workflow.md`
+### The Build Loop · spec `docs/specs/build-loop-workflow.md`
 
 An opt-in plan → implement → verify → review → merge engineering loop on the
 0.4.11 isolation substrate. Single-agent stays the default; `/build` is the
 explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 - [x] P1 — `build` workflow template + `/build <task>` command
-- [ ] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits)
-- [ ] P2.5 — review-gated merge: a reviewer reads each worktree's full diff before merge-back; merge only on verify-green + review-approve (+ cross-worktree synthesis review on fan-out; `cli.worktreeMergeReview` extends it to ad-hoc workers)
-- [ ] P3 — escalation: `cli.buildLoop` knob + planner classifier
-- [ ] P4 — surface the active phase in `/ps` · `/agents` · statusline
-- [ ] P5 — (stretch) bounded loop-until-green + per-agent thread durability
+- [x] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits) + review-gated merge *(#300)*
+- [x] P2.5 — **fan-out builds** (`build` template `slices[]` → one held worktree per slice) + a **cross-worktree synthesis review** with overlap-aware gated merge (`finalizeFanOutBuild`), and the **`cli.worktreeMergeReview`** knob extending the hold-for-review gate to ad-hoc `/spawn` workers
+- [x] P3 — escalation: `cli.buildLoop` knob (`off`/`escalate`/`always`) + planner classifier *(#301)*
+- [x] P4 — surface the active phase in `/ps` · `/agents` · statusline (active-run ledger → `▶ <phase> (n/total)`; opt-in `phase` statusline segment) *(#303)*
+- [x] P5 — bounded **loop-until-green** build self-repair: opt-in `cli.buildLoopMaxRepairs` (default **0 = disabled**); when >0 a red Verify re-runs Implement→Verify→Review in the same worktree up to N times until green *(#304)*. Per-agent thread durability tracked separately.
+
+### Multi-agent run continuity
+
+- [x] C1 — parent-loop continuation: a turn ending with timed-out children polls their status and auto-fires a synthetic continue (drain + synthesize) once they settle — always on, cancelled by user input *(#305)*
+- [x] C2 — input queue while busy: a mid-turn prompt is queued (not dropped), drained one-by-one after each turn; `/queue` lists, `/queue remove <n>` / `/queue clear` manage it *(#306)*
+
+### Reliability & accuracy
+
+- [x] Reconnect-with-backoff for model + memory/MCP calls (honors `Retry-After`, connectivity-aware) instead of hard wall-clock timeouts; genuine recall timeouts still fail fast *(#307)*
+- [x] Child **and** worker timeouts are parent-wait only — never kill the child/worker; `timeoutMs: 0` waits to completion *(#310)*
+- [x] Orphan-worktree GC no longer deletes a running child's worktree *(#307)*
+- [x] `grep_search` does real regex matching + ignores build/cache dirs; workflow roles degrade gracefully *(#308)*
+- [x] `/tokens` session cost includes child / sub-agent tokens *(#309)*; worker state relocated to the BrainRouter home *(#310)*
+
+### Remaining before release
+
+- [ ] Release prep — version bump across packages + dist-manifest sync, changelog, publish (on go).
+- [ ] Optional REPL polish (deferrable to 0.4.13): parallel same-name tool-result display pairing; `file:line` citation escaping; next-action planner latency.
 
 ### Future — design drafted
 

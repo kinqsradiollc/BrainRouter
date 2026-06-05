@@ -321,6 +321,19 @@ export function summarizePhases(run: WorkflowRun): { done: number; total: number
   return { done, total, current: running ? running.title : null };
 }
 
+/**
+ * BUILD-LOOP P4 (0.4.12) — a compact "which phase is running now" label for a
+ * phase-aware run, e.g. `Implement (2/4)` (the running phase's 1-based position).
+ * Returns null when no phase is currently running (not phase-aware, or momentarily
+ * between phases). Pure — shared by the statusline, `/ps`/bg-panel, and `/agents`.
+ */
+export function formatActivePhase(run: WorkflowRun): string | null {
+  const phases = run.phases ?? [];
+  const idx = phases.findIndex((p) => p.status === 'running');
+  if (idx < 0) return null;
+  return `${phases[idx].title} (${idx + 1}/${phases.length})`;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // File-backed store
 // ──────────────────────────────────────────────────────────────────────────
@@ -494,6 +507,16 @@ export function listRuns(workspaceRoot: string): WorkflowRun[] {
     .map((e) => readRun(workspaceRoot, e.name))
     .filter((r): r is WorkflowRun => r !== null)
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+}
+
+/**
+ * BUILD-LOOP P4 (0.4.12) — the single workflow run that's progressing right now:
+ * the most-recently-updated run with status `running` (or null). `listRuns` is
+ * already sorted newest-first, so this is the first running entry. Drives the
+ * statusline `phase` segment + the `/agents` active-workflow header.
+ */
+export function activeRun(workspaceRoot: string): WorkflowRun | null {
+  return listRuns(workspaceRoot).find((r) => r.status === 'running') ?? null;
 }
 
 /**

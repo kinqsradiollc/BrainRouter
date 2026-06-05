@@ -63,3 +63,9 @@ test('FOOTER-TELEMETRY-2 offload segment: both child spend and savings', () => {
   }));
   assert.equal(out, 'child:4.0k saved:~2.0k');
 });
+
+test('BUILD-LOOP P4 phase: known segment; hidden when no run is active', () => {
+  assert.ok((SEGMENT_NAMES as readonly string[]).includes('phase'));
+  // baseInputs points at a nonexistent workspace → no active run → segment hides.
+  assert.equal(renderSegment('phase', baseInputs()), undefined);
+});

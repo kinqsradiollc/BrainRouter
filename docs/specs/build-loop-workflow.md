@@ -1,8 +1,10 @@
 # Spec: The Build Loop — a default engineering workflow
 
-> Status: **DRAFT — design only, not yet approved.** No code until sign-off.
+> Status: **SHIPPED in 0.4.12.** All phases (P1–P5) plus the C1/C2 run-continuity
+> work are merged on `release/0.4.12`. This spec is retained as the design of
+> record; see [`../../brainrouter-changelog/0.4.12.md`](../../brainrouter-changelog/0.4.12.md)
+> for what shipped.
 > Target: 0.4.12 (sequel to the 0.4.11 worktree isolation + merge-back work).
-> Owner: TBD.
 
 ## Objective
 
@@ -175,7 +177,10 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
 - Non-git workspaces (the loop degrades to the shared tree, no isolated `W`).
 - Durable/resumable per-agent threads (tracked separately; a build run is still
   resumable at the *phase* level via WF-RESUME).
-- Auto-fixing a red verify (the loop reports; it doesn't loop-until-green in v1).
+- Auto-fixing a red verify is **off by default** (the loop reports + preserves a
+  patch). P5 adds an **opt-in** bounded loop-until-green: `cli.buildLoopMaxRepairs`
+  (default `0` = disabled); when `> 0`, a red Verify re-runs Implement→Verify→Review
+  in the same worktree up to N times (single-worktree builds only).
 
 ## Boundaries
 
@@ -187,6 +192,10 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
 - **Never:** merge on a red verify; merge unreviewed code when review is enabled;
   tear down `W` before its work is either merged or saved as a patch; force the
   loop on a trivial / single-file change under `escalate`.
+- **Deferred (P2.5 → future):** a fan-out build gates on the **synthesis review +
+  structural overlap + check-then-apply**; it does NOT yet run a per-slice test-run
+  **verify** (the slices aren't applied until the gated merge, so a meaningful test
+  run would need a combined-tree assembly step). Single-worktree builds keep verify.
 
 ## Success Criteria (Definition of Done)
 
@@ -199,14 +208,17 @@ A new knob `cli.buildLoop: 'off' | 'escalate' | 'always'` (default **`escalate`*
       verify + review pass.
 - [ ] A **`block`/`request-changes` review verdict** stops the merge (work
       preserved as a patch + findings surfaced), even when verify is green.
-- [ ] **Fan-out:** each worktree is reviewed independently; a cross-worktree
-      synthesis reviewer runs before any merge; conflicting worktrees fall back to
-      preserved patches. With `cli.worktreeMergeReview: 'on'`, an ad-hoc
-      `/spawn worker` is also merge-reviewed before landing.
-- [ ] `cli.buildLoop: 'off'` → only `/build` triggers it; `'escalate'` → a
+- [x] **Fan-out:** a fan-out build (`slices[]`) runs one held worktree per slice; a
+      cross-worktree synthesis reviewer reads the combined change-set + an
+      overlap-aware gated merge runs before any merge; conflicting worktrees fall
+      back to preserved patches. With `cli.worktreeMergeReview: 'on'`, an ad-hoc
+      `/spawn worker` is held for review before landing. *(P2.5; per-slice test-run
+      verify on the combined tree is deferred — see Boundaries)*
+- [x] `cli.buildLoop: 'off'` → only `/build` triggers it; `'escalate'` → a
       single-file fix stays single-agent while a multi-file feature enters the
-      loop; `'always'` → every implementation verb enters it.
-- [ ] The active phase is visible in `/ps` / `/agents` and the statusline.
+      loop; `'always'` → every implementation verb enters it. *(P3)*
+- [x] The active phase is visible in `/ps` / `/agents` and the statusline (P4 —
+      `▶ <phase> (n/total)` from the active-run ledger; opt-in `phase` segment).
 - [ ] A killed build run reconciles on next boot (WF-RESUME) and `W` is GC'd
       (reuses the 0.4.11 worktree + patch reconcile).
 - [ ] Deterministic tests: template shape, phase-scoped worktree lifecycle,

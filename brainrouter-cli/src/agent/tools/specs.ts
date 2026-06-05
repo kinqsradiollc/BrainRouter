@@ -70,12 +70,12 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'grep_search',
-    description: 'Search for a query string in files within a directory in the workspace.',
+    description: 'Search workspace files for a REGULAR-EXPRESSION query (JS regex syntax — e.g. `foo|bar`, `\\bclass\\b`). `path` may be a directory (searched recursively, build/VCS/.claude/.brainrouter dirs skipped) or a single file. Returns up to 50 matches as {path,line,text}.',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path to search under. Defaults to "."' },
-        query: { type: 'string', description: 'String or regex query pattern to search for.' }
+        path: { type: 'string', description: 'Directory (recursed) or file to search. Defaults to "."' },
+        query: { type: 'string', description: 'Regular expression to match per line (JS regex; falls back to literal substring if the pattern is invalid regex).' }
       },
       required: ['query']
     }
@@ -154,7 +154,7 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'spawn_worker_thread',
-    description: 'Start a persistent background worker thread for a self-contained task. It runs detached (your turn does NOT block), persists its transcript + rolling summary + status under .brainrouter/cli/workers/, and is observable via /workers and read_worker_summary. Returns the worker id. Workers cannot spawn workers.',
+    description: 'Start a persistent background worker thread for a self-contained task. It runs detached (your turn does NOT block), persists its transcript + rolling summary + status in the workspace CLI state, and is observable via /workers and read_worker_summary. Returns the worker id. Workers cannot spawn workers.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,12 +168,12 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'wait_worker',
-    description: 'Block until a worker thread finishes (bounded), then return its status + summary.',
+    description: 'Block until a worker thread finishes or the wait timeout elapses, then return its status + summary. A wait timeout does not stop or fail the worker.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Worker id from spawn_worker_thread.' },
-        timeoutMs: { type: 'number', description: 'Max wait in ms (default 600000).' }
+        timeoutMs: { type: 'number', description: 'Max parent wait in ms (default 600000). Use 0 to wait until completion.' }
       },
       required: ['id']
     }

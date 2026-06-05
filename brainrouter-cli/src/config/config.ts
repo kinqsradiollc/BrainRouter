@@ -129,8 +129,17 @@ export interface CliKnobs {
   theme?: 'light' | 'dark' | 'auto';
 
   // ---- LLM call ergonomics ----------------------------------------------
-  /** Per-call LLM timeout in ms. Default 120000. */
+  /** Per-call LLM timeout in ms. Default 120000. A timeout is treated as a
+   *  RECONNECT signal (not a hard failure) — see `llmMaxReconnects`. */
   llmTimeoutMs?: number;
+  /**
+   * RECONNECT (0.4.12) — max reconnect attempts for a transient LLM failure
+   * (timeout / disconnect / 5xx / 429) before giving up, with exponential backoff
+   * that honors `Retry-After`. Default 5. While the machine is genuinely OFFLINE
+   * the loop keeps waiting for the link WITHOUT spending this budget, so a dropped
+   * connection auto-resumes when the network returns rather than failing the turn.
+   */
+  llmMaxReconnects?: number;
   /** Max concurrent LLM calls across parent + children. Default 4. */
   llmMaxConcurrent?: number;
   /** Disable streaming (SSE). Default false. */
@@ -190,6 +199,36 @@ export interface CliKnobs {
    * Replaces the old `$TMPDIR/brainrouter-worktrees` location.
    */
   worktreeRoot?: string;
+  /**
+   * BUILD-LOOP P3 (0.4.12) — when the next-action planner may escalate a coding
+   * request into the plan→implement→verify→review→merge `build` workflow.
+   * `off` = never auto-escalate (the loop only runs via the explicit `/build`
+   * command); `escalate` (default) = the planner routes multi-file / feature-scale
+   * implementation tasks into the build loop, single edits stay single-agent;
+   * `always` = any implementation request (even a one-file change) runs the loop.
+   */
+  buildLoop?: 'off' | 'escalate' | 'always';
+  /**
+   * BUILD-LOOP P2.5 (0.4.12) — extend the build loop's pre-merge review gate to
+   * ad-hoc isolated write-children. `off` (default) = an isolated `/spawn worker`
+   * merges its clean changes back automatically (0.4.11 behavior). `on` = the
+   * child's changes are HELD as a reviewable recovery patch instead of
+   * auto-merging, so even a one-off delegated worker is reviewed (via
+   * `/agents diff <id>`) and applied explicitly (`/agents diff <id> apply`) before
+   * anything lands in your tree. (Build-loop fan-out slices are always held +
+   * gated regardless of this knob.)
+   */
+  worktreeMergeReview?: 'off' | 'on';
+  /**
+   * BUILD-LOOP P5 (0.4.12) — bounded loop-until-green build self-repair. `0`
+   * (default) = DISABLED: a `/build` whose Verify is red preserves the work as a
+   * recovery patch (no retry), the 0.4.12 P2 behavior. `> 0` = OPT-IN: when Verify
+   * comes back red, re-run Implement→Verify→Review in the SAME shared worktree —
+   * feeding the verifier's failure back to the worker — up to this many times, then
+   * stop on the first green verify (or give up + preserve the patch). Single-worktree
+   * builds only; fan-out builds are not retried.
+   */
+  buildLoopMaxRepairs?: number;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -286,7 +325,13 @@ export interface CliKnobs {
   lspServers?: Record<string, string>;
 
   // ---- orchestration ----------------------------------------------------
-  /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
+  /**
+   * Default parent wait timeout for child-agent tools in ms. Default **0 = wait
+   * until completion**. This does not kill the child; child execution is bounded
+   * by `maxToolLoops`, per-call LLM/MCP/shell timeouts, and reconnect handling.
+   * Set a positive value only when the parent should stop waiting and return a
+   * timeout envelope while the child keeps running.
+   */
   childAgentTimeoutMs?: number;
   /** Character budget for the in-REPL child-agent result preview. Default 2500. */
   agentPreviewChars?: number;
@@ -562,6 +607,7 @@ export interface ResolvedCliKnobs {
   quiet: boolean;
   theme: 'light' | 'dark' | 'auto';
   llmTimeoutMs: number;
+  llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh';
@@ -575,6 +621,9 @@ export interface ResolvedCliKnobs {
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
+  buildLoop: 'off' | 'escalate' | 'always';
+  worktreeMergeReview: 'off' | 'on';
+  buildLoopMaxRepairs: number;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -630,6 +679,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     quiet: c.quiet ?? false,
     theme: c.theme ?? 'auto',
     llmTimeoutMs: c.llmTimeoutMs ?? 120_000,
+    llmMaxReconnects: Math.max(1, Math.floor(c.llmMaxReconnects ?? 5)),
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
     effort: c.effort ?? 'medium',
@@ -645,6 +695,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
     childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
     worktreeRoot: c.worktreeRoot ?? '',
+    buildLoop: c.buildLoop ?? 'escalate',
+    worktreeMergeReview: c.worktreeMergeReview ?? 'off',
+    buildLoopMaxRepairs: Math.max(0, Math.floor(c.buildLoopMaxRepairs ?? 0)),
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
@@ -670,7 +723,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     autoReindex: c.autoReindex ?? true,
     browserSmoke: c.browserSmoke ?? '',
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
-    childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
+    childAgentTimeoutMs: c.childAgentTimeoutMs ?? 0, // 0 = parent waits until child completion
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
     workspaceOverride: c.workspaceOverride,
@@ -752,5 +805,4 @@ export function _resetCliKnobsCache(): void {
   cachedRawCli = undefined;
   cachedOverrides = {};
 }
-
 

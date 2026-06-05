@@ -21,9 +21,12 @@ import {
   type PhaseChildResult,
   type PhaseStatus,
   type PhaseExecution,
+  type PhasePlanExecution,
 } from './phaseOrchestrator.js';
 import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../state/workflowRun.js';
 import { getCliKnobs } from '../config/config.js';
+import { prepareSharedWorktree, worktreePatchFile } from './worktreeIsolation.js';
+import { finalizeBuildLoop, finalizeFanOutBuild, repairUntilGreen, type FanOutSlice } from './buildLoop.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */
@@ -61,13 +64,22 @@ export function defaultPhaseRunner(
   ctx: OrchestrationContext,
   dispatch: OrchestrationDispatch,
   maxConcurrent: number,
+  opts?: { workspaceRootOverride?: string; holdWorktree?: boolean },
 ): PhaseRunner {
   return async (agents, phase) => {
     const results: PhaseChildResult[] = [];
     let idx = 0;
     for (const wave of chunkIntoWaves(agents, maxConcurrent)) {
       const spawnArgs = {
-        agents: wave.map((a) => ({ role: a.role, prompt: a.prompt, access: a.access, label: a.label })),
+        // BUILD-LOOP P2 — every phase child runs in the shared worktree when set,
+        // so verify/review operate on the worker's actual edits.
+        // BUILD-LOOP P2.5 — a fan-out build holds each slice worker's own worktree
+        // (no auto-merge) so the synthesis gate + finalize own the merge decision.
+        agents: wave.map((a) => ({
+          role: a.role, prompt: a.prompt, access: a.access, label: a.label,
+          ...(opts?.workspaceRootOverride ? { workspaceRootOverride: opts.workspaceRootOverride } : {}),
+          ...(opts?.holdWorktree ? { holdWorktree: true } : {}),
+        })),
       };
       let ids: string[] = [];
       try {
@@ -111,6 +123,19 @@ export function defaultPhaseRunner(
     }
     return results;
   };
+}
+
+/** BUILD-LOOP P2.5 — the held slice worktrees of a fan-out build's `implement`
+ *  phase: each child's id + its preserved recovery patch, for the synthesis gate. */
+function collectFanOutSlices(ws: string, execution: PhasePlanExecution): FanOutSlice[] {
+  const implement = execution.phases.find((p) => p.id === 'implement');
+  if (!implement) return [];
+  return implement.children.map((c) => ({ id: c.id, label: c.label, patchPath: worktreePatchFile(ws, c.id) }));
+}
+
+/** The synthesis `review` phase's aggregated output (drives the blocker verdict). */
+function reviewPhaseOutput(execution: PhasePlanExecution): string {
+  return execution.phases.find((p) => p.id === 'review')?.output ?? '';
 }
 
 const PHASE_TO_RUN_STATUS: Record<PhaseStatus, RunPhaseStatus> = {
@@ -157,15 +182,32 @@ export async function runWorkflow(
 
   const slug = workflowSlug(args, plan);
   const ws = ctx.workspaceRoot;
+  // BUILD-LOOP P2/P2.5 — a synchronous `build` run is gated. Two shapes:
+  //  • single-worktree (P2): implement/verify/review share ONE worktree, merged
+  //    back gated on verify-green + review-ok (`finalizeBuildLoop`).
+  //  • fan-out (P2.5): the implement phase fans out one worker per slice, each in
+  //    its OWN held worktree; a synthesis review reads the combined change-set, then
+  //    `finalizeFanOutBuild` does the overlap-aware gated merge.
+  // (Both skipped for background runs / a test-injected runner.) Tagging the run
+  // `kind:'build'` lets WF-RESUME re-attach the same gate.
+  const isBuildRun = args?.template === 'build' && !deps.runner && args?.background !== true;
+  const isFanOutBuild = isBuildRun && !!plan.phases.find((p) => p.id === 'implement')?.fanOut;
   ensurePhaseRun(
     ws,
     slug,
     plan.phases.map((p) => ({ id: p.id, title: p.title })),
-    { sessionKey: ctx.parentSessionKey ?? null, pid: process.pid, kind: 'workflow', planJson: JSON.stringify(plan) },
+    { sessionKey: ctx.parentSessionKey ?? null, pid: process.pid, kind: isBuildRun ? 'build' : 'workflow', planJson: JSON.stringify(plan) },
   );
 
+  const buildLoop = isBuildRun && !isFanOutBuild ? prepareSharedWorktree(ws, slug) : null;
+
   const runner =
-    deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
+    deps.runner ?? defaultPhaseRunner(
+      ctx,
+      deps.dispatch,
+      getCliKnobs().maxConcurrentChildren ?? 8,
+      buildLoop ? { workspaceRootOverride: buildLoop.workspaceRoot } : isFanOutBuild ? { holdWorktree: true } : undefined,
+    );
 
   const hooks = makeRunHooks(ws, slug);
 
@@ -191,7 +233,24 @@ export async function runWorkflow(
     );
   }
 
-  const execution = await executePhasePlan(plan, runner, hooks);
+  let execution = await executePhasePlan(plan, runner, hooks);
+
+  // BUILD-LOOP P5 — opt-in bounded loop-until-green. A single-worktree build whose
+  // Verify came back red re-runs Implement→Verify→Review in the SAME shared worktree
+  // (feeding the failure back) up to `cli.buildLoopMaxRepairs` times, stopping on the
+  // first green. Default 0 = disabled → no retry (the P2 behavior). Fan-out excluded.
+  const maxRepairs = getCliKnobs().buildLoopMaxRepairs ?? 0;
+  let buildRepairs: { attempts: number; green: boolean } | undefined;
+  if (buildLoop && maxRepairs > 0) {
+    const repaired = await repairUntilGreen(execution, maxRepairs, (p) => executePhasePlan(p, runner, hooks));
+    execution = repaired.execution;
+    if (repaired.attempts > 0) buildRepairs = { attempts: repaired.attempts, green: repaired.green };
+  }
+
+  // BUILD-LOOP P2 — gate + merge the shared worktree (or preserve it as a patch).
+  const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
+  // BUILD-LOOP P2.5 — fan-out: cross-worktree synthesis gate over the held slices.
+  const fanOutMerge = isFanOutBuild ? finalizeFanOutBuild(ws, collectFanOutSlices(ws, execution), reviewPhaseOutput(execution)) : undefined;
 
   return JSON.stringify(
     {
@@ -200,6 +259,9 @@ export async function runWorkflow(
       status: execution.status,
       phases: execution.phases.map((p) => ({ id: p.id, status: p.status, children: p.children.length })),
       output: execution.phases[execution.phases.length - 1]?.output ?? '',
+      ...(buildMerge ? { buildMerge } : {}),
+      ...(fanOutMerge ? { fanOutMerge } : {}),
+      ...(buildRepairs ? { buildRepairs } : {}),
     },
     null,
     2,
@@ -266,8 +328,22 @@ export async function resumeWorkflow(slug: string, ctx: OrchestrationContext, de
     return JSON.stringify({ ok: true, slug, resumed: false, status: 'completed', note: 'nothing to resume — all phases already completed' }, null, 2);
   }
 
-  const runner = deps.runner ?? defaultPhaseRunner(ctx, deps.dispatch, getCliKnobs().maxConcurrentChildren ?? 8);
+  // BUILD-LOOP P2/P2.5 — a resumed `build` run re-attaches its gate (mirroring the
+  // fresh path) so re-run phases stay isolated and nothing merges back ungated:
+  // single-worktree → shared worktree + finalizeBuildLoop; fan-out → held slices +
+  // finalizeFanOutBuild. (A test-injected runner skips it.)
+  const isBuildResume = run.kind === 'build' && !deps.runner;
+  const isFanOutBuild = isBuildResume && !!plan.phases.find((p) => p.id === 'implement')?.fanOut;
+  const buildLoop = isBuildResume && !isFanOutBuild ? prepareSharedWorktree(ws, slug) : null;
+  const runner = deps.runner ?? defaultPhaseRunner(
+    ctx,
+    deps.dispatch,
+    getCliKnobs().maxConcurrentChildren ?? 8,
+    buildLoop ? { workspaceRootOverride: buildLoop.workspaceRoot } : isFanOutBuild ? { holdWorktree: true } : undefined,
+  );
   const execution = await executePhasePlan(plan, runner, makeRunHooks(ws, slug), { completed, priorOutputs });
+  const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
+  const fanOutMerge = isFanOutBuild ? finalizeFanOutBuild(ws, collectFanOutSlices(ws, execution), reviewPhaseOutput(execution)) : undefined;
   return JSON.stringify(
     {
       ok: true,
@@ -277,6 +353,8 @@ export async function resumeWorkflow(slug: string, ctx: OrchestrationContext, de
       skipped: [...completed],
       phases: execution.phases.map((p) => ({ id: p.id, status: p.status, children: p.children.length })),
       output: execution.phases[execution.phases.length - 1]?.output ?? '',
+      ...(buildMerge ? { buildMerge } : {}),
+      ...(fanOutMerge ? { fanOutMerge } : {}),
     },
     null,
     2,

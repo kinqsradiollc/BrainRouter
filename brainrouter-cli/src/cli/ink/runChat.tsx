@@ -17,6 +17,8 @@ import { resolveSandboxConfig, runShell } from '../../runtime/exec/sandbox.js';
 import { parseBangCommand } from '../../runtime/exec/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
+import { childrenSettled, buildChildResumePrompt } from '../../runtime/childResume.js';
+import { InputQueue } from '../../runtime/inputQueue.js';
 import { reconcileOrphanWorktrees } from '../../orchestration/worktreeIsolation.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '../../state/checkpointStore.js';
@@ -125,6 +127,17 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // remains a single owner of the turn lifecycle.
   let isProcessing = false;
   let pendingContinuation = false;
+  // C2 — messages typed while a turn is running are queued here (not dropped) and
+  // drained one at a time after each turn settles.
+  const inputQueue = new InputQueue();
+  // C1 — interval that polls timed-out children and auto-resumes once they settle.
+  let childResumeTimer: ReturnType<typeof setInterval> | null = null;
+  const cancelChildResume = (): boolean => {
+    if (!childResumeTimer) return false;
+    clearInterval(childResumeTimer);
+    childResumeTimer = null;
+    return true;
+  };
   // Anti-spin corrective: give /goal ONE retry with a stronger nudge before
   // halting on a prose-only turn. Resets on any tool-call turn or goal clear.
   let goalNoToolStrikes = 0;
@@ -245,18 +258,22 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // only writes the JSON file when there were actual stale entries
       // to flip — subsequent calls are pure reads.
       reconcileStale(agent.workspaceRoot);
-      // CODEX-WORKTREE-CLEANUP — also GC orphan child worktrees left under
-      // $TMPDIR by a crashed prior process (git worktree prune + rm untracked
-      // dirs). Best-effort + idempotent, mirrors reconcileStale.
-      try { reconcileOrphanWorktrees(agent.workspaceRoot); } catch { /* best-effort */ }
+      // Snapshot the LIVE (running/pending) children AFTER reconcileStale has flipped
+      // any dead-pid sessions — these ids guard their worktrees from the GC below.
+      const sessions = listSessions(agent.workspaceRoot);
+      const liveChildIds = sessions.filter((s) => s.status === 'pending' || s.status === 'running').map((s) => s.id);
+      // CODEX-WORKTREE-CLEANUP — GC orphan child worktrees left under the worktree
+      // base by a crashed prior process (git worktree prune + rm untracked dirs).
+      // `keepChildIds` ensures a RUNNING child's worktree is never deleted out from
+      // under it (the live-child GC bug). Best-effort + idempotent.
+      try { reconcileOrphanWorktrees(agent.workspaceRoot, { keepChildIds: liveChildIds }); } catch { /* best-effort */ }
       // MAS-P5-T3: same treatment for worker threads — a `running` worker
       // from a dead CLI process can't resume mid-turn, so flip it to failed.
       reconcileStaleWorkers(agent.workspaceRoot);
       // PARITY-W1: durable workflow runs left `running` by a dead process are
       // flipped to `interrupted` so the /workflows viewer is honest on restart.
       reconcileStaleRuns(agent.workspaceRoot);
-      const sessions = listSessions(agent.workspaceRoot);
-      return sessions.filter((s) => s.status === 'pending' || s.status === 'running').length;
+      return liveChildIds.length;
     } catch {
       return 0;
     }
@@ -443,6 +460,77 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }
   };
 
+  // C1 — auto-resume after a turn whose child drain TIMED OUT. Poll the timed-out
+  // children; once they all settle, fire a synthetic continue prompt (drain +
+  // synthesize) so the stranded result is delivered without a manual /continue. The
+  // user's next keystroke cancels it (handled in onSubmit). A goal continuation, if
+  // queued, takes precedence (it owns the next turn).
+  const CHILD_RESUME_POLL_MS = 2500;
+  const CHILD_RESUME_MAX_WAIT_MS = 10 * 60 * 1000;
+  const scheduleChildResume = () => {
+    const ids = [...agent.lastTurnPendingChildIds];
+    if (ids.length === 0 || pendingContinuation) return;
+    cancelChildResume();
+    const startedAt = Date.now();
+    controller?.push.notice(
+      `(auto-resume armed — watching ${ids.length} background agent${ids.length === 1 ? '' : 's'}; type anything to cancel)`,
+      'info',
+    );
+    childResumeTimer = setInterval(() => {
+      if (exited) { cancelChildResume(); return; }
+      if (isProcessing) return; // a turn is running — wait for it to settle
+      const statusById = new Map(listSessions(agent.workspaceRoot).map((s) => [s.id, s.status]));
+      if (!childrenSettled(ids, (id) => statusById.get(id))) {
+        if (Date.now() - startedAt > CHILD_RESUME_MAX_WAIT_MS) {
+          cancelChildResume();
+          controller?.push.notice('(auto-resume gave up after 10m — type /continue when the agents finish)', 'warn');
+        }
+        return;
+      }
+      cancelChildResume();
+      controller?.push.notice('(background agents finished — resuming)', 'info');
+      void runChatTurn(buildChildResumePrompt(ids));
+    }, CHILD_RESUME_POLL_MS);
+  };
+
+  // C2 — `/queue` view + manage the messages typed while busy. Handled inline (like
+  // `?` and `!`) so it works mid-turn without going through the turn dispatcher.
+  const queuePreview = (t: string) => { const s = t.replace(/\s+/g, ' ').trim(); return s.length > 80 ? `${s.slice(0, 80)}…` : s; };
+  const handleQueueCommand = (args: string[]) => {
+    const sub = (args[0] ?? '').toLowerCase();
+    if (sub === 'clear') {
+      const n = inputQueue.clear();
+      controller?.push.notice(n ? `Cleared ${n} queued message${n === 1 ? '' : 's'}.` : 'Queue already empty.', 'info');
+      return;
+    }
+    if (sub === 'remove' || sub === 'rm') {
+      const pos = Number.parseInt(args[1] ?? '', 10);
+      const removed = Number.isInteger(pos) ? inputQueue.removeAt(pos) : undefined;
+      controller?.push.notice(
+        removed ? `Removed queued message ${pos}: "${queuePreview(removed.text)}"` : `No queued message at position "${args[1] ?? ''}". Use /queue to list.`,
+        removed ? 'info' : 'warn',
+      );
+      return;
+    }
+    const items = inputQueue.list();
+    if (items.length === 0) { controller?.push.notice('Input queue is empty.', 'info'); return; }
+    controller?.push.notice(`Queued (${items.length}) — drained after the current turn · /queue remove <n> · /queue clear:`, 'info');
+    items.forEach((it, i) => controller?.push.notice(`  ${i + 1}. ${queuePreview(it.text)}`, 'info'));
+  };
+
+  // C2 — after a turn settles, run the next queued message iff nothing else owns the
+  // next turn (a goal continuation or a child auto-resume takes precedence).
+  const drainInputQueue = () => {
+    setImmediate(() => {
+      if (isProcessing || pendingContinuation || childResumeTimer || exited) return;
+      const next = inputQueue.dequeue();
+      if (!next) return;
+      const remaining = inputQueue.size;
+      controller?.push.notice(`(running queued message${remaining ? ` — ${remaining} more queued` : ''})`, 'info');
+      void runChatTurn(next.text);
+    });
+  };
+
   // Run a single agent turn through the Ink chat REPL. Mirrors
   // cli/repl.ts:runAgentTurn but pushes events through the Ink
   // scrollback controller instead of console.log + ora spinner.
@@ -452,6 +540,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       controller.push.notice('A previous turn is still running.');
       return;
     }
+    // A fresh turn supersedes any armed auto-resume watch.
+    cancelChildResume();
     isProcessing = true;
     clearIdleHint();
     // CLI-21 — crash checkpoint: record the in-flight prompt before the turn so
@@ -753,6 +843,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // failed turn doesn't trigger it (we don't want auto-retry loops).
       scheduleGoalContinuation(rawInput, answer);
 
+      // C1 — if this turn ended with timed-out children, arm the auto-resume watch
+      // (skipped when a goal continuation already owns the next turn).
+      scheduleChildResume();
+
       // MEM-33b — after a successful MULTI-STEP turn, fire-and-forget distil a
       // reusable skill (the brain's <no-skill/> gate drops trivial runs). Opt-in
       // (cli.autoExtractSkills, off by default — one LLM call per turn). Fully
@@ -794,6 +888,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // held back so they didn't scroll past under the active turn.
       notifyIdleCompletions();
       armIdleHint();
+      // C2 — run the next queued message (if any) now the turn has settled and
+      // nothing else (goal continuation / child auto-resume) owns the next turn.
+      drainInputQueue();
     }
   };
 
@@ -996,6 +1093,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             pendingContinuation = false;
             push.notice('(goal continuation cancelled by user input)');
           }
+          // C1 — likewise cancel an armed child auto-resume watch.
+          if (cancelChildResume()) {
+            push.notice('(auto-resume cancelled by user input)');
+          }
           clearIdleHint();
 
           // If a slash command's handler had called `rl.question(cb)`,
@@ -1059,12 +1160,19 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             const parts = text.trim().split(/\s+/);
             const command = parts[0].toLowerCase();
             const args = parts.slice(1);
+            // C2 — `/queue` is handled inline so it works mid-turn (the slash
+            // dispatcher itself is fine to run while a turn is in flight).
+            if (command === '/queue') { handleQueueCommand(args); return; }
             await dispatchSlash(command, args, shim);
             return;
           }
 
+          // C2 — a prompt typed while a turn is running is QUEUED (not dropped); it
+          // runs after the current turn settles (see drainInputQueue). Manage it with
+          // /queue. (Slash commands above still dispatch immediately.)
           if (isProcessing) {
-            push.notice('A previous turn is still running. Wait for the prompt before sending another message.');
+            const { position } = inputQueue.enqueue(text);
+            push.notice(`(queued #${position} — runs after the current turn; /queue to view, /queue remove ${position} to drop)`, 'info');
             return;
           }
 

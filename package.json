@@ -1,7 +1,7 @@
 {
   "name": "brainrouter-monorepo",
   "private": true,
-  "version": "0.4.11",
+  "version": "0.4.12",
   "workspaces": [
     "packages/*",
     "brainrouter",
@@ -27,7 +27,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@kinqs/brainrouter-mcp-server": "^0.4.11",
+    "@kinqs/brainrouter-mcp-server": "^0.4.12",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   }

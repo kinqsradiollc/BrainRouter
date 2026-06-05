@@ -11,6 +11,7 @@ import {
   matchGlob,
   resolveWorkspacePath,
 } from '../agent/agent.js';
+import { grepSearch } from '../agent/workspaceFs.js';
 import { parsePatchEnvelope, assessPatchSafety } from '../agent/applyPatch.js';
 import { findWorkspaceRoot } from '../config/workspace.js';
 import { withTempWorkspace } from './_helpers.js';
@@ -78,6 +79,55 @@ test('globFiles ignores generated directories and returns workspace-relative mat
     fs.writeFileSync('dist/index.ts', 'export {};\n');
 
     assert.deepEqual(globFiles('**/*.ts'), ['src/index.ts']);
+  });
+});
+
+test('FS-FIX grep_search matches a REGEX (alternation), not a literal substring', () => {
+  withTempWorkspace(() => {
+    fs.mkdirSync('src', { recursive: true });
+    fs.writeFileSync('src/a.ts', 'import sqlite from "x";\nconst y = 1;\n');
+    fs.writeFileSync('src/b.ts', 'use better-sqlite3 here\n');
+    const ws = fs.realpathSync(process.cwd());
+    // The old literal `includes` searched for the raw string "sqlite|better-sqlite"
+    // (with the pipe) and found nothing. As a regex it matches both files.
+    const hits = grepSearch('sqlite|better-sqlite', ws, ws);
+    assert.deepEqual(hits.map((h) => h.path).sort(), ['src/a.ts', 'src/b.ts']);
+    assert.equal(hits.find((h) => h.path === 'src/a.ts')!.line, 1);
+  });
+});
+
+test('FS-FIX grep_search accepts a single FILE path (no ENOTDIR)', () => {
+  withTempWorkspace(() => {
+    fs.mkdirSync('src', { recursive: true });
+    fs.writeFileSync('src/a.ts', 'hello\nworld\n');
+    const ws = fs.realpathSync(process.cwd());
+    // Previously `readdirSync(file)` threw ENOTDIR; now it greps just that file.
+    const hits = grepSearch('world', path.join(ws, 'src/a.ts'), ws);
+    assert.deepEqual(hits, [{ path: 'src/a.ts', line: 2, text: 'world' }]);
+  });
+});
+
+test('FS-FIX grep_search falls back to literal on an invalid regex', () => {
+  withTempWorkspace(() => {
+    fs.writeFileSync('a.txt', 'value a(b literal\n');
+    const ws = fs.realpathSync(process.cwd());
+    const hits = grepSearch('a(b', ws, ws); // '(' is invalid regex → literal fallback
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].path, 'a.txt');
+  });
+});
+
+test('FS-FIX grep_search + globFiles skip .claude / .brainrouter (worktree copies)', () => {
+  withTempWorkspace(() => {
+    fs.mkdirSync('.claude/worktrees/copy', { recursive: true });
+    fs.mkdirSync('.brainrouter/worktrees/copy', { recursive: true });
+    fs.mkdirSync('src', { recursive: true });
+    fs.writeFileSync('.claude/worktrees/copy/dup.ts', 'NEEDLE\n');
+    fs.writeFileSync('.brainrouter/worktrees/copy/dup.ts', 'NEEDLE\n');
+    fs.writeFileSync('src/real.ts', 'NEEDLE\n');
+    const ws = fs.realpathSync(process.cwd());
+    assert.deepEqual(globFiles('**/*.ts'), ['src/real.ts'], 'glob skips repo copies');
+    assert.deepEqual(grepSearch('NEEDLE', ws, ws).map((h) => h.path), ['src/real.ts'], 'grep skips repo copies');
   });
 });
 

@@ -36,7 +36,7 @@ import { buildParentExecutionContextSnapshot } from './parentContext.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
-import { prepareChildWorkspace, removeChildWorktree } from './worktreeIsolation.js';
+import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, worktreePatchFile, type WorktreeHoldReason, type ChildWorkspaceResolution } from './worktreeIsolation.js';
 import { getCliStateDir } from '../state/cliState.js';
 
 export interface OrchestrationContext {
@@ -85,7 +85,7 @@ export interface OrchestrationContext {
    * Lets the REPL surface "✓ agent X completed" so the user knows when to act,
    * instead of seeing tool events and then silence.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }) => void;
+  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string; heldForReview?: boolean } }) => void;
   /**
    * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
    * `handleSpawn` calls this to ask the user (returns true to allow).
@@ -173,14 +173,11 @@ export function extractChildPreview(output: string, maxChars: number): string {
   return output.slice(0, head) + '\n…\n' + output.slice(-tail);
 }
 
-// Default wait/timeout for foreground delegation. Mirrors wait_agent's
-// historical 120 s default so task_agent and spawn_agent({ wait: true })
-// behave identically when no explicit timeoutMs is passed. Only used inside
-// handleTaskAgent (call-time); kept out of the schema-creator bodies to
-// avoid the ESM circular-import TDZ between tools.ts and agent.ts (agent.ts
-// constructs the LOCAL_TOOLS array eagerly at module load).
-const DEFAULT_TASK_AGENT_TIMEOUT_MS = 120_000;
-const DEFAULT_CHILD_AGENT_TIMEOUT_MS = 10 * 60_000;
+// Default wait timeout for foreground delegation. 0 = wait until completion.
+// Child execution itself is not killed by this value; its inner loops are
+// bounded by maxToolLoops plus per-call LLM/MCP/shell timeouts and reconnect.
+const DEFAULT_TASK_AGENT_TIMEOUT_MS = 0;
+const DEFAULT_CHILD_AGENT_TIMEOUT_MS = 0;
 
 const ORCHESTRATION_TOOL_NAMES = new Set([
   'task_agent',
@@ -271,26 +268,11 @@ function resolveChildLaunchCwd(ctx: OrchestrationContext, rawWorkdir: unknown): 
   }
 }
 
-function childTimeoutMsFromArgs(args: any): number {
+function parentWaitTimeoutMsFromArgs(args: any): number {
   const knobValue = getCliKnobs().childAgentTimeoutMs;
   const raw = Number(args?.timeoutMs ?? knobValue ?? DEFAULT_CHILD_AGENT_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_CHILD_AGENT_TIMEOUT_MS;
-}
-
-async function withChildDeadline<T>(promise: Promise<T>, timeoutMs: number, childId: string): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`Child agent ${childId} exceeded wall-clock timeout (${timeoutMs}ms).`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+  // 0 / invalid / negative ⇒ no parent wait timeout.
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
 export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool } from './agentTools.js';
@@ -359,7 +341,7 @@ export function synthesizeDelegateTools(
             enum: ['read', 'write', 'shell'],
             description: `Override the agent's default access mode (${def.defaultAccess ?? 'read'}).`,
           },
-          timeoutMs: { type: 'integer', description: 'Optional wall-clock timeout in ms.' },
+          timeoutMs: { type: 'integer', description: 'Optional parent wait timeout in ms. 0 or omitted waits until completion; timeout leaves the child running.' },
           workdir: { type: 'string', description: 'Optional workspace-relative child launch directory.' },
           seedRecordIds: {
             type: 'array',
@@ -591,7 +573,8 @@ async function handleSpawnBatch(args: any, ctx: OrchestrationContext): Promise<s
 async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<string> {
   const ids = Array.isArray(args?.ids) ? args.ids.map(String) : [];
   if (ids.length === 0) throw new Error('wait_agents requires a non-empty `ids` array.');
-  const timeoutMs = Number(args?.timeoutMs ?? 240_000);
+  const rawTimeoutMs = args?.timeoutMs === undefined ? 240_000 : Number(args.timeoutMs);
+  const timeoutMs = Number.isFinite(rawTimeoutMs) ? rawTimeoutMs : 240_000;
   // ORCH-FIX — allSettled, not all: one child's wait rejecting must NOT reject
   // the whole batch (which would surface as a tool failure and lose the other
   // children's results). A rejected wait becomes a per-child error result.
@@ -687,7 +670,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   // creating the session. `no-children` denies outright; `ask-*` policies
   // prompt the interactive parent (and fail closed in headless runs).
   const delegationPolicy = resolveDelegationPolicy(readPreferences(ctx.workspaceRoot));
-  const gate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
+  const rawGate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
+  // Auto-chain follow-ups (the reviewer/verifier the user opted into via
+  // `/auto-chain review|verify|both`) are PRE-AUTHORIZED — they must not re-prompt
+  // "approve this delegation?" on every worker completion. A hard `deny` policy
+  // ("no-children") still blocks them.
+  const gate = args.autoChainFollowup === true && rawGate === 'ask' ? 'auto' : rawGate;
   if (gate === 'deny') {
     throw new Error(
       `Delegation is disabled (policy "no-children"). The agent may not spawn child agents. ` +
@@ -708,7 +696,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   }
 
   const requestedChildLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
-  const childTimeoutMs = childTimeoutMsFromArgs(args);
+  const parentWaitTimeoutMs = parentWaitTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
     role: role.name,
     prompt,
@@ -718,13 +706,32 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     tier: childTier,
     depth: currentDepth + 1,
   });
-  const childWorkspace = prepareChildWorkspace({
-    parentWorkspaceRoot: ctx.workspaceRoot,
-    parentLaunchCwd: requestedChildLaunchCwd,
-    childId: record.id,
-    access,
-    mode: getCliKnobs().childWorkspaceIsolation,
-  });
+  // BUILD-LOOP P2 (0.4.12) — when the build orchestrator passes an explicit
+  // `workspaceRootOverride` (the ONE worktree shared by a build run's
+  // implement/verify/review children), the child runs IN that worktree with NO
+  // per-child isolation handle — so it never merges back on its own; the build
+  // loop owns the shared worktree's lifecycle + the gated merge at the end.
+  // The override is honored ONLY when it's a git worktree of the SAME repo as the
+  // parent workspace — never an arbitrary path — so a child's writes can't be
+  // redirected outside the workspace (ownership + write-validation key off
+  // `workspaceRoot`). Anything else falls through to normal per-child isolation.
+  const sharedRootOverride = typeof args.workspaceRootOverride === 'string' && args.workspaceRootOverride.trim()
+    ? args.workspaceRootOverride.trim()
+    : undefined;
+  const sharedRootValid = sharedRootOverride ? isSharedWorktreeOf(ctx.workspaceRoot, sharedRootOverride) : false;
+  const childWorkspace: ChildWorkspaceResolution = (sharedRootOverride && sharedRootValid)
+    ? (() => {
+        const root = fs.realpathSync(sharedRootOverride);
+        // Map the requested cwd into the shared worktree (fall back to its root).
+        return { workspaceRoot: root, launchCwd: sharedWorktreeLaunchCwd(ctx.workspaceRoot, requestedChildLaunchCwd, root), isolated: true };
+      })()
+    : prepareChildWorkspace({
+        parentWorkspaceRoot: ctx.workspaceRoot,
+        parentLaunchCwd: requestedChildLaunchCwd,
+        childId: record.id,
+        access,
+        mode: getCliKnobs().childWorkspaceIsolation,
+      });
   const childWorkspaceRoot = childWorkspace.workspaceRoot;
   const childLaunchCwd = childWorkspace.launchCwd;
   if (childWorkspace.isolated || childWorkspace.notice) {
@@ -857,7 +864,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Synthetic dangling-tool-call recovery: every child must resolve to
       // an explicit result instead of leaving
       // the session running forever when an LLM/MCP call hangs.
-      const output = await withChildDeadline(childAgent.runTurn(prompt, {
+      const output = await childAgent.runTurn(prompt, {
         onStatusUpdate: () => {},
         onToolStart: (tool, args) => {
           childToolStarts.set(tool, Date.now());
@@ -882,7 +889,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
             durationMs,
           });
         },
-      }), childTimeoutMs, record.id);
+      });
 
       // Working-memory offload: when a child returns a sizeable payload, push
       // the full body into the BrainRouter working canvas and keep only a
@@ -966,12 +973,18 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // auto-chain review/verify. Doing it in `finally` instead would merge AFTER
       // an auto-chained reviewer already read a stale (un-merged) parent tree.
       // Best-effort: a throw must not turn a succeeded child into a failure.
-      let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } | undefined;
+      let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string; heldForReview?: boolean } | undefined;
       let mergeLine = '';
       if (childWorkspace.isolation && !worktreeSettled) {
         try {
+          // BUILD-LOOP P2.5 — HOLD the child's changes (don't auto-merge) when it's a
+          // build fan-out slice (`holdWorktree` → the synthesis gate owns the merge) or
+          // when `cli.worktreeMergeReview` is on (the user applies). Either way the work
+          // is captured as a recovery patch and surfaced via `/agents diff <id>`.
+          const holdReason: WorktreeHoldReason | null =
+            args.holdWorktree === true ? 'fanout' : getCliKnobs().worktreeMergeReview === 'on' ? 'review' : null;
           const cleanup = removeChildWorktree(childWorkspace.isolation, {
-            applyBack: true,
+            applyBack: !holdReason,
             patchFile: worktreePatchFile(ctx.workspaceRoot, record.id),
           });
           worktreeSettled = true;
@@ -982,10 +995,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
               applied: cleanup.applied,
               patchPath: cleanup.patchPath,
               applyError: cleanup.applyError,
+              heldForReview: !!holdReason,
             };
-            mergeLine = cleanup.applied
-              ? `\n\n— worktree: ${cleanup.changedFiles} file(s) merged into your tree`
-              : `\n\n— worktree: ${cleanup.changedFiles} file(s) NOT merged (${cleanup.applyError ?? 'conflict'}) — recover with /agents diff ${record.id}`;
+            mergeLine = mergeBackLine(cleanup, record.id, holdReason);
           }
         } catch (mergeErr: any) {
           console.error(`[BrainRouter] child ${record.id} merge-back threw (isolated):`, mergeErr?.message ?? mergeErr);
@@ -1030,6 +1042,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
               label: `auto-${followRole}-${record.id}`,
               access: followRole === 'verifier' ? 'shell' : 'read',
               seedRecordIds: seededIds,
+              // Pre-authorized by the user's /auto-chain setting → no approval prompt.
+              autoChainFollowup: true,
             },
             ctx,
           );
@@ -1122,7 +1136,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   );
 
   if (args.wait) {
-    return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? childTimeoutMs }, ctx);
+    return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? parentWaitTimeoutMs }, ctx);
   }
   return JSON.stringify({
     id: record.id,
@@ -1134,7 +1148,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     isolatedWorkspace: childWorkspace.isolated,
     isolation: childWorkspace.isolation,
     notice: childWorkspace.notice,
-    timeoutMs: childTimeoutMs,
+    timeoutMs: parentWaitTimeoutMs,
   }, null, 2);
 }
 
@@ -1146,29 +1160,34 @@ function handleList(ctx: OrchestrationContext): string {
 async function handleWait(args: any, ctx: OrchestrationContext): Promise<string> {
   const id = String(args.id ?? '');
   if (!id) throw new Error('wait_agent requires an id.');
-  const timeoutMs = Number(args.timeoutMs ?? 120000);
+  const rawTimeoutMs = args.timeoutMs === undefined ? 120_000 : Number(args.timeoutMs);
+  const timeoutMs = Number.isFinite(rawTimeoutMs) ? rawTimeoutMs : 120_000;
 
   const promise = runningPromises.get(id);
   if (promise) {
-    let timedOut = false;
-    let timeout: NodeJS.Timeout | undefined;
-    await Promise.race([
-      promise,
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
-      }),
-    ]);
-    if (timeout) clearTimeout(timeout);
-    if (timedOut) {
-      const record = getSession(ctx.workspaceRoot, id);
-      return JSON.stringify({
-        id,
-        status: 'timeout',
-        childStatus: record?.status ?? 'unknown',
-        role: record?.role,
-        label: record?.label,
-        summary: record ? formatSessionSummary(record) : `No child session with id ${id}.`,
-      }, null, 2);
+    if (timeoutMs <= 0) {
+      await promise;
+    } else {
+      let timedOut = false;
+      let timeout: NodeJS.Timeout | undefined;
+      await Promise.race([
+        promise,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      if (timedOut) {
+        const record = getSession(ctx.workspaceRoot, id);
+        return JSON.stringify({
+          id,
+          status: 'timeout',
+          childStatus: record?.status ?? 'unknown',
+          role: record?.role,
+          label: record?.label,
+          summary: record ? formatSessionSummary(record) : `No child session with id ${id}.`,
+        }, null, 2);
+      }
     }
   }
 
@@ -1238,13 +1257,6 @@ async function offloadChildOutput(
   });
   if (res.isError) return undefined;
   return res.parsed?.refNodeId ?? res.parsed?.nodeId ?? res.parsed?.ref ?? undefined;
-}
-
-// CODEX-WORKTREE-MERGEBACK — where a child's full recovery patch is persisted so
-// its work survives the throwaway worktree's removal (and can be re-applied with
-// `git apply <path>`). Lives under the per-workspace CLI state dir, not the repo.
-function worktreePatchFile(workspaceRoot: string, childId: string): string {
-  return path.join(getCliStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
 }
 
 // CODEX-WORKTREE-MERGEBACK — persist a worktree-cleanup result onto the child

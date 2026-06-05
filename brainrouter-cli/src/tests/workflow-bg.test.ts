@@ -64,5 +64,6 @@ test('WF-BG background panel surfaces phase progress in the label', async () => 
   const tasks = collectRunningTasks(ws);
   const wf = tasks.find((t) => t.kind === 'workflow' && t.id === 'wf-panel');
   assert.ok(wf, 'workflow run shows in the background panel');
-  assert.match(wf!.label, /phase 1\/2/);
+  // BUILD-LOOP P4 — the label now names the ACTIVE phase + its position ("B (2/2)").
+  assert.match(wf!.label, /B \(2\/2\)/);
 });
