@@ -55,12 +55,18 @@ test('buildSystemPrompt includes workspace, session, and raw MCP tool names', ()
   assert.doesNotMatch(prompt, /mcp_brainrouter_memory_resolve_session/);
 });
 
-test('agent role registry lists built-in roles and rejects unknown ones', () => {
+test('agent role registry lists built-in roles and DEGRADES unknown ones to a best-fit', () => {
   const names = listRoles().map(r => r.name).sort();
   assert.deepEqual(names, ['architect', 'explorer', 'reviewer', 'verifier', 'worker']);
   assert.equal(resolveRole('explorer').defaultAccess, 'read');
   assert.equal(resolveRole('worker').defaultAccess, 'write');
-  assert.throws(() => resolveRole('nope'), /Unknown agent role/);
+  // FS-FIX: an unknown/custom role no longer THROWS (which killed whole workflows
+  // when a model named a phase agent `security-auditor`). It maps to the best-fit
+  // built-in, defaulting to the safe read-only `explorer`.
+  assert.equal(resolveRole('nope').name, 'explorer');
+  assert.equal(resolveRole('security-auditor').name, 'reviewer');
+  assert.equal(resolveRole('qa-engineer').name, 'verifier');
+  assert.equal(resolveRole('implementer').name, 'worker');
 });
 
 test('buildRolePrompt embeds overlay and task into base prompt', () => {
