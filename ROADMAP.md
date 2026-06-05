@@ -8,12 +8,12 @@ design specs in [`docs/specs/`](docs/specs/).
 
 ## Shipped
 
-Latest: **0.4.11** (2026-06-04) — worktree isolation that merges back, a
-self-hydrating `config.json`, and memory hygiene (`/memory verify` +
-churn-weighted decay).
+Latest published: **0.4.11** (2026-06-04). **0.4.12** (The Build Loop) is
+**feature-complete on `release/0.4.12`** — release prep pending.
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 (feature-complete) |
 | 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
 | 0.4.10 | Memory-home hardening · mobile dashboard · Cloudflare Worker runtime | 2026-06-03 |
 | 0.4.9 | Dashboard redesign ("The Memory Instrument") · auth refresh tokens · API hardening | 2026-06-03 |
@@ -27,10 +27,10 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
-## Active tracks — 0.4.12 · branch `release/0.4.12`
+## 0.4.12 — The Build Loop · branch `release/0.4.12` (feature-complete)
 
-Every feature lands as its **own PR into `release/0.4.12`**, merged after code
-review. Live checklist — ticked as each PR merges.
+All feature work below is **merged into `release/0.4.12`**; what remains is
+release prep (version bump + changelog + publish) and optional REPL polish.
 
 ### The Build Loop · spec `docs/specs/build-loop-workflow.md`
 
@@ -38,17 +38,30 @@ An opt-in plan → implement → verify → review → merge engineering loop on
 0.4.11 isolation substrate. Single-agent stays the default; `/build` is the
 explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
-- [x] P1 — `build` workflow template + `/build <task>` command *(shipped in 0.4.11 prep; on `main`)*
-- [x] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits) *(PR #300 → review)*
-- [x] P2.5 — review-gated merge: the single-worktree gate landed with P2; P2.5 adds **fan-out builds** (`build` template `slices[]` → one held worktree per slice) + a **cross-worktree synthesis review** with overlap-aware gated merge (`finalizeFanOutBuild`), and the **`cli.worktreeMergeReview`** knob extending the hold-for-review gate to ad-hoc `/spawn` workers *(PR — branch `feat/build-loop-p25-merge-gate`)*
-- [x] P3 — escalation: `cli.buildLoop` knob + planner classifier *(merged)*
-- [x] P4 — surface the active phase in `/ps` · `/agents` · statusline (active-run ledger → `▶ <phase> (n/total)`; new opt-in `phase` statusline segment) *(PR — branch `feat/build-loop-p4-active-phase`)*
-- [x] P5 — bounded **loop-until-green** build self-repair: opt-in `cli.buildLoopMaxRepairs` (default **0 = disabled**); when >0 a red Verify re-runs Implement→Verify→Review in the same worktree up to N times until green (`repairUntilGreen`) *(PR — branch `feat/build-loop-p5-loop-until-green`)*. Per-agent thread durability tracked separately (CODEX-THREAD-FORK).
+- [x] P1 — `build` workflow template + `/build <task>` command
+- [x] P2 — phase-scoped shared worktree (verify runs against the worker's actual edits) + review-gated merge *(#300)*
+- [x] P2.5 — **fan-out builds** (`build` template `slices[]` → one held worktree per slice) + a **cross-worktree synthesis review** with overlap-aware gated merge (`finalizeFanOutBuild`), and the **`cli.worktreeMergeReview`** knob extending the hold-for-review gate to ad-hoc `/spawn` workers
+- [x] P3 — escalation: `cli.buildLoop` knob (`off`/`escalate`/`always`) + planner classifier *(#301)*
+- [x] P4 — surface the active phase in `/ps` · `/agents` · statusline (active-run ledger → `▶ <phase> (n/total)`; opt-in `phase` statusline segment) *(#303)*
+- [x] P5 — bounded **loop-until-green** build self-repair: opt-in `cli.buildLoopMaxRepairs` (default **0 = disabled**); when >0 a red Verify re-runs Implement→Verify→Review in the same worktree up to N times until green *(#304)*. Per-agent thread durability tracked separately.
 
-### Carried from 0.4.11
+### Multi-agent run continuity
 
-- [x] C1 — spawn-child loop continuation: when a turn ends with timed-out children, the REPL polls their status and auto-fires a synthetic continue (drain + synthesize) once they settle — always on, cancelled by user input (`runtime/childResume.ts`) *(PR — branch `feat/c1-child-loop-resume`)*
-- [x] C2 — input queue while busy: a prompt typed mid-turn is queued (not dropped), drained one-by-one after each turn; `/queue` lists, `/queue remove <n>` / `/queue clear` manage it (`runtime/inputQueue.ts`) *(PR — branch `feat/c2-input-queue`)*
+- [x] C1 — parent-loop continuation: a turn ending with timed-out children polls their status and auto-fires a synthetic continue (drain + synthesize) once they settle — always on, cancelled by user input *(#305)*
+- [x] C2 — input queue while busy: a mid-turn prompt is queued (not dropped), drained one-by-one after each turn; `/queue` lists, `/queue remove <n>` / `/queue clear` manage it *(#306)*
+
+### Reliability & accuracy
+
+- [x] Reconnect-with-backoff for model + memory/MCP calls (honors `Retry-After`, connectivity-aware) instead of hard wall-clock timeouts; genuine recall timeouts still fail fast *(#307)*
+- [x] Child **and** worker timeouts are parent-wait only — never kill the child/worker; `timeoutMs: 0` waits to completion *(#310)*
+- [x] Orphan-worktree GC no longer deletes a running child's worktree *(#307)*
+- [x] `grep_search` does real regex matching + ignores build/cache dirs; workflow roles degrade gracefully *(#308)*
+- [x] `/tokens` session cost includes child / sub-agent tokens *(#309)*; worker state relocated to the BrainRouter home *(#310)*
+
+### Remaining before release
+
+- [ ] Release prep — version bump across packages + dist-manifest sync, changelog, publish (on go).
+- [ ] Optional REPL polish (deferrable to 0.4.13): parallel same-name tool-result display pairing; `file:line` citation escaping; next-action planner latency.
 
 ### Future — design drafted
 
