@@ -14,7 +14,8 @@ import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../state/sessionStore.js';
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
-import { shouldRetryLlm } from '../state/checkpointStore.js';
+import { isConnectivityError, isRetryableServerError } from '../state/checkpointStore.js';
+import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -1246,18 +1247,45 @@ export class Agent {
       // limits (429), and overload errors — not just client-side connectivity.
       // Context-overflow and model-not-found errors are neither, so they fall
       // straight through to the dedicated recovery in the catch below.
-      const LLM_MAX_ATTEMPTS = 3;
+      // RECONNECT (0.4.12) — Codex-style: a transient failure (timeout / disconnect
+      // / 5xx / 429) RECONNECTS with exponential backoff (honoring Retry-After) up to
+      // `llmMaxReconnects`, rather than dying on the first hiccup. AND — if the
+      // machine is genuinely OFFLINE — it keeps waiting for the link to return WITHOUT
+      // spending the reconnect budget, so a dropped connection auto-resumes once the
+      // network is back (a long background worker no longer dies on a Wi-Fi blip).
+      const maxReconnects = Math.max(1, getCliKnobs().llmMaxReconnects);
+      const OFFLINE_MAX_WAITS = 120; // generous: keep waiting for the network to return
+      const llmEndpoint = this.llmConfig?.endpoint ?? '';
       const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
-        for (let attempt = 1; ; attempt++) {
+        let attempt = 0;
+        let offlineWaits = 0;
+        for (;;) {
           try {
             return await invokeLlm();
           } catch (err: any) {
-            if (!shouldRetryLlm(err, attempt, LLM_MAX_ATTEMPTS)) throw err;
-            const delayMs = attempt === 1 ? 600 : 1800;
+            // Only transient transport / server failures reconnect; deterministic
+            // errors (4xx, context overflow, model-not-found) fall straight through.
+            const serverSide = isRetryableServerError(err);
+            if (!serverSide && !isConnectivityError(err)) throw err;
+            // A connectivity error may just be the network being down — probe; while
+            // offline, wait for it to come back without consuming the retry budget.
+            const online = serverSide ? true : await probeConnectivity(llmEndpoint);
+            if (!online) {
+              if (offlineWaits >= OFFLINE_MAX_WAITS) throw err;
+              offlineWaits += 1;
+              const delay = reconnectBackoffMs(Math.min(offlineWaits, 6), { capMs: 15_000 });
+              callbacks.onStatusUpdate(`Waiting for connection… offline — retrying in ${(delay / 1000).toFixed(1)}s (${offlineWaits})`);
+              await new Promise((r) => setTimeout(r, delay));
+              continue;
+            }
+            attempt += 1;
+            if (attempt > maxReconnects) throw err;
+            const retryAfterMs = typeof err?.retryAfterMs === 'number' ? err.retryAfterMs : undefined;
+            const delay = reconnectBackoffMs(attempt, { retryAfterMs });
             callbacks.onStatusUpdate(
-              `Transient error reaching the model (${String(err?.message ?? err).slice(0, 80)}) — retrying ${attempt}/${LLM_MAX_ATTEMPTS - 1} in ${(delayMs / 1000).toFixed(1)}s...`,
+              `Reconnecting… ${attempt}/${maxReconnects} — ${String(err?.message ?? err).slice(0, 60)} (in ${(delay / 1000).toFixed(1)}s)`,
             );
-            await new Promise((r) => setTimeout(r, delayMs));
+            await new Promise((r) => setTimeout(r, delay));
           }
         }
       };
@@ -4087,7 +4115,13 @@ export async function callOpenAI(
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${errText}`);
+    // RECONNECT — attach the structured status + any `Retry-After` so the resilient
+    // loop classifies it (429/5xx → reconnect) and honors the server's backoff.
+    const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${errText}`);
+    apiErr.status = res.status;
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+    throw apiErr;
   }
 
   const data = await res.json() as any;

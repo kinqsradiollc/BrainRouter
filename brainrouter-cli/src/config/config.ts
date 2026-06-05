@@ -129,8 +129,17 @@ export interface CliKnobs {
   theme?: 'light' | 'dark' | 'auto';
 
   // ---- LLM call ergonomics ----------------------------------------------
-  /** Per-call LLM timeout in ms. Default 120000. */
+  /** Per-call LLM timeout in ms. Default 120000. A timeout is treated as a
+   *  RECONNECT signal (not a hard failure) — see `llmMaxReconnects`. */
   llmTimeoutMs?: number;
+  /**
+   * RECONNECT (0.4.12) — max reconnect attempts for a transient LLM failure
+   * (timeout / disconnect / 5xx / 429) before giving up, with exponential backoff
+   * that honors `Retry-After`. Default 5. While the machine is genuinely OFFLINE
+   * the loop keeps waiting for the link WITHOUT spending this budget, so a dropped
+   * connection auto-resumes when the network returns rather than failing the turn.
+   */
+  llmMaxReconnects?: number;
   /** Max concurrent LLM calls across parent + children. Default 4. */
   llmMaxConcurrent?: number;
   /** Disable streaming (SSE). Default false. */
@@ -316,7 +325,13 @@ export interface CliKnobs {
   lspServers?: Record<string, string>;
 
   // ---- orchestration ----------------------------------------------------
-  /** Per-child-agent wall-clock timeout in ms. Default 600000 (10 min). */
+  /**
+   * Per-child-agent wall-clock timeout in ms. Default **0 = NO wall-clock timeout**
+   * — a child runs to completion (the inner loops are already bounded by
+   * `maxToolLoops`, the per-call LLM/MCP/shell timeouts, and the reconnect loop, so
+   * the outer wall-clock only ever killed legitimately-long children). Set a
+   * positive value to re-enable a hard cap.
+   */
   childAgentTimeoutMs?: number;
   /** Character budget for the in-REPL child-agent result preview. Default 2500. */
   agentPreviewChars?: number;
@@ -592,6 +607,7 @@ export interface ResolvedCliKnobs {
   quiet: boolean;
   theme: 'light' | 'dark' | 'auto';
   llmTimeoutMs: number;
+  llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh';
@@ -663,6 +679,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     quiet: c.quiet ?? false,
     theme: c.theme ?? 'auto',
     llmTimeoutMs: c.llmTimeoutMs ?? 120_000,
+    llmMaxReconnects: Math.max(1, Math.floor(c.llmMaxReconnects ?? 5)),
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
     effort: c.effort ?? 'medium',
@@ -706,7 +723,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     autoReindex: c.autoReindex ?? true,
     browserSmoke: c.browserSmoke ?? '',
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
-    childAgentTimeoutMs: c.childAgentTimeoutMs ?? 600_000,
+    childAgentTimeoutMs: c.childAgentTimeoutMs ?? 0, // 0 = no wall-clock timeout (run to completion)
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
     workspaceOverride: c.workspaceOverride,

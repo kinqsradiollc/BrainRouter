@@ -248,6 +248,28 @@ test('CODEX-WORKTREE-CLEANUP reconcileOrphanWorktrees removes a leftover dir git
   });
 });
 
+test('WORKTREE-GC reconcileOrphanWorktrees KEEPS a LIVE child worktree (keepChildIds guard)', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const childId = `agent-live-${Date.now()}`;
+    const resolved = prepareChildWorkspace({ parentWorkspaceRoot: workspace, parentLaunchCwd: workspace, childId, access: 'write', mode: 'auto' });
+    assert.ok(resolved.isolation);
+    // Reproduce the bug's setup: git "loses track" of the worktree (admin entry
+    // gone) but the dir is live + in use by a running child. Without the guard the
+    // GC would delete it out from under the child → ENOENT on every tool call.
+    git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+    fs.mkdirSync(resolved.workspaceRoot, { recursive: true });
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'wip.txt'), 'in progress\n', 'utf8');
+    // WITH the live child id → kept.
+    const removed = reconcileOrphanWorktrees(workspace, { keepChildIds: [childId] });
+    assert.equal(removed, 0, 'a live child worktree is never reclaimed');
+    assert.equal(fs.existsSync(resolved.workspaceRoot), true, 'worktree survives the GC');
+    // Once the child is no longer live, the SAME dir IS reclaimed (real orphan).
+    const removedAfter = reconcileOrphanWorktrees(workspace, { keepChildIds: [] });
+    assert.ok(removedAfter >= 1, 'reclaimed once no longer live');
+    assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+  });
+});
+
 test('A5 (0.4.11) worktrees live under BRAINROUTER_HOME/worktrees, not $TMPDIR', async () => {
   await withGitWorkspace(async (workspace) => {
     const resolved = prepareChildWorkspace({

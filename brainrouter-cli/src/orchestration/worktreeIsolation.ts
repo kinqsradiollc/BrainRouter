@@ -447,12 +447,19 @@ export function applyPatchFile(cwd: string, patchFile: string): { ok: boolean; e
 }
 
 /**
- * Startup reconcile: prune git's stale worktree admin entries and delete any
- * leftover `<worktreeBase>/<repo>/*` dirs that git no longer tracks (orphans
- * from a crashed prior process). Best-effort; returns how many dirs it removed.
- * Mirrors `reconcileStale` for session records.
+ * Reconcile: prune git's stale worktree admin entries and delete any leftover
+ * `<worktreeBase>/<repo>/*` dirs that git no longer tracks (orphans from a crashed
+ * prior process). Best-effort; returns how many dirs it removed. Mirrors
+ * `reconcileStale` for session records.
+ *
+ * CRITICAL — `opts.keepChildIds` MUST list every LIVE (running/pending) child id so
+ * their worktrees are NEVER GC'd. This runs on the periodic background refresh, not
+ * just at startup, so without the guard a transient git-tracking miss (a freshly
+ * `git worktree add`ed worktree not yet in `worktree list`, a sibling terminal on the
+ * same repo, or a prune race) would delete a RUNNING child's worktree out from under
+ * it — the child then ENOENTs on every tool call until its wall-clock timeout.
  */
-export function reconcileOrphanWorktrees(workspaceRoot: string): number {
+export function reconcileOrphanWorktrees(workspaceRoot: string, opts?: { keepChildIds?: Iterable<string> }): number {
   let removed = 0;
   try {
     const repoRoot = gitRoot(workspaceRoot);
@@ -464,7 +471,12 @@ export function reconcileOrphanWorktrees(workspaceRoot: string): number {
       (runGit(repoRoot, ['worktree', 'list', '--porcelain']).stdout.match(/^worktree (.+)$/gm) ?? [])
         .map((l) => l.replace(/^worktree /, '').trim()),
     );
+    // Live children's worktree dir names (the dir basename is `safeName(childId)`),
+    // by both the raw id and its sanitized form — never GC these.
+    const keep = new Set<string>();
+    for (const id of opts?.keepChildIds ?? []) { keep.add(id); keep.add(safeName(id)); }
     for (const entry of fs.readdirSync(base)) {
+      if (keep.has(entry)) continue; // a live child owns this worktree — leave it alone
       const dir = path.join(base, entry);
       let real = dir;
       try { real = fs.realpathSync(dir); } catch { /* use dir */ }
