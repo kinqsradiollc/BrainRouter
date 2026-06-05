@@ -10,15 +10,12 @@ context for each release.
 
 | Order | Version | State | Main question |
 |---:|---|---|---|
-| 1 | **[0.3.7](0.3.7.md)** | Shipped | How do we finish the Ink/config CLI shell? |
-| 2 | **[0.3.8](0.3.8.md)** | Shipped | How do we stop child-agent waiting/stuck behavior? |
-| 3 | **[0.3.9](0.3.9.md)** | Shipped | Memory quality, cache-first loop, tool repair, cost control, CLI knobs → `config.json` |
-| 4 | **[0.4.0](0.4.0.md)** | Shipped | How do multiple CLIs share one memory plane? |
-| 5 | **[0.4.1](0.4.x.md)** | Next | Federation handoff, ownership/budgeting, brain job queue + agent registry |
-| 6 | **[0.4.x](0.4.x.md)** | Planned (0.4.2–0.4.3) | How do we harden orchestration and brain agents? |
-| 7 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI and marketplace? |
+| — | 0.3.7 → 0.4.11 | Shipped | Per-version detail in [`../brainrouter-changelog/`](../brainrouter-changelog/) |
+| 1 | **0.4.12 — The Build Loop** | Feature-complete | How do roles + the phase engine + worktree isolation compose into one plan → implement → verify → review → merge loop? |
+| 2 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI, plugin marketplace, and engineering sync providers? |
 
-Latest shipped: **[0.4.0](0.4.0.md)** on 2026-05-28.
+Latest published: **[0.4.11](../brainrouter-changelog/0.4.11.md)** on 2026-06-04.
+**0.4.12** is feature-complete on `release/0.4.12` (release prep pending).
 
 ---
 

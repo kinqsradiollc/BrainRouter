@@ -1,8 +1,10 @@
 # Spec: The Build Loop — a default engineering workflow
 
-> Status: **DRAFT — design only, not yet approved.** No code until sign-off.
+> Status: **SHIPPED in 0.4.12.** All phases (P1–P5) plus the C1/C2 run-continuity
+> work are merged on `release/0.4.12`. This spec is retained as the design of
+> record; see [`../../brainrouter-changelog/0.4.12.md`](../../brainrouter-changelog/0.4.12.md)
+> for what shipped.
 > Target: 0.4.12 (sequel to the 0.4.11 worktree isolation + merge-back work).
-> Owner: TBD.
 
 ## Objective
 

@@ -13,6 +13,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.4.12](0.4.12.md)** | 2026-06-05 | Feature-complete | The Build Loop (`/build`, plan→implement→verify→review→merge, `cli.buildLoop`, fan-out + merge-gate, loop-until-green) + multi-agent reliability (reconnect not timeout, parent-wait timeouts, C1 loop-continue, C2 input queue) + grep / cost / role accuracy fixes |
+| **[0.4.11](0.4.11.md)** | 2026-06-04 | Shipped | Worktree merge-back isolation (`childWorkspaceIsolation: auto`), self-hydrating `config.json`, `/memory verify` + churn-weighted decay |
+| **[0.4.10](0.4.10.md)** | 2026-06-03 | Shipped | Memory-home hardening, mobile dashboard, Cloudflare Worker runtime |
+| **[0.4.9](0.4.9.md)** | 2026-06-03 | Shipped | Dashboard redesign ("The Memory Instrument"), auth refresh tokens, API hardening |
 | **[0.4.8](0.4.8.md)** | 2026-06-02 | Shipped | Deterministic multi-phase workflow orchestration (PhasePlan engine, run_workflow + templates, planner auto-runs, durable/resumable runs, launcher + background) + brain body-limit fix |
 | **[0.4.7](0.4.7.md)** | 2026-06-02 | Shipped | Coding-agent parity (sandbox fail-closed, command-segment approval, MCP egress, worktree isolation, atomic patches), agentic autonomy + next-action planner, staleness-aware recall |
 | **[0.4.6](0.4.6.md)** | 2026-06-01 | Shipped | Structural refactor — concern-scoped modular layout (behavior-preserving, no user-facing change) |
