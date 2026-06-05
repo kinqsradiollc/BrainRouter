@@ -7,7 +7,7 @@ import type { LLMConfig, ServerConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { VERSION } from '../version.js';
 import { isConnectivityError } from '../state/checkpointStore.js';
-import { reconnectBackoffMs, probeConnectivity } from './reconnect.js';
+import { reconnectBackoffMs } from './reconnect.js';
 
 /**
  * Match the Streamable HTTP session-expiry error so `callTool` can
@@ -308,47 +308,42 @@ export class McpClientWrapper {
           ),
         ),
       ]);
-    // RECONNECT (0.4.12) — apply the same Codex-style resilience the LLM call loop
-    // uses to the memory transport: a stalled/dropped brain call REDIALS + retries
-    // with exponential backoff instead of failing the turn, and while genuinely
-    // OFFLINE (HTTP brain only) it waits for the link to return without spending the
-    // budget. A real tool ERROR is returned (isError envelope), not thrown, so only
-    // transient transport failures reconnect here.
-    // NOTE: a write tool retried after a *timeout* could double-apply; the brain's
-    // capture pipeline reconciles duplicates, and for a memory-first system losing
-    // the op on a blip is worse than a rare reconciled duplicate.
+    // RECONNECT (0.4.12) — recover the memory transport from a genuine connection
+    // DROP (brain restarted / session aged out / socket reset) by redialing + a small
+    // bounded retry, so a transient blip doesn't fail the turn into offline mode.
+    //
+    // CRITICAL — this stays FAST + bounded because memory calls (esp. the per-turn
+    // briefing) are best-effort: a slow recall must degrade to "no memory", never
+    // block. So an `invoke()` TIMEOUT (the brain is alive but slow/hung) FAILS FAST —
+    // redialing would just re-run the same slow query and loop for minutes (the
+    // briefing-takes-forever regression). Only a real drop reconnects, capped low,
+    // with no offline-wait blocking. A real tool ERROR is returned as an isError
+    // envelope (not thrown), so it never enters this loop.
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const maxReconnects = Math.max(1, getCliKnobs().llmMaxReconnects);
-    const probeUrl = this.lastServerConfig?.type === 'http' ? this.lastServerConfig.url : '';
-    const MCP_OFFLINE_MAX_WAITS = 30;
+    const MCP_MAX_RECONNECTS = 2; // best-effort: a few quick redials, then offline-degrade
     let reconnects = 0;
     let sessionRedials = 0;
-    let offlineWaits = 0;
     for (;;) {
       try {
         return await invoke();
       } catch (err) {
+        // Our own per-call timeout ⇒ the brain is slow/hung, not dropped. Fail fast
+        // (caller degrades to offline) rather than redial-and-rerun the slow op.
+        if (err instanceof Error && /\btimed out after \d+ms\b/.test(err.message)) throw err;
         // Streamable HTTP session-expiry: the brain restarted / the session aged out
-        // and our cached `mcp-session-id` is rejected forever. Redial + retry (a few
-        // times) without spending the reconnect budget — the server IS up.
+        // and our cached `mcp-session-id` is rejected. Redial + retry a couple of
+        // times (the server IS up) without spending the reconnect budget.
         if (isSessionNotFoundError(err) && this.lastServerConfig && sessionRedials < 2) {
           sessionRedials += 1;
           try { await this.reinit(); continue; } catch { /* fall through to transient handling */ }
         }
-        // Deterministic failures (a non-transient SDK error) propagate unchanged.
+        // Only a genuine connection drop reconnects; anything else propagates.
         if (!isConnectivityError(err)) throw err;
-        // Offline-aware (only meaningful for an HTTP brain): wait for the network to
-        // return without consuming the reconnect budget.
-        if (probeUrl && offlineWaits < MCP_OFFLINE_MAX_WAITS && !(await probeConnectivity(probeUrl))) {
-          offlineWaits += 1;
-          await sleep(reconnectBackoffMs(Math.min(offlineWaits, 6), { capMs: 15_000 }));
-          continue;
-        }
         reconnects += 1;
-        if (reconnects > maxReconnects) throw err;
-        console.error(`[BrainRouter] memory call "${name}" stalled — reconnecting ${reconnects}/${maxReconnects}...`);
-        try { await this.reinit(); } catch { /* redial best-effort; retry will surface the real failure */ }
-        await sleep(reconnectBackoffMs(reconnects));
+        if (reconnects > MCP_MAX_RECONNECTS) throw err;
+        console.error(`[BrainRouter] memory call "${name}" — reconnecting ${reconnects}/${MCP_MAX_RECONNECTS}...`);
+        try { await this.reinit(); } catch { /* redial best-effort; retry surfaces the real failure */ }
+        await sleep(reconnectBackoffMs(reconnects, { capMs: 4000 }));
       }
     }
   }
