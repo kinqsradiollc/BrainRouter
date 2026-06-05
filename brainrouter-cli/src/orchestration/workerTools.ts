@@ -31,7 +31,7 @@ import {
 /** In-process worker runs, keyed by worker id. */
 const runningWorkers = new Map<string, Promise<void>>();
 
-const DEFAULT_WORKER_TIMEOUT_MS = 600_000;
+const DEFAULT_WORKER_WAIT_TIMEOUT_MS = 600_000;
 
 export interface SpawnWorkerInput {
   workspaceRoot: string;
@@ -46,14 +46,6 @@ export interface SpawnWorkerInput {
   /** The spawning agent's depth (the worker is created at this depth). */
   spawnerDepth: number;
   effortOverride?: EffortLevel;
-  timeoutMs?: number;
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`worker timed out after ${ms}ms`)), ms)),
-  ]);
 }
 
 function ts(): string {
@@ -92,27 +84,23 @@ export function spawnWorkerThread(
   });
 
   appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'system', event: 'spawn', goal: input.goal });
-  const timeoutMs = input.timeoutMs ?? DEFAULT_WORKER_TIMEOUT_MS;
 
   const promise = (async () => {
     try {
-      const output = await withTimeout(
-        childAgent.runTurn(input.prompt ?? input.goal, {
-          onStatusUpdate: () => {},
-          onToolStart: (tool: string) =>
-            appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'tool', event: 'start', tool }),
-          onToolEnd: (tool: string, result: { success?: boolean; summary?: string }) =>
-            appendWorkerTranscript(input.workspaceRoot, worker.id, {
-              ts: ts(),
-              role: 'tool',
-              event: 'end',
-              tool,
-              ok: result?.success ?? true,
-              summary: result?.summary,
-            }),
-        } as any),
-        timeoutMs,
-      );
+      const output = await childAgent.runTurn(input.prompt ?? input.goal, {
+        onStatusUpdate: () => {},
+        onToolStart: (tool: string) =>
+          appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'tool', event: 'start', tool }),
+        onToolEnd: (tool: string, result: { success?: boolean; summary?: string }) =>
+          appendWorkerTranscript(input.workspaceRoot, worker.id, {
+            ts: ts(),
+            role: 'tool',
+            event: 'end',
+            tool,
+            ok: result?.success ?? true,
+            summary: result?.summary,
+          }),
+      } as any);
       appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'assistant', content: output });
       writeWorkerSummary(input.workspaceRoot, worker.id, output);
       // Don't clobber a manual /workers close that landed mid-run.
@@ -156,18 +144,23 @@ export function isWorkerRunningHere(id: string): boolean {
 }
 
 /**
- * Await a worker's completion (bounded). Resolves to the latest meta —
- * terminal if it finished, still `running` if the wait timed out or the
- * worker belongs to another (dead) process.
+ * Await a worker's completion. By default the wait is bounded; pass
+ * timeoutMs <= 0 to wait until a live in-process worker reaches terminal
+ * state. A bounded wait timeout only returns the latest meta and never marks
+ * the worker failed.
  */
 export async function waitWorker(
   workspaceRoot: string,
   id: string,
-  timeoutMs: number = DEFAULT_WORKER_TIMEOUT_MS,
+  timeoutMs: number = DEFAULT_WORKER_WAIT_TIMEOUT_MS,
 ): Promise<WorkerMeta | null> {
   const p = runningWorkers.get(id);
   if (p) {
-    await Promise.race([p.catch(() => {}), new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      await Promise.race([p.catch(() => {}), new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+    } else {
+      await p.catch(() => {});
+    }
   }
   return readWorkerMeta(workspaceRoot, id);
 }

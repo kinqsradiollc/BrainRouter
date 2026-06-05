@@ -118,7 +118,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
       if (sub === 'list') {
         const workers = listWorkers(ws);
         if (!workers.length) {
-          console.log(chalk.gray('\nNo worker threads. (workers persist under .brainrouter/cli/workers/)\n'));
+          console.log(chalk.gray('\nNo worker threads. (workers persist under the workspace CLI state directory.)\n'));
           return true;
         }
         console.log(chalk.bold('\nWorker threads:'));

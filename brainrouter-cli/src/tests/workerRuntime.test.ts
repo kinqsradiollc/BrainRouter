@@ -8,15 +8,29 @@ import {
   updateWorkerMeta,
   appendWorkerTranscript,
   readWorkerTranscript,
+  readWorkerSummary,
   staleWorkerIds,
   reconcileStaleWorkers,
   readWorkerMeta,
   type WorkerMeta,
 } from '../state/workerStore.js';
+import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
+import { withTempWorkspaceAsync } from './_helpers.js';
 
 function ws(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'br-worker-rt-'));
-  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const home = mkdtempSync(join(tmpdir(), 'br-worker-rt-home-'));
+  const previousHome = process.env.BRAINROUTER_HOME;
+  process.env.BRAINROUTER_HOME = home;
+  return {
+    dir,
+    cleanup: () => {
+      if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
+      else process.env.BRAINROUTER_HOME = previousHome;
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    },
+  };
 }
 
 const w = (over: Partial<WorkerMeta>): WorkerMeta => ({
@@ -77,5 +91,44 @@ test('MAS-P5-T3 readWorkerTranscript: returns last-N parsed entries, tolerant of
     assert.deepEqual(readWorkerTranscript(dir, 'missing'), []);
   } finally {
     cleanup();
+  }
+});
+
+test('worker runtime: bounded wait timeout returns running without failing the worker', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: 'worker complete' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    await withTempWorkspaceAsync(async (dir) => {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const worker = spawnWorkerThread(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: dir,
+        launchCwd: dir,
+        role: 'worker',
+        goal: 'slow worker',
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell',
+        spawnerDepth: 0,
+      });
+
+      const timedOut = await waitWorker(dir, worker.id, 5);
+      assert.equal(timedOut?.status, 'running');
+
+      const completed = await waitWorker(dir, worker.id, 0);
+      assert.equal(completed?.status, 'completed');
+      assert.match(readWorkerSummary(dir, worker.id) ?? '', /worker complete/);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

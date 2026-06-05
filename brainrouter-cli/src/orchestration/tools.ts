@@ -173,15 +173,9 @@ export function extractChildPreview(output: string, maxChars: number): string {
   return output.slice(0, head) + '\n…\n' + output.slice(-tail);
 }
 
-// Default wait/timeout for foreground delegation. Mirrors wait_agent's
-// historical 120 s default so task_agent and spawn_agent({ wait: true })
-// behave identically when no explicit timeoutMs is passed. Only used inside
-// handleTaskAgent (call-time); kept out of the schema-creator bodies to
-// avoid the ESM circular-import TDZ between tools.ts and agent.ts (agent.ts
-// constructs the LOCAL_TOOLS array eagerly at module load).
-// 0 = NO wall-clock timeout (children run to completion; inner loops are already
-// bounded by maxToolLoops + the per-call LLM/MCP/shell timeouts + reconnect). A
-// positive `timeoutMs` arg or `cli.childAgentTimeoutMs` re-enables a hard cap.
+// Default wait timeout for foreground delegation. 0 = wait until completion.
+// Child execution itself is not killed by this value; its inner loops are
+// bounded by maxToolLoops plus per-call LLM/MCP/shell timeouts and reconnect.
 const DEFAULT_TASK_AGENT_TIMEOUT_MS = 0;
 const DEFAULT_CHILD_AGENT_TIMEOUT_MS = 0;
 
@@ -274,32 +268,11 @@ function resolveChildLaunchCwd(ctx: OrchestrationContext, rawWorkdir: unknown): 
   }
 }
 
-function childTimeoutMsFromArgs(args: any): number {
+function parentWaitTimeoutMsFromArgs(args: any): number {
   const knobValue = getCliKnobs().childAgentTimeoutMs;
   const raw = Number(args?.timeoutMs ?? knobValue ?? DEFAULT_CHILD_AGENT_TIMEOUT_MS);
-  // 0 / invalid / negative ⇒ NO wall-clock timeout; a positive value caps the child.
+  // 0 / invalid / negative ⇒ no parent wait timeout.
   return Number.isFinite(raw) && raw > 0 ? raw : 0;
-}
-
-async function withChildDeadline<T>(promise: Promise<T>, timeoutMs: number, childId: string): Promise<T> {
-  // No wall-clock timeout (the default): await the child to completion. Its inner
-  // loops are already bounded, so it can't hang forever, and a legitimately-long
-  // child (slow model, reconnects, big review) is no longer killed at an arbitrary
-  // deadline.
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return await promise;
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`Child agent ${childId} exceeded wall-clock timeout (${timeoutMs}ms).`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
 }
 
 export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool } from './agentTools.js';
@@ -368,7 +341,7 @@ export function synthesizeDelegateTools(
             enum: ['read', 'write', 'shell'],
             description: `Override the agent's default access mode (${def.defaultAccess ?? 'read'}).`,
           },
-          timeoutMs: { type: 'integer', description: 'Optional wall-clock timeout in ms.' },
+          timeoutMs: { type: 'integer', description: 'Optional parent wait timeout in ms. 0 or omitted waits until completion; timeout leaves the child running.' },
           workdir: { type: 'string', description: 'Optional workspace-relative child launch directory.' },
           seedRecordIds: {
             type: 'array',
@@ -600,7 +573,8 @@ async function handleSpawnBatch(args: any, ctx: OrchestrationContext): Promise<s
 async function handleWaitBatch(args: any, ctx: OrchestrationContext): Promise<string> {
   const ids = Array.isArray(args?.ids) ? args.ids.map(String) : [];
   if (ids.length === 0) throw new Error('wait_agents requires a non-empty `ids` array.');
-  const timeoutMs = Number(args?.timeoutMs ?? 240_000);
+  const rawTimeoutMs = args?.timeoutMs === undefined ? 240_000 : Number(args.timeoutMs);
+  const timeoutMs = Number.isFinite(rawTimeoutMs) ? rawTimeoutMs : 240_000;
   // ORCH-FIX — allSettled, not all: one child's wait rejecting must NOT reject
   // the whole batch (which would surface as a tool failure and lose the other
   // children's results). A rejected wait becomes a per-child error result.
@@ -722,7 +696,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   }
 
   const requestedChildLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
-  const childTimeoutMs = childTimeoutMsFromArgs(args);
+  const parentWaitTimeoutMs = parentWaitTimeoutMsFromArgs(args);
   const record = createSession(ctx.workspaceRoot, {
     role: role.name,
     prompt,
@@ -890,7 +864,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Synthetic dangling-tool-call recovery: every child must resolve to
       // an explicit result instead of leaving
       // the session running forever when an LLM/MCP call hangs.
-      const output = await withChildDeadline(childAgent.runTurn(prompt, {
+      const output = await childAgent.runTurn(prompt, {
         onStatusUpdate: () => {},
         onToolStart: (tool, args) => {
           childToolStarts.set(tool, Date.now());
@@ -915,7 +889,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
             durationMs,
           });
         },
-      }), childTimeoutMs, record.id);
+      });
 
       // Working-memory offload: when a child returns a sizeable payload, push
       // the full body into the BrainRouter working canvas and keep only a
@@ -1162,7 +1136,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   );
 
   if (args.wait) {
-    return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? childTimeoutMs }, ctx);
+    return await handleWait({ id: record.id, timeoutMs: args.timeoutMs ?? parentWaitTimeoutMs }, ctx);
   }
   return JSON.stringify({
     id: record.id,
@@ -1174,7 +1148,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     isolatedWorkspace: childWorkspace.isolated,
     isolation: childWorkspace.isolation,
     notice: childWorkspace.notice,
-    timeoutMs: childTimeoutMs,
+    timeoutMs: parentWaitTimeoutMs,
   }, null, 2);
 }
 
@@ -1186,29 +1160,34 @@ function handleList(ctx: OrchestrationContext): string {
 async function handleWait(args: any, ctx: OrchestrationContext): Promise<string> {
   const id = String(args.id ?? '');
   if (!id) throw new Error('wait_agent requires an id.');
-  const timeoutMs = Number(args.timeoutMs ?? 120000);
+  const rawTimeoutMs = args.timeoutMs === undefined ? 120_000 : Number(args.timeoutMs);
+  const timeoutMs = Number.isFinite(rawTimeoutMs) ? rawTimeoutMs : 120_000;
 
   const promise = runningPromises.get(id);
   if (promise) {
-    let timedOut = false;
-    let timeout: NodeJS.Timeout | undefined;
-    await Promise.race([
-      promise,
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
-      }),
-    ]);
-    if (timeout) clearTimeout(timeout);
-    if (timedOut) {
-      const record = getSession(ctx.workspaceRoot, id);
-      return JSON.stringify({
-        id,
-        status: 'timeout',
-        childStatus: record?.status ?? 'unknown',
-        role: record?.role,
-        label: record?.label,
-        summary: record ? formatSessionSummary(record) : `No child session with id ${id}.`,
-      }, null, 2);
+    if (timeoutMs <= 0) {
+      await promise;
+    } else {
+      let timedOut = false;
+      let timeout: NodeJS.Timeout | undefined;
+      await Promise.race([
+        promise,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      if (timedOut) {
+        const record = getSession(ctx.workspaceRoot, id);
+        return JSON.stringify({
+          id,
+          status: 'timeout',
+          childStatus: record?.status ?? 'unknown',
+          role: record?.role,
+          label: record?.label,
+          summary: record ? formatSessionSummary(record) : `No child session with id ${id}.`,
+        }, null, 2);
+      }
     }
   }
 

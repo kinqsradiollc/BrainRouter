@@ -154,7 +154,7 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'spawn_worker_thread',
-    description: 'Start a persistent background worker thread for a self-contained task. It runs detached (your turn does NOT block), persists its transcript + rolling summary + status under .brainrouter/cli/workers/, and is observable via /workers and read_worker_summary. Returns the worker id. Workers cannot spawn workers.',
+    description: 'Start a persistent background worker thread for a self-contained task. It runs detached (your turn does NOT block), persists its transcript + rolling summary + status in the workspace CLI state, and is observable via /workers and read_worker_summary. Returns the worker id. Workers cannot spawn workers.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,12 +168,12 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'wait_worker',
-    description: 'Block until a worker thread finishes (bounded), then return its status + summary.',
+    description: 'Block until a worker thread finishes or the wait timeout elapses, then return its status + summary. A wait timeout does not stop or fail the worker.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Worker id from spawn_worker_thread.' },
-        timeoutMs: { type: 'number', description: 'Max wait in ms (default 600000).' }
+        timeoutMs: { type: 'number', description: 'Max parent wait in ms (default 600000). Use 0 to wait until completion.' }
       },
       required: ['id']
     }

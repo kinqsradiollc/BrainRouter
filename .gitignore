@@ -66,6 +66,8 @@ BRAINROUTER_TASKS.md
 BRAINROUTER_IMPLEMENTATION_PLAN.md
 SETUP.md
 Tasks.md
+BRAINROUTER_IMPROVEMENTS.md
+task.md
 
 # Local-only working files — never push these. They hold WIP feature
 # specs, master task queues, and handover notes that are useful across
