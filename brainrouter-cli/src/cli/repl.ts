@@ -45,7 +45,7 @@ export const SLASH_COMMANDS = [
   '/tokens', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
-  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/logout', '/apps', '/plugins',
+  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugins',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
@@ -173,6 +173,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/ps', desc: 'List all background tasks (loop + workflows + workers + child agents)' },
       { cmd: '/fg <id>', desc: 'Bring a background worker/child agent to the foreground (snapshot of status + transcript)' },
       { cmd: '/stop [id]', desc: 'Stop a specific worker/child by id, or (no id) stop the loop + mark stale children' },
+      { cmd: '/queue [remove <n>|clear]', desc: 'View / manage messages you typed while a turn was running (they run next, in order)' },
     ],
   },
   {
