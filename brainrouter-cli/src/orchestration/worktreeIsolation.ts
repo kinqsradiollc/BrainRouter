@@ -457,7 +457,7 @@ export function applyPatchFile(cwd: string, patchFile: string): { ok: boolean; e
  * just at startup, so without the guard a transient git-tracking miss (a freshly
  * `git worktree add`ed worktree not yet in `worktree list`, a sibling terminal on the
  * same repo, or a prune race) would delete a RUNNING child's worktree out from under
- * it — the child then ENOENTs on every tool call until its wall-clock timeout.
+ * it — the child then ENOENTs on every tool call until the agent loop fails.
  */
 export function reconcileOrphanWorktrees(workspaceRoot: string, opts?: { keepChildIds?: Iterable<string> }): number {
   let removed = 0;

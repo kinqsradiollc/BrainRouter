@@ -5,7 +5,7 @@
  * it survives the parent turn (and, with the federation registry, a CLI
  * restart). State lives under:
  *
- *   <workspace>/.brainrouter/cli/workers/<id>/
+ *   <brainrouter-home>/workspaces/<encoded>/cli/workers/<id>/
  *     meta.json        status + lineage
  *     transcript.jsonl one JSON line per turn/event
  *     goal.json        the worker's own goal
@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getCliStateDir } from './cliState.js';
 
 /** Workers can't spawn workers — a single level of background depth. */
 export const MAX_WORKER_DEPTH = 1;
@@ -43,7 +44,7 @@ export interface WorkerMeta {
 }
 
 function workersRoot(workspaceRoot: string): string {
-  return path.join(workspaceRoot, '.brainrouter', 'cli', 'workers');
+  return path.join(getCliStateDir(workspaceRoot), 'workers');
 }
 
 export function workerDir(workspaceRoot: string, id: string): string {

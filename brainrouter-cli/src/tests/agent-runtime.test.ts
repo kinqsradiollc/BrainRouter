@@ -1160,10 +1160,10 @@ test('runTurn: task_agent counts as already-waited (no double-drain)', async () 
   });
 });
 
-test('orchestration: task_agent timeout returns explicit timeout envelope', async () => {
-  // Spec §2 acceptance: task_agent returns "completed child output OR a
-  // timeout envelope". Drive the timeout branch by making the child slow
-  // and passing timeoutMs that cannot be met.
+test('orchestration: task_agent wait timeout returns envelope without failing the child', async () => {
+  // A parent wait timeout is not a child kill switch. The parent may stop
+  // waiting and report a timeout envelope, but the child must stay running
+  // and be allowed to complete later.
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => {
@@ -1193,17 +1193,21 @@ test('orchestration: task_agent timeout returns explicit timeout envelope', asyn
         ctx,
       );
       const result = JSON.parse(raw);
-      assert.match(result.status, /timeout|running|pending|failed/i,
-        `expected timeout-shaped envelope; got ${JSON.stringify(result)}`);
+      assert.equal(result.status, 'timeout');
+      assert.equal(result.childStatus, 'running');
       assert.match(result.id, /^agent-/);
       await new Promise((resolve) => setTimeout(resolve, 150));
+      const { getSession } = await import('../orchestration/orchestrator.js');
+      const record = getSession(workspace, result.id);
+      assert.equal(record?.status, 'completed');
+      assert.match(record?.finalOutput ?? '', /too late|never reached/);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 });
 
-test('orchestration: background child timeout marks session failed with synthetic output', async () => {
+test('orchestration: background child timeout arg does not kill the child', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => {
@@ -1233,11 +1237,54 @@ test('orchestration: background child timeout marks session failed with syntheti
         ctx,
       );
       const result = JSON.parse(raw);
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await new Promise((resolve) => setTimeout(resolve, 150));
       const { getSession } = await import('../orchestration/orchestrator.js');
       const record = getSession(workspace, result.id);
-      assert.equal(record?.status, 'failed');
-      assert.match(record?.finalOutput ?? '', /ERROR: Child agent .* exceeded wall-clock timeout/);
+      assert.equal(record?.status, 'completed');
+      assert.equal(record?.error, undefined);
+      assert.match(record?.finalOutput ?? '', /too late/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: wait_agent timeoutMs 0 waits until child completion', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'zero wait completed' } }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const ctx = {
+        workspaceRoot: workspace,
+        parentSessionKey: 'session:test',
+        parentAccessMode: 'shell' as const,
+        mcpClient: stubMcp,
+        llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+        launchCwd: workspace,
+      };
+      const spawned = JSON.parse(await executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'explorer', prompt: 'zero wait background' },
+        ctx,
+      ));
+      const waited = JSON.parse(await executeOrchestrationTool(
+        'wait_agent',
+        { id: spawned.id, timeoutMs: 0 },
+        ctx,
+      ));
+      assert.equal(waited.status, 'completed');
+      assert.match(waited.finalOutput, /zero wait completed/);
     } finally {
       globalThis.fetch = originalFetch;
     }
