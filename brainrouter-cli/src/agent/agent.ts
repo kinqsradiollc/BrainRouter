@@ -791,6 +791,7 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    this.lastTurnPendingChildIds = []; // C1 — reset; set if a child drain times out this turn
     // HEADLESS-EVENTS — bridge the code-index callback to executeLocalTool.
     this.codeIndexListener = callbacks.onCodeIndex ?? null;
     // 0.4.x-3b — new turn: re-resolve the file-snapshot ordinal on first mutation.
@@ -1544,6 +1545,9 @@ export class Agent {
 
           const timeouts = parseChildDrainTimeouts(waitResultText);
           if (timeouts.length > 0) {
+            // C1 — record the timed-out ids so the REPL can poll them and
+            // auto-resume once they settle (instead of waiting for a manual /continue).
+            this.lastTurnPendingChildIds = timeouts.map((t) => t.id).filter((id) => id && id !== '(unknown)');
             finalAnswer = formatChildDrainTimeoutAnswer(timeouts);
             exitedCleanly = true;
             break;
@@ -3145,6 +3149,11 @@ export class Agent {
   /** Count of tool calls executed during the most recent runTurn. The goal */
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
+
+  /** C1 — child ids whose drain TIMED OUT this turn (the parent answered before they
+   *  finished). The REPL polls these and auto-resumes once they settle. Empty when
+   *  nothing timed out. */
+  public lastTurnPendingChildIds: string[] = [];
 
   /** Goal lifecycle transition the LLM triggered during the most recent turn, if any. */
   public lastGoalTransition: 'complete' | 'blocked' | undefined;

@@ -47,7 +47,7 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 ### Carried from 0.4.11
 
-- [ ] C1 — spawn-child loop continuation (the parent loop stops when a child runs past the 30s drain timeout; proper fix = async auto-resume on child completion)
+- [x] C1 — spawn-child loop continuation: when a turn ends with timed-out children, the REPL polls their status and auto-fires a synthetic continue (drain + synthesize) once they settle — always on, cancelled by user input (`runtime/childResume.ts`) *(PR — branch `feat/c1-child-loop-resume`)*
 - [ ] C2 — input queue while busy (queue / view / remove messages mid-turn)
 
 ### Future — design drafted
