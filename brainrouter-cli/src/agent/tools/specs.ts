@@ -70,12 +70,12 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'grep_search',
-    description: 'Search for a query string in files within a directory in the workspace.',
+    description: 'Search workspace files for a REGULAR-EXPRESSION query (JS regex syntax — e.g. `foo|bar`, `\\bclass\\b`). `path` may be a directory (searched recursively, build/VCS/.claude/.brainrouter dirs skipped) or a single file. Returns up to 50 matches as {path,line,text}.',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path to search under. Defaults to "."' },
-        query: { type: 'string', description: 'String or regex query pattern to search for.' }
+        path: { type: 'string', description: 'Directory (recursed) or file to search. Defaults to "."' },
+        query: { type: 'string', description: 'Regular expression to match per line (JS regex; falls back to literal substring if the pattern is invalid regex).' }
       },
       required: ['query']
     }

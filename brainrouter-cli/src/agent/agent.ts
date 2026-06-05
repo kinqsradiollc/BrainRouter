@@ -40,7 +40,7 @@ import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.
 import { ownershipWriteViolation } from '../orchestration/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
-import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './workspaceFs.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
 export { applyPatchEnvelope } from './applyPatch.js';
@@ -2403,41 +2403,11 @@ export class Agent {
       case 'grep_search': {
         const wsRoot = fs.realpathSync(this.workspaceRoot);
         const root = resolveHere(args.path || '.');
-        const results: Array<{ path: string; line: number; text: string }> = [];
-        
-        const search = (dir: string) => {
-          if (results.length >= 50) return;
-          const files = fs.readdirSync(dir);
-          for (const file of files) {
-            if (IGNORED_DIRS.has(file)) continue;
-            const full = path.join(dir, file);
-            if (!isPathInside(wsRoot, fs.realpathSync(full))) continue;
-            const stat = fs.statSync(full);
-            if (stat.isDirectory()) {
-              search(full);
-            } else if (stat.isFile()) {
-              try {
-                const content = fs.readFileSync(full, 'utf8');
-                const lines = content.split('\n');
-                for (let i = 0; i < lines.length; i++) {
-                  if (lines[i].includes(args.query)) {
-                    results.push({
-                      path: path.relative(wsRoot, full),
-                      line: i + 1,
-                      text: lines[i].trim()
-                    });
-                    if (results.length >= 50) return;
-                  }
-                }
-              } catch {
-                // Ignore binary or unreadable files
-              }
-            }
-          }
-        };
-
-        search(root);
-        return JSON.stringify(results, null, 2);
+        const query = String(args.query ?? '');
+        if (!query) throw new Error('Missing parameter "query" for grep_search.');
+        // grepSearch: regex match (not literal `includes`) + accepts a file OR a
+        // directory (the old inline version crashed with ENOTDIR on a file path).
+        return JSON.stringify(grepSearch(query, root, wsRoot), null, 2);
       }
       case 'glob_files': {
         const pattern = args.pattern;
