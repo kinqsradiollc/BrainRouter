@@ -129,8 +129,17 @@ export interface CliKnobs {
   theme?: 'light' | 'dark' | 'auto';
 
   // ---- LLM call ergonomics ----------------------------------------------
-  /** Per-call LLM timeout in ms. Default 120000. */
+  /** Per-call LLM timeout in ms. Default 120000. A timeout is treated as a
+   *  RECONNECT signal (not a hard failure) — see `llmMaxReconnects`. */
   llmTimeoutMs?: number;
+  /**
+   * RECONNECT (0.4.12) — max reconnect attempts for a transient LLM failure
+   * (timeout / disconnect / 5xx / 429) before giving up, with exponential backoff
+   * that honors `Retry-After`. Default 5. While the machine is genuinely OFFLINE
+   * the loop keeps waiting for the link WITHOUT spending this budget, so a dropped
+   * connection auto-resumes when the network returns rather than failing the turn.
+   */
+  llmMaxReconnects?: number;
   /** Max concurrent LLM calls across parent + children. Default 4. */
   llmMaxConcurrent?: number;
   /** Disable streaming (SSE). Default false. */
@@ -592,6 +601,7 @@ export interface ResolvedCliKnobs {
   quiet: boolean;
   theme: 'light' | 'dark' | 'auto';
   llmTimeoutMs: number;
+  llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh';
@@ -663,6 +673,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     quiet: c.quiet ?? false,
     theme: c.theme ?? 'auto',
     llmTimeoutMs: c.llmTimeoutMs ?? 120_000,
+    llmMaxReconnects: Math.max(1, Math.floor(c.llmMaxReconnects ?? 5)),
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
     effort: c.effort ?? 'medium',
