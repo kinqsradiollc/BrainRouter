@@ -258,18 +258,22 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // only writes the JSON file when there were actual stale entries
       // to flip — subsequent calls are pure reads.
       reconcileStale(agent.workspaceRoot);
-      // CODEX-WORKTREE-CLEANUP — also GC orphan child worktrees left under
-      // $TMPDIR by a crashed prior process (git worktree prune + rm untracked
-      // dirs). Best-effort + idempotent, mirrors reconcileStale.
-      try { reconcileOrphanWorktrees(agent.workspaceRoot); } catch { /* best-effort */ }
+      // Snapshot the LIVE (running/pending) children AFTER reconcileStale has flipped
+      // any dead-pid sessions — these ids guard their worktrees from the GC below.
+      const sessions = listSessions(agent.workspaceRoot);
+      const liveChildIds = sessions.filter((s) => s.status === 'pending' || s.status === 'running').map((s) => s.id);
+      // CODEX-WORKTREE-CLEANUP — GC orphan child worktrees left under the worktree
+      // base by a crashed prior process (git worktree prune + rm untracked dirs).
+      // `keepChildIds` ensures a RUNNING child's worktree is never deleted out from
+      // under it (the live-child GC bug). Best-effort + idempotent.
+      try { reconcileOrphanWorktrees(agent.workspaceRoot, { keepChildIds: liveChildIds }); } catch { /* best-effort */ }
       // MAS-P5-T3: same treatment for worker threads — a `running` worker
       // from a dead CLI process can't resume mid-turn, so flip it to failed.
       reconcileStaleWorkers(agent.workspaceRoot);
       // PARITY-W1: durable workflow runs left `running` by a dead process are
       // flipped to `interrupted` so the /workflows viewer is honest on restart.
       reconcileStaleRuns(agent.workspaceRoot);
-      const sessions = listSessions(agent.workspaceRoot);
-      return sessions.filter((s) => s.status === 'pending' || s.status === 'running').length;
+      return liveChildIds.length;
     } catch {
       return 0;
     }
