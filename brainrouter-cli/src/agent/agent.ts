@@ -16,6 +16,7 @@ import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../sta
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../state/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
+import { unsynthesizedChildIds, mergePendingChildIds } from '../runtime/childResume.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -1740,6 +1741,16 @@ export class Agent {
             callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
             continue;
           }
+        }
+
+        // MAR-1 (0.4.13) — arm the auto-resume for any child spawned this turn that
+        // the model never observed/synthesized (a background spawn the drain step
+        // couldn't reach, or a wait that errored), so its result is still delivered
+        // without a manual /continue. Additive: drain timeouts already armed above;
+        // this only ever ADDS still-unsynthesized ids (deduped).
+        const unsynthesized = unsynthesizedChildIds(spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+        if (unsynthesized.length > 0) {
+          this.lastTurnPendingChildIds = mergePendingChildIds(this.lastTurnPendingChildIds, unsynthesized);
         }
 
         finalAnswer = response.content;
