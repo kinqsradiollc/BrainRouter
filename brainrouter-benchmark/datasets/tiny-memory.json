@@ -1,0 +1,58 @@
+{
+  "id": "tiny-memory",
+  "version": "1.0.0",
+  "source": "brainrouter-benchmark fixture",
+  "description": "Small deterministic multi-session memory fixture for smoke tests.",
+  "records": [
+    {
+      "id": "rec-auth-oauth",
+      "sessionId": "s-auth",
+      "content": "Configured GitHub OAuth through NextAuth. The callback URL must use HTTPS in production.",
+      "metadata": { "tags": ["auth", "oauth", "nextauth"], "tokens": 18 }
+    },
+    {
+      "id": "rec-db-index",
+      "sessionId": "s-db",
+      "content": "Fixed a slow post listing query by adding a composite PostgreSQL index on authorId and createdAt.",
+      "metadata": { "tags": ["database", "postgres", "performance"], "tokens": 20 }
+    },
+    {
+      "id": "rec-ci-playwright",
+      "sessionId": "s-test",
+      "content": "Resolved flaky Playwright CI by replacing waitForNavigation with waitForURL after form submission.",
+      "metadata": { "tags": ["testing", "playwright", "ci"], "tokens": 18 }
+    },
+    {
+      "id": "rec-k8s-secret",
+      "sessionId": "s-devops",
+      "content": "Kubernetes pods crashed because the secret key was database-url while the deployment expected DATABASE_URL.",
+      "metadata": { "tags": ["kubernetes", "secret", "debugging"], "tokens": 18 }
+    }
+  ],
+  "queries": [
+    {
+      "id": "q-oauth",
+      "query": "What was the OAuth callback production fix?",
+      "goldRecordIds": ["rec-auth-oauth"],
+      "category": "exact"
+    },
+    {
+      "id": "q-db",
+      "query": "database performance index author posts",
+      "goldRecordIds": ["rec-db-index"],
+      "category": "semantic"
+    },
+    {
+      "id": "q-playwright",
+      "query": "Playwright flaky CI wait for URL",
+      "goldRecordIds": ["rec-ci-playwright"],
+      "category": "exact"
+    },
+    {
+      "id": "q-k8s",
+      "query": "Why did Kubernetes pods crash from env secret?",
+      "goldRecordIds": ["rec-k8s-secret"],
+      "category": "debugging"
+    }
+  ]
+}

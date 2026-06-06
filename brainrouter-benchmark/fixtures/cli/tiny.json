@@ -1,0 +1,30 @@
+{
+  "id": "tiny-cli",
+  "version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "build-green",
+      "suite": "build-loop",
+      "description": "Verifier passes and review has no blocker.",
+      "expected": { "status": "passed", "verifyGreen": true, "reviewBlocked": false }
+    },
+    {
+      "id": "build-held",
+      "suite": "build-loop",
+      "description": "Verifier fails, so merge must be held.",
+      "expected": { "status": "held", "verifyGreen": false, "reviewBlocked": false }
+    },
+    {
+      "id": "queue-order",
+      "suite": "input-queue",
+      "description": "Queued prompts are drained in input order.",
+      "expected": { "status": "passed", "droppedInputs": 0 }
+    },
+    {
+      "id": "reconnect-retry",
+      "suite": "reconnect",
+      "description": "A transient transport failure recovers after retry.",
+      "expected": { "status": "passed", "recovered": true }
+    }
+  ]
+}

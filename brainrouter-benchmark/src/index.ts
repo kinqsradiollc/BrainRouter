@@ -1,0 +1,102 @@
+import { loadResultsFromDir, writeReports } from "./shared/report.js";
+import { runCliDeterministicSuite, runCliLiveSuite } from "./cli/deterministic-suite.js";
+import { runMemoryLoadSuite } from "./memory/load-suite.js";
+import { runMemoryRetrievalSuite } from "./memory/retrieval-suite.js";
+import { formatDatasetList } from "./shared/dataset-resolver.js";
+import { importMemBenchFirstAgentSimple } from "./shared/membench-importer.js";
+import { buildMemBenchSplit } from "./shared/membench-data-importer.js";
+
+function argValue(name: string, fallback: string): string {
+  const prefixed = `--${name}=`;
+  const match = process.argv.find((arg) => arg.startsWith(prefixed));
+  if (match) return match.slice(prefixed.length);
+  const index = process.argv.indexOf(`--${name}`);
+  if (index >= 0 && process.argv[index + 1]) return process.argv[index + 1];
+  const positional = process.argv.slice(3).find((arg) => !arg.startsWith("--"));
+  if (positional) return positional;
+  return fallback;
+}
+
+function argNumber(name: string): number | undefined {
+  const value = argValue(name, "");
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+function argFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
+async function main(): Promise<void> {
+  const command = process.argv[2] ?? "help";
+  const fixture = argValue("fixture", "tiny");
+  const maxRecords = argNumber("max-records");
+  const maxQueries = argNumber("max-queries");
+  const progress = argFlag("progress");
+  let output: { outputDir: string };
+
+  switch (command) {
+    case "memory:dry-run":
+      output = await runMemoryRetrievalSuite({ fixture, dryRun: true, maxRecords, maxQueries, progress });
+      break;
+    case "memory:retrieval":
+      output = await runMemoryRetrievalSuite({ fixture, maxRecords, maxQueries, progress });
+      break;
+    case "memory:load":
+      output = await runMemoryLoadSuite({});
+      break;
+    case "memory:all":
+      output = await runMemoryRetrievalSuite({ fixture, maxRecords, maxQueries, progress });
+      await runMemoryLoadSuite({});
+      break;
+    case "cli:dry-run":
+      output = await runCliDeterministicSuite({ fixture, dryRun: true });
+      break;
+    case "cli:deterministic":
+      output = await runCliDeterministicSuite({ fixture });
+      break;
+    case "cli:live":
+      output = await runCliLiveSuite();
+      break;
+    case "datasets:list":
+      console.log(formatDatasetList());
+      return;
+    case "datasets:import-membench": {
+      const imported = importMemBenchFirstAgentSimple();
+      console.log(`converted: ${imported.outputPath}`);
+      console.log(`records: ${imported.records}`);
+      console.log(`queries: ${imported.queries}`);
+      return;
+    }
+    case "datasets:build-split": {
+      const split = argValue("split", "");
+      if (!split) {
+        console.error("Usage: datasets:build-split --split membench:ps-fm:10k [--sample 100] [--seed 1337]");
+        process.exit(1);
+      }
+      const built = buildMemBenchSplit({ splitId: split, sampleNum: argNumber("sample"), seed: argNumber("seed") });
+      console.log(`converted: ${built.outputPath}`);
+      console.log(`trajectories: ${built.trajectories}`);
+      console.log(`records: ${built.records} (noise: ${built.noiseRecords})`);
+      console.log(`queries: ${built.queries}`);
+      return;
+    }
+    case "report": {
+      const paths = writeReports(loadResultsFromDir());
+      console.log(`memory report: ${paths.memoryPath}`);
+      console.log(`cli report: ${paths.cliPath}`);
+      return;
+    }
+    default:
+      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, datasets:list, datasets:import-membench, datasets:build-split, report");
+      return;
+  }
+
+  console.log(`results: ${output.outputDir}`);
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.stack : err);
+  process.exit(1);
+});

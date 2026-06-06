@@ -1,0 +1,31 @@
+{
+  "name": "brainrouter-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clean BrainRouter benchmark suite split into Memory and CLI tracks.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "bench:memory:dry-run": "npm run build --silent && node dist/index.js memory:dry-run",
+    "bench:memory:retrieval": "npm run build --silent && node dist/index.js memory:retrieval",
+    "bench:memory:load": "npm run build --silent && node dist/index.js memory:load",
+    "bench:memory:all": "npm run build --silent && node dist/index.js memory:all",
+    "bench:cli:dry-run": "npm run build --silent && node dist/index.js cli:dry-run",
+    "bench:cli:deterministic": "npm run build --silent && node dist/index.js cli:deterministic",
+    "bench:cli:live": "npm run build --silent && node dist/index.js cli:live",
+    "bench:datasets:list": "npm run build --silent && node dist/index.js datasets:list",
+    "bench:datasets:import-membench": "npm run build --silent && node dist/index.js datasets:import-membench",
+    "bench:datasets:build-split": "npm run build --silent && node --max-old-space-size=8192 dist/index.js datasets:build-split",
+    "bench:report": "npm run build --silent && node dist/index.js report"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
