@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "id": "membench",
+  "name": "MemBench",
+  "version": "2506.21605",
+  "source": {
+    "paper": "https://arxiv.org/abs/2506.21605",
+    "paperPdf": "https://arxiv.org/pdf/2506.21605",
+    "aclPdf": "https://aclanthology.org/2025.findings-acl.989.pdf",
+    "repository": "https://github.com/import-myself/Membench",
+    "downloads": [
+      {
+        "label": "Baidu Pan",
+        "url": "https://pan.baidu.com/s/1HqwY0nu5bltSAJ2TbnxcFQ?pwd=yzsj",
+        "note": "Extraction code: yzsj"
+      },
+      {
+        "label": "Google Drive",
+        "url": "https://drive.google.com/file/d/112Zraj4pTPH4Idph6i1uMOLA_LPFdGr0/view?usp=sharing"
+      }
+    ]
+  },
+  "notes": [
+    "MemBench evaluates factual and reflective memory across participation and observation scenarios.",
+    "The paper uses sampled 0-10k and 100k conversation-length test data under data2test.",
+    "NoiseData can extend memory-flow length; each added noise unit is about 1k tokens on average according to the upstream README."
+  ],
+  "splits": [
+    {
+      "id": "membench:ps-fm:github-simple",
+      "scenario": "participation",
+      "memoryLevel": "factual",
+      "lengthBucket": "categorical-simple",
+      "upstreamDataset": "MemData/FirstAgent/simple.json",
+      "expectedConvertedPath": "datasets/membench/ps-fm-github-simple.json",
+      "rawHints": ["MemData", "FirstAgent", "simple.json", "participation", "factual"]
+    },
+    {
+      "id": "membench:ps-fm:10k",
+      "scenario": "participation",
+      "memoryLevel": "factual",
+      "lengthBucket": "0-10k",
+      "upstreamDataset": "FirstAgentLowLevel",
+      "expectedConvertedPath": "datasets/membench/ps-fm-10k.json",
+      "rawHints": ["data2test", "FirstAgent", "LowLevel", "10k"]
+    },
+    {
+      "id": "membench:ps-fm:100k",
+      "scenario": "participation",
+      "memoryLevel": "factual",
+      "lengthBucket": "100k",
+      "upstreamDataset": "FirstAgentLowLevel",
+      "expectedConvertedPath": "datasets/membench/ps-fm-100k.json",
+      "rawHints": ["data2test", "FirstAgent", "LowLevel", "100k"]
+    },
+    {
+      "id": "membench:ps-rm:10k",
+      "scenario": "participation",
+      "memoryLevel": "reflective",
+      "lengthBucket": "0-10k",
+      "upstreamDataset": "FirstAgentHighLevel",
+      "expectedConvertedPath": "datasets/membench/ps-rm-10k.json",
+      "rawHints": ["data2test", "FirstAgent", "HighLevel", "10k"]
+    },
+    {
+      "id": "membench:ps-rm:100k",
+      "scenario": "participation",
+      "memoryLevel": "reflective",
+      "lengthBucket": "100k",
+      "upstreamDataset": "FirstAgentHighLevel",
+      "expectedConvertedPath": "datasets/membench/ps-rm-100k.json",
+      "rawHints": ["data2test", "FirstAgent", "HighLevel", "100k"]
+    },
+    {
+      "id": "membench:os-fm:10k",
+      "scenario": "observation",
+      "memoryLevel": "factual",
+      "lengthBucket": "0-10k",
+      "upstreamDataset": "ThirdAgentLowLevel",
+      "expectedConvertedPath": "datasets/membench/os-fm-10k.json",
+      "rawHints": ["data2test", "ThirdAgent", "LowLevel", "10k"]
+    },
+    {
+      "id": "membench:os-fm:100k",
+      "scenario": "observation",
+      "memoryLevel": "factual",
+      "lengthBucket": "100k",
+      "upstreamDataset": "ThirdAgentLowLevel",
+      "expectedConvertedPath": "datasets/membench/os-fm-100k.json",
+      "rawHints": ["data2test", "ThirdAgent", "LowLevel", "100k"]
+    },
+    {
+      "id": "membench:os-rm:10k",
+      "scenario": "observation",
+      "memoryLevel": "reflective",
+      "lengthBucket": "0-10k",
+      "upstreamDataset": "ThirdAgentHighLevel",
+      "expectedConvertedPath": "datasets/membench/os-rm-10k.json",
+      "rawHints": ["data2test", "ThirdAgent", "HighLevel", "10k"]
+    },
+    {
+      "id": "membench:os-rm:100k",
+      "scenario": "observation",
+      "memoryLevel": "reflective",
+      "lengthBucket": "100k",
+      "upstreamDataset": "ThirdAgentHighLevel",
+      "expectedConvertedPath": "datasets/membench/os-rm-100k.json",
+      "rawHints": ["data2test", "ThirdAgent", "HighLevel", "100k"]
+    }
+  ]
+}

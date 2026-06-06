@@ -47,6 +47,17 @@ brainrouter-cli/changelog/
 brainrouter/memory.db
 brainrouter/mcp_server.log
 brainrouter/benchmark/data/longmemeval_s_cleaned.json
+brainrouter-benchmark/results/**
+!brainrouter-benchmark/results/.gitkeep
+brainrouter-benchmark/reports/**
+!brainrouter-benchmark/reports/.gitkeep
+brainrouter-benchmark/datasets/membench/**
+!brainrouter-benchmark/datasets/membench/.gitkeep
+brainrouter-benchmark/datasets/raw/**
+!brainrouter-benchmark/datasets/raw/.gitkeep
+# benchmark env clones hold copied API keys — never commit them
+brainrouter-benchmark/envs/
+.env.benchmark_*
 
 # Top-level test/ scratchpad for LLM-scaffolded throwaway demos
 # (not the package-local test folders under brainrouter-cli/, brainrouter/, etc.)
