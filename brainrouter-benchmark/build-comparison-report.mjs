@@ -111,9 +111,14 @@ function index(runs) {
     const sys = byFixture.get(fixture);
     for (const r of run.results) {
       if (r.systemId === "dataset-resolver" || r.systemId === "dataset-validator") continue;
-      // keep the most informative copy (passed > anything; later run wins ties)
+      // Keep the most informative copy: passed beats non-passed, and among two
+      // passed runs the NEWEST wins (by completedAt) — so re-running a config
+      // overrides the older row instead of being ignored.
       const prev = sys.get(r.systemId);
-      if (!prev || (prev.status !== "passed" && r.status === "passed")) {
+      const newerPassed =
+        prev && prev.status === "passed" && r.status === "passed" &&
+        String(r.completedAt ?? "") > String(prev.completedAt ?? "");
+      if (!prev || (prev.status !== "passed" && r.status === "passed") || newerPassed) {
         sys.set(r.systemId, r);
       }
     }
