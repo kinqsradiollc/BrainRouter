@@ -2,7 +2,7 @@
 
 Top-level planning index — kept short. Shipped detail lives in
 [`CHANGELOG.md`](CHANGELOG.md) + [`brainrouter-changelog/`](brainrouter-changelog/);
-design specs in [`docs/specs/`](docs/specs/).
+design specs in [`brainrouter-docs/specs/`](brainrouter-docs/specs/).
 
 ---
 
@@ -34,7 +34,7 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 All feature work below is **merged into `release/0.4.12`**; what remains is
 release prep (version bump + changelog + publish) and optional REPL polish.
 
-### The Build Loop · spec `docs/specs/build-loop-workflow.md`
+### The Build Loop · spec `brainrouter-docs/specs/build-loop-workflow.md`
 
 An opt-in plan → implement → verify → review → merge engineering loop on the
 0.4.11 isolation substrate. Single-agent stays the default; `/build` is the
@@ -67,11 +67,11 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 ### Future — design drafted
 
-- [ ] Per-session isolation (two terminals on one repo) — `docs/specs/per-session-isolation.md`
+- [ ] Per-session isolation (two terminals on one repo) — `brainrouter-docs/specs/per-session-isolation.md`
 
 ---
 
-## 0.4.14 — Memory Accuracy · branch `feat/memory-accuracy-0.4.14` · spec `docs/specs/memory-accuracy.md`
+## 0.4.14 — Memory Accuracy · branch `feat/memory-accuracy-0.4.14` · spec `brainrouter-docs/specs/memory-accuracy.md`
 
 Benchmark-driven recall overhaul. The new `brainrouter-benchmark` (MemBench ·
 LoCoMo · LongMemEval) showed BrainRouter's retriever is solid but the **reranker
@@ -113,4 +113,4 @@ granularity. **Status: spec in review — no engine code until sign-off.**
 | [`CHANGELOG.md`](CHANGELOG.md) | Shipped changes |
 | [`brainrouter-changelog/`](brainrouter-changelog/) | Per-version changelog detail |
 | [`brainrouter-roadmap/`](brainrouter-roadmap/) | Per-release plans |
-| [`docs/specs/`](docs/specs/) | Design specs (per-session isolation, build loop) |
+| [`brainrouter-docs/specs/`](brainrouter-docs/specs/) | Design specs (per-session isolation, build loop) |

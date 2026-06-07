@@ -4,8 +4,8 @@ description: Records decisions and documentation. Use when making architectural 
 hints:
   - Document the 'why' (context, constraints, trade-offs) behind a change, not just the 'what'.
   - Write an ADR (Architecture Decision Record) for any decision that would be expensive to reverse.
-  - Review existing ADRs under docs/decisions/ for structure and style guidelines.
-  - Store ADRs in docs/decisions/ with sequential, three-digit numbering (e.g., ADR-001).
+  - Review existing ADRs under brainrouter-docs/decisions/ for structure and style guidelines.
+  - Store ADRs in brainrouter-docs/decisions/ with sequential, three-digit numbering (e.g., ADR-001).
   - Keep public API and inline documentation clean, type-annotated, and free of commented-out code.
 ---
 
@@ -41,7 +41,7 @@ ADRs capture the reasoning behind significant technical decisions. They're the h
 
 ### ADR Template
 
-Store ADRs in `docs/decisions/` with sequential numbering:
+Store ADRs in `brainrouter-docs/decisions/` with sequential numbering:
 
 ```markdown
 # ADR-001: Use PostgreSQL for primary database
@@ -286,7 +286,7 @@ After documenting:
 ## Workflow
 
 1. **Identify Significant Decisions:** Recognize when a change impacts API structure, package dependencies, data model/schema, or deployment architecture.
-2. **Draft the Architecture Decision Record (ADR):** Create a new markdown file under `docs/decisions/` prefixed with a sequential index (e.g., `ADR-005-redis-caching.md`).
+2. **Draft the Architecture Decision Record (ADR):** Create a new markdown file under `brainrouter-docs/decisions/` prefixed with a sequential index (e.g., `ADR-005-redis-caching.md`).
 3. **Analyze Alternatives:** Outline at least 2 distinct alternatives, detailing explicit pros/cons and clear reasons for rejection.
 4. **Define Consequences:** Explicitly capture downstream engineering impacts, risks, and onboarding implications.
 5. **Verify and Update:** Review against similar historical decisions before finalizing.
@@ -294,6 +294,6 @@ After documenting:
 ## Verification
 
 After executing this skill, confirm:
-- [ ] ADR file is correctly formatted and located in `docs/decisions/`.
+- [ ] ADR file is correctly formatted and located in `brainrouter-docs/decisions/`.
 - [ ] No un-analyzed alternatives or vague rationalizations exist in the record.
 - [ ] Code references to the decision are updated to cross-reference the ADR.
