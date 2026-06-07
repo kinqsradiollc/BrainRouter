@@ -5,13 +5,13 @@ import { readRerankCharBudget, rerankHeadSize } from "../memory/recall.js";
 // doc-chars). Adapts to doc length: long docs → few candidates, short docs →
 // the whole pool, so it never starves a deep-gold short-doc corpus.
 describe("readRerankCharBudget", () => {
-  it("defaults to 18000, parses, clamps to 500000, rejects junk / too-small", () => {
-    expect(readRerankCharBudget({})).toBe(18000);
-    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "" })).toBe(18000);
+  it("defaults to 30000, parses, clamps to 500000, rejects junk / too-small", () => {
+    expect(readRerankCharBudget({})).toBe(30000);
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "" })).toBe(30000);
     expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "30000" })).toBe(30000);
     expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "999999" })).toBe(500000);
-    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "100" })).toBe(18000); // below floor
-    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "junk" })).toBe(18000);
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "100" })).toBe(30000); // below floor
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "junk" })).toBe(30000);
   });
 });
 

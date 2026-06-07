@@ -214,12 +214,15 @@ export function blendByRank(rerankRank: number[], alpha: number, k: number = RER
  * capping to 12 drops recall) while not helping enough on long docs. A *char*
  * budget adapts — long docs (longmemeval, ~1500 ch/chunk) → few candidates
  * (latency cut, and that corpus's gold is shallow), short docs (locomo, a few
- * hundred ch) → the whole pool (deep gold still rescued). Default 18000 chars
- * (~12 max-length chunks). Clamp [1500, 500000].
+ * hundred ch) → the whole pool (deep gold still rescued). Default 30000 chars
+ * (~20 max-length chunks): tuned so long-session recall fully recovers (R@5/10
+ * back to the all-pool baseline) while still cutting latency ~1.5× (22.7s →
+ * 14.8s on longmemeval); short-doc corpora are unaffected (already under it).
+ * Clamp [1500, 500000].
  *   BRAINROUTER_RECALL_RERANK_CHAR_BUDGET
  */
 export function readRerankCharBudget(env: NodeJS.ProcessEnv = process.env): number {
-  const def = 18000;
+  const def = 30000;
   const raw = env.BRAINROUTER_RECALL_RERANK_CHAR_BUDGET;
   if (raw === undefined || raw.trim() === "") return def;
   const n = Number.parseInt(raw, 10);
