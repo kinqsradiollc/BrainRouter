@@ -407,6 +407,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RERANKER_API_KEY` | _(unset)_ | Reranker credential. |
 | `BRAINROUTER_RERANKER_MODEL` | _(provider default)_ | e.g. `rerank-english-v3.0`. |
 | `BRAINROUTER_RERANKER_TOP_N` | `10` | Top-K to rerank. |
+| `BRAINROUTER_RERANKER_MAX_DOC_CHARS` | `1500` | Per-doc chars sent to the cross-encoder (0.4.14). Covers a whole chunk instead of the old hardcoded 700; clamped [100, 8000]. Raise for larger-context rerankers, lower for strict 512-token ones. |
 
 ### Relevance judge — `brainrouter/.env`
 
@@ -418,6 +419,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RELEVANCE_JUDGE_MODEL` | inherits `BRAINROUTER_LLM_MODEL` | Model id. A fast/cheap model is usually right. |
 | `BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES` | `10` | Max candidates batched into a single judge call. |
 | `BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS` | `15000` | Per-call timeout. On timeout the reranker output passes through unchanged. |
+| `BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP` | `1` | Result floor (0.4.14): if the judge approves fewer than this, backfill from the top pre-judge results so recall never collapses to 0 on long records it can't verify. `0` = old collapse-to-zero. Short-record precision is unaffected. |
 
 ### Memory engine — `brainrouter/.env`
 
@@ -426,6 +428,8 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_MEMORY_DB` | `~/.brainrouter/memory.db` | SQLite path. |
 | `BRAINROUTER_HOME` | `~/.brainrouter` | Per-user state root. Honored by both processes. |
 | `BRAINROUTER_LOCAL_ROOT` | _(unset)_ | Override the local-state root. |
+| `BRAINROUTER_IMPORT_CHUNK_CHARS` | `1500` | Chunk records longer than this on `memory_import` (0.4.14) so recall stages get focused units (child id `${parent}::c{i}`, parent in metadata). `0` disables. |
+| `BRAINROUTER_IMPORT_EMBED` | `1` (on) | Embed imported records immediately (0.4.14) for instant vector recall instead of waiting on the background sweep. `0` = backfill via the sweep (faster bulk import). |
 | `BRAINROUTER_GRAPH_ENABLED` | `true` | 2-hop graph extraction + BFS expansion. |
 | `BRAINROUTER_GRAPH_TIMEOUT_MS` | `120000` | Graph-extraction LLM timeout. |
 | `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | `60000` | Contradiction-check timeout. |
