@@ -18,6 +18,8 @@
     "bench:datasets:list": "npm run build --silent && node dist/index.js datasets:list",
     "bench:datasets:import-membench": "npm run build --silent && node dist/index.js datasets:import-membench",
     "bench:datasets:build-split": "npm run build --silent && node --max-old-space-size=8192 dist/index.js datasets:build-split",
+    "bench:datasets:build-longmemeval": "npm run build --silent && node --max-old-space-size=8192 dist/index.js datasets:build-longmemeval",
+    "bench:datasets:build-locomo": "npm run build --silent && node --max-old-space-size=8192 dist/index.js datasets:build-locomo",
     "bench:report": "npm run build --silent && node dist/index.js report"
   },
   "devDependencies": {

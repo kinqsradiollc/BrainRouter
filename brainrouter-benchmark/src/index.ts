@@ -5,6 +5,7 @@ import { runMemoryRetrievalSuite } from "./memory/retrieval-suite.js";
 import { formatDatasetList } from "./shared/dataset-resolver.js";
 import { importMemBenchFirstAgentSimple } from "./shared/membench-importer.js";
 import { buildMemBenchSplit } from "./shared/membench-data-importer.js";
+import { buildLongMemEval, buildLoCoMo } from "./shared/conversation-importer.js";
 
 function argValue(name: string, fallback: string): string {
   const prefixed = `--${name}=`;
@@ -82,6 +83,20 @@ async function main(): Promise<void> {
       console.log(`queries: ${built.queries}`);
       return;
     }
+    case "datasets:build-longmemeval": {
+      const built = buildLongMemEval({ inputPath: argValue("input", "") || undefined, limitQuestions: argNumber("limit") });
+      console.log(`converted: ${built.outputPath}`);
+      console.log(`records (sessions): ${built.records}`);
+      console.log(`queries: ${built.queries}`);
+      return;
+    }
+    case "datasets:build-locomo": {
+      const built = buildLoCoMo({ inputPath: argValue("input", "") || undefined, limitSamples: argNumber("limit") });
+      console.log(`converted: ${built.outputPath}`);
+      console.log(`records (turns): ${built.records}`);
+      console.log(`queries: ${built.queries} (skipped ${built.skipped} no/unresolvable-evidence)`);
+      return;
+    }
     case "report": {
       const paths = writeReports(loadResultsFromDir());
       console.log(`memory report: ${paths.memoryPath}`);
@@ -89,7 +104,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, datasets:list, datasets:import-membench, datasets:build-split, report");
+      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, datasets:list, datasets:import-membench, datasets:build-split, datasets:build-longmemeval, datasets:build-locomo, report");
       return;
   }
 

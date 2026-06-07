@@ -50,6 +50,23 @@ Splits: `membench:{ps-fm,ps-rm,os-fm,os-rm}:{10k,100k}` →
 `First/Third AgentData {Low,High}Level.json`. `10k` adds 10 noise units/trajectory,
 `100k` adds 100.
 
+**LongMemEval-S** and **LoCoMo** (conversation-memory benchmarks). Place the raw
+files under `datasets/raw/` then build:
+
+```bash
+# datasets/raw/longmemeval_s.json  and  datasets/raw/locomo10.json
+npm run bench:datasets:build-longmemeval     # → fixture longmemeval:s (sessions; recall_any@k)
+npm run bench:datasets:build-locomo          # → fixture locomo (turns; recall@k)
+```
+
+| fixture | unit (record) | gold | headline metric |
+|---|---|---|---|
+| `longmemeval:s` | session | `answer_session_ids` | **R-any@k** (recall_any) |
+| `locomo` | turn | `evidence` turns | recall@k |
+
+Both build a **global-union corpus**; the per-run haystack size is `--max-records`
+(so it's tunable, and harder than the per-question haystack some papers report).
+
 ---
 
 ## 3. The config matrix (one `.env` per pipeline mode)
@@ -109,9 +126,12 @@ Scope it down while iterating (env overrides):
 SPLITS="ps-fm" MAXREC=1000 MAXQ=10 ./bench-load.sh
 SPLITS="ps-fm" MAXREC=1000 MAXQ=10 ./bench-one.sh judge
 ./bench-one.sh reranker ps-fm                 # one config, one split
+SPLITS="longmemeval:s locomo" ./bench-load.sh && ./bench-one.sh judge longmemeval:s
 ```
 
-Defaults: `SPLITS="ps-fm ps-rm os-fm os-rm"`, `MAXREC=3000`, `MAXQ=30`.
+Split tokens: the four MemBench ones (`ps-fm ps-rm os-fm os-rm`, → `membench:<x>:10k`),
+plus `longmemeval:s` and `locomo`. Defaults: `SPLITS="ps-fm ps-rm os-fm os-rm"`,
+`MAXREC=3000`, `MAXQ=30`.
 
 **Verbose output**: every run prints the config's active knobs, the server's stage
 readiness, per-query progress, and the resulting metrics inline (`→ brainrouter-<config> R@5=… p50=…`), so you see exactly what's running.

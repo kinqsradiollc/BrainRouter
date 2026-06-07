@@ -95,21 +95,23 @@ function table(sys) {
   const order = [...BASELINE_ROWS, ...configRowsFor(sys)];
   const rows = order.map(([id, label]) => ({ id, label, result: sys.get(id) })).filter((r) => r.result);
   const bestR10 = bestOf(rows, "recallAt10");
+  const bestRany5 = bestOf(rows, "recallAnyAt5");
+  const bestRany10 = bestOf(rows, "recallAnyAt10");
   const bestP5 = bestOf(rows, "precisionAt5");
   const bestNdcg = bestOf(rows, "ndcgAt10");
   const lines = [
-    "| System | R@5 | R@10 | R@20 | P@5 | nDCG@10 | MRR | p50 ms | status |",
-    "|---|--:|--:|--:|--:|--:|--:|--:|:--|",
+    "| System | R@5 | R@10 | R@20 | R-any@5 | R-any@10 | P@5 | nDCG@10 | MRR | p50 ms | status |",
+    "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|",
   ];
   for (const { label, result } of rows) {
     const m = result.metrics ?? {};
     if (result.status !== "passed") {
-      lines.push(`| ${label} | — | — | — | — | — | — | — | ${result.status}${result.unavailableReason ? ` (${result.unavailableReason})` : ""} |`);
+      lines.push(`| ${label} | — | — | — | — | — | — | — | — | — | ${result.status}${result.unavailableReason ? ` (${result.unavailableReason})` : ""} |`);
       continue;
     }
     const mark = (v, best) => (typeof v === "number" && v === best && best > 0 ? `**${fmt(v)}**` : fmt(v));
     lines.push(
-      `| ${label} | ${fmt(m.recallAt5)} | ${mark(m.recallAt10, bestR10)} | ${fmt(m.recallAt20)} | ${mark(m.precisionAt5, bestP5)} | ${mark(m.ndcgAt10, bestNdcg)} | ${fmt(m.mrr)} | ${fmtMs(m.p50Ms)} | passed |`,
+      `| ${label} | ${fmt(m.recallAt5)} | ${mark(m.recallAt10, bestR10)} | ${fmt(m.recallAt20)} | ${mark(m.recallAnyAt5, bestRany5)} | ${mark(m.recallAnyAt10, bestRany10)} | ${mark(m.precisionAt5, bestP5)} | ${mark(m.ndcgAt10, bestNdcg)} | ${fmt(m.mrr)} | ${fmtMs(m.p50Ms)} | passed |`,
     );
   }
   return lines.join("\n");
@@ -121,8 +123,9 @@ const out = [];
 out.push("# BrainRouter Memory — Comparison Report");
 out.push("");
 out.push(
-  "BrainRouter vs. standard memory-retrieval strategies on the MemBench 10k splits " +
-    "(each trajectory padded with ~10k tokens of distractor noise). Each system retrieves " +
+  "BrainRouter vs. standard memory-retrieval strategies on long-term-memory benchmarks " +
+    "(MemBench 10k, LongMemEval-S, LoCoMo). `R-any@k` (recall_any) is the headline metric " +
+    "for LongMemEval — does any gold session surface. Each system retrieves " +
     "up to 20 results; gold answers are matched by stable record id. Best value per quality " +
     "column is **bold**.",
 );
@@ -145,7 +148,7 @@ for (const f of fixtures) {
   const q = anyBaseline?.perQuery?.length ?? "?";
   out.push(`## ${f}${SPLIT_DESC[f] ? ` — ${SPLIT_DESC[f]}` : ""}`);
   out.push("");
-  out.push(`_${q} queries scored over a bounded ~3000-record corpus (incl. distractor noise)._`);
+  out.push(`_${q} queries over a bounded corpus (haystack size = \`--max-records\`)._`);
   out.push("");
   out.push(table(sys));
   out.push("");
