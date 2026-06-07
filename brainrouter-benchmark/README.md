@@ -1,199 +1,176 @@
 # BrainRouter Benchmark
 
-Compares BrainRouter's memory recall — **one pipeline config at a time** — against
-the standard alternatives (full-context dump, recency cap, BM25, vector, hybrid)
-on MemBench data.
+Measures BrainRouter's memory recall — **one pipeline stage at a time** — against the
+standard baselines (full-context, recency, BM25, vector, hybrid) on **MemBench**,
+**LoCoMo**, and **LongMemEval**.
 
-- `src/memory/` — memory/retrieval comparison
-- `src/cli/` — deterministic CLI checks
-
-Runs are seeded (`1337`) and reproducible. Outputs → `results/` (raw JSON) and
-`reports/` (Markdown). **Run every command from this folder.**
+**Run every command from this folder.** Runs are seeded (`1337`) and reproducible.
+Output lands in `results/` (raw JSON) and `reports/` (Markdown).
 
 ---
 
-## Prerequisites
-
-- **Node ≥ 22.** Deps are hoisted to the repo-root `node_modules` (workspace); if
-  `../node_modules` is missing, run `npm install` once at the repo root.
-- **Live BrainRouter rows:** an LLM/embedding endpoint, e.g. **LM Studio on
-  `:1234`** with `google/gemma-4-e2b`. The base config is read from
-  `../brainrouter/.env`.
-- **MemBench data:** `gdown` + `python3`/`numpy` to fetch/convert the archive.
-
----
-
-## 1. Smoke test (no external deps)
+## Quickstart (no external services)
 
 ```bash
 npm run build
-npm run bench:datasets:list
 npm run bench:memory:retrieval -- --fixture tiny --progress
 npm run bench:report
 ```
 
----
-
-## 2. Get the datasets (once)
-
-```bash
-npm run bench:datasets:import-membench          # small "github-simple" sample
-# 10k/100k need the upstream archive (id in datasets/membench.manifest.json):
-mkdir -p datasets/raw/membench
-gdown "<google-drive-id>" -O datasets/raw/membench/archive.zip
-cd datasets/raw/membench && unzip -q archive.zip && cd -
-npm run bench:datasets:build-split -- --split membench:ps-fm:10k     # repeat per split
-npm run bench:datasets:list                      # confirm "yes"
-```
-
-Splits: `membench:{ps-fm,ps-rm,os-fm,os-rm}:{10k,100k}` →
-`First/Third AgentData {Low,High}Level.json`. `10k` adds 10 noise units/trajectory,
-`100k` adds 100.
-
-**LongMemEval-S** and **LoCoMo** (conversation-memory benchmarks). Place the raw
-files under `datasets/raw/` then build:
-
-```bash
-# datasets/raw/longmemeval_s.json  and  datasets/raw/locomo10.json
-npm run bench:datasets:build-longmemeval     # → fixture longmemeval:s (sessions; recall_any@k)
-npm run bench:datasets:build-locomo          # → fixture locomo (turns; recall@k)
-```
-
-| fixture | unit (record) | gold | headline metric |
-|---|---|---|---|
-| `longmemeval:s` | session | `answer_session_ids` | **R-any@k** (recall_any) |
-| `locomo` | turn | `evidence` turns | recall@k |
-
-Both build a **global-union corpus**; the per-run haystack size is `--max-records`
-(so it's tunable, and harder than the per-question haystack some papers report).
+If that prints a table, the harness works. Everything below runs the **real** datasets
+against a live BrainRouter server.
 
 ---
 
-## 3. The config matrix (one `.env` per pipeline mode)
+## What you need
 
-Each BrainRouter config is its own env file under `envs/.env.benchmark_<name>` —
-a **clone of `../brainrouter/.env`** with that config's recall knobs pinned. This
-is how you test each pipeline stage **individually** instead of one fixed combo.
-
-```bash
-./make-bench-envs.sh        # generates all envs/.env.benchmark_* from your .env
-```
-
-| config | what it isolates |
+| | |
 |---|---|
-| `keyword` | FTS / keyword only (embeddings OFF), no judge |
-| `vector_rrf` | FTS + vector, RRF fusion only |
+| **Node ≥ 22** | deps are hoisted to the repo root — if `../node_modules` is missing, run `npm install` once at the root |
+| **An LLM + embedding endpoint** | e.g. **LM Studio on `:1234`** with `google/gemma-4-e2b`. Base config is read from `../brainrouter/.env` |
+| **(optional) a reranker** | a Cohere/vLLM `/v1/rerank` service (e.g. vLLM on `:8000`). LM Studio has none → the `reranker`/`full` configs report `unavailable` |
+| **Port `3747` free** | the scripts start/stop the server here |
+
+---
+
+## Step 1 — Datasets (once)
+
+```bash
+# MemBench: fetch the upstream archive (drive id in datasets/membench.manifest.json)
+mkdir -p datasets/raw/membench
+gdown "<drive-id>" -O datasets/raw/membench/archive.zip
+( cd datasets/raw/membench && unzip -q archive.zip )
+npm run bench:datasets:build-split -- --split membench:ps-fm:10k    # repeat per split
+
+# LoCoMo + LongMemEval: drop the raw files, then build
+#   datasets/raw/locomo10.json   datasets/raw/longmemeval_s.json
+npm run bench:datasets:build-locomo
+npm run bench:datasets:build-longmemeval
+
+npm run bench:datasets:list        # every split you built should say "yes"
+```
+
+| fixture | record unit | headline metric |
+|---|---|---|
+| `membench:{ps-fm,ps-rm,os-fm,os-rm}:{10k,100k}` | fact | recall@k · nDCG · MRR |
+| `locomo` | turn | recall@k |
+| `longmemeval:s` | session | **recall_any@k** |
+
+---
+
+## Step 2 — Pick the configs
+
+Each pipeline mode is its own env file (`envs/.env.benchmark_<name>`) — a clone of
+`../brainrouter/.env` with that mode's recall knobs pinned, so you can test each stage
+in isolation.
+
+```bash
+./make-bench-envs.sh        # (re)generate all of them from your .env
+```
+
+| config | isolates |
+|---|---|
+| `keyword` | FTS / BM25 only (vectors off, no judge) |
+| `vector_rrf` | FTS + vector, RRF fusion |
 | `vector_mmr` | + MMR diversity |
-| `reranker` | + cross-encoder reranker¹ |
-| `judge` | + LLM relevance judge, return up to 20 |
-| `precision` | judge ON, top-5 (BrainRouter's default, precision-first) |
+| `reranker` | + cross-encoder reranker* |
+| `judge` | + LLM relevance judge (top 20) |
+| `precision` | judge on, top 5 (BrainRouter's default) |
 | `full` | everything on |
 
-Files are git-ignored (they contain copied API keys). **Add your own**: drop a new
-`envs/.env.benchmark_<name>` (or edit one) and it's picked up automatically.
+\* Before each `reranker`/`full` run the script **probes** the endpoint; if it isn't a
+real `/v1/rerank` service the config is logged as **`unavailable`** — never a silent RRF
+fallback. Point it at a real one and regenerate:
+`RERANKER_ENDPOINT=https://host/v1/rerank ./make-bench-envs.sh`.
 
-¹ Reranker needs a Cohere/vLLM-compatible `/v1/rerank` endpoint. Before each
-`reranker`/`full` run the script **probes** it; if it doesn't return a valid
-rerank response (**LM Studio has no rerank API**), that config is recorded as
-**`unavailable`** in the report — it is *not* silently benchmarked as an RRF
-fallback. To actually test reranking, point it at a real service and regenerate:
-`RERANKER_ENDPOINT=https://my-rerank/v1/rerank ./make-bench-envs.sh`.
+Add your own mode by dropping a new `envs/.env.benchmark_<name>` — it's picked up
+automatically. (These files hold copied API keys and are git-ignored.)
 
 ---
 
-## 4. Run it
+## Step 3 — Run
 
-Two steps. **Load once, then test each config.** Needs LM Studio up and port
-`3747` free.
-
-```bash
-# (a) import each split ONCE into its own throwaway DB (also captures baselines)
-./bench-load.sh
-
-# (b) test ONE config across the splits  ← the individual test
-./bench-one.sh keyword
-./bench-one.sh judge
-./bench-one.sh precision
-# … run as many configs as you like, one at a time
-
-# or sweep EVERY config in one go:
-./bench-all.sh
-```
-
-Scope it down while iterating (env overrides):
+Two phases: **load once, then test.**
 
 ```bash
-SPLITS="ps-fm" MAXREC=1000 MAXQ=10 ./bench-load.sh
-SPLITS="ps-fm" MAXREC=1000 MAXQ=10 ./bench-one.sh judge
-./bench-one.sh reranker ps-fm                 # one config, one split
-SPLITS="longmemeval:s locomo" ./bench-load.sh && ./bench-one.sh judge longmemeval:s
+export BRAINROUTER_LLM_MAX_CONCURRENT=2                          # keep local models happy (see ⚠️)
+export SPLITS="ps-fm ps-rm os-fm os-rm locomo longmemeval:s"     # all six; default is the 4 MemBench
+
+./bench-load.sh        # import each split into its own throwaway DB + capture baselines
+./bench-all.sh         # sweep every config across every split
+                       #   …or one at a time:  ./bench-one.sh judge   ./bench-one.sh reranker ps-fm
 ```
 
-Split tokens: the four MemBench ones (`ps-fm ps-rm os-fm os-rm`, → `membench:<x>:10k`),
-plus `longmemeval:s` and `locomo`. Defaults: `SPLITS="ps-fm ps-rm os-fm os-rm"`,
-`MAXREC=3000`, `MAXQ=30`.
-
-**Verbose output**: every run prints the config's active knobs, the server's stage
-readiness, per-query progress, and the resulting metrics inline (`→ brainrouter-<config> R@5=… p50=…`), so you see exactly what's running.
-
-> Timing: non-judge configs are seconds/split; judge configs are ~minutes/split
-> (local LLM per query). A full `bench-all.sh` over 4 splits is roughly 30–60 min.
-
----
-
-## 5. Extract the report
+Build the report:
 
 ```bash
 node build-comparison-report.mjs > reports/memory-comparison.md
 ```
 
-One clean table per split — baselines + every `brainrouter-<config>` you ran, best
-value per quality column **bold**. (`npm run bench:report` instead dumps *every*
-raw run row; use that to audit.)
+One clean table per split — baselines + every config you ran, best value per column in
+**bold**. (`npm run bench:report` dumps every raw row instead, for auditing.)
 
----
-
-## 6. Knobs
-
-| env var | side | effect |
-|---|---|---|
-| `SPLITS` / `MAXREC` / `MAXQ` | scripts | which splits, corpus size, # queries |
-| `RERANKER_ENDPOINT` | make-bench-envs | bake a real `/v1/rerank` url into reranker/full |
-| `BRAINROUTER_MEMORY_DB` | server | SQLite path (scripts set a throwaway path per split) |
-| `BRAINROUTER_RELEVANCE_JUDGE_ENABLED` | server | `true`=precision, `false`=recall |
-| `BRAINROUTER_RECALL_TOP_RESULTS` / `_FTS_LIMIT` / `_VEC_LIMIT` | server | result count / candidate pool |
-| `BRAINROUTER_RECALL_DIVERSITY` | server | `on`/`off` (MMR) |
-| `BRAINROUTER_EMBEDDING_API_KEY` | server | empty = vector OFF (keyword only) |
-| `BRAINROUTER_BENCH_MCP_URL` / `_API_KEY` | bench | point the adapter at the server |
-| `BRAINROUTER_BENCH_SYSTEM_ID` | bench | row name in results (scripts set `brainrouter-<config>`) |
-| `BRAINROUTER_BENCH_SKIP_IMPORT=1` | bench | query a pre-loaded DB (scripts use this) |
-
-The scripts set the bench-side vars for you — the table is for manual runs /
-custom configs.
-
----
-
-## 7. Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `… not loaded — run ./bench-load.sh first` | Run `./bench-load.sh` before `./bench-one.sh`. |
-| reranker shows `unavailable` in the report | Its endpoint failed the pre-flight rerank probe (LM Studio has no `/v1/rerank`). That's intentional — set `RERANKER_ENDPOINT` to a real service + `./make-bench-envs.sh`, then re-run `./bench-one.sh reranker`. |
-| `MCP error … Request timed out` | Raise `BRAINROUTER_BENCH_MCP_TIMEOUT_MS`, or use a non-judge config. |
-| `401` / `403` | Stale key — re-run `./bench-load.sh` (re-mints into the split DB). |
-| `EADDRINUSE :3747` | `lsof -ti :3747 \| xargs kill` |
-| all configs give identical numbers | Expected on tiny/easy slices; raise `MAXQ` and use the real splits. |
-| few/low live hits | LM Studio down → keyword fallback. Check `curl localhost:1234/v1/models`. |
-
----
-
-## 8. Cleanup
+**Scope it down while iterating** — defaults are `MAXREC=3000`, `MAXQ=30`:
 
 ```bash
-lsof -ti :3747 | xargs kill            # stop any server
-rm -f ~/.brainrouter-bench/*           # throwaway DBs + keys
-rm -rf results/memory/*                # old runs
+SPLITS="ps-fm" MAXREC=1000 MAXQ=10 ./bench-load.sh
+SPLITS="ps-fm" MAXREC=1000 MAXQ=10 ./bench-one.sh judge
 ```
 
-Notes: `tiny` is a smoke fixture — never use it for claims. Everything under
-`datasets/raw/**`, `datasets/membench/**`, and `envs/` is git-ignored.
+> **Resumable.** Loading is the slow part and happens once per split; config runs reuse
+> the loaded DBs. If a config dies, just re-run it — no reload.
+>
+> **Watch progress:** `tail -f /tmp/bench-load-<split>.log` (loading) or
+> `tail -f /tmp/bench-<config>-<split>.log` (a config run).
+>
+> **Timing:** non-judge configs are seconds/split; judge configs are minutes/split. The
+> full six-split sweep is a few hours (LongMemEval is slowest) — lower `MAXQ` or run it
+> in two batches for a faster first pass.
+
+> ⚠️ **Don't crank concurrency.** Pushing a single local model with many parallel
+> embed/judge calls makes it drop connections (`LM Link connection closed`), which taints
+> results and looks like a stall. Keep `BRAINROUTER_LLM_MAX_CONCURRENT` at `1`–`2`; the
+> server retries the occasional drop automatically.
+
+---
+
+## Re-run from clean
+
+```bash
+lsof -ti :3747 | xargs kill        # stop any server
+rm -f  ~/.brainrouter-bench/*      # throwaway DBs + keys
+rm -rf results/memory/*            # old runs
+rm -f  reports/memory-comparison.md
+```
+
+---
+
+## Reference
+
+**Knobs** (the scripts set the bench-side ones for you):
+
+| env var | effect |
+|---|---|
+| `SPLITS` / `MAXREC` / `MAXQ` | which splits, corpus size, # queries |
+| `BRAINROUTER_LLM_MAX_CONCURRENT` | parallel LLM/embed calls — keep at `1`–`2` for local models |
+| `RERANKER_ENDPOINT` | bake a real `/v1/rerank` url into `reranker`/`full` (with `make-bench-envs.sh`) |
+| `BRAINROUTER_RELEVANCE_JUDGE_ENABLED` | `true` = precision, `false` = recall |
+| `BRAINROUTER_RECALL_TOP_RESULTS` / `_FTS_LIMIT` / `_VEC_LIMIT` | result count / candidate pool |
+| `BRAINROUTER_RECALL_DIVERSITY` | `on` / `off` (MMR) |
+| `BRAINROUTER_EMBEDDING_API_KEY` | empty = vectors off (keyword only) |
+| `BRAINROUTER_BENCH_MCP_TIMEOUT_MS` | raise if judge runs hit `Request timed out` |
+
+**Troubleshooting:**
+
+| symptom | fix |
+|---|---|
+| `… not loaded — run ./bench-load.sh first` | run `./bench-load.sh` before testing |
+| `reranker` shows `unavailable` | its `/v1/rerank` probe failed (LM Studio has none) — point at a real service + `./make-bench-envs.sh` |
+| `MCP error … Request timed out` | raise `BRAINROUTER_BENCH_MCP_TIMEOUT_MS`, or use a non-judge config |
+| `401` / `403` | stale key — re-run `./bench-load.sh` (re-mints per split) |
+| `EADDRINUSE :3747` | `lsof -ti :3747 \| xargs kill` |
+| identical numbers across configs | expected on tiny/easy slices — raise `MAXQ`, use real splits |
+| few / low live hits | LM Studio down → keyword fallback. Check `curl localhost:1234/v1/models` |
+
+> `tiny` is a smoke fixture — never use it for claims. `datasets/raw/**`,
+> `datasets/membench/**`, and `envs/` are git-ignored.
