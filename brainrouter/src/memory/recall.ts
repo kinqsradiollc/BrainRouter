@@ -2,6 +2,7 @@ import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation, RelevanceVerdict } from "@kinqs/brainrouter-types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
+import { rerankerMaxDocChars } from "./store/reranker.js";
 import type { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
@@ -206,19 +207,40 @@ export function blendByRank(rerankRank: number[], alpha: number, k: number = RER
 }
 
 /**
- * MEM-RERANK2 (0.4.14) — max candidates sent to the cross-encoder. Reranker
- * cost ∝ candidates × doc length and dominates recall latency (longmemeval
- * 22-28s over a 40-doc pool). The retriever already orders well, so only the
- * top-N by pre-score are reranked; the rest keep their pre-score order. Default
- * 12; clamp [1, 200].
- *   BRAINROUTER_RECALL_RERANK_INPUT_CAP
+ * MEM-RERANK2 (0.4.14) — total character budget sent to the cross-encoder.
+ * Reranker latency ∝ Σ doc-chars, and it's the recall-latency bottleneck on
+ * long-session corpora (longmemeval 22-28s). A fixed *count* cap is wrong: it
+ * starves short-doc/deep-gold corpora (locomo gold sits at pre-rank 20-40, so
+ * capping to 12 drops recall) while not helping enough on long docs. A *char*
+ * budget adapts — long docs (longmemeval, ~1500 ch/chunk) → few candidates
+ * (latency cut, and that corpus's gold is shallow), short docs (locomo, a few
+ * hundred ch) → the whole pool (deep gold still rescued). Default 18000 chars
+ * (~12 max-length chunks). Clamp [1500, 500000].
+ *   BRAINROUTER_RECALL_RERANK_CHAR_BUDGET
  */
-export function readRerankInputCap(env: NodeJS.ProcessEnv = process.env): number {
-  const def = 12;
-  const raw = env.BRAINROUTER_RECALL_RERANK_INPUT_CAP;
+export function readRerankCharBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 18000;
+  const raw = env.BRAINROUTER_RECALL_RERANK_CHAR_BUDGET;
   if (raw === undefined || raw.trim() === "") return def;
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 200) : def;
+  return Number.isFinite(n) && n >= 1500 ? Math.min(n, 500000) : def;
+}
+
+/**
+ * How many leading (pre-score-ordered) candidates fit in the reranker char
+ * budget — each doc costs min(its length, maxDocChars). Always ≥1 so the
+ * reranker still runs; the rest are kept in pre-score order by the caller.
+ */
+export function rerankHeadSize(docLens: number[], budgetChars: number, maxDocChars: number): number {
+  let total = 0;
+  let n = 0;
+  for (const len of docLens) {
+    const eff = Math.min(Math.max(0, len), maxDocChars);
+    if (n > 0 && total + eff > budgetChars) break;
+    total += eff;
+    n++;
+  }
+  return Math.max(1, Math.min(n, docLens.length || 1));
 }
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
@@ -628,15 +650,19 @@ export class MemoryRecallPipeline {
 
     if (this.rerankerService.isReady() && !params.disableReranker) {
       try {
-        // MEM-RERANK2 (0.4.14) — only the cheap-ranked head goes to the
-        // cross-encoder. Reranker cost ∝ candidates × doc length and is the
-        // recall-latency bottleneck (longmemeval 22-28s over a 40-doc pool); the
-        // retriever already orders well, so rerank the top-N by pre-score and
-        // keep the tail in pre-score order. Cuts latency ~pool/cap× with no
-        // recall loss (the tail is still returned).
-        const cap = Math.min(readRerankInputCap(), rerankCandidates.length);
-        const head = rerankCandidates.slice(0, cap);
-        const tail = rerankCandidates.slice(cap);
+        // MEM-RERANK2 (0.4.14) — only a char-budgeted head goes to the
+        // cross-encoder (the recall-latency bottleneck, longmemeval 22-28s).
+        // Budgeting by chars (not a fixed count) adapts to doc length: long-doc
+        // corpora send few candidates (latency cut; their gold is shallow),
+        // short-doc corpora send the whole pool (deep gold still rescued). The
+        // tail keeps its pre-score order and is appended — no recall loss.
+        const headSize = rerankHeadSize(
+          rerankCandidates.map((r) => String(r.record.content ?? "").length),
+          readRerankCharBudget(),
+          rerankerMaxDocChars(),
+        );
+        const head = rerankCandidates.slice(0, headSize);
+        const tail = rerankCandidates.slice(headSize);
         const documents = head.map(r => r.record.content);
         // MEM-BLEND (0.4.14) — score the whole head, then blend the cross-encoder
         // order with the pre-rerank order (RRF + half-life recency) by reciprocal

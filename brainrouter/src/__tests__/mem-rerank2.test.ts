@@ -1,15 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { readRerankInputCap } from "../memory/recall.js";
+import { readRerankCharBudget, rerankHeadSize } from "../memory/recall.js";
 
-// MEM-RERANK2 (0.4.14) — cap the cross-encoder input to the cheap-ranked head
-// (latency ∝ candidates × doc length); the tail keeps its pre-score order.
-describe("readRerankInputCap", () => {
-  it("defaults to 12, parses an override, clamps to 200, rejects junk / <1", () => {
-    expect(readRerankInputCap({})).toBe(12);
-    expect(readRerankInputCap({ BRAINROUTER_RECALL_RERANK_INPUT_CAP: "" })).toBe(12);
-    expect(readRerankInputCap({ BRAINROUTER_RECALL_RERANK_INPUT_CAP: "20" })).toBe(20);
-    expect(readRerankInputCap({ BRAINROUTER_RECALL_RERANK_INPUT_CAP: "999" })).toBe(200);
-    expect(readRerankInputCap({ BRAINROUTER_RECALL_RERANK_INPUT_CAP: "0" })).toBe(12);
-    expect(readRerankInputCap({ BRAINROUTER_RECALL_RERANK_INPUT_CAP: "junk" })).toBe(12);
+// MEM-RERANK2 (0.4.14) — char-budget the cross-encoder input (latency ∝ Σ
+// doc-chars). Adapts to doc length: long docs → few candidates, short docs →
+// the whole pool, so it never starves a deep-gold short-doc corpus.
+describe("readRerankCharBudget", () => {
+  it("defaults to 18000, parses, clamps to 500000, rejects junk / too-small", () => {
+    expect(readRerankCharBudget({})).toBe(18000);
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "" })).toBe(18000);
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "30000" })).toBe(30000);
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "999999" })).toBe(500000);
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "100" })).toBe(18000); // below floor
+    expect(readRerankCharBudget({ BRAINROUTER_RECALL_RERANK_CHAR_BUDGET: "junk" })).toBe(18000);
+  });
+});
+
+describe("rerankHeadSize", () => {
+  const maxDoc = 1500;
+  it("long docs → few candidates fit the budget (latency cut)", () => {
+    expect(rerankHeadSize(new Array(40).fill(1500), 18000, maxDoc)).toBe(12);
+  });
+  it("short docs → the whole pool fits (deep gold rescued)", () => {
+    expect(rerankHeadSize(new Array(40).fill(300), 18000, maxDoc)).toBe(40); // 40*300=12000 < 18000
+  });
+  it("caps each doc at maxDocChars when budgeting", () => {
+    expect(rerankHeadSize(new Array(40).fill(5000), 18000, maxDoc)).toBe(12); // counted as 1500 each
+  });
+  it("always returns at least 1, even if the first doc blows the budget", () => {
+    expect(rerankHeadSize([100000], 1500, maxDoc)).toBe(1);
+    expect(rerankHeadSize([], 18000, maxDoc)).toBe(1);
   });
 });
