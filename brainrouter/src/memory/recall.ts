@@ -128,6 +128,45 @@ export function applyJudgeFloor<T>(preJudge: T[], approved: T[], minKeep: number
   return out;
 }
 
+/**
+ * MEM-JUDGE2 (0.4.14) — how the relevance judge applies its verdicts:
+ *   "reorder" (default) — recall-safe: keep every candidate and move the
+ *                         approved ones to the front. The top-K slice still
+ *                         gets a precision-ordered set, but recall@k can never
+ *                         drop below the retriever (fixes the LongMemEval
+ *                         judge R@k collapse where R@5=R@10=R@20).
+ *   "filter"            — legacy precision-max: drop the rejects, floored by
+ *                         BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP so it can't hit 0.
+ *   BRAINROUTER_RELEVANCE_JUDGE_MODE
+ */
+export function readJudgeMode(env: NodeJS.ProcessEnv = process.env): "reorder" | "filter" {
+  return env.BRAINROUTER_RELEVANCE_JUDGE_MODE?.trim().toLowerCase() === "filter" ? "filter" : "reorder";
+}
+
+/**
+ * MEM-JUDGE2 (0.4.14) — recall-safe judge application. Return a permutation of
+ * `preJudge`: the judge-approved records first (in the judge's order, deduped),
+ * then every remaining record in its original retriever order. Records the judge
+ * never saw (beyond its candidate window) or rejected are demoted, not dropped,
+ * so the caller's top-K slice loses no recall. Pure + total.
+ */
+export function reorderApprovedFirst<T>(preJudge: T[], approvedIndices: number[]): T[] {
+  if (preJudge.length === 0) return [];
+  const approvedSet = new Set<number>();
+  const approved: T[] = [];
+  for (const i of approvedIndices) {
+    if (Number.isInteger(i) && i >= 0 && i < preJudge.length && !approvedSet.has(i)) {
+      approvedSet.add(i);
+      approved.push(preJudge[i]);
+    }
+  }
+  const rest: T[] = [];
+  for (let i = 0; i < preJudge.length; i++) {
+    if (!approvedSet.has(i)) rest.push(preJudge[i]);
+  }
+  return [...approved, ...rest];
+}
+
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
   // B7 (MEM-CHURN) — shorten the half-life for memories anchored to high-churn
   // files. `churn` undefined / 0 → the base half-life, so existing data and every
@@ -591,12 +630,18 @@ export class MemoryRecallPipeline {
         judgeVerdicts = judgeResult.verdicts;
         judgeApproved = judgeResult.approvedIndices.length;
         judgeRejected = topResults.length - judgeApproved;
-        // MEM-JUDGE (0.4.14) — floor: don't let the judge collapse the result set
-        // below minKeep when the retriever produced candidates (fixes the
-        // long-session 0-recall; short-record precision trimming is unaffected).
+        // MEM-JUDGE2 (0.4.14) — apply the verdicts recall-safely. Default
+        // "reorder" keeps every candidate and just promotes the approved ones,
+        // so the top-K slice gains precision without losing recall (fixes the
+        // long-session R@5=R@10=R@20 collapse). "filter" restores the legacy
+        // drop-the-rejects behavior, floored by MIN_KEEP so it can't hit 0.
         const preJudge = topResults;
-        const approvedResults = judgeResult.approvedIndices.map((i) => preJudge[i]);
-        topResults = applyJudgeFloor(preJudge, approvedResults, readJudgeMinKeep());
+        if (readJudgeMode() === "filter") {
+          const approvedResults = judgeResult.approvedIndices.map((i) => preJudge[i]);
+          topResults = applyJudgeFloor(preJudge, approvedResults, readJudgeMinKeep());
+        } else {
+          topResults = reorderApprovedFirst(preJudge, judgeResult.approvedIndices);
+        }
       } catch (e) {
         // Locally-hosted LLMs (LM Studio, Ollama) timing out on the
         // relevance judge isn't a server bug — it just means the
