@@ -408,6 +408,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RERANKER_MODEL` | _(provider default)_ | e.g. `rerank-english-v3.0`. |
 | `BRAINROUTER_RERANKER_TOP_N` | `10` | Top-K to rerank. |
 | `BRAINROUTER_RERANKER_MAX_DOC_CHARS` | `1500` | Per-doc chars sent to the cross-encoder (0.4.14). Covers a whole chunk instead of the old hardcoded 700; clamped [100, 8000]. Raise for larger-context rerankers, lower for strict 512-token ones. |
+| `BRAINROUTER_RECALL_RERANK_BLEND_ALPHA` | `0.6` | MEM-BLEND (0.4.14): weight of the cross-encoder relevance vs the pre-rerank score (RRF + half-life recency) when combining them. `1` = pure reranker (legacy — replaces the order); `0` = pure retriever order. Keeps recency in play (a recency baseline can't beat the pipeline) and stops low-similarity reflective gold from being demoted. Clamp [0,1]. |
 
 ### Relevance judge — `brainrouter/.env`
 
