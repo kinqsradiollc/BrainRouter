@@ -93,6 +93,41 @@ export function readRecallSelection(env: NodeJS.ProcessEnv = process.env): Recal
   return { diversity, lambda };
 }
 
+/**
+ * MEM-JUDGE (0.4.14) — result floor for the relevance judge. On long-session
+ * records the small judge can't verify an answer buried in a 2.6k-token session
+ * (it also only sees the first 600 chars), so it "when in doubt, reject"s every
+ * candidate and recall collapses to ~0 (LongMemEval judge R@5 0.80 → 0.10). The
+ * floor keeps at least `minKeep` top pre-judge results when the judge
+ * under-delivers, so recall never drops below the retriever on a query that had
+ * candidates. The judge's precision trimming on short records is untouched
+ * (it only kicks in when approvals < minKeep).
+ *   BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP  (default 1; 0 = old collapse-to-zero)
+ */
+export function readJudgeMinKeep(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP;
+  if (raw === undefined || raw.trim() === "") return 1;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+/**
+ * Keep the judge's approved results, but if it approved fewer than `minKeep`,
+ * backfill from the rank-ordered pre-judge list (approvals first, then the
+ * next-best retriever results) so the set never collapses below the floor.
+ * Pure + order-preserving; `approved` must be a subset of `preJudge`.
+ */
+export function applyJudgeFloor<T>(preJudge: T[], approved: T[], minKeep: number): T[] {
+  if (minKeep <= 0 || approved.length >= minKeep || preJudge.length === 0) return approved;
+  const out = [...approved];
+  const have = new Set<T>(approved);
+  for (const item of preJudge) {
+    if (out.length >= minKeep) break;
+    if (!have.has(item)) { out.push(item); have.add(item); }
+  }
+  return out;
+}
+
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
   // B7 (MEM-CHURN) — shorten the half-life for memories anchored to high-churn
   // files. `churn` undefined / 0 → the base half-life, so existing data and every
@@ -556,7 +591,12 @@ export class MemoryRecallPipeline {
         judgeVerdicts = judgeResult.verdicts;
         judgeApproved = judgeResult.approvedIndices.length;
         judgeRejected = topResults.length - judgeApproved;
-        topResults = judgeResult.approvedIndices.map((i) => topResults[i]);
+        // MEM-JUDGE (0.4.14) — floor: don't let the judge collapse the result set
+        // below minKeep when the retriever produced candidates (fixes the
+        // long-session 0-recall; short-record precision trimming is unaffected).
+        const preJudge = topResults;
+        const approvedResults = judgeResult.approvedIndices.map((i) => preJudge[i]);
+        topResults = applyJudgeFloor(preJudge, approvedResults, readJudgeMinKeep());
       } catch (e) {
         // Locally-hosted LLMs (LM Studio, Ollama) timing out on the
         // relevance judge isn't a server bug — it just means the
