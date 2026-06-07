@@ -17,6 +17,7 @@ import { recordFileMutation } from '../state/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../state/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
 import { unsynthesizedChildIds, mergePendingChildIds } from '../runtime/childResume.js';
+import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../runtime/synthesisGuard.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -1071,6 +1072,12 @@ export class Agent {
     // honest signal. Bounded so a model that won't update can't loop.
     let planSyncGuardFired = 0;
     const PLAN_SYNC_GUARD_MAX = 1;
+    // MAR-3 — child-synthesis guard. `childOutputDeliveredThisTurn` flips true once a
+    // child/sub-agent's findings reach the parent this turn; the guard fires once if
+    // the model then ends with a deferral instead of synthesizing them.
+    let synthesisGuardFired = 0;
+    const SYNTHESIS_GUARD_MAX = 1;
+    let childOutputDeliveredThisTurn = false;
     const planCompletedAtTurnStart = (() => {
       try { return readPlan(this.workspaceRoot, this.sessionKey).items.filter((i) => i.status === 'completed').length; }
       catch { return 0; }
@@ -1589,6 +1596,7 @@ export class Agent {
           ].join('\n\n');
           const childResultSystem = summarizeWaitedChildOutputs(waitResultText);
           if (childResultSystem) {
+            childOutputDeliveredThisTurn = true; // MAR-3 — drained child output reached the parent
             const systemMsg = { role: 'system', content: childResultSystem };
             this.chatHistory.push(systemMsg);
             this.recordTranscript(systemMsg);
@@ -1741,6 +1749,28 @@ export class Agent {
             callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
             continue;
           }
+        }
+
+        // MAR-3 (0.4.13) — child-synthesis guard. Child results were delivered this
+        // turn but the model is ending with a deferral ("I'll summarize later" /
+        // "still working") instead of synthesizing them. Force ONE synthesis pass.
+        // Bounded → never loops.
+        if (
+          synthesisGuardFired < SYNTHESIS_GUARD_MAX &&
+          childOutputDeliveredThisTurn &&
+          looksLikeChildSynthesisPunt(response.content ?? '')
+        ) {
+          synthesisGuardFired += 1;
+          const correction = [
+            'Runtime child-synthesis guardrail tripped.',
+            'A child agent already returned its results to you THIS turn, but your answer defers ("I\'ll summarize later" / "still working") instead of delivering them.',
+            'Their output is in the conversation above. Synthesize it into your final answer for the user NOW — do not promise a future summary, and do not spawn or wait on new agents.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Recovery: child results delivered but answer deferred — forcing synthesis (${synthesisGuardFired}/${SYNTHESIS_GUARD_MAX})`);
+          continue;
         }
 
         // MAR-1 (0.4.13) — arm the auto-resume for any child spawned this turn that
@@ -1944,6 +1974,8 @@ export class Agent {
             resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
             summary = getToolSummary(name, args, resultText);
             trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+            // MAR-3 — note when a child/sub-agent's findings reached the parent this turn.
+            if (isChildSynthesisTool(name) && resultHasChildOutput(resultText)) childOutputDeliveredThisTurn = true;
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
