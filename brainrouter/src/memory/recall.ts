@@ -2,6 +2,7 @@ import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation, RelevanceVerdict } from "@kinqs/brainrouter-types";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { RerankerService } from "./store/reranker.js";
+import { rerankerMaxDocChars } from "./store/reranker.js";
 import type { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
@@ -169,13 +170,16 @@ export function reorderApprovedFirst<T>(preJudge: T[], approvedIndices: number[]
 
 /**
  * MEM-BLEND (0.4.14) — weight of the cross-encoder relevance vs the pre-rerank
- * score (RRF + half-life recency) when combining them. 1 = pure reranker
- * (legacy: the cross-encoder *replaces* the order); 0 = pure retriever order.
- * Default 0.6 (relevance-leaning but keeps recency in play). Clamp [0,1].
+ * score (RRF + half-life recency) when combining them by reciprocal rank.
+ * 1 = pure reranker; 0 = pure retriever order. Default **1.0** (pure reranker):
+ * on reranker-favorable queries (factual / conversational) blending in the
+ * weaker lexical order only hurts, so the safe global default is to trust the
+ * reranker and let MEM-ROUTE *lower* alpha for the query types where the
+ * retriever/recency should win (reflective / synthesis). Clamp [0,1].
  *   BRAINROUTER_RECALL_RERANK_BLEND_ALPHA
  */
 export function readRerankBlendAlpha(env: NodeJS.ProcessEnv = process.env): number {
-  const def = 0.6;
+  const def = 1.0;
   const raw = env.BRAINROUTER_RECALL_RERANK_BLEND_ALPHA;
   if (raw === undefined || raw.trim() === "") return def;
   const n = Number.parseFloat(raw);
@@ -200,6 +204,46 @@ export function blendByRank(rerankRank: number[], alpha: number, k: number = RER
     .map((i) => ({ i, s: alpha * (1 / (k + rerankRank[i])) + (1 - alpha) * (1 / (k + i)) }))
     .sort((a, b) => b.s - a.s)
     .map((x) => x.i);
+}
+
+/**
+ * MEM-RERANK2 (0.4.14) — total character budget sent to the cross-encoder.
+ * Reranker latency ∝ Σ doc-chars, and it's the recall-latency bottleneck on
+ * long-session corpora (longmemeval 22-28s). A fixed *count* cap is wrong: it
+ * starves short-doc/deep-gold corpora (locomo gold sits at pre-rank 20-40, so
+ * capping to 12 drops recall) while not helping enough on long docs. A *char*
+ * budget adapts — long docs (longmemeval, ~1500 ch/chunk) → few candidates
+ * (latency cut, and that corpus's gold is shallow), short docs (locomo, a few
+ * hundred ch) → the whole pool (deep gold still rescued). Default 30000 chars
+ * (~20 max-length chunks): tuned so long-session recall fully recovers (R@5/10
+ * back to the all-pool baseline) while still cutting latency ~1.5× (22.7s →
+ * 14.8s on longmemeval); short-doc corpora are unaffected (already under it).
+ * Clamp [1500, 500000].
+ *   BRAINROUTER_RECALL_RERANK_CHAR_BUDGET
+ */
+export function readRerankCharBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 30000;
+  const raw = env.BRAINROUTER_RECALL_RERANK_CHAR_BUDGET;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1500 ? Math.min(n, 500000) : def;
+}
+
+/**
+ * How many leading (pre-score-ordered) candidates fit in the reranker char
+ * budget — each doc costs min(its length, maxDocChars). Always ≥1 so the
+ * reranker still runs; the rest are kept in pre-score order by the caller.
+ */
+export function rerankHeadSize(docLens: number[], budgetChars: number, maxDocChars: number): number {
+  let total = 0;
+  let n = 0;
+  for (const len of docLens) {
+    const eff = Math.min(Math.max(0, len), maxDocChars);
+    if (n > 0 && total + eff > budgetChars) break;
+    total += eff;
+    n++;
+  }
+  return Math.max(1, Math.min(n, docLens.length || 1));
 }
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
@@ -609,29 +653,40 @@ export class MemoryRecallPipeline {
 
     if (this.rerankerService.isReady() && !params.disableReranker) {
       try {
-        const documents = rerankCandidates.map(r => r.record.content);
-        // MEM-BLEND (0.4.14) — score the WHOLE pool (topN = pool size) so the
-        // blend sees every candidate, then combine the cross-encoder relevance
-        // with the pre-rerank score (RRF + half-life recency) instead of letting
-        // the reranker *replace* the order. Keeps recency in play (a recency
-        // baseline can't beat us) and stops low-similarity reflective gold from
-        // being demoted. alpha=1 reproduces the legacy pure-reranker order.
+        // MEM-RERANK2 (0.4.14) — only a char-budgeted head goes to the
+        // cross-encoder (the recall-latency bottleneck, longmemeval 22-28s).
+        // Budgeting by chars (not a fixed count) adapts to doc length: long-doc
+        // corpora send few candidates (latency cut; their gold is shallow),
+        // short-doc corpora send the whole pool (deep gold still rescued). The
+        // tail keeps its pre-score order and is appended — no recall loss.
+        const headSize = rerankHeadSize(
+          rerankCandidates.map((r) => String(r.record.content ?? "").length),
+          readRerankCharBudget(),
+          rerankerMaxDocChars(),
+        );
+        const head = rerankCandidates.slice(0, headSize);
+        const tail = rerankCandidates.slice(headSize);
+        const documents = head.map(r => r.record.content);
+        // MEM-BLEND (0.4.14) — score the whole head, then blend the cross-encoder
+        // order with the pre-rerank order (RRF + half-life recency) by reciprocal
+        // rank instead of letting the reranker *replace* it. Keeps recency in play
+        // (a recency baseline can't beat us) and stops low-similarity reflective
+        // gold from being demoted. alpha=1 reproduces the legacy pure-reranker order.
         const ranked = await this.rerankerService.rerank({
           query,
           documents,
-          topN: rerankCandidates.length,
+          topN: head.length,
         });
-        // rerankRank[i] = item i's position in the reranker order (lower = better).
-        // Unranked items (shouldn't happen — we ask for the whole pool) sink last.
-        const rerankRank = new Array(rerankCandidates.length).fill(rerankCandidates.length);
+        // rerankRank[i] = head item i's position in the reranker order (lower = better).
+        const rerankRank = new Array(head.length).fill(head.length);
         ranked.forEach((r, pos) => {
           if (Number.isInteger(r.index) && r.index >= 0 && r.index < rerankRank.length) {
             rerankRank[r.index] = pos;
           }
         });
         const outN = Math.max(1, this.rerankerService.getTopN());
-        const order = blendByRank(rerankRank, readRerankBlendAlpha());
-        topResults = order.slice(0, outN).map((i) => rerankCandidates[i]);
+        const headOrder = blendByRank(rerankRank, readRerankBlendAlpha());
+        topResults = [...headOrder.map((i) => head[i]), ...tail].slice(0, outN);
         usedReranker = true;
       } catch (e) {
         console.error("[BrainRouter] Reranker failed during recall, falling back to RRF:", (e as Error).message);

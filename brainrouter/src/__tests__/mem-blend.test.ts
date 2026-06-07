@@ -5,17 +5,17 @@ import { readRerankBlendAlpha, blendByRank } from "../memory/recall.js";
 // (RRF + half-life recency) order by reciprocal rank, so the reranker refines
 // rather than replaces the retriever (and recency survives).
 describe("readRerankBlendAlpha", () => {
-  it("defaults to 0.6, parses, allows the [0,1] endpoints", () => {
-    expect(readRerankBlendAlpha({})).toBe(0.6);
-    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "" })).toBe(0.6);
+  it("defaults to 1.0 (pure reranker), parses, allows the [0,1] endpoints", () => {
+    expect(readRerankBlendAlpha({})).toBe(1.0);
+    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "" })).toBe(1.0);
     expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "0.8" })).toBe(0.8);
     expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "0" })).toBe(0);
     expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "1" })).toBe(1);
   });
   it("falls back to default on out-of-range / junk", () => {
-    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "1.5" })).toBe(0.6);
-    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "-0.2" })).toBe(0.6);
-    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "junk" })).toBe(0.6);
+    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "1.5" })).toBe(1.0);
+    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "-0.2" })).toBe(1.0);
+    expect(readRerankBlendAlpha({ BRAINROUTER_RECALL_RERANK_BLEND_ALPHA: "junk" })).toBe(1.0);
   });
 });
 
