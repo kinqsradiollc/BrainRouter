@@ -4,6 +4,7 @@ import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, Ses
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import { extractIntraFileCallEdges } from "../code-retrieval.js";
+import { expandImportRecord, readImportChunkChars } from "../pipeline/chunk-import.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
@@ -2146,7 +2147,12 @@ export class SqliteMemoryStore implements IMemoryStore {
 
     this.db.exec("BEGIN");
     try {
-      for (const record of data.memories ?? []) {
+      // MEM-CHUNK (0.4.14) — split over-long records into chunk records before
+      // storage so the recall stages get focused units. Short records pass
+      // through unchanged; parent id is preserved via `${id}::c{i}` + metadata.
+      const chunkChars = readImportChunkChars();
+      const memories = (data.memories ?? []).flatMap((r) => expandImportRecord(r, chunkChars));
+      for (const record of memories) {
         this.stmtCognitiveUpsertMeta.run(
           record.id, userId, record.sessionKey, record.sessionId, record.content,
           record.type, record.priority, record.sceneName, record.skillTag,
