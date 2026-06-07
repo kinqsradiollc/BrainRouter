@@ -33,6 +33,34 @@ export function childrenSettled(ids: string[], statusOf: (id: string) => string 
 }
 
 /**
+ * MAR-1 (0.4.13) — the children spawned this turn that the main agent never
+ * observed/synthesized: `spawned − waited`. These should arm the auto-resume even
+ * when they completed NORMALLY (no drain timeout), so a finished background child's
+ * result is still delivered without a manual `/continue`. Order-preserving + deduped,
+ * skipping empty/`(unknown)` ids. Pure.
+ */
+export function unsynthesizedChildIds(spawned: Iterable<string>, waited: ReadonlySet<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of spawned) {
+    if (!id || id === '(unknown)' || waited.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** Merge new pending ids into an existing list, order-preserving + deduped. Pure. */
+export function mergePendingChildIds(existing: string[], add: string[]): string[] {
+  const seen = new Set(existing);
+  const out = [...existing];
+  for (const id of add) {
+    if (!seen.has(id)) { seen.add(id); out.push(id); }
+  }
+  return out;
+}
+
+/**
  * The synthetic prompt fired to auto-resume the turn once the children settled. It
  * tells the model the background agents finished and to drain + synthesize — the
  * automated equivalent of the user typing `/continue`. Pure.
@@ -43,5 +71,45 @@ export function buildChildResumePrompt(ids: string[]): string {
   return [
     `The background agent(s) you spawned earlier have now finished: ${list}.`,
     `Call \`wait_agents\` with ids ${idsJson} to read their results (they return immediately now), then synthesize their output and deliver the answer the user was waiting for. Do not spawn new agents.`,
+  ].join('\n');
+}
+
+/**
+ * MAR-2 (0.4.13) — should a child-completion EVENT fire the auto-resume immediately?
+ * True only when the REPL is idle (no turn running, not exiting, no goal continuation
+ * pending), some children are armed for resume, and they have ALL settled. This is the
+ * event-driven fast path; the C1 poll remains the fallback (e.g. for a child that
+ * vanishes without emitting a completion event). Pure.
+ */
+export function shouldResumeOnChildComplete(args: {
+  exited: boolean;
+  isProcessing: boolean;
+  pendingContinuation: boolean;
+  pendingIds: string[];
+  allSettled: boolean;
+}): boolean {
+  return (
+    !args.exited &&
+    !args.isProcessing &&
+    !args.pendingContinuation &&
+    args.pendingIds.length > 0 &&
+    args.allSettled
+  );
+}
+
+/**
+ * MAR-4 (0.4.13) — a turn-start hint naming the background children carried over from
+ * the previous turn, so when the user asks "is it done?" the model waits on the EXACT
+ * ids instead of guessing one out of a long `list_agents`. Wording is neutral so it
+ * reads correctly whether the children are still running or already finished. Returns
+ * null when nothing is pending. Pure.
+ */
+export function buildPendingChildStatusHint(ids: string[]): string | null {
+  const clean = ids.filter((id) => id && id !== '(unknown)');
+  if (clean.length === 0) return null;
+  const idsJson = JSON.stringify(clean);
+  return [
+    `Background sub-agent(s) from your previous turn: ${clean.join(', ')}.`,
+    `To check whether they are done or to collect their results, call \`wait_agents\` with exactly these ids ${idsJson} (it returns immediately once they finish), then synthesize — do NOT call \`list_agents\` and guess an id.`,
   ].join('\n');
 }
