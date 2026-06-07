@@ -246,6 +246,28 @@ export function rerankHeadSize(docLens: number[], budgetChars: number, maxDocCha
   return Math.max(1, Math.min(n, docLens.length || 1));
 }
 
+/**
+ * MEM-ROUTE (0.4.14) — detect reflective / analytical queries ("most likely
+ * sentiment", "how do they feel", "overall pattern", "summarize their attitude").
+ * Their gold evidence has low surface overlap with the question, so the
+ * cross-encoder demotes it — and on these the retriever+judge path already beats
+ * the reranker (os-rm judge R-any@10 0.87 vs reranker 0.77). We route reflective
+ * queries around the cross-encoder; factual / conversational keep it.
+ */
+const REFLECTIVE_QUERY_RE = /\b(sentiment|mood|emotions?|emotional|feel(s|ing|ings)?|attitude|opinion|tone|most likely|tend(s|ed)? to|usually|typically|overall|in general|generally|pattern|patterns|summar(y|ize|ise)|reflect|state of mind|disposition|outlook|impression)\b/i;
+
+export function isReflectiveQuery(query: string): boolean {
+  return REFLECTIVE_QUERY_RE.test(query ?? "");
+}
+
+/**
+ * MEM-ROUTE — query-type routing toggle. Default on (heuristic); set
+ * BRAINROUTER_RECALL_QUERY_ROUTING=off to always run the cross-encoder.
+ */
+export function readQueryRoutingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.BRAINROUTER_RECALL_QUERY_ROUTING?.trim().toLowerCase() !== "off";
+}
+
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
   // B7 (MEM-CHURN) — shorten the half-life for memories anchored to high-churn
   // files. `churn` undefined / 0 → the base half-life, so existing data and every
@@ -651,7 +673,11 @@ export class MemoryRecallPipeline {
     let usedReranker = false;
     let usedLexicalSelection = false;
 
-    if (this.rerankerService.isReady() && !params.disableReranker) {
+    // MEM-ROUTE (0.4.14) — skip the cross-encoder for reflective/analytical
+    // queries; their low-overlap gold retrieves better without it (it gets
+    // demoted), so they fall through to the MMR + recall-safe judge path below.
+    const routeReflective = readQueryRoutingEnabled() && isReflectiveQuery(query);
+    if (this.rerankerService.isReady() && !params.disableReranker && !routeReflective) {
       try {
         // MEM-RERANK2 (0.4.14) — only a char-budgeted head goes to the
         // cross-encoder (the recall-latency bottleneck, longmemeval 22-28s).
