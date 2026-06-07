@@ -96,3 +96,20 @@ export function shouldResumeOnChildComplete(args: {
     args.allSettled
   );
 }
+
+/**
+ * MAR-4 (0.4.13) — a turn-start hint naming the background children carried over from
+ * the previous turn, so when the user asks "is it done?" the model waits on the EXACT
+ * ids instead of guessing one out of a long `list_agents`. Wording is neutral so it
+ * reads correctly whether the children are still running or already finished. Returns
+ * null when nothing is pending. Pure.
+ */
+export function buildPendingChildStatusHint(ids: string[]): string | null {
+  const clean = ids.filter((id) => id && id !== '(unknown)');
+  if (clean.length === 0) return null;
+  const idsJson = JSON.stringify(clean);
+  return [
+    `Background sub-agent(s) from your previous turn: ${clean.join(', ')}.`,
+    `To check whether they are done or to collect their results, call \`wait_agents\` with exactly these ids ${idsJson} (it returns immediately once they finish), then synthesize — do NOT call \`list_agents\` and guess an id.`,
+  ].join('\n');
+}
