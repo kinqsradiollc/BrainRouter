@@ -8,12 +8,14 @@ design specs in [`docs/specs/`](docs/specs/).
 
 ## Shipped
 
-Latest published: **0.4.11** (2026-06-04). **0.4.12** (The Build Loop) is
-**feature-complete on `release/0.4.12`** — release prep pending.
+Latest published: **0.4.13** (2026-06-07) — sub-agent results flow back to the main
+agent (poll + event-driven resume, synthesis guard, status-check correlation) + REPL
+polish.
 
 | Version | Theme | Date |
 |---|---|---|
-| 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 (feature-complete) |
+| 0.4.13 | Sub-agent result delivery (resume + synthesis guard) · REPL polish | 2026-06-07 |
+| 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 |
 | 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
 | 0.4.10 | Memory-home hardening · mobile dashboard · Cloudflare Worker runtime | 2026-06-03 |
 | 0.4.9 | Dashboard redesign ("The Memory Instrument") · auth refresh tokens · API hardening | 2026-06-03 |
@@ -27,7 +29,7 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
-## 0.4.12 — The Build Loop · branch `release/0.4.12` (feature-complete)
+## 0.4.12 — The Build Loop · branch `release/0.4.12` (shipped)
 
 All feature work below is **merged into `release/0.4.12`**; what remains is
 release prep (version bump + changelog + publish) and optional REPL polish.

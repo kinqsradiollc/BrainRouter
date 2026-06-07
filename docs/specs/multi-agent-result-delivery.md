@@ -1,7 +1,7 @@
 # Spec: Multi-agent result delivery — completed children flow back to the main agent
 
-> Status: **DRAFT.** Target: 0.4.13.
-> Sequel to C1 (0.4.12 auto-resume) and a prerequisite for the CODEX-CHILD-TRANSPORT event channel.
+> Status: **SHIPPED in 0.4.13** (MAR-1..4). Retained as the design of record.
+> Sequel to C1 (0.4.12 auto-resume) and a prerequisite for a structured child→parent event channel.
 
 ## Problem
 
@@ -81,7 +81,7 @@ core delivery fix; MAR-3 + MAR-4 are robustness follow-ons.
 
 ## Non-goals
 
-- A structured child→parent streaming transport (that is CODEX-CHILD-TRANSPORT).
+- A structured child→parent streaming transport (a separate, later effort).
 - Changing the foreground delegate/`task_agent` return contract (already correct).
 - Fixing weak-model quality generally — only the deterministic delivery + a bounded
   synthesis nudge.

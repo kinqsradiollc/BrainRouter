@@ -13,7 +13,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
-| **[0.4.12](0.4.12.md)** | 2026-06-05 | Feature-complete | The Build Loop (`/build`, plan→implement→verify→review→merge, `cli.buildLoop`, fan-out + merge-gate, loop-until-green) + multi-agent reliability (reconnect not timeout, parent-wait timeouts, C1 loop-continue, C2 input queue) + grep / cost / role accuracy fixes |
+| **[0.4.13](0.4.13.md)** | 2026-06-07 | Shipped | Sub-agent results flow back to the main agent (poll + event-driven resume, weak-model synthesis guard, status-check id-correlation) + REPL polish (tool-result pairing, citation repair, low-effort planner) |
+| **[0.4.12](0.4.12.md)** | 2026-06-05 | Shipped | The Build Loop (`/build`, plan→implement→verify→review→merge, `cli.buildLoop`, fan-out + merge-gate, loop-until-green) + multi-agent reliability (reconnect not timeout, parent-wait timeouts, C1 loop-continue, C2 input queue) + grep / cost / role accuracy fixes |
 | **[0.4.11](0.4.11.md)** | 2026-06-04 | Shipped | Worktree merge-back isolation (`childWorkspaceIsolation: auto`), self-hydrating `config.json`, `/memory verify` + churn-weighted decay |
 | **[0.4.10](0.4.10.md)** | 2026-06-03 | Shipped | Memory-home hardening, mobile dashboard, Cloudflare Worker runtime |
 | **[0.4.9](0.4.9.md)** | 2026-06-03 | Shipped | Dashboard redesign ("The Memory Instrument"), auth refresh tokens, API hardening |
