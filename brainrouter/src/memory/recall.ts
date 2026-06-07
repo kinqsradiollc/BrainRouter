@@ -167,6 +167,34 @@ export function reorderApprovedFirst<T>(preJudge: T[], approvedIndices: number[]
   return [...approved, ...rest];
 }
 
+/**
+ * MEM-BLEND (0.4.14) — weight of the cross-encoder relevance vs the pre-rerank
+ * score (RRF + half-life recency) when combining them. 1 = pure reranker
+ * (legacy: the cross-encoder *replaces* the order); 0 = pure retriever order.
+ * Default 0.6 (relevance-leaning but keeps recency in play). Clamp [0,1].
+ *   BRAINROUTER_RECALL_RERANK_BLEND_ALPHA
+ */
+export function readRerankBlendAlpha(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 0.6;
+  const raw = env.BRAINROUTER_RECALL_RERANK_BLEND_ALPHA;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : def;
+}
+
+/**
+ * Min-max normalize to [0,1]. All-equal (or non-finite span) → 0.5 (neutral),
+ * so a degenerate axis contributes a constant to a blend rather than NaN.
+ */
+export function minMaxNormalize(xs: number[]): number[] {
+  if (xs.length === 0) return [];
+  let lo = Infinity, hi = -Infinity;
+  for (const x of xs) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  const span = hi - lo;
+  if (!Number.isFinite(span) || span <= 0) return xs.map(() => 0.5);
+  return xs.map((x) => (x - lo) / span);
+}
+
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
   // B7 (MEM-CHURN) — shorten the half-life for memories anchored to high-churn
   // files. `churn` undefined / 0 → the base half-life, so existing data and every
@@ -575,13 +603,32 @@ export class MemoryRecallPipeline {
     if (this.rerankerService.isReady() && !params.disableReranker) {
       try {
         const documents = rerankCandidates.map(r => r.record.content);
+        // MEM-BLEND (0.4.14) — score the WHOLE pool (topN = pool size) so the
+        // blend sees every candidate, then combine the cross-encoder relevance
+        // with the pre-rerank score (RRF + half-life recency) instead of letting
+        // the reranker *replace* the order. Keeps recency in play (a recency
+        // baseline can't beat us) and stops low-similarity reflective gold from
+        // being demoted. alpha=1 reproduces the legacy pure-reranker order.
         const ranked = await this.rerankerService.rerank({
           query,
           documents,
-          topN: this.rerankerService.getTopN()
+          topN: rerankCandidates.length,
         });
-
-        topResults = ranked.map(r => rerankCandidates[r.index]);
+        const returned = ranked.filter(
+          (r) => Number.isInteger(r.index) && r.index >= 0 && r.index < rerankCandidates.length,
+        );
+        const minRel = returned.length ? Math.min(...returned.map((r) => r.relevanceScore)) : 0;
+        const relRaw = new Array(rerankCandidates.length).fill(minRel);
+        for (const r of returned) relRaw[r.index] = r.relevanceScore;
+        const alpha = readRerankBlendAlpha();
+        const normRel = minMaxNormalize(relRaw);
+        const normPre = minMaxNormalize(rerankCandidates.map((c) => c.score));
+        const outN = Math.max(1, this.rerankerService.getTopN());
+        topResults = rerankCandidates
+          .map((cand, i) => ({ cand, blend: alpha * normRel[i] + (1 - alpha) * normPre[i] }))
+          .sort((a, b) => b.blend - a.blend)
+          .slice(0, outN)
+          .map((x) => x.cand);
         usedReranker = true;
       } catch (e) {
         console.error("[BrainRouter] Reranker failed during recall, falling back to RRF:", (e as Error).message);
