@@ -169,13 +169,16 @@ export function reorderApprovedFirst<T>(preJudge: T[], approvedIndices: number[]
 
 /**
  * MEM-BLEND (0.4.14) — weight of the cross-encoder relevance vs the pre-rerank
- * score (RRF + half-life recency) when combining them. 1 = pure reranker
- * (legacy: the cross-encoder *replaces* the order); 0 = pure retriever order.
- * Default 0.6 (relevance-leaning but keeps recency in play). Clamp [0,1].
+ * score (RRF + half-life recency) when combining them by reciprocal rank.
+ * 1 = pure reranker; 0 = pure retriever order. Default **1.0** (pure reranker):
+ * on reranker-favorable queries (factual / conversational) blending in the
+ * weaker lexical order only hurts, so the safe global default is to trust the
+ * reranker and let MEM-ROUTE *lower* alpha for the query types where the
+ * retriever/recency should win (reflective / synthesis). Clamp [0,1].
  *   BRAINROUTER_RECALL_RERANK_BLEND_ALPHA
  */
 export function readRerankBlendAlpha(env: NodeJS.ProcessEnv = process.env): number {
-  const def = 0.6;
+  const def = 1.0;
   const raw = env.BRAINROUTER_RECALL_RERANK_BLEND_ALPHA;
   if (raw === undefined || raw.trim() === "") return def;
   const n = Number.parseFloat(raw);
