@@ -18,6 +18,7 @@ import { isConnectivityError, isRetryableServerError } from '../state/checkpoint
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
 import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../runtime/childResume.js';
 import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../runtime/synthesisGuard.js';
+import { sanitizeModelArtifacts } from '../runtime/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -1797,7 +1798,9 @@ export class Agent {
           this.lastTurnPendingChildIds = mergePendingChildIds(this.lastTurnPendingChildIds, unsynthesized);
         }
 
-        finalAnswer = response.content;
+        // POLISH-2 (0.4.13) — repair the `*#COLON|*` citation garble some weak models
+        // emit, so the final answer (display, transcript, memory capture) reads clean.
+        finalAnswer = response.content ? sanitizeModelArtifacts(response.content) : response.content;
         exitedCleanly = true;
         break;
       }
