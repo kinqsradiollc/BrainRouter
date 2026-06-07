@@ -23,6 +23,8 @@
     "bench:datasets:list": "npm run bench:datasets:list -w brainrouter-benchmark --",
     "bench:datasets:import-membench": "npm run bench:datasets:import-membench -w brainrouter-benchmark --",
     "bench:datasets:build-split": "npm run bench:datasets:build-split -w brainrouter-benchmark --",
+    "bench:datasets:build-longmemeval": "npm run bench:datasets:build-longmemeval -w brainrouter-benchmark --",
+    "bench:datasets:build-locomo": "npm run bench:datasets:build-locomo -w brainrouter-benchmark --",
     "bench:report": "npm run bench:report -w brainrouter-benchmark --",
     "cf:build": "npm run build:cf -w dashboard",
     "cf:deploy": "npm run cf:deploy -w dashboard",

@@ -97,6 +97,9 @@ export interface BenchmarkMetricSet {
   recallAt5?: number;
   recallAt10?: number;
   recallAt20?: number;
+  recallAnyAt5?: number;
+  recallAnyAt10?: number;
+  recallAnyAt20?: number;
   precisionAt5?: number;
   precisionAt10?: number;
   ndcgAt10?: number;

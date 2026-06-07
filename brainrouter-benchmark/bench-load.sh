@@ -23,6 +23,9 @@ cd "$BENCH" || exit 1
 mkdir -p "$STATE"
 stamp() { date +%H:%M:%S; }
 stop_server() { lsof -ti :$PORT 2>/dev/null | xargs kill 2>/dev/null; for _ in $(seq 1 30); do lsof -ti :$PORT >/dev/null 2>&1 || return 0; sleep 0.5; done; }
+# Map a split token to a fixture id + a filesystem-safe DB key.
+fixture_for() { case "$1" in longmemeval|longmemeval:s) echo "longmemeval:s";; locomo) echo "locomo";; *) echo "membench:$1:10k";; esac; }
+dbkey_for() { printf '%s' "$1" | tr ':/ ' '___'; }
 
 echo "============================================================"
 echo "[$(stamp)] LOAD  splits=[$SPLITS]  bound=${MAXREC} records / ${MAXQ} queries"
@@ -30,15 +33,15 @@ echo "[$(stamp)] (fresh DB per split; baselines captured here too)"
 echo "============================================================"
 
 for SP in $SPLITS; do
-  SPLIT="membench:$SP:10k"
-  DB="$STATE/$SP.db"
+  SPLIT=$(fixture_for "$SP"); DBKEY=$(dbkey_for "$SP")
+  DB="$STATE/$DBKEY.db"
   echo ""
   echo "[$(stamp)] ── $SPLIT"
   rm -f "$DB" "$DB-wal" "$DB-shm"
   KEY=$(env BRAINROUTER_MEMORY_DB="$DB" node "$SERVER/scripts/setup-admin.js" \
         --userId bench --email bench@local 2>/dev/null | grep -oE 'br_[a-f0-9]{48}' | head -1)
   if [ -z "$KEY" ]; then echo "[$(stamp)]   ERROR: could not mint key — skipping $SP"; continue; fi
-  echo "$KEY" > "$STATE/$SP.key"
+  echo "$KEY" > "$STATE/$DBKEY.key"
   echo "[$(stamp)]   db=$DB   key=${KEY:0:14}…"
   echo "[$(stamp)]   starting loader server (embeddings ON, judge OFF)"
   stop_server

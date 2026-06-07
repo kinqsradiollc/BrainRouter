@@ -53,6 +53,10 @@ brainrouter-benchmark/reports/**
 !brainrouter-benchmark/reports/.gitkeep
 brainrouter-benchmark/datasets/membench/**
 !brainrouter-benchmark/datasets/membench/.gitkeep
+brainrouter-benchmark/datasets/longmemeval/**
+!brainrouter-benchmark/datasets/longmemeval/.gitkeep
+brainrouter-benchmark/datasets/locomo/**
+!brainrouter-benchmark/datasets/locomo/.gitkeep
 brainrouter-benchmark/datasets/raw/**
 !brainrouter-benchmark/datasets/raw/.gitkeep
 # benchmark env clones hold copied API keys — never commit them

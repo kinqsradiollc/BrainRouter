@@ -20,11 +20,17 @@ STRIP='^(BRAINROUTER_LLM_MODEL|BRAINROUTER_RELEVANCE_JUDGE_MODEL|BRAINROUTER_REL
 # model is pinned for all benchmark configs (fast local judge/extractor)
 COMMON=$'BRAINROUTER_LLM_MODEL=google/gemma-4-e2b\nBRAINROUTER_RELEVANCE_JUDGE_MODEL=google/gemma-4-e2b'
 
-# Reranker endpoint for the reranker/full configs. NOTE: LM Studio does NOT
-# expose /v1/rerank — point this at a Cohere- or vLLM-compatible rerank service,
-# otherwise those configs fall back to RRF (bench-one.sh warns when that happens).
-#   RERANKER_ENDPOINT=https://my-rerank/v1/rerank bash make-bench-envs.sh
-RERANKER_ENDPOINT="${RERANKER_ENDPOINT:-http://localhost:1234/v1/rerank}"
+# Reranker connection for the reranker/full configs. Inherited from the base
+# .env (BRAINROUTER_RERANKER_*) so those configs actually rerank; override the
+# endpoint with RERANKER_ENDPOINT=… if needed. top_n is forced to 20 below for
+# apples-to-apples recall@20, regardless of the base's value. If no compatible
+# /v1/rerank service answers, bench-one.sh records those configs as 'unavailable'.
+RR_BASE_EP=$(grep -E '^BRAINROUTER_RERANKER_ENDPOINT=' "$BASE" | head -1 | cut -d= -f2-)
+RR_BASE_KEY=$(grep -E '^BRAINROUTER_RERANKER_API_KEY=' "$BASE" | head -1 | cut -d= -f2-)
+RR_BASE_MODEL=$(grep -E '^BRAINROUTER_RERANKER_MODEL=' "$BASE" | head -1 | cut -d= -f2-)
+RERANKER_ENDPOINT="${RERANKER_ENDPOINT:-${RR_BASE_EP:-http://localhost:8000/v1/rerank}}"
+RERANKER_KEY="${RR_BASE_KEY:-local}"
+RERANKER_MODEL="${RR_BASE_MODEL:-BAAI/bge-reranker-v2-m3}"
 
 emit() {
   local name="$1" desc="$2" body="$3"
@@ -81,8 +87,8 @@ BRAINROUTER_RECALL_FTS_LIMIT=20
 BRAINROUTER_RECALL_VEC_LIMIT=20
 BRAINROUTER_RECALL_RERANK_POOL=40
 BRAINROUTER_RERANKER_ENDPOINT=$RERANKER_ENDPOINT
-BRAINROUTER_RERANKER_API_KEY=local
-BRAINROUTER_RERANKER_MODEL=bge-reranker-v2-m3
+BRAINROUTER_RERANKER_API_KEY=$RERANKER_KEY
+BRAINROUTER_RERANKER_MODEL=$RERANKER_MODEL
 BRAINROUTER_RERANKER_TOP_N=20
 EOF
 )"
@@ -111,8 +117,8 @@ BRAINROUTER_RECALL_VEC_LIMIT=20
 BRAINROUTER_RECALL_RERANK_POOL=40
 BRAINROUTER_RECALL_DIVERSITY=on
 BRAINROUTER_RERANKER_ENDPOINT=$RERANKER_ENDPOINT
-BRAINROUTER_RERANKER_API_KEY=local
-BRAINROUTER_RERANKER_MODEL=bge-reranker-v2-m3
+BRAINROUTER_RERANKER_API_KEY=$RERANKER_KEY
+BRAINROUTER_RERANKER_MODEL=$RERANKER_MODEL
 BRAINROUTER_RERANKER_TOP_N=20
 EOF
 )"

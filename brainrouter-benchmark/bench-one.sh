@@ -33,6 +33,9 @@ SPLITS="${*:-${SPLITS:-ps-fm ps-rm os-fm os-rm}}"
 
 stamp() { date +%H:%M:%S; }
 stop_server() { lsof -ti :$PORT 2>/dev/null | xargs kill 2>/dev/null; for _ in $(seq 1 30); do lsof -ti :$PORT >/dev/null 2>&1 || return 0; sleep 0.5; done; }
+# Map a split token to a fixture id + a filesystem-safe DB key.
+fixture_for() { case "$1" in longmemeval|longmemeval:s) echo "longmemeval:s";; locomo) echo "locomo";; *) echo "membench:$1:10k";; esac; }
+dbkey_for() { printf '%s' "$1" | tr ':/ ' '___'; }
 
 # Probe a /v1/rerank endpoint the way the server will call it. 0 = usable
 # (returns a 'results' array), non-zero = not available.
@@ -68,9 +71,9 @@ if [ -n "${RR_KEY:-}" ]; then
 fi
 
 for SP in $SPLITS; do
-  SPLIT="membench:$SP:10k"
-  DB="$STATE/$SP.db"
-  KEYF="$STATE/$SP.key"
+  SPLIT=$(fixture_for "$SP"); DBKEY=$(dbkey_for "$SP")
+  DB="$STATE/$DBKEY.db"
+  KEYF="$STATE/$DBKEY.key"
   echo ""
   if [ ! -f "$DB" ] || [ ! -f "$KEYF" ]; then
     echo "[$(stamp)] ⚠ $SP not loaded — run ./bench-load.sh first. Skipping."

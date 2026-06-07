@@ -1,6 +1,6 @@
 import { loadAndValidateDataset } from "../shared/dataset-validator.js";
 import { resolveDatasetFixture } from "../shared/dataset-resolver.js";
-import { mean, meanReciprocalRank, ndcgAtK, percentile, precisionAtK, recallAtK } from "../shared/metrics.js";
+import { mean, meanReciprocalRank, ndcgAtK, percentile, precisionAtK, recallAtK, recallAnyAtK } from "../shared/metrics.js";
 import { createRunConfig, environmentInfo, writeResults } from "../shared/results.js";
 import type { BenchmarkDataset, BenchmarkMetricSet, BenchmarkResult, SystemAdapter } from "../shared/schema.js";
 import { memoryBaselineAdapters } from "./baselines.js";
@@ -11,6 +11,9 @@ function aggregate(perQuery: NonNullable<BenchmarkResult["perQuery"]>): Benchmar
     recallAt5: mean(perQuery.map((q) => q.metrics.recallAt5 ?? 0)),
     recallAt10: mean(perQuery.map((q) => q.metrics.recallAt10 ?? 0)),
     recallAt20: mean(perQuery.map((q) => q.metrics.recallAt20 ?? 0)),
+    recallAnyAt5: mean(perQuery.map((q) => q.metrics.recallAnyAt5 ?? 0)),
+    recallAnyAt10: mean(perQuery.map((q) => q.metrics.recallAnyAt10 ?? 0)),
+    recallAnyAt20: mean(perQuery.map((q) => q.metrics.recallAnyAt20 ?? 0)),
     precisionAt5: mean(perQuery.map((q) => q.metrics.precisionAt5 ?? 0)),
     precisionAt10: mean(perQuery.map((q) => q.metrics.precisionAt10 ?? 0)),
     ndcgAt10: mean(perQuery.map((q) => q.metrics.ndcgAt10 ?? 0)),
@@ -97,6 +100,9 @@ async function runAdapter(adapter: SystemAdapter, dataset: BenchmarkDataset, run
         recallAt5: recallAtK(retrieved, gold, 5),
         recallAt10: recallAtK(retrieved, gold, 10),
         recallAt20: recallAtK(retrieved, gold, 20),
+        recallAnyAt5: recallAnyAtK(retrieved, gold, 5),
+        recallAnyAt10: recallAnyAtK(retrieved, gold, 10),
+        recallAnyAt20: recallAnyAtK(retrieved, gold, 20),
         precisionAt5: precisionAtK(retrieved, gold, 5),
         precisionAt10: precisionAtK(retrieved, gold, 10),
         ndcgAt10: ndcgAtK(retrieved, gold, 10),

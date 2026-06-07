@@ -71,6 +71,23 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 ---
 
+## 0.4.14 — Memory Accuracy · branch `feat/memory-accuracy-0.4.14` · spec `docs/specs/memory-accuracy.md`
+
+Benchmark-driven recall overhaul. The new `brainrouter-benchmark` (MemBench ·
+LoCoMo · LongMemEval) showed BrainRouter's retriever is solid but the **reranker
++ judge degrade badly on long-session records** (LongMemEval recall_any@5 **0.80
+retriever → 0.27 reranker → 0.10 judge**). Root cause: one-record-per-session
+granularity. **Status: spec in review — no engine code until sign-off.**
+
+- [ ] MEM-AUDIT — recall pipeline deep-dive (review-gated, no code)
+- [ ] MEM-CHUNK — conversational record chunking (passage/turn granularity + parent roll-up)
+- [ ] MEM-RERANK — length-aware reranking (the 700-char doc cap drops ~93% of a median session)
+- [ ] MEM-JUDGE — judge result-floor + long-context safety (stop the 0-result collapse)
+- [ ] MEM-VEC — embedding granularity (vector currently adds nothing over BM25 here)
+- [ ] MEM-EVAL — chunked-LongMemEval variant + re-benchmark gate after each change
+
+---
+
 ## 0.5.0 — Power-user surface
 
 - [ ] Fullscreen `/focus` TUI + plugin marketplace + trust/signature model.
