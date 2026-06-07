@@ -71,20 +71,26 @@ explicit trigger; `cli.buildLoop` defaults to `escalate`.
 
 ---
 
-## 0.4.14 — Memory Accuracy · branch `feat/memory-accuracy-0.4.14` · spec `brainrouter-docs/specs/memory-accuracy.md`
+## 0.4.14 — Memory Accuracy · branch `release/0.4.14` · spec `brainrouter-docs/specs/memory-accuracy.md`
 
-Benchmark-driven recall overhaul. The new `brainrouter-benchmark` (MemBench ·
-LoCoMo · LongMemEval) showed BrainRouter's retriever is solid but the **reranker
-+ judge degrade badly on long-session records** (LongMemEval recall_any@5 **0.80
-retriever → 0.27 reranker → 0.10 judge**). Root cause: one-record-per-session
-granularity. **Status: spec in review — no engine code until sign-off.**
+Benchmark-driven recall overhaul (MemBench · LoCoMo · LongMemEval), in two rounds.
 
-- [ ] MEM-AUDIT — recall pipeline deep-dive (review-gated, no code)
-- [ ] MEM-CHUNK — conversational record chunking (passage/turn granularity + parent roll-up)
-- [ ] MEM-RERANK — length-aware reranking (the 700-char doc cap drops ~93% of a median session)
-- [ ] MEM-JUDGE — judge result-floor + long-context safety (stop the 0-result collapse)
-- [ ] MEM-VEC — embedding granularity (vector currently adds nothing over BM25 here)
-- [ ] MEM-EVAL — chunked-LongMemEval variant + re-benchmark gate after each change
+**Round 1 — granularity (shipped):** the one-record-per-session granularity wrecked
+long-session reranking/judging. Fixed by chunking on import, a length-aware reranker
+cap, a judge result-floor, embed-on-import, and a transient-embed retry.
+- [x] MEM-AUDIT · MEM-CHUNK · MEM-RERANK · MEM-JUDGE · MEM-VEC · MEM-EMBED-RETRY · ASYNC-1
+
+**Round 2 — recall quality (in progress):** the clean 6-split sweep exposed that the
+reranker/judge *replace* the retriever order — collapsing recall and losing to a
+plain recency baseline. Fixes follow one rule: *score → sort → take top-N, never
+hard-drop.* Old benchmark results cleared; each stage re-benchmarked for its delta.
+- [ ] MEM-JUDGE2 — judge **reorders** (approved-first), never drops below the retriever
+- [ ] MEM-BLEND — **blend** reranker score with the recency/RRF score instead of replacing it
+- [ ] MEM-RERANK2 — two-stage pool (cheap pre-narrow) + adaptive doc budget to cut latency
+- [ ] MEM-ROUTE — query-type routing (factual vs reflective/synthesis), per-type profile
+- [ ] MEM-EVAL — per-stage benchmark gate + final 6-split sweep vs the saved baseline
+
+ASYNC-2/3 deferred per ADR-001.
 
 ---
 
