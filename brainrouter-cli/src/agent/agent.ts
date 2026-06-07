@@ -980,7 +980,11 @@ export class Agent {
           // BUILD-LOOP P3 — the `cli.buildLoop` knob lets the planner escalate a
           // code-writing task into the `build` workflow (off | escalate | always).
           const buildLoop = getCliKnobs().buildLoop;
-          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), []);
+          // POLISH-3 (0.4.13) — the planner is a one-shot CLASSIFIER (pick 1 of 5
+          // strategies); it needs no deep reasoning. Run it at low effort so
+          // reasoning-capable models don't burn a long thinking pass here — the main
+          // lever on the planner's pre-turn latency. Providers that ignore effort no-op.
+          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), [], { effort: 'low' });
           const plan = parseNextActionPlan(planResp?.content, { buildLoop });
           if (plan) {
             planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
