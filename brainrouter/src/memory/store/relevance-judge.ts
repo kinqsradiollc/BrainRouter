@@ -18,6 +18,21 @@ export interface JudgeResult {
 }
 
 /**
+ * MEM-JUDGE2 (0.4.14) — characters of each candidate shown to the judge. The old
+ * hardcoded 600 showed only ~40% of a 1500-char (MEM-CHUNK) chunk, so the judge
+ * rejected answers it literally never saw — a major source of the recall
+ * collapse on long records. Default 1200; clamp [200, 4000].
+ *   BRAINROUTER_RELEVANCE_JUDGE_DOC_CHARS
+ */
+export function judgeDocChars(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 1200;
+  const raw = env.BRAINROUTER_RELEVANCE_JUDGE_DOC_CHARS;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 200 ? Math.min(n, 4000) : def;
+}
+
+/**
  * LLM-as-judge stage that approves or rejects retrieved memories based on
  * actual semantic relevance to the user query — sits between the reranker and
  * context formatting, dropping candidates that share keywords but aren't
@@ -77,10 +92,11 @@ export class RelevanceJudgeService {
     }
 
     const candidates = params.candidates.slice(0, this.maxCandidates);
+    const maxDocChars = judgeDocChars();
     const safeQuery = params.query.length > 800 ? params.query.slice(0, 800) + "…" : params.query;
     const candidateBlock = candidates
       .map((c, i) => {
-        const text = c.content.length > 600 ? c.content.slice(0, 600) + "…" : c.content;
+        const text = c.content.length > maxDocChars ? c.content.slice(0, maxDocChars) + "…" : c.content;
         return `[${i}] ${text.replace(/\s+/g, " ").trim()}`;
       })
       .join("\n");
