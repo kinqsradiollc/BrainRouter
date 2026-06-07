@@ -7,6 +7,21 @@ export interface RankedResult {
   relevanceScore: number;
 }
 
+/**
+ * MEM-RERANK (0.4.14) — per-doc char budget sent to the cross-encoder. The old
+ * hardcoded 700 (~180 tokens) discarded ~93% of a long session; with MEM-CHUNK a
+ * record is now ≤ one chunk, so the reranker should score the whole chunk.
+ * Default 1500 chars (~375 tokens) stays within a 512-token reranker once the
+ * ~50-token query is added. Lower it for stricter rerankers; raise for larger.
+ */
+export function rerankerMaxDocChars(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 1500;
+  const raw = env.BRAINROUTER_RERANKER_MAX_DOC_CHARS;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 100 ? Math.min(n, 8000) : def;
+}
+
 export class RerankerService {
   private readonly endpoint: string;
   private readonly apiKey: string;
@@ -61,12 +76,14 @@ export class RerankerService {
 
     const requestTopN = params.topN ?? this.topN;
 
-    // Graceful truncation: Ensure inputs do not exceed typical 512-token context length (approx 2000 chars).
-    // To be absolutely safe and prevent HTTP 400 Bad Request errors from local rerankers
-    // with strict 512-token limits, we limit the query to 200 characters (~50 tokens)
-    // and each document to 700 characters (~180 tokens).
-    const safeDocuments = params.documents.map(doc => 
-      doc.length > 700 ? doc.substring(0, 700) + "..." : doc
+    // Graceful truncation: keep inputs within a typical 512-token reranker.
+    // Query → 200 chars (~50 tokens). Docs → BRAINROUTER_RERANKER_MAX_DOC_CHARS
+    // (default 1500 ~375 tokens; MEM-RERANK). With MEM-CHUNK records are chunk-
+    // sized, so this covers a whole chunk instead of the old 700-char (~7% of a
+    // long session) window that wrecked long-record reranking.
+    const maxDocChars = rerankerMaxDocChars();
+    const safeDocuments = params.documents.map(doc =>
+      doc.length > maxDocChars ? doc.substring(0, maxDocChars) + "..." : doc
     );
     const safeQuery = params.query.length > 200 
       ? params.query.substring(0, 200) + "..." 
