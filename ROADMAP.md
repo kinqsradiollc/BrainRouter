@@ -80,15 +80,15 @@ long-session reranking/judging. Fixed by chunking on import, a length-aware rera
 cap, a judge result-floor, embed-on-import, and a transient-embed retry.
 - [x] MEM-AUDIT · MEM-CHUNK · MEM-RERANK · MEM-JUDGE · MEM-VEC · MEM-EMBED-RETRY · ASYNC-1
 
-**Round 2 — recall quality (in progress):** the clean 6-split sweep exposed that the
+**Round 2 — recall quality (shipped):** the clean 6-split sweep exposed that the
 reranker/judge *replace* the retriever order — collapsing recall and losing to a
 plain recency baseline. Fixes follow one rule: *score → sort → take top-N, never
 hard-drop.* Old benchmark results cleared; each stage re-benchmarked for its delta.
-- [ ] MEM-JUDGE2 — judge **reorders** (approved-first), never drops below the retriever
-- [ ] MEM-BLEND — **blend** reranker score with the recency/RRF score instead of replacing it
-- [ ] MEM-RERANK2 — two-stage pool (cheap pre-narrow) + adaptive doc budget to cut latency
-- [ ] MEM-ROUTE — query-type routing (factual vs reflective/synthesis), per-type profile
-- [ ] MEM-EVAL — per-stage benchmark gate + final 6-split sweep vs the saved baseline
+- [x] MEM-JUDGE2 — judge **reorders** (approved-first), never drops below the retriever
+- [x] MEM-BLEND — **blend** reranker score with the recency/RRF score instead of replacing it
+- [x] MEM-RERANK2 — two-stage pool (cheap pre-narrow) + adaptive doc budget to cut latency
+- [x] MEM-ROUTE — query-type routing (factual vs reflective/synthesis), per-type profile
+- [x] MEM-EVAL — per-stage benchmark gate + final 6-split sweep vs the saved baseline
 
 ASYNC-2/3 deferred per ADR-001.
 
