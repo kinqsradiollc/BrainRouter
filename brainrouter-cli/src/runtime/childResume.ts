@@ -73,3 +73,26 @@ export function buildChildResumePrompt(ids: string[]): string {
     `Call \`wait_agents\` with ids ${idsJson} to read their results (they return immediately now), then synthesize their output and deliver the answer the user was waiting for. Do not spawn new agents.`,
   ].join('\n');
 }
+
+/**
+ * MAR-2 (0.4.13) — should a child-completion EVENT fire the auto-resume immediately?
+ * True only when the REPL is idle (no turn running, not exiting, no goal continuation
+ * pending), some children are armed for resume, and they have ALL settled. This is the
+ * event-driven fast path; the C1 poll remains the fallback (e.g. for a child that
+ * vanishes without emitting a completion event). Pure.
+ */
+export function shouldResumeOnChildComplete(args: {
+  exited: boolean;
+  isProcessing: boolean;
+  pendingContinuation: boolean;
+  pendingIds: string[];
+  allSettled: boolean;
+}): boolean {
+  return (
+    !args.exited &&
+    !args.isProcessing &&
+    !args.pendingContinuation &&
+    args.pendingIds.length > 0 &&
+    args.allSettled
+  );
+}
