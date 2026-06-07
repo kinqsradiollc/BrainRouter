@@ -16,6 +16,9 @@ import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../sta
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../state/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
+import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../runtime/childResume.js';
+import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../runtime/synthesisGuard.js';
+import { sanitizeModelArtifacts } from '../runtime/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
 import type { AccessMode } from '../orchestration/roles.js';
@@ -268,8 +271,11 @@ function summarizeWaitedChildOutputs(resultText: string): string | undefined {
 
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
-  onToolStart: (name: string, args: Record<string, any>) => void;
-  onToolEnd: (name: string, result: { success: boolean; summary: string; preview?: string }) => void;
+  // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
+  // result with its OWN start row; parallel same-name calls no longer collide on a
+  // name-keyed map. Optional → existing callers are unaffected.
+  onToolStart: (name: string, args: Record<string, any>, callId?: string) => void;
+  onToolEnd: (name: string, result: { success: boolean; summary: string; preview?: string }, callId?: string) => void;
   /**
    * Optional: invoked whenever the agent calls update_plan during a turn,
    * so the REPL can render a live ✓ / ⏳ / ☐ checklist instead of leaving the
@@ -792,6 +798,9 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
+    // so a "is it done?" question this turn can resolve those exact ids.
+    const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
     this.lastTurnPendingChildIds = []; // C1 — reset; set if a child drain times out this turn
     // HEADLESS-EVENTS — bridge the code-index callback to executeLocalTool.
     this.codeIndexListener = callbacks.onCodeIndex ?? null;
@@ -971,7 +980,11 @@ export class Agent {
           // BUILD-LOOP P3 — the `cli.buildLoop` knob lets the planner escalate a
           // code-writing task into the `build` workflow (off | escalate | always).
           const buildLoop = getCliKnobs().buildLoop;
-          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), []);
+          // POLISH-3 (0.4.13) — the planner is a one-shot CLASSIFIER (pick 1 of 5
+          // strategies); it needs no deep reasoning. Run it at low effort so
+          // reasoning-capable models don't burn a long thinking pass here — the main
+          // lever on the planner's pre-turn latency. Providers that ignore effort no-op.
+          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), [], { effort: 'low' });
           const plan = parseNextActionPlan(planResp?.content, { buildLoop });
           if (plan) {
             planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
@@ -1030,6 +1043,14 @@ export class Agent {
     const userMsg = { role: 'user', content: prompt };
     this.chatHistory.push(userMsg);
     this.recordTranscript(userMsg);
+    // MAR-4 — when children from the prior turn are still pending, hand the model the
+    // exact ids to wait on so it resolves them directly instead of guessing from list_agents.
+    const pendingChildHint = buildPendingChildStatusHint(carriedPendingChildIds);
+    if (pendingChildHint) {
+      const hintMsg = { role: 'system', content: pendingChildHint };
+      this.chatHistory.push(hintMsg);
+      this.recordTranscript(hintMsg);
+    }
 
     let loopCount = 0;
     // Multi-agent workflows (explorers → wait → architect → wait → write spec
@@ -1070,6 +1091,12 @@ export class Agent {
     // honest signal. Bounded so a model that won't update can't loop.
     let planSyncGuardFired = 0;
     const PLAN_SYNC_GUARD_MAX = 1;
+    // MAR-3 — child-synthesis guard. `childOutputDeliveredThisTurn` flips true once a
+    // child/sub-agent's findings reach the parent this turn; the guard fires once if
+    // the model then ends with a deferral instead of synthesizing them.
+    let synthesisGuardFired = 0;
+    const SYNTHESIS_GUARD_MAX = 1;
+    let childOutputDeliveredThisTurn = false;
     const planCompletedAtTurnStart = (() => {
       try { return readPlan(this.workspaceRoot, this.sessionKey).items.filter((i) => i.status === 'completed').length; }
       catch { return 0; }
@@ -1588,6 +1615,7 @@ export class Agent {
           ].join('\n\n');
           const childResultSystem = summarizeWaitedChildOutputs(waitResultText);
           if (childResultSystem) {
+            childOutputDeliveredThisTurn = true; // MAR-3 — drained child output reached the parent
             const systemMsg = { role: 'system', content: childResultSystem };
             this.chatHistory.push(systemMsg);
             this.recordTranscript(systemMsg);
@@ -1742,7 +1770,41 @@ export class Agent {
           }
         }
 
-        finalAnswer = response.content;
+        // MAR-3 (0.4.13) — child-synthesis guard. Child results were delivered this
+        // turn but the model is ending with a deferral ("I'll summarize later" /
+        // "still working") instead of synthesizing them. Force ONE synthesis pass.
+        // Bounded → never loops.
+        if (
+          synthesisGuardFired < SYNTHESIS_GUARD_MAX &&
+          childOutputDeliveredThisTurn &&
+          looksLikeChildSynthesisPunt(response.content ?? '')
+        ) {
+          synthesisGuardFired += 1;
+          const correction = [
+            'Runtime child-synthesis guardrail tripped.',
+            'A child agent already returned its results to you THIS turn, but your answer defers ("I\'ll summarize later" / "still working") instead of delivering them.',
+            'Their output is in the conversation above. Synthesize it into your final answer for the user NOW — do not promise a future summary, and do not spawn or wait on new agents.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate(`Recovery: child results delivered but answer deferred — forcing synthesis (${synthesisGuardFired}/${SYNTHESIS_GUARD_MAX})`);
+          continue;
+        }
+
+        // MAR-1 (0.4.13) — arm the auto-resume for any child spawned this turn that
+        // the model never observed/synthesized (a background spawn the drain step
+        // couldn't reach, or a wait that errored), so its result is still delivered
+        // without a manual /continue. Additive: drain timeouts already armed above;
+        // this only ever ADDS still-unsynthesized ids (deduped).
+        const unsynthesized = unsynthesizedChildIds(spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+        if (unsynthesized.length > 0) {
+          this.lastTurnPendingChildIds = mergePendingChildIds(this.lastTurnPendingChildIds, unsynthesized);
+        }
+
+        // POLISH-2 (0.4.13) — repair the `*#COLON|*` citation garble some weak models
+        // emit, so the final answer (display, transcript, memory capture) reads clean.
+        finalAnswer = response.content ? sanitizeModelArtifacts(response.content) : response.content;
         exitedCleanly = true;
         break;
       }
@@ -1812,7 +1874,7 @@ export class Agent {
         const argParseError: string | undefined = parsedArgs.error;
 
         const isLocal = LOCAL_TOOLS.some(lt => lt.name === name);
-        callbacks.onToolStart(name, args);
+        callbacks.onToolStart(name, args, tc.id);
 
         let resultText = '';
         let isError = false;
@@ -1824,7 +1886,7 @@ export class Agent {
           isError = true;
           resultText = argParseError;
           summary = 'malformed JSON args';
-          callbacks.onToolEnd(name, { success: false, summary });
+          callbacks.onToolEnd(name, { success: false, summary }, tc.id);
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'bad_args' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
@@ -1843,7 +1905,7 @@ export class Agent {
             'Pick a different action: read a different file, write the output you have, spawn a worker child, or call `goal_blocked` if no further path remains.',
           ].join(' ');
           summary = `repeat guard tripped (${repeatCount + 1}× ${name})`;
-          callbacks.onToolEnd(name, { success: false, summary });
+          callbacks.onToolEnd(name, { success: false, summary }, tc.id);
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'repeat' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
@@ -1933,6 +1995,8 @@ export class Agent {
             resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
             summary = getToolSummary(name, args, resultText);
             trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+            // MAR-3 — note when a child/sub-agent's findings reached the parent this turn.
+            if (isChildSynthesisTool(name) && resultHasChildOutput(resultText)) childOutputDeliveredThisTurn = true;
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
@@ -2037,7 +2101,7 @@ export class Agent {
           : (resultText
               ? `${resultText.length > 400 ? resultText.slice(0, 400) + '…' : resultText}`
               : (summary || undefined));
-        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview });
+        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview }, tc.id);
         traceEvent('brainrouter.tool', {
           tool: name,
           ok: !isError,

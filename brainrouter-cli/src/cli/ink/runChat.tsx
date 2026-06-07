@@ -17,7 +17,8 @@ import { resolveSandboxConfig, runShell } from '../../runtime/exec/sandbox.js';
 import { parseBangCommand } from '../../runtime/exec/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { childrenSettled, buildChildResumePrompt } from '../../runtime/childResume.js';
+import { childrenSettled, buildChildResumePrompt, shouldResumeOnChildComplete } from '../../runtime/childResume.js';
+import { toolPairKey } from '../../runtime/toolPairing.js';
 import { InputQueue } from '../../runtime/inputQueue.js';
 import { reconcileOrphanWorktrees } from '../../orchestration/worktreeIsolation.js';
 import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
@@ -493,6 +494,23 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     }, CHILD_RESUME_POLL_MS);
   };
 
+  // MAR-2 — event-driven delivery. When a background child COMPLETES while the REPL
+  // is idle, deliver its result NOW (fire the same synthesize-continue the C1 poll
+  // would) instead of waiting for the next poll tick — and crucially still deliver it
+  // after the poll has given up. The poll stays as the fallback; the next keystroke
+  // cancels both (handled in onSubmit).
+  const maybeResumeOnChildComplete = () => {
+    const ids = [...agent.lastTurnPendingChildIds];
+    const statusById = ids.length
+      ? new Map(listSessions(agent.workspaceRoot).map((s) => [s.id, s.status]))
+      : new Map<string, string>();
+    const allSettled = childrenSettled(ids, (id) => statusById.get(id));
+    if (!shouldResumeOnChildComplete({ exited, isProcessing, pendingContinuation, pendingIds: ids, allSettled })) return;
+    cancelChildResume();
+    controller?.push.notice('(background agent finished — resuming)', 'info');
+    void runChatTurn(buildChildResumePrompt(ids));
+  };
+
   // C2 — `/queue` view + manage the messages typed while busy. Handled inline (like
   // `?` and `!`) so it works mid-turn without going through the turn dispatcher.
   const queuePreview = (t: string) => { const s = t.replace(/\s+/g, ' ').trim(); return s.length > 80 ? `${s.slice(0, 80)}…` : s; };
@@ -579,9 +597,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     // full args but onToolEnd only sees name + result, so we stash the
     // args here so the end-of-call scrollback row can render the
     // formatted call (`Read(src/foo.ts)`) instead of just the bare name.
-    // The map key is the tool name; we treat parallel same-name calls
-    // as overlapping which is fine for the duration display (the older
-    // start time wins, slightly under-counting concurrent invocations).
+    // The map key is the LLM tool_call id when present (so parallel same-name calls
+    // pair to their OWN start row), falling back to the tool name when a provider
+    // omits ids. See runtime/toolPairing.ts (toolPairKey).
     const toolStartTimes = new Map<string, number>();
     const toolArgsSnapshot = new Map<string, Record<string, any>>();
     // In-flight LOCAL tool calls, so a parallel batch shows ALL of them running
@@ -661,29 +679,31 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           controller!.push.compaction(event);
           tickStatus('Thinking');
         },
-        onToolStart: (name, args) => {
+        onToolStart: (name, args, callId) => {
           // Surface the in-flight tool via the spinner status line — the
           // scrollback entry is pushed at onToolEnd so each tool call is
           // a single block (header + result), not two rows.
           turnToolCalls++;
-          toolStartTimes.set(name, Date.now());
-          toolArgsSnapshot.set(name, args ?? {});
+          const key = toolPairKey(name, callId);
+          toolStartTimes.set(key, Date.now());
+          toolArgsSnapshot.set(key, args ?? {});
           // Track this call as in-flight and render the WHOLE set, so a
           // parallel batch shows "4 tools running in parallel: …" rather than
           // the last call clobbering the status line.
           inFlightToolLabels.push(formatToolCall(name, args));
           renderInFlightStatus();
         },
-        onToolEnd: (name, result) => {
+        onToolEnd: (name, result, callId) => {
           // Quiet mode hides successes (the prose response covers them).
           if (isQuiet() && result.success) {
             tickStatus('Thinking');
             return;
           }
-          const startedAt = toolStartTimes.get(name);
-          const args = toolArgsSnapshot.get(name);
-          toolStartTimes.delete(name);
-          toolArgsSnapshot.delete(name);
+          const key = toolPairKey(name, callId);
+          const startedAt = toolStartTimes.get(key);
+          const args = toolArgsSnapshot.get(key);
+          toolStartTimes.delete(key);
+          toolArgsSnapshot.delete(key);
           const durationMs = startedAt ? Date.now() - startedAt : undefined;
           const header = formatToolCall(name, args);
           // Drop this call from the in-flight set, then refresh the status so a
@@ -769,6 +789,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // settles — without this it'd stay stuck at the pre-completion
           // number until the next user input refreshes the footer.
           refreshFooter();
+          // MAR-2 — this completed child may be the last one the main agent was
+          // waiting on; deliver its result now rather than only on the poll tick.
+          maybeResumeOnChildComplete();
         },
         onMemoryEvent: (event) => {
           if (isQuiet() && event.kind !== 'contradiction') return;
