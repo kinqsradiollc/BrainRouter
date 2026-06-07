@@ -33,6 +33,34 @@ export function childrenSettled(ids: string[], statusOf: (id: string) => string 
 }
 
 /**
+ * MAR-1 (0.4.13) — the children spawned this turn that the main agent never
+ * observed/synthesized: `spawned − waited`. These should arm the auto-resume even
+ * when they completed NORMALLY (no drain timeout), so a finished background child's
+ * result is still delivered without a manual `/continue`. Order-preserving + deduped,
+ * skipping empty/`(unknown)` ids. Pure.
+ */
+export function unsynthesizedChildIds(spawned: Iterable<string>, waited: ReadonlySet<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of spawned) {
+    if (!id || id === '(unknown)' || waited.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** Merge new pending ids into an existing list, order-preserving + deduped. Pure. */
+export function mergePendingChildIds(existing: string[], add: string[]): string[] {
+  const seen = new Set(existing);
+  const out = [...existing];
+  for (const id of add) {
+    if (!seen.has(id)) { seen.add(id); out.push(id); }
+  }
+  return out;
+}
+
+/**
  * The synthetic prompt fired to auto-resume the turn once the children settled. It
  * tells the model the background agents finished and to drain + synthesize — the
  * automated equivalent of the user typing `/continue`. Pure.

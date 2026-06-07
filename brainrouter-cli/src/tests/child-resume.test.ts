@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { unsettledChildIds, childrenSettled, buildChildResumePrompt } from '../runtime/childResume.js';
+import { unsettledChildIds, childrenSettled, buildChildResumePrompt, unsynthesizedChildIds, mergePendingChildIds } from '../runtime/childResume.js';
 
 const STATUS: Record<string, string> = {
   a: 'running',
@@ -33,4 +33,22 @@ test('C1 buildChildResumePrompt: names the ids, calls wait_agents, forbids re-sp
   assert.match(p, /\["agent-1","agent-2"\]/); // ids passed as a JSON array
   assert.match(p, /synthesize/i);
   assert.match(p, /Do not spawn new agents/i);
+});
+
+test('MAR-1 unsynthesizedChildIds: spawned − waited, deduped, order-preserving, skips junk', () => {
+  const waited = new Set(['b']);
+  // spawned a,b,c,a → drop b (waited) and the duplicate a → [a, c]
+  assert.deepEqual(unsynthesizedChildIds(['a', 'b', 'c', 'a'], waited), ['a', 'c']);
+  // all observed → nothing to resume
+  assert.deepEqual(unsynthesizedChildIds(['b'], waited), []);
+  // empty / junk ids are skipped
+  assert.deepEqual(unsynthesizedChildIds(['', '(unknown)', 'x'], new Set<string>()), ['x']);
+  // a Set is a valid Iterable input
+  assert.deepEqual(unsynthesizedChildIds(new Set(['a', 'b']), waited), ['a']);
+});
+
+test('MAR-1 mergePendingChildIds: union, existing first, no dupes', () => {
+  assert.deepEqual(mergePendingChildIds(['t1'], ['t2', 't1', 't3']), ['t1', 't2', 't3']);
+  assert.deepEqual(mergePendingChildIds([], ['a', 'a']), ['a']);
+  assert.deepEqual(mergePendingChildIds(['a'], []), ['a']);
 });
