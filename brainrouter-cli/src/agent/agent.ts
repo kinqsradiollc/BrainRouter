@@ -270,8 +270,11 @@ function summarizeWaitedChildOutputs(resultText: string): string | undefined {
 
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
-  onToolStart: (name: string, args: Record<string, any>) => void;
-  onToolEnd: (name: string, result: { success: boolean; summary: string; preview?: string }) => void;
+  // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
+  // result with its OWN start row; parallel same-name calls no longer collide on a
+  // name-keyed map. Optional → existing callers are unaffected.
+  onToolStart: (name: string, args: Record<string, any>, callId?: string) => void;
+  onToolEnd: (name: string, result: { success: boolean; summary: string; preview?: string }, callId?: string) => void;
   /**
    * Optional: invoked whenever the agent calls update_plan during a turn,
    * so the REPL can render a live ✓ / ⏳ / ☐ checklist instead of leaving the
@@ -1864,7 +1867,7 @@ export class Agent {
         const argParseError: string | undefined = parsedArgs.error;
 
         const isLocal = LOCAL_TOOLS.some(lt => lt.name === name);
-        callbacks.onToolStart(name, args);
+        callbacks.onToolStart(name, args, tc.id);
 
         let resultText = '';
         let isError = false;
@@ -1876,7 +1879,7 @@ export class Agent {
           isError = true;
           resultText = argParseError;
           summary = 'malformed JSON args';
-          callbacks.onToolEnd(name, { success: false, summary });
+          callbacks.onToolEnd(name, { success: false, summary }, tc.id);
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'bad_args' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
@@ -1895,7 +1898,7 @@ export class Agent {
             'Pick a different action: read a different file, write the output you have, spawn a worker child, or call `goal_blocked` if no further path remains.',
           ].join(' ');
           summary = `repeat guard tripped (${repeatCount + 1}× ${name})`;
-          callbacks.onToolEnd(name, { success: false, summary });
+          callbacks.onToolEnd(name, { success: false, summary }, tc.id);
           traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'repeat' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
@@ -2091,7 +2094,7 @@ export class Agent {
           : (resultText
               ? `${resultText.length > 400 ? resultText.slice(0, 400) + '…' : resultText}`
               : (summary || undefined));
-        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview });
+        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview }, tc.id);
         traceEvent('brainrouter.tool', {
           tool: name,
           ok: !isError,
