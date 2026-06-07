@@ -31,8 +31,8 @@ When you are assigned a development task in this codebase, look up the scenario 
 ### 🔍 Scenario: Planning & Architecture
 *Focus: Clarifying ambiguous requirements, creating specs, and defining tasks.*
 - **[planning-skill](skills/agent/planning-skill/SKILL.md)**: Standard planning mode, tracking progress in `task.md`.
-- **[spec-driven-skill](skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `docs/specs/` before writing core code.
-- **[adr-skill](skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `docs/decisions/` for major database or routing decisions.
+- **[spec-driven-skill](skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `brainrouter-docs/specs/` before writing core code.
+- **[adr-skill](skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `brainrouter-docs/decisions/` for major database or routing decisions.
 
 ### 💻 Scenario: Code Implementation & Cleanups
 *Focus: Writing robust code, refactoring layers, and codebase cleanup.*
