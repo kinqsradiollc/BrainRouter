@@ -16,7 +16,7 @@ import { appendTranscriptEntry, redactText, readTranscriptEntries } from '../sta
 import { recordFileMutation } from '../state/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../state/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../runtime/reconnect.js';
-import { unsynthesizedChildIds, mergePendingChildIds } from '../runtime/childResume.js';
+import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../runtime/childResume.js';
 import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../runtime/synthesisGuard.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
@@ -794,6 +794,9 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
+    // so a "is it done?" question this turn can resolve those exact ids.
+    const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
     this.lastTurnPendingChildIds = []; // C1 — reset; set if a child drain times out this turn
     // HEADLESS-EVENTS — bridge the code-index callback to executeLocalTool.
     this.codeIndexListener = callbacks.onCodeIndex ?? null;
@@ -1032,6 +1035,14 @@ export class Agent {
     const userMsg = { role: 'user', content: prompt };
     this.chatHistory.push(userMsg);
     this.recordTranscript(userMsg);
+    // MAR-4 — when children from the prior turn are still pending, hand the model the
+    // exact ids to wait on so it resolves them directly instead of guessing from list_agents.
+    const pendingChildHint = buildPendingChildStatusHint(carriedPendingChildIds);
+    if (pendingChildHint) {
+      const hintMsg = { role: 'system', content: pendingChildHint };
+      this.chatHistory.push(hintMsg);
+      this.recordTranscript(hintMsg);
+    }
 
     let loopCount = 0;
     // Multi-agent workflows (explorers → wait → architect → wait → write spec
