@@ -182,17 +182,24 @@ export function readRerankBlendAlpha(env: NodeJS.ProcessEnv = process.env): numb
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : def;
 }
 
+/** RRF constant for rank-based blending (matches the fusion stage's k). */
+export const RERANK_BLEND_K = 60;
+
 /**
- * Min-max normalize to [0,1]. All-equal (or non-finite span) → 0.5 (neutral),
- * so a degenerate axis contributes a constant to a blend rather than NaN.
+ * MEM-BLEND (0.4.14) — combine the reranker order with the pre-rerank order by
+ * *reciprocal rank*, not raw score. Cross-encoder scores are bimodal (~1 for a
+ * hit, ~0 otherwise), so a min-max score blend just reproduces the reranker
+ * order and `alpha` does nothing; blending positions instead makes `alpha`
+ * actually trade off relevance vs the retriever (RRF + recency). Input is in
+ * pre-score order (so preRank = i); `rerankRank[i]` is item i's position in the
+ * reranker order. Returns item indices, best blended first.
  */
-export function minMaxNormalize(xs: number[]): number[] {
-  if (xs.length === 0) return [];
-  let lo = Infinity, hi = -Infinity;
-  for (const x of xs) { if (x < lo) lo = x; if (x > hi) hi = x; }
-  const span = hi - lo;
-  if (!Number.isFinite(span) || span <= 0) return xs.map(() => 0.5);
-  return xs.map((x) => (x - lo) / span);
+export function blendByRank(rerankRank: number[], alpha: number, k: number = RERANK_BLEND_K): number[] {
+  const n = rerankRank.length;
+  return Array.from({ length: n }, (_, i) => i)
+    .map((i) => ({ i, s: alpha * (1 / (k + rerankRank[i])) + (1 - alpha) * (1 / (k + i)) }))
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.i);
 }
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
@@ -614,21 +621,17 @@ export class MemoryRecallPipeline {
           documents,
           topN: rerankCandidates.length,
         });
-        const returned = ranked.filter(
-          (r) => Number.isInteger(r.index) && r.index >= 0 && r.index < rerankCandidates.length,
-        );
-        const minRel = returned.length ? Math.min(...returned.map((r) => r.relevanceScore)) : 0;
-        const relRaw = new Array(rerankCandidates.length).fill(minRel);
-        for (const r of returned) relRaw[r.index] = r.relevanceScore;
-        const alpha = readRerankBlendAlpha();
-        const normRel = minMaxNormalize(relRaw);
-        const normPre = minMaxNormalize(rerankCandidates.map((c) => c.score));
+        // rerankRank[i] = item i's position in the reranker order (lower = better).
+        // Unranked items (shouldn't happen — we ask for the whole pool) sink last.
+        const rerankRank = new Array(rerankCandidates.length).fill(rerankCandidates.length);
+        ranked.forEach((r, pos) => {
+          if (Number.isInteger(r.index) && r.index >= 0 && r.index < rerankRank.length) {
+            rerankRank[r.index] = pos;
+          }
+        });
         const outN = Math.max(1, this.rerankerService.getTopN());
-        topResults = rerankCandidates
-          .map((cand, i) => ({ cand, blend: alpha * normRel[i] + (1 - alpha) * normPre[i] }))
-          .sort((a, b) => b.blend - a.blend)
-          .slice(0, outN)
-          .map((x) => x.cand);
+        const order = blendByRank(rerankRank, readRerankBlendAlpha());
+        topResults = order.slice(0, outN).map((i) => rerankCandidates[i]);
         usedReranker = true;
       } catch (e) {
         console.error("[BrainRouter] Reranker failed during recall, falling back to RRF:", (e as Error).message);

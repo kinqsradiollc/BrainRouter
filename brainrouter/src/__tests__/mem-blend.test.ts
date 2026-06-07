@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readRerankBlendAlpha, minMaxNormalize } from "../memory/recall.js";
+import { readRerankBlendAlpha, blendByRank } from "../memory/recall.js";
 
-// MEM-BLEND (0.4.14) — blend the cross-encoder score with the pre-rerank
-// (RRF + half-life recency) score instead of replacing the order.
+// MEM-BLEND (0.4.14) — blend the cross-encoder order with the pre-rerank
+// (RRF + half-life recency) order by reciprocal rank, so the reranker refines
+// rather than replaces the retriever (and recency survives).
 describe("readRerankBlendAlpha", () => {
   it("defaults to 0.6, parses, allows the [0,1] endpoints", () => {
     expect(readRerankBlendAlpha({})).toBe(0.6);
@@ -18,26 +19,25 @@ describe("readRerankBlendAlpha", () => {
   });
 });
 
-describe("minMaxNormalize", () => {
-  it("maps the min to 0 and the max to 1", () => {
-    expect(minMaxNormalize([0, 5, 10])).toEqual([0, 0.5, 1]);
-    expect(minMaxNormalize([-1, 0, 1])).toEqual([0, 0.5, 1]);
+describe("blendByRank", () => {
+  it("alpha=1 reproduces the reranker order", () => {
+    // item0 ranked #1 by reranker, item1 #2, item2 #0
+    expect(blendByRank([1, 2, 0], 1)).toEqual([2, 0, 1]);
   });
-  it("returns neutral 0.5 for a degenerate (all-equal) axis", () => {
-    expect(minMaxNormalize([3, 3, 3])).toEqual([0.5, 0.5, 0.5]);
-    expect(minMaxNormalize([7])).toEqual([0.5]);
+  it("alpha=0 reproduces the pre-score (input) order", () => {
+    expect(blendByRank([2, 0, 1], 0)).toEqual([0, 1, 2]);
+  });
+  it("low alpha rescues retriever-favored gold the reranker demoted (reflective case)", () => {
+    // item0 = gold: best by pre-score (rank 0) but reranker buries it (rank 1);
+    // item1 = reranker's favorite but pre-score-weak.
+    const rerankRank = [1, 0];
+    expect(blendByRank(rerankRank, 0.9)[0]).toBe(1); // high alpha → reranker wins
+    expect(blendByRank(rerankRank, 0.1)[0]).toBe(0); // low alpha  → gold rescued
+  });
+  it("is a total permutation of the indices", () => {
+    expect(blendByRank([3, 1, 0, 2], 0.6).slice().sort()).toEqual([0, 1, 2, 3]);
   });
   it("handles empty input", () => {
-    expect(minMaxNormalize([])).toEqual([]);
-  });
-  it("produces a usable blend (alpha mixes the two normalized axes)", () => {
-    // rel favors index 0, pre favors index 2; alpha=0.6 should let rel win at 0.
-    const rel = minMaxNormalize([1.0, 0.5, 0.0]); // [1, .5, 0]
-    const pre = minMaxNormalize([0.0, 0.5, 1.0]); // [0, .5, 1]
-    const alpha = 0.6;
-    const blend = rel.map((r, i) => alpha * r + (1 - alpha) * pre[i]);
-    expect(blend[0]).toBeCloseTo(0.6); // 0.6*1 + 0.4*0
-    expect(blend[2]).toBeCloseTo(0.4); // 0.6*0 + 0.4*1
-    expect(blend[0]).toBeGreaterThan(blend[2]);
+    expect(blendByRank([], 0.6)).toEqual([]);
   });
 });
