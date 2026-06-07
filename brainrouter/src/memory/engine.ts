@@ -183,6 +183,7 @@ export class MemoryEngine {
   /** MEM-19 — kept to query reranker/judge readiness when picking benchmark modes. */
   private rerankerService!: RerankerService;
   private relevanceJudge!: RelevanceJudgeService;
+  private embeddingService!: EmbeddingService; // MEM-VEC — reused for embed-on-import
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
   private sweeperTimer?: NodeJS.Timeout;
@@ -285,6 +286,7 @@ export class MemoryEngine {
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.rerankerService = rerankerService; // MEM-19 — readiness drives benchmark mode selection
+    this.embeddingService = embeddingService; // MEM-VEC — embed-on-import reuse
     this.relevanceJudge = relevanceJudge;
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
@@ -1057,8 +1059,22 @@ export class MemoryEngine {
     return this.store.exportMemories(userId);
   }
 
-  public importMemories(userId: string, data: MemoryImport) {
-    return this.store.importMemories(userId, data);
+  public async importMemories(userId: string, data: MemoryImport) {
+    const result = this.store.importMemories(userId, data);
+    // MEM-VEC (0.4.14) — embed imported records now so they're vector-searchable
+    // immediately. Without this, vectors only fill via the background re-embed
+    // sweep, which lags far behind a bulk import → vector recall finds nothing
+    // (vector ≡ keyword in the benchmark). Opt out with BRAINROUTER_IMPORT_EMBED=0
+    // for fast bulk restores (vectors then backfill via the sweep).
+    if (result.importedMemories > 0 && process.env.BRAINROUTER_IMPORT_EMBED !== "0" && this.embeddingService.isReady()) {
+      try {
+        const embedded = await this.store.reembedStaleRecords((text) => this.embeddingService.embed(text));
+        if (embedded > 0) console.error(`[BrainRouter] Embedded ${embedded} imported records for vector recall.`);
+      } catch (err) {
+        console.error("[BrainRouter] embed-on-import failed (vectors backfill via the sweep):", err instanceof Error ? err.message : err);
+      }
+    }
+    return result;
   }
 
   public governanceDelete(userId: string, recordId: string, reason: string) {

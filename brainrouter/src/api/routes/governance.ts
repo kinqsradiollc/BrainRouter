@@ -12,9 +12,9 @@ governanceRouter.get("/export", (req: AuthedRequest, res) => {
   res.json(memoryEngine.exportMemories(req.userId!));
 });
 
-governanceRouter.post("/import", (req: AuthedRequest, res) => {
+governanceRouter.post("/import", async (req: AuthedRequest, res) => {
   try {
-    res.json(memoryEngine.importMemories(req.userId!, req.body));
+    res.json(await memoryEngine.importMemories(req.userId!, req.body));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "Invalid import payload" });
   }
