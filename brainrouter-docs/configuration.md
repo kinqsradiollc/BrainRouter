@@ -430,6 +430,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_LOCAL_ROOT` | _(unset)_ | Override the local-state root. |
 | `BRAINROUTER_IMPORT_CHUNK_CHARS` | `1500` | Chunk records longer than this on `memory_import` (0.4.14) so recall stages get focused units (child id `${parent}::c{i}`, parent in metadata). `0` disables. |
 | `BRAINROUTER_IMPORT_EMBED` | `1` (on) | Embed imported records immediately (0.4.14) for instant vector recall instead of waiting on the background sweep. `0` = backfill via the sweep (faster bulk import). |
+| `BRAINROUTER_EMBED_CONCURRENCY` | `8` | Worker-pool size for bulk embedding (import + startup sweep, 0.4.14). Effective concurrency = min(this, `BRAINROUTER_LLM_MAX_CONCURRENT`). |
 | `BRAINROUTER_GRAPH_ENABLED` | `true` | 2-hop graph extraction + BFS expansion. |
 | `BRAINROUTER_GRAPH_TIMEOUT_MS` | `120000` | Graph-extraction LLM timeout. |
 | `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | `60000` | Contradiction-check timeout. |
