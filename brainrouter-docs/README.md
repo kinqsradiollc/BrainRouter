@@ -40,6 +40,18 @@ deep dives.
   (`read`/`write`/`shell`), sandbox, external-directory writes, the per-host
   egress allowlist, how each tool maps to a gated action, and the bundled
   `readonly` / `workspace` / `trusted` profiles you switch with `/policy`.
+- **[mcp-install.md](mcp-install.md)** — installing the BrainRouter MCP server
+  into MCP clients.
+
+### Specs & decisions
+
+- **[specs/](specs/)** — design specs: [memory-accuracy](specs/memory-accuracy.md)
+  (+ the [audit](specs/memory-accuracy-audit.md)), [build-loop-workflow](specs/build-loop-workflow.md),
+  [per-session-isolation](specs/per-session-isolation.md),
+  [multi-agent-result-delivery](specs/multi-agent-result-delivery.md).
+- **[decisions/](decisions/)** — ADRs: [ADR-001 async store worker](decisions/ADR-001-async-store-worker.md).
+
+Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
 If you're new, read [BRAINROUTER.md](../BRAINROUTER.md) first. If you just
 want to run something, [README.md → Quick Start](../README.md#quick-start).
