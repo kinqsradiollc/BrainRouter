@@ -43,6 +43,7 @@ import fs from "node:fs";
 
 import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
+import { isClientDisconnectError } from './transport-errors.js';
 import { VERSION } from './version.js';
 
 // Import tools
@@ -453,7 +454,18 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
     }
   });
 
-  server.onerror = (error) => console.error('[MCP Error]', error);
+  server.onerror = (error) => {
+    // A response that can't be delivered because the client already closed the
+    // request stream (cancel / timeout / disconnect) is not a server fault —
+    // the handler ran fine, there's just nowhere to send the reply. Downgrade
+    // to a quiet warning instead of an alarming [MCP Error] + stack.
+    if (isClientDisconnectError(error)) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn(`[BrainRouter] Dropped MCP response to a closed connection (client disconnected before reply): ${msg}`);
+      return;
+    }
+    console.error('[MCP Error]', error);
+  };
   return server;
 }
 
