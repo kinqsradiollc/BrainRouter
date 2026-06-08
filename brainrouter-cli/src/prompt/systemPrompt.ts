@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { INSTRUCTION_FILES } from '../config/workspace.js';
 
 export interface SystemPromptContext {
   workspaceRoot: string;
@@ -161,7 +162,7 @@ function modelFamilyOverlay(model: string | undefined): string {
     '- NEVER end your turn without having truly and completely solved the problem.',
     '- When you say "I will do X" / "Next I will read Y" / "Let me check Z", you MUST actually do X / Y / Z in the SAME response (as structured `tool_calls`), instead of saying you will and stopping.',
     '- You are a highly capable and autonomous agent. You can definitely solve most problems without asking the user for further input.',
-    '- For ANY exploration request ("analyze", "tell me about", "help with X", "what does Y do", "look at this"), your FIRST action MUST be tool calls. Open with `list_dir(.)`, read `README.md` / `package.json` / `AGENT.md` / `AGENTS.md`, and `glob_files` for entry points — all in parallel. NEVER respond with "please tell me which files" / "which project" / "what specifically".',
+    '- For ANY exploration request ("analyze", "tell me about", "help with X", "what does Y do", "look at this"), your FIRST action MUST be tool calls. Open with `list_dir(.)`, read `README.md` / `package.json` / `AGENT.md` / `AGENTS.md` / `CLAUDE.md`, and `glob_files` for entry points — all in parallel. NEVER respond with "please tell me which files" / "which project" / "what specifically".',
     '- If you find yourself about to write a clarifying question, STOP. Instead pick the most plausible interpretation, act on it with tools, and surface assumptions in the final answer. The user will redirect if needed.',
     '- Output text outside `tool_calls` is what the user sees. "I will analyze the project" with no tool calls in the same message is wasted text and looks like a stall.',
   ].join('\n');
@@ -227,7 +228,7 @@ function memoryFirstSection(): string {
 export function buildSystemPrompt(context: SystemPromptContext): string {
   const instructionSummary = context.instructionSummary?.trim()
     ? context.instructionSummary.trim()
-    : 'No workspace AGENT.md or AGENTS.md instruction file was found.';
+    : 'No workspace AGENT.md or AGENTS.md or CLAUDE.md instruction file was found.';
   const brainOnline = isBrainOnline(context.connectedMcpTools);
 
   // Order matters for prompt-cache hits (item 9c): identity + tool-mechanics
@@ -369,7 +370,8 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
 }
 
 export function loadWorkspaceInstructionSummary(workspaceRoot: string): string | undefined {
-  const instructionPath = ['AGENT.md', 'AGENTS.md']
+  // First found wins: AGENT.md → AGENTS.md → CLAUDE.md (INSTRUCTION_FILES).
+  const instructionPath = INSTRUCTION_FILES
     .map(file => path.join(workspaceRoot, file))
     .find(filePath => fs.existsSync(filePath));
 
