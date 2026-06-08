@@ -1,9 +1,14 @@
 # Spec: Memory Accuracy (0.4.14)
 
-> Status: **DRAFT — design only, not yet approved. No memory-engine code until
-> sign-off.** Target: **0.4.14 — "Memory Accuracy"** (point release; 0.5.0 stays
-> the power-user surface). Owner: TBD.
-> Measurement gate: `brainrouter-benchmark` (MemBench · LoCoMo · LongMemEval).
+> Status: **SHIPPED on `release/0.4.14`** (two rounds; pending version bump + publish
+> to `main`). Results: [`reports/0.4.14-recall-delta.md`](../../brainrouter-benchmark/reports/0.4.14-recall-delta.md).
+> Target: **0.4.14 — "Memory Accuracy"** (point release; 0.5.0 stays the power-user
+> surface). Measurement gate: `brainrouter-benchmark` (MemBench · LoCoMo · LongMemEval).
+>
+> The **Evidence** below is the *before* state that motivated the work — kept as the
+> diagnosis of record. What shipped (round 1 granularity fixes + MEM-JUDGE2 · MEM-BLEND ·
+> MEM-RERANK2 · MEM-ROUTE) and the after-numbers live in the results doc above;
+> the knobs are documented in [`configuration.md`](../configuration.md) / [`memory-engine.md`](../memory-engine.md).
 
 ## Objective
 
