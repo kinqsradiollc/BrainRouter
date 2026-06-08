@@ -14,6 +14,7 @@ import {
 import { grepSearch } from '../agent/workspaceFs.js';
 import { parsePatchEnvelope, assessPatchSafety } from '../agent/applyPatch.js';
 import { findWorkspaceRoot } from '../config/workspace.js';
+import { loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('resolveWorkspacePath rejects parent traversal outside workspace', () => {
@@ -357,5 +358,35 @@ test('findWorkspaceRoot promotes BrainRouter package cwd to parent monorepo', ()
     const info = findWorkspaceRoot(path.join(workspace, 'brainrouter'));
     assert.equal(info.workspaceRoot, fs.realpathSync(workspace));
     assert.match(info.reason, /workspace/);
+  });
+});
+
+test('findWorkspaceRoot treats CLAUDE.md as a workspace marker', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync('CLAUDE.md', '# Claude instructions\n');
+    fs.mkdirSync('sub', { recursive: true });
+    const info = findWorkspaceRoot(path.join(workspace, 'sub'));
+    assert.equal(info.workspaceRoot, fs.realpathSync(workspace));
+  });
+});
+
+test('loadWorkspaceInstructionSummary reads CLAUDE.md when present', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync('CLAUDE.md', '# Claude rules\nDo the thing.\n');
+    assert.match(loadWorkspaceInstructionSummary(workspace) ?? '', /Do the thing/);
+  });
+});
+
+test('loadWorkspaceInstructionSummary precedence: AGENT.md wins over CLAUDE.md', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync('AGENT.md', '# from AGENT\n');
+    fs.writeFileSync('CLAUDE.md', '# from CLAUDE\n');
+    assert.match(loadWorkspaceInstructionSummary(workspace) ?? '', /from AGENT/);
+  });
+});
+
+test('loadWorkspaceInstructionSummary returns undefined when no instruction file exists', () => {
+  withTempWorkspace((workspace) => {
+    assert.equal(loadWorkspaceInstructionSummary(workspace), undefined);
   });
 });

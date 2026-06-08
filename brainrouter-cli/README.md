@@ -136,7 +136,9 @@ Individual knobs (`cli.externalDirWrites`, `cli.egressAllowlist`,
 ## Workspace detection
 
 By default, the CLI uses the nearest project root with `AGENT.md`,
-`AGENTS.md`, or `.git`. Override with:
+`AGENTS.md`, `CLAUDE.md`, or `.git`. Whichever of `AGENT.md` / `AGENTS.md` /
+`CLAUDE.md` it finds first (in that order) is loaded as the workspace
+instruction file and injected into the system prompt. Override the root with:
 
 ```bash
 brainrouter --workspace /absolute/path/to/project
