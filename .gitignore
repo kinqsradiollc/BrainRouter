@@ -51,6 +51,10 @@ brainrouter-benchmark/results/**
 !brainrouter-benchmark/results/.gitkeep
 brainrouter-benchmark/reports/**
 !brainrouter-benchmark/reports/.gitkeep
+# Published benchmark results (the rest of reports/ stays scratch).
+!brainrouter-benchmark/reports/README.md
+!brainrouter-benchmark/reports/memory-comparison.md
+!brainrouter-benchmark/reports/0.4.14-recall-delta.md
 brainrouter-benchmark/datasets/membench/**
 !brainrouter-benchmark/datasets/membench/.gitkeep
 brainrouter-benchmark/datasets/longmemeval/**
