@@ -94,6 +94,7 @@ import { runExtractResult } from '../runtime/tools/extractResult.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
 import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../state/completionInbox.js';
 import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
+import { classifyDenial, formatDenialResult } from './denialMessage.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -2121,6 +2122,7 @@ export class Agent {
           // ("incremental-implementation", "spec-driven", "...-skill") that
           // it has confused for an invocable tool. Surface a correction so
           // the next iteration self-corrects instead of retrying garbage.
+          const denial = classifyDenial(message);
           if (/-32601|Unknown tool|MethodNotFound/i.test(message)) {
             const hint = explainUnknownToolName(name);
             // 0.3.8-I4: surface a "did you mean: X?" suggestion when the
@@ -2131,6 +2133,12 @@ export class Agent {
             const suggestionLine = didYouMean ? `did you mean: ${didYouMean}?\n` : '';
             resultText = `Tool "${name}" does not exist. ${suggestionLine}${hint}\nUnderlying error: ${message}`;
             summary = didYouMean ? `unknown tool — did you mean ${didYouMean}?` : `unknown tool — ${hint.slice(0, 120)}`;
+          } else if (denial) {
+            // CC-P6.8 — a DENIAL (user declined / hook / policy / access mode)
+            // is a decision, not a transient failure. Tell the model to adjust
+            // its approach, not retry the identical call.
+            resultText = formatDenialResult(name, denial, message);
+            summary = `denied (${denial}) — adjust, do not retry`;
           } else {
             resultText = `Tool execution failed: ${message}`;
             summary = message;
