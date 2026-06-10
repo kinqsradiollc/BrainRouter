@@ -97,6 +97,7 @@ import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck
 import { classifyDenial, formatDenialResult } from './denialMessage.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import { truncateFullRead } from './readTruncation.js';
+import { classifyForVerification, shouldNudgeVerification, buildVerificationNudge } from './verificationGate.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -621,6 +622,10 @@ export class Agent {
   private filesReadThisSession = new Set<string>();
   // CC-P9.2 — once-per-session task-tracking reminder latch.
   private taskTrackingNudged = false;
+  // CC-P6.5 — per-turn verification gate: did the workspace get mutated, and
+  // did a build/test/lint run? Reset at the top of each runTurn.
+  private mutatedThisTurn = false;
+  private verifiedThisTurn = false;
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -810,6 +815,9 @@ export class Agent {
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // CC-P6.5 — per-turn verification tracking (mutated workspace? ran a check?).
+    this.mutatedThisTurn = false;
+    this.verifiedThisTurn = false;
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -1117,6 +1125,9 @@ export class Agent {
     // bounded nudge, then accept whatever comes next (never loops).
     let deliverableGuardFired = 0;
     const DELIVERABLE_GUARD_MAX = 1;
+    // CC-P6.5 — verification gate: once-per-turn nudge when the workspace was
+    // mutated but nothing was run to verify it.
+    let verificationNudged = false;
     // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
     // goal_complete — so a turn that concludes WITHOUT goal_complete (just
     // delivers the answer) never reconciles the plan, leaving it stale (the
@@ -1798,6 +1809,23 @@ export class Agent {
           }
         }
 
+        // CC-P6.5 — verification gate. The turn mutated the workspace (edits /
+        // writes / a mutating shell command) but never ran a build/test/lint.
+        // Nudge once to verify before declaring done; the model can justify
+        // skipping (docs-only change) in its next reply.
+        if (shouldNudgeVerification({
+          mutated: this.mutatedThisTurn,
+          verified: this.verifiedThisTurn,
+          alreadyNudged: verificationNudged,
+        })) {
+          verificationNudged = true;
+          const guardMsg = { role: 'user', content: buildVerificationNudge() };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript(guardMsg);
+          callbacks.onStatusUpdate('Recovery: mutated workspace but ran no verification — nudging to verify');
+          continue;
+        }
+
         // Plan-sync guardrail — see planCompletedAtTurnStart. The model is about
         // to finish (no tool_calls, clean exit) but it did real work this turn
         // yet advanced NO plan item while open items remain. That's the "work
@@ -1949,6 +1977,19 @@ export class Agent {
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
+        // CC-P6.5 — classify this call for the verification gate (mutated the
+        // workspace vs ran a build/test/lint). Best-effort arg parse; the real
+        // execution + arg validation happens below.
+        try {
+          let cmdText = '';
+          if (name === 'run_command') {
+            const a = typeof tc?.function?.arguments === 'string' ? JSON.parse(tc.function.arguments) : (tc?.function?.arguments ?? {});
+            cmdText = String(a?.command ?? '');
+          }
+          const signal = classifyForVerification(name, cmdText);
+          if (signal === 'mutated') this.mutatedThisTurn = true;
+          else if (signal === 'verified') this.verifiedThisTurn = true;
+        } catch { /* arg parse is best-effort; gate just won't credit this call */ }
         // 0.3.8-I4: Use the strict-recovery helper so a malformed-arguments
         // tool_call surfaces as a structured tool_result (with the raw
         // arguments echoed back) instead of throwing out of the loop.
