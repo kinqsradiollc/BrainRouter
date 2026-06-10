@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.kinqsradiollc/brainrouter",
   "description": "BrainRouter MCP server — the cognitive memory engine. Durable recall, capture, focus scenes, persona, contradictions, code-aware retrieval, and a cognitive graph as MCP tools for any MCP-speaking agent.",
-  "version": "0.4.13",
+  "version": "0.4.14",
   "repository": {
     "url": "https://github.com/kinqsradiollc/BrainRouter",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@kinqs/brainrouter-mcp-server",
-      "version": "0.4.13",
+      "version": "0.4.14",
       "transport": { "type": "stdio" },
       "environmentVariables": [
         {

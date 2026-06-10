@@ -105,3 +105,8 @@ COMPARISION.md
 045_CODEX_CLI_CODE_COMPARISON.md
 
 AWSPrep
+
+# Local-only planning docs (consult, never commit)
+FULL_TASKS_*.md
+FULL_TASKS_*.MD
+walkthrough.md

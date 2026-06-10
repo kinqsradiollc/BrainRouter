@@ -8,12 +8,13 @@ design specs in [`brainrouter-docs/specs/`](brainrouter-docs/specs/).
 
 ## Shipped
 
-Latest published: **0.4.13** (2026-06-07) — sub-agent results flow back to the main
-agent (poll + event-driven resume, synthesis guard, status-check correlation) + REPL
-polish.
+Latest published: **0.4.14** (2026-06-10) — benchmark-driven recall overhaul + the
+grid TUI (live fleet sidebar, scroll mode) + model-spawned background workers with
+a completion inbox that reports results back into the conversation.
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.14 | Memory accuracy (2 rounds) · grid TUI + fleet sidebar · workers that report back | 2026-06-10 |
 | 0.4.13 | Sub-agent result delivery (resume + synthesis guard) · REPL polish | 2026-06-07 |
 | 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 |
 | 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
@@ -32,7 +33,7 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 ## 0.4.14 — Memory Accuracy + TUI shell · branch `release/0.4.14` · spec [`memory-accuracy.md`](brainrouter-docs/specs/memory-accuracy.md)
 
 Benchmark-driven recall overhaul (MemBench · LoCoMo · LongMemEval), in two rounds.
-**Status: feature-complete on `release/0.4.14`; pending version bump + publish to `main`.**
+**Status: SHIPPED 2026-06-10 — merged to `main`, tagged `v0.4.14`, published to npm.**
 
 **Round 1 — granularity (shipped):** the one-record-per-session granularity wrecked
 long-session reranking/judging. Fixed by chunking on import, a length-aware reranker
