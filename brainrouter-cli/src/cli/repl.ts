@@ -23,6 +23,7 @@ import { tryHandleConfigCommand } from './commands/config.js';
 import { tryHandleLoginCommand } from './commands/login.js';
 import { tryHandleScheduleCommand } from './commands/schedule.js';
 import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
+import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/customCommands.js';
 
 /**
  * All slash commands the REPL recognizes. Used for tab autocomplete and for
@@ -331,6 +332,18 @@ export async function handleSlashCommand(
   if (await tryHandleSessionCommand(cmdCtx)) return;
   if (await tryHandleGuardCommand(cmdCtx)) return;
   if (await tryHandleMcpCommand(cmdCtx)) return;
+
+  // CC-P4.1 — user-defined markdown slash commands. A file at
+  // .brainrouter/commands/<name>.md turns /<name> into a prompt template
+  // ($ARGUMENTS / $1..$9 substitution) run as a normal agent turn. Checked
+  // AFTER every built-in so a custom file can never shadow a real command.
+  const customDef = findCustomCommand(loadCustomCommands(cmdCtx.agent.workspaceRoot), command);
+  if (customDef) {
+    const prompt = expandCommandBody(customDef.body, cmdCtx.args);
+    console.log(chalk.gray(`\n▶ ${command} — ${customDef.description}\n`));
+    cmdCtx.repl.runAgentTurn(prompt);
+    return;
+  }
 
   // All commands extracted to category files above. Anything that reaches
   // here didn't match any handler.
