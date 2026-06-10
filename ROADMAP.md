@@ -62,16 +62,19 @@ and a scrollback overhaul (accurate height packing, scroll mode, live turn timer
 
 ---
 
-## 0.4.15 — CLI ergonomics & coding-agent parity (next)
+## 0.4.15 — The Agent Behind the Glass · plan [`brainrouter-roadmap/0.4.15.md`](brainrouter-roadmap/0.4.15.md)
 
-Gap-driven program; chat ergonomics first (current pain), then session lifecycle,
-safety, extensibility. Keeps the 0.4.14 grid/sidebar UI.
-
-- [ ] Chat ergonomics — line-level smooth scrolling, mouse-wheel scroll + scroll-speed knob, collapsible tool results, transcript search, Esc-to-interrupt, `/copy`·`/export`, `Ctrl+R` history search.
-- [ ] Session lifecycle — `--continue`/`--resume` + `/resume` picker, `/rewind` turn restore (with optional file restore), `/branch` forks, `/rename`·`/recap`.
-- [ ] Safety — plan permission mode (read-only until an approved plan), declarative `cli.permissions` allow/ask/deny rules + "always allow" persistence, network domain rules.
-- [ ] Extensibility — markdown slash commands, hook-event breadth (pre/post tool-use gates, prompt-submit, stop, pre-compact), background shell tasks, `!`/`#` composer prefixes.
-- [ ] Polish — `/doctor`, `/usage` category breakdown, vim/emacs composer modes + keybindings, image paste, model fallback chain.
+Beyond the TUI: upgrade the **process behind it** to reference-coding-agent level,
+keeping the 0.4.14 UI. Seven threads — **A** chat ergonomics (line-level scrolling,
+mouse wheel, collapsible results, Esc-interrupt) · **B** agent-loop behavior
+(layered system-prompt architecture, final-message deliverable contract, parallel
+batching, read-before-edit, verification gate, subagent output contracts) · **C**
+context engine (byte-stable cached prefix, system-reminder channel, truncation
+contract, structured compaction) · **D** session lifecycle (`--resume`, `/rewind`,
+`/branch`) · **E** plan mode + declarative permissions · **F** extensibility (md
+slash commands, hook decision contracts, background shell) · **G** an
+agent-behavior benchmark that gates it all (batching rate, premature-question
+rate, verification rate, deliverable completeness, tokens-per-task).
 
 ---
 
