@@ -1,5 +1,6 @@
 import { loadResultsFromDir, writeReports } from "./shared/report.js";
 import { runCliDeterministicSuite, runCliLiveSuite } from "./cli/deterministic-suite.js";
+import { runBehaviorSuite } from "./cli/behaviorSuite.js";
 import { runMemoryLoadSuite } from "./memory/load-suite.js";
 import { runMemoryRetrievalSuite } from "./memory/retrieval-suite.js";
 import { formatDatasetList } from "./shared/dataset-resolver.js";
@@ -60,6 +61,20 @@ async function main(): Promise<void> {
     case "cli:live":
       output = await runCliLiveSuite();
       break;
+    case "cli:behavior": {
+      // CC-P8.1 — score recorded session transcripts on the behavior contracts.
+      // Usage: cli:behavior --input <transcript.jsonl|dir> [--out reports/x.md] [--title "Baseline"]
+      const input = argValue("input", "");
+      if (!input) throw new Error("cli:behavior requires --input <transcript.jsonl or directory>");
+      const outPath = argValue("out", "");
+      const report = await runBehaviorSuite({
+        input,
+        out: outPath || undefined,
+        title: argValue("title", "") || undefined,
+      });
+      console.log(report);
+      return;
+    }
     case "datasets:list":
       console.log(formatDatasetList());
       return;
@@ -104,7 +119,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, datasets:list, datasets:import-membench, datasets:build-split, datasets:build-longmemeval, datasets:build-locomo, report");
+      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, cli:behavior, datasets:list, datasets:import-membench, datasets:build-split, datasets:build-longmemeval, datasets:build-locomo, report");
       return;
   }
 
