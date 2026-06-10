@@ -29,7 +29,7 @@ Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
 
 ---
 
-## 0.4.14 — Memory Accuracy · branch `release/0.4.14` · spec [`memory-accuracy.md`](brainrouter-docs/specs/memory-accuracy.md)
+## 0.4.14 — Memory Accuracy + TUI shell · branch `release/0.4.14` · spec [`memory-accuracy.md`](brainrouter-docs/specs/memory-accuracy.md)
 
 Benchmark-driven recall overhaul (MemBench · LoCoMo · LongMemEval), in two rounds.
 **Status: feature-complete on `release/0.4.14`; pending version bump + publish to `main`.**
@@ -51,6 +51,26 @@ hard-drop.* Results: [`reports/0.4.14-recall-delta.md`](brainrouter-benchmark/re
 
 Deferred per [`ADR-001`](brainrouter-docs/decisions/ADR-001-async-store-worker.md): ASYNC-2/3 (worker-thread store).
 Follow-up: benchmark importer per-record timestamps so the recency signal is measurable.
+
+**TUI shell + worker orchestration (merged to the release branch 2026-06-09, #344):**
+grid TUI (view router · 70/30 workspace split · context sidebar with the running
+fleet split into sub-agents / workers / workflows — role, worktree marker, live
+elapsed), model-spawned background worker threads (depth/tier-gated), a completion
+inbox so detached background work reports its results into the agent's next turn,
+and a scrollback overhaul (accurate height packing, scroll mode, live turn timer).
+
+---
+
+## 0.4.15 — CLI ergonomics & coding-agent parity (next)
+
+Gap-driven program; chat ergonomics first (current pain), then session lifecycle,
+safety, extensibility. Keeps the 0.4.14 grid/sidebar UI.
+
+- [ ] Chat ergonomics — line-level smooth scrolling, mouse-wheel scroll + scroll-speed knob, collapsible tool results, transcript search, Esc-to-interrupt, `/copy`·`/export`, `Ctrl+R` history search.
+- [ ] Session lifecycle — `--continue`/`--resume` + `/resume` picker, `/rewind` turn restore (with optional file restore), `/branch` forks, `/rename`·`/recap`.
+- [ ] Safety — plan permission mode (read-only until an approved plan), declarative `cli.permissions` allow/ask/deny rules + "always allow" persistence, network domain rules.
+- [ ] Extensibility — markdown slash commands, hook-event breadth (pre/post tool-use gates, prompt-submit, stop, pre-compact), background shell tasks, `!`/`#` composer prefixes.
+- [ ] Polish — `/doctor`, `/usage` category breakdown, vim/emacs composer modes + keybindings, image paste, model fallback chain.
 
 ---
 
