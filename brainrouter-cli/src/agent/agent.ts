@@ -98,6 +98,7 @@ import { classifyDenial, formatDenialResult } from './denialMessage.js';
 import { evaluatePermissionRules, primaryArgText } from '../runtime/exec/permissionRules.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import { truncateFullRead } from './readTruncation.js';
+import { waitUntilCondition } from '../runtime/waitUntil.js';
 import { classifyForVerification, shouldNudgeVerification, buildVerificationNudge } from './verificationGate.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
@@ -2862,6 +2863,27 @@ export class Agent {
         if (!id) throw new Error('close_worker requires an id.');
         const meta = closeWorker(this.workspaceRoot, id);
         return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
+      }
+      case 'wait_until': {
+        // CC-P11.2 — block until a workspace file condition holds (or timeout).
+        const condition = String(args.condition ?? '');
+        if (condition !== 'file_exists' && condition !== 'file_contains') {
+          throw new Error('wait_until requires condition "file_exists" or "file_contains".');
+        }
+        const watchPath = String(args.path ?? '').trim();
+        if (!watchPath) throw new Error('wait_until requires a path.');
+        if (condition === 'file_contains' && !String(args.text ?? '').trim()) {
+          throw new Error('wait_until with file_contains requires `text`.');
+        }
+        const resolvedWatch = resolveHere(watchPath);
+        const result = await waitUntilCondition({
+          condition,
+          resolvedPath: resolvedWatch,
+          text: typeof args.text === 'string' ? args.text : undefined,
+          timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+          pollMs: typeof args.pollMs === 'number' ? args.pollMs : undefined,
+        });
+        return JSON.stringify({ ...result, condition, path: watchPath });
       }
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
