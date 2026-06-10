@@ -77,7 +77,7 @@ cron agents, recurring loop) · **H** session lifecycle (resume, rewind, branch,
 chapters) · **I** plan mode + declarative permissions + hook gates · **J**
 interaction layer (structured multi-choice questions, side-task chips, skill
 auto-trigger, md commands) · **K** headless stream-json surface · **L** the
-agent-behavior benchmark that gates it all.
+agent-behavior benchmark that gates it all. · **M** BrainRouter Desktop — native macOS/Windows app (Electron + React over the unchanged agent runtime; chat, approvals, fleet sidebar, sessions as real UI; signed installers + auto-update; ships as alpha beside the TUI).
 
 ---
 
