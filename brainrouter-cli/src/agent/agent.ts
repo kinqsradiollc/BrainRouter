@@ -95,6 +95,7 @@ import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '
 import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../state/completionInbox.js';
 import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from './denialMessage.js';
+import { evaluatePermissionRules, primaryArgText } from '../runtime/exec/permissionRules.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import { truncateFullRead } from './readTruncation.js';
 import { classifyForVerification, shouldNudgeVerification, buildVerificationNudge } from './verificationGate.js';
@@ -2074,7 +2075,19 @@ export class Agent {
           // a silent child can't answer fails closed. This closes the gap where
           // spawn/delegate/worker dispatches bypassed the access-mode gate.
           {
+            // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
+            // blocks outright; an allow match downgrades an `ask` below (it never
+            // overrides a mode-based deny — rules can't escalate read mode).
+            const ruleDecision = evaluatePermissionRules(
+              getCliKnobs().permissions, name, primaryArgText(name, args as Record<string, unknown> | null));
+            if (ruleDecision === 'deny') {
+              throw new Error(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
+            }
             const policy = resolveToolPolicy(name, this.accessMode, args as Record<string, unknown> | null);
+            if (ruleDecision === 'allow' && policy.decision === 'ask') {
+              policy.decision = 'allow';
+              policy.reason = 'cli.permissions allow rule';
+            }
             if (policy.mutating) {
               this.policyAudit.push({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
               traceEvent(
