@@ -16,7 +16,9 @@
     "@kinqs/brainrouter-agent-protocol": "^0.4.14",
     "@kinqs/brainrouter-cli": "^0.4.14",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",

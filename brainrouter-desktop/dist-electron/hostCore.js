@@ -40,8 +40,10 @@ export function createHostCore(input) {
                 await startTurn(cmd.prompt);
                 return;
             case 'interrupt': {
-                // v1: dismiss pending approvals so a blocked turn fails closed and
-                // unwinds. Hard mid-LLM abort lands with DESK-2's AbortSignal work.
+                // DESK-2 — cooperative stop: flag the agent (it unwinds at the next
+                // LLM/tool boundary) AND dismiss pending approvals so a turn blocked
+                // on a dialog fails closed instead of hanging.
+                input.agent.requestInterrupt?.();
                 const dismissed = broker.dismissAll();
                 emit({ kind: 'status', text: `Interrupt requested${dismissed ? ` — dismissed ${dismissed} pending approval(s)` : ''}.` });
                 return;
