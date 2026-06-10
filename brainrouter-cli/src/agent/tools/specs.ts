@@ -210,6 +210,18 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'mark_chapter',
+    description: 'Mark the start of a new chapter when the work shifts to a meaningfully different phase (exploration -> implementation -> verification, or a topic pivot). Sparingly — a typical session has 3-8 chapters. The user browses them with /chapters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short noun-phrase title, under 40 chars (e.g. "Auth bug fix").' },
+        summary: { type: 'string', description: 'Optional one-line summary of what the chapter covers.' }
+      },
+      required: ['title']
+    }
+  },
+  {
     name: 'wait_until',
     description: 'Block until a workspace condition holds or the timeout elapses: a file exists, or a file contains a text marker. Use after starting background work (a worker, a detached build writing a log) to wait for its artifact instead of polling manually. Returns { satisfied, waitedMs }.',
     inputSchema: {

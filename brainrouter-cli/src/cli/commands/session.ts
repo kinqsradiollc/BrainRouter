@@ -14,6 +14,7 @@ import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type Ex
 import { searchTranscript, formatMatches } from '../../state/transcriptSearch.js';
 import { readPlan } from '../../state/taskStore.js';
 import { buildRecap } from '../../state/sessionRecap.js';
+import { listChapters, formatChapters } from '../../state/chapterMarks.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
 import { planRestore, readFileMutations } from '../../state/fileSnapshotStore.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
@@ -69,6 +70,16 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(line.replace(re, (m) => chalk.bgYellow.black(m)));
       }
       console.log(chalk.gray('\nTip: /transcript <#> shows an entry in full; /export-chat saves the whole session.\n'));
+      return true;
+    }
+    case '/chapters':
+    {
+      // CC-P12.3 — table of contents from mark_chapter markers.
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      const marks = listChapters(entries);
+      console.log(chalk.bold(`\nChapters (${marks.length}):\n`));
+      for (const line of formatChapters(marks)) console.log(line);
+      console.log(chalk.gray('\nTip: /transcript shows entries around an [#index]; mark_chapter is the agent-side tool.\n'));
       return true;
     }
     case '/recap':
