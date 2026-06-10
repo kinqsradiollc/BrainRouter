@@ -96,6 +96,7 @@ import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } fr
 import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from './denialMessage.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
+import { truncateFullRead } from './readTruncation.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -2470,7 +2471,9 @@ export class Agent {
         const endLine = args.endLine ? Number(args.endLine) : undefined;
 
         if (startLine === 1 && endLine === undefined) {
-          return content;
+          // CC-P7.3 — cap an unbounded full-file read so a huge file can't blow
+          // the context window; the model gets an explicit reread affordance.
+          return truncateFullRead(content, String(args.path)).text;
         }
 
         const lines = content.split('\n');
