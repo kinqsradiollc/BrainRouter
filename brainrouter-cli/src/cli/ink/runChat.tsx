@@ -14,7 +14,7 @@ import { isKnownSegment, renderSegments } from '../statusline.js';
 import { resolveTierLadder, currentTier } from '../../runtime/tierLadder.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { resolveSandboxConfig, runShell } from '../../runtime/exec/sandbox.js';
-import { parseBangCommand } from '../../runtime/exec/bangCommand.js';
+import { parseBangCommand, parseNoteCommand } from '../../runtime/exec/bangCommand.js';
 import { runHooks } from '../../state/hooksStore.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { childrenSettled, buildChildResumePrompt, shouldResumeOnChildComplete } from '../../runtime/childResume.js';
@@ -1176,7 +1176,35 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             return;
           }
 
-          // `! <command>` shell escape (PARITY-B1) — run a shell command
+          // CC-P4.4 — `# <note>` quick memory capture: save a note straight to the
+    // brain without an LLM turn (Claude Code's # memorize shortcut). Sent as a
+    // user-note + synthetic ack pair so the extractor sees its usual shape;
+    // shows the brain's capture verdict (or a clear offline notice).
+    const noteCmd = parseNoteCommand(text);
+    if (noteCmd.isNote) {
+      if (!noteCmd.note) {
+        push.notice('Usage: # <note to remember>   (e.g.  # deploys happen Fridays only)', 'warn');
+        return;
+      }
+      try {
+        const res = await mcpClient.callTool('memory_capture_turn', {
+          sessionKey: agent.sessionKey,
+          messages: [
+            { role: 'user', content: `[user note — remember this] ${noteCmd.note}`, timestamp: Date.now() },
+            { role: 'assistant', content: 'Noted and saved to memory.', timestamp: Date.now() },
+          ],
+        });
+        const raw = (res as any)?.content?.[0]?.text ?? '';
+        let captured = '';
+        try { const p = JSON.parse(raw); captured = p?.cognitiveRecords !== undefined ? ` (${p.cognitiveRecords} record(s))` : ''; } catch { /* non-JSON ack */ }
+        push.notice(`💾 Remembered${captured}: ${noteCmd.note.slice(0, 80)}${noteCmd.note.length > 80 ? '…' : ''}`, 'info');
+      } catch (err: any) {
+        push.notice(`✗ Could not save the note (brain offline?): ${err?.message ?? err}`, 'warn');
+      }
+      return;
+    }
+
+    // `! <command>` shell escape (PARITY-B1) — run a shell command
           // directly from the composer, mirroring Claude Code's bang prefix.
           // The user typed the command explicitly, so there's no askYesNo
           // gate (that guards model-initiated commands); the `cli.sandbox`

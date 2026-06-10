@@ -86,6 +86,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
       { cmd: '/init', desc: 'Re-run the onboarding wizard (Theme → Provider → API key → Model → MCP → AGENT.md)' },
       { cmd: '! <command>', desc: 'Shell escape — run a shell command from the composer (sandboxed when cli.sandbox=on)' },
+      { cmd: '# <note>', desc: 'Quick memory capture — save a note to the brain without an LLM turn' },
       { cmd: '/exit  /quit', desc: 'Close MCP connection and exit' },
     ],
   },

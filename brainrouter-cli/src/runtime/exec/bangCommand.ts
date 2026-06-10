@@ -13,3 +13,20 @@ export function parseBangCommand(text: string): { isBang: boolean; command: stri
   if (!text.startsWith('!')) return { isBang: false, command: '' };
   return { isBang: true, command: text.slice(1).trim() };
 }
+
+/**
+ * CC-P4.4 — parse the `#` quick memory-capture prefix.
+ *
+ * `# <note>` saves the note straight to the memory brain without running an
+ * LLM turn — Claude Code's `#` memorize shortcut. Same purity contract as
+ * `parseBangCommand`.
+ *
+ *   - Non-`#` input          → { isNote: false }
+ *   - bare `#` / `#` spaces  → { isNote: true, note: '' }  (caller shows usage)
+ *   - `# prefers vitest`     → { isNote: true, note: 'prefers vitest' }
+ */
+export function parseNoteCommand(text: string): { isNote: boolean; note: string } {
+  if (!text.startsWith('#')) return { isNote: false, note: '' };
+  return { isNote: true, note: text.slice(1).trim() };
+}
+
