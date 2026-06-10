@@ -43,6 +43,7 @@ export type AgentEvent =
   | { kind: 'interaction-request'; request: InteractionRequest }
   | { kind: 'turn-complete'; answer: string }
   | { kind: 'turn-error'; message: string }
+  | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string }
   | { kind: 'query-result'; id: string; ok: boolean; result?: unknown; error?: string };
 
 export type AgentEventMessage = EventEnvelope & { event: AgentEvent };
@@ -51,7 +52,7 @@ const EVENT_KINDS = new Set<string>([
   'turn-start', 'status', 'assistant-turn-start', 'assistant-delta', 'assistant-turn-end',
   'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
   'child-complete', 'plan-update', 'compaction', 'memory', 'approval-decision',
-  'interaction-request', 'turn-complete', 'turn-error', 'query-result',
+  'interaction-request', 'turn-complete', 'turn-error', 'session-changed', 'query-result',
 ]);
 
 /** Structural guard for a wire-decoded event message. Pure. */
@@ -72,9 +73,12 @@ export type AgentCommand =
   | { kind: 'interrupt' }
   | { kind: 'interaction-response'; id: string; response: InteractionResponse }
   | { kind: 'query'; id: string; name: string; args?: Record<string, unknown> }
+  | { kind: 'new-session'; label?: string }
+  | { kind: 'resume-session'; sessionKey: string }
+  | { kind: 'set-model'; model: string; persist?: boolean }
   | { kind: 'shutdown' };
 
-const COMMAND_KINDS = new Set<string>(['start-turn', 'interrupt', 'interaction-response', 'query', 'shutdown']);
+const COMMAND_KINDS = new Set<string>(['start-turn', 'interrupt', 'interaction-response', 'query', 'new-session', 'resume-session', 'set-model', 'shutdown']);
 
 /** Structural guard for a wire-decoded command. Pure. */
 export function isAgentCommand(value: unknown): value is AgentCommand {

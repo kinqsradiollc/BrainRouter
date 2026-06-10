@@ -27,10 +27,44 @@ export interface AgentLike {
   runTurn(prompt: string, callbacks: any): Promise<string>;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
+  // DESK-3 — session lifecycle + model control (all present on the real Agent).
+  clearHistory?(): void;
+  resetSessionCounters?(): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  loadHistory?(entries: any[]): number;
+  setModel?(model: string): void;
+  getModel?(): string;
 }
 
 /** Named read-only queries the renderer can issue (sessions list, recap, …). */
 export type QueryHandler = (args: Record<string, unknown>) => Promise<unknown> | unknown;
+
+/**
+ * DESK-3 — InteractionPort backed by the broker: agent approval/choice asks
+ * become `interaction-request` events; the renderer answers with an
+ * `interaction-response` command. 5-minute timeout → dismissed → the agent's
+ * fail-closed paths (deny / decide-yourself) fire instead of hanging.
+ */
+export function createBrokerPort(
+  broker: InteractionBroker,
+  emit: (event: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest }) => void,
+  timeoutMs = 300_000,
+) {
+  return {
+    async confirm(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }): Promise<boolean> {
+      const { request, response } = broker.request({ type: 'confirm', ...req }, { timeoutMs });
+      emit({ kind: 'interaction-request', request });
+      const r = await response;
+      return r.type === 'confirm' ? r.approved : false;
+    },
+    async choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null> {
+      const { request, response } = broker.request({ type: 'choice', ...req }, { timeoutMs });
+      emit({ kind: 'interaction-request', request });
+      const r = await response;
+      return r.type === 'choice' ? r.labels : null;
+    },
+  };
+}
 
 export interface HostCore {
   /** Feed one decoded wire message in; invalid shapes are ignored (logged via status). */
@@ -43,11 +77,18 @@ export function createHostCore(input: {
   agent: AgentLike;
   send: (msg: AgentEventMessage) => void;
   queries?: Record<string, QueryHandler>;
+  /** DESK-3 — load a persisted transcript for resume-session. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  loadTranscript?: (sessionKey: string) => any[];
+  /** DESK-3 — persist a model choice into the shared config.json. */
+  persistModel?: (model: string) => void;
+  /** DESK-3 — share the broker with the agent's InteractionPort adapter. */
+  broker?: InteractionBroker;
   /** Called on `shutdown` after pending interactions are dismissed. */
   onShutdown?: () => void;
 }): HostCore {
   const emit = createEnvelopeWriter(input.agent.sessionKey, input.send);
-  const broker = new InteractionBroker();
+  const broker = input.broker ?? new InteractionBroker();
   let turnRunning = false;
 
   // Bridge: every RunTurnCallbacks callback becomes a protocol event. The
@@ -104,6 +145,39 @@ export function createHostCore(input: {
         } catch (err) {
           emit({ kind: 'query-result', id: cmd.id, ok: false, error: err instanceof Error ? err.message : String(err) });
         }
+        return;
+      }
+      case 'new-session': {
+        const label = (cmd.label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
+        input.agent.sessionKey = `${input.agent.sessionKey.split(':')[0]}:${label}`;
+        input.agent.resetSessionCounters?.();
+        input.agent.clearHistory?.();
+        emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: 0, model: input.agent.getModel?.() ?? '' });
+        return;
+      }
+      case 'resume-session': {
+        const entries = input.loadTranscript?.(cmd.sessionKey) ?? [];
+        if (entries.length === 0) {
+          emit({ kind: 'turn-error', message: `No transcript found for "${cmd.sessionKey}".` });
+          return;
+        }
+        input.agent.sessionKey = cmd.sessionKey;
+        input.agent.resetSessionCounters?.();
+        const loaded = input.agent.loadHistory?.(entries) ?? 0;
+        emit({ kind: 'session-changed', sessionKey: cmd.sessionKey, loadedMessages: loaded, model: input.agent.getModel?.() ?? '' });
+        return;
+      }
+      case 'set-model': {
+        input.agent.setModel?.(cmd.model);
+        if (cmd.persist) {
+          try { input.persistModel?.(cmd.model); } catch (err) {
+            emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
+            emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: -1, model: cmd.model });
+            return;
+          }
+        }
+        emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ''}.` });
+        emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: -1, model: cmd.model });
         return;
       }
       case 'shutdown':

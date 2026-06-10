@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHostCore, type AgentLike } from './hostCore.js';
+import { createBrokerPort, createHostCore, type AgentLike } from './hostCore.js';
+import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import type { AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 
 function fakeAgent(behavior?: (prompt: string, cb: Record<string, unknown>) => Promise<string>): AgentLike {
@@ -117,4 +118,78 @@ test('interrupt flags the agent for a cooperative stop', async () => {
   const core = createHostCore({ agent, send });
   await core.handle({ kind: 'interrupt' });
   assert.equal(flagged, true);
+});
+
+test('new-session: fresh key + cleared history + session-changed event', async () => {
+  const { out, send } = collect();
+  let cleared = false;
+  const agent: AgentLike = {
+    ...fakeAgent(), sessionKey: 'root:old',
+    clearHistory: () => { cleared = true; },
+    resetSessionCounters: () => {},
+    getModel: () => 'test-model',
+  };
+  const core = createHostCore({ agent, send });
+  await core.handle({ kind: 'new-session', label: 'My Chat!' });
+  assert.equal(cleared, true);
+  assert.equal(agent.sessionKey, 'root:My-Chat-');
+  const ev = out.find((m) => m.event.kind === 'session-changed')!.event as { sessionKey: string; loadedMessages: number };
+  assert.equal(ev.loadedMessages, 0);
+});
+
+test('resume-session: loads the transcript; unknown key errors', async () => {
+  const { out, send } = collect();
+  let loadedWith: unknown[] = [];
+  const agent: AgentLike = {
+    ...fakeAgent(),
+    resetSessionCounters: () => {},
+    loadHistory: (entries) => { loadedWith = entries; return entries.length; },
+    getModel: () => 'm',
+  };
+  const core = createHostCore({
+    agent, send,
+    loadTranscript: (key) => (key === 'sess-known' ? [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }] : []),
+  });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess-known' });
+  assert.equal(agent.sessionKey, 'sess-known');
+  assert.equal(loadedWith.length, 2);
+  const ok = out.find((m) => m.event.kind === 'session-changed')!.event as { loadedMessages: number };
+  assert.equal(ok.loadedMessages, 2);
+  await core.handle({ kind: 'resume-session', sessionKey: 'missing' });
+  assert.ok(out.some((m) => m.event.kind === 'turn-error' && (m.event as { message: string }).message.includes('missing')));
+});
+
+test('set-model: switches + persists; persist failure degrades gracefully', async () => {
+  const { out, send } = collect();
+  let model = 'old';
+  const agent: AgentLike = { ...fakeAgent(), setModel: (m) => { model = m; }, getModel: () => model };
+  let persisted = '';
+  const core = createHostCore({ agent, send, persistModel: (m) => { persisted = m; } });
+  await core.handle({ kind: 'set-model', model: 'gpt-5.5', persist: true });
+  assert.equal(model, 'gpt-5.5');
+  assert.equal(persisted, 'gpt-5.5');
+  assert.ok(out.some((m) => m.event.kind === 'status' && (m.event as { text: string }).text.includes('shared with the CLI')));
+
+  const failing = createHostCore({ agent, send, persistModel: () => { throw new Error('disk full'); } });
+  await failing.handle({ kind: 'set-model', model: 'x', persist: true });
+  assert.ok(out.some((m) => m.event.kind === 'status' && (m.event as { text: string }).text.includes('persisting failed')));
+});
+
+test('createBrokerPort: confirm/choice round-trip + dismissal fails closed', async () => {
+  const broker = new InteractionBroker();
+  const emitted: Array<{ kind: string; request: { id: string; type: string } }> = [];
+  const port = createBrokerPort(broker, (e) => emitted.push(e as never), 1_000);
+
+  const confirmP = port.confirm({ title: 'Run?', dangerous: true, tool: 'run_command' });
+  assert.equal(emitted[0].request.type, 'confirm');
+  broker.resolve(emitted[0].request.id, { type: 'confirm', approved: true });
+  assert.equal(await confirmP, true);
+
+  const choiceP = port.choice({ question: 'Pick', header: 'P', options: [{ label: 'A', description: 'a' }] });
+  broker.resolve(emitted[1].request.id, { type: 'choice', labels: ['A'] });
+  assert.deepEqual(await choiceP, ['A']);
+
+  const dismissedP = port.confirm({ title: 'ignored' });
+  broker.resolve(emitted[2].request.id, { type: 'dismissed' });
+  assert.equal(await dismissedP, false, 'dismissed confirm = deny');
 });
