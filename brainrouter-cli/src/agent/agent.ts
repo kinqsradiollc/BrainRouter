@@ -630,6 +630,11 @@ export class Agent {
   // did a build/test/lint run? Reset at the top of each runTurn.
   private mutatedThisTurn = false;
   private verifiedThisTurn = false;
+  // DESK-2 / CC-P1.5 — cooperative turn interrupt. Set by requestInterrupt()
+  // (desktop Stop button / TUI Esc); checked at every LLM-call and tool
+  // boundary so a long multi-tool turn stops at the next seam instead of
+  // running to completion. Reset at the top of each runTurn.
+  private interruptRequested = false;
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -822,6 +827,7 @@ export class Agent {
     // CC-P6.5 — per-turn verification tracking (mutated workspace? ran a check?).
     this.mutatedThisTurn = false;
     this.verifiedThisTurn = false;
+    this.interruptRequested = false;
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -1281,6 +1287,17 @@ export class Agent {
 
     while (loopCount < maxLoops) {
       loopCount++;
+      // INTERRUPT — cooperative stop before the next LLM call. The note lands
+      // in history so a resumed conversation knows the turn was cut short.
+      if (this.interruptRequested) {
+        this.interruptRequested = false;
+        const note = '⏹ Turn interrupted by user.';
+        const interruptMsg = { role: 'system', content: 'The user interrupted this turn before it finished; the work above may be incomplete.' };
+        this.chatHistory.push(interruptMsg);
+        this.recordTranscript(interruptMsg);
+        callbacks.onStatusUpdate('Interrupted');
+        return note;
+      }
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
       let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
@@ -1995,6 +2012,13 @@ export class Agent {
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
+        // INTERRUPT — skip queued tools once a stop is requested; the loop-top
+        // check then ends the turn before the next LLM call.
+        if (this.interruptRequested) {
+          const skipped = 'Skipped: turn interrupted by user.';
+          callbacks.onToolEnd(name, { success: false, summary: 'turn interrupted — tool skipped' }, tc.id);
+          return { toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: skipped, isError: true }, fullResultText: skipped };
+        }
         // CC-P6.5 — classify this call for the verification gate (mutated the
         // workspace vs ran a build/test/lint). Best-effort arg parse; the real
         // execution + arg validation happens below.
@@ -3165,6 +3189,15 @@ export class Agent {
     // mode so the model isn't blind to what was load-bearing.
     this.recallNextTurnIsPostCompaction = true;
     return { ...result, replacedMessages: before };
+  }
+
+  /**
+   * DESK-2 / CC-P1.5 — request a cooperative stop of the running turn. Safe to
+   * call from any callback or IPC handler; the turn unwinds at the next
+   * LLM-call or tool boundary with a clean "interrupted" answer.
+   */
+  public requestInterrupt(): void {
+    this.interruptRequested = true;
   }
 
   /** Runtime model switch. Used by `/model` slash command. */
