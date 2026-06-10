@@ -12,6 +12,8 @@ import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
 import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat } from '../../state/transcriptExport.js';
 import { searchTranscript, formatMatches } from '../../state/transcriptSearch.js';
+import { readPlan } from '../../state/taskStore.js';
+import { buildRecap } from '../../state/sessionRecap.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
 import { planRestore, readFileMutations } from '../../state/fileSnapshotStore.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
@@ -67,6 +69,29 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(line.replace(re, (m) => chalk.bgYellow.black(m)));
       }
       console.log(chalk.gray('\nTip: /transcript <#> shows an entry in full; /export-chat saves the whole session.\n'));
+      return true;
+    }
+    case '/recap':
+    {
+      // CC-P2.4 — instant "where was I?" summary (no LLM call).
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.yellow('\nNothing to recap — this session has no transcript yet.\n'));
+        return true;
+      }
+      let plan = null;
+      try { plan = readPlan(agent.workspaceRoot, agent.sessionKey); } catch { plan = null; }
+      const goal = readGoal(agent.workspaceRoot, agent.sessionKey);
+      const lines = buildRecap({
+        entries,
+        plan,
+        goalText: goal?.text ?? null,
+        goalStatus: goal?.status ?? null,
+        sessionKey: agent.sessionKey,
+      });
+      console.log('');
+      for (const l of lines) console.log(l ? `  ${l}` : '');
+      console.log('');
       return true;
     }
     case '/export-chat':
