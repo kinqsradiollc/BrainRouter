@@ -344,9 +344,24 @@ program
   .option('--format <fmt>', 'Output format: text (default) | json | jsonl (stable per-event stream for CI)')
   .option('--session <key>', 'Resume a specific sessionKey')
   .option('--timeout <ms>', 'LLM request timeout in ms')
+  .option('--max-tool-loops <n>', 'Hard cap on tool iterations for this run (CI guard)')
+  .option('--disallowed-tools <names>', 'Comma-separated tool names denied for this run (any tool, local or MCP)')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .action(async (promptParts: string[], options) => {
     if (options.workspace) setCliKnobOverride({ workspaceOverride: options.workspace });
+    // CC-P13.2 — headless automation guards.
+    if (options.maxToolLoops) {
+      const n = Number(options.maxToolLoops);
+      if (Number.isFinite(n) && n > 0) setCliKnobOverride({ maxToolLoops: Math.floor(n) });
+    }
+    if (options.disallowedTools) {
+      const { parseToolList } = await import('./runtime/exec/permissionRules.js');
+      const denied = parseToolList(String(options.disallowedTools));
+      if (denied.length > 0) {
+        const current = getCliKnobs().permissions;
+        setCliKnobOverride({ permissions: { allow: current.allow, deny: [...current.deny, ...denied] } });
+      }
+    }
     if (options.timeout) {
       const ms = Number(options.timeout);
       if (Number.isFinite(ms) && ms > 0) setCliKnobOverride({ llmTimeoutMs: ms });

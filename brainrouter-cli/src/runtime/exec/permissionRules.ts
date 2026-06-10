@@ -96,3 +96,10 @@ export function primaryArgText(toolName: string, args: Record<string, unknown> |
     }
   }
 }
+
+/** Parse a comma-separated tool list flag ("run_command, fetch_url") → names. Pure. */
+export function parseToolList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(',').map((t) => t.trim()).filter(Boolean);
+}
+
