@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
+import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat } from '../../state/transcriptExport.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
 import { planRestore, readFileMutations } from '../../state/fileSnapshotStore.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
@@ -41,6 +42,35 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.gray('\nResume one with: /resume <sessionKey>'));
       }
       console.log();
+      return true;
+    }
+    case '/export-chat':
+    {
+      // CC-P1.6 — write the current session transcript to a shareable file.
+      // Usage: /export-chat [md|json] [path]  (`/export` is taken by memory dump)
+      const fmtArg = (args[0] ?? 'md').toLowerCase();
+      const format: ExportFormat = fmtArg === 'json' ? 'json' : 'md';
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.yellow('\nNothing to export — this session has no transcript yet.\n'));
+        return true;
+      }
+      const exportedAt = new Date().toISOString();
+      const meta = { sessionKey: agent.sessionKey, exportedAt };
+      const body = format === 'json'
+        ? exportTranscriptJson(entries, meta)
+        : exportTranscriptMarkdown(entries, meta);
+      const explicitPath = args.slice(format === fmtArg ? 1 : 0).join(' ').trim();
+      const outPath = explicitPath
+        ? path.resolve(agent.launchCwd ?? process.cwd(), explicitPath)
+        : path.resolve(agent.launchCwd ?? process.cwd(), exportFileName(agent.sessionKey, format, exportedAt));
+      try {
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, body, 'utf-8');
+        console.log(chalk.green(`\n✓ Exported ${entries.length} entries to ${chalk.cyan(outPath)}\n`));
+      } catch (err: any) {
+        console.log(chalk.red(`\nExport failed: ${err?.message ?? err}\n`));
+      }
       return true;
     }
     case '/resume':
