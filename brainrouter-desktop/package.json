@@ -1,0 +1,30 @@
+{
+  "name": "brainrouter-desktop",
+  "version": "0.4.14",
+  "private": true,
+  "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the unchanged brainrouter-cli agent runtime.",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build": "npm run build:electron && vite build",
+    "build:electron": "rm -rf dist-electron && tsc -p tsconfig.electron.json",
+    "test": "npm run build:electron && node --test \"dist-electron/**/*.test.js\"",
+    "dev": "vite",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@kinqs/brainrouter-agent-protocol": "^0.4.14",
+    "@kinqs/brainrouter-cli": "^0.4.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^33.0.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6"
+  }
+}
