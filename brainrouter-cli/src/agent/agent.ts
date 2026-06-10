@@ -100,6 +100,7 @@ import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingN
 import { truncateFullRead } from './readTruncation.js';
 import { waitUntilCondition } from '../runtime/waitUntil.js';
 import { startBackgroundShell, readBackgroundOutput } from '../runtime/exec/backgroundShell.js';
+import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../state/chapterMarks.js';
 import { classifyForVerification, shouldNudgeVerification, buildVerificationNudge } from './verificationGate.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
@@ -2879,6 +2880,16 @@ export class Agent {
         if (!id) throw new Error('close_worker requires an id.');
         const meta = closeWorker(this.workspaceRoot, id);
         return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
+      }
+      case 'mark_chapter': {
+        // CC-P12.3 — persist a chapter marker into the session transcript.
+        const title = String(args.title ?? '').trim();
+        if (!title) throw new Error('mark_chapter requires a non-empty title.');
+        if (title.length > 60) throw new Error('mark_chapter title must be under 60 chars.');
+        const summary = typeof args.summary === 'string' && args.summary.trim() ? args.summary.trim() : undefined;
+        const marker = { role: 'system', name: CHAPTER_ENTRY_NAME, content: chapterEntryContent(title, summary) };
+        this.recordTranscript(marker);
+        return JSON.stringify({ marked: true, title, note: 'Chapter recorded — the user can browse with /chapters.' });
       }
       case 'task_output': {
         // CC-P11.1 — incremental output of a background run_command.
