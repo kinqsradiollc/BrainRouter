@@ -138,6 +138,8 @@ program
   .option('-w, --workspace <path>', 'Workspace root for files, commands, memory session, and MCP --root')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .option('--quiet', 'Suppress recall tables, briefing dumps, and tool-completion previews (model prose only). Toggle in-session with /quiet.')
+  .option('--continue', 'Resume the most recent session in this workspace')
+  .option('--resume <sessionKey>', 'Resume a specific session (exact key or unique prefix)')
   .action(async (options) => {
     if (options.workspace) {
       setCliKnobOverride({ workspaceOverride: options.workspace });
@@ -264,6 +266,26 @@ program
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
     });
+    // CC-P2.1 — `--continue` / `--resume <key>`: load a persisted session's
+    // transcript into this launch before the REPL starts. Errors print and
+    // fall through to a fresh session (never abort the launch).
+    if (options.continue || options.resume) {
+      const { listTranscripts, loadTranscript } = await import('./state/sessionStore.js');
+      const { pickResumeSession } = await import('./state/resumePicker.js');
+      const pick = pickResumeSession(listTranscripts(workspace.workspaceRoot), {
+        continueLatest: !!options.continue,
+        resumeKey: typeof options.resume === 'string' ? options.resume : undefined,
+      });
+      if (pick.ok) {
+        const entries = loadTranscript(workspace.workspaceRoot, pick.sessionKey);
+        agent.sessionKey = pick.sessionKey;
+        agent.resetSessionCounters();
+        const loaded = agent.loadHistory(entries);
+        console.log(chalk.green(`Resumed session ${pick.sessionKey} (${loaded} prior messages).`));
+      } else {
+        console.log(chalk.yellow(pick.error + ' Starting a fresh session.'));
+      }
+    }
     // Federation Stage 2 (FED-S2-T2/T3): claim a row in the brain's
     // active_sessions registry + heartbeat every 30s. Resolves to null
     // (no-op) when the brain pre-dates Stage 2 — older brains keep
