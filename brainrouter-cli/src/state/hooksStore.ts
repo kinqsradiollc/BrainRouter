@@ -12,10 +12,12 @@ import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
  */
 
 export type HookEvent =
-  | 'pre-tool'    // Fired before a tool runs; non-zero exit denies the call.
+  | 'pre-tool'    // Fired before a tool runs; non-zero exit OR a {"decision":"deny"} JSON denies the call.
   | 'post-tool'   // Fired after a tool returns; informational.
   | 'pre-turn'    // Fired before each LLM turn.
   | 'post-turn'   // Fired after the assistant's final message of a turn.
+  | 'user-prompt-submit' // CC-P4.2 — fired on prompt submit; a deny decision blocks the turn.
+  | 'pre-compact' // CC-P4.2 — fired before auto/manual compaction; advisory.
   | 'session-start'
   | 'session-end';
 
@@ -113,3 +115,35 @@ export function runHooks(
   }
   return results;
 }
+
+/**
+ * CC-P4.2 — structured hook decision contract. A hook may print JSON on
+ * stdout instead of relying on its exit code:
+ *
+ *   { "decision": "deny",  "reason": "touching prod config is forbidden" }
+ *   { "decision": "allow", "reason": "pre-approved by policy bot" }
+ *   { "decision": "allow", "updatedInput": { "command": "git status" } }
+ *
+ * `deny` blocks even with exit 0 (the reason reaches the model); `allow` can
+ * downgrade an approval prompt; `updatedInput` REPLACES the tool arguments
+ * (pre-tool only). Non-JSON stdout → null (legacy exit-code semantics). Pure.
+ */
+export interface HookDecision {
+  decision?: 'allow' | 'deny';
+  reason?: string;
+  updatedInput?: Record<string, unknown>;
+}
+
+export function parseHookDecision(stdout: string): HookDecision | null {
+  const t = (stdout ?? '').trim();
+  if (!t.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(t) as HookDecision;
+    if (parsed && typeof parsed === 'object') {
+      const ok = parsed.decision === 'allow' || parsed.decision === 'deny' || parsed.updatedInput !== undefined;
+      return ok ? parsed : null;
+    }
+  } catch { /* non-JSON stdout — legacy semantics */ }
+  return null;
+}
+

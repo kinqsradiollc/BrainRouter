@@ -68,7 +68,7 @@ import { callMcpTool, extractToolText } from '../runtime/mcpUtils.js';
 import { applyFederationIdentity } from '../runtime/federationIdentity.js';
 import { acquireLLMSlot } from '../runtime/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../state/goalStore.js';
-import { runHooks } from '../state/hooksStore.js';
+import { runHooks, parseHookDecision } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../runtime/exec/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
@@ -989,6 +989,20 @@ export class Agent {
 
     // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
     if (!this.silent) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+    // CC-P4.2 — user-prompt-submit gate: a hook returning {"decision":"deny"}
+    // (or a non-zero exit) blocks the turn before any LLM call; the reason is
+    // returned to the user verbatim.
+    if (!this.silent) {
+      const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
+      for (const r of submitResults) {
+        const d = parseHookDecision(r.stdout);
+        const denied = d?.decision === 'deny' || (!d && r.exitCode !== 0);
+        if (denied) {
+          const reason = d?.reason?.trim() || (r.stderr || r.stdout || '').toString().trim() || `Hook ${r.hook.id} blocked this prompt`;
+          return `Prompt blocked by user-prompt-submit hook: ${reason}`;
+        }
+      }
+    }
 
     this.lastUserPrompt = prompt;
     this.lastTurnHitLoopLimit = false;
@@ -2051,6 +2065,19 @@ export class Agent {
           const denial = preResults.find((r) => r.exitCode !== 0);
           if (denial) {
             blockedByHook = (denial.stderr || denial.stdout || '').toString().trim() || `Hook ${denial.hook.id} denied tool call (exit ${denial.exitCode})`;
+          }
+          // CC-P4.2 — structured decision contract: a hook may print JSON
+          // ({decision, reason, updatedInput}) instead of using its exit code.
+          // deny blocks even on exit 0; updatedInput REPLACES the tool args.
+          for (const r of preResults) {
+            const d = parseHookDecision(r.stdout);
+            if (!d) continue;
+            if (d.decision === 'deny' && !blockedByHook) {
+              blockedByHook = d.reason?.trim() || `Hook ${r.hook.id} (pre-tool) denied this call`;
+            } else if (d.updatedInput && typeof d.updatedInput === 'object') {
+              args = d.updatedInput;
+              hookifyWarnings.push(`hook ${r.hook.id} rewrote the tool input${d.reason ? ` — ${d.reason}` : ''}`);
+            }
           }
           // Hookify markdown rules: warn/block matching by event + pattern.
           const rules = listHookifyRules(this.workspaceRoot);
@@ -3115,6 +3142,8 @@ export class Agent {
    */
   public async compactHistory(): Promise<{ summary: string; estimatedTokens: number; durationMs: number; replacedMessages: number } | null> {
     if (this.chatHistory.length < 4) return null;
+    // CC-P4.2 — advisory pre-compact hook (notify/log; cannot block).
+    if (!this.silent) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
     const before = this.chatHistory.length;
     const userMessages = this.chatHistory.filter((m) => m.role === 'user');
     const lastUserMessage = userMessages.length > 0 ? String(userMessages[userMessages.length - 1].content ?? '') : undefined;
