@@ -469,6 +469,16 @@ export interface AgentOptions {
    * set, shell approval requests that would otherwise fail closed are forwarded
    * to the parent agent/UI for a decision.
    */
+  /**
+   * DESK-3 — injectable human-decision port. When set (the Desktop agent
+   * host), approval prompts and ask_user_choice render as UI dialogs instead
+   * of readline prompts; when unset the CLI's readline behavior is unchanged.
+   * Dismissals fail CLOSED (deny / "decide yourself"), never hang a turn.
+   */
+  interactionPort?: {
+    confirm(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }): Promise<boolean>;
+    choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null>;
+  };
   confirmToolApproval?: (info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean; arguments?: Record<string, unknown> }) => Promise<boolean>;
 }
 
@@ -694,6 +704,7 @@ export class Agent {
   /** 0.4.x-5 — per-child reasoning-effort override; falls back to session /effort. */
   private effortOverride?: EffortLevel;
   private confirmToolApproval?: AgentOptions['confirmToolApproval'];
+  private interactionPort?: AgentOptions['interactionPort'];
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -725,6 +736,7 @@ export class Agent {
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
     this.confirmToolApproval = options.confirmToolApproval;
+    this.interactionPort = options.interactionPort;
   }
 
   /** Expose for orchestration so spawn_agent can record the parent linkage. */
@@ -1227,6 +1239,9 @@ export class Agent {
             const q =
               `Delegation policy gate — allow spawning a ${info.role} agent (${info.access})?\n` +
               `  Task: ${info.prompt.slice(0, 160)}${info.prompt.length > 160 ? '…' : ''}`;
+            if (this.interactionPort) {
+              return await this.interactionPort.confirm({ title: 'Allow agent delegation?', detail: q, tool: 'spawn_agent' });
+            }
             try {
               return await askYesNo(q, false);
             } catch (err) {
@@ -1247,6 +1262,9 @@ export class Agent {
               `Child agent approval gate — allow ${info.role} (${info.childId}) to run ${info.tool}?` +
               command +
               `\n  Reason: ${info.reason}`;
+            if (this.interactionPort) {
+              return await this.interactionPort.confirm({ title: 'Allow child-agent tool?', detail: q, dangerous: true, tool: info.tool });
+            }
             try {
               return await askYesNo(q, false);
             } catch (err) {
@@ -2231,6 +2249,16 @@ export class Agent {
                 if (!approved) {
                   throw new Error(`MCP tool "${name}" rejected by parent approval.`);
                 }
+              } else if (this.interactionPort) {
+                const uiApproved = await this.interactionPort.confirm({
+                  title: 'MCP tool approval',
+                  detail: `${name} — ${mcpApproval.reason}`,
+                  dangerous: mcpApproval.dangerous,
+                  tool: name,
+                });
+                if (!uiApproved) {
+                  throw new Error(`MCP tool "${name}" rejected by user.`);
+                }
               } else {
                 const approved = await askYesNo(
                   `${chalk.yellow('⚠️  MCP tool approval request:')} ${chalk.cyan(name)}${mcpApproval.dangerous ? chalk.red(' (potentially destructive)') : ''}\nReason: ${mcpApproval.reason}\nAllow MCP tool call? (y/N) `,
@@ -2787,7 +2815,9 @@ export class Agent {
           // up" feel in main-screen mode. (0.3.9 — 2026-05-27)
           console.log(`${chalk.yellow('⚠️  Command execution request:')} ${chalk.cyan(cmd)}${dangerous ? chalk.red(' (potentially destructive)') : ''}`);
           const question = buildRunCommandPrompt(cmd);
-          const approved = await askYesNo(question, false);
+          const approved = this.interactionPort
+            ? await this.interactionPort.confirm({ title: 'Run shell command?', detail: cmd, dangerous, tool: 'run_command' })
+            : await askYesNo(question, false);
           if (!approved) {
             return 'Command execution rejected by user.';
           }
@@ -3094,6 +3124,20 @@ export class Agent {
         // Eager TTY check so we fail without disturbing the screen. askChoice
         // also checks (defense-in-depth for direct callers), but doing it here
         // means the LLM gets a clean error before the picker tries to render.
+        // DESK-3 — UI dialog path: no TTY needed when an interaction port is
+        // attached. A dismissed dialog mirrors the NoTTY contract verbatim.
+        if (this.interactionPort) {
+          const labels = await this.interactionPort.choice({
+            question, header, options, multiSelect: !!args.multiSelect,
+          });
+          if (!labels || labels.length === 0) {
+            throw new NoTTYError(
+              'The user dismissed the choice dialog. ' +
+              'Fall back to deciding yourself and state which option you picked and why.',
+            );
+          }
+          return JSON.stringify({ answer: args.multiSelect ? labels : labels[0] });
+        }
         if (!getActiveReadline() || !process.stdin.isTTY) {
           throw new NoTTYError(
             'ask_user_choice requires an interactive TTY. ' +
