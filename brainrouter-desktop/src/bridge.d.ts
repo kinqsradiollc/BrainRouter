@@ -6,6 +6,9 @@ declare global {
     brainrouter: {
       send(command: AgentCommand): void;
       onEvent(listener: (msg: AgentEventMessage) => void): () => void;
+      addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }>;
+      workspaceRecents(): Promise<{ current: string | null; recents: string[] }>;
+      openWorkspace(workspaceRoot: string): Promise<{ opened: boolean }>;
     };
   }
 }

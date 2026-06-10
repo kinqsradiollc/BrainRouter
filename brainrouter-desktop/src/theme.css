@@ -85,3 +85,29 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 .reasoning { color: var(--text-dim); font-style: italic; }
 .composer-hint { color: var(--text-dim); font-size: 11px; margin-top: 6px; padding-left: 4px; }
 .composer .stop { background: var(--err); }
+
+
+/* ---- DESK-3b dialogs / rail buttons / settings ---- */
+.rail-btn { display: block; width: 100%; margin: 6px 0; padding: 8px 10px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); font-size: 12.5px; cursor: pointer; text-align: left; }
+.rail-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.rail-section { margin: 14px 0 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); }
+.session { cursor: pointer; }
+
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.dialog { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; width: 520px; max-width: 90vw; max-height: 80vh; overflow: auto; box-shadow: 0 18px 60px rgba(0,0,0,0.5); }
+.dialog.dangerous { border-color: var(--err); }
+.dialog-title { font-weight: 600; font-size: 15px; margin-bottom: 10px; }
+.dialog-detail { background: #161513; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.dialog-actions { display: flex; gap: 10px; margin-top: 14px; justify-content: flex-end; }
+.dialog-actions button { border: 0; border-radius: 8px; padding: 7px 16px; font-weight: 600; cursor: pointer; }
+.dialog-actions .approve { background: var(--accent); color: #fff; }
+.dialog-actions .approve:disabled { opacity: 0.4; }
+.dialog-actions .deny { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
+.dialog-options .opt { display: block; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 8px 0; cursor: pointer; }
+.dialog-options .opt.picked { border-color: var(--accent); background: var(--accent-soft); }
+.dialog-options .opt b { display: block; margin-bottom: 2px; }
+.dialog-options .opt span { color: var(--text-dim); font-size: 12.5px; }
+.settings-row { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.settings-row input { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 8px 10px; font-size: 13.5px; }
+.settings-note { color: var(--text-dim); font-size: 12px; line-height: 1.5; }
+.settings-note code { font-family: var(--mono); }

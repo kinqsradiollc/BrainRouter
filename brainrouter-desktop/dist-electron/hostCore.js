@@ -6,9 +6,31 @@
  * Electron imports in this file, so the whole router is unit-testable.
  */
 import { createCallbackBridge, createEnvelopeWriter, InteractionBroker, isAgentCommand, } from '@kinqs/brainrouter-agent-protocol';
+/**
+ * DESK-3 — InteractionPort backed by the broker: agent approval/choice asks
+ * become `interaction-request` events; the renderer answers with an
+ * `interaction-response` command. 5-minute timeout → dismissed → the agent's
+ * fail-closed paths (deny / decide-yourself) fire instead of hanging.
+ */
+export function createBrokerPort(broker, emit, timeoutMs = 300_000) {
+    return {
+        async confirm(req) {
+            const { request, response } = broker.request({ type: 'confirm', ...req }, { timeoutMs });
+            emit({ kind: 'interaction-request', request });
+            const r = await response;
+            return r.type === 'confirm' ? r.approved : false;
+        },
+        async choice(req) {
+            const { request, response } = broker.request({ type: 'choice', ...req }, { timeoutMs });
+            emit({ kind: 'interaction-request', request });
+            const r = await response;
+            return r.type === 'choice' ? r.labels : null;
+        },
+    };
+}
 export function createHostCore(input) {
     const emit = createEnvelopeWriter(input.agent.sessionKey, input.send);
-    const broker = new InteractionBroker();
+    const broker = input.broker ?? new InteractionBroker();
     let turnRunning = false;
     // Bridge: every RunTurnCallbacks callback becomes a protocol event. The
     // bridge object is reused across turns (the envelope writer owns seq).
@@ -67,6 +89,42 @@ export function createHostCore(input) {
                 catch (err) {
                     emit({ kind: 'query-result', id: cmd.id, ok: false, error: err instanceof Error ? err.message : String(err) });
                 }
+                return;
+            }
+            case 'new-session': {
+                const label = (cmd.label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
+                input.agent.sessionKey = `${input.agent.sessionKey.split(':')[0]}:${label}`;
+                input.agent.resetSessionCounters?.();
+                input.agent.clearHistory?.();
+                emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: 0, model: input.agent.getModel?.() ?? '' });
+                return;
+            }
+            case 'resume-session': {
+                const entries = input.loadTranscript?.(cmd.sessionKey) ?? [];
+                if (entries.length === 0) {
+                    emit({ kind: 'turn-error', message: `No transcript found for "${cmd.sessionKey}".` });
+                    return;
+                }
+                input.agent.sessionKey = cmd.sessionKey;
+                input.agent.resetSessionCounters?.();
+                const loaded = input.agent.loadHistory?.(entries) ?? 0;
+                emit({ kind: 'session-changed', sessionKey: cmd.sessionKey, loadedMessages: loaded, model: input.agent.getModel?.() ?? '' });
+                return;
+            }
+            case 'set-model': {
+                input.agent.setModel?.(cmd.model);
+                if (cmd.persist) {
+                    try {
+                        input.persistModel?.(cmd.model);
+                    }
+                    catch (err) {
+                        emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
+                        emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: -1, model: cmd.model });
+                        return;
+                    }
+                }
+                emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ''}.` });
+                emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: -1, model: cmd.model });
                 return;
             }
             case 'shutdown':
