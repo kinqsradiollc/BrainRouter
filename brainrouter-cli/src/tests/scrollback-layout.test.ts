@@ -89,3 +89,12 @@ test('packVisibleLines: empty input → empty window', () => {
     { slices: [], hiddenLinesAbove: 0, hiddenLinesBelow: 0, totalLines: 0 },
   );
 });
+
+test('estimateEntryHeight: verbose mode uncaps tool previews (CC-P1.3)', () => {
+  const preview = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n');
+  const entry = { id: 1, kind: 'tool', header: 'Read(x)', ok: true, preview } as ScrollbackEntry;
+  const capped = estimateEntryHeight(entry, 80);
+  const verbose = estimateEntryHeight(entry, 80, true);
+  assert.equal(capped, 1 + 8 + 1 + 1); // header + 8 lines + hidden notice + margin
+  assert.equal(verbose, 1 + 30 + 1);   // header + all lines + margin
+});
