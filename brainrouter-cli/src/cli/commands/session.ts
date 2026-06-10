@@ -11,6 +11,7 @@ import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
 import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat } from '../../state/transcriptExport.js';
+import { searchTranscript, formatMatches } from '../../state/transcriptSearch.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
 import { planRestore, readFileMutations } from '../../state/fileSnapshotStore.js';
 import { readGoal, resumeGoal } from '../../state/goalStore.js';
@@ -42,6 +43,30 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.gray('\nResume one with: /resume <sessionKey>'));
       }
       console.log();
+      return true;
+    }
+    case '/find':
+    {
+      // CC-P1.4 — search the current session transcript.
+      // Usage: /find <query>  (case-insensitive; quotes not required)
+      const query = args.join(' ').trim();
+      if (!query) {
+        console.log(chalk.red('\nUsage: /find <query> — search this session\'s transcript.\n'));
+        return true;
+      }
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.yellow('\nNothing to search — this session has no transcript yet.\n'));
+        return true;
+      }
+      const matches = searchTranscript(entries, query);
+      console.log(chalk.bold(`\nMatches for "${query}" (${matches.length}${matches.length === 50 ? '+' : ''} of ${entries.length} entries):\n`));
+      for (const line of formatMatches(matches, query)) {
+        // Highlight the query inside the snippet for scanability.
+        const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig');
+        console.log(line.replace(re, (m) => chalk.bgYellow.black(m)));
+      }
+      console.log(chalk.gray('\nTip: /transcript <#> shows an entry in full; /export-chat saves the whole session.\n'));
       return true;
     }
     case '/export-chat':
