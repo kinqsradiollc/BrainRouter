@@ -1,36 +1,44 @@
 /**
- * DESK-1 — Electron main: window lifecycle + the renderer⇄host relay.
- * Security posture: contextIsolation ON, nodeIntegration OFF, a typed preload
- * bridge is the renderer's ONLY capability surface, and every inbound command
- * is shape-validated before it reaches the agent host.
+ * DESK-3b/4a — Electron main: one window+host pair PER WORKSPACE, a native
+ * folder picker to open more, and a persisted recent-workspaces list.
+ * Security posture unchanged: contextIsolation on, typed preload only,
+ * senderFrame + shape validation on every inbound command.
  */
-import { app, BrowserWindow, ipcMain, utilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, utilityProcess } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-let host = null;
-let win = null;
-function startHost(workspaceRoot) {
-    host = utilityProcess.fork(path.join(__dirname, 'host.js'), [], {
-        env: { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspaceRoot },
-        serviceName: 'brainrouter-agent-host',
-    });
-    host.on('message', (msg) => { win?.webContents.send('agent-event', msg); });
-    host.on('exit', (code) => {
-        win?.webContents.send('agent-event', {
-            seq: -1, ts: Date.now(), sessionKey: 'host',
-            event: { kind: 'turn-error', message: `Agent host exited (code ${code ?? 'unknown'}).` },
-        });
-    });
+const pairs = new Map(); // webContents.id → pair
+const recentsPath = () => path.join(app.getPath('userData'), 'recent-workspaces.json');
+function readRecents() {
+    try {
+        return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8'));
+    }
+    catch {
+        return [];
+    }
 }
-function createWindow() {
-    win = new BrowserWindow({
-        width: 1280,
-        height: 840,
-        minWidth: 900,
-        minHeight: 600,
-        title: 'BrainRouter',
+function pushRecent(workspaceRoot) {
+    const next = [workspaceRoot, ...readRecents().filter((w) => w !== workspaceRoot)].slice(0, 10);
+    try {
+        fs.mkdirSync(path.dirname(recentsPath()), { recursive: true });
+        fs.writeFileSync(recentsPath(), JSON.stringify(next, null, 2));
+    }
+    catch { /* best-effort */ }
+}
+function openWorkspaceWindow(workspaceRoot) {
+    // Focus an existing window for this workspace instead of duplicating it.
+    for (const pair of pairs.values()) {
+        if (pair.workspaceRoot === workspaceRoot) {
+            pair.win.focus();
+            return;
+        }
+    }
+    const win = new BrowserWindow({
+        width: 1280, height: 840, minWidth: 900, minHeight: 600,
+        title: `BrainRouter — ${path.basename(workspaceRoot)}`,
         backgroundColor: '#262624',
         titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
         webPreferences: {
@@ -40,6 +48,22 @@ function createWindow() {
             sandbox: false,
         },
     });
+    const host = utilityProcess.fork(path.join(__dirname, 'host.js'), [], {
+        env: { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspaceRoot },
+        serviceName: `brainrouter-agent-host:${path.basename(workspaceRoot)}`,
+    });
+    host.on('message', (msg) => { if (!win.isDestroyed())
+        win.webContents.send('agent-event', msg); });
+    host.on('exit', (code) => {
+        if (!win.isDestroyed())
+            win.webContents.send('agent-event', {
+                seq: -1, ts: Date.now(), sessionKey: 'host',
+                event: { kind: 'turn-error', message: `Agent host exited (code ${code ?? 'unknown'}).` },
+            });
+    });
+    win.on('closed', () => { host.postMessage({ kind: 'shutdown' }); pairs.delete(win.webContents.id); });
+    pairs.set(win.webContents.id, { win, host, workspaceRoot });
+    pushRecent(workspaceRoot);
     const devUrl = process.env.VITE_DEV_SERVER_URL;
     if (devUrl)
         void win.loadURL(devUrl);
@@ -47,22 +71,44 @@ function createWindow() {
         void win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 app.whenReady().then(() => {
-    // v1 workspace = launch cwd (folder picker lands in DESK-5).
-    startHost(process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd());
-    createWindow();
+    openWorkspaceWindow(process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd());
     ipcMain.on('agent-command', (event, raw) => {
-        // Validate sender + shape before anything reaches the host.
-        if (event.senderFrame !== win?.webContents.mainFrame)
+        const pair = pairs.get(event.sender.id);
+        if (!pair || event.senderFrame !== pair.win.webContents.mainFrame)
             return;
         if (!isAgentCommand(raw))
             return;
-        host?.postMessage(raw);
+        pair.host.postMessage(raw);
     });
-    app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0)
-        createWindow(); });
+    // Workspace management — main-process concerns, separate channel from the
+    // agent protocol. invoke/handle so the renderer gets results back.
+    ipcMain.handle('workspace:add', async (event) => {
+        const pair = pairs.get(event.sender.id);
+        const res = await dialog.showOpenDialog(pair?.win ?? BrowserWindow.getFocusedWindow(), {
+            title: 'Open workspace folder', properties: ['openDirectory', 'createDirectory'],
+        });
+        if (res.canceled || res.filePaths.length === 0)
+            return { opened: false };
+        openWorkspaceWindow(res.filePaths[0]);
+        return { opened: true, workspaceRoot: res.filePaths[0] };
+    });
+    ipcMain.handle('workspace:recents', (event) => {
+        const pair = pairs.get(event.sender.id);
+        return { current: pair?.workspaceRoot ?? null, recents: readRecents() };
+    });
+    ipcMain.handle('workspace:open', (event, workspaceRoot) => {
+        if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot))
+            return { opened: false };
+        openWorkspaceWindow(workspaceRoot);
+        return { opened: true };
+    });
+    app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+            openWorkspaceWindow(readRecents()[0] || process.cwd());
+        }
+    });
 });
 app.on('window-all-closed', () => {
-    host?.postMessage({ kind: 'shutdown' });
     if (process.platform !== 'darwin')
         app.quit();
 });

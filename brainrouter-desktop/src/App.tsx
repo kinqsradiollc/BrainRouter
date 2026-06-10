@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 
 type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed' };
 
@@ -64,6 +64,11 @@ export function App(): React.ReactElement {
   const [fleet, setFleet] = useState<FleetRow[]>([]);
   const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string }>({});
   const [hostUp, setHostUp] = useState(false);
+  const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelDraft, setModelDraft] = useState('');
+  const [workspaces, setWorkspaces] = useState<{ current: string | null; recents: string[] }>({ current: null, recents: [] });
   const liveBuf = useRef('');
   const chatEnd = useRef<HTMLDivElement>(null);
 
@@ -109,6 +114,14 @@ export function App(): React.ReactElement {
           push({ id: rid(), kind: 'status', text: `✗ ${e.message}` });
           setRunning(false); setStatusLine(''); setReasoningTail('');
           break;
+        case 'interaction-request': setInteraction(e.request); setPicked([]); break;
+        case 'session-changed':
+          if (e.loadedMessages >= 0) {
+            setRows([{ id: rid(), kind: 'status', text: e.loadedMessages > 0 ? `Resumed ${e.sessionKey} (${e.loadedMessages} prior messages).` : 'New chat started.' }]);
+          }
+          setInfo((i) => ({ ...i, sessionKey: e.sessionKey, model: e.model || i.model }));
+          refreshSidebar();
+          break;
         case 'query-result': handleQueryResult(e.id, e.ok ? e.result : undefined); break;
         default: break;
       }
@@ -126,9 +139,16 @@ export function App(): React.ReactElement {
   }
 
   function refreshSidebar(): void {
+    void window.brainrouter.workspaceRecents().then(setWorkspaces).catch(() => {});
     window.brainrouter.send({ kind: 'query', id: 'q-sessions', name: 'list-sessions' });
     window.brainrouter.send({ kind: 'query', id: 'q-fleet', name: 'fleet' });
     window.brainrouter.send({ kind: 'query', id: 'q-info', name: 'session-info' });
+  }
+
+  function answerInteraction(response: { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' }): void {
+    if (!interaction) return;
+    window.brainrouter.send({ kind: 'interaction-response', id: interaction.id, response });
+    setInteraction(null);
   }
 
   function submit(): void {
@@ -144,12 +164,21 @@ export function App(): React.ReactElement {
     <div className="app">
       <nav className="rail">
         <h1>BrainRouter</h1>
-        <div className="session active">{info.sessionKey ? `Current — ${info.sessionKey.slice(0, 18)}…` : 'Current session'}</div>
+        <button className="rail-btn primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}>+ New chat</button>
+        <div className="rail-section">Workspaces</div>
+        <div className="session active" title={workspaces.current ?? ''}>{workspaces.current?.split('/').pop() ?? '…'}</div>
+        {workspaces.recents.filter((w) => w !== workspaces.current).slice(0, 5).map((w) => (
+          <div key={w} className="session" title={w} onClick={() => void window.brainrouter.openWorkspace(w)}>{w.split('/').pop()}</div>
+        ))}
+        <button className="rail-btn" onClick={() => void window.brainrouter.addWorkspace()}>Add workspace…</button>
+        <div className="rail-section">Chats</div>
         {sessions.map((s) => (
-          <div key={s.sessionKey} className="session" title={s.sessionKey}>
+          <div key={s.sessionKey} className={`session${s.sessionKey === info.sessionKey ? ' active' : ''}`} title={s.sessionKey}
+               onClick={() => window.brainrouter.send({ kind: 'resume-session', sessionKey: s.sessionKey })}>
             {s.firstUserMessage || s.sessionKey}
           </div>
         ))}
+        <button className="rail-btn" onClick={() => { setModelDraft(info.model ?? ''); setSettingsOpen(true); }}>⚙ Settings</button>
       </nav>
 
       <main className="center">
@@ -217,6 +246,67 @@ export function App(): React.ReactElement {
         <div className="kv"><span>Source</span><b>~/.config/brainrouter</b></div>
         <div className="kv"><span>Shared with</span><b>brainrouter CLI</b></div>
       </aside>
+
+      {interaction ? (
+        <div className="overlay" onKeyDown={(e) => {
+          if (interaction.type === 'confirm') {
+            if (e.key === '1' || e.key === 'Enter') answerInteraction({ type: 'confirm', approved: true });
+            if (e.key === '2' || e.key === 'Escape') answerInteraction({ type: 'confirm', approved: false });
+          } else if (e.key === 'Escape') answerInteraction({ type: 'dismissed' });
+        }} tabIndex={-1} ref={(el) => el?.focus()}>
+          <div className={`dialog${interaction.type === 'confirm' && interaction.dangerous ? ' dangerous' : ''}`}>
+            {interaction.type === 'confirm' ? (
+              <>
+                <div className="dialog-title">{interaction.title}</div>
+                {interaction.detail ? <pre className="dialog-detail">{interaction.detail}</pre> : null}
+                <div className="dialog-actions">
+                  <button className="approve" onClick={() => answerInteraction({ type: 'confirm', approved: true })}>[1] Allow</button>
+                  <button className="deny" onClick={() => answerInteraction({ type: 'confirm', approved: false })}>[2] Deny</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="dialog-title">{interaction.question}</div>
+                <div className="dialog-options">
+                  {interaction.options.map((o) => (
+                    <label key={o.label} className={`opt${picked.includes(o.label) ? ' picked' : ''}`}
+                      onClick={() => setPicked((p) => interaction.multiSelect
+                        ? (p.includes(o.label) ? p.filter((x) => x !== o.label) : [...p, o.label])
+                        : [o.label])}>
+                      <b>{o.label}</b><span>{o.description}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="dialog-actions">
+                  <button className="approve" disabled={picked.length === 0}
+                    onClick={() => answerInteraction({ type: 'choice', labels: picked })}>Answer</button>
+                  <button className="deny" onClick={() => answerInteraction({ type: 'dismissed' })}>Dismiss</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setSettingsOpen(false); }}>
+          <div className="dialog settings">
+            <div className="dialog-title">Settings</div>
+            <div className="settings-row">
+              <label>Model</label>
+              <input value={modelDraft} onChange={(e) => setModelDraft(e.target.value)} placeholder="e.g. gpt-5.5 / claude-opus-4-8" />
+            </div>
+            <div className="settings-note">Saved to <code>~/.config/brainrouter/config.json</code> — shared with the brainrouter CLI. Provider/endpoint/API keys come from the same file (edit via the CLI's /config or /login for now).</div>
+            <div className="dialog-actions">
+              <button className="approve" disabled={!modelDraft.trim()} onClick={() => {
+                window.brainrouter.send({ kind: 'set-model', model: modelDraft.trim(), persist: true });
+                setSettingsOpen(false);
+              }}>Save</button>
+              <button className="deny" onClick={() => setSettingsOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
