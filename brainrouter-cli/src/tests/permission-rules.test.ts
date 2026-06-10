@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  parseToolList,
   parseRule,
   ruleMatches,
   evaluatePermissionRules,
@@ -45,4 +46,10 @@ test('primaryArgText: per-tool argument extraction', () => {
   assert.equal(primaryArgText('fetch_url', { url: 'https://x.dev' }), 'https://x.dev');
   assert.equal(primaryArgText('grep_search', { query: 'foo' }), 'foo');
   assert.equal(primaryArgText('run_command', null), '');
+});
+
+test('parseToolList: splits, trims, drops empties (CC-P13.2 flag)', () => {
+  assert.deepEqual(parseToolList('run_command, fetch_url ,,web_search'), ['run_command', 'fetch_url', 'web_search']);
+  assert.deepEqual(parseToolList(''), []);
+  assert.deepEqual(parseToolList(undefined), []);
 });
