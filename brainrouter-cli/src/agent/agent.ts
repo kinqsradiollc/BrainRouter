@@ -611,6 +611,11 @@ export class Agent {
    */
   private fileSnapshotTurn = 0;
   private snapshotsThisTurn: Set<string> | null = null;
+  // CC-P6.4 — resolved paths this agent has READ this session. Gates
+  // edit_file / write-overwrite on a prior read so the model can't clobber a
+  // file it hasn't seen (Claude Code's read-before-edit contract). Reset by
+  // loadHistory / fork / bootstrapSession (see clearSessionState).
+  private filesReadThisSession = new Set<string>();
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -2424,6 +2429,7 @@ export class Agent {
           throw new Error(`File not found: ${args.path}`);
         }
         const content = fs.readFileSync(resolved, 'utf8');
+        this.filesReadThisSession.add(resolved); // CC-P6.4 — read-before-edit ledger
         // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
         // reads stay snappy, and guarded so a rejection never escapes.
         void this.maybeReindexSource(resolved, content).catch(() => {});
@@ -2448,6 +2454,12 @@ export class Agent {
         const resolved = resolveHere(args.path, { forWrite: true });
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
+        // CC-P6.4 — read-before-overwrite. Creating a NEW file is fine, but
+        // overwriting an EXISTING one the agent hasn't read this session would
+        // blow away content it never saw. Require a read_file first in that case.
+        if (fs.existsSync(resolved) && !this.filesReadThisSession.has(resolved)) {
+          throw new Error(`Read-before-overwrite: "${args.path}" already exists and you have not read it this session. read_file("${args.path}") first (then write_file replaces it intentionally), or use edit_file for a targeted change.`);
+        }
         const parentDenial = await this.confirmSilentChildToolApproval({
           tool: 'write_file',
           path: String(args.path ?? ''),
@@ -2455,6 +2467,9 @@ export class Agent {
           reason: 'silent child agent requested a file write',
         });
         if (parentDenial) return parentDenial;
+        // A successful overwrite means the on-disk content is now what the agent
+        // wrote — keep the read ledger accurate so a follow-up edit is allowed.
+        this.filesReadThisSession.add(resolved);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
@@ -2471,6 +2486,12 @@ export class Agent {
         if (ownErr) throw new Error(ownErr);
         if (!fs.existsSync(resolved)) {
           throw new Error(`File not found: ${args.path}`);
+        }
+        // CC-P6.4 — read-before-edit. Editing a file the agent hasn't read this
+        // session risks clobbering content it can't see (stale assumptions,
+        // mismatched indentation). Require a read_file first.
+        if (!this.filesReadThisSession.has(resolved)) {
+          throw new Error(`Read-before-edit: you must read_file("${args.path}") before editing it — you have not read this file this session. Read it first, then edit with targetContent that matches the current contents.`);
         }
         const content = fs.readFileSync(resolved, 'utf8');
         const target = args.targetContent;
@@ -3187,6 +3208,7 @@ export class Agent {
       });
     this.chatHistory = [this.createSystemMessage(), ...replay];
     this.initialized = true;
+    this.filesReadThisSession.clear(); // CC-P6.4 — replayed reads aren't fresh reads
     // 9b: a freshly-loaded history is a session boundary; reset gated
     // recall state so the next turn refreshes the briefing.
     this.recallHasFiredThisSession = false;
