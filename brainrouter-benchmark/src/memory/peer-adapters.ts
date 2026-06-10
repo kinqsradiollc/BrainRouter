@@ -164,7 +164,10 @@ export class BrainRouterMcpAdapter implements SystemAdapter {
       const content = String(memory.content ?? memory.text ?? "");
       const explicit = typeof memory.recordId === "string" ? memory.recordId : typeof memory.id === "string" ? memory.id : "";
       const marker = content.match(/BenchmarkRecordId:\s*([^\s]+)/)?.[1];
-      const recordId = marker ?? explicit;
+      // MEM-CHUNK (0.4.14) — a long record is stored as `${parent}::c{i}` chunk
+      // records; roll a returned chunk back to its parent so recall_any@parent
+      // matches the gold session/record id (and chunks of one parent dedup).
+      const recordId = (marker ?? explicit).replace(/::c\d+$/, "");
       if (!recordId || seen.has(recordId)) continue;
       seen.add(recordId);
       ranked.push({

@@ -233,7 +233,7 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
     }
     case "memory_import": {
       const params = z.object({ ...baseUser, data: importEnvelopeSchema }).parse(args);
-      return toolResult(memoryEngine.importMemories(effectiveUserId(params.userId, options?.defaultUserId), params.data as any));
+      return toolResult(await memoryEngine.importMemories(effectiveUserId(params.userId, options?.defaultUserId), params.data as any));
     }
     case "memory_governance_delete": {
       const params = z.object({ ...baseUser, recordId: z.string(), reason: z.string().min(1) }).parse(args);

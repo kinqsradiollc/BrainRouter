@@ -51,8 +51,16 @@ brainrouter-benchmark/results/**
 !brainrouter-benchmark/results/.gitkeep
 brainrouter-benchmark/reports/**
 !brainrouter-benchmark/reports/.gitkeep
+# Published benchmark results (the rest of reports/ stays scratch).
+!brainrouter-benchmark/reports/README.md
+!brainrouter-benchmark/reports/memory-comparison.md
+!brainrouter-benchmark/reports/0.4.14-recall-delta.md
 brainrouter-benchmark/datasets/membench/**
 !brainrouter-benchmark/datasets/membench/.gitkeep
+brainrouter-benchmark/datasets/longmemeval/**
+!brainrouter-benchmark/datasets/longmemeval/.gitkeep
+brainrouter-benchmark/datasets/locomo/**
+!brainrouter-benchmark/datasets/locomo/.gitkeep
 brainrouter-benchmark/datasets/raw/**
 !brainrouter-benchmark/datasets/raw/.gitkeep
 # benchmark env clones hold copied API keys — never commit them
@@ -97,3 +105,8 @@ COMPARISION.md
 045_CODEX_CLI_CODE_COMPARISON.md
 
 AWSPrep
+
+# Local-only planning docs (consult, never commit)
+FULL_TASKS_*.md
+FULL_TASKS_*.MD
+walkthrough.md

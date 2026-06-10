@@ -15,6 +15,15 @@ import { flagSuggestions, applyFlagCompletion } from '../../runtime/slashFlags.j
 // 0.3.9 — show the model's max prompt-context window in the footer next
 // to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
 import { formatContextWindow } from '../../runtime/contextWindow.js';
+import { TuiRouterProvider, useTuiRouter, type TuiRoute } from './TuiRouter.js';
+import { GridWorkspace } from './layouts/GridWorkspace.js';
+import { renderMarkdown } from './markdownRender.js';
+import { Sidebar } from './components/Sidebar.js';
+import { WelcomeView } from './views/WelcomeView.js';
+import type { BannerInputs } from '../banner.js';
+import { resolveTheme } from '../theme.js';
+import { TuiHeader } from './components/TuiHeader.js';
+import { VERSION } from '../../version.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -96,6 +105,7 @@ export interface ChatAppProps {
    * after each turn via `controller.setFooter`.
    */
   initialFooter?: FooterState;
+  bannerInputs?: BannerInputs;
 }
 
 export interface FooterState {
@@ -147,7 +157,7 @@ export interface ChatController {
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
 }
 
-export type ScrollbackEntry =
+export type ScrollbackEntry = (
   | { id: number; kind: 'raw'; text: string; noWrap?: boolean }
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'assistant'; text: string; raw?: boolean; durationMs?: number; tokensIn?: number; tokensOut?: number; calls?: number }
@@ -189,7 +199,8 @@ export type ScrollbackEntry =
    * (controller.push.setChildFleet) instead of pushing a new row per
    * event. Removed when the fleet drains to zero.
    */
-  | { id: number; kind: 'child-fleet'; children: Array<{ childId: string; role: string; tool?: string }>; };
+  | { id: number; kind: 'child-fleet'; children: Array<{ childId: string; role: string; tool?: string }>; }
+) & { timestamp?: Date };
 
 export interface PushScrollback {
   raw(text: string, opts?: { noWrap?: boolean }): void;
@@ -271,7 +282,7 @@ export {
 
 // --- Main app ---------------------------------------------------------
 
-export function ChatApp({
+function ChatAppContent({
   initialBanner,
   initialOfflineWarning,
   initialHint,
@@ -284,8 +295,10 @@ export function ChatApp({
   initialAccessMode = 'read',
   initialFooter = {},
   workspaceRoot,
+  bannerInputs,
 }: ChatAppProps) {
   const { exit } = useApp();
+  const { activeRoute, navigate } = useTuiRouter();
   // useTerminalSize subscribes to stdout 'resize' and pushes the new
   // width into React state, forcing a re-render. Reading
   // useStdout().stdout.columns inline LOOKS like it would work (it's a
@@ -294,10 +307,16 @@ export function ChatApp({
   // until the next unrelated state change — which is what causes the
   // duplicated/growing dash residue when dragging the window. See
   // useTerminalSize.ts for the full rationale.
-  const { columns: cols } = useTerminalSize();
+  const { columns: cols, rows } = useTerminalSize();
+  const theme = useMemo(() => resolveTheme(workspaceRoot), [workspaceRoot]);
+  const showSidebar = cols >= 100;
+  const mainWidth = showSidebar ? Math.floor(cols * 0.7) - 4 : cols;
+  const sidebarWidth = showSidebar ? Math.floor(cols * 0.3) - 3 : 0;
 
-  const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(initialBanner, initialOfflineWarning, initialHint));
+  const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(workspaceRoot, initialOfflineWarning, initialHint));
   const nextIdRef = useRef(scrollback.length);
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const [scrollMode, setScrollMode] = useState(false);
   const [composerValue, setComposerValue] = useState('');
   // INPUT-ERGO — remount key for the composer TextInput. ink-text-input only
   // initializes its internal cursor at the END of `value` on MOUNT; an external
@@ -397,16 +416,33 @@ export function ChatApp({
   // new entry on every child tool event. -1 means no row currently shown.
   const childFleetIdRef = useRef<number>(-1);
 
+  const visibleScrollback = useMemo(() => {
+    const maxHeight = Math.max(10, rows - CHROME_RESERVED_ROWS);
+    const liveReasoningHeight = liveReasoning ? 8 : 0;
+    const liveAssistantHeight = liveAssistant ? estimateTextHeight(liveAssistant, mainWidth) + 2 : 0;
+    const budget = Math.max(5, maxHeight - liveReasoningHeight - liveAssistantHeight);
+    return packVisibleScrollback(scrollback, {
+      budget,
+      scrollOffset,
+      estimateHeight: (e) => estimateEntryHeight(e, mainWidth),
+    });
+  }, [scrollback, rows, liveReasoning, liveAssistant, mainWidth, scrollOffset]);
+
   const pushFns = useMemo<PushScrollback>(() => {
     const push = (entry: any) => {
+      // Stick to the bottom ONLY when already at the bottom. If the user has
+      // scrolled up to read history, keep their viewport anchored as new entries
+      // arrive (bump the offset by the one we're adding) instead of yanking them
+      // back down — that yank-on-every-push was why scrolling "did nothing".
+      setScrollOffset((prev) => (prev > 0 ? prev + 1 : 0));
       setScrollback((s) => {
         const id = ++nextIdRef.current;
-        return [...s, { id, ...entry } as ScrollbackEntry];
+        return [...s, { id, timestamp: new Date(), ...entry } as ScrollbackEntry];
       });
     };
     return {
       raw: (text, opts) => push({ kind: 'raw', text, noWrap: opts?.noWrap }),
-      user: (text) => push({ kind: 'user', text }),
+      user: (text) => { setScrollOffset(0); push({ kind: 'user', text }); },
       assistant: (text, meta) => {
         // The final assistant message for the turn is landing — clear
         // any leftover live-stream state so we don't double-render it.
@@ -674,6 +710,7 @@ export function ChatApp({
       }
     }
     if (!trimmed) return;
+    setScrollOffset(0);
     // INPUT-ERGO — record the submitted input for ↑/↓ recall and reset browse.
     setHistEntries((h) => appendHistory(h, trimmed));
     setHistIndex(LIVE);
@@ -703,9 +740,59 @@ export function ChatApp({
   // of bug that makes "/config exits to bash" symptoms.
   useInput((input, key) => {
     if (overlay !== null) return;
+    // Ctrl+C / Ctrl+D always exit, even from scroll mode.
+    if (key.ctrl && (input === 'c' || input === 'd')) { exit(); return; }
+    // SCROLL MODE — toggle with Esc. While on, the composer is INACTIVE
+    // (focus=false), so plain keys scroll instead of typing into the prompt:
+    //   w / k / ↑ = up · s / j / ↓ = down · g / G = top / bottom · Esc / i / Enter = type
+    // This is the only way to scroll with letter keys without them being typed.
+    if (scrollMode) {
+      const top = Math.max(0, scrollback.length - 1);
+      if (input === 'w' || input === 'k' || key.upArrow) {
+        setScrollOffset((p) => Math.min(top, p + 1)); // fine, 1 at a time (holding glides)
+      } else if (input === 's' || input === 'j' || key.downArrow) {
+        setScrollOffset((p) => Math.max(0, p - 1));
+      } else if (key.pageUp) {
+        setScrollOffset((p) => Math.min(top, p + 8)); // page jump
+      } else if (key.pageDown) {
+        setScrollOffset((p) => Math.max(0, p - 8));
+      } else if (input === 'g') {
+        setScrollOffset(top);
+      } else if (input === 'G') {
+        setScrollOffset(0);
+      } else if (key.escape || key.return || input === 'i' || input === 'q') {
+        setScrollMode(false);
+      }
+      return;
+    }
+    // Enter scroll mode with Esc when no palette / completion popup owns the key.
+    if (key.escape && slashQuery === null && atMatches.length === 0 && flagMatches.length === 0) {
+      setScrollMode(true);
+      return;
+    }
+    if (key.pageUp) {
+      setScrollOffset((prev) => Math.min(scrollback.length - 1, prev + 5));
+      return;
+    }
+    if (key.pageDown) {
+      setScrollOffset((prev) => Math.max(0, prev - 5));
+      return;
+    }
     if (key.ctrl && (input === 'c' || input === 'd')) {
       exit();
       return;
+    }
+    if (key.ctrl && key.tab) {
+      const routes: TuiRoute[] = ['home', 'session', 'workflow', 'mcp'];
+      const nextIdx = (routes.indexOf(activeRoute) + 1) % routes.length;
+      navigate(routes[nextIdx]);
+      return;
+    }
+    if (key.meta) {
+      if (input === '1') { navigate('home'); return; }
+      if (input === '2') { navigate('session'); return; }
+      if (input === '3') { navigate('workflow'); return; }
+      if (input === '4') { navigate('mcp'); return; }
     }
     // Ctrl+L clears the visible scrollback (terminal-level) and the
     // in-memory entry list, leaving only the banner. Standard REPL UX
@@ -818,85 +905,7 @@ export function ChatApp({
   });
 
   return (
-    <Box flexDirection="column">
-      {/* Scrollback is part of the diffed frame so terminal resize can
-          clear and redraw the scrollback + composer as one coherent
-          layout. Splitting it into <Static> caused duplicate composer
-          blocks to accumulate while dragging the window. */}
-      <Box flexDirection="column">
-        {scrollback.map((entry) => (
-          <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} cols={cols} />
-        ))}
-        {/* BG-TASKS-PANEL — fixed panel listing background actors that are
-            running right now (workflows / workers / child agents). Auto-hides
-            when nothing is running. Refreshed by runChat's ticker. */}
-        {bgTasks.length > 0 ? (
-          <Box flexDirection="column" marginTop={1}>
-            <Text color="cyan" dimColor>{`⚙ background · ${summarizeTasks(bgTasks)}`}</Text>
-            <Box
-              flexDirection="column"
-              marginLeft={1}
-              paddingLeft={1}
-              borderStyle="single"
-              borderColor="cyan"
-              borderDimColor
-              borderTop={false}
-              borderRight={false}
-              borderBottom={false}
-            >
-              {formatBackgroundTasks(bgTasks).map((line, i) => (
-                <Text key={i} color="cyan" wrap="truncate-end">{line}</Text>
-              ))}
-            </Box>
-          </Box>
-        ) : null}
-        {/* TIER A: transient live assistant + reasoning rows. The
-            assistant streams here mid-turn; when the turn finishes,
-            assistantDeltaEnd() clears these and runChat.tsx pushes the
-            final 'assistant' scrollback entry with token/duration meta. */}
-        {liveReasoning ? (
-          // Stable-height reasoning panel. The body Box has a fixed
-          // `height` equal to REASONING_VISIBLE_LINES, so as the model
-          // streams more chain-of-thought the Ink frame DOES NOT grow
-          // — the tail just slides upward inside the fixed window.
-          // This eliminates the "keep scrolling while thinking" bug:
-          // the terminal native scroll only triggers when total
-          // rendered content exceeds the viewport. With a fixed-height
-          // panel, the layout's total row count stays constant during
-          // reasoning, so the terminal never scrolls.
-          <Box flexDirection="column" marginTop={1}>
-            <Text color="magenta" italic dimColor>
-              💭 thinking{liveReasoning.length > REASONING_TAIL_CHARS ? ` (${liveReasoning.length.toLocaleString()} chars)` : ''}
-            </Text>
-            <Box
-              marginLeft={1}
-              paddingLeft={1}
-              height={REASONING_VISIBLE_LINES}
-              flexDirection="column"
-              borderStyle="single"
-              borderColor="magenta"
-              borderDimColor
-              borderTop={false}
-              borderRight={false}
-              borderBottom={false}
-            >
-              <Text color="gray" italic wrap="truncate-end">
-                {buildReasoningWindow(tailReasoning(liveReasoning), cols)}<Text color="gray">▍</Text>
-              </Text>
-            </Box>
-          </Box>
-        ) : null}
-        {liveAssistant ? (
-          <Box marginTop={1}>
-            <Text color="green">⏺ </Text>
-            <Text>{liveAssistant}<Text color="gray">▍</Text></Text>
-          </Box>
-        ) : null}
-      </Box>
-
-      {/* Overlay (e.g. /config picker) — when active, it OWNS the
-          dynamic region: spinner, composer, palette all hide so the
-          overlay's own useInput owns keystrokes uncontested. */}
+    <Box flexDirection="column" height={rows} overflow="hidden">
       {overlay !== null ? (
         <>
           {overlay}
@@ -911,59 +920,161 @@ export function ChatApp({
         </>
       ) : (
         <>
-          {/* Active turn spinner. Warms to amber after 10s ("still working"
-              cue). Label is the runChat
-              adapter's status text — typically the formatted active tool.
-              wrap="truncate" on the label so a long tool call header
-              (Bash(...long command...)) doesn't wrap and leave residue. */}
-          {/* Hide the spinner once content is actively streaming — the
-              gray ▍ cursor in the live assistant/reasoning row IS the
-              activity indicator, and the spinner is an additional
-              setInterval-driven re-render at ~10Hz that adds noise to
-              the frame on top of streaming flushes. The spinner returns
-              the moment the model goes quiet (between tool calls). */}
+          <TuiHeader
+            cols={cols}
+            theme={theme}
+            accentColor={accentColor}
+            mcpProfile={bannerInputs?.mcpProfile}
+            mcpTransport={bannerInputs?.mcpTransport}
+            mcpOnline={bannerInputs?.mcpOnline}
+            mcpIdentity={bannerInputs?.mcpIdentity}
+          />
+          <GridWorkspace
+            cols={cols}
+            mainWidth={mainWidth}
+            sidebarWidth={sidebarWidth}
+            flexGrow={1}
+            sidebar={
+              <Sidebar
+                model={footer.model}
+                session={footer.session}
+                branch={footer.branch}
+                effort={footer.effort}
+                accessMode={accessMode}
+                workspaceRoot={workspaceRoot}
+                bgTasks={bgTasks}
+                scrollback={scrollback}
+                mcpProfile={bannerInputs?.mcpProfile}
+                mcpTransport={bannerInputs?.mcpTransport}
+                mcpOnline={bannerInputs?.mcpOnline}
+                mcpIdentity={bannerInputs?.mcpIdentity}
+                width={sidebarWidth}
+              />
+            }
+          >
+            {/* The active route view */}
+            {activeRoute === 'home' ? (
+              <WelcomeView workspaceRoot={workspaceRoot ?? process.cwd()} accentColor={accentColor} />
+            ) : activeRoute === 'session' ? (
+              <Box flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
+                <Box flexDirection="column">
+                  {visibleScrollback.hiddenAbove > 0 || visibleScrollback.hiddenBelow > 0 ? (
+                    <Text color="gray" dimColor wrap="truncate">
+                      {`  ⋯ ${visibleScrollback.hiddenAbove} earlier message${visibleScrollback.hiddenAbove === 1 ? '' : 's'} above · press Esc to scroll (w/s · j/k · ↑/↓)${visibleScrollback.hiddenBelow > 0 ? ` · ${visibleScrollback.hiddenBelow} below` : ''}`}
+                    </Text>
+                  ) : null}
+                  {visibleScrollback.entries.map((entry) => (
+                    <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} cols={mainWidth} />
+                  ))}
+                  {liveReasoning ? (
+                    <Box flexDirection="column" marginTop={1}>
+                      <Text color="magenta" italic dimColor>
+                        💭 thinking{liveReasoning.length > REASONING_TAIL_CHARS ? ` (${liveReasoning.length.toLocaleString()} chars)` : ''}
+                      </Text>
+                      <Box
+                        marginLeft={1}
+                        paddingLeft={1}
+                        height={REASONING_VISIBLE_LINES}
+                        flexDirection="column"
+                        borderStyle="single"
+                        borderColor="magenta"
+                        borderDimColor
+                        borderTop={false}
+                        borderRight={false}
+                        borderBottom={false}
+                      >
+                        <Text color="gray" italic wrap="truncate-end">
+                          {buildReasoningWindow(tailReasoning(liveReasoning), mainWidth)}<Text color="gray">▍</Text>
+                        </Text>
+                      </Box>
+                    </Box>
+                  ) : null}
+                  {liveAssistant ? (
+                    <Box marginTop={1}>
+                      <Text color="green">⏺ </Text>
+                      <Text>{liveAssistant}<Text color="gray">▍</Text></Text>
+                    </Box>
+                  ) : null}
+                </Box>
+              </Box>
+            ) : activeRoute === 'workflow' ? (
+              <Box flexDirection="column" padding={1}>
+                <Text color="cyan" bold>WORKFLOWS & DURABLE TASKS</Text>
+                <Box flexDirection="column" marginTop={1} gap={1}>
+                  {bgTasks.length === 0 ? (
+                    <Text color="gray" italic>No active workflows running in the background.</Text>
+                  ) : (
+                    bgTasks.map((task) => (
+                      <Box key={task.id} flexDirection="column" borderStyle="single" borderColor="cyan" borderDimColor padding={1}>
+                        <Text bold color="cyan">{`⚡ ${task.kind}: ${task.id.substring(0, 8)}`}</Text>
+                        <Box marginTop={1}>
+                          <Text color="white">{task.label}</Text>
+                        </Box>
+                      </Box>
+                    ))
+                  )}
+                </Box>
+              </Box>
+            ) : (
+              <Box flexDirection="column" padding={1}>
+                <Text color="cyan" bold>MCP TOOLS & CONSOLE</Text>
+                <Box flexDirection="column" marginTop={1} gap={1}>
+                  <Text color="white">Connected Servers:</Text>
+                  <Text color="gray">  · filesystem (local)</Text>
+                  <Text color="gray">  · brainrouter-mcp (memory)</Text>
+                  <Box marginTop={1}>
+                    <Text color="gray">Run <Text color="cyan" bold>/tools</Text> or <Text color="cyan" bold>/mcp</Text> to configure servers and view available API actions.</Text>
+                  </Box>
+                </Box>
+              </Box>
+            )}
+          </GridWorkspace>
+
+          {/* Active turn spinner */}
           {phase === 'turn-running' && !liveAssistant && !liveReasoning ? (
-            <Box>
+            <Box marginTop={1} flexShrink={0}>
               <Text color={turnElapsedMs >= 10_000 ? 'yellow' : 'green'}>
                 {React.createElement(Spinner as any, { type: 'dots' })}
               </Text>
               <Text color="gray" wrap="truncate">  {spinnerLabel}</Text>
+            {turnElapsedMs >= 1000 ? (
+              <Text color={turnElapsedMs >= 10_000 ? 'yellow' : 'gray'} dimColor>{`  · ${Math.floor(turnElapsedMs / 1000)}s`}</Text>
+            ) : null}
             </Box>
           ) : null}
 
-          {/* Composer with top + bottom dividers, EXACTLY cols-2 chars wide
-              so they never visually wrap in the current terminal (which
-              would leave residue on resize). Reading `cols` inline ensures
-              the divider length tracks the current width. */}
-          <Box flexDirection="column">
+          {/* Global Composer (TextInput) and dividers */}
+          <Box flexDirection="column" marginTop={1} flexShrink={0}>
             <Text color={accentColor} dimColor>{'─'.repeat(Math.max(10, cols - 2))}</Text>
             <Box>
-              <Text color={accentColor}>{' ❯ '}</Text>
+              <Text color={scrollMode ? 'cyan' : accentColor} bold={scrollMode}>{scrollMode ? ' ⊟ ' : ' ❯ '}</Text>
               <TextInput
                 key={composerKey}
                 value={composerValue}
                 onChange={onComposerChange}
                 onSubmit={onComposerSubmit}
-                placeholder={phase === 'turn-running' ? '' : 'type a prompt or / for commands'}
+                focus={!scrollMode}
+                placeholder={scrollMode ? 'SCROLL — w/s · j/k · ↑/↓ scroll · g/G top·bottom · Esc or i to type' : (phase === 'turn-running' ? '' : 'type a prompt or / for commands')}
               />
             </Box>
             <Text color={accentColor} dimColor>{'─'.repeat(Math.max(10, cols - 2))}</Text>
           </Box>
 
-          {/* Slash palette — renders below composer when the user is typing `/`. */}
+          {/* Slash palette panel */}
           {slashQuery !== null ? (
-            <SlashPalettePanel
-              matches={paletteMatches}
-              cursor={paletteCursor}
-              accentColor={accentColor}
-              cols={cols}
-            />
+            <Box flexShrink={0}>
+              <SlashPalettePanel
+                matches={paletteMatches}
+                cursor={paletteCursor}
+                accentColor={accentColor}
+                cols={cols}
+              />
+            </Box>
           ) : null}
 
-          {/* INPUT-ERGO — flag suggestions when typing `--token` in args mode.
-              Tab completes the highlighted flag; ↑/↓ navigate. */}
+          {/* Flag suggestions */}
           {flagMatches.length > 0 ? (
-            <Box flexDirection="column" marginTop={0}>
+            <Box flexDirection="column" marginTop={0} flexShrink={0}>
               <Text color="gray" dimColor>  flags (Tab to complete, ↑/↓ to navigate)</Text>
               {flagMatches.map((m, i) => (
                 <Box key={m.flag}>
@@ -976,11 +1087,9 @@ export function ChatApp({
             </Box>
           ) : null}
 
-          {/* @-mention file completions — appear when composer ends with `@token`.
-              Tab accepts the highlighted candidate (handled in the useInput hook
-              above the composer). Esc clears. Arrow keys navigate. */}
+          {/* @-mentions */}
           {atMatches.length > 0 ? (
-            <Box flexDirection="column" marginTop={0}>
+            <Box flexDirection="column" marginTop={0} flexShrink={0}>
               <Text color="gray" dimColor>  @ files (Tab to accept, ↑/↓ to navigate, Esc to dismiss)</Text>
               {atMatches.map((m, i) => (
                 <Text key={m} color={i === atCursor ? accentColor : 'gray'}>
@@ -990,18 +1099,28 @@ export function ChatApp({
             </Box>
           ) : null}
 
-          {/* Footer status line. */}
-          <FooterStatus
-            promptLabel={promptLabel}
-            phase={phase}
-            accentColor={accentColor}
-            accessMode={accessMode}
-            footer={footer}
-            cols={cols}
-          />
+          {/* Global TUI Footer */}
+          <Box flexShrink={0}>
+            <FooterStatus
+              promptLabel={promptLabel}
+              phase={phase}
+              accentColor={accentColor}
+              accessMode={accessMode}
+              footer={footer}
+              cols={cols}
+            />
+          </Box>
         </>
       )}
     </Box>
+  );
+}
+
+export function ChatApp(props: ChatAppProps) {
+  return (
+    <TuiRouterProvider initialRoute="session">
+      <ChatAppContent {...props} />
+    </TuiRouterProvider>
   );
 }
 
@@ -1028,13 +1147,129 @@ export function ChatApp({
 // the visible flicker / flashing during streaming.
 // --- Helpers ----------------------------------------------------------
 
-function seedScrollback(banner: string, offline: string | undefined, hint: string): ScrollbackEntry[] {
+function seedScrollback(workspaceRoot: string | undefined, offline: string | undefined, hint: string): ScrollbackEntry[] {
   let id = 0;
   const next = (): number => ++id;
-  const out: ScrollbackEntry[] = [{ id: next(), kind: 'raw', text: banner, noWrap: true }];
-  if (offline) out.push({ id: next(), kind: 'raw', text: offline, noWrap: true });
-  out.push({ id: next(), kind: 'raw', text: hint, noWrap: true });
+  const theme = resolveTheme(workspaceRoot);
+  const welcomeText = theme.primary(`🧠 Welcome to BrainRouter CLI v${VERSION}\n\n`);
+  const out: ScrollbackEntry[] = [{ id: next(), kind: 'raw', text: welcomeText, noWrap: true, timestamp: new Date() }];
+  if (offline) out.push({ id: next(), kind: 'raw', text: offline, noWrap: true, timestamp: new Date() });
+  out.push({ id: next(), kind: 'raw', text: hint, noWrap: true, timestamp: new Date() });
   return out;
+}
+
+export function estimateTextHeight(text: string, cols: number): number {
+  if (!text) return 0;
+  const lines = text.split('\n');
+  let count = 0;
+  for (const line of lines) {
+    count += Math.max(1, Math.ceil(line.length / Math.max(1, cols)));
+  }
+  return count;
+}
+
+// Rows the chrome (header + composer + footer + spinner + scroll hint) reserves
+// outside the scrollback area. The budget undershooting this is what let the
+// scrollback overflow onto the composer/footer rows.
+const CHROME_RESERVED_ROWS = 10;
+
+// Markdown height is measured by ACTUALLY rendering (mirrors ScrollbackRow) —
+// the old raw-`\n` estimate ignored marked's list spacing / wrapping and
+// undershot badly, which overflowed the frame. Cached + bounded (FIFO) so the
+// per-render cost stays flat even while streaming re-runs the memo.
+const _mdRenderCache = new Map<string, string>();
+function renderMarkdownCached(text: string, width: number): string {
+  const key = width + ' ' + text;
+  let rendered = _mdRenderCache.get(key);
+  if (rendered === undefined) {
+    rendered = renderMarkdown(text, { width }).trimEnd();
+    if (_mdRenderCache.size >= 256) _mdRenderCache.delete(_mdRenderCache.keys().next().value as string);
+    _mdRenderCache.set(key, rendered);
+  }
+  return rendered;
+}
+
+export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): number {
+  switch (entry.kind) {
+    case 'raw':
+    case 'user':
+    case 'notice':
+      return estimateTextHeight(entry.text ?? '', cols) + (entry.kind === 'user' ? 1 : 0);
+    case 'assistant': {
+      const text = entry.text ?? '';
+      // Mirror the renderer: markdown rendered at width `cols-2`, then displayed
+      // in a flexGrow column to the right of "⏺ " (+ optional timestamp). Re-wrap
+      // at that narrower width so we OVER- rather than under-estimate.
+      const rendered = entry.raw ? text : renderMarkdownCached(text, Math.max(1, cols - 2));
+      const bodyWidth = Math.max(1, cols - (entry.timestamp ? 13 : 2));
+      return 1 /* marginTop */ + estimateTextHeight(rendered, bodyWidth) + (entry.durationMs !== undefined ? 1 : 0);
+    }
+    case 'tool': {
+      let h = 1;
+      if (entry.preview) {
+        const lines = entry.preview.split('\n').length;
+        h += Math.min(8, lines);
+        if (lines > 8) h += 1;
+      }
+      return h + 1;
+    }
+    case 'memory':
+      return 1;
+    case 'plan':
+      return 1 + (entry.explanation ? 1 : 0) + entry.items.length + 1;
+    case 'agent-result': {
+      // Body wraps (wrap="wrap") inside a paddingLeft={4} column.
+      return 1 + estimateTextHeight(entry.body ?? '', Math.max(1, cols - 4));
+    }
+    case 'reasoning': {
+      const rawLines = entry.text ? entry.text.split('\n') : [];
+      const shown = rawLines.slice(0, 10).join('\n');
+      const visible = estimateTextHeight(shown, Math.max(1, cols - 3)); // wraps inside a bordered column
+      const hiddenExtra = rawLines.length > 10 ? 1 : 0;
+      return 1 + visible + hiddenExtra + 1;
+    }
+    case 'child-fleet':
+      return 1;
+    case 'compaction': {
+      // Renderer shows up to 8 summary lines, each wrapping inside a paddingLeft={3} column.
+      const shown = entry.summary ? entry.summary.split('\n').slice(0, 8).join('\n') : '';
+      return 1 + estimateTextHeight(shown, Math.max(1, cols - 3)) + 1;
+    }
+    default:
+      return 1;
+  }
+}
+
+
+/**
+ * Choose which scrollback entries to render and how many are hidden above/below.
+ * Packs newest-first until the height `budget` is exhausted, always keeping at
+ * least the newest entry (the overflow:hidden box clips it if it alone is taller
+ * than the budget). This GUARANTEES the rendered scrollback fits its allocated
+ * height — it can never spill onto the composer/footer rows (the overlap bug).
+ * `scrollOffset` slides the window toward older history (PageUp). Pure → tested.
+ */
+export function packVisibleScrollback<T>(
+  entries: T[],
+  opts: { budget: number; scrollOffset: number; estimateHeight: (entry: T) => number },
+): { entries: T[]; hiddenAbove: number; hiddenBelow: number } {
+  const endIdx = Math.max(0, entries.length - Math.max(0, opts.scrollOffset));
+  let sliceStart = endIdx;
+  let currentHeight = 0;
+  // Fill the available height newest-first, INCLUDING the entry that crosses the
+  // budget (the box clips its top via overflow:hidden + flex-end). Bailing out
+  // before that entry is what left a tall response off-screen with the rest of
+  // the pane blank — the "responses gone, massive free space" bug.
+  for (let i = endIdx - 1; i >= 0; i--) {
+    currentHeight += opts.estimateHeight(entries[i]);
+    sliceStart = i;
+    if (currentHeight >= opts.budget) break;
+  }
+  return {
+    entries: entries.slice(sliceStart, endIdx),
+    hiddenAbove: sliceStart,
+    hiddenBelow: entries.length - endIdx,
+  };
 }
 
 export function filterPaletteCommands(commands: SlashCommandDef[], query: string): SlashCommandDef[] {

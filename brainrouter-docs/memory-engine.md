@@ -113,6 +113,28 @@ reranker, an optional LLM judge that drops candidates that aren't actually
 relevant (the reranker only reorders), and a 2-hop graph walk for
 spreading activation.
 
+### Long-record handling (0.4.14)
+
+The recall stages assume *focused* records. A long blob (e.g. an imported
+multi-turn session) breaks all of them — the reranker truncates it, the judge
+reads only its first 600 chars, and one embedding over thousands of tokens is a
+blurry average. Four knobs keep long records working:
+
+- **Chunk on import** — `memory_import` splits records over
+  `BRAINROUTER_IMPORT_CHUNK_CHARS` (default 1500) into chunk records (child id
+  `${parent}::c{i}`; recall rolls a chunk back to its parent).
+- **Embed on import** — imported records are embedded immediately
+  (`BRAINROUTER_IMPORT_EMBED`, default on) so vector search isn't left waiting on
+  the background re-embed sweep.
+- **Reranker doc cap** — `BRAINROUTER_RERANKER_MAX_DOC_CHARS` (default 1500) lets
+  the cross-encoder score a whole chunk instead of the old 700-char window.
+- **Judge result floor** — `BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP` (default 1)
+  stops the judge collapsing recall to 0 when it can't verify a long candidate.
+
+On the LongMemEval benchmark (local `gemma-4-e2b`) these lifted the reranker
+config from 0.27 → 0.80 `recall_any@5` and the judge from 0.10 → 0.50, with no
+regression on short-record corpora (MemBench, LoCoMo).
+
 ### Reciprocal Rank Fusion
 
 $$\text{Score}_{\text{RRF}}(m) = \sum_{s \in \text{streams}} \frac{1}{60 + \text{Rank}_s(m)}$$
@@ -135,8 +157,8 @@ finalScore(r)        = rrfScore(r) * 30 * 0.7
 | **Intent affinity** | `detectTaskIntent(query)` maps verbs (debug, fix, design) to per-type multipliers. |
 | **Skill boost** | Score ×1.2 when `record.skill_tag` matches active skill. |
 | **Neural sparks** | 2-hop spreading activation — records firing above threshold join the candidate pool. On by default; set `BRAINROUTER_NEURAL_SPARK_ENABLED=false` to disable propagation, Hebbian strengthening, and synaptic decay/pruning (recall falls back to the plain scored/reranked set). |
-| **Reranker** | Cross-encoder (Cohere / vLLM `/v1/rerank`) replaces top-K ordering when configured. |
-| **Relevance judge** | LLM-as-judge stage that filters the reranked finalists. Each candidate gets a binary verdict + reason; rejects are dropped. Off by default — opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`. Adds one LLM round-trip; on failure the reranker output passes through unchanged. Survives LM Studio's idle-model auto-unload by detecting the "model is unloaded" 400, waiting 1.5s, and retrying once (mirrors `ModelLLMRunner`). |
+| **Reranker** | Cross-encoder (Cohere / vLLM `/v1/rerank`) replaces top-K ordering when configured. Per-doc input capped at `BRAINROUTER_RERANKER_MAX_DOC_CHARS` (default 1500 — covers a chunk). |
+| **Relevance judge** | LLM-as-judge stage over the reranked finalists. Each candidate gets a binary verdict + reason. By default (`BRAINROUTER_RELEVANCE_JUDGE_MODE=reorder`, MEM-JUDGE2) approved candidates are promoted to the front and the rest kept — recall-safe, so the top-K slice gains precision without dropping recall below the retriever; set `filter` for the legacy drop-the-rejects behavior. The judge reads `BRAINROUTER_RELEVANCE_JUDGE_DOC_CHARS` (default 1200) of each candidate. Off by default — opt in with `BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true`. Adds one LLM round-trip; on failure the reranker output passes through unchanged. Survives LM Studio's idle-model auto-unload by detecting the "model is unloaded" 400, waiting 1.5s, and retrying once (mirrors `ModelLLMRunner`). A result floor (`BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP`, default 1) backfills top pre-judge results so it never drops recall to 0 on long candidates it can't verify. |
 
 ## Filters
 

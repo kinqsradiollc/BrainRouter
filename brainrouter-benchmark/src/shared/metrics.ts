@@ -8,6 +8,19 @@ export function recallAtK(retrieved: string[], relevant: Set<string>, k: number)
   return hits / relevant.size;
 }
 
+/**
+ * recall_any@K — 1 if ANY relevant item appears in the top-K, else 0. This is the
+ * session-level metric LongMemEval reports (does any gold session surface?), as
+ * opposed to recallAtK which is the fraction of all gold found.
+ */
+export function recallAnyAtK(retrieved: string[], relevant: Set<string>, k: number): number {
+  if (relevant.size === 0) return 0;
+  for (const id of retrieved.slice(0, k)) {
+    if (relevant.has(id)) return 1;
+  }
+  return 0;
+}
+
 export function precisionAtK(retrieved: string[], relevant: Set<string>, k: number): number {
   if (k <= 0) return 0;
   const top = retrieved.slice(0, k);

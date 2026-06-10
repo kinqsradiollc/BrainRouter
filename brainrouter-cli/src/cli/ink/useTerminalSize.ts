@@ -37,7 +37,11 @@ export interface TerminalSize {
 }
 
 const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 24;
+// 50 instead of the VT100-era 24: the TUI chrome (TuiHeader, GridWorkspace,
+// composer, footer) takes ~10 rows, so 24 leaves too little for content in
+// non-TTY environments (tests, piping) where stdout has no .rows property.
+// In production TTY, stdout.rows is always defined and used instead.
+const DEFAULT_ROWS = 50;
 
 export function useTerminalSize(): TerminalSize {
   const { stdout } = useStdout();

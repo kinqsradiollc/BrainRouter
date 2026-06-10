@@ -154,8 +154,8 @@ function baselineRoute(task: string): BaselineRoute {
   if (LONG_RUNNING.test(task)) {
     return {
       tier: 'spawn-worker',
-      reason: 'Prompt mentions long-running / background work — worker thread suits this once 0.4.2 ships them.',
-      recommendedTool: 'delegate_agent',
+      reason: 'Prompt mentions long-running / background work — a detached worker thread that outlives this turn fits best.',
+      recommendedTool: 'spawn_worker_thread',
       agentId: null,
       confidence: 0.75,
     };

@@ -407,6 +407,10 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RERANKER_API_KEY` | _(unset)_ | Reranker credential. |
 | `BRAINROUTER_RERANKER_MODEL` | _(provider default)_ | e.g. `rerank-english-v3.0`. |
 | `BRAINROUTER_RERANKER_TOP_N` | `10` | Top-K to rerank. |
+| `BRAINROUTER_RERANKER_MAX_DOC_CHARS` | `1500` | Per-doc chars sent to the cross-encoder (0.4.14). Covers a whole chunk instead of the old hardcoded 700; clamped [100, 8000]. Raise for larger-context rerankers, lower for strict 512-token ones. |
+| `BRAINROUTER_RECALL_RERANK_BLEND_ALPHA` | `1.0` | MEM-BLEND (0.4.14): weight of the cross-encoder relevance vs the pre-rerank score (RRF + half-life recency), by **reciprocal rank** (cross-encoder scores are bimodal, so a raw-score blend is a no-op). `1` = pure reranker; `0` = pure retriever order. Default **1.0** (trust the reranker — on reranker-favorable queries blending in the weaker lexical order hurts); MEM-ROUTE lowers it per query type so the retriever/recency wins for reflective/synthesis. Clamp [0,1]. |
+| `BRAINROUTER_RECALL_RERANK_CHAR_BUDGET` | `30000` | MEM-RERANK2 (0.4.14): total character budget sent to the cross-encoder (latency ∝ Σ doc-chars). Budgeting by chars rather than a fixed count adapts to doc length — long-doc corpora send ~20 candidates (cuts long-session latency ~1.5×: 22.7s→14.8s, recall fully held), short-doc corpora send the whole pool (deep gold still rescued). The tail keeps its pre-score order and is appended (no recall loss). Clamp [1500, 500000]. |
+| `BRAINROUTER_RECALL_QUERY_ROUTING` | `on` | MEM-ROUTE (0.4.14): query-type routing. Reflective/analytical queries ("most likely sentiment", "overall pattern", "how do they feel") are detected by a zero-cost heuristic and **skip the cross-encoder** — its surface-similarity scoring demotes their low-overlap gold, and the retriever+judge path measurably beats it there (os-rm `full` R-any@10 0.73→0.87). Factual/conversational queries keep the reranker. `off` to always rerank. |
 
 ### Relevance judge — `brainrouter/.env`
 
@@ -418,6 +422,9 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RELEVANCE_JUDGE_MODEL` | inherits `BRAINROUTER_LLM_MODEL` | Model id. A fast/cheap model is usually right. |
 | `BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES` | `10` | Max candidates batched into a single judge call. |
 | `BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS` | `15000` | Per-call timeout. On timeout the reranker output passes through unchanged. |
+| `BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP` | `1` | Result floor (0.4.14): if the judge approves fewer than this, backfill from the top pre-judge results so recall never collapses to 0 on long records it can't verify. `0` = old collapse-to-zero. Short-record precision is unaffected. Only applies in `filter` mode. |
+| `BRAINROUTER_RELEVANCE_JUDGE_MODE` | `reorder` | How verdicts apply (MEM-JUDGE2, 0.4.14). `reorder` (default) keeps every candidate and promotes the approved ones to the front — recall-safe (top-K gains precision, recall@k never drops below the retriever). `filter` drops the rejects (legacy, floored by `MIN_KEEP`). |
+| `BRAINROUTER_RELEVANCE_JUDGE_DOC_CHARS` | `1200` | Chars of each candidate shown to the judge (MEM-JUDGE2, 0.4.14). The old hardcoded 600 showed ~40% of a 1500-char chunk, so the judge rejected text it never saw. Clamp [200, 4000]. |
 
 ### Memory engine — `brainrouter/.env`
 
@@ -426,6 +433,9 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_MEMORY_DB` | `~/.brainrouter/memory.db` | SQLite path. |
 | `BRAINROUTER_HOME` | `~/.brainrouter` | Per-user state root. Honored by both processes. |
 | `BRAINROUTER_LOCAL_ROOT` | _(unset)_ | Override the local-state root. |
+| `BRAINROUTER_IMPORT_CHUNK_CHARS` | `1500` | Chunk records longer than this on `memory_import` (0.4.14) so recall stages get focused units (child id `${parent}::c{i}`, parent in metadata). `0` disables. |
+| `BRAINROUTER_IMPORT_EMBED` | `1` (on) | Embed imported records immediately (0.4.14) for instant vector recall instead of waiting on the background sweep. `0` = backfill via the sweep (faster bulk import). |
+| `BRAINROUTER_EMBED_CONCURRENCY` | `8` | Worker-pool size for bulk embedding (import + startup sweep, 0.4.14). Effective concurrency = min(this, `BRAINROUTER_LLM_MAX_CONCURRENT`). |
 | `BRAINROUTER_GRAPH_ENABLED` | `true` | 2-hop graph extraction + BFS expansion. |
 | `BRAINROUTER_GRAPH_TIMEOUT_MS` | `120000` | Graph-extraction LLM timeout. |
 | `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | `60000` | Contradiction-check timeout. |

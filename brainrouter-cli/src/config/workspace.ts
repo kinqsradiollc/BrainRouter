@@ -8,7 +8,15 @@ export interface WorkspaceInfo {
   reason: string;
 }
 
-const ROOT_MARKERS = ['AGENT.md', 'AGENTS.md', '.git'];
+/**
+ * Files recognized as a workspace agent-instruction file, in precedence order
+ * (first found wins). `AGENT.md` / `AGENTS.md` are the cross-tool standard;
+ * `CLAUDE.md` is Claude Code's. Shared by workspace-root detection (below) and
+ * instruction loading (`prompt/systemPrompt.loadWorkspaceInstructionSummary`).
+ */
+export const INSTRUCTION_FILES = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'] as const;
+
+const ROOT_MARKERS = [...INSTRUCTION_FILES, '.git'];
 
 export function findWorkspaceRoot(startDir = process.cwd()): WorkspaceInfo {
   const launchCwd = fs.realpathSync(startDir);
@@ -64,7 +72,7 @@ function maybePromoteBrainRouterPackage(root: string): { root: string; reason: s
   const packageJsonPath = path.join(parent, 'package.json');
   if (
     path.basename(root) === 'brainrouter-cli' &&
-    fs.existsSync(path.join(parent, 'AGENT.md')) &&
+    INSTRUCTION_FILES.some(f => fs.existsSync(path.join(parent, f))) &&
     fs.existsSync(packageJsonPath)
   ) {
     try {

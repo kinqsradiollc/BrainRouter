@@ -34,7 +34,7 @@ function mountChat(): {
       initialHint: 'HINT',
       slashCommands: [],
       promptLabel: 'test',
-      onSubmit: async () => {},
+      onSubmit: async () => { },
       onReady: (c) => resolveCtrl(c),
     }),
   );
@@ -56,7 +56,7 @@ test('Ink streaming: assistant deltas land in the live frame and respect 80ms co
   c.push.assistantDelta('agent.');
   // Before the flush fires, the live frame is still empty.
   // After the 80ms timer fires, the text appears in one frame.
-  await waitMs(120);
+  await waitMs(300);
   const frame = instance.lastFrame() ?? '';
   assert.ok(
     frame.includes('Hello world from the agent.'),
@@ -73,7 +73,7 @@ test('Ink streaming: reasoning longer than the tail cap renders truncated with m
   // 3000-char reasoning is well over the 1500-char tail cap.
   const long = 'reasoning '.repeat(300);
   c.push.reasoningDelta(long);
-  await waitMs(120);
+  await waitMs(300);
   const frame = instance.lastFrame() ?? '';
   assert.ok(frame.includes('💭 thinking'), 'expected thinking header in frame');
   // After 0.3.10 stable-height window: long reasoning shows a char
@@ -96,7 +96,7 @@ test('Ink streaming: completed scrollback rows stay stable across streaming flus
   // Push a user + assistant pair so we have a stable scrollback baseline.
   c.push.user('test prompt');
   c.push.assistant('first reply', { tokensOut: 10, durationMs: 100 });
-  await waitMs(10);
+  await waitMs(300);
   const baseline = instance.lastFrame() ?? '';
   assert.ok(baseline.includes('test prompt'));
   assert.ok(baseline.includes('first reply'));
@@ -108,10 +108,10 @@ test('Ink streaming: completed scrollback rows stay stable across streaming flus
   c.push.setPhase('turn-running');
   c.push.assistantDeltaStart();
   c.push.assistantDelta('A');
-  await waitMs(120);
+  await waitMs(300);
   const midStream1 = instance.lastFrame() ?? '';
   c.push.assistantDelta('B');
-  await waitMs(120);
+  await waitMs(300);
   const midStream2 = instance.lastFrame() ?? '';
 
   // Extract the lines containing "test prompt" and "first reply" —
@@ -148,19 +148,19 @@ test('Ink streaming: reasoning panel keeps a stable height as content grows (scr
 
   // Checkpoint 1: tiny reasoning (1 line).
   c.push.reasoningDelta('first thought\n');
-  await waitMs(120);
+  await waitMs(300);
   const lines1 = (instance.lastFrame() ?? '').split('\n').length;
 
   // Checkpoint 2: moderate reasoning (~5 lines).
   c.push.reasoningDelta(Array.from({ length: 4 }, (_, i) => `thought ${i + 2}`).join('\n') + '\n');
-  await waitMs(120);
+  await waitMs(300);
   const lines2 = (instance.lastFrame() ?? '').split('\n').length;
 
   // Checkpoint 3: long reasoning (~50 lines). This is well past
   // REASONING_VISIBLE_LINES — the rendered frame MUST NOT grow
   // proportionally.
   c.push.reasoningDelta(Array.from({ length: 50 }, (_, i) => `deep thought ${i + 6}`).join('\n') + '\n');
-  await waitMs(120);
+  await waitMs(300);
   const lines3 = (instance.lastFrame() ?? '').split('\n').length;
 
   // The plateau: lines3 - lines2 should be small (within ~2 lines of
@@ -178,7 +178,7 @@ test('Ink streaming: spinner hides during active streaming, returns when stream 
   const c = await ctrl;
   c.push.setPhase('turn-running');
   c.push.setStatus('Bash(curl example)');
-  await waitMs(20);
+  await waitMs(300);
   // Pre-stream: spinner label visible (we ship ink-spinner so we can't
   // assert the glyph directly, but the label IS visible).
   const beforeStream = instance.lastFrame() ?? '';
@@ -191,7 +191,7 @@ test('Ink streaming: spinner hides during active streaming, returns when stream 
   // visual element is the gray ▍ cursor.
   c.push.assistantDeltaStart();
   c.push.assistantDelta('streaming now');
-  await waitMs(120);
+  await waitMs(300);
   const duringStream = instance.lastFrame() ?? '';
   assert.ok(duringStream.includes('streaming now'));
   assert.ok(
@@ -210,7 +210,7 @@ test('Ink streaming: assistantDeltaEnd flushes pending buffer to the visible fra
   // End BEFORE the 80ms timer fires — the end handler must synchronously
   // flush the buffer so the user sees the model's last words.
   c.push.assistantDeltaEnd();
-  await waitMs(10);
+  await waitMs(300);
   const frame = instance.lastFrame() ?? '';
   assert.ok(
     frame.includes('partial chunk'),

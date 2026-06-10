@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { INSTRUCTION_FILES } from '../config/workspace.js';
 
 export interface SystemPromptContext {
   workspaceRoot: string;
@@ -161,7 +162,7 @@ function modelFamilyOverlay(model: string | undefined): string {
     '- NEVER end your turn without having truly and completely solved the problem.',
     '- When you say "I will do X" / "Next I will read Y" / "Let me check Z", you MUST actually do X / Y / Z in the SAME response (as structured `tool_calls`), instead of saying you will and stopping.',
     '- You are a highly capable and autonomous agent. You can definitely solve most problems without asking the user for further input.',
-    '- For ANY exploration request ("analyze", "tell me about", "help with X", "what does Y do", "look at this"), your FIRST action MUST be tool calls. Open with `list_dir(.)`, read `README.md` / `package.json` / `AGENT.md` / `AGENTS.md`, and `glob_files` for entry points — all in parallel. NEVER respond with "please tell me which files" / "which project" / "what specifically".',
+    '- For ANY exploration request ("analyze", "tell me about", "help with X", "what does Y do", "look at this"), your FIRST action MUST be tool calls. Open with `list_dir(.)`, read `README.md` / `package.json` / `AGENT.md` / `AGENTS.md` / `CLAUDE.md`, and `glob_files` for entry points — all in parallel. NEVER respond with "please tell me which files" / "which project" / "what specifically".',
     '- If you find yourself about to write a clarifying question, STOP. Instead pick the most plausible interpretation, act on it with tools, and surface assumptions in the final answer. The user will redirect if needed.',
     '- Output text outside `tool_calls` is what the user sees. "I will analyze the project" with no tool calls in the same message is wasted text and looks like a stall.',
   ].join('\n');
@@ -227,7 +228,7 @@ function memoryFirstSection(): string {
 export function buildSystemPrompt(context: SystemPromptContext): string {
   const instructionSummary = context.instructionSummary?.trim()
     ? context.instructionSummary.trim()
-    : 'No workspace AGENT.md or AGENTS.md instruction file was found.';
+    : 'No workspace AGENT.md or AGENTS.md or CLAUDE.md instruction file was found.';
   const brainOnline = isBrainOnline(context.connectedMcpTools);
 
   // Order matters for prompt-cache hits (item 9c): identity + tool-mechanics
@@ -302,12 +303,13 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     '',
     '# Multi-agent orchestration (task_agent / delegate_agent)',
     'Use `task_agent` (foreground) or `delegate_agent` (background) to launch specialized subagents for complex, multi-step work — research, exploration, review, implementation. Roles: explorer / architect / reviewer / worker / verifier. **Call `route_task` first** (4 tiers: answer-direct → direct-tool → spawn-inline → spawn-worker) to pick the cheapest tier — fan-out without it over-delegates.',
-    '- **Prefer `task_agent` for codebase exploration to reduce parent context usage.** When exploring the codebase or answering a non-needle question, use `task_agent` instead of running grep/glob directly.',
-    '- Launch multiple agents concurrently when possible — a single assistant message with multiple `task_agent` tool_calls actually fans out in parallel (the runtime dispatches batched `task_agent` / `delegate_agent` calls concurrently; total wall-clock = max(child), not sum). Phrasings like "everything / all / in parallel / thoroughly / comprehensive / across the codebase" → ≥3 `task_agent` calls in one message.',
-    '- Brief each child like a smart colleague who just walked in: explain what you\'re accomplishing and why, what you\'ve already learned or ruled out, enough context that the child can make judgment calls. Terse command-style prompts produce shallow generic work.',
+    '- **Prefer `task_agent` for codebase exploration** (keeps child grep/glob output out of the parent context) rather than running grep/glob yourself.',
+    '- Launch agents concurrently — multiple `task_agent` calls in ONE message fan out in parallel (wall-clock = max(child), not sum). "everything / all / in parallel / thoroughly / across the codebase" → ≥3 `task_agent` calls in one message.',
+    '- Brief each child like a smart colleague: what you\'re accomplishing and why, what you\'ve learned or ruled out, enough context to make judgment calls. Terse prompts produce shallow work.',
     '- **Never delegate understanding.** Don\'t write "based on your findings, fix the bug" — that pushes synthesis onto the child. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.',
     '- **Prefer typed `delegate_<agentId>` when listed** (`delegate_explorer`, `delegate_reviewer`, …) — each routes to a specific agent and surfaces its `whenToUse`. `task_agent`/`spawn_agent` are escape hatches; `delegate_agent` is fire-and-forget (call `wait_agent` later). Synthesize child outputs in your own words.',
     '- **When NOT to use** `task_agent`: specific file path → `read_file`; named class/function → `grep_search`; 2–3 known files → `read_file`; trivial one-shot answers.',
+    '- **Detached / long-running work → `spawn_worker_thread`.** Runs in the background past this turn (see `/workers`); unlike `task_agent` (blocks) / `spawn_agents` (waited in-turn) it does NOT block — its result reports back next turn, or `wait_worker`. Workers can\'t spawn workers.',
     '',
     '# Workflow artifacts',
     'Multi-step requests (spec, feature plan, review, implementation plan) land as files under `.brainrouter/cli/workflows/<slug>/` — `spec.md` (what + why + boundaries), `tasks.md` (ordered breakdown), `walkthrough.md` (post-implementation summary). Use `/spec <title>` or `/feature-dev <title>` to set up the folder; don\'t produce chat-only plans. If you can\'t write the file, say so explicitly.',
@@ -369,7 +371,8 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
 }
 
 export function loadWorkspaceInstructionSummary(workspaceRoot: string): string | undefined {
-  const instructionPath = ['AGENT.md', 'AGENTS.md']
+  // First found wins: AGENT.md → AGENTS.md → CLAUDE.md (INSTRUCTION_FILES).
+  const instructionPath = INSTRUCTION_FILES
     .map(file => path.join(workspaceRoot, file))
     .find(filePath => fs.existsSync(filePath));
 

@@ -14,7 +14,20 @@ import { MemoryEngine } from "../memory/engine.js";
 
 function fresh(label: string) {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-bench-${label}-`));
-  const prevRunner = process.env.BRAINROUTER_JOB_RUNNER;
+  // Hermetic env: the engine constructor reads the reranker/judge knobs from
+  // process.env, so a developer machine with a live reranker endpoint or
+  // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true would otherwise flip the bench
+  // into running those modes against real services (skippedModes assertions
+  // fail + the test hits live endpoints). Snapshot + clear, restore in cleanup.
+  const HERMETIC_KEYS = [
+    "BRAINROUTER_JOB_RUNNER",
+    "BRAINROUTER_RERANKER_ENDPOINT",
+    "BRAINROUTER_RERANKER_API_KEY",
+    "BRAINROUTER_RERANKER_MODEL",
+    "BRAINROUTER_RELEVANCE_JUDGE_ENABLED",
+  ] as const;
+  const prevEnv = new Map<string, string | undefined>(HERMETIC_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of HERMETIC_KEYS) delete process.env[k];
   process.env.BRAINROUTER_JOB_RUNNER = "off";
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
@@ -22,8 +35,10 @@ function fresh(label: string) {
   return {
     store, dir, engine,
     cleanup: () => {
-      if (prevRunner === undefined) delete process.env.BRAINROUTER_JOB_RUNNER;
-      else process.env.BRAINROUTER_JOB_RUNNER = prevRunner;
+      for (const [k, v] of prevEnv) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
       rmSync(dir, { recursive: true, force: true });
     },
   };

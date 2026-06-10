@@ -4,6 +4,8 @@ import {
   LOCAL_TOOL_REGISTRY,
   registryAllowedTools,
   registryParallelSafeLocal,
+  hideWorkerToolsFor,
+  WORKER_THREAD_TOOLS,
 } from '../agent/tools/registry.js';
 import { actionKindForTool } from '../runtime/exec/execPolicy.js';
 import { isParallelSafe } from '../agent/toolSafety.js';
@@ -15,10 +17,10 @@ import {
   localToolSpecsFromExecutors,
 } from '../agent/tools/executors.js';
 
-// Worker tools are a separate, goal-scoped dynamic surface — not access-gated
-// through the registry, so the spec↔registry guard treats them as known.
+// Worker-thread tools are now registered (so the model can call them); the only
+// remaining unregistered, goal-scoped dynamic specs are these — the spec↔registry
+// guard still treats them as known exceptions.
 const WORKER_TOOLS = new Set([
-  'spawn_worker_thread', 'wait_worker', 'close_worker', 'read_worker_summary',
   'extract_result', 'workflow_progress',
 ]);
 
@@ -77,6 +79,32 @@ test('CODEX-TOOL-REGISTRY every spec\'d local tool is classified (registry or kn
       `spec'd tool "${name}" has no registry entry — add it to LOCAL_TOOL_REGISTRY (or WORKER_TOOLS if it's a worker tool)`,
     );
   }
+});
+
+test('WORKER-EXPOSURE worker tools are registered (read tier) and runtime-gated by depth/tier', () => {
+  // Registered now, so the model can call them — all four sit in the read tier.
+  for (const name of WORKER_THREAD_TOOLS) {
+    assert.ok(registryAllowedTools('read').has(name), `${name} should be a read-tier registered tool`);
+  }
+  // Visible only to a depth-0, non-worker orchestrator.
+  assert.equal(hideWorkerToolsFor(0, 'chat'), false);
+  assert.equal(hideWorkerToolsFor(0, 'reasoning'), false);
+  assert.equal(hideWorkerToolsFor(0, undefined), false);
+  assert.equal(hideWorkerToolsFor(1, 'chat'), true); // any child agent
+  assert.equal(hideWorkerToolsFor(0, 'worker'), true); // worker tier (defensive)
+  assert.equal(hideWorkerToolsFor(2, 'reasoning'), true);
+});
+
+test('WORKER-EXPOSURE filter shows worker tools at depth 0, hides them for child/worker', () => {
+  const allNames = localToolSpecsFromExecutors().map((t) => t.name);
+  const visibleAt = (depth: number, tier?: string) =>
+    allNames.filter((n) => !(hideWorkerToolsFor(depth, tier) && WORKER_THREAD_TOOLS.has(n)));
+  const root = visibleAt(0, 'chat');
+  for (const w of WORKER_THREAD_TOOLS) assert.ok(root.includes(w), `${w} visible to depth-0 orchestrator`);
+  const child = visibleAt(1, 'chat');
+  for (const w of WORKER_THREAD_TOOLS) assert.ok(!child.includes(w), `${w} hidden from child agent`);
+  const worker = visibleAt(1, 'worker');
+  for (const w of WORKER_THREAD_TOOLS) assert.ok(!worker.includes(w), `${w} hidden from worker`);
 });
 
 test('CODEX-TOOL-REGISTRY entries are unique', () => {

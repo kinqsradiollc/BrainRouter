@@ -4,6 +4,8 @@ import type { ActiveSessionFilters, ActiveSessionRecord, ActiveSessionUsage, Ses
 import * as sqliteVec from "sqlite-vec";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import { extractIntraFileCallEdges } from "../code-retrieval.js";
+import { expandImportRecord, readImportChunkChars } from "../pipeline/chunk-import.js";
+import { mapWithConcurrency, readEmbedConcurrency } from "../concurrency.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
@@ -353,20 +355,25 @@ export class SqliteMemoryStore implements IMemoryStore {
       ORDER BY r.created_time ASC, r.record_id ASC
     `).all() as Array<{ record_id: string; content: string }>;
 
-    let successCount = 0;
-    for (const row of rows) {
+    // ASYNC-1 (0.4.14) — embed through a bounded worker pool instead of one
+    // record at a time. The shared LLM semaphore inside embed() still caps actual
+    // network concurrency (BRAINROUTER_LLM_MAX_CONCURRENT), so this saturates the
+    // cap rather than leaving slots idle. upsertCognitiveVec is a synchronous
+    // SQLite write — single-threaded, so the interleaved writes can't race.
+    const outcomes = await mapWithConcurrency(rows, readEmbedConcurrency(), async (row) => {
       try {
         const embedding = await embedder(row.content);
         this.upsertCognitiveVec(row.record_id, embedding);
-        successCount += 1;
+        return true;
       } catch (error) {
         console.error(
           `[BrainRouter] Failed to re-embed record ${row.record_id}:`,
           error instanceof Error ? error.message : error
         );
+        return false;
       }
-    }
-    return successCount;
+    });
+    return outcomes.reduce((acc, ok) => acc + (ok ? 1 : 0), 0);
   }
 
   public getSqliteVersion(): string {
@@ -2146,7 +2153,12 @@ export class SqliteMemoryStore implements IMemoryStore {
 
     this.db.exec("BEGIN");
     try {
-      for (const record of data.memories ?? []) {
+      // MEM-CHUNK (0.4.14) — split over-long records into chunk records before
+      // storage so the recall stages get focused units. Short records pass
+      // through unchanged; parent id is preserved via `${id}::c{i}` + metadata.
+      const chunkChars = readImportChunkChars();
+      const memories = (data.memories ?? []).flatMap((r) => expandImportRecord(r, chunkChars));
+      for (const record of memories) {
         this.stmtCognitiveUpsertMeta.run(
           record.id, userId, record.sessionKey, record.sessionId, record.content,
           record.type, record.priority, record.sceneName, record.skillTag,
