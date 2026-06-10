@@ -1,6 +1,8 @@
 import { loadResultsFromDir, writeReports } from "./shared/report.js";
 import { runCliDeterministicSuite, runCliLiveSuite } from "./cli/deterministic-suite.js";
 import { runBehaviorSuite } from "./cli/behaviorSuite.js";
+import { normalizeTrace, diffTraces } from "./cli/decisionTrace.js";
+import { parseTranscript } from "./cli/behaviorSuite.js";
 import { runMemoryLoadSuite } from "./memory/load-suite.js";
 import { runMemoryRetrievalSuite } from "./memory/retrieval-suite.js";
 import { formatDatasetList } from "./shared/dataset-resolver.js";
@@ -61,6 +63,23 @@ async function main(): Promise<void> {
     case "cli:live":
       output = await runCliLiveSuite();
       break;
+    case "cli:trace-diff": {
+      // CC-P8.2 — diff two transcripts' decision traces (reference vs ours).
+      // Usage: cli:trace-diff --a <transcript.jsonl> --b <transcript.jsonl> [--out report.md]
+      const a = argValue("a", "");
+      const b = argValue("b", "");
+      if (!a || !b) throw new Error("cli:trace-diff requires --a and --b transcript paths");
+      const report = diffTraces(normalizeTrace(parseTranscript(a)), normalizeTrace(parseTranscript(b)));
+      const out = argValue("out", "");
+      if (out) {
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, report);
+      }
+      console.log(report);
+      return;
+    }
     case "cli:behavior": {
       // CC-P8.1 — score recorded session transcripts on the behavior contracts.
       // Usage: cli:behavior --input <transcript.jsonl|dir> [--out reports/x.md] [--title "Baseline"]
@@ -119,7 +138,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, cli:behavior, datasets:list, datasets:import-membench, datasets:build-split, datasets:build-longmemeval, datasets:build-locomo, report");
+      console.log("Commands: memory:dry-run, memory:retrieval, memory:load, memory:all, cli:dry-run, cli:deterministic, cli:live, cli:behavior, cli:trace-diff, datasets:list, datasets:import-membench, datasets:build-split, datasets:build-longmemeval, datasets:build-locomo, report");
       return;
   }
 
