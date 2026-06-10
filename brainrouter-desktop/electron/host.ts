@@ -10,6 +10,7 @@
  * Sign in once, configure once — both heads see it.
  */
 import { createBrokerPort, createHostCore } from './hostCore.js';
+import { execFileSync } from 'node:child_process';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
@@ -76,6 +77,33 @@ async function main(): Promise<void> {
       },
       'fleet': () => collectRunningTasks(workspaceRoot),
       'session-info': () => ({ sessionKey: agent.sessionKey, model: llm.model, workspaceRoot }),
+      // DESK-4 — diff/review surfaces. git-backed, tolerant of non-repos.
+      'changed-files': () => {
+        try {
+          const out = execFileSync('git', ['status', '--porcelain'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 });
+          return out.split('\n').filter(Boolean).slice(0, 200).map((line) => ({
+            status: line.slice(0, 2).trim() || '??',
+            path: line.slice(3).trim(),
+          }));
+        } catch { return []; }
+      },
+      'file-diff': (args) => {
+        const file = typeof args.path === 'string' ? args.path : '';
+        if (!file) return { path: file, diff: '' };
+        try {
+          // HEAD diff covers staged + unstaged; untracked files get a synthetic add-diff.
+          let diff = execFileSync('git', ['diff', 'HEAD', '--', file], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 4_000_000 });
+          if (!diff.trim()) {
+            diff = execFileSync('git', ['diff', '--no-index', '--', '/dev/null', file], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 4_000_000 }).toString();
+          }
+          return { path: file, diff: diff.slice(0, 200_000) };
+        } catch (err) {
+          // git diff --no-index exits 1 when files differ — its stdout IS the diff.
+          const out = (err as { stdout?: string }).stdout;
+          if (typeof out === 'string' && out.trim()) return { path: file, diff: out.slice(0, 200_000) };
+          return { path: file, diff: '' };
+        }
+      },
     },
     onShutdown: () => { void mcpClient.close?.(); process.exit(0); },
   });

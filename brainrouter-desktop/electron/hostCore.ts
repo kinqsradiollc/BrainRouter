@@ -34,6 +34,8 @@ export interface AgentLike {
   loadHistory?(entries: any[]): number;
   setModel?(model: string): void;
   getModel?(): string;
+  /** DESK-4 — cumulative session token usage (mirrors the CLI's /tokens). */
+  sessionUsage?: { promptTokens: number; completionTokens: number; calls: number; turns: number };
 }
 
 /** Named read-only queries the renderer can issue (sessions list, recap, …). */
@@ -105,6 +107,8 @@ export function createHostCore(input: {
     try {
       const answer = await input.agent.runTurn(prompt, callbacks);
       emit({ kind: 'turn-complete', answer });
+      const u = input.agent.sessionUsage;
+      if (u) emit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns });
     } catch (err) {
       emit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
     } finally {

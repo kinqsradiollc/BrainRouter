@@ -69,6 +69,13 @@ export function App(): React.ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelDraft, setModelDraft] = useState('');
   const [workspaces, setWorkspaces] = useState<{ current: string | null; recents: string[] }>({ current: null, recents: [] });
+  const [termLines, setTermLines] = useState<string[]>([]);
+  const [bottomTab, setBottomTab] = useState<'terminal' | 'tools'>('terminal');
+  const [toolLog, setToolLog] = useState<Array<{ id: number; tool: string; ok: boolean; summary: string }>>([]);
+  const [sideTab, setSideTab] = useState<'context' | 'files'>('context');
+  const [changedFiles, setChangedFiles] = useState<Array<{ status: string; path: string }>>([]);
+  const [diffView, setDiffView] = useState<{ path: string; diff: string } | null>(null);
+  const [tokens, setTokens] = useState<{ promptTokens: number; completionTokens: number; turns: number } | null>(null);
   const liveBuf = useRef('');
   const chatEnd = useRef<HTMLDivElement>(null);
 
@@ -90,9 +97,15 @@ export function App(): React.ReactElement {
         case 'assistant-delta': liveBuf.current += e.text; setLiveText(liveBuf.current); break;
         case 'assistant-turn-end': flushAssistant(); break;
         case 'tool-start': break; // card lands at tool-end with the result
-        case 'tool-end':
+        case 'tool-end': {
           push({ id: rid(), kind: 'tool', tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok });
+          setToolLog((t) => [...t.slice(-199), { id: rid(), tool: e.tool, ok: e.ok, summary: e.summary }]);
+          if ((e.tool === 'run_command' || e.tool === 'task_output') && (e.preview || e.summary)) {
+            const text = (e.preview ?? e.summary).split('\n').slice(0, 40);
+            setTermLines((l) => [...l.slice(-400), `$ ${e.tool}${e.ok ? '' : ' ✗'}`, ...text]);
+          }
           break;
+        }
         case 'child-tool-end':
           push({ id: rid(), kind: 'tool', tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, child: `${e.role}·${e.childId.slice(-4)}` });
           break;
@@ -107,6 +120,7 @@ export function App(): React.ReactElement {
           setRows((r) => (r.some((x) => x.kind === 'assistant') ? r : [...r, { id: rid(), kind: 'assistant', text: e.answer }]));
           setRunning(false); setStatusLine(''); setReasoningTail('');
           refreshSidebar();
+          window.brainrouter.send({ kind: 'query', id: 'q-files', name: 'changed-files' });
           break;
         }
         case 'turn-error':
@@ -122,6 +136,7 @@ export function App(): React.ReactElement {
           setInfo((i) => ({ ...i, sessionKey: e.sessionKey, model: e.model || i.model }));
           refreshSidebar();
           break;
+        case 'tokens-updated': setTokens({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, turns: e.turns }); break;
         case 'query-result': handleQueryResult(e.id, e.ok ? e.result : undefined); break;
         default: break;
       }
@@ -136,6 +151,8 @@ export function App(): React.ReactElement {
     if (id === 'q-sessions' && Array.isArray(result)) setSessions(result as SessionRow[]);
     if (id === 'q-fleet' && Array.isArray(result)) setFleet(result as FleetRow[]);
     if (id === 'q-info' && result && typeof result === 'object') setInfo(result as typeof info);
+    if (id === 'q-files' && Array.isArray(result)) setChangedFiles(result as Array<{ status: string; path: string }>);
+    if (id === 'q-diff' && result && typeof result === 'object') setDiffView(result as { path: string; diff: string });
   }
 
   function refreshSidebar(): void {
@@ -143,6 +160,7 @@ export function App(): React.ReactElement {
     window.brainrouter.send({ kind: 'query', id: 'q-sessions', name: 'list-sessions' });
     window.brainrouter.send({ kind: 'query', id: 'q-fleet', name: 'fleet' });
     window.brainrouter.send({ kind: 'query', id: 'q-info', name: 'session-info' });
+    window.brainrouter.send({ kind: 'query', id: 'q-files', name: 'changed-files' });
   }
 
   function answerInteraction(response: { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' }): void {
@@ -232,6 +250,30 @@ export function App(): React.ReactElement {
       </main>
 
       <aside className="sidebar">
+        <div className="side-tabs">
+          <button className={sideTab === 'context' ? 'on' : ''} onClick={() => setSideTab('context')}>Context</button>
+          <button className={sideTab === 'files' ? 'on' : ''} onClick={() => { setSideTab('files'); window.brainrouter.send({ kind: 'query', id: 'q-files', name: 'changed-files' }); }}>
+            Files{changedFiles.length ? ` (${changedFiles.length})` : ''}
+          </button>
+        </div>
+        {sideTab === 'files' ? (
+          diffView ? (
+            <div className="diff-pane">
+              <button className="rail-btn" onClick={() => setDiffView(null)}>← {diffView.path}</button>
+              <pre className="diff">{diffView.diff.split('\n').map((line, i) => (
+                <div key={i} className={line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : ''}>{line || ' '}</div>
+              ))}</pre>
+            </div>
+          ) : (
+            <div>
+              {changedFiles.length === 0 ? <div className="kv"><span>working tree clean</span></div> : changedFiles.map((f) => (
+                <div key={f.path} className="file-row" onClick={() => window.brainrouter.send({ kind: 'query', id: 'q-diff', name: 'file-diff', args: { path: f.path } })}>
+                  <span className={`fstat s-${f.status.replace('?', 'u')}`}>{f.status}</span>{f.path}
+                </div>
+              ))}
+            </div>
+          )
+        ) : (<>
         <h2>Active context</h2>
         <div className="kv"><span>Host</span><b><span className={`dot ${hostUp ? 'on' : 'off'}`} />{hostUp ? 'online' : 'starting…'}</b></div>
         <div className="kv"><span>Model</span><b>{info.model ?? '—'}</b></div>
@@ -242,10 +284,29 @@ export function App(): React.ReactElement {
         ) : (
           fleet.map((f) => <div key={f.id} className="kv"><span>{f.kind}</span><b>{f.label}</b></div>)
         )}
+        <h2>Tokens</h2>
+        <div className="kv"><span>Session</span><b>{tokens ? `${tokens.promptTokens.toLocaleString()} in / ${tokens.completionTokens.toLocaleString()} out · ${tokens.turns} turns` : '—'}</b></div>
         <h2>Settings</h2>
         <div className="kv"><span>Source</span><b>~/.config/brainrouter</b></div>
         <div className="kv"><span>Shared with</span><b>brainrouter CLI</b></div>
+        </>)}
       </aside>
+
+      <section className="bottom">
+        <div className="side-tabs">
+          <button className={bottomTab === 'terminal' ? 'on' : ''} onClick={() => setBottomTab('terminal')}>Terminal</button>
+          <button className={bottomTab === 'tools' ? 'on' : ''} onClick={() => setBottomTab('tools')}>Tool calls{toolLog.length ? ` (${toolLog.length})` : ''}</button>
+        </div>
+        {bottomTab === 'terminal' ? (
+          <pre className="term">{termLines.length ? termLines.join('\n') : 'Shell output from run_command / background tasks appears here.'}</pre>
+        ) : (
+          <div className="toollog">
+            {toolLog.length === 0 ? <div className="kv"><span>no tool calls yet</span></div> : toolLog.slice().reverse().map((t) => (
+              <div key={t.id} className="toollog-row"><span className={t.ok ? 'okdot' : 'faildot'} />{t.tool} — {t.summary}</div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {interaction ? (
         <div className="overlay" onKeyDown={(e) => {

@@ -43,6 +43,7 @@ export type AgentEvent =
   | { kind: 'interaction-request'; request: InteractionRequest }
   | { kind: 'turn-complete'; answer: string }
   | { kind: 'turn-error'; message: string }
+  | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number }
   | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string }
   | { kind: 'query-result'; id: string; ok: boolean; result?: unknown; error?: string };
 
@@ -52,7 +53,7 @@ const EVENT_KINDS = new Set<string>([
   'turn-start', 'status', 'assistant-turn-start', 'assistant-delta', 'assistant-turn-end',
   'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
   'child-complete', 'plan-update', 'compaction', 'memory', 'approval-decision',
-  'interaction-request', 'turn-complete', 'turn-error', 'session-changed', 'query-result',
+  'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'session-changed', 'query-result',
 ]);
 
 /** Structural guard for a wire-decoded event message. Pure. */
