@@ -93,6 +93,7 @@ import { runExtractResult } from '../runtime/tools/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
 import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../state/completionInbox.js';
+import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -1101,6 +1102,11 @@ export class Agent {
     // model that ignored the first prod off the single-thread default.
     let fanOutGuardFired = 0;
     const FANOUT_GUARD_MAX = 2;
+    // CC-P6.2 — deliverable guardrail. A turn that did real tool work must END
+    // on the deliverable, not a trailing question / offer / promise. One
+    // bounded nudge, then accept whatever comes next (never loops).
+    let deliverableGuardFired = 0;
+    const DELIVERABLE_GUARD_MAX = 1;
     // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
     // goal_complete — so a turn that concludes WITHOUT goal_complete (just
     // delivers the answer) never reconciles the plan, leaving it stale (the
@@ -1756,6 +1762,30 @@ export class Agent {
           this.recordTranscript(guardMsg);
           callbacks.onStatusUpdate(`Recovery: fan-out-hinted-but-no-spawn (${fanOutGuardFired}/${FANOUT_GUARD_MAX}) — forcing follow-through`);
           continue;
+        }
+
+        // CC-P6.2 — deliverable guardrail. The model did real tool work this
+        // turn but its FINAL message ends on a deferral (trailing question,
+        // "let me know…" offer, or a promise of future work) instead of the
+        // deliverable. Nudge once to deliver the result in-message, then
+        // accept the next reply regardless. Applies to child agents too —
+        // their final message IS their return value, so a deferral ending
+        // hands the parent an empty result.
+        if (
+          deliverableGuardFired < DELIVERABLE_GUARD_MAX &&
+          this.lastTurnToolCalls > 0 &&
+          typeof response.content === 'string'
+        ) {
+          const deferral = classifyDeferral(response.content);
+          if (deferral) {
+            deliverableGuardFired += 1;
+            const preview = response.content.trim().slice(-160).replace(/\s+/g, ' ');
+            const guardMsg = { role: 'user', content: buildDeliverableCorrection(deferral, preview) };
+            this.chatHistory.push(guardMsg);
+            this.recordTranscript(guardMsg);
+            callbacks.onStatusUpdate(`Recovery: ended-on-${deferral} (${deliverableGuardFired}/${DELIVERABLE_GUARD_MAX}) — forcing the deliverable`);
+            continue;
+          }
         }
 
         // Plan-sync guardrail — see planCompletedAtTurnStart. The model is about
