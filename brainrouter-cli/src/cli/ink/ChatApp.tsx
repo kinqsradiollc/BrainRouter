@@ -10,7 +10,7 @@ export { ScrollbackRow } from './ScrollbackRow.js';
 import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
-import { appendHistory, historyPrev, historyNext, LIVE } from '../../runtime/inputHistory.js';
+import { appendHistory, historyPrev, historyNext, searchHistory, LIVE } from '../../runtime/inputHistory.js';
 import { flagSuggestions, applyFlagCompletion } from '../../runtime/slashFlags.js';
 // 0.3.9 — show the model's max prompt-context window in the footer next
 // to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
@@ -322,6 +322,8 @@ function ChatAppContent({
   const scrollMaxRef = useRef(0); // top clamp (totalLines - budget)
   const mainWidthRef = useRef(80); // width for push-time height estimates
   const [scrollMode, setScrollMode] = useState(false);
+  // CC-P1.7 — Ctrl+R reverse history search: null = off; query + skip cycle.
+  const [histSearch, setHistSearch] = useState<{ query: string; skip: number } | null>(null);
   const [composerValue, setComposerValue] = useState('');
   // INPUT-ERGO — remount key for the composer TextInput. ink-text-input only
   // initializes its internal cursor at the END of `value` on MOUNT; an external
@@ -761,6 +763,30 @@ function ChatAppContent({
     // (focus=false), so plain keys scroll instead of typing into the prompt:
     //   w / k / ↑ = up · s / j / ↓ = down · g / G = top / bottom · Esc / i / Enter = type
     // This is the only way to scroll with letter keys without them being typed.
+    // CC-P1.7 — reverse history search owns the keyboard while active. The
+    // composer is defocused (focus prop below), so plain chars build the query
+    // instead of typing into the prompt; Ctrl+R cycles older matches; Enter
+    // accepts the match into the composer; Esc cancels.
+    if (histSearch !== null) {
+      const match = searchHistory(histEntries, histSearch.query, histSearch.skip);
+      if (key.return) {
+        if (match) setComposerProgrammatic(match.value);
+        setHistSearch(null);
+      } else if (key.escape) {
+        setHistSearch(null);
+      } else if (key.ctrl && (input === 'r' || input === 'R')) {
+        setHistSearch((h) => h ? { ...h, skip: h.skip + 1 } : h);
+      } else if (key.backspace || key.delete) {
+        setHistSearch((h) => h ? { query: h.query.slice(0, -1), skip: 0 } : h);
+      } else if (input && input.length === 1 && !key.ctrl && !key.meta) {
+        setHistSearch((h) => h ? { query: h.query + input, skip: 0 } : h);
+      }
+      return;
+    }
+    if (key.ctrl && (input === 'r' || input === 'R')) {
+      setHistSearch({ query: '', skip: 0 });
+      return;
+    }
     if (scrollMode) {
       // CC-P1.1 — LINE-granular: w/s move one visual line (holding glides
       // smoothly); PageUp/Dn move a viewport page; g/G jump top/bottom.
@@ -1076,6 +1102,17 @@ function ChatAppContent({
           {/* Global Composer (TextInput) and dividers */}
           <Box flexDirection="column" marginTop={1} flexShrink={0}>
             <Text color={accentColor} dimColor>{'─'.repeat(Math.max(10, cols - 2))}</Text>
+            {histSearch !== null ? (() => {
+              const m = searchHistory(histEntries, histSearch.query, histSearch.skip);
+              return (
+                <Box>
+                  <Text color="cyan" bold>{` (reverse-i-search) `}</Text>
+                  <Text color="yellow">{`'${histSearch.query}'`}</Text>
+                  <Text color="gray">{': '}</Text>
+                  <Text wrap="truncate-end">{m ? m.value : histSearch.query ? '(no match)' : 'type to search · Ctrl+R next · Enter accept · Esc cancel'}</Text>
+                </Box>
+              );
+            })() : null}
             <Box>
               <Text color={scrollMode ? 'cyan' : accentColor} bold={scrollMode}>{scrollMode ? ' ⊟ ' : ' ❯ '}</Text>
               <TextInput
@@ -1083,7 +1120,7 @@ function ChatAppContent({
                 value={composerValue}
                 onChange={onComposerChange}
                 onSubmit={onComposerSubmit}
-                focus={!scrollMode}
+                focus={!scrollMode && histSearch === null}
                 placeholder={scrollMode ? 'SCROLL — w/s · j/k · ↑/↓ scroll · g/G top·bottom · Esc or i to type' : (phase === 'turn-running' ? '' : 'type a prompt or / for commands')}
               />
             </Box>
