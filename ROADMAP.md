@@ -64,17 +64,20 @@ and a scrollback overhaul (accurate height packing, scroll mode, live turn timer
 
 ## 0.4.15 — The Agent Behind the Glass · plan [`brainrouter-roadmap/0.4.15.md`](brainrouter-roadmap/0.4.15.md)
 
-Beyond the TUI: upgrade the **process behind it** to reference-coding-agent level,
-keeping the 0.4.14 UI. Seven threads — **A** chat ergonomics (line-level scrolling,
-mouse wheel, collapsible results, Esc-interrupt) · **B** agent-loop behavior
-(layered system-prompt architecture, final-message deliverable contract, parallel
-batching, read-before-edit, verification gate, subagent output contracts) · **C**
-context engine (byte-stable cached prefix, system-reminder channel, truncation
-contract, structured compaction) · **D** session lifecycle (`--resume`, `/rewind`,
-`/branch`) · **E** plan mode + declarative permissions · **F** extensibility (md
-slash commands, hook decision contracts, background shell) · **G** an
-agent-behavior benchmark that gates it all (batching rate, premature-question
-rate, verification rate, deliverable completeness, tokens-per-task).
+A **complete reverse-engineering of the strongest reference coding agent** —
+decomposed into twelve subsystems, each mapped against what BrainRouter has and
+rebuilt as testable contracts. Keeps the 0.4.14 UI. Threads: **A** chat ergonomics
+· **B** prompt OS + turn-engine contracts (deliverable guard, batching, autonomy/
+assessment rules, denied-tool semantics, verification gate) · **C** per-tool
+contracts (read-before-edit, unique-match edits) · **D** context OS (stable cached
+prefix, reminder channel, structured compaction) · **E** first-class task tracker
+· **F** programmable workflows (scripted stages, schema-validated child outputs,
+budgets, resume) · **G** background runtime (bg shell + output polling, wait-until,
+cron agents, recurring loop) · **H** session lifecycle (resume, rewind, branch,
+chapters) · **I** plan mode + declarative permissions + hook gates · **J**
+interaction layer (structured multi-choice questions, side-task chips, skill
+auto-trigger, md commands) · **K** headless stream-json surface · **L** the
+agent-behavior benchmark that gates it all.
 
 ---
 
