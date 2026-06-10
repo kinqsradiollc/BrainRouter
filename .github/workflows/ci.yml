@@ -52,6 +52,10 @@ jobs:
         # package-lock.json is out of sync, never mutates it. Faster than
         # `npm install` in CI because it skips dep resolution.
         run: npm ci
+        env:
+          # brainrouter-desktop devDeps include electron; CI only typechecks/
+          # vite-builds it, so skip the ~100MB binary download per run.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       - name: Build all workspaces
         # Root `build` fans out to every workspace via `npm run build -ws
