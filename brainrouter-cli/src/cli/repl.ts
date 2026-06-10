@@ -43,7 +43,7 @@ export const SLASH_COMMANDS = [
   '/continue', '/auto-review', '/auto-chain', '/vim', '/statusline', '/quiet', '/release-notes',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
-  '/tokens', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
+  '/tokens', '/usage', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
   '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugins',
@@ -200,6 +200,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Observability',
     entries: [
       { cmd: '/tokens', desc: 'Session token usage + memory-savings estimate' },
+      { cmd: '/usage', desc: 'Per-actor token breakdown — parent vs each child agent, cache hit, offload savings' },
       { cmd: '/context [all|current]', desc: 'Context-window fill (used/max/%) + token breakdown: per-skill + per-briefing + per-tool calls' },
       { cmd: '/watch', desc: 'Tail trace log (BRAINROUTER_TRACE_LOG required)' },
       { cmd: '/trace save <desc>  /trace search <q>', desc: 'Debug-trace store' },

@@ -4,6 +4,7 @@
  */
 
 import fs from 'node:fs';
+import { buildUsageBreakdown } from '../../runtime/usageBreakdown.js';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
@@ -94,6 +95,30 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       rl.once('SIGINT', onInterrupt);
       // Resume the prompt only after the user interrupts; otherwise the
       // tail stays attached.
+      return true;
+    }
+    case '/usage':
+    {
+      // CC-P5.2 — per-actor token breakdown (parent vs each child, cache hit).
+      const children = listSessions(agent.workspaceRoot)
+        .filter((c) => c.usage && c.parentSessionKey === agent.sessionKey)
+        .map((c) => ({
+          id: c.id,
+          role: c.role,
+          label: c.label,
+          promptTokens: c.usage?.promptTokens ?? 0,
+          completionTokens: c.usage?.completionTokens ?? 0,
+          calls: c.usage?.calls ?? 0,
+          wallClockMs: c.usage?.wallClockMs,
+        }));
+      const lines = buildUsageBreakdown({
+        parent: agent.sessionUsage,
+        children,
+        offload: agent.getOffloadTotals(),
+      });
+      console.log('');
+      for (const l of lines) console.log(l);
+      console.log('');
       return true;
     }
     case '/tokens':
