@@ -93,13 +93,26 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'run_command',
-    description: 'Run a shell command on the user\'s terminal. Requires user approval before execution.',
+    description: 'Run a shell command on the user\'s terminal. Requires user approval before execution. Pass background:true to DETACH a long-running command (build, server, watch) — returns an id immediately; poll its output with task_output.',
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'The shell command to run.' }
+        command: { type: 'string', description: 'The shell command to run.' },
+        background: { type: 'boolean', description: 'Detach and return an id immediately instead of blocking (poll with task_output). Default false.' }
       },
       required: ['command']
+    }
+  },
+  {
+    name: 'task_output',
+    description: 'Read incremental output of a background run_command: returns { status, exitCode, chunk, nextOffset, complete }. Pass the previous nextOffset as fromByte to read only new output.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Run id returned by run_command({background:true}).' },
+        fromByte: { type: 'number', description: 'Byte offset to read from. Default 0.' }
+      },
+      required: ['id']
     }
   },
   {

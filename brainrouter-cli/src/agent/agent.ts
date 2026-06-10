@@ -99,6 +99,7 @@ import { evaluatePermissionRules, primaryArgText } from '../runtime/exec/permiss
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import { truncateFullRead } from './readTruncation.js';
 import { waitUntilCondition } from '../runtime/waitUntil.js';
+import { startBackgroundShell, readBackgroundOutput } from '../runtime/exec/backgroundShell.js';
 import { classifyForVerification, shouldNudgeVerification, buildVerificationNudge } from './verificationGate.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
@@ -2740,6 +2741,21 @@ export class Agent {
           }
         }
 
+        // CC-P11.1 — background run: same approval gating as foreground (we are
+        // past it here), but detach instead of blocking the turn. v1 runs
+        // unsandboxed, so it is refused while cli.sandbox=on.
+        if (args.background === true) {
+          if (getCliKnobs().sandbox === 'on') {
+            return 'Background run_command is not supported with cli.sandbox=on (v1) — run it foreground or disable the sandbox.';
+          }
+          const bg = startBackgroundShell({ command: cmd, cwd: this.launchCwd, workspaceRoot: this.workspaceRoot });
+          return JSON.stringify({
+            id: bg.id,
+            status: bg.status,
+            logPath: bg.logPath,
+            note: 'Detached. Poll with task_output({ id }) — pass back nextOffset as fromByte to read incrementally. The turn is NOT blocked.',
+          });
+        }
         const sandboxConfig = resolveSandboxConfig(this.workspaceRoot, {
           readPaths: prefs.sandboxReadPaths,
           writePaths: prefs.sandboxWritePaths,
@@ -2863,6 +2879,15 @@ export class Agent {
         if (!id) throw new Error('close_worker requires an id.');
         const meta = closeWorker(this.workspaceRoot, id);
         return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
+      }
+      case 'task_output': {
+        // CC-P11.1 — incremental output of a background run_command.
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('task_output requires an id (from run_command background:true).');
+        const fromByte = typeof args.fromByte === 'number' && args.fromByte >= 0 ? Math.floor(args.fromByte) : 0;
+        const out = readBackgroundOutput(id, fromByte);
+        if (!out) return JSON.stringify({ id, found: false, note: 'Unknown background run (it dies with the CLI process).' });
+        return JSON.stringify(out);
       }
       case 'wait_until': {
         // CC-P11.2 — block until a workspace file condition holds (or timeout).
