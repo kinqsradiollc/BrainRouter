@@ -324,6 +324,8 @@ function ChatAppContent({
   const [scrollMode, setScrollMode] = useState(false);
   // CC-P1.7 — Ctrl+R reverse history search: null = off; query + skip cycle.
   const [histSearch, setHistSearch] = useState<{ query: string; skip: number } | null>(null);
+  // CC-P1.3 — Ctrl+O: expand/collapse tool previews + reasoning blocks globally.
+  const [verboseTranscript, setVerboseTranscript] = useState(false);
   const [composerValue, setComposerValue] = useState('');
   // INPUT-ERGO — remount key for the composer TextInput. ink-text-input only
   // initializes its internal cursor at the END of `value` on MOUNT; an external
@@ -431,7 +433,7 @@ function ChatAppContent({
     const packed = packVisibleLines(scrollback, {
       budget,
       lineOffset: scrollOffset,
-      estimateHeight: (e) => estimateEntryHeight(e, mainWidth),
+      estimateHeight: (e) => estimateEntryHeight(e, mainWidth, verboseTranscript),
     });
     // Refs for the scroll keys: page size + the top clamp (g / PageUp), and
     // the width used by push-time line-anchoring estimates.
@@ -439,7 +441,7 @@ function ChatAppContent({
     scrollMaxRef.current = Math.max(0, packed.totalLines - budget);
     mainWidthRef.current = mainWidth;
     return packed;
-  }, [scrollback, rows, liveReasoning, liveAssistant, mainWidth, scrollOffset]);
+  }, [scrollback, rows, liveReasoning, liveAssistant, mainWidth, scrollOffset, verboseTranscript]);
 
   const pushFns = useMemo<PushScrollback>(() => {
     const push = (entry: any) => {
@@ -787,6 +789,11 @@ function ChatAppContent({
       setHistSearch({ query: '', skip: 0 });
       return;
     }
+    // CC-P1.3 — Ctrl+O toggles the verbose transcript (full tool previews).
+    if (key.ctrl && (input === 'o' || input === 'O')) {
+      setVerboseTranscript((v) => !v);
+      return;
+    }
     if (scrollMode) {
       // CC-P1.1 — LINE-granular: w/s move one visual line (holding glides
       // smoothly); PageUp/Dn move a viewport page; g/G jump top/bottom.
@@ -1008,7 +1015,7 @@ function ChatAppContent({
                     </Text>
                   ) : null}
                   {visibleScrollback.slices.map((slice) => {
-                    const row = <ScrollbackRow key={slice.entry.id} entry={slice.entry} accentColor={accentColor} cols={mainWidth} />;
+                    const row = <ScrollbackRow key={slice.entry.id} entry={slice.entry} accentColor={accentColor} cols={mainWidth} verbose={verboseTranscript} />;
                     if (slice.clipTop === 0 && slice.clipBottom === 0) return row;
                     // Boundary entry: show only its visible rows. Fixed-height
                     // overflow:hidden wrapper; a negative top margin slides the
@@ -1256,7 +1263,7 @@ function renderMarkdownCached(text: string, width: number): string {
   return rendered;
 }
 
-export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): number {
+export function estimateEntryHeight(entry: ScrollbackEntry, cols: number, verbose = false): number {
   switch (entry.kind) {
     case 'raw':
     case 'user':
@@ -1275,8 +1282,8 @@ export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): numbe
       let h = 1;
       if (entry.preview) {
         const lines = entry.preview.split('\n').length;
-        h += Math.min(8, lines);
-        if (lines > 8) h += 1;
+        h += verbose ? lines : Math.min(8, lines);
+        if (!verbose && lines > 8) h += 1;
       }
       return h + 1;
     }
@@ -1290,7 +1297,7 @@ export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): numbe
     }
     case 'reasoning': {
       const rawLines = entry.text ? entry.text.split('\n') : [];
-      const shown = rawLines.slice(0, 10).join('\n');
+      const shown = rawLines.slice(0, verbose ? rawLines.length : 10).join('\n');
       const visible = estimateTextHeight(shown, Math.max(1, cols - 3)); // wraps inside a bordered column
       const hiddenExtra = rawLines.length > 10 ? 1 : 0;
       return 1 + visible + hiddenExtra + 1;
