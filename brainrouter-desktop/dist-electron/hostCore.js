@@ -45,6 +45,9 @@ export function createHostCore(input) {
         try {
             const answer = await input.agent.runTurn(prompt, callbacks);
             emit({ kind: 'turn-complete', answer });
+            const u = input.agent.sessionUsage;
+            if (u)
+                emit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns });
         }
         catch (err) {
             emit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });

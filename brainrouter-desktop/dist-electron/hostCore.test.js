@@ -175,3 +175,16 @@ test('createBrokerPort: confirm/choice round-trip + dismissal fails closed', asy
     broker.resolve(emitted[2].request.id, { type: 'dismissed' });
     assert.equal(await dismissedP, false, 'dismissed confirm = deny');
 });
+test('turn-complete is followed by tokens-updated when the agent exposes usage', async () => {
+    const { out, send } = collect();
+    const agent = {
+        ...fakeAgent(),
+        sessionUsage: { promptTokens: 1200, completionTokens: 80, calls: 3, turns: 1 },
+    };
+    const core = createHostCore({ agent, send });
+    await core.handle({ kind: 'start-turn', prompt: 'x' });
+    const kinds = out.map((m) => m.event.kind);
+    assert.deepEqual(kinds.slice(-2), ['turn-complete', 'tokens-updated']);
+    const tok = out[out.length - 1].event;
+    assert.equal(tok.promptTokens, 1200);
+});
