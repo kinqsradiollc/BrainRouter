@@ -95,6 +95,7 @@ import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '
 import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../state/completionInbox.js';
 import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from './denialMessage.js';
+import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -617,6 +618,8 @@ export class Agent {
   // file it hasn't seen (Claude Code's read-before-edit contract). Reset by
   // loadHistory / fork / bootstrapSession (see clearSessionState).
   private filesReadThisSession = new Set<string>();
+  // CC-P9.2 — once-per-session task-tracking reminder latch.
+  private taskTrackingNudged = false;
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -1823,6 +1826,28 @@ export class Agent {
             this.chatHistory.push(guardMsg);
             this.recordTranscript(guardMsg);
             callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
+            continue;
+          }
+        }
+
+        // CC-P9.2 — task-tracking nudge. This turn did substantial multi-step
+        // tool work but no plan is being kept. Inject one per-session reminder
+        // to use update_plan (distinct from plan-sync, which needs an existing
+        // plan). Latched so it never nags.
+        if (!this.taskTrackingNudged) {
+          let planCount = 0;
+          try { planCount = readPlan(this.workspaceRoot, this.sessionKey).items.length; } catch { planCount = 0; }
+          if (shouldNudgeTaskTracking({
+            toolCallsThisTurn: this.lastTurnToolCalls,
+            planItemCount: planCount,
+            alreadyNudged: this.taskTrackingNudged,
+            silent: this.silent,
+          })) {
+            this.taskTrackingNudged = true;
+            const guardMsg = { role: 'user', content: buildTaskTrackingNudge(this.lastTurnToolCalls) };
+            this.chatHistory.push(guardMsg);
+            this.recordTranscript(guardMsg);
+            callbacks.onStatusUpdate('Reminder: multi-step work with no task list — nudging to use update_plan');
             continue;
           }
         }
