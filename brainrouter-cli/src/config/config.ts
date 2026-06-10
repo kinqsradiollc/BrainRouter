@@ -76,6 +76,14 @@ export interface CliKnobs {
    * the breadthHint heuristic. Skipped for trivial prompts regardless.
    */
   nextActionPlanner?: 'on' | 'off';
+  /**
+   * CC-P3.2 (0.4.15). Declarative tool-permission rules. Patterns are
+   * `tool` or `tool(glob)` matched against the call's primary argument
+   * (run_command→command, file tools→path, fetch_url→url). A deny match
+   * blocks the call outright; an allow match downgrades an `ask` to
+   * `allow` (never overrides a mode-based deny).
+   */
+  permissions?: { allow?: string[]; deny?: string[] };
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -586,6 +594,7 @@ export function selfHealConfig(parsed: Config): { config: Config; changed: boole
  * you're plumbing a config-override path (tests, /config reload).
  */
 export interface ResolvedCliKnobs {
+  permissions: { allow: string[]; deny: string[] };
   recallMode: 'always' | 'gated' | 'off';
   nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
@@ -660,6 +669,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   return {
     recallMode: c.recallMode ?? 'gated',
     nextActionPlanner: c.nextActionPlanner ?? 'on',
+    permissions: { allow: c.permissions?.allow ?? [], deny: c.permissions?.deny ?? [] },
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
