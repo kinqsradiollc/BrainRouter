@@ -100,3 +100,11 @@ test('garbage on the wire is ignored; shutdown dismisses + calls onShutdown', as
     assert.deepEqual(await p.response, { type: 'dismissed' });
     assert.equal(shut, true);
 });
+test('interrupt flags the agent for a cooperative stop', async () => {
+    const { send } = collect();
+    let flagged = false;
+    const agent = { ...fakeAgent(), requestInterrupt: () => { flagged = true; } };
+    const core = createHostCore({ agent, send });
+    await core.handle({ kind: 'interrupt' });
+    assert.equal(flagged, true);
+});
