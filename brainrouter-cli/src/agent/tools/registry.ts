@@ -59,6 +59,8 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'read_agent_transcript', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'close_agent', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'route_task', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // CC-P11.2 — blocking observer; waiting mutates nothing.
+  { name: 'wait_until', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // WF-TOOL — run_workflow launches a fan-out of child agents (child_write), like spawn_*.
   { name: 'run_workflow', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   // Worker-thread surface — durable, detached background agents the model can

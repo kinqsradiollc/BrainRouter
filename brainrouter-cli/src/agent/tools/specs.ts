@@ -197,6 +197,21 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'wait_until',
+    description: 'Block until a workspace condition holds or the timeout elapses: a file exists, or a file contains a text marker. Use after starting background work (a worker, a detached build writing a log) to wait for its artifact instead of polling manually. Returns { satisfied, waitedMs }.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        condition: { type: 'string', enum: ['file_exists', 'file_contains'], description: 'What to wait for.' },
+        path: { type: 'string', description: 'Workspace-relative file path to watch.' },
+        text: { type: 'string', description: 'Required for file_contains — the marker text to look for.' },
+        timeoutMs: { type: 'number', description: 'Max wait in ms. Default 60000, capped at 600000.' },
+        pollMs: { type: 'number', description: 'Poll interval in ms. Default 500, min 50.' }
+      },
+      required: ['condition', 'path']
+    }
+  },
+  {
     name: 'apply_patch',
     description: 'Apply a multi-file patch using the Begin/End envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). Lets you make several coordinated edits across files in one tool call.',
     inputSchema: {
