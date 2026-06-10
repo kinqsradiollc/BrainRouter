@@ -52,3 +52,21 @@ export function historyNext(entries: string[], index: number, draft: string): Hi
   const i = index + 1;
   return { index: i, value: entries[i] };
 }
+
+/**
+ * CC-P1.7 — reverse incremental history search (Ctrl+R). Find prompts
+ * CONTAINING `query` (case-insensitive), newest-first; `skip` returns the
+ * Nth older match so repeated Ctrl+R cycles back through history. Pure.
+ */
+export function searchHistory(entries: string[], query: string, skip = 0): { value: string; index: number } | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  let remaining = Math.max(0, skip);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].toLowerCase().includes(q)) {
+      if (remaining === 0) return { value: entries[i], index: i };
+      remaining -= 1;
+    }
+  }
+  return null;
+}
