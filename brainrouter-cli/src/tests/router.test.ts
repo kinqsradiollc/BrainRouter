@@ -102,12 +102,13 @@ test('tier classification: implementation prompt with no investigation verbs →
   assert.equal(res.agentId, 'worker');
 });
 
-test('tier classification: long-running cue → spawn-worker', async () => {
+test('tier classification: long-running cue → spawn-worker recommends spawn_worker_thread', async () => {
   const res = await routeTask({
     task: 'while I keep working, run a long-running benchmark on the recall pipeline',
     skipMemory: true,
   });
   assert.equal(res.tier, 'spawn-worker');
+  assert.equal(res.recommendedTool, 'spawn_worker_thread');
 });
 
 test('offline path: confidence capped at 0.6 + memoryEvidence empty + reason notes the gap', async () => {

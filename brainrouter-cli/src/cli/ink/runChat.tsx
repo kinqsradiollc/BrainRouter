@@ -98,7 +98,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     });
   } catch { /* hook errors must not block the REPL boot */ }
   const theme = resolveTheme(agent.workspaceRoot);
-  const banner = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
+  // Boxed banner is disabled as it is no longer needed (kept here for reference)
+  // const banner = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
+  const banner = '';
   // Track the last rendered banner so slash commands that change banner-
   // visible state (model, MCP profile, session, workflow, goal) can push
   // a fresh one into scrollback rather than leaving stale values on
@@ -746,6 +748,13 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // parent is in the middle of a tool batch — getRunningChildCount
           // reads session-store status so the count is authoritative.
           refreshFooter();
+          // FLEET-SIDEBAR — push the live running set into the sidebar's
+          // Sub-agents section NOW, and keep the 3s ticker alive during the
+          // turn. Without this the sidebar only refreshed post-turn, so
+          // task_agent / spawn_agents children that spawn AND finish inside the
+          // parent turn never appeared as running.
+          refreshBackgroundTasks();
+          ensureChildRefreshTimer();
         },
         onChildToolEnd: (event) => {
           const key = `${event.childId}:${event.tool}`;
@@ -789,6 +798,9 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // settles — without this it'd stay stuck at the pre-completion
           // number until the next user input refreshes the footer.
           refreshFooter();
+          // FLEET-SIDEBAR — keep the sidebar's Sub-agents section in sync as
+          // children settle (mirror of the footer refresh above).
+          refreshBackgroundTasks();
           // MAR-2 — this completed child may be the last one the main agent was
           // waiting on; deliver its result now rather than only on the poll tick.
           maybeResumeOnChildComplete();
@@ -926,19 +938,42 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // so we're not waking up every 3s on idle sessions.
   let childRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let lastChildCount = 0;
+  let refreshTickN = 0;
+  // Live-refresh cadence for the fleet sidebar. The sidebar path
+  // (collectRunningTasks) is just plain JSON reads, so it runs every second for
+  // real-time appearance / elapsed ticking. The EXPENSIVE count
+  // (getRunningChildCount → reconcile + git-worktree GC) is throttled to every
+  // Nth tick so we never spawn git every second.
+  const SIDEBAR_REFRESH_MS = 1000;
+  const GC_EVERY_N_TICKS = 3;
+  // Cheap "is anything live?" probe (no reconcile / worktree GC) for the
+  // ticker's own start/stop lifecycle.
+  const hasLiveActors = (): boolean => {
+    try {
+      if (listSessions(agent.workspaceRoot).some((s) => s.status === 'running' || s.status === 'pending')) return true;
+    } catch { /* ignore */ }
+    return getRunningWorkerCount() > 0 || getRunningWorkflowCount() > 0;
+  };
   const tickChildRefresh = () => {
+    // Cheap, EVERY tick → live sidebar (sub-agents appear/clear) + elapsed ticks.
+    refreshBackgroundTasks();
     // PARITY-W3: announce any background actor that finished since last tick.
     notifyIdleCompletions();
-    refreshBackgroundTasks();
-    const count = getRunningChildCount();
-    if (count !== lastChildCount) {
-      lastChildCount = count;
-      refreshFooter();
+    // Expensive (reconcile + worktree GC), THROTTLED → footer "· N working".
+    // Gated so a childless turn never spawns git: only runs while actors are
+    // live, or to wind the count back down to 0 after they finish.
+    refreshTickN = (refreshTickN + 1) % GC_EVERY_N_TICKS;
+    if (refreshTickN === 0 && (lastChildCount > 0 || hasLiveActors())) {
+      const count = getRunningChildCount();
+      if (count !== lastChildCount) {
+        lastChildCount = count;
+        refreshFooter();
+      }
     }
-    // Keep ticking while ANY background actor (child session, worker, or
-    // workflow) is live, so a lone worker/workflow finishing while idle is
-    // still caught.
-    if (count === 0 && getRunningWorkerCount() === 0 && getRunningWorkflowCount() === 0 && childRefreshTimer) {
+    // Keep ticking while a turn is ACTIVE (children may spawn at any moment) or
+    // while any background actor is live. Stop only once the turn is over AND
+    // nothing is left running (cheap check — no GC).
+    if (!isProcessing && !hasLiveActors() && childRefreshTimer) {
       clearInterval(childRefreshTimer);
       childRefreshTimer = null;
       refreshBackgroundTasks(); // final sweep → clears the panel when all done
@@ -946,8 +981,10 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   };
   const ensureChildRefreshTimer = () => {
     if (childRefreshTimer) return;
-    if (getRunningChildCount() === 0 && getRunningWorkerCount() === 0 && getRunningWorkflowCount() === 0) return;
-    childRefreshTimer = setInterval(tickChildRefresh, 3000);
+    // Run while a turn is active (so mid-turn spawns show up live) OR when
+    // something is already running in the background.
+    if (!isProcessing && !hasLiveActors()) return;
+    childRefreshTimer = setInterval(tickChildRefresh, SIDEBAR_REFRESH_MS);
   };
 
   // Background `/schedule` ticker. Single in-process timer; fires due
@@ -1001,6 +1038,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           session: agent.sessionKey,
           effort: readPreferences(agent.workspaceRoot).effort,
         }}
+        bannerInputs={buildBannerInputs(config, agent, mcpClient)}
         onReady={(ctrl) => {
           controller = ctrl;
           // Publish the shim so cliPrompt's askYesNo can find an "active
@@ -1273,13 +1311,16 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       // Uses controller.replaceBanner — overwrites the original banner
       // entry in scrollback rather than pushing a new copy, so there's
       // only ever one banner box on screen.
+      // Banner updates disabled since the boxed banner is no longer needed
+      /*
       try {
         const fresh = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
         if (fresh !== lastRenderedBanner) {
           controller.replaceBanner('\n' + fresh);
           lastRenderedBanner = fresh;
         }
-      } catch { /* banner reprint is best-effort; don't break the command */ }
+      } catch { }
+      */
       // BG-TASKS-PANEL — commands like /bg, /spawn, /workflow, /loop start
       // background actors WITHOUT a chat turn, so arm the ticker + refresh the
       // panel here too (the turn path does this in runChatTurn's finally).

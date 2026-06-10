@@ -301,7 +301,7 @@ export function createRouteTaskTool() {
   return {
     name: 'route_task',
     description:
-      'Direct-first delegation dry-run. Returns `{ tier, reason, recommendedTool, agentId, confidence, memoryEvidence }`. Tiers: `answer-direct` (no tool — reply in prose), `direct-tool` (one concrete tool answers — e.g. `read_file`, `grep_search`, `run_command`), `spawn-inline` (specialized child via `delegate_<id>`), `spawn-worker` (long-running tracked work; worker threads ship in 0.4.2). Call this BEFORE spawning to pick the right tier — fan-out without it routinely over-delegates.',
+      'Direct-first delegation dry-run. Returns `{ tier, reason, recommendedTool, agentId, confidence, memoryEvidence }`. Tiers: `answer-direct` (no tool — reply in prose), `direct-tool` (one concrete tool answers — e.g. `read_file`, `grep_search`, `run_command`), `spawn-inline` (specialized child via `delegate_<id>`), `spawn-worker` (long-running detached work that outlives the turn → `spawn_worker_thread`). Call this BEFORE spawning to pick the right tier — fan-out without it routinely over-delegates.',
     inputSchema: {
       type: 'object',
       properties: {

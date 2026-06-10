@@ -27,6 +27,7 @@ import {
   writeWorkerSummary,
   type WorkerMeta,
 } from '../state/workerStore.js';
+import { enqueueCompletion } from '../state/completionInbox.js';
 
 /** In-process worker runs, keyed by worker id. */
 const runningWorkers = new Map<string, Promise<void>>();
@@ -106,6 +107,12 @@ export function spawnWorkerThread(
       // Don't clobber a manual /workers close that landed mid-run.
       if (readWorkerMeta(input.workspaceRoot, worker.id)?.status === 'running') {
         updateWorkerMeta(input.workspaceRoot, worker.id, { status: 'completed' });
+        // COMPLETION-FEEDBACK — report the result back to the spawning agent's
+        // next turn (it didn't necessarily `wait_worker`).
+        enqueueCompletion(input.parentSessionKey, {
+          kind: 'worker', id: worker.id, status: 'completed',
+          label: input.role, summary: output, completedAt: ts(),
+        });
       }
     } catch (err) {
       // ORCH-FIX (worker analog) — the failure-bookkeeping itself touches disk
@@ -116,6 +123,10 @@ export function spawnWorkerThread(
         appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'system', event: 'error', error: (err as Error).message });
         if (readWorkerMeta(input.workspaceRoot, worker.id)?.status === 'running') {
           updateWorkerMeta(input.workspaceRoot, worker.id, { status: 'failed' });
+          enqueueCompletion(input.parentSessionKey, {
+            kind: 'worker', id: worker.id, status: 'failed',
+            label: input.role, summary: (err as Error).message, completedAt: ts(),
+          });
         }
       } catch (bookkeepingErr: any) {
         console.error(`[BrainRouter] worker ${worker.id} failure-bookkeeping threw (isolated):`, bookkeepingErr?.message ?? bookkeepingErr);

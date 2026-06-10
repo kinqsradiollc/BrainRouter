@@ -50,7 +50,7 @@ export { applyPatchEnvelope } from './applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
 import { LOCAL_TOOLS } from './tools/specs.js';
 import { normalizeToolName } from './tools/names.js';
-import { registryAllowedTools } from './tools/registry.js';
+import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS } from './tools/registry.js';
 import { localToolExecutor, localToolSpecsFromExecutors } from './tools/executors.js';
 import { assessMcpToolApproval } from './mcpApproval.js';
 export { LOCAL_TOOLS } from './tools/specs.js';
@@ -92,6 +92,7 @@ import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../runtim
 import { runExtractResult } from '../runtime/tools/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../state/workerStore.js';
+import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../state/completionInbox.js';
 import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../state/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -859,8 +860,15 @@ export class Agent {
     // pick four overlapping tools at random instead of consistently using
     // task_agent.
     const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
+    // Worker-thread tools are registered so the model can call them, but only a
+    // depth-0, non-worker orchestrator should SEE them (workers can't spawn
+    // workers; a child owns none) — hide the surface from everyone else.
+    const hideWorkerTools = hideWorkerToolsFor(this.agentDepth, this.tier);
     const filteredLocalTools = localToolSpecsFromExecutors().filter(
-      (t) => allowed.has(t.name) && !MODEL_HIDDEN_TOOLS.has(t.name),
+      (t) =>
+        allowed.has(t.name) &&
+        !MODEL_HIDDEN_TOOLS.has(t.name) &&
+        !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)),
     );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
@@ -1050,6 +1058,19 @@ export class Agent {
       const hintMsg = { role: 'system', content: pendingChildHint };
       this.chatHistory.push(hintMsg);
       this.recordTranscript(hintMsg);
+    }
+    // COMPLETION-FEEDBACK — fold in any DETACHED background actor (worker thread
+    // or fire-and-forget child) that finished since this agent's last turn, so
+    // its result lands in context the way an in-turn `wait_*` result would. The
+    // drain delivers each completion exactly once.
+    const completions = drainCompletions(this.sessionKey);
+    if (completions.length > 0) {
+      const feedback = formatCompletionFeedback(completions);
+      if (feedback) {
+        const feedbackMsg = { role: 'system', content: feedback };
+        this.chatHistory.push(feedbackMsg);
+        this.recordTranscript(feedbackMsg);
+      }
     }
 
     let loopCount = 0;
@@ -2683,6 +2704,9 @@ export class Agent {
         if (!id) throw new Error('wait_worker requires an id.');
         const meta = await waitWorker(this.workspaceRoot, id, typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined);
         if (!meta) return JSON.stringify({ id, found: false });
+        // Terminal → delivered in-turn; drop any pending next-turn feedback.
+        // A timeout leaves status 'running', so its completion still reports later.
+        if (meta.status !== 'running') acknowledgeCompletions(this.sessionKey, [id]);
         return JSON.stringify({ id, status: meta.status, summary: readWorkerSummary(this.workspaceRoot, id) ?? null });
       }
       case 'read_worker_summary': {

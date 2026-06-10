@@ -4,6 +4,13 @@ import { renderMarkdown } from './markdownRender.js';
 import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
 import type { ScrollbackEntry } from './ChatApp.js';
 
+function formatTime(date: Date | string): string {
+  const d = new Date(date);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+
 /**
  * REFAC-CHATAPP-SPLIT part 4 (0.4.6) — the scrollback row renderer + its
  * preview/duration helpers, extracted verbatim from ChatApp.tsx. Presentational
@@ -14,19 +21,18 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
   switch (entry.kind) {
     case 'raw':
       return <Text wrap={entry.noWrap ? 'truncate' : 'wrap'}>{entry.text}</Text>;
-    case 'user':
-      // Flex layout: ❯ on the left, prompt body in an inner column that
-      // takes the remaining width. Continuation lines (when the user
-      // pastes a multi-line prompt) align under the body column, not
-      // under the caret.
+    case 'user': {
+      const userTime = entry.timestamp ? `[${formatTime(entry.timestamp)}] ` : '';
       return (
         <Box marginTop={1}>
           <Text color={accentColor}>❯ </Text>
+          {userTime ? <Text color="gray" dimColor>{userTime}</Text> : null}
           <Box flexDirection="column" flexGrow={1}>
             <Text>{entry.text}</Text>
           </Box>
         </Box>
       );
+    }
     case 'assistant': {
       // Pass the WHOLE rendered markdown to a single <Text> instead of
       // splitting on \n and re-rendering each line. The old line-split
@@ -47,14 +53,16 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
       // literal markdown source.
       // Pass the live terminal width so GFM tables render to fit (and re-fit
       // on resize — `cols` is a prop, so the row re-renders when it changes).
-      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text, { width: cols })).trimEnd();
+      const rendered = (entry.raw ? entry.text : renderMarkdown(entry.text, { width: cols - 2 })).trimEnd();
       const meta = entry.durationMs !== undefined
         ? `  ${Math.floor(entry.durationMs / 1000)}s${entry.tokensIn !== undefined ? ` · ${entry.tokensIn.toLocaleString()} in / ${entry.tokensOut?.toLocaleString() ?? 0} out` : ''}`
         : '';
+      const renderTime = entry.timestamp ? `[${formatTime(entry.timestamp)}] ` : '';
       return (
         <Box flexDirection="column" marginTop={1}>
           <Box>
             <Text color="green">⏺ </Text>
+            {renderTime ? <Text color="gray" dimColor>{renderTime}</Text> : null}
             <Box flexDirection="column" flexGrow={1}>
               <Text>{rendered}</Text>
             </Box>
@@ -78,10 +86,12 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
       const dotColor = entry.ok ? 'green' : 'red';
       const previewLines = entry.preview ? splitForPreview(entry.preview) : null;
       const isDiff = entry.preview ? looksLikeDiff(entry.preview) : false;
+      const toolTime = entry.timestamp ? `[${formatTime(entry.timestamp)}] ` : '';
       return (
         <Box flexDirection="column" marginTop={1}>
           <Box>
             <Text color={dotColor}>⏺ </Text>
+            {toolTime ? <Text color="gray" dimColor>{toolTime}</Text> : null}
             <Text wrap="truncate">{entry.header}</Text>
             {entry.durationMs !== undefined ? (
               <Text color="gray" dimColor>{`  · ${formatDuration(entry.durationMs)}`}</Text>
@@ -106,10 +116,8 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
         </Box>
       );
     }
-    case 'memory':
-      // Memory pipeline events — briefing / capture / citation / contradiction.
-      // Warnings (contradictions, extraction failures) stand out; info events
-      // stay dim so the chat doesn't drown in capture chatter.
+    case 'memory': {
+      const memTime = entry.timestamp ? `[${formatTime(entry.timestamp)}] ` : '';
       return (
         <Box>
           <Text
@@ -118,14 +126,16 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
             dimColor={entry.level === 'info'}
             wrap="truncate"
           >
-            {entry.level === 'warn' ? '⚠ ' : '· '}{entry.text}
+            {entry.level === 'warn' ? '⚠ ' : '· '}{memTime}{entry.text}
           </Text>
         </Box>
       );
-    case 'plan':
+    }
+    case 'plan': {
+      const planTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="gray" bold>📋 Plan</Text>
+          <Text color="gray" bold>📋 Plan{planTime}</Text>
           {entry.explanation ? (
             <Box marginBottom={1}>
               <Text color="gray" dimColor italic>   ↳ {entry.explanation}</Text>
@@ -154,16 +164,18 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
           })}
         </Box>
       );
+    }
     case 'notice': {
       // info  → gray dim
       // warn  → yellow
       // error → red bold
       const level = entry.level ?? 'info';
       const color = level === 'error' ? 'red' : level === 'warn' ? 'yellow' : 'gray';
+      const noticeTime = entry.timestamp ? `[${formatTime(entry.timestamp)}] ` : '';
       return (
         <Box>
           <Text color={color} bold={level === 'error'} dimColor={level === 'info'} wrap="truncate">
-            {entry.text}
+            {noticeTime}{entry.text}
           </Text>
         </Box>
       );
@@ -177,10 +189,11 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
       const icon = ok ? '🏁' : '💥';
       const headerColor = ok ? 'green' : 'red';
       const bodyLines = entry.body ? entry.body.split('\n') : [];
+      const agentTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
       return (
         <Box flexDirection="column">
           <Text color={headerColor} bold>
-            {`${icon} Agent ${entry.childId} (${entry.role}) ${entry.status}`}
+            {`${icon} Agent ${entry.childId} (${entry.role}) ${entry.status}${agentTime}`}
           </Text>
           {bodyLines.length > 0 ? (
             <Box paddingLeft={4} flexDirection="column">
@@ -194,11 +207,13 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
     }
     case 'reasoning': {
       const lines = entry.text.split('\n');
-      // A dim-magenta left rule frames the chain-of-thought as a distinct
-      // "thinking aside" — visually separate from the model's actual prose.
+      const maxLines = 10;
+      const visibleLines = lines.slice(0, maxLines);
+      const hiddenLinesCount = lines.length - maxLines;
+      const reasoningTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="magenta" italic dimColor>💭 thinking</Text>
+          <Text color="magenta" italic dimColor>💭 thinking{reasoningTime}</Text>
           <Box
             flexDirection="column"
             marginLeft={1}
@@ -210,9 +225,12 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
             borderRight={false}
             borderBottom={false}
           >
-            {lines.map((line, i) => (
+            {visibleLines.map((line, i) => (
               <Text key={i} color="gray" italic wrap="wrap">{line || ' '}</Text>
             ))}
+            {hiddenLinesCount > 0 ? (
+              <Text color="magenta" dimColor italic>{`... (+${hiddenLinesCount} more line${hiddenLinesCount === 1 ? '' : 's'} of thinking hidden)`}</Text>
+            ) : null}
           </Box>
         </Box>
       );
@@ -246,9 +264,10 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
     }
     case 'compaction': {
       const summaryLines = entry.summary ? entry.summary.split('\n').slice(0, 8) : [];
+      const compTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="cyan" bold>{`📦 Compacted ${entry.droppedMessages} message(s) → kept ${entry.keptMessages}`}</Text>
+          <Text color="cyan" bold>{`📦 Compacted ${entry.droppedMessages} message(s) → kept ${entry.keptMessages}${compTime}`}</Text>
           {summaryLines.length > 0 ? (
             <Box paddingLeft={3} flexDirection="column">
               {summaryLines.map((line, i) => (
