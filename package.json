@@ -33,7 +33,7 @@
     "cli:nobuild": "node brainrouter-cli/dist/index.js"
   },
   "devDependencies": {
-    "@types/react": "^19.2.15",
+    "@types/react": "^19.2.17",
     "esbuild": "^0.25.12",
     "jest": "^30.4.2",
     "react-router-dom": "^7.15.1",
@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "@kinqs/brainrouter-mcp-server": "^0.4.13",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   }
 }
