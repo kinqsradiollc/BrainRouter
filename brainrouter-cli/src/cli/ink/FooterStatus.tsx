@@ -62,9 +62,10 @@ export function FooterStatus({
   // branch). Below 60 cols, drop the right-side hint. Below 40 cols,
   // even the effort glyph collapses to just the access pill — that's
   // the smallest viable status row.
-  const showLeftSegs = cols >= 80 && leftSegs.length > 0;
-  const showEffortLabel = cols >= 50;
-  const showEffortGlyph = !!effortGlyph && cols >= 40;
+  const isSidebarVisible = cols >= 100;
+  const showLeftSegs = cols >= 80 && leftSegs.length > 0 && !isSidebarVisible;
+  const showEffortLabel = cols >= 50 && !isSidebarVisible;
+  const showEffortGlyph = !!effortGlyph && cols >= 40 && !isSidebarVisible;
   const showRightHint = cols >= 60;
   const rightText = showRightHint
     ? (cols >= 80 ? '? for shortcuts  ·  / for commands' : '?  ·  /')

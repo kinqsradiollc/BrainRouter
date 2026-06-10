@@ -22,6 +22,12 @@ export interface BackgroundTask {
   kind: BackgroundTaskKind;
   id: string;
   label: string;
+  /** ISO start time, when known — lets the panel show elapsed time. */
+  startedAt?: string;
+  /** Sub-agent role (explorer / reviewer / worker / …) — agents only. */
+  role?: string;
+  /** True when the actor runs in an isolated git worktree (agents only). */
+  worktree?: boolean;
 }
 
 /** Read the live state stores and return everything currently running. */
@@ -30,13 +36,20 @@ export function collectRunningTasks(workspaceRoot: string): BackgroundTask[] {
   try {
     for (const s of listSessions(workspaceRoot)) {
       if (s.status === 'running' || s.status === 'pending') {
-        tasks.push({ kind: 'agent', id: s.id, label: s.label ? `${s.label} (${s.id})` : s.id });
+        tasks.push({
+          kind: 'agent',
+          id: s.id,
+          label: s.label ? `${s.label} (${s.id})` : s.id,
+          startedAt: s.startedAt,
+          role: s.role,
+          worktree: !!s.childWorkspaceIsolation,
+        });
       }
     }
   } catch { /* store unavailable — skip */ }
   try {
     for (const w of listWorkers(workspaceRoot)) {
-      if (w.status === 'running') tasks.push({ kind: 'worker', id: w.id, label: `${w.id} · ${w.role}` });
+      if (w.status === 'running') tasks.push({ kind: 'worker', id: w.id, label: `${w.id} · ${w.role}`, startedAt: w.createdAt });
     }
   } catch { /* skip */ }
   try {
@@ -55,17 +68,27 @@ export function collectRunningTasks(workspaceRoot: string): BackgroundTask[] {
           label = `${r.slug} · phase ${done}/${total}`;
         }
       }
-      tasks.push({ kind: 'workflow', id: r.slug, label });
+      tasks.push({ kind: 'workflow', id: r.slug, label, startedAt: r.startedAt });
     }
   } catch { /* skip */ }
   return tasks;
 }
 
-const GLYPH: Record<BackgroundTaskKind, string> = {
+export const GLYPH: Record<BackgroundTaskKind, string> = {
   workflow: '⟳',
   worker: '◆',
   agent: '◐',
 };
+
+/**
+ * Split running tasks into their three kinds, preserving order within each.
+ * Pure — the sidebar renders each group as its own labeled section.
+ */
+export function groupTasksByKind(tasks: BackgroundTask[]): Record<BackgroundTaskKind, BackgroundTask[]> {
+  const groups: Record<BackgroundTaskKind, BackgroundTask[]> = { agent: [], worker: [], workflow: [] };
+  for (const t of tasks) groups[t.kind].push(t);
+  return groups;
+}
 
 /** Counts per kind, for the panel header. Pure. */
 export function summarizeTasks(tasks: BackgroundTask[]): string {

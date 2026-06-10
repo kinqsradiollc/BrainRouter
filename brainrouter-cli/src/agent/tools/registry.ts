@@ -16,10 +16,12 @@ import type { AccessMode, ActionKind } from '../../runtime/exec/execPolicy.js';
  * exposure set is now GENERATED from `accessTier` here, and a guard test
  * (`tool-registry.test.ts`) fails on any registry↔policy↔parallel mismatch.
  *
- * Scope note: the dynamic worker tools (`spawn_worker_thread`, `wait_worker`, …)
- * are a separate, goal-scoped surface that isn't access-mode gated here, so they
- * are intentionally NOT in this table; the guard test treats them as a known
- * exception rather than a missing entry.
+ * Scope note: the worker-thread tools (`spawn_worker_thread`, `wait_worker`,
+ * `read_worker_summary`, `close_worker`) ARE registered here so the model can
+ * see and call them, but their exposure is further gated at runtime to depth-0 /
+ * non-worker-tier agents (workers can't spawn workers) — see `Agent.runTurn`.
+ * Other dynamic tools (`extract_result`, `workflow_progress`) remain a separate
+ * goal-scoped surface and are the guard test's known registry exceptions.
  */
 export interface LocalToolEntry {
   name: string;
@@ -59,6 +61,14 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'route_task', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // WF-TOOL — run_workflow launches a fan-out of child agents (child_write), like spawn_*.
   { name: 'run_workflow', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
+  // Worker-thread surface — durable, detached background agents the model can
+  // launch from a prompt (like spawn_agents, but outliving the turn). Exposure
+  // is further gated to depth-0 / non-worker tier in Agent.runTurn (workers
+  // can't spawn workers). spawn gates as child_write; the rest are observers.
+  { name: 'spawn_worker_thread', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
+  { name: 'wait_worker', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'read_worker_summary', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'close_worker', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // --- write tier: + structured file edits --------------------------------
   { name: 'write_file', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'edit_file', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
@@ -82,6 +92,27 @@ export function registryAllowedTools(mode: AccessMode): Set<string> {
 /** The parallel-safe local tools, generated from the registry. */
 export function registryParallelSafeLocal(): Set<string> {
   return new Set(LOCAL_TOOL_REGISTRY.filter((t) => t.parallelSafe).map((t) => t.name));
+}
+
+/**
+ * The worker-thread tool surface. Registered (so the model can call them) but
+ * exposure is runtime-gated by `hideWorkerToolsFor` — see `Agent.runTurn`.
+ */
+export const WORKER_THREAD_TOOLS = new Set([
+  'spawn_worker_thread',
+  'wait_worker',
+  'read_worker_summary',
+  'close_worker',
+]);
+
+/**
+ * Whether to hide the worker-thread surface from an agent. Workers can't spawn
+ * workers (`MAX_WORKER_DEPTH = 1`) and a child agent owns no workers of its own,
+ * so only a depth-0, non-worker orchestrator should see these tools — everyone
+ * else would only ever see tools that throw. Pure → unit-tested.
+ */
+export function hideWorkerToolsFor(depth: number, tier?: string): boolean {
+  return depth > 0 || tier === 'worker';
 }
 
 /** Lookup an entry by tool name. */

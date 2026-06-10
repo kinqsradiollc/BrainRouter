@@ -60,7 +60,7 @@ function detectRepoSignals(root: string) {
     testCmds.push('make test');
   }
   if (has('.env.example') || has('.env.sample')) hits.push('Env template (`.env.example`)');
-  if (has('CLAUDE.md') || has('AGENTS.md')) hits.push('Existing sibling agent doc');
+  if (has('CLAUDE.md') || has('AGENTS.md') || has('AGENT.md')) hits.push('Existing sibling agent doc');
   if (has('README.md')) hits.push('README.md');
   return { hits, buildCmds: dedupe(buildCmds), testCmds: dedupe(testCmds) };
 }
@@ -83,7 +83,7 @@ function renderTemplate(signals: ReturnType<typeof detectRepoSignals>, projectNa
 
   return `# AGENT.md
 
-> Instructions for AI coding agents working in this repo. Compatible with AGENT.md / AGENTS.md aware tools.
+> Instructions for AI coding agents working in this repo. Compatible with AGENT.md/ AGENTS.md / CLAUDE.md aware tools.
 
 ## Project context
 
@@ -129,7 +129,7 @@ If you have catalogued BrainRouter skills relevant to this repo, list them here:
 
 const TEMPLATE_FALLBACK = `# AGENT.md
 
-> Instructions for AI coding agents working in this repo. Compatible with AGENT.md / AGENTS.md aware tools.
+> Instructions for AI coding agents working in this repo. Compatible with AGENT.md/ AGENTS.md / CLAUDE.md aware tools.
 
 ## Project context
 
@@ -185,7 +185,7 @@ export interface InitResult {
  * read both spellings, so a singular file works everywhere.
  */
 export function initAgentMd(workspaceRoot: string): InitResult {
-  const candidates = ['AGENT.md', 'AGENTS.md'].map((name) => path.join(workspaceRoot, name));
+  const candidates = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'].map((name) => path.join(workspaceRoot, name));
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       return { status: 'exists', path: candidate };

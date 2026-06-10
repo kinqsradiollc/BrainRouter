@@ -33,6 +33,7 @@ import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
 import { resolveDelegationPolicy, evaluateDelegationGate } from './delegationPolicy.js';
 import { aggregateChildUsage } from './childAccounting.js';
 import { buildParentExecutionContextSnapshot } from './parentContext.js';
+import { enqueueCompletion, acknowledgeCompletions } from '../state/completionInbox.js';
 import { getOutputContract, parseChildOutput } from './outputContracts.js';
 import { routeTask } from './router.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from './memoryEvents.js';
@@ -852,6 +853,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
 
   updateSession(ctx.workspaceRoot, record.id, { status: 'running' });
 
+  // COMPLETION-FEEDBACK — a DETACHED child (delegate_agent / spawn_agent with
+  // wait:false) returns only its id now; its result is reported back to the
+  // parent's next turn via the completion inbox. A waited child (task_agent)
+  // returns in-turn, so it's acknowledged at wait time instead (no duplicate).
+  const reportCompletionToParent = !args.wait;
+
   const promise = (async () => {
     // CODEX-WORKTREE-MERGEBACK — guards against double cleanup: the success path
     // merges the worktree back BEFORE the completion notice + auto-chain; the
@@ -1017,6 +1024,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
         preview: previewBody,
         worktree: worktreeSummary,
       });
+      if (reportCompletionToParent) {
+        enqueueCompletion(ctx.parentSessionKey, {
+          kind: 'agent', id: record.id, status: 'completed',
+          label: role.name, summary: storedOutput, completedAt,
+        });
+      }
 
       // Auto-chain (MAS-P4-T4): when a worker finishes, optionally chain a
       // review and/or verify follow-up on its output — closing the "agent
@@ -1097,6 +1110,12 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
           status: 'failed',
           error: message,
         });
+        if (reportCompletionToParent) {
+          enqueueCompletion(ctx.parentSessionKey, {
+            kind: 'agent', id: record.id, status: 'failed',
+            label: role.name, summary: message, completedAt,
+          });
+        }
       } catch (bookkeepingErr: any) {
         console.error(`[BrainRouter] child ${record.id} failure-bookkeeping threw (isolated):`, bookkeepingErr?.message ?? bookkeepingErr);
       }
@@ -1190,6 +1209,9 @@ async function handleWait(args: any, ctx: OrchestrationContext): Promise<string>
       }
     }
   }
+
+  // Delivered in-turn — drop any pending next-turn feedback for this child.
+  acknowledgeCompletions(ctx.parentSessionKey, [id]);
 
   const record = getSession(ctx.workspaceRoot, id);
   if (!record) {
