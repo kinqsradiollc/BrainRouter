@@ -440,3 +440,8 @@ input.ctl { min-width: 220px; }
 
 /* send/stop morph inside the input */
 .input-send { position: absolute; right: 9px; bottom: 9px; }
+
+/* DESK-5 — bridge command output blocks */
+.cmd-out { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.cmd-out-head { font-family: var(--mono); font-size: 11.5px; color: var(--accent); padding: 7px 12px 6px; border-bottom: 1px solid var(--border); }
+.cmd-out pre { margin: 0; padding: 9px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text-dim); white-space: pre-wrap; max-height: 320px; overflow: auto; }

@@ -16,7 +16,7 @@ import {
   DiffPanel, FilesPanel, FileViewerPanel, Panel, PanelPicker, PlanPanel, SearchPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
-import { buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
+import { BRIDGE_COMMANDS, buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -31,6 +31,7 @@ type ChatRow =
   | { id: number; kind: 'assistant'; text: string; ts: number }
   | { id: number; kind: 'status'; text: string; ts: number }
   | { id: number; kind: 'error'; text: string; detail?: string; ts: number }
+  | { id: number; kind: 'cmd-out'; cmd: string; lines: string[]; ts: number }
   | { id: number; kind: 'tool-group'; items: ToolItem[]; ts: number };
 
 function fmtRel(ts: number): string {
@@ -284,6 +285,12 @@ export function App(): React.ReactElement {
     q('q-usage', 'usage-breakdown');
   }
 
+  const pendingCmdRef = useRef('');
+  function runBridge(cmd: string, argText = ''): void {
+    pendingCmdRef.current = `/${cmd}${argText ? ` ${argText}` : ''}`;
+    q('q-cmd', 'command:dispatch', { cmd, args: argText });
+  }
+
   const cmdCtx: CmdCtx = {
     send: (c) => window.brainrouter.send(c as never),
     query: q,
@@ -291,6 +298,8 @@ export function App(): React.ReactElement {
     openSettings,
     info: (title, body) => setInfoDialog({ title, body }),
     toast: setToast,
+    compose: (text) => { setDraft(text); setSlashDismissed(true); },
+    bridge: runBridge,
   };
 
   useEffect(() => {
@@ -437,6 +446,12 @@ export function App(): React.ReactElement {
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
+      case 'q-cmd': {
+        const lines = result && typeof result === 'object' && Array.isArray((result as { lines?: unknown }).lines)
+          ? (result as { lines: string[] }).lines : [fmt(result)];
+        setRows((r) => [...r, { id: rid(), kind: 'cmd-out', cmd: pendingCmdRef.current, lines, ts: Date.now() }]);
+        return;
+      }
       case 'a-allow-rule': setToast(`Always-allow rule saved${result && typeof result === 'object' && 'rule' in (result as object) ? `: ${(result as { rule: string }).rule}` : ''} — shared with the CLI.`); q('q-snapshot', 'config-snapshot'); return;
       case 'a-term': {
         const r = result as { out?: string; code?: number };
@@ -484,6 +499,13 @@ export function App(): React.ReactElement {
   function submit(): void {
     const prompt = draft.trim();
     if (!prompt || running) return;
+    // DESK-5 — bridge commands run against the CLI's stores, not as a turn.
+    const bridgeMatch = prompt.match(/^\/([a-z-]+)(?:\s+([\s\S]+))?$/);
+    if (bridgeMatch && BRIDGE_COMMANDS.has(bridgeMatch[1])) {
+      setDraft('');
+      runBridge(bridgeMatch[1], bridgeMatch[2] ?? '');
+      return;
+    }
     lastPromptRef.current = prompt;
     setRows((r) => [...r, { id: rid(), kind: 'user', text: prompt, ts: Date.now() }]);
     setDraft('');
@@ -655,6 +677,14 @@ export function App(): React.ReactElement {
                         <div className="error-title">{r.text}</div>
                         <div className="error-advice">Try sending your message again — your draft was kept. If it keeps happening, check the host log.</div>
                         {r.detail ? <div className="error-detail">{r.detail}</div> : null}
+                      </div>
+                    </div>
+                  );
+                  case 'cmd-out': return (
+                    <div key={r.id} className="row">
+                      <div className="cmd-out">
+                        <div className="cmd-out-head">{r.cmd}</div>
+                        <pre>{r.lines.join('\n')}</pre>
                       </div>
                     </div>
                   );

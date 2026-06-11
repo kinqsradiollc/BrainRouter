@@ -164,6 +164,21 @@ export function installDevBridge(): void {
     ],
     'action:allow-rule': (a) => ({ ok: true, rule: a.rule }),
     'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
+    'command:dispatch': (a) => {
+      const cmd = String(a.cmd ?? '');
+      const demo: Record<string, string[]> = {
+        goal: a.args ? [`Goal set: ${String(a.args)}`, 'status: active'] : ['Goal: ship DESK-5 command bridge', 'status: active · set 2026-06-11'],
+        plan: ['[x] Capture live app behavior', '[~] Implement command bridge', '[ ] Provider editor'],
+        workers: ['wkr-91 · running · vitest suite', 'wkr-87 · done · docs sweep'],
+        ps: ['worker · wkr-91 · vitest suite', 'sub-agent · agent-3f2a · survey recall pipeline'],
+        tools: ['12 MCP tools:', 'memory_search', 'cognitive_recall', 'memory_capture_turn', 'blackboard_review'],
+        status: ['model: claude-opus-4-8 (anthropic)', 'workspace: /Users/dev/BrainRouter', 'mcp brainrouter: connected (brainrouter)'],
+        memory: [`3 memories for "${String(a.args ?? '')}":`, '• reranker blend regression — fixed via 0.6/0.4 split', '• grid TUI sidebar must stay', '• release/0.4.15 active track'],
+        recall: [`recall("${String(a.args ?? '')}") → 2 anchors`, '• recall.ts blend pipeline', '• benchmark sweep config'],
+      };
+      return { lines: demo[cmd] ?? [`Unknown bridge command "${cmd}"`] };
+    },
+    'action:set-llm': (a) => ({ ok: true, provider: a.provider ?? 'openai', model: 'claude-opus-4-8', endpoint: a.endpoint ?? null }),
   };
 
   (window as unknown as { brainrouter: unknown }).brainrouter = {
