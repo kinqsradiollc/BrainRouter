@@ -41,9 +41,9 @@ export function installDevBridge(): void {
 
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => [
-      { sessionKey: 'dev:fix-recall-blend', firstUserMessage: 'fix the reranker blend regression' },
-      { sessionKey: 'dev:grid-tui', firstUserMessage: 'make the sidebar live' },
-      { sessionKey: 'dev:release-0414', firstUserMessage: 'release 0.4.14 to npm' },
+      { sessionKey: 'dev:fix-recall-blend', firstUserMessage: 'fix the reranker blend regression', modifiedAt: new Date(Date.now() - 3600_000).toISOString() },
+      { sessionKey: 'dev:grid-tui', firstUserMessage: 'make the sidebar live', modifiedAt: new Date(Date.now() - 26 * 3600_000).toISOString() },
+      { sessionKey: 'dev:release-0414', firstUserMessage: 'release 0.4.14 to npm', modifiedAt: new Date(Date.now() - 6 * 86400_000).toISOString() },
     ],
     'fleet': () => [
       { kind: 'sub-agent', id: 'agent-3f2a', label: 'explorer·3f2a — survey recall pipeline' },
@@ -78,6 +78,7 @@ export function installDevBridge(): void {
       truncated: false,
     }),
     'git-info': () => ({ repo: 'BrainRouter', branch: 'release/0.4.15', files: 4, insertions: 7670, deletions: 112 }),
+    'git-branches': () => ({ current: 'release/0.4.15', branches: ['release/0.4.15', 'main', 'feat/desk-4j-reference-patterns', 'release/0.4.14'] }),
     'file-diff': (a) => ({ path: String(a.path ?? 'src/agent/agent.ts'), diff: DEMO_DIFF }),
     'read-file': (a) => ({
       path: String(a.path ?? 'src/state/completionInbox.ts'),

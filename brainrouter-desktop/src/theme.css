@@ -552,3 +552,13 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .composer-controls .chip { background: transparent; border-color: transparent; padding: 4px 6px; font-size: 12.5px; color: var(--text); font-weight: 550; }
 .composer-controls .chip:hover { background: rgba(255,255,255,0.06); border-color: transparent; }
 .composer-controls .model-label { font-size: 12.5px; }
+
+/* ---------- DESK-4j — reference-pattern wave ---------- */
+.session-age { margin-left: auto; flex: none; color: var(--text-faint); font-size: 11px; padding-left: 8px; }
+.context-chips { display: flex; align-items: center; gap: 6px; max-width: var(--chat-w, 760px); margin: 6px auto 0; width: 100%; }
+.ctx-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 3px 9px; cursor: pointer; transition: border-color .12s, color .12s; font-family: var(--mono); }
+.ctx-chip:hover { border-color: var(--border-strong); color: var(--text); }
+.home-recents { margin-top: 22px; }
+.home-recent { display: flex; align-items: center; gap: 9px; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 13px; margin-bottom: 7px; color: var(--text-dim); font-size: 13px; cursor: pointer; text-align: left; transition: border-color .12s, color .12s; }
+.home-recent:hover { border-color: var(--border-strong); color: var(--text); }
+.home-recent .hr-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
