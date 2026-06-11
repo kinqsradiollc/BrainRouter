@@ -62,6 +62,15 @@ type ChatRow =
   | { id: number; kind: 'loading'; ts: number }
   | { id: number; kind: 'tool-group'; items: ToolItem[]; ts: number };
 
+function fmtAge(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
 function fmtRel(ts: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return 'just now';
@@ -70,7 +79,7 @@ function fmtRel(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-interface SessionRow { sessionKey: string; firstUserMessage?: string }
+interface SessionRow { sessionKey: string; firstUserMessage?: string; modifiedAt?: string }
 interface FleetRow { kind: string; id: string; label: string }
 
 let nextId = 0;
@@ -176,8 +185,11 @@ function PanelColumn({ width, onWidth, children }: {
 }
 
 /** DESK-4d — the greeting/home view shown on an empty session. */
-function HomeView({ username, stats, tab, setTab, range, setRange, model, provider }: {
+function HomeView({ username, stats, tab, setTab, range, setRange, model, provider, repo, recents, onResume }: {
   username?: string;
+  repo?: string;
+  recents?: Array<{ sessionKey: string; firstUserMessage?: string; modifiedAt?: string }>;
+  onResume?: (key: string) => void;
   stats: { sessions: number; turns: number; activeDays: number; currentStreak: number; longestStreak: number; model: string; perDay: Record<string, number> } | null;
   tab: 'overview' | 'models';
   setTab: (t: 'overview' | 'models') => void;
@@ -203,7 +215,7 @@ function HomeView({ username, stats, tab, setTab, range, setRange, model, provid
     <div className="home">
       <div className="home-greet">
         <span className="spark">✺</span>
-        <span>What's up next, {name}?</span>
+        <span>{repo ? `What should we build in ${repo}?` : `What's up next, ${name}?`}</span>
         <span className="whatsnew" onClick={() => sendReleaseNotes()}>What's new</span>
       </div>
       <div className="stats-card">
@@ -241,6 +253,18 @@ function HomeView({ username, stats, tab, setTab, range, setRange, model, provid
           </div>
         )}
       </div>
+      {recents && recents.length ? (
+        <div className="home-recents">
+          <div className="rail-section" style={{ margin: '0 0 6px' }}>Pick up where you left off</div>
+          {recents.slice(0, 3).map((r) => (
+            <button key={r.sessionKey} className="home-recent" onClick={() => onResume?.(r.sessionKey)}>
+              <span className="session-dot" />
+              <span className="hr-title">{r.firstUserMessage || r.sessionKey}</span>
+              {r.modifiedAt ? <span className="session-age">{fmtAge(r.modifiedAt)}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -293,7 +317,7 @@ export function App(): React.ReactElement {
   const [theme, setTheme] = useState(() => localStorage.getItem('br-desktop-theme') ?? 'dark');
   const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
   // DESK-4d² — composer popovers (one open at a time): mode · model · effort · account · export
-  const [pop, setPop] = useState<'' | 'mode' | 'model' | 'effort' | 'account' | 'export'>('');
+  const [pop, setPop] = useState<'' | 'mode' | 'model' | 'effort' | 'account' | 'export' | 'branch'>('');
   const [homeStats, setHomeStats] = useState<{
     sessions: number; turns: number; activeDays: number; currentStreak: number;
     longestStreak: number; model: string; perDay: Record<string, number>;
@@ -312,6 +336,7 @@ export function App(): React.ReactElement {
   const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
   const [grepHits, setGrepHits] = useState<import('./panels.js').GrepHit[] | null>(null);
   const [inlineDiffs, setInlineDiffs] = useState<Record<string, string>>({});
+  const [branches, setBranches] = useState<{ current: string | null; branches: string[] }>({ current: null, branches: [] });
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [trustAsk, setTrustAsk] = useState<string | null>(null);
@@ -514,6 +539,7 @@ export function App(): React.ReactElement {
       case 'q-read': if (result && typeof result === 'object') setFileView(result as { path: string; content: string }); return;
       case 'q-git': if (result && typeof result === 'object') setGitInfo(result as typeof gitInfo); return;
       case 'q-home': if (result && typeof result === 'object') setHomeStats(result as typeof homeStats); return;
+      case 'q-branches': if (result && typeof result === 'object') setBranches(result as typeof branches); return;
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
@@ -577,6 +603,7 @@ export function App(): React.ReactElement {
     q('q-list', 'list-files');
     q('q-git', 'git-info');
     q('q-home', 'home-stats');
+    q('q-branches', 'git-branches');
   }
 
   function answerInteraction(response: { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' }): void {
@@ -697,6 +724,7 @@ export function App(): React.ReactElement {
               <div key={s.sessionKey} className={`session${s.sessionKey === info.sessionKey ? ' active' : ''}`} title={s.sessionKey}
                    onClick={() => window.brainrouter.send({ kind: 'resume-session', sessionKey: s.sessionKey })}>
                 <span className="session-dot" style={running && s.sessionKey === info.sessionKey ? { background: 'var(--brand)' } : undefined} /><span>{s.firstUserMessage || s.sessionKey}</span>
+                {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
               </div>
             ))}
           </div>
@@ -742,7 +770,10 @@ export function App(): React.ReactElement {
             }}>
               {rows.length === 0 && !liveText && !running ? (
                 <HomeView username={info.username} stats={homeStats} tab={statsTab} setTab={setStatsTab}
-                  range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider} />
+                  range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider}
+                  repo={gitInfo?.repo ?? info.workspaceRoot?.split('/').pop()}
+                  recents={sessions}
+                  onResume={(key) => window.brainrouter.send({ kind: 'resume-session', sessionKey: key })} />
               ) : null}
               {rows.map((r, i) => {
                 switch (r.kind) {
@@ -879,7 +910,32 @@ export function App(): React.ReactElement {
                   onClick={() => running ? window.brainrouter.send({ kind: 'interrupt' }) : submit()}
                   disabled={!running && !draft.trim()}>{running ? '⏹' : '⏎'}</button>
               </div>
-                <div className="composer-controls">
+                <div className="context-chips">
+                <span className="ctx-chip" title={info.workspaceRoot}>🗀 {info.workspaceRoot?.split('/').pop() ?? 'workspace'}</span>
+                <span className="pop-wrap">
+                  {pop === 'branch' ? (
+                    <div className="menu-pop left" style={{ bottom: 'calc(100% + 8px)' }}>
+                      <div className="menu-head"><span>Branches</span></div>
+                      {branches.branches.slice(0, 12).map((b) => (
+                        <button key={b} className="menu-item" onClick={() => {
+                          setPop('');
+                          if (b === branches.current) return;
+                          setTermLines((l) => [...l.slice(-400), `❯ git checkout ${b}`]);
+                          q('a-term', 'action:term-exec', { cmd: `git checkout ${JSON.stringify(b).slice(1, -1)}` });
+                          setTimeout(() => { q('q-branches', 'git-branches'); q('q-git', 'git-info'); }, 600);
+                        }}>
+                          <span className="mi-check">{b === branches.current ? '✓' : ''}</span>{b}
+                        </button>
+                      ))}
+                      {branches.branches.length === 0 ? <div className="empty">Not a git repository.</div> : null}
+                    </div>
+                  ) : null}
+                  {branches.current ? (
+                    <span className="ctx-chip" onClick={() => setPop(pop === 'branch' ? '' : 'branch')}>⎇ {branches.current} ⌄</span>
+                  ) : null}
+                </span>
+              </div>
+              <div className="composer-controls">
                   <span className="pop-wrap">
                     {pop === 'mode' ? (
                       <div className="menu-pop left">

@@ -157,6 +157,20 @@ async function main() {
                     return { path: file, content: '', error: err instanceof Error ? err.message : String(err) };
                 }
             },
+            // DESK-4j — branch picker (pattern: branch chip with dropdown in the
+            // composer context row). Listing is read-only; checkout runs through
+            // the same user-command path as the terminal input.
+            'git-branches': () => {
+                try {
+                    const out = execFileSync('git', ['branch', '--list', '--sort=-committerdate'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 });
+                    const branches = out.split('\n').map((l) => l.replace(/^[*+]?\s*/, '').trim()).filter(Boolean).slice(0, 20);
+                    const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 }).trim();
+                    return { current, branches };
+                }
+                catch {
+                    return { current: null, branches: [] };
+                }
+            },
             'git-info': () => {
                 try {
                     const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 }).trim();
