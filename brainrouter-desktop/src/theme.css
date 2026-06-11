@@ -61,9 +61,9 @@ button { font-family: var(--font); }
 .center { flex: 1 1 0; min-width: 400px; display: flex; flex-direction: column; min-height: 0; }
 
 /* ---------- left rail ---------- */
-.rail { width: 248px; flex: none; background: var(--sidebar); border-right: 1px solid var(--border); padding: 10px 10px 12px; display: flex; flex-direction: column; min-height: 0; -webkit-app-region: drag; }
+.rail { width: 264px; flex: none; background: var(--bg); padding: 6px 0 10px 10px; display: flex; flex-direction: column; min-height: 0; -webkit-app-region: drag; }
 .rail > * { -webkit-app-region: no-drag; }
-.rail-top { display: flex; justify-content: flex-end; height: 28px; }
+.rail-top { display: flex; align-items: center; gap: 2px; height: 34px; padding: 0 2px; flex: none; }
 .rail-section { margin: 13px 4px 5px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
 .rail-scroll { flex: 1; overflow-y: auto; min-height: 0; margin: 0 -4px; padding: 0 4px; }
 .session { padding: 6.5px 10px; border-radius: var(--r-sm); color: var(--text-dim); font-size: 12.5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background .12s, color .12s; }
@@ -532,3 +532,23 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 @media (max-width: 640px) {
   .composer-row { flex-wrap: wrap; row-gap: 6px; }
 }
+
+/* ---------- DESK-4i — sidebar card + slim composer (side-by-side pass) ---------- */
+.rail-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--sidebar); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 10px 10px; overflow: hidden; }
+[data-theme="dark"] .rail-card { background: var(--surface); }
+.rail-card .rail-row { padding: 9px 12px; font-size: 13.5px; border-radius: var(--r-md); }
+.rail-card .session { padding: 8px 12px; font-size: 13px; border-radius: var(--r-md); }
+.rail-card .recents-head { margin: 16px 6px 6px; }
+
+.composer .box { padding: 0; border-radius: var(--r-md); }
+.composer textarea { padding: 12px 44px 12px 14px; max-height: 140px; min-height: 20px; }
+.input-send { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 14px; color: var(--text-faint); }
+.input-send:not(:disabled):hover { color: var(--text); }
+.input-send.stop-red { color: var(--err); }
+.composer-controls { display: flex; align-items: center; gap: 8px; max-width: var(--chat-w, 760px); margin: 8px auto 0; width: 100%; }
+.composer-controls .composer-spacer { flex: 1; }
+
+/* mode/effort controls render as quiet text below the box (observed) */
+.composer-controls .chip { background: transparent; border-color: transparent; padding: 4px 6px; font-size: 12.5px; color: var(--text); font-weight: 550; }
+.composer-controls .chip:hover { background: rgba(255,255,255,0.06); border-color: transparent; }
+.composer-controls .model-label { font-size: 12.5px; }
