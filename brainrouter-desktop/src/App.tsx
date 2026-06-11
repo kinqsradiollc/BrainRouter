@@ -27,10 +27,19 @@ type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed' 
 type ToolItem = { id: number; tool: string; summary: string; preview?: string; ok: boolean; child?: string };
 
 type ChatRow =
-  | { id: number; kind: 'user'; text: string }
-  | { id: number; kind: 'assistant'; text: string }
-  | { id: number; kind: 'status'; text: string }
-  | { id: number; kind: 'tool-group'; items: ToolItem[] };
+  | { id: number; kind: 'user'; text: string; ts: number }
+  | { id: number; kind: 'assistant'; text: string; ts: number }
+  | { id: number; kind: 'status'; text: string; ts: number }
+  | { id: number; kind: 'error'; text: string; detail?: string; ts: number }
+  | { id: number; kind: 'tool-group'; items: ToolItem[]; ts: number };
+
+function fmtRel(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 interface SessionRow { sessionKey: string; firstUserMessage?: string }
 interface FleetRow { kind: string; id: string; label: string }
@@ -55,12 +64,17 @@ function download(filename: string, content: string): void {
   URL.revokeObjectURL(a.href);
 }
 
-function ToolGroup({ row }: { row: Extract<ChatRow, { kind: 'tool-group' }> }): React.ReactElement {
+function ToolGroup({ row, live }: { row: Extract<ChatRow, { kind: 'tool-group' }>; live?: boolean }): React.ReactElement {
   const [open, setOpen] = useState(false);
   const [openItem, setOpenItem] = useState<number | null>(null);
-  const label = row.items.length === 1
-    ? `${row.items[0].child ? `[${row.items[0].child}] ` : ''}${row.items[0].tool} — ${row.items[0].summary}`
-    : `Ran ${row.items.length} commands`;
+  // Observed: live groups read "Using {tool} *"; finished ones get an
+  // outcome-phrased label ("Used N tools ›").
+  const last = row.items[row.items.length - 1];
+  const label = live
+    ? `Using ${last.child ? `[${last.child}] ` : ''}${last.tool} ✶`
+    : row.items.length === 1
+      ? `${row.items[0].child ? `[${row.items[0].child}] ` : ''}${row.items[0].tool} — ${row.items[0].summary}`
+      : `Used ${row.items.length} tools`;
   const failed = row.items.some((i) => !i.ok);
   return (
     <div className="step">
@@ -240,7 +254,15 @@ export function App(): React.ReactElement {
   const [statsRange, setStatsRange] = useState<'all' | '30d' | '7d'>('all');
 
   const liveBuf = useRef('');
+  const lastPromptRef = useRef('');
   const chatEnd = useRef<HTMLDivElement>(null);
+  const [turnStart, setTurnStart] = useState(0);
+  const [nowTick, setNowTick] = useState(0);
+  const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
+  const [grepHits, setGrepHits] = useState<import('./panels.js').GrepHit[] | null>(null);
+  const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
+  const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
+  const [trustAsk, setTrustAsk] = useState<string | null>(null);
   const commands = useMemo(() => buildCommandList(catalog), [catalog]);
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
@@ -270,6 +292,19 @@ export function App(): React.ReactElement {
     info: (title, body) => setInfoDialog({ title, body }),
     toast: setToast,
   };
+
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--chat-w', chatWidth === 'narrow' ? '640px' : chatWidth === 'wide' ? '920px' : '760px');
+    document.documentElement.style.setProperty('--chat-fs', chatSize === 'small' ? '12.5px' : chatSize === 'large' ? '14.5px' : '13.5px');
+    localStorage.setItem('br-chat-w', chatWidth);
+    localStorage.setItem('br-chat-fs', chatSize);
+  }, [chatWidth, chatSize]);
 
   useEffect(() => {
     if (!toast) return;
@@ -310,13 +345,13 @@ export function App(): React.ReactElement {
       if (last && last.kind === 'tool-group') {
         return [...r.slice(0, -1), { ...last, items: [...last.items, item] }];
       }
-      return [...r, { id: rid(), kind: 'tool-group', items: [item] }];
+      return [...r, { id: rid(), kind: 'tool-group', items: [item], ts: Date.now() }];
     });
     const flushAssistant = () => {
       const text = liveBuf.current.trim();
       liveBuf.current = '';
       setLiveText('');
-      if (text) push({ id: rid(), kind: 'assistant', text });
+      if (text) push({ id: rid(), kind: 'assistant', text, ts: Date.now() });
     };
     const off = window.brainrouter.onEvent((msg: AgentEventMessage) => {
       setHostUp(true);
@@ -340,19 +375,20 @@ export function App(): React.ReactElement {
           pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, child: `${e.role}·${e.childId.slice(-4)}` });
           break;
         case 'child-complete':
-          push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '🏁' : '💥'} agent ${e.childId} (${e.role}) ${e.status}` });
+          push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '🏁' : '💥'} agent ${e.childId} (${e.role}) ${e.status}`, ts: Date.now() });
+          setFinishedTasks((f) => [...f.slice(-30), { id: `${e.childId}-${Date.now()}`, label: `${e.role}·${e.childId.slice(-4)}`, status: e.status === 'completed' ? 'Agent · Completed' : 'Agent · Failed' }]);
           break;
         case 'plan-update':
           setLastPlan({ items: e.items, explanation: e.explanation });
-          push({ id: rid(), kind: 'status', text: '☰ Updated the plan' });
+          push({ id: rid(), kind: 'status', text: '☰ Updated the plan', ts: Date.now() });
           break;
-        case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}` }); break;
-        case 'memory': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.text}` }); break;
+        case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}`, ts: Date.now() }); break;
+        case 'memory': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.text}`, ts: Date.now() }); break;
         case 'tokens-updated': setTokens({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, turns: e.turns }); break;
         case 'interaction-request': setInteraction(e.request); setPicked([]); break;
         case 'session-changed':
           if (e.loadedMessages >= 0) {
-            setRows([{ id: rid(), kind: 'status', text: e.loadedMessages > 0 ? `Resumed ${e.sessionKey} (${e.loadedMessages} prior messages).` : 'New chat started.' }]);
+            setRows([{ id: rid(), kind: 'status', text: e.loadedMessages > 0 ? `Resumed ${e.sessionKey} (${e.loadedMessages} prior messages).` : 'New chat started.', ts: Date.now() }]);
             setSearchHits(null);
           }
           setInfo((i) => ({ ...i, sessionKey: e.sessionKey, model: e.model || i.model }));
@@ -360,15 +396,17 @@ export function App(): React.ReactElement {
           break;
         case 'turn-complete': {
           flushAssistant();
-          setRows((r) => (r.some((x) => x.kind === 'assistant') ? r : [...r, { id: rid(), kind: 'assistant', text: e.answer }]));
+          setRows((r) => (r.some((x) => x.kind === 'assistant') ? r : [...r, { id: rid(), kind: 'assistant', text: e.answer, ts: Date.now() }]));
           setRunning(false); setStatusLine(''); setReasoningTail('');
           refreshSidebar();
           break;
         }
         case 'turn-error':
           flushAssistant();
-          push({ id: rid(), kind: 'status', text: `✗ ${e.message}` });
+          push({ id: rid(), kind: 'error', text: 'Something went wrong', detail: e.message, ts: Date.now() });
           setRunning(false); setStatusLine(''); setReasoningTail('');
+          // Observed: the app preserves your message on failure.
+          setDraft((d) => d || lastPromptRef.current);
           break;
         case 'query-result': handleQueryResult(e.id, e.ok ? e.result : undefined, e.ok ? undefined : (e as { error?: string }).error); break;
         default: break;
@@ -398,6 +436,13 @@ export function App(): React.ReactElement {
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
+      case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
+      case 'a-allow-rule': setToast(`Always-allow rule saved${result && typeof result === 'object' && 'rule' in (result as object) ? `: ${(result as { rule: string }).rule}` : ''} — shared with the CLI.`); q('q-snapshot', 'config-snapshot'); return;
+      case 'a-term': {
+        const r = result as { out?: string; code?: number };
+        setTermLines((l) => [...l.slice(-400), ...(r?.out ? r.out.split('\n') : []), r?.code ? `✗ exit ${r.code}` : '']);
+        return;
+      }
       case 'q-recap': setInfoDialog({ title: 'Session recap', body: fmt(result) }); return;
       case 'q-chapters': {
         const marks = Array.isArray(result) ? result as Array<{ title: string; summary?: string }> : [];
@@ -439,9 +484,11 @@ export function App(): React.ReactElement {
   function submit(): void {
     const prompt = draft.trim();
     if (!prompt || running) return;
-    setRows((r) => [...r, { id: rid(), kind: 'user', text: prompt }]);
+    lastPromptRef.current = prompt;
+    setRows((r) => [...r, { id: rid(), kind: 'user', text: prompt, ts: Date.now() }]);
     setDraft('');
     setRunning(true);
+    setTurnStart(Date.now());
     window.brainrouter.send({ kind: 'start-turn', prompt });
   }
 
@@ -450,6 +497,14 @@ export function App(): React.ReactElement {
     const firstUser = rows.find((r) => r.kind === 'user') as { text: string } | undefined;
     return firstUser ? firstUser.text.slice(0, 48) : 'New session';
   }, [rows]);
+
+  // Observed stacking rule: a dock column holds up to two views stacked
+  // vertically; further views open new columns.
+  const panelPairs = useMemo(() => {
+    const pairs: PanelId[][] = [];
+    for (let i = 0; i < openPanels.length; i += 2) pairs.push(openPanels.slice(i, i + 2));
+    return pairs;
+  }, [openPanels]);
 
   const slashActive = !slashDismissed && !running && draft.startsWith('/') && !/\s/.test(draft);
   const slashMatches = useMemo(() => (slashActive ? filterCommands(commands, draft) : []), [slashActive, commands, draft]);
@@ -483,7 +538,7 @@ export function App(): React.ReactElement {
           <div className="kv"><span>Tokens</span><b>{tokens ? `${tokens.promptTokens.toLocaleString()} in / ${tokens.completionTokens.toLocaleString()} out` : '—'}</b></div>
           <div className="kv"><span>Config</span><b>~/.config/brainrouter</b></div>
         </Panel>);
-      case 'files': return <Panel key={id} title={def.title} onClose={close}><FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} /></Panel>;
+      case 'files': return <Panel key={id} title={def.title} onClose={close}><FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits} onGrep={(gq) => q('q-grep', 'search-content', { q: gq })} /></Panel>;
       case 'file': return <Panel key={id} title={fileView?.path ? `File — ${fileView.path.split('/').pop()}` : def.title} onClose={close}><FileViewerPanel view={fileView} /></Panel>;
       case 'diff': return (
         <Panel key={id} title={def.title} onClose={close}>
@@ -491,9 +546,9 @@ export function App(): React.ReactElement {
             onPick={(p) => q('q-diff', 'file-diff', { path: p })}
             onBack={() => setDiffView(null)} onOpenFile={openFile} />
         </Panel>);
-      case 'terminal': return <Panel key={id} title={def.title} onClose={close}><TerminalPanel lines={termLines} /></Panel>;
+      case 'terminal': return <Panel key={id} title={def.title} onClose={close}><TerminalPanel lines={termLines} onExec={(cmd) => { setTermLines((l) => [...l.slice(-400), `❯ ${cmd}`]); q('a-term', 'action:term-exec', { cmd }); }} /></Panel>;
       case 'tools': return <Panel key={id} title={def.title} onClose={close}><ToolsPanel log={toolLog} /></Panel>;
-      case 'tasks': return <Panel key={id} title={def.title} onClose={close}><TasksPanel fleet={fleet} /></Panel>;
+      case 'tasks': return <Panel key={id} title={def.title} onClose={close}><TasksPanel fleet={fleet} finished={finishedTasks} onClear={() => setFinishedTasks([])} /></Panel>;
       case 'plan': return <Panel key={id} title={def.title} onClose={close}><PlanPanel plan={lastPlan} /></Panel>;
       case 'search': return <Panel key={id} title={def.title} onClose={close}><SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} /></Panel>;
       default: return null;
@@ -511,7 +566,11 @@ export function App(): React.ReactElement {
           <button className="rail-row" onClick={() => setPaletteOpen(true)}><span className="ri">⌘</span>Commands<span className="account-chev">⌘K</span></button>
           <button className="rail-row" onClick={() => void window.brainrouter.addWorkspace()}><span className="ri">🗂</span>Add workspace…</button>
           {workspaces.recents.filter((w) => w !== workspaces.current).slice(0, 3).map((w) => (
-            <button key={w} className="rail-row" title={w} onClick={() => void window.brainrouter.openWorkspace(w)}><span className="ri">▸</span>{w.split('/').pop()}</button>
+            <button key={w} className="rail-row" title={w} onClick={() => {
+              const trusted: string[] = JSON.parse(localStorage.getItem('br-trusted') ?? '[]');
+              if (trusted.includes(w)) void window.brainrouter.openWorkspace(w);
+              else setTrustAsk(w);
+            }}><span className="ri">▸</span>{w.split('/').pop()}</button>
           ))}
           <div className="recents-head">
             <span className="rail-section" style={{ margin: 0 }}>Recents</span>
@@ -524,7 +583,7 @@ export function App(): React.ReactElement {
             ).map((s) => (
               <div key={s.sessionKey} className={`session${s.sessionKey === info.sessionKey ? ' active' : ''}`} title={s.sessionKey}
                    onClick={() => window.brainrouter.send({ kind: 'resume-session', sessionKey: s.sessionKey })}>
-                <span className="session-dot" /><span>{s.firstUserMessage || s.sessionKey}</span>
+                <span className="session-dot" style={running && s.sessionKey === info.sessionKey ? { background: 'var(--brand)' } : undefined} /><span>{s.firstUserMessage || s.sessionKey}</span>
               </div>
             ))}
           </div>
@@ -566,16 +625,39 @@ export function App(): React.ReactElement {
                 <HomeView username={info.username} stats={homeStats} tab={statsTab} setTab={setStatsTab}
                   range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider} />
               ) : null}
-              {rows.map((r) => {
+              {rows.map((r, i) => {
                 switch (r.kind) {
-                  case 'user': return <div key={r.id} className="row"><div className="user">{r.text}</div></div>;
+                  case 'user': return (
+                    <div key={r.id} className="row user-row">
+                      <div className="user">{r.text}</div>
+                      <span className="msg-actions">
+                        <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}>🗗</button>
+                        <span>{fmtRel(r.ts)}</span>
+                      </span>
+                    </div>
+                  );
                   case 'assistant': return (
                     <div key={r.id} className="row assistant md">
                       <Markdown remarkPlugins={[remarkGfm]}>{r.text}</Markdown>
                       <div className="turn-mark">✺</div>
+                      <span className="msg-actions">
+                        <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}>🗗</button>
+                        <span>{fmtRel(r.ts)}</span>
+                      </span>
                     </div>
                   );
-                  case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} /></div>;
+                  case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} live={running && i === rows.length - 1 && !liveText} /></div>;
+                  case 'error': return (
+                    <div key={r.id} className="row">
+                      <div className="error-card">
+                        <button className="icon-btn err-x" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))}>✕</button>
+                        <span className="error-icon">⚠</span>
+                        <div className="error-title">{r.text}</div>
+                        <div className="error-advice">Try sending your message again — your draft was kept. If it keeps happening, check the host log.</div>
+                        {r.detail ? <div className="error-detail">{r.detail}</div> : null}
+                      </div>
+                    </div>
+                  );
                   case 'status': return <div key={r.id} className="row status">{r.text}</div>;
                 }
               })}
@@ -585,9 +667,37 @@ export function App(): React.ReactElement {
                   <span className="caret">▍</span>
                 </div>
               ) : null}
-              {running && !liveText ? (
-                <div className="row status working">
-                  <span className="spinner" /> {statusLine || 'Working…'}{reasoningTail ? <span className="reasoning"> · {reasoningTail}</span> : null}
+              {running ? (
+                <div className="row workline">
+                  <span className="spark">✺</span>
+                  <span>{Math.max(0, Math.floor(((nowTick || Date.now()) - turnStart) / 1000))}s</span>
+                  <span>·</span>
+                  <span>{liveText ? 'writing…' : reasoningTail ? 'thinking…' : statusLine || 'working…'}</span>
+                  {reasoningTail && !liveText ? <span className="reasoning"> {reasoningTail.slice(-90)}</span> : null}
+                </div>
+              ) : null}
+              {interaction && interaction.type === 'confirm' ? (
+                <div className="approval-card" onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) answerInteraction({ type: 'confirm', approved: true });
+                }}>
+                  <div className="approval-head">
+                    <span className="approval-dot" />
+                    <span className="approval-title">{interaction.title}</span>
+                    <span className="approval-scope">Project (local)</span>
+                  </div>
+                  {interaction.tool ? <div className="approval-sub">{interaction.tool}</div> : null}
+                  {interaction.dangerous ? <div className="approval-warn">This action is flagged as potentially dangerous.</div> : null}
+                  {interaction.detail ? <pre className="approval-detail">{interaction.detail}</pre> : null}
+                  <div className="approval-actions">
+                    <button className="btn-deny" onClick={() => answerInteraction({ type: 'confirm', approved: false })}>Deny</button>
+                    <span className="spacer" />
+                    <button className="btn-always" onClick={() => {
+                      const rule = `${interaction.tool ?? 'run_command'}(*)`;
+                      q('a-allow-rule', 'action:allow-rule', { rule });
+                      answerInteraction({ type: 'confirm', approved: true });
+                    }}>Always allow</button>
+                    <button className="btn-once" autoFocus onClick={() => answerInteraction({ type: 'confirm', approved: true })}>Allow once<kbd>Ctrl+⏎</kbd></button>
+                  </div>
                 </div>
               ) : null}
               <div ref={chatEnd} />
@@ -698,10 +808,12 @@ export function App(): React.ReactElement {
             </div>
           </main>
 
-          {openPanels.map((id) => (
-            <PanelColumn key={id} width={panelWidths[id] ?? DEFAULT_WIDTHS[id] ?? 340}
-              onWidth={(w) => setPanelWidths((pw) => ({ ...pw, [id]: w }))}>
-              {renderPanel(id)}
+          {panelPairs.map((pair) => (
+            <PanelColumn key={pair.join('+')} width={panelWidths[pair[0]] ?? DEFAULT_WIDTHS[pair[0]] ?? 360}
+              onWidth={(w) => setPanelWidths((pw) => ({ ...pw, [pair[0]]: w }))}>
+              <div className="col-stack">
+                {pair.map((id) => renderPanel(id))}
+              </div>
             </PanelColumn>
           ))}
         </div>
@@ -733,26 +845,18 @@ export function App(): React.ReactElement {
         onCodeFont={setCodeFont}
         theme={theme}
         onTheme={setTheme}
+        chatWidth={chatWidth}
+        onChatWidth={setChatWidth}
+        chatSize={chatSize}
+        onChatSize={setChatSize}
       />
 
-      {interaction ? (
+      {interaction && interaction.type === 'choice' ? (
         <div className="overlay" onKeyDown={(e) => {
-          if (interaction.type === 'confirm') {
-            if (e.key === '1' || e.key === 'Enter') answerInteraction({ type: 'confirm', approved: true });
-            if (e.key === '2' || e.key === 'Escape') answerInteraction({ type: 'confirm', approved: false });
-          } else if (e.key === 'Escape') answerInteraction({ type: 'dismissed' });
+          if (e.key === 'Escape') answerInteraction({ type: 'dismissed' });
         }} tabIndex={-1} ref={(el) => el?.focus()}>
-          <div className={`dialog${interaction.type === 'confirm' && interaction.dangerous ? ' dangerous' : ''}`}>
-            {interaction.type === 'confirm' ? (
-              <>
-                <div className="dialog-title">{interaction.title}</div>
-                {interaction.detail ? <pre className="dialog-detail">{interaction.detail}</pre> : null}
-                <div className="dialog-actions">
-                  <button className="approve" onClick={() => answerInteraction({ type: 'confirm', approved: true })}>Allow <kbd>1</kbd></button>
-                  <button className="deny" onClick={() => answerInteraction({ type: 'confirm', approved: false })}>Deny <kbd>2</kbd></button>
-                </div>
-              </>
-            ) : (
+          <div className="dialog">
+            {(
               <>
                 <div className="dialog-title">{interaction.question}</div>
                 <div className="dialog-options">
@@ -772,6 +876,25 @@ export function App(): React.ReactElement {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {trustAsk ? (
+        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setTrustAsk(null); }}>
+          <div className="dialog" style={{ width: 460 }}>
+            <div className="dialog-title">Trust this workspace?</div>
+            <div className="set-desc" style={{ marginBottom: 10 }}>BrainRouter may read, write, or execute files in this directory. Only proceed if you trust this workspace.</div>
+            <pre className="dialog-detail">{trustAsk}</pre>
+            <div className="dialog-actions">
+              <button className="deny" onClick={() => setTrustAsk(null)}>Cancel</button>
+              <button className="approve" onClick={() => {
+                const trusted: string[] = JSON.parse(localStorage.getItem('br-trusted') ?? '[]');
+                localStorage.setItem('br-trusted', JSON.stringify([...new Set([...trusted, trustAsk])]));
+                void window.brainrouter.openWorkspace(trustAsk);
+                setTrustAsk(null);
+              }}>Trust workspace</button>
+            </div>
           </div>
         </div>
       ) : null}

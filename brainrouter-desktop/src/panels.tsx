@@ -67,28 +67,51 @@ export function PanelPicker({ open, onToggle }: {
 
 // ---------------------------------------------------------------------------
 
-export function FilesPanel({ files, statuses, onOpen }: {
+export interface GrepHit { file: string; line: number; snippet: string }
+
+export function FilesPanel({ files, statuses, onOpen, grepHits, onGrep }: {
   files: string[];
   statuses: Map<string, string>;
   onOpen: (path: string) => void;
+  grepHits: GrepHit[] | null;
+  onGrep: (q: string) => void;
 }): React.ReactElement {
   const [filter, setFilter] = useState('');
+  const contentMode = filter.startsWith('?');
   const shown = useMemo(() => {
+    if (contentMode) return [];
     const q = filter.trim().toLowerCase();
     const list = q ? files.filter((f) => f.toLowerCase().includes(q)) : files;
     return list.slice(0, 400);
-  }, [files, filter]);
+  }, [files, filter, contentMode]);
   return (
     <>
-      <input className="filter" placeholder="Filter files…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <input className="filter" placeholder="Filter files… (?text to search contents)" value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && contentMode && filter.slice(1).trim()) onGrep(filter.slice(1).trim()); }} />
       <div className="scroll">
-        {shown.map((f) => (
-          <div key={f} className="file-row" onClick={() => onOpen(f)} title={f}>
-            <span className={`fstat ${statuses.has(f) ? 's-' + (statuses.get(f) ?? '').replace('?', 'u') : ''}`}>{statuses.get(f) ?? ''}</span>
-            <span className="file-name">{f}</span>
-          </div>
-        ))}
-        {shown.length === 0 ? <div className="empty">No matches.</div> : null}
+        {contentMode ? (
+          grepHits === null ? <div className="empty">Press Enter to search file contents.</div>
+            : grepHits.length === 0 ? <div className="empty center-empty">No matches</div>
+            : grepHits.map((h, i) => (
+              <div key={i} className="grep-hit" onClick={() => onOpen(h.file)}>
+                <div className="grep-file">{h.file}:{h.line}</div>
+                <div className="grep-snippet">{h.snippet}</div>
+              </div>
+            ))
+        ) : files.length === 0 ? (
+          <div className="empty center-empty">Folder is empty</div>
+        ) : (
+          <>
+            {shown.map((f) => (
+              <div key={f} className="file-row" onClick={() => onOpen(f)} title={f}>
+                <span className={`fstat ${statuses.has(f) ? 's-' + (statuses.get(f) ?? '').replace('?', 'u') : ''}`}>{statuses.get(f) ?? ''}</span>
+                <span className="file-name">{f}</span>
+              </div>
+            ))}
+            {shown.length === 0 ? <div className="empty">No matches.</div> : null}
+          </>
+        )}
       </div>
     </>
   );
@@ -154,8 +177,21 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
   );
 }
 
-export function TerminalPanel({ lines }: { lines: string[] }): React.ReactElement {
-  return <pre className="term scroll">{lines.length ? lines.join('\n') : 'Shell output from run_command / background tasks appears here.'}</pre>;
+export function TerminalPanel({ lines, onExec }: { lines: string[]; onExec: (cmd: string) => void }): React.ReactElement {
+  const [cmd, setCmd] = useState('');
+  const endRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'auto' }); }, [lines.length]);
+  return (
+    <>
+      <pre className="term scroll">{lines.length ? lines.join('\n') : 'Run a command below, or watch run_command / background output here.'}<div ref={endRef} /></pre>
+      <div className="term-input-row">
+        <span className="prompt-ch">❯</span>
+        <input value={cmd} placeholder="Run a command in the workspace…" spellCheck={false}
+          onChange={(e) => setCmd(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && cmd.trim()) { onExec(cmd.trim()); setCmd(''); } }} />
+      </div>
+    </>
+  );
 }
 
 export function ToolsPanel({ log }: { log: Array<{ id: number; tool: string; ok: boolean; summary: string }> }): React.ReactElement {
@@ -168,11 +204,25 @@ export function ToolsPanel({ log }: { log: Array<{ id: number; tool: string; ok:
   );
 }
 
-export function TasksPanel({ fleet }: { fleet: Array<{ kind: string; id: string; label: string }> }): React.ReactElement {
+export interface FinishedTask { id: string; label: string; status: string }
+
+export function TasksPanel({ fleet, finished, onClear }: {
+  fleet: Array<{ kind: string; id: string; label: string }>;
+  finished: FinishedTask[];
+  onClear: () => void;
+}): React.ReactElement {
   return (
     <div className="scroll">
-      {fleet.length === 0 ? <div className="empty">No background tasks running.</div> : fleet.map((f) => (
+      <div className="tasks-section"><span>Running</span></div>
+      {fleet.length === 0 ? <div className="empty">Nothing running.</div> : fleet.map((f) => (
         <div key={f.id} className="task-row"><span className="task-kind">{f.kind}</span><span className="file-name">{f.label}</span></div>
+      ))}
+      <div className="tasks-section"><span>Finished</span>{finished.length ? <button className="tasks-clear" onClick={onClear}>Clear</button> : null}</div>
+      {finished.length === 0 ? <div className="empty">Nothing finished yet.</div> : finished.map((f) => (
+        <div key={f.id}>
+          <div className="task-row"><span className="session-dot" /><span className="file-name">{f.label}</span></div>
+          <div className="task-status">{f.status}</div>
+        </div>
       ))}
     </div>
   );

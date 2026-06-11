@@ -74,6 +74,10 @@ export function SettingsDialog(props: {
   onCodeFont: (f: string) => void;
   theme: string;
   onTheme: (t: string) => void;
+  chatWidth: string;
+  onChatWidth: (w: string) => void;
+  chatSize: string;
+  onChatSize: (z: string) => void;
 }): React.ReactElement | null {
   const { snapshot, section } = props;
   const [modelDraft, setModelDraft] = useState<string | null>(null);
@@ -217,6 +221,20 @@ export function SettingsDialog(props: {
           </Row>
           <Row title="Code font" desc="Monospace font for code, diffs and the terminal panel (desktop only).">
             <input className="ctl" value={props.codeFont} placeholder="e.g. JetBrains Mono" onChange={(e) => props.onCodeFont(e.target.value)} />
+          </Row>
+          <Row title="Transcript width" desc="Maximum width of the transcript and composer columns.">
+            <div className="seg">
+              {['narrow', 'medium', 'wide'].map((w) => (
+                <button key={w} className={props.chatWidth === w ? 'active' : ''} onClick={() => props.onChatWidth(w)}>{w[0].toUpperCase() + w.slice(1)}</button>
+              ))}
+            </div>
+          </Row>
+          <Row title="Transcript text size" desc="Size of the conversation transcript text.">
+            <div className="seg">
+              {['small', 'medium', 'large'].map((z) => (
+                <button key={z} className={props.chatSize === z ? 'active' : ''} onClick={() => props.onChatSize(z)}>{z[0].toUpperCase() + z.slice(1)}</button>
+              ))}
+            </div>
           </Row>
           <Row title="Raw scrollback (CLI)" desc="Skip markdown rendering in the terminal REPL for copy-friendly text. (/raw)">
             <Toggle on={pb('rawScrollback', false)} onChange={(v) => props.onPref('rawScrollback', v)} />
