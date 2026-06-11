@@ -112,6 +112,80 @@ function PanelColumn({ width, onWidth, children }: {
   );
 }
 
+/** DESK-4d — the greeting/home view shown on an empty session. */
+function HomeView({ username, stats, tab, setTab, range, setRange, model, provider }: {
+  username?: string;
+  stats: { sessions: number; turns: number; activeDays: number; currentStreak: number; longestStreak: number; model: string; perDay: Record<string, number> } | null;
+  tab: 'overview' | 'models';
+  setTab: (t: 'overview' | 'models') => void;
+  range: 'all' | '30d' | '7d';
+  setRange: (r: 'all' | '30d' | '7d') => void;
+  model?: string;
+  provider?: string;
+}): React.ReactElement {
+  const name = username ? username.charAt(0).toUpperCase() + username.slice(1) : 'there';
+  const days = range === '7d' ? 7 : range === '30d' ? 30 : 119;
+  const cells: Array<{ day: string; n: number }> = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    cells.push({ day: key, n: stats?.perDay[key] ?? 0 });
+  }
+  const inRange = cells.filter((c) => c.n > 0);
+  const turnsInRange = cells.reduce((s, c) => s + c.n, 0);
+  const lvl = (n: number) => (n === 0 ? '' : n <= 2 ? ' h1' : n <= 5 ? ' h2' : ' h3');
+  return (
+    <div className="home">
+      <div className="home-greet">
+        <span className="spark">✺</span>
+        <span>What's up next, {name}?</span>
+        <span className="whatsnew" onClick={() => sendReleaseNotes()}>What's new</span>
+      </div>
+      <div className="stats-card">
+        <div className="stats-head">
+          <div className="seg">
+            <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>Overview</button>
+            <button className={tab === 'models' ? 'active' : ''} onClick={() => setTab('models')}>Models</button>
+          </div>
+          <div className="seg">
+            {(['all', '30d', '7d'] as const).map((r) => (
+              <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{r === 'all' ? 'All' : r}</button>
+            ))}
+          </div>
+        </div>
+        {tab === 'overview' ? (
+          <>
+            <div className="stat-grid">
+              <div className="stat-card"><div className="stat-label">Sessions</div><div className="stat-value">{stats?.sessions ?? 0}</div></div>
+              <div className="stat-card"><div className="stat-label">Turns</div><div className="stat-value">{range === 'all' ? stats?.turns ?? 0 : turnsInRange}</div></div>
+              <div className="stat-card"><div className="stat-label">Active days</div><div className="stat-value">{range === 'all' ? stats?.activeDays ?? 0 : inRange.length}</div></div>
+              <div className="stat-card"><div className="stat-label">Current streak</div><div className="stat-value">{stats?.currentStreak ?? 0}d</div></div>
+              <div className="stat-card"><div className="stat-label">Longest streak</div><div className="stat-value">{stats?.longestStreak ?? 0}d</div></div>
+              <div className="stat-card"><div className="stat-label">Model</div><div className="stat-value" style={{ fontSize: 13 }}>{stats?.model ?? model ?? '—'}</div></div>
+              <div className="stat-card"><div className="stat-label">Provider</div><div className="stat-value" style={{ fontSize: 13 }}>{provider ?? '—'}</div></div>
+              <div className="stat-card"><div className="stat-label">Workspace state</div><div className="stat-value" style={{ fontSize: 13 }}>shared w/ CLI</div></div>
+            </div>
+            <div className="heatmap" title="Turns per day">
+              {cells.map((c) => <span key={c.day} className={`heat-cell${lvl(c.n)}`} title={`${c.day}: ${c.n}`} />)}
+            </div>
+          </>
+        ) : (
+          <div className="stat-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <div className="stat-card"><div className="stat-label">Active model</div><div className="stat-value" style={{ fontSize: 14 }}>{model ?? '—'}</div></div>
+            <div className="stat-card"><div className="stat-label">Provider</div><div className="stat-value" style={{ fontSize: 14 }}>{provider ?? '—'}</div></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function sendReleaseNotes(): void {
+  window.brainrouter.send({ kind: 'query', id: 'q-recap', name: 'recap' });
+}
+
 export function App(): React.ReactElement {
   const [rows, setRows] = useState<ChatRow[]>([]);
   const [draft, setDraft] = useState('');
@@ -121,7 +195,7 @@ export function App(): React.ReactElement {
   const [liveText, setLiveText] = useState('');
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [fleet, setFleet] = useState<FleetRow[]>([]);
-  const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string }>({});
+  const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string; username?: string }>({});
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
@@ -153,6 +227,15 @@ export function App(): React.ReactElement {
   const [slashSel, setSlashSel] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [codeFont, setCodeFont] = useState(() => localStorage.getItem('br-code-font') ?? '');
+  const [theme, setTheme] = useState(() => localStorage.getItem('br-desktop-theme') ?? 'dark');
+  const [mode, setMode] = useState<'chat' | 'code'>('code');
+  const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
+  const [homeStats, setHomeStats] = useState<{
+    sessions: number; turns: number; activeDays: number; currentStreak: number;
+    longestStreak: number; model: string; perDay: Record<string, number>;
+  } | null>(null);
+  const [statsTab, setStatsTab] = useState<'overview' | 'models'>('overview');
+  const [statsRange, setStatsRange] = useState<'all' | '30d' | '7d'>('all');
 
   const liveBuf = useRef('');
   const chatEnd = useRef<HTMLDivElement>(null);
@@ -165,6 +248,7 @@ export function App(): React.ReactElement {
     setOpenPanels((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   }
   function ensurePanel(id: PanelId): void {
+    setMode('code');
     setOpenPanels((p) => (p.includes(id) ? p : [...p, id]));
   }
   function openFile(path: string): void {
@@ -205,6 +289,11 @@ export function App(): React.ReactElement {
       codeFont.trim() ? `"${codeFont.trim()}", "SF Mono", Consolas, monospace` : '"SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace');
     localStorage.setItem('br-code-font', codeFont);
   }, [codeFont]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('br-desktop-theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     const push = (row: ChatRow) => setRows((r) => [...r, row]);
@@ -296,6 +385,7 @@ export function App(): React.ReactElement {
       case 'q-list': if (result && typeof result === 'object') setAllFiles((result as { files: string[] }).files ?? []); return;
       case 'q-read': if (result && typeof result === 'object') setFileView(result as { path: string; content: string }); return;
       case 'q-git': if (result && typeof result === 'object') setGitInfo(result as typeof gitInfo); return;
+      case 'q-home': if (result && typeof result === 'object') setHomeStats(result as typeof homeStats); return;
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
@@ -329,6 +419,7 @@ export function App(): React.ReactElement {
     q('q-files', 'changed-files');
     q('q-list', 'list-files');
     q('q-git', 'git-info');
+    q('q-home', 'home-stats');
   }
 
   function answerInteraction(response: { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' }): void {
@@ -397,24 +488,36 @@ export function App(): React.ReactElement {
           <div className="rail-top">
             <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}>◧</button>
           </div>
-          <button className="rail-btn primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}>＋ New session</button>
-          <div className="rail-section">Workspaces</div>
-          <div className="session active" title={workspaces.current ?? ''}>{workspaces.current?.split('/').pop() ?? '…'}</div>
-          {workspaces.recents.filter((w) => w !== workspaces.current).slice(0, 4).map((w) => (
-            <div key={w} className="session" title={w} onClick={() => void window.brainrouter.openWorkspace(w)}>{w.split('/').pop()}</div>
+          <div className="pills">
+            <button className={`pill${mode === 'chat' ? ' active' : ''}`} onClick={() => setMode('chat')}>💬 Chat</button>
+            <button className={`pill${mode === 'code' ? ' active' : ''}`} onClick={() => setMode('code')}>‹/› Code</button>
+          </div>
+          <button className="rail-row primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><span className="ri">＋</span>New session</button>
+          <button className="rail-row" onClick={() => setPaletteOpen(true)}><span className="ri">⌘</span>Commands<span className="account-chev">⌘K</span></button>
+          <button className="rail-row" onClick={() => void window.brainrouter.addWorkspace()}><span className="ri">🗂</span>Add workspace…</button>
+          {workspaces.recents.filter((w) => w !== workspaces.current).slice(0, 3).map((w) => (
+            <button key={w} className="rail-row" title={w} onClick={() => void window.brainrouter.openWorkspace(w)}><span className="ri">▸</span>{w.split('/').pop()}</button>
           ))}
-          <button className="rail-btn" onClick={() => void window.brainrouter.addWorkspace()}>Add workspace…</button>
-          <div className="rail-section">Recents</div>
+          <div className="recents-head">
+            <span className="rail-section" style={{ margin: 0 }}>Recents</span>
+            <button className="icon-btn" title={`Sort: ${recentsSort}`} onClick={() => setRecentsSort((s) => (s === 'recent' ? 'alpha' : 'recent'))}>⇅</button>
+          </div>
           <div className="rail-scroll">
-            {sessions.map((s) => (
+            {(recentsSort === 'alpha'
+              ? [...sessions].sort((a, b) => (a.firstUserMessage ?? a.sessionKey).localeCompare(b.firstUserMessage ?? b.sessionKey))
+              : sessions
+            ).map((s) => (
               <div key={s.sessionKey} className={`session${s.sessionKey === info.sessionKey ? ' active' : ''}`} title={s.sessionKey}
                    onClick={() => window.brainrouter.send({ kind: 'resume-session', sessionKey: s.sessionKey })}>
-                {s.firstUserMessage || s.sessionKey}
+                <span className="session-dot" /><span>{s.firstUserMessage || s.sessionKey}</span>
               </div>
             ))}
           </div>
-          <button className="rail-btn" onClick={() => setPaletteOpen(true)}>⌘K Commands</button>
-          <button className="rail-btn" onClick={() => openSettings('general')}>⚙ Settings</button>
+          <div className="account-row" onClick={() => openSettings('general')} title="Settings">
+            <span className="avatar">{(info.username ?? 'br').slice(0, 2)}</span>
+            <span className="account-name">{info.username ?? 'BrainRouter'} <span className="account-sub">· {workspaces.current?.split('/').pop() ?? 'workspace'}</span></span>
+            <span className="account-chev">⌄</span>
+          </div>
         </nav>
       ) : null}
 
@@ -433,6 +536,10 @@ export function App(): React.ReactElement {
         <div className="workrow">
           <main className="center">
             <div className="chat">
+              {rows.length === 0 && !liveText && !running ? (
+                <HomeView username={info.username} stats={homeStats} tab={statsTab} setTab={setStatsTab}
+                  range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider} />
+              ) : null}
               {rows.map((r) => {
                 switch (r.kind) {
                   case 'user': return <div key={r.id} className="row"><div className="user">{r.text}</div></div>;
@@ -466,6 +573,12 @@ export function App(): React.ReactElement {
               </div>
             ) : null}
             <div className="composer">
+              {rows.length === 0 && !running ? (
+                <div className="ws-chips">
+                  <button className="ws-chip" title={info.workspaceRoot}>🖥 {info.workspaceRoot?.split('/').pop() ?? 'Local'}</button>
+                  <button className="ws-chip" onClick={() => void window.brainrouter.addWorkspace()}>🗂 Select folder…</button>
+                </div>
+              ) : null}
               <div className="box">
                 {slashActive && slashMatches.length ? (
                   <div className="slash-pop">
@@ -490,10 +603,13 @@ export function App(): React.ReactElement {
                 />
                 <div className="composer-row">
                   <span className="chip dim" onClick={() => openSettings('permissions')}>
-                    {String((snapshot?.prefs as Record<string, unknown> | undefined)?.executionMode ?? 'planning')}
+                    {String((snapshot?.prefs as Record<string, unknown> | undefined)?.executionMode ?? 'planning')} ⌄
                   </span>
                   <span className="composer-spacer" />
-                  <span className="dim model-label">{info.model ?? ''}</span>
+                  <span className="dim model-label" onClick={() => openSettings('general')} style={{ cursor: 'pointer' }}>
+                    {info.model ?? ''} · {String((snapshot?.prefs as Record<string, unknown> | undefined)?.effort ?? 'medium')}
+                  </span>
+                  <span className={`orb${running ? ' busy' : ''}`} title={running ? 'Working' : 'Idle'} />
                   {running ? (
                     <button className="send stop" onClick={() => window.brainrouter.send({ kind: 'interrupt' })}>■ Stop</button>
                   ) : (
@@ -504,12 +620,12 @@ export function App(): React.ReactElement {
             </div>
           </main>
 
-          {openPanels.map((id) => (
+          {mode === 'code' ? openPanels.map((id) => (
             <PanelColumn key={id} width={panelWidths[id] ?? DEFAULT_WIDTHS[id] ?? 340}
               onWidth={(w) => setPanelWidths((pw) => ({ ...pw, [id]: w }))}>
               {renderPanel(id)}
             </PanelColumn>
-          ))}
+          )) : null}
         </div>
       </div>
 
@@ -535,6 +651,8 @@ export function App(): React.ReactElement {
         onRunCommand={(c) => { setSettings((st) => ({ ...st, open: false })); runCommand(c, cmdCtx); }}
         codeFont={codeFont}
         onCodeFont={setCodeFont}
+        theme={theme}
+        onTheme={setTheme}
       />
 
       {interaction ? (
