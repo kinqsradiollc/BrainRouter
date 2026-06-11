@@ -601,3 +601,30 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .input-send.stop-red { background: transparent; color: var(--err); }
 .chat .md pre { border: 0; background: var(--term-bg); }
 .chat .md code { background: var(--raised); }
+
+/* ---------- DESK-4l — interactive views rail + terminal dock ---------- */
+.views-rail { flex: none; width: 176px; border-left: 1px solid var(--border); background: var(--bg); padding: 8px 7px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.vr-row { display: flex; align-items: center; gap: 9px; width: 100%; background: transparent; border: 0; border-radius: var(--r-sm); padding: 8px 9px; color: var(--text-dim); font-size: 12.5px; font-weight: 500; cursor: pointer; text-align: left; transition: background .12s, color .12s; }
+.vr-row:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.vr-row.active { background: var(--accent-soft); color: var(--text); }
+.vr-row .ic { color: inherit; }
+.vr-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vr-hint { flex: none; color: var(--text-faint); font-size: 10.5px; font-family: var(--mono); }
+
+.term-dock { flex: none; height: 240px; border-top: 1px solid var(--border-strong); background: var(--term-bg); display: flex; flex-direction: column; animation: dockUp .16s ease-out; }
+@keyframes dockUp { from { transform: translateY(14px); opacity: 0; } }
+.term-tabs { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px 0; }
+.term-tab { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; border-radius: 7px; padding: 5px 10px; color: var(--text-dim); font-size: 12px; font-family: var(--mono); cursor: pointer; transition: background .12s, color .12s; }
+.term-tab:hover { background: rgba(255,255,255,0.05); }
+.term-tab.active { background: var(--raised); color: var(--text); }
+.term-tab-x { padding: 0 2px; }
+.term-dock-body { flex: 1; min-height: 0; display: flex; padding: 6px 8px 8px; }
+.term-dock-body .xterm-wrap { flex: 1; }
+
+.rail-section.collapser { display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 0; cursor: pointer; color: var(--text-faint); font: inherit; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; padding: 0; }
+.rail-section.collapser:hover { color: var(--text-dim); }
+.session-cmd { flex: none; margin-left: auto; color: var(--text-faint); font-size: 10px; font-family: var(--mono); opacity: 0; transition: opacity .12s; }
+.session:hover .session-cmd { opacity: 1; }
+.session-cmd + .session-age { margin-left: 6px; }
+
+@media (max-width: 1100px) { .views-rail { display: none; } }

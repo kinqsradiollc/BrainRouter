@@ -33,7 +33,7 @@ const MD_COMPONENTS: Record<string, unknown> = {
 };
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, Panel, PanelPicker, PlanPanel, SearchPanel,
+  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, Panel, PlanPanel, SearchPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { BRIDGE_COMMANDS, buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
@@ -327,6 +327,7 @@ export function App(): React.ReactElement {
   const [statsRange, setStatsRange] = useState<'all' | '30d' | '7d'>('all');
 
   const liveBuf = useRef('');
+  const sessionsRef = useRef<SessionRow[]>([]);
   const lastPromptRef = useRef('');
   const chatEnd = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
@@ -343,6 +344,12 @@ export function App(): React.ReactElement {
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [trustAsk, setTrustAsk] = useState<string | null>(null);
   const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
+  // DESK-4l — bottom terminal dock with tabs (sessions stay mounted per tab).
+  const [termDockOpen, setTermDockOpen] = useState(false);
+  const [termTabs, setTermTabs] = useState<number[]>([1]);
+  const [activeTerm, setActiveTerm] = useState(1);
+  const termSeq = useRef(1);
+  const [recentsOpen, setRecentsOpen] = useState(true);
   const commands = useMemo(() => buildCommandList(catalog), [catalog]);
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
@@ -352,7 +359,12 @@ export function App(): React.ReactElement {
     setOpenPanels((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   }
   function ensurePanel(id: PanelId): void {
+    if (id === 'terminal') { setTermDockOpen(true); return; }
     setOpenPanels((p) => (p.includes(id) ? p : [...p, id]));
+  }
+  function toggleView(id: PanelId): void {
+    if (id === 'terminal') { setTermDockOpen((o) => !o); return; }
+    togglePanel(id);
   }
   function openFile(path: string): void {
     ensurePanel('file');
@@ -407,7 +419,12 @@ export function App(): React.ReactElement {
       // View shortcuts (parity with the reference app's Views menu)
       if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); togglePanel('diff'); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); togglePanel('files'); }
-      if (e.ctrlKey && e.key === '`') { e.preventDefault(); togglePanel('terminal'); }
+      if (e.ctrlKey && e.key === '`') { e.preventDefault(); setTermDockOpen((o) => !o); }
+      if (mod && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const idx = Number(e.key) - 1;
+        const sess = sessionsRef.current[idx];
+        if (sess) { e.preventDefault(); window.brainrouter.send({ kind: 'resume-session', sessionKey: sess.sessionKey }); }
+      }
       if (mod && e.key === ',') { e.preventDefault(); openSettings('general'); }
     };
     window.addEventListener('keydown', h);
@@ -541,7 +558,7 @@ export function App(): React.ReactElement {
   function handleQueryResult(id: string, result: unknown, error?: string): void {
     if (error) { setToast(`✗ ${error}`); return; }
     switch (id) {
-      case 'q-sessions': if (Array.isArray(result)) setSessions(result as SessionRow[]); return;
+      case 'q-sessions': if (Array.isArray(result)) { setSessions(result as SessionRow[]); sessionsRef.current = result as SessionRow[]; } return;
       case 'q-fleet': if (Array.isArray(result)) setFleet(result as FleetRow[]); return;
       case 'q-info': if (result && typeof result === 'object') setInfo(result as typeof info); return;
       case 'q-files': if (Array.isArray(result)) setChangedFiles(result as Array<{ status: string; path: string }>); return;
@@ -730,17 +747,20 @@ export function App(): React.ReactElement {
             }}><span className="ri"><Icon name="chev-right" size={11} /></span>{w.split('/').pop()}</button>
           ))}
           <div className="recents-head">
-            <span className="rail-section" style={{ margin: 0 }}>Recents</span>
+            <button className="rail-section collapser" style={{ margin: 0 }} onClick={() => setRecentsOpen((o) => !o)}>
+              <Icon name={recentsOpen ? 'chev-down' : 'chev-right'} size={9} /> Recents
+            </button>
             <button className="icon-btn" title={`Sort: ${recentsSort}`} onClick={() => setRecentsSort((s) => (s === 'recent' ? 'alpha' : 'recent'))}><Icon name="sort" size={13} /></button>
           </div>
-          <div className="rail-scroll">
+          <div className="rail-scroll" style={recentsOpen ? undefined : { display: 'none' }}>
             {(recentsSort === 'alpha'
               ? [...sessions].sort((a, b) => (a.firstUserMessage ?? a.sessionKey).localeCompare(b.firstUserMessage ?? b.sessionKey))
               : sessions
-            ).map((s) => (
+            ).map((s, i) => (
               <div key={s.sessionKey} className={`session${s.sessionKey === info.sessionKey ? ' active' : ''}`} title={s.sessionKey}
                    onClick={() => window.brainrouter.send({ kind: 'resume-session', sessionKey: s.sessionKey })}>
                 <span className="session-dot" style={running && s.sessionKey === info.sessionKey ? { background: 'var(--brand)' } : undefined} /><span>{s.firstUserMessage || s.sessionKey}</span>
+                {i < 9 ? <span className="session-cmd">⌘{i + 1}</span> : null}
                 {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
               </div>
             ))}
@@ -771,9 +791,7 @@ export function App(): React.ReactElement {
               {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}><Icon name="layout" size={15} /></button> : null}
               <span className="crumb"><b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b><span className="crumb-sep">/</span>{sessionTitle}</span>
               <span className="topbar-right">
-                {gitInfo?.branch ? <span className="chip dim chip-ic" title="branch"><Icon name="branch" size={11} /> {gitInfo.branch}</span> : null}
                 <button className="icon-btn" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}><Icon name="export" size={14} /></button>
-                <PanelPicker open={openPanels} onToggle={togglePanel} />
                 <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={14} /></button>
               </span>
             </header>
@@ -888,18 +906,12 @@ export function App(): React.ReactElement {
             ) : null}
             {gitInfo?.branch && (gitInfo.insertions + gitInfo.deletions > 0) ? (
               <div className="branchbar" onClick={() => ensurePanel('diff')}>
-                <span className="gitbranch">⎇ {gitInfo.branch}</span>
+                <Icon name="diff" size={12} />
                 <span><span className="add-n">+{gitInfo.insertions.toLocaleString()}</span> <span className="del-n">-{gitInfo.deletions.toLocaleString()}</span></span>
-                <span className="dim">{changedFiles.length} files — click for diff</span>
+                <span className="dim">{changedFiles.length} files changed — view diff</span>
               </div>
             ) : null}
             <div className="composer">
-              {rows.length === 0 && !running ? (
-                <div className="ws-chips">
-                  <button className="ws-chip" title={info.workspaceRoot}><Icon name="monitor" size={12} /> {info.workspaceRoot?.split('/').pop() ?? 'Local'}</button>
-                  <button className="ws-chip" onClick={() => void window.brainrouter.addWorkspace()}><Icon name="folder" size={12} /> Select folder…</button>
-                </div>
-              ) : null}
               <div className="box">
                 {slashActive && slashMatches.length ? (
                   <div className="slash-pop">
@@ -1020,7 +1032,55 @@ export function App(): React.ReactElement {
               </div>
             </PanelColumn>
           ))}
+
+          <aside className="views-rail">
+            {PANEL_DEFS.map((d) => {
+              const active = d.id === 'terminal' ? termDockOpen : openPanels.includes(d.id);
+              const hint = d.id === 'diff' ? '⇧⌘D' : d.id === 'terminal' ? '⌃`' : d.id === 'files' ? '⇧⌘F' : '';
+              return (
+                <button key={d.id} className={`vr-row${active ? ' active' : ''}`} onClick={() => toggleView(d.id)}>
+                  <Icon name={d.icon} size={14} />
+                  <span className="vr-title">{d.title}</span>
+                  {hint ? <span className="vr-hint">{hint}</span> : null}
+                </button>
+              );
+            })}
+          </aside>
         </div>
+
+        {termDockOpen ? (
+          <div className="term-dock">
+            <div className="term-tabs">
+              {termTabs.map((t) => (
+                <button key={t} className={`term-tab${t === activeTerm ? ' active' : ''}`} onClick={() => setActiveTerm(t)}>
+                  <Icon name="terminal" size={11} /> {gitInfo?.repo ?? 'shell'}{termTabs.length > 1 ? ` ${t}` : ''}
+                  {termTabs.length > 1 ? <span className="icon-btn term-tab-x" onClick={(ev) => {
+                    ev.stopPropagation();
+                    setTermTabs((tabs) => {
+                      const nextTabs = tabs.filter((x) => x !== t);
+                      if (t === activeTerm && nextTabs.length) setActiveTerm(nextTabs[0]);
+                      return nextTabs;
+                    });
+                  }}><Icon name="close" size={9} /></span> : null}
+                </button>
+              ))}
+              <button className="icon-btn" title="New terminal" onClick={() => {
+                const next = ++termSeq.current;
+                setTermTabs((tabs) => [...tabs, next]);
+                setActiveTerm(next);
+              }}><Icon name="plus" size={12} /></button>
+              <span className="composer-spacer" />
+              <button className="icon-btn" title="Hide terminal (⌃`)" onClick={() => setTermDockOpen(false)}><Icon name="close" size={12} /></button>
+            </div>
+            <div className="term-dock-body">
+              {termTabs.map((t) => (
+                <div key={t} style={t === activeTerm ? { display: 'contents' } : { display: 'none' }}>
+                  <TerminalPanel />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {pop && pop !== 'export' ? <div className="picker-backdrop" onClick={() => setPop('')} /> : null}
