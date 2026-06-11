@@ -10,7 +10,7 @@
  * Sign in once, configure once — both heads see it.
  */
 import { createBrokerPort, createHostCore } from './hostCore.js';
-import { exec, execFileSync } from 'node:child_process';
+import { exec, execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,6 +44,45 @@ interface ParentPortLike {
   postMessage(message: unknown): void;
 }
 
+/**
+ * DESK-5c — real terminal sessions: a persistent interactive shell per
+ * terminal panel (default shell on mac/linux, PowerShell on Windows),
+ * stdout/stderr accumulated in a ring buffer the renderer polls with
+ * `term-read {id, from}` — the same offset-poll contract as the CLI's
+ * background-shell store. Not a full pty (raw-mode apps like vim won't
+ * run), but a real stateful shell: cwd, env and history persist.
+ */
+interface TermSession { proc: ChildProcessWithoutNullStreams; buf: string; alive: boolean }
+const TERM_BUF_CAP = 400_000;
+
+/**
+ * DESK-5c — live model list, same endpoint contract as the CLI wizard's
+ * fetchOpenAiCompatibleModels (cli/wizard/modelsApi.ts, not imported here
+ * because it pulls the ink picker): derive `GET <endpoint>/models` by
+ * stripping the trailing /chat/completions, Bearer auth (literal "local"
+ * when no key — the LM Studio/Ollama convention), 5s timeout,
+ * `{ data: [{ id }] }` response shape.
+ */
+async function fetchEndpointModels(endpoint: string | undefined, apiKey: string): Promise<string[]> {
+  const chat = (endpoint && endpoint.trim()) || 'https://api.openai.com/v1/chat/completions';
+  const modelsUrl = chat.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const res = await fetch(modelsUrl, {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim() || 'local'}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const body = await res.json() as { data?: Array<{ id?: string }> };
+    return [...new Set((body.data ?? []).map((m) => m.id).filter((x): x is string => !!x))].sort();
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main(): Promise<void> {
   const workspaceRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd();
   // utilityProcess gives us process.parentPort; plain `node host.js` (dev
@@ -73,6 +112,11 @@ async function main(): Promise<void> {
     launchCwd: workspaceRoot,
     interactionPort: createBrokerPort(broker, (e) => emitForPort(e)),
   });
+
+  // DESK-5c — terminal session registry + endpoint-models cache.
+  const terms = new Map<string, TermSession>();
+  let termSeq = 0;
+  let modelsCache: { models: string[]; at: number } | null = null;
 
   const core = createHostCore({
     agent,
@@ -402,6 +446,54 @@ async function main(): Promise<void> {
         if (typeof args.apiKey === 'string' && args.apiKey.trim()) llmCfg.apiKey = args.apiKey.trim();
         saveConfig(fresh);
         return { ok: true, provider: llmCfg.provider, model: llmCfg.model, endpoint: llmCfg.endpoint ?? null };
+      },
+      // DESK-5c — live model list from the configured endpoint (cached 60s).
+      'list-models': async () => {
+        const fresh = loadConfig();
+        const l = fresh.llm ?? llm;
+        const now = Date.now();
+        if (modelsCache && now - modelsCache.at < 60_000) return { models: modelsCache.models, current: agent.getModel?.() ?? l.model };
+        const models = await fetchEndpointModels(l.endpoint, l.apiKey ?? '');
+        modelsCache = { models, at: now };
+        return { models, current: agent.getModel?.() ?? l.model };
+      },
+      // DESK-5c — real terminal sessions (offset-poll streaming).
+      'term-open': () => {
+        const id = `t${++termSeq}`;
+        const isWin = process.platform === 'win32';
+        const shell = isWin ? 'powershell.exe' : (process.env.SHELL || '/bin/zsh');
+        const args = isWin ? ['-NoLogo'] : ['-i'];
+        const proc = spawn(shell, args, {
+          cwd: workspaceRoot,
+          env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' },
+        });
+        const sess: TermSession = { proc, buf: '', alive: true };
+        const append = (d: Buffer) => {
+          sess.buf += d.toString('utf-8');
+          if (sess.buf.length > TERM_BUF_CAP) sess.buf = sess.buf.slice(-TERM_BUF_CAP);
+        };
+        proc.stdout.on('data', append);
+        proc.stderr.on('data', append);
+        proc.on('exit', (code) => { sess.alive = false; sess.buf += `\r\n[shell exited ${code ?? '?'}]\r\n`; });
+        terms.set(id, sess);
+        return { id, shell };
+      },
+      'term-write': (args) => {
+        const sess = terms.get(String(args.id));
+        if (!sess?.alive) return { ok: false };
+        sess.proc.stdin.write(String(args.data ?? ''));
+        return { ok: true };
+      },
+      'term-read': (args) => {
+        const sess = terms.get(String(args.id));
+        if (!sess) return { chunk: '', next: 0, alive: false };
+        const from = Math.max(0, Math.min(Number(args.from) || 0, sess.buf.length));
+        return { chunk: sess.buf.slice(from), next: sess.buf.length, alive: sess.alive };
+      },
+      'term-kill': (args) => {
+        const sess = terms.get(String(args.id));
+        if (sess) { try { sess.proc.kill(); } catch { /* already gone */ } terms.delete(String(args.id)); }
+        return { ok: true };
       },
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).

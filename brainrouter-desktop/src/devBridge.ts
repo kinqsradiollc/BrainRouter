@@ -12,6 +12,7 @@ export function installDevBridge(): void {
   if (typeof window === 'undefined' || (window as { brainrouter?: unknown }).brainrouter) return;
 
   const listeners = new Set<(msg: AgentEventMessage) => void>();
+  let termBuf = '';
   let seq = 0;
   const emit = (event: AgentEvent, delay = 0) => {
     setTimeout(() => {
@@ -79,6 +80,16 @@ export function installDevBridge(): void {
     }),
     'git-info': () => ({ repo: 'BrainRouter', branch: 'release/0.4.15', files: 4, insertions: 7670, deletions: 112 }),
     'git-branches': () => ({ current: 'release/0.4.15', branches: ['release/0.4.15', 'main', 'feat/desk-4j-reference-patterns', 'release/0.4.14'] }),
+    'list-models': () => ({ current: 'claude-opus-4-8', models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air'] }),
+    'term-open': () => { termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },
+    'term-write': (a) => {
+      const d = String(a.data ?? '');
+      termBuf += d.replace('\r', '');
+      if (d.includes('\r')) termBuf += '\r\n(demo) executed in the workspace\r\n$ ';
+      return { ok: true };
+    },
+    'term-read': (a) => { const from = Number(a.from) || 0; return { chunk: termBuf.slice(from), next: termBuf.length, alive: true }; },
+    'term-kill': () => ({ ok: true }),
     'file-diff': (a) => ({ path: String(a.path ?? 'src/agent/agent.ts'), diff: DEMO_DIFF }),
     'read-file': (a) => ({
       path: String(a.path ?? 'src/state/completionInbox.ts'),

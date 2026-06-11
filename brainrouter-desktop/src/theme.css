@@ -562,3 +562,17 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .home-recent { display: flex; align-items: center; gap: 9px; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 13px; margin-bottom: 7px; color: var(--text-dim); font-size: 13px; cursor: pointer; text-align: left; transition: border-color .12s, color .12s; }
 .home-recent:hover { border-color: var(--border-strong); color: var(--text); }
 .home-recent .hr-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* ---------- DESK-5c — tree, xterm, model menu, accent ---------- */
+.tree-row { display: flex; align-items: center; gap: 6px; padding-top: 3.5px; padding-bottom: 3.5px; padding-right: 8px; border-radius: 6px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; transition: background .1s; }
+.tree-row:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.tree-row.file { font-family: var(--mono); font-size: 12px; }
+.tree-chevron { width: 12px; flex: none; color: var(--text-faint); font-size: 10px; }
+.tree-folder { flex: none; font-size: 12px; opacity: .8; }
+.tree-row .fstat { width: auto; margin-left: auto; }
+.xterm-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.xterm-host { flex: 1; min-height: 0; }
+.xterm-host .xterm { height: 100%; padding: 4px; }
+.model-menu { min-width: 250px; }
+.model-list { max-height: 220px; overflow-y: auto; }
+.color-ctl { width: 52px; height: 32px; padding: 2px; cursor: pointer; }
