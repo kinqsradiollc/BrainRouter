@@ -15,9 +15,11 @@
   "dependencies": {
     "@kinqs/brainrouter-agent-protocol": "^0.4.14",
     "@kinqs/brainrouter-cli": "^0.4.14",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
