@@ -33,7 +33,7 @@ const MD_COMPONENTS: Record<string, unknown> = {
 };
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  CodeBlock, DiffPanel, FilesPanel, FileViewerPanel, Panel, PanelPicker, PlanPanel, SearchPanel,
+  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, Panel, PanelPicker, PlanPanel, SearchPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { BRIDGE_COMMANDS, buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
@@ -44,7 +44,14 @@ import { installDevBridge } from './devBridge.js';
 installDevBridge();
 
 type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed' };
-type ToolItem = { id: number; tool: string; summary: string; preview?: string; ok: boolean; child?: string };
+type ToolItem = { id: number; tool: string; summary: string; preview?: string; ok: boolean; child?: string; file?: string };
+
+/** Pull a workspace-relative path out of a tool summary ("Edited src/x.ts +3 -1"). */
+function fileFromSummary(tool: string, summary: string): string | undefined {
+  if (!/edit|write|patch|apply/i.test(tool)) return undefined;
+  const m = summary.match(/[\w./-]+\.[\w]+/);
+  return m?.[0];
+}
 
 type ChatRow =
   | { id: number; kind: 'user'; text: string; ts: number }
@@ -86,9 +93,15 @@ function download(filename: string, content: string): void {
   URL.revokeObjectURL(a.href);
 }
 
-function ToolGroup({ row, live }: { row: Extract<ChatRow, { kind: 'tool-group' }>; live?: boolean }): React.ReactElement {
+function ToolGroup({ row, live, inlineDiffs, onRequestDiff }: {
+  row: Extract<ChatRow, { kind: 'tool-group' }>;
+  live?: boolean;
+  inlineDiffs: Record<string, string>;
+  onRequestDiff: (file: string) => void;
+}): React.ReactElement {
   const [open, setOpen] = useState(false);
   const [openItem, setOpenItem] = useState<number | null>(null);
+  const [diffItem, setDiffItem] = useState<number | null>(null);
   // Observed: live groups read "Using {tool} *"; finished ones get an
   // outcome-phrased label ("Used N tools ›").
   const last = row.items[row.items.length - 1];
@@ -113,9 +126,22 @@ function ToolGroup({ row, live }: { row: Extract<ChatRow, { kind: 'tool-group' }
                 <span className={`step-dot ${t.ok ? 'ok' : 'fail'}`} />
                 <span className="tool-name">{t.child ? `[${t.child}] ` : ''}{t.tool}</span>
                 <span className="tool-summary">{t.summary}</span>
+                {t.file ? (
+                  <span className="diff-chip" title="Inspect diff" onClick={(ev) => {
+                    ev.stopPropagation();
+                    if (diffItem === t.id) { setDiffItem(null); return; }
+                    setDiffItem(t.id);
+                    if (!inlineDiffs[t.file!]) onRequestDiff(t.file!);
+                  }}>±{diffItem === t.id ? ' ⌄' : ''}</span>
+                ) : null}
                 {t.preview ? <span className="step-chevron">{openItem === t.id ? '⌄' : '›'}</span> : null}
               </button>
               {openItem === t.id && t.preview ? <pre className="tool-preview">{t.preview}</pre> : null}
+              {diffItem === t.id && t.file ? (
+                <div className="inline-diff">
+                  {inlineDiffs[t.file] ? <DiffView diff={inlineDiffs[t.file]} /> : <div className="row status"><span className="spinner" /> Loading diff…</div>}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
@@ -285,6 +311,7 @@ export function App(): React.ReactElement {
   const [nowTick, setNowTick] = useState(0);
   const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
   const [grepHits, setGrepHits] = useState<import('./panels.js').GrepHit[] | null>(null);
+  const [inlineDiffs, setInlineDiffs] = useState<Record<string, string>>({});
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [trustAsk, setTrustAsk] = useState<string | null>(null);
@@ -406,7 +433,7 @@ export function App(): React.ReactElement {
         case 'assistant-delta': liveBuf.current += e.text; setLiveText(liveBuf.current); break;
         case 'assistant-turn-end': flushAssistant(); break;
         case 'tool-end': {
-          pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok });
+          pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, file: fileFromSummary(e.tool, e.summary) });
           setToolLog((t) => [...t.slice(-199), { id: rid(), tool: e.tool, ok: e.ok, summary: e.summary }]);
           if ((e.tool === 'run_command' || e.tool === 'task_output') && (e.preview || e.summary)) {
             const text = (e.preview ?? e.summary).split('\n').slice(0, 40);
@@ -478,6 +505,11 @@ export function App(): React.ReactElement {
       case 'q-info': if (result && typeof result === 'object') setInfo(result as typeof info); return;
       case 'q-files': if (Array.isArray(result)) setChangedFiles(result as Array<{ status: string; path: string }>); return;
       case 'q-diff': if (result && typeof result === 'object') setDiffView(result as { path: string; diff: string }); return;
+      case 'q-inline-diff': {
+        const r = result as { path?: string; diff?: string };
+        if (r?.path) setInlineDiffs((d) => ({ ...d, [r.path!]: r.diff ?? '' }));
+        return;
+      }
       case 'q-list': if (result && typeof result === 'object') setAllFiles((result as { files: string[] }).files ?? []); return;
       case 'q-read': if (result && typeof result === 'object') setFileView(result as { path: string; content: string }); return;
       case 'q-git': if (result && typeof result === 'object') setGitInfo(result as typeof gitInfo); return;
@@ -730,7 +762,7 @@ export function App(): React.ReactElement {
                       </span>
                     </div>
                   );
-                  case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} live={running && i === rows.length - 1 && !liveText} /></div>;
+                  case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} live={running && i === rows.length - 1 && !liveText} inlineDiffs={inlineDiffs} onRequestDiff={(f) => q('q-inline-diff', 'file-diff', { path: f })} /></div>;
                   case 'error': return (
                     <div key={r.id} className="row">
                       <div className="error-card">
