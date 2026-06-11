@@ -672,7 +672,9 @@ export function App(): React.ReactElement {
         <nav className="rail">
           <div className="rail-top">
             <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}>◧</button>
+            <button className="icon-btn" title="Search commands (⌘K)" onClick={() => setPaletteOpen(true)}>🔍</button>
           </div>
+          <div className="rail-card">
           <button className="rail-row primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><span className="ri">＋</span>New session</button>
           <button className="rail-row" onClick={() => setPaletteOpen(true)}><span className="ri">⌘</span>Commands<span className="account-chev">⌘K</span></button>
           <button className="rail-row" onClick={() => void window.brainrouter.addWorkspace()}><span className="ri">🗂</span>Add workspace…</button>
@@ -712,6 +714,7 @@ export function App(): React.ReactElement {
               <span className="account-name">{info.username ?? 'BrainRouter'} <span className="account-sub">· {workspaces.current?.split('/').pop() ?? 'workspace'}</span></span>
               <span className="account-chev">⌄</span>
             </div>
+          </div>
           </div>
         </nav>
       ) : null}
@@ -857,7 +860,7 @@ export function App(): React.ReactElement {
                   </div>
                 ) : null}
                 <textarea
-                  rows={2}
+                  rows={1}
                   placeholder={running ? 'Working…' : 'Message BrainRouter…  ( / for commands · ⌘K for the palette )'}
                   value={draft}
                   onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
@@ -872,7 +875,11 @@ export function App(): React.ReactElement {
                     if (e.key === 'Escape' && running) window.brainrouter.send({ kind: 'interrupt' });
                   }}
                 />
-                <div className="composer-row">
+                <button className={`input-send icon-btn${running ? ' stop-red' : ''}`} title={running ? 'Stop' : 'Send'}
+                  onClick={() => running ? window.brainrouter.send({ kind: 'interrupt' }) : submit()}
+                  disabled={!running && !draft.trim()}>{running ? '⏹' : '⏎'}</button>
+              </div>
+                <div className="composer-controls">
                   <span className="pop-wrap">
                     {pop === 'mode' ? (
                       <div className="menu-pop left">
@@ -932,13 +939,7 @@ export function App(): React.ReactElement {
                     <span className="chip dim" onClick={() => setPop(pop === 'effort' ? '' : 'effort')}>{effort}</span>
                   </span>
                   <span className={`orb${running ? ' busy' : ''}`} title={running ? 'Working' : 'Idle'} />
-                  {running ? (
-                    <button className="send stop" onClick={() => window.brainrouter.send({ kind: 'interrupt' })}>■ Stop</button>
-                  ) : (
-                    <button className="send" disabled={!draft.trim()} onClick={submit}>↑</button>
-                  )}
                 </div>
-              </div>
             </div>
           </main>
 
