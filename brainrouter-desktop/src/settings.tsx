@@ -81,6 +81,7 @@ export function SettingsDialog(props: {
 }): React.ReactElement | null {
   const { snapshot, section } = props;
   const [modelDraft, setModelDraft] = useState<string | null>(null);
+  const [llmDraft, setLlmDraft] = useState<{ provider?: string; endpoint?: string; apiKey?: string }>({});
   const [search, setSearch] = useState('');
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
@@ -187,7 +188,25 @@ export function SettingsDialog(props: {
       );
       case 'connectors': return (
         <>
-          <div className="set-h">Connectors (MCP)</div>
+          <div className="set-h">Provider</div>
+          <div className="set-desc" style={{ marginBottom: 6 }}>The LLM endpoint both heads use — OpenAI-compatible wire format. Saved to <code>~/.config/brainrouter/config.json</code>; your key is write-only here and never echoed back.</div>
+          <Row title="Provider id" desc="Catalog label for tier-ladder lookups (openai, lmstudio, ollama, deepseek, …).">
+            <input className="ctl" value={llmDraft.provider ?? snapshot?.provider ?? ''} placeholder="openai"
+              onChange={(e) => setLlmDraft((d) => ({ ...d, provider: e.target.value }))} />
+          </Row>
+          <Row title="Endpoint" desc="OpenAI-compatible base URL. Empty = the provider's default.">
+            <input className="ctl" value={llmDraft.endpoint ?? ''} placeholder="https://api.openai.com/v1"
+              onChange={(e) => setLlmDraft((d) => ({ ...d, endpoint: e.target.value }))} />
+          </Row>
+          <Row title="API key" desc="Stored in config.json. Leave blank to keep the current key.">
+            <input className="ctl" type="password" value={llmDraft.apiKey ?? ''} placeholder="•••••••• (unchanged)"
+              onChange={(e) => setLlmDraft((d) => ({ ...d, apiKey: e.target.value }))} />
+          </Row>
+          <Row title="">
+            <button className="btn primary" disabled={!Object.values(llmDraft).some((v) => (v ?? '').trim())}
+              onClick={() => { props.onAction('a-llm', 'action:set-llm', llmDraft as Record<string, unknown>); setLlmDraft({}); }}>Save provider</button>
+          </Row>
+          <div className="set-h2">Connectors (MCP)</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Server profiles from config.json — the same pool the CLI connects. Sign in once, both heads use it.</div>
           {(snapshot?.servers ?? []).length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
           {(snapshot?.servers ?? []).map((s) => (

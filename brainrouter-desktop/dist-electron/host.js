@@ -33,6 +33,11 @@ import { searchTranscript } from '@kinqs/brainrouter-cli/dist/state/transcriptSe
 import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName } from '@kinqs/brainrouter-cli/dist/state/transcriptExport.js';
 import { listChapters } from '@kinqs/brainrouter-cli/dist/state/chapterMarks.js';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-cli/dist/runtime/usageBreakdown.js';
+// DESK-5 — the command bridge dispatches REPL-only commands against the SAME
+// stores the terminal CLI uses. No parallel state: /goal here is /goal there.
+import { readGoal, setGoal, clearGoal } from '@kinqs/brainrouter-cli/dist/state/goalStore.js';
+import { readPlan, formatPlan } from '@kinqs/brainrouter-cli/dist/state/taskStore.js';
+import { listWorkers, readWorkerSummary } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
 async function main() {
     const workspaceRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd();
     // utilityProcess gives us process.parentPort; plain `node host.js` (dev
@@ -284,6 +289,102 @@ async function main() {
                         });
                     });
                 });
+            },
+            // DESK-5 — the command bridge. Each case mirrors the REPL command's
+            // behavior using the CLI's own store modules; output is plain lines the
+            // renderer shows as a command-output block in the chat.
+            'command:dispatch': async (args) => {
+                const cmd = String(args.cmd ?? '');
+                const rest = typeof args.args === 'string' ? args.args.trim() : '';
+                switch (cmd) {
+                    case 'goal': {
+                        if (rest === 'clear') {
+                            clearGoal(workspaceRoot, agent.sessionKey);
+                            return { lines: ['Goal cleared.'] };
+                        }
+                        if (rest) {
+                            const g = setGoal(workspaceRoot, rest, agent.sessionKey);
+                            return { lines: [`Goal set: ${g.text}`, `status: ${g.status}`] };
+                        }
+                        const g = readGoal(workspaceRoot, agent.sessionKey);
+                        return { lines: g ? [`Goal: ${g.text}`, `status: ${g.status} · set ${g.setAt}`] : ['No active goal.', 'Usage: /goal <text> · /goal clear'] };
+                    }
+                    case 'plan': {
+                        const text = formatPlan(readPlan(workspaceRoot, agent.sessionKey));
+                        return { lines: text.trim() ? text.split('\n') : ['No plan yet.'] };
+                    }
+                    case 'workers': {
+                        const ws = listWorkers(workspaceRoot);
+                        if (rest.startsWith('info ')) {
+                            const id = rest.slice(5).trim();
+                            const summary = readWorkerSummary(workspaceRoot, id);
+                            return { lines: summary ? summary.split('\n').slice(0, 40) : [`No summary for worker ${id}.`] };
+                        }
+                        return {
+                            lines: ws.length
+                                ? ws.slice(0, 20).map((w) => `${w.id} · ${w.status ?? '?'} · ${(w.task ?? '').slice(0, 70)}`)
+                                : ['No workers in this workspace.'],
+                        };
+                    }
+                    case 'ps': {
+                        const tasks = collectRunningTasks(workspaceRoot);
+                        return { lines: tasks.length ? tasks.map((t) => `${t.kind} · ${t.id} · ${t.label}`) : ['Nothing running.'] };
+                    }
+                    case 'tools': {
+                        try {
+                            const res = await mcpClient.listTools();
+                            const names = (res.tools ?? []).map((t) => t.name).filter(Boolean);
+                            return { lines: names.length ? [`${names.length} MCP tools:`, ...names.slice(0, 60)] : ['No MCP tools (offline mode — local tools only).'] };
+                        }
+                        catch {
+                            return { lines: ['No MCP tools (offline mode — local tools only).'] };
+                        }
+                    }
+                    case 'status': {
+                        const st = mcpClient.getStatuses();
+                        return {
+                            lines: [
+                                `model: ${agent.getModel?.() ?? llm.model} (${llm.provider})`,
+                                `workspace: ${workspaceRoot}`,
+                                `session: ${agent.sessionKey}`,
+                                ...st.map((x) => `mcp ${x.serverId}: ${x.status}${x.identity !== 'unknown' ? ` (${x.identity})` : ''}`),
+                                st.length === 0 ? 'mcp: no servers configured' : '',
+                            ].filter(Boolean),
+                        };
+                    }
+                    case 'memory':
+                    case 'recall': {
+                        if (!rest)
+                            return { lines: [`Usage: /${cmd} <query>`] };
+                        try {
+                            const result = await mcpClient.callTool(cmd === 'memory' ? 'memory_search' : 'cognitive_recall', { query: rest });
+                            const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+                            return { lines: text.split('\n').slice(0, 50) };
+                        }
+                        catch (err) {
+                            return { lines: [`${cmd} failed: ${err instanceof Error ? err.message : String(err)}`, 'Is the BrainRouter MCP server connected?'] };
+                        }
+                    }
+                    default:
+                        throw new Error(`Unknown bridge command "${cmd}".`);
+                }
+            },
+            // DESK-5 — provider/endpoint/key editor writes the shared config.json.
+            // Only the fields the user actually typed are touched; the key is never
+            // echoed back (config-snapshot already omits it).
+            'action:set-llm': (args) => {
+                const fresh = loadConfig();
+                const llmCfg = (fresh.llm = fresh.llm ?? { provider: 'openai', apiKey: '', model: '' });
+                if (typeof args.provider === 'string' && args.provider.trim())
+                    llmCfg.provider = args.provider.trim();
+                if (typeof args.model === 'string' && args.model.trim())
+                    llmCfg.model = args.model.trim();
+                if (typeof args.endpoint === 'string')
+                    llmCfg.endpoint = args.endpoint.trim() || undefined;
+                if (typeof args.apiKey === 'string' && args.apiKey.trim())
+                    llmCfg.apiKey = args.apiKey.trim();
+                saveConfig(fresh);
+                return { ok: true, provider: llmCfg.provider, model: llmCfg.model, endpoint: llmCfg.endpoint ?? null };
             },
             // Actions — host-side mutations the Settings dialog / palette trigger.
             // They ride the query channel (free-form names, result routing by id).

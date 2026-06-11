@@ -22,13 +22,22 @@ export interface CmdCtx {
   openSettings(section: SettingsSection): void;
   info(title: string, body: string): void;
   toast(text: string): void;
+  /** Put text into the composer (for bridge commands that take arguments). */
+  compose(text: string): void;
+  /** Run a bridge command now and render its output block in the chat. */
+  bridge(cmd: string, args?: string): void;
 }
 
 export type Wire =
   | { kind: 'native'; run: (ctx: CmdCtx) => void }
   | { kind: 'panel'; panel: PanelId }
   | { kind: 'settings'; section: SettingsSection }
+  /** DESK-5 — executed by the host's command bridge against the CLI's stores. */
+  | { kind: 'bridge'; cmd: string; takesArgs?: boolean }
   | { kind: 'cli' };
+
+/** Commands the host bridge executes natively (single source for composer interception). */
+export const BRIDGE_COMMANDS = new Set(['goal', 'plan', 'workers', 'ps', 'tools', 'status', 'memory', 'recall']);
 
 export interface CatalogCategory { key: string; title: string; entries: Array<{ cmd: string; desc: string }> }
 export interface CommandsCatalog { categories: CatalogCategory[]; all: string[] }
@@ -56,13 +65,20 @@ export const WIRED: Record<string, Wire> = {
 
   // -- workbench panels --
   '/diff': { kind: 'panel', panel: 'diff' },
-  '/plan': { kind: 'panel', panel: 'plan' },
-  '/ps': { kind: 'panel', panel: 'tasks' },
-  '/workers': { kind: 'panel', panel: 'tasks' },
   '/agents': { kind: 'panel', panel: 'tasks' },
   '/workflows': { kind: 'panel', panel: 'tasks' },
   '/transcript': { kind: 'panel', panel: 'tools' },
   '/watch': { kind: 'panel', panel: 'terminal' },
+
+  // -- DESK-5 bridge (host executes against the CLI's own stores) --
+  '/goal': { kind: 'bridge', cmd: 'goal', takesArgs: true },
+  '/plan': { kind: 'bridge', cmd: 'plan' },
+  '/workers': { kind: 'bridge', cmd: 'workers' },
+  '/ps': { kind: 'bridge', cmd: 'ps' },
+  '/tools': { kind: 'bridge', cmd: 'tools' },
+  '/status': { kind: 'bridge', cmd: 'status' },
+  '/memory': { kind: 'bridge', cmd: 'memory', takesArgs: true },
+  '/recall': { kind: 'bridge', cmd: 'recall', takesArgs: true },
 
   // -- settings deep links --
   '/model': { kind: 'settings', section: 'general' },
@@ -88,7 +104,6 @@ export const WIRED: Record<string, Wire> = {
   '/tokens': { kind: 'settings', section: 'observability' },
   '/usage': { kind: 'settings', section: 'observability' },
   '/context': { kind: 'settings', section: 'observability' },
-  '/status': { kind: 'settings', section: 'observability' },
   '/doctor': { kind: 'settings', section: 'observability' },
   '/debug-config': { kind: 'settings', section: 'observability' },
   '/theme': { kind: 'settings', section: 'appearance' },
@@ -128,11 +143,15 @@ export function runCommand(c: DeskCommand, ctx: CmdCtx): void {
     case 'native': c.wire.run(ctx); return;
     case 'panel': ctx.ensurePanel(c.wire.panel); return;
     case 'settings': ctx.openSettings(c.wire.section); return;
+    case 'bridge':
+      if (c.wire.takesArgs) ctx.compose(`${c.base} `);
+      else ctx.bridge(c.wire.cmd);
+      return;
     case 'cli':
-      ctx.info(c.cmd, `${c.desc || 'CLI command.'}\n\nThis one still runs in the terminal CLI (\`brainrouter chat\`) — same workspace, same sessions, same config. Desktop wiring for the remaining REPL commands lands with the DESK-5 command bridge.`);
+      ctx.info(c.cmd, `${c.desc || 'CLI command.'}\n\nThis one still runs in the terminal CLI (\`brainrouter chat\`) — same workspace, same sessions, same config. Desktop wiring for more REPL commands grows with the command bridge.`);
       return;
   }
 }
 
 export const wireBadge = (w: Wire): string =>
-  w.kind === 'native' ? 'native' : w.kind === 'panel' ? 'panel' : w.kind === 'settings' ? 'settings' : 'cli';
+  w.kind === 'native' || w.kind === 'bridge' ? 'native' : w.kind === 'panel' ? 'panel' : w.kind === 'settings' ? 'settings' : 'cli';
