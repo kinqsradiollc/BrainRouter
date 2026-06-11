@@ -10,7 +10,7 @@
  * Sign in once, configure once — both heads see it.
  */
 import { createBrokerPort, createHostCore } from './hostCore.js';
-import { execFileSync } from 'node:child_process';
+import { exec, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -237,6 +237,53 @@ async function main() {
                     filename: exportFileName(agent.sessionKey, format, exportedAt),
                     content: format === 'json' ? exportTranscriptJson(entries, meta) : exportTranscriptMarkdown(entries, meta),
                 };
+            },
+            // DESK-4e — content search (the Files panel's "?text" mode, observed).
+            'search-content': (args) => {
+                const query = typeof args.q === 'string' ? args.q : '';
+                if (!query.trim())
+                    return [];
+                try {
+                    const out = execFileSync('git', ['grep', '-n', '-I', '--max-count', '3', '--', query], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 8_000, maxBuffer: 4_000_000 });
+                    return out.split('\n').filter(Boolean).slice(0, 50).map((line) => {
+                        const [file, ln, ...rest] = line.split(':');
+                        return { file, line: Number(ln) || 0, snippet: rest.join(':').trim().slice(0, 160) };
+                    });
+                }
+                catch {
+                    return [];
+                }
+            },
+            // DESK-4e — "Always allow" on inline approval cards persists a glob rule
+            // into the SAME cli.permissions store the CLI's policy gate evaluates.
+            'action:allow-rule': (args) => {
+                const rule = typeof args.rule === 'string' ? args.rule.trim() : '';
+                if (!rule)
+                    throw new Error('Empty permission rule.');
+                const fresh = loadConfig();
+                fresh.cli = fresh.cli ?? {};
+                fresh.cli.permissions = fresh.cli.permissions ?? {};
+                const allow = (fresh.cli.permissions.allow = fresh.cli.permissions.allow ?? []);
+                if (!allow.includes(rule))
+                    allow.push(rule);
+                saveConfig(fresh);
+                return { ok: true, rule };
+            },
+            // DESK-4e — user-typed terminal commands (the Terminal panel's input
+            // row). Equivalent to the CLI's `!` shell escape: the USER runs it, so
+            // no approval gate; cwd is the workspace.
+            'action:term-exec': (args) => {
+                const cmd = typeof args.cmd === 'string' ? args.cmd : '';
+                if (!cmd.trim())
+                    return { out: '', code: 0 };
+                return new Promise((resolve) => {
+                    exec(cmd, { cwd: workspaceRoot, timeout: 20_000, maxBuffer: 1_000_000 }, (err, stdout, stderr) => {
+                        resolve({
+                            out: `${stdout ?? ''}${stderr ? `\n${stderr}` : ''}`.trim().slice(0, 20_000),
+                            code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0,
+                        });
+                    });
+                });
             },
             // Actions — host-side mutations the Settings dialog / palette trigger.
             // They ride the query channel (free-form names, result routing by id).

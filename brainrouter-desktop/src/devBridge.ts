@@ -158,6 +158,12 @@ export function installDevBridge(): void {
     'action:set-hook': () => ({ ok: true }),
     'action:set-access': (a) => ({ ok: true, mode: a.mode }),
     'action:reconnect-mcp': () => ({ ok: true }),
+    'search-content': (a) => [
+      { file: 'src/memory/recall.ts', line: 42, snippet: `const blended = 0.6 * rerank + 0.4 * rrf; // ${String(a.q ?? '')}` },
+      { file: 'src/agent/agent.ts', line: 1240, snippet: 'private interruptRequested = false;' },
+    ],
+    'action:allow-rule': (a) => ({ ok: true, rule: a.rule }),
+    'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
   };
 
   (window as unknown as { brainrouter: unknown }).brainrouter = {
