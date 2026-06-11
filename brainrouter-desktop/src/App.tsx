@@ -10,10 +10,30 @@ import remarkGfm from 'remark-gfm';
 
 // react-markdown's return type clashes with the workspace-hoisted @types/react;
 // the runtime component is a plain function component.
-const Markdown = ReactMarkdown as unknown as React.ComponentType<{ remarkPlugins?: unknown[]; children: string }>;
+const Markdown = ReactMarkdown as unknown as React.ComponentType<{ remarkPlugins?: unknown[]; components?: Record<string, unknown>; children: string }>;
+
+/** Fenced code blocks render through the same highlighter as the File view. */
+const MD_COMPONENTS: Record<string, unknown> = {
+  code(props: { inline?: boolean; className?: string; children?: React.ReactNode }) {
+    const match = /language-([\w-]+)/.exec(props.className ?? '');
+    const text = String(props.children ?? '').replace(/\n$/, '');
+    if (props.inline || (!match && !text.includes('\n'))) {
+      return <code className={props.className}>{props.children}</code>;
+    }
+    return (
+      <div className="md-code">
+        <div className="md-code-bar">
+          <span>{match?.[1] ?? 'text'}</span>
+          <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(text)}>🗗</button>
+        </div>
+        <CodeBlock code={text} language={match?.[1] ?? 'text'} />
+      </div>
+    );
+  },
+};
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  DiffPanel, FilesPanel, FileViewerPanel, Panel, PanelPicker, PlanPanel, SearchPanel,
+  CodeBlock, DiffPanel, FilesPanel, FileViewerPanel, Panel, PanelPicker, PlanPanel, SearchPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { BRIDGE_COMMANDS, buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
@@ -111,7 +131,7 @@ function PanelColumn({ width, onWidth, children }: {
 }): React.ReactElement {
   const [drag, setDrag] = useState(false);
   return (
-    <div className="panel-col" style={{ width }}>
+    <div className="panel-col" style={{ width, flexShrink: 1, minWidth: 250 }}>
       <div className={`col-grip${drag ? ' active' : ''}`} title="Drag to resize"
         onPointerDown={(e) => {
           e.preventDefault();
@@ -257,6 +277,9 @@ export function App(): React.ReactElement {
   const liveBuf = useRef('');
   const lastPromptRef = useRef('');
   const chatEnd = useRef<HTMLDivElement>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
   const [turnStart, setTurnStart] = useState(0);
   const [nowTick, setNowTick] = useState(0);
   const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
@@ -420,7 +443,8 @@ export function App(): React.ReactElement {
         case 'query-result': handleQueryResult(e.id, e.ok ? e.result : undefined, e.ok ? undefined : (e as { error?: string }).error); break;
         default: break;
       }
-      queueMicrotask(() => chatEnd.current?.scrollIntoView({ behavior: 'auto' }));
+      // Sticky-bottom: never yank the view while the user is reading scrollback.
+      queueMicrotask(() => { if (atBottomRef.current) chatEnd.current?.scrollIntoView({ behavior: 'auto' }); });
     });
     refreshSidebar();
     q('q-catalog', 'commands-catalog');
@@ -628,21 +652,26 @@ export function App(): React.ReactElement {
       ) : null}
 
       <div className="main">
-        <header className="topbar">
-          {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}>◨</button> : null}
-          <span className="crumb"><b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b><span className="crumb-sep">/</span>{sessionTitle}</span>
-          <span className="topbar-right">
-            {gitInfo?.branch ? <span className="chip dim" title="branch">⎇ {gitInfo.branch}</span> : null}
-            <button className="chip dim" title="Command palette (⌘K)" onClick={() => setPaletteOpen(true)}>⌘K</button>
-            <button className="icon-btn" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}>⬆</button>
-            <PanelPicker open={openPanels} onToggle={togglePanel} />
-            <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}>⚙</button>
-          </span>
-        </header>
-
         <div className="workrow">
           <main className="center">
-            <div className="chat">
+            <header className="chat-head">
+              {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}>◨</button> : null}
+              <span className="crumb"><b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b><span className="crumb-sep">/</span>{sessionTitle}</span>
+              <span className="topbar-right">
+                {gitInfo?.branch ? <span className="chip dim" title="branch">⎇ {gitInfo.branch}</span> : null}
+                <button className="chip dim" title="Command palette (⌘K)" onClick={() => setPaletteOpen(true)}>⌘K</button>
+                <button className="icon-btn" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}>⬆</button>
+                <PanelPicker open={openPanels} onToggle={togglePanel} />
+                <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}>⚙</button>
+              </span>
+            </header>
+            <div className="chat" ref={chatRef} onScroll={() => {
+              const el = chatRef.current;
+              if (!el) return;
+              const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              atBottomRef.current = pinned;
+              setAtBottom(pinned);
+            }}>
               {rows.length === 0 && !liveText && !running ? (
                 <HomeView username={info.username} stats={homeStats} tab={statsTab} setTab={setStatsTab}
                   range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider} />
@@ -660,7 +689,7 @@ export function App(): React.ReactElement {
                   );
                   case 'assistant': return (
                     <div key={r.id} className="row assistant md">
-                      <Markdown remarkPlugins={[remarkGfm]}>{r.text}</Markdown>
+                      <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{r.text}</Markdown>
                       <div className="turn-mark">✺</div>
                       <span className="msg-actions">
                         <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}>🗗</button>
@@ -693,7 +722,7 @@ export function App(): React.ReactElement {
               })}
               {liveText ? (
                 <div className="row assistant md live">
-                  <Markdown remarkPlugins={[remarkGfm]}>{liveText}</Markdown>
+                  <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{liveText}</Markdown>
                   <span className="caret">▍</span>
                 </div>
               ) : null}
@@ -732,6 +761,13 @@ export function App(): React.ReactElement {
               ) : null}
               <div ref={chatEnd} />
             </div>
+            {!atBottom ? (
+              <button className="jump-latest" onClick={() => {
+                atBottomRef.current = true;
+                setAtBottom(true);
+                chatEnd.current?.scrollIntoView({ behavior: 'smooth' });
+              }}>↓ Latest</button>
+            ) : null}
             {gitInfo?.branch && (gitInfo.insertions + gitInfo.deletions > 0) ? (
               <div className="branchbar" onClick={() => ensurePanel('diff')}>
                 <span className="gitbranch">⎇ {gitInfo.branch}</span>
