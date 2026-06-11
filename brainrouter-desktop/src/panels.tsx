@@ -43,9 +43,10 @@ export function PanelPicker({ open, onToggle }: {
   onToggle: (id: PanelId) => void;
 }): React.ReactElement {
   const [menu, setMenu] = useState(false);
+  const SHORTCUTS: Partial<Record<PanelId, string>> = { diff: '⇧⌘D', terminal: '⌃`', files: '⇧⌘F' };
   return (
     <div className="picker">
-      <button className="chip" onClick={() => setMenu((m) => !m)} title="Panels">⊞ Panels</button>
+      <button className="chip" onClick={() => setMenu((m) => !m)} title="Views">⊞ Views</button>
       {menu ? (
         <>
           <div className="picker-backdrop" onClick={() => setMenu(false)} />
@@ -54,6 +55,7 @@ export function PanelPicker({ open, onToggle }: {
               <button key={d.id} className="picker-item" onClick={() => onToggle(d.id)}>
                 <span className="picker-check">{open.includes(d.id) ? '✓' : ''}</span>
                 <span className="picker-icon">{d.icon}</span>{d.title}
+                {SHORTCUTS[d.id] ? <span className="picker-hint">{SHORTCUTS[d.id]}</span> : null}
               </button>
             ))}
           </div>
@@ -139,7 +141,7 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
         </>
       ) : (
         <div className="scroll">
-          {changed.length === 0 ? <div className="empty">Working tree clean.</div> : changed.map((f) => (
+          {changed.length === 0 ? <div className="empty center-empty">No changes to show</div> : changed.map((f) => (
             <div key={f.path} className="file-row" title={f.path}>
               <span className={`fstat s-${f.status.replace('?', 'u')}`}>{f.status}</span>
               <span className="file-name" onClick={() => onPick(f.path)}>{f.path}</span>

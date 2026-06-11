@@ -47,6 +47,44 @@ export function filterCommands(commands: DeskCommand[], filter: string): DeskCom
   return scored.slice(0, 60).map((x) => x.c);
 }
 
+/**
+ * Composer "/" popup — names-only list with a side pane describing the
+ * highlighted command (the pattern the reference app uses).
+ */
+export function SlashPopup({ commands, filter, selected, onPick, onHover }: {
+  commands: DeskCommand[];
+  filter: string;
+  selected: number;
+  onPick: (c: DeskCommand) => void;
+  onHover: (i: number) => void;
+}): React.ReactElement {
+  const shown = useMemo(() => filterCommands(commands, filter), [commands, filter]);
+  const sel = shown[Math.min(selected, shown.length - 1)];
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listRef.current?.querySelector('.pal-item.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
+  return (
+    <div className="slash-split">
+      <div className="pal-list" ref={listRef}>
+        {shown.length === 0 ? <div className="empty">No matching commands.</div> : shown.map((c, i) => (
+          <button key={c.base + c.category} className={`pal-item${i === selected ? ' sel' : ''}`}
+            onMouseEnter={() => onHover(i)} onClick={() => onPick(c)}>
+            <span className="pal-cmd">{c.base.slice(1)}</span>
+          </button>
+        ))}
+      </div>
+      {sel ? (
+        <div className="slash-desc">
+          <span className="slash-desc-cmd">{sel.cmd}</span>
+          <p>{sel.desc || sel.category}</p>
+          <span className={`badge ${wireBadge(sel.wire)}`}>{wireBadge(sel.wire)}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function CommandPalette({ open, commands, onClose, onRun }: {
   open: boolean;
   commands: DeskCommand[];

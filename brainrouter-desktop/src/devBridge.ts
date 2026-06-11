@@ -49,7 +49,19 @@ export function installDevBridge(): void {
       { kind: 'sub-agent', id: 'agent-3f2a', label: 'explorer·3f2a — survey recall pipeline' },
       { kind: 'worker', id: 'wkr-91', label: 'worker·91 ⎇ — vitest suite' },
     ],
-    'session-info': () => ({ sessionKey: 'dev:demo', model: 'claude-opus-4-8', workspaceRoot: '/Users/dev/BrainRouter' }),
+    'session-info': () => ({ sessionKey: 'dev:demo', model: 'claude-opus-4-8', workspaceRoot: '/Users/dev/BrainRouter', username: 'anhdang' }),
+    'home-stats': () => {
+      const perDay: Record<string, number> = {};
+      const today = new Date();
+      for (let i = 0; i < 119; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        // deterministic pseudo-activity so screenshots are stable
+        const n = (i * 7 + 3) % 11;
+        if (n > 4) perDay[d.toISOString().slice(0, 10)] = n - 4;
+      }
+      return { sessions: 23, turns: 412, activeDays: 64, currentStreak: 3, longestStreak: 11, model: 'claude-opus-4-8', perDay };
+    },
     'changed-files': () => [
       { status: 'M', path: 'src/agent/agent.ts' },
       { status: 'M', path: 'src/cli/ink/ChatApp.tsx' },

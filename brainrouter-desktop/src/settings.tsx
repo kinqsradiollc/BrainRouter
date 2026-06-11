@@ -72,6 +72,8 @@ export function SettingsDialog(props: {
   onRunCommand: (c: DeskCommand) => void;
   codeFont: string;
   onCodeFont: (f: string) => void;
+  theme: string;
+  onTheme: (t: string) => void;
 }): React.ReactElement | null {
   const { snapshot, section } = props;
   const [modelDraft, setModelDraft] = useState<string | null>(null);
@@ -206,6 +208,10 @@ export function SettingsDialog(props: {
       case 'appearance': return (
         <>
           <div className="set-h">Appearance</div>
+          <Row title="Desktop theme" desc="Claude Dark = warm charcoal (the desktop default). High-contrast = near-black.">
+            <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Claude Dark'} options={['Claude Dark', 'High-contrast dark']}
+              onChange={(v) => props.onTheme(v === 'High-contrast dark' ? 'hc' : 'dark')} />
+          </Row>
           <Row title="Markdown theme (CLI)" desc="Syntax highlighting theme the terminal CLI uses for markdown output. (/theme)">
             <Select value={ps('theme', 'dark')} options={['auto', 'light', 'dark', 'mono']} onChange={(v) => props.onPref('theme', v)} />
           </Row>

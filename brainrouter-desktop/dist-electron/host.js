@@ -12,6 +12,7 @@
 import { createBrokerPort, createHostCore } from './hostCore.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
@@ -80,7 +81,51 @@ async function main() {
                 return buildRecap({ entries: loadTranscript(workspaceRoot, key), sessionKey: key });
             },
             'fleet': () => collectRunningTasks(workspaceRoot),
-            'session-info': () => ({ sessionKey: agent.sessionKey, model: llm.model, workspaceRoot }),
+            'session-info': () => ({ sessionKey: agent.sessionKey, model: llm.model, workspaceRoot, username: os.userInfo().username }),
+            // DESK-4d — the home/greeting view: real numbers from the workspace's
+            // persisted transcripts (sessions, messages, active days, streaks, and
+            // a per-day activity map for the heatmap).
+            'home-stats': () => {
+                const transcripts = listTranscripts(workspaceRoot).slice(0, 200);
+                let turns = 0;
+                const perDay = new Map();
+                for (const t of transcripts) {
+                    turns += t.turnCount;
+                    const ts = new Date(t.modifiedAt);
+                    if (!Number.isNaN(ts.getTime())) {
+                        const day = ts.toISOString().slice(0, 10);
+                        perDay.set(day, (perDay.get(day) ?? 0) + t.turnCount);
+                    }
+                }
+                // streaks over the per-day activity map
+                const today = new Date();
+                const dayKey = (offset) => {
+                    const d = new Date(today);
+                    d.setDate(d.getDate() - offset);
+                    return d.toISOString().slice(0, 10);
+                };
+                let current = 0;
+                for (let i = 0; perDay.has(dayKey(i)); i++)
+                    current++;
+                let longest = 0, run = 0;
+                for (let i = 0; i < 365; i++) {
+                    if (perDay.has(dayKey(i))) {
+                        run++;
+                        longest = Math.max(longest, run);
+                    }
+                    else
+                        run = 0;
+                }
+                return {
+                    sessions: transcripts.length,
+                    turns,
+                    activeDays: perDay.size,
+                    currentStreak: current,
+                    longestStreak: longest,
+                    model: llm.model,
+                    perDay: Object.fromEntries(perDay),
+                };
+            },
             // DESK-4c — workspace browsing panels.
             'list-files': () => {
                 try {
