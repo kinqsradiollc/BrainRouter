@@ -11,6 +11,8 @@
  */
 import { createBrokerPort, createHostCore } from './hostCore.js';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
@@ -20,6 +22,16 @@ import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
 import { listTranscripts, loadTranscript } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
+// DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
+// desktop never drifts from the terminal: same catalog, same preferences
+// file, same hooks store, same transcript tooling.
+import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-cli/dist/cli/repl.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-cli/dist/state/preferencesStore.js';
+import { readHooks, setHookEnabled } from '@kinqs/brainrouter-cli/dist/state/hooksStore.js';
+import { searchTranscript } from '@kinqs/brainrouter-cli/dist/state/transcriptSearch.js';
+import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName } from '@kinqs/brainrouter-cli/dist/state/transcriptExport.js';
+import { listChapters } from '@kinqs/brainrouter-cli/dist/state/chapterMarks.js';
+import { buildUsageBreakdown } from '@kinqs/brainrouter-cli/dist/runtime/usageBreakdown.js';
 
 interface ParentPortLike {
   on(event: 'message', listener: (e: { data: unknown }) => void): void;
@@ -77,6 +89,41 @@ async function main(): Promise<void> {
       },
       'fleet': () => collectRunningTasks(workspaceRoot),
       'session-info': () => ({ sessionKey: agent.sessionKey, model: llm.model, workspaceRoot }),
+      // DESK-4c — workspace browsing panels.
+      'list-files': () => {
+        try {
+          const tracked = execFileSync('git', ['ls-files'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 8_000_000 });
+          const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 8_000_000 });
+          const all = (tracked + '\n' + untracked).split('\n').filter(Boolean).sort();
+          return { files: all.slice(0, 3000), truncated: all.length > 3000 };
+        } catch { return { files: [], truncated: false }; }
+      },
+      'read-file': (args) => {
+        const file = typeof args.path === 'string' ? args.path : '';
+        const resolved = path.resolve(workspaceRoot, file);
+        if (!file || !(resolved === path.resolve(workspaceRoot) || resolved.startsWith(path.resolve(workspaceRoot) + path.sep))) {
+          return { path: file, content: '', error: 'path escapes the workspace' };
+        }
+        try {
+          const content = fs.readFileSync(resolved, 'utf-8');
+          return { path: file, content: content.slice(0, 200_000), truncated: content.length > 200_000 };
+        } catch (err) {
+          return { path: file, content: '', error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+      'git-info': () => {
+        try {
+          const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 }).trim();
+          let insertions = 0, deletions = 0, files = 0;
+          try {
+            const stat = execFileSync('git', ['diff', 'HEAD', '--shortstat'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 });
+            files = Number(/(\d+) files? changed/.exec(stat)?.[1] ?? 0);
+            insertions = Number(/(\d+) insertions?/.exec(stat)?.[1] ?? 0);
+            deletions = Number(/(\d+) deletions?/.exec(stat)?.[1] ?? 0);
+          } catch { /* clean tree */ }
+          return { repo: path.basename(workspaceRoot), branch, files, insertions, deletions };
+        } catch { return { repo: path.basename(workspaceRoot), branch: null, files: 0, insertions: 0, deletions: 0 }; }
+      },
       // DESK-4 — diff/review surfaces. git-backed, tolerant of non-repos.
       'changed-files': () => {
         try {
@@ -103,6 +150,67 @@ async function main(): Promise<void> {
           if (typeof out === 'string' && out.trim()) return { path: file, diff: out.slice(0, 200_000) };
           return { path: file, diff: '' };
         }
+      },
+      // DESK-4c — every CLI slash command, straight from the CLI's catalog.
+      'commands-catalog': () => ({ categories: HELP_CATEGORIES, all: [...SLASH_COMMANDS] }),
+      // DESK-4c — one snapshot powering the whole Settings dialog. All values
+      // come from the stores the CLI itself reads/writes.
+      'config-snapshot': () => {
+        const fresh = loadConfig();
+        const cli = (fresh as { cli?: { permissions?: { allow?: string[]; deny?: string[] }; sandbox?: 'on' | 'off'; fallbackModel?: string | null } }).cli;
+        return {
+          model: fresh.llm?.model ?? llm.model,
+          provider: fresh.llm?.provider ?? llm.provider,
+          fallbackModel: cli?.fallbackModel ?? null,
+          workspaceRoot,
+          sandbox: cli?.sandbox ?? 'off',
+          prefs: readPreferences(workspaceRoot),
+          permissionRules: { allow: cli?.permissions?.allow ?? [], deny: cli?.permissions?.deny ?? [] },
+          hooks: readHooks(workspaceRoot),
+          servers: mcpClient.getStatuses().map((s) => ({ id: s.serverId, online: s.status === 'connected', detail: s.identity !== 'unknown' ? s.identity : undefined })),
+        };
+      },
+      'usage-breakdown': () => buildUsageBreakdown({ parent: agent.sessionUsage, children: [], offload: undefined }),
+      'search-transcript': (args) => {
+        const query = typeof args.q === 'string' ? args.q : '';
+        return searchTranscript(loadTranscript(workspaceRoot, agent.sessionKey), query, { limit: 50 })
+          .map((m) => ({ index: (m as { index?: number }).index ?? 0, role: (m as { role?: string }).role ?? '?', snippet: (m as { snippet?: string }).snippet ?? '' }));
+      },
+      'chapters': () => listChapters(loadTranscript(workspaceRoot, agent.sessionKey)),
+      'export-chat': (args) => {
+        const format = args.format === 'json' ? 'json' : 'md';
+        const entries = loadTranscript(workspaceRoot, agent.sessionKey);
+        const exportedAt = new Date().toISOString();
+        const meta = { sessionKey: agent.sessionKey, exportedAt };
+        return {
+          filename: exportFileName(agent.sessionKey, format, exportedAt),
+          content: format === 'json' ? exportTranscriptJson(entries, meta) : exportTranscriptMarkdown(entries, meta),
+        };
+      },
+      // Actions — host-side mutations the Settings dialog / palette trigger.
+      // They ride the query channel (free-form names, result routing by id).
+      'action:clear': () => { agent.clearHistory(); return { ok: true }; },
+      'action:compact': async () => agent.compactHistory(),
+      'action:set-pref': (args) => {
+        const key = typeof args.key === 'string' ? args.key : '';
+        const SETTABLE = new Set(['executionMode', 'reviewPolicy', 'delegationPolicy', 'autoChain', 'effort', 'personality', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
+        if (!SETTABLE.has(key)) throw new Error(`Preference "${key}" is not settable from the desktop.`);
+        return writePreferences(workspaceRoot, { [key]: args.value } as never);
+      },
+      'action:set-hook': (args) => {
+        const id = typeof args.id === 'string' ? args.id : '';
+        return { ok: setHookEnabled(workspaceRoot, id, args.enabled === true) };
+      },
+      'action:set-access': (args) => {
+        const mode = args.mode;
+        if (mode !== 'read' && mode !== 'write' && mode !== 'shell') throw new Error(`Unknown access mode "${String(mode)}".`);
+        agent.setAccessMode(mode);
+        return { ok: true, mode };
+      },
+      'action:reconnect-mcp': async (args) => {
+        const id = typeof args.id === 'string' ? args.id : '';
+        await mcpClient.reconnectOne(id);
+        return { ok: true };
       },
     },
     onShutdown: () => { void mcpClient.close?.(); process.exit(0); },
