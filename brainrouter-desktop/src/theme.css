@@ -351,3 +351,25 @@ input.ctl { min-width: 220px; }
 .ws-chip:hover { border-color: var(--border-strong); }
 .orb { width: 14px; height: 14px; border-radius: 50%; border: 2.5px solid var(--raised); flex: none; }
 .orb.busy { border-color: var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
+
+/* ---------- DESK-4d² — popovers from the live-app walkthrough ---------- */
+.pop-wrap { position: relative; display: inline-flex; }
+.menu-pop { position: absolute; bottom: calc(100% + 10px); right: 0; min-width: 215px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 5px; z-index: 80; box-shadow: 0 14px 40px rgba(0,0,0,0.5); }
+.menu-pop.left { left: 0; right: auto; }
+.menu-head { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--text-faint); padding: 6px 9px 5px; font-weight: 600; }
+.menu-item { display: flex; align-items: center; gap: 7px; width: 100%; background: transparent; border: 0; border-radius: var(--r-sm); padding: 7px 9px; color: var(--text); font-size: 12.5px; cursor: pointer; text-align: left; transition: background .12s; }
+.menu-item:hover { background: rgba(255,255,255,0.07); }
+.menu-item .mi-hint { margin-left: auto; color: var(--text-faint); font-size: 11px; flex: none; }
+.menu-item .mi-check { width: 13px; color: var(--accent); font-weight: 700; flex: none; }
+.menu-sep { height: 1px; background: var(--border); margin: 5px 4px; }
+.menu-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; font-size: 12.5px; color: var(--text); }
+.effort-pop { width: 230px; padding: 8px 12px 12px; }
+.effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
+.effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }
+.turn-mark { color: var(--brand); font-size: 13px; margin: 8px 0 2px; user-select: none; }
+.slash-split { display: flex; align-items: stretch; }
+.slash-split .pal-list { flex: 1; max-height: 300px; }
+.slash-desc { width: 46%; flex: none; border-left: 1px solid var(--border); padding: 12px 14px; font-size: 12px; color: var(--text-dim); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.slash-desc p { margin: 0; line-height: 1.55; }
+.slash-desc-cmd { font-family: var(--mono); color: var(--text); font-size: 12px; }
+.picker-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; padding-left: 14px; }

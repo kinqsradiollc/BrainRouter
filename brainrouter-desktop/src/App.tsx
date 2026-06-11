@@ -17,7 +17,7 @@ import {
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
-import { CommandList, CommandPalette, filterCommands } from './palette.js';
+import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 
@@ -39,6 +39,7 @@ let nextId = 0;
 const rid = () => ++nextId;
 
 const DEFAULT_WIDTHS: Partial<Record<PanelId, number>> = { file: 460, diff: 430, terminal: 420, files: 300 };
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
 
 function fmt(result: unknown): string {
   if (typeof result === 'string') return result;
@@ -228,8 +229,9 @@ export function App(): React.ReactElement {
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [codeFont, setCodeFont] = useState(() => localStorage.getItem('br-code-font') ?? '');
   const [theme, setTheme] = useState(() => localStorage.getItem('br-desktop-theme') ?? 'dark');
-  const [mode, setMode] = useState<'chat' | 'code'>('code');
   const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
+  // DESK-4d² — composer popovers (one open at a time): mode · model · effort · account · export
+  const [pop, setPop] = useState<'' | 'mode' | 'model' | 'effort' | 'account' | 'export'>('');
   const [homeStats, setHomeStats] = useState<{
     sessions: number; turns: number; activeDays: number; currentStreak: number;
     longestStreak: number; model: string; perDay: Record<string, number>;
@@ -248,7 +250,6 @@ export function App(): React.ReactElement {
     setOpenPanels((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   }
   function ensurePanel(id: PanelId): void {
-    setMode('code');
     setOpenPanels((p) => (p.includes(id) ? p : [...p, id]));
   }
   function openFile(path: string): void {
@@ -278,10 +279,17 @@ export function App(): React.ReactElement {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((p) => !p); }
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((p) => !p); }
+      // View shortcuts (parity with the reference app's Views menu)
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); togglePanel('diff'); }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); togglePanel('files'); }
+      if (e.ctrlKey && e.key === '`') { e.preventDefault(); togglePanel('terminal'); }
+      if (mod && e.key === ',') { e.preventDefault(); openSettings('general'); }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -446,6 +454,17 @@ export function App(): React.ReactElement {
   const slashActive = !slashDismissed && !running && draft.startsWith('/') && !/\s/.test(draft);
   const slashMatches = useMemo(() => (slashActive ? filterCommands(commands, draft) : []), [slashActive, commands, draft]);
 
+  // DESK-4d² — composer control state derived from the shared prefs.
+  const prefsObj = snapshot?.prefs as Record<string, unknown> | undefined;
+  const execMode = String(prefsObj?.executionMode ?? 'planning');
+  const reviewPolicy = String(prefsObj?.reviewPolicy ?? 'request');
+  const modeLabel = execMode === 'planning' ? 'Plan mode' : reviewPolicy === 'proceed' ? 'Auto mode' : 'Accept edits';
+  const effort = String(prefsObj?.effort ?? 'medium');
+  const modelChoices = useMemo(() => {
+    const out = [info.model, snapshot?.fallbackModel].filter((m): m is string => !!m);
+    return [...new Set(out)];
+  }, [info.model, snapshot?.fallbackModel]);
+
   function runSlash(c: DeskCommand): void {
     setDraft('');
     setSlashSel(0);
@@ -488,10 +507,6 @@ export function App(): React.ReactElement {
           <div className="rail-top">
             <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}>◧</button>
           </div>
-          <div className="pills">
-            <button className={`pill${mode === 'chat' ? ' active' : ''}`} onClick={() => setMode('chat')}>💬 Chat</button>
-            <button className={`pill${mode === 'code' ? ' active' : ''}`} onClick={() => setMode('code')}>‹/› Code</button>
-          </div>
           <button className="rail-row primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><span className="ri">＋</span>New session</button>
           <button className="rail-row" onClick={() => setPaletteOpen(true)}><span className="ri">⌘</span>Commands<span className="account-chev">⌘K</span></button>
           <button className="rail-row" onClick={() => void window.brainrouter.addWorkspace()}><span className="ri">🗂</span>Add workspace…</button>
@@ -513,10 +528,20 @@ export function App(): React.ReactElement {
               </div>
             ))}
           </div>
-          <div className="account-row" onClick={() => openSettings('general')} title="Settings">
-            <span className="avatar">{(info.username ?? 'br').slice(0, 2)}</span>
-            <span className="account-name">{info.username ?? 'BrainRouter'} <span className="account-sub">· {workspaces.current?.split('/').pop() ?? 'workspace'}</span></span>
-            <span className="account-chev">⌄</span>
+          <div className="pop-wrap">
+            {pop === 'account' ? (
+              <div className="menu-pop left" style={{ minWidth: 230 }}>
+                <div className="menu-head"><span>{info.username ?? 'BrainRouter'} · {workspaces.current?.split('/').pop() ?? 'workspace'}</span></div>
+                <button className="menu-item" onClick={() => { setPop(''); openSettings('general'); }}><span className="mi-check" />Settings<span className="mi-hint">⌃,</span></button>
+                <button className="menu-item" onClick={() => { setPop(''); openSettings('commands'); }}><span className="mi-check" />All commands<span className="mi-hint">⌘K</span></button>
+                <button className="menu-item" onClick={() => { setPop(''); setInfoDialog({ title: 'About BrainRouter Desktop', body: `Workspace: ${info.workspaceRoot ?? '—'}\nSession: ${info.sessionKey ?? '—'}\nModel: ${info.model ?? '—'}\n\nState is shared with the brainrouter CLI — same config.json, same sessions, same brain.` }); }}><span className="mi-check" />About</button>
+              </div>
+            ) : null}
+            <div className="account-row" onClick={() => setPop(pop === 'account' ? '' : 'account')} title="Account">
+              <span className="avatar">{(info.username ?? 'br').slice(0, 2)}</span>
+              <span className="account-name">{info.username ?? 'BrainRouter'} <span className="account-sub">· {workspaces.current?.split('/').pop() ?? 'workspace'}</span></span>
+              <span className="account-chev">⌄</span>
+            </div>
           </div>
         </nav>
       ) : null}
@@ -528,6 +553,7 @@ export function App(): React.ReactElement {
           <span className="topbar-right">
             {gitInfo?.branch ? <span className="chip dim" title="branch">⎇ {gitInfo.branch}</span> : null}
             <button className="chip dim" title="Command palette (⌘K)" onClick={() => setPaletteOpen(true)}>⌘K</button>
+            <button className="icon-btn" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}>⬆</button>
             <PanelPicker open={openPanels} onToggle={togglePanel} />
             <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}>⚙</button>
           </span>
@@ -546,6 +572,7 @@ export function App(): React.ReactElement {
                   case 'assistant': return (
                     <div key={r.id} className="row assistant md">
                       <Markdown remarkPlugins={[remarkGfm]}>{r.text}</Markdown>
+                      <div className="turn-mark">✺</div>
                     </div>
                   );
                   case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} /></div>;
@@ -582,7 +609,7 @@ export function App(): React.ReactElement {
               <div className="box">
                 {slashActive && slashMatches.length ? (
                   <div className="slash-pop">
-                    <CommandList commands={commands} filter={draft} selected={slashSel} onPick={runSlash} onHover={setSlashSel} />
+                    <SlashPopup commands={commands} filter={draft} selected={slashSel} onPick={runSlash} onHover={setSlashSel} />
                   </div>
                 ) : null}
                 <textarea
@@ -602,12 +629,63 @@ export function App(): React.ReactElement {
                   }}
                 />
                 <div className="composer-row">
-                  <span className="chip dim" onClick={() => openSettings('permissions')}>
-                    {String((snapshot?.prefs as Record<string, unknown> | undefined)?.executionMode ?? 'planning')} ⌄
+                  <span className="pop-wrap">
+                    {pop === 'mode' ? (
+                      <div className="menu-pop left">
+                        <div className="menu-head"><span>Mode</span><span>⇧⌃M</span></div>
+                        {([['Plan mode', 'planning', 'request', '1'], ['Accept edits', 'fast', 'request', '2'], ['Auto mode', 'fast', 'proceed', '3']] as const).map(([label, em, rp, num]) => (
+                          <button key={label} className="menu-item" onClick={() => {
+                            q('a-pref', 'action:set-pref', { key: 'executionMode', value: em });
+                            q('a-pref', 'action:set-pref', { key: 'reviewPolicy', value: rp });
+                            setPop('');
+                          }}>
+                            <span className="mi-check">{modeLabel === label ? '✓' : ''}</span>{label}
+                            <span className="mi-hint">{num}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <span className="chip dim" onClick={() => setPop(pop === 'mode' ? '' : 'mode')}>{modeLabel} ⌄</span>
                   </span>
                   <span className="composer-spacer" />
-                  <span className="dim model-label" onClick={() => openSettings('general')} style={{ cursor: 'pointer' }}>
-                    {info.model ?? ''} · {String((snapshot?.prefs as Record<string, unknown> | undefined)?.effort ?? 'medium')}
+                  <span className="pop-wrap">
+                    {pop === 'model' ? (
+                      <div className="menu-pop">
+                        <div className="menu-head"><span>Models</span><span>⇧⌃I</span></div>
+                        {modelChoices.map((m, i) => (
+                          <button key={m} className="menu-item" onClick={() => {
+                            window.brainrouter.send({ kind: 'set-model', model: m, persist: true });
+                            setPop('');
+                          }}>
+                            <span className="mi-check">{m === info.model ? '✓' : ''}</span>{m}
+                            <span className="mi-hint">{i + 1}</span>
+                          </button>
+                        ))}
+                        <button className="menu-item" onClick={() => { setPop(''); openSettings('general'); }}>
+                          <span className="mi-check" />Custom model…
+                        </button>
+                        <div className="menu-sep" />
+                        <div className="menu-row">
+                          <span>Fast mode</span>
+                          <button className={`switch${execMode === 'fast' ? ' on' : ''}`} onClick={() => {
+                            q('a-pref', 'action:set-pref', { key: 'executionMode', value: execMode === 'fast' ? 'planning' : 'fast' });
+                          }} />
+                        </div>
+                      </div>
+                    ) : null}
+                    <span className="dim model-label" style={{ cursor: 'pointer' }} onClick={() => setPop(pop === 'model' ? '' : 'model')}>{info.model ?? ''}</span>
+                  </span>
+                  <span className="pop-wrap">
+                    {pop === 'effort' ? (
+                      <div className="menu-pop effort-pop">
+                        <div className="menu-head"><span>Effort <b style={{ color: 'var(--text)' }}>{effort}</b></span></div>
+                        <div className="effort-labels"><span>Faster</span><span>Smarter</span></div>
+                        <input type="range" className="effort-slider" min={0} max={3} step={1}
+                          value={Math.max(0, EFFORT_LEVELS.indexOf(effort))}
+                          onChange={(e) => q('a-pref', 'action:set-pref', { key: 'effort', value: EFFORT_LEVELS[Number(e.target.value)] })} />
+                      </div>
+                    ) : null}
+                    <span className="chip dim" onClick={() => setPop(pop === 'effort' ? '' : 'effort')}>{effort}</span>
                   </span>
                   <span className={`orb${running ? ' busy' : ''}`} title={running ? 'Working' : 'Idle'} />
                   {running ? (
@@ -620,14 +698,16 @@ export function App(): React.ReactElement {
             </div>
           </main>
 
-          {mode === 'code' ? openPanels.map((id) => (
+          {openPanels.map((id) => (
             <PanelColumn key={id} width={panelWidths[id] ?? DEFAULT_WIDTHS[id] ?? 340}
               onWidth={(w) => setPanelWidths((pw) => ({ ...pw, [id]: w }))}>
               {renderPanel(id)}
             </PanelColumn>
-          )) : null}
+          ))}
         </div>
       </div>
+
+      {pop && pop !== 'export' ? <div className="picker-backdrop" onClick={() => setPop('')} /> : null}
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)}
         onRun={(c) => runCommand(c, cmdCtx)} />
@@ -692,6 +772,19 @@ export function App(): React.ReactElement {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {pop === 'export' ? (
+        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setPop(''); }}>
+          <div className="dialog" style={{ width: 420 }}>
+            <div className="dialog-title">Export session</div>
+            <div className="set-desc" style={{ marginBottom: 12 }}>Save this session's transcript to a file — same as /export-chat in the CLI.</div>
+            <div className="dialog-actions" style={{ justifyContent: 'flex-start' }}>
+              <button className="approve" onClick={() => { q('q-export', 'export-chat', { format: 'md' }); setPop(''); }}>Markdown</button>
+              <button className="deny" onClick={() => { q('q-export', 'export-chat', { format: 'json' }); setPop(''); }}>JSON</button>
+            </div>
           </div>
         </div>
       ) : null}
