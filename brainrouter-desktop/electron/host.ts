@@ -221,6 +221,31 @@ async function main(): Promise<void> {
           .map((m) => ({ index: (m as { index?: number }).index ?? 0, role: (m as { role?: string }).role ?? '?', snippet: (m as { snippet?: string }).snippet ?? '' }));
       },
       'chapters': () => listChapters(loadTranscript(workspaceRoot, agent.sessionKey)),
+      // DESK-4g — render a resumed session's history in the chat. Persisted
+      // entries become renderable rows: user/assistant prose verbatim, tool
+      // traffic collapsed into counts (the reference renders those as
+      // collapsed outcome rows).
+      'transcript': (args) => {
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : agent.sessionKey;
+        const entries = loadTranscript(workspaceRoot, key) as Array<{ role?: string; content?: unknown; name?: string; tool_calls?: unknown[] }>;
+        const rows: Array<{ kind: string; text?: string; tools?: number }> = [];
+        let toolRun = 0;
+        const flushTools = () => { if (toolRun > 0) { rows.push({ kind: 'tools', tools: toolRun }); toolRun = 0; } };
+        for (const e of entries) {
+          const text = typeof e.content === 'string' ? e.content : '';
+          if (e.role === 'user' && text.trim() && !e.name) {
+            flushTools();
+            rows.push({ kind: 'user', text: text.slice(0, 20_000) });
+          } else if (e.role === 'assistant') {
+            if (Array.isArray(e.tool_calls) && e.tool_calls.length) toolRun += e.tool_calls.length;
+            if (text.trim()) { flushTools(); rows.push({ kind: 'assistant', text: text.slice(0, 40_000) }); }
+          } else if (e.role === 'tool') {
+            // counted via the assistant tool_calls that requested them
+          }
+        }
+        flushTools();
+        return { sessionKey: key, rows: rows.slice(-200) };
+      },
       'export-chat': (args) => {
         const format = args.format === 'json' ? 'json' : 'md';
         const entries = loadTranscript(workspaceRoot, agent.sessionKey);

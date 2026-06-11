@@ -162,6 +162,17 @@ export function installDevBridge(): void {
       { file: 'src/memory/recall.ts', line: 42, snippet: `const blended = 0.6 * rerank + 0.4 * rrf; // ${String(a.q ?? '')}` },
       { file: 'src/agent/agent.ts', line: 1240, snippet: 'private interruptRequested = false;' },
     ],
+    'transcript': (a) => ({
+      sessionKey: String(a.sessionKey ?? 'dev:fix-recall-blend'),
+      rows: [
+        { kind: 'user', text: 'fix the reranker blend regression' },
+        { kind: 'tools', tools: 3 },
+        { kind: 'assistant', text: 'Found it — the reranker score **replaces** the retriever order in `recall.ts`. Blending 0.6/0.4 with RRF restores MemBench to **0.58**.' },
+        { kind: 'user', text: 'run the full sweep to confirm' },
+        { kind: 'tools', tools: 5 },
+        { kind: 'assistant', text: 'Sweep complete across 6 splits — all green:\n\n| split | score |\n|---|---|\n| MemBench | 0.58 |\n| LoCoMo | 0.52 |' },
+      ],
+    }),
     'action:allow-rule': (a) => ({ ok: true, rule: a.rule }),
     'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
     'command:dispatch': (a) => {

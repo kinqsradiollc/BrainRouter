@@ -472,3 +472,37 @@ input.ctl { min-width: 220px; }
 .md-code-bar { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--border); color: var(--text-faint); font-size: 11px; font-family: var(--mono); }
 .md-code pre { margin: 0 !important; padding: 10px 13px !important; background: transparent !important; border: 0 !important; }
 .chat .md .md-code code { background: transparent; padding: 0; }
+
+/* ---------- DESK-4g — resume loading + responsive + micro-motion ---------- */
+.history-loading { display: flex; justify-content: center; padding: 120px 0; }
+.spinner.big { width: 22px; height: 22px; border-width: 2.5px; }
+
+button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97); }
+.session, .rail-row, .menu-item, .picker-item, .pal-item { transition: background .12s, color .12s; }
+
+/* ≤1100px — the rail overlays instead of pushing */
+@media (max-width: 1100px) {
+  .rail { position: absolute; left: 0; top: 0; bottom: 0; z-index: 70; box-shadow: 12px 0 40px rgba(0,0,0,0.45); animation: railIn .18s ease-out; }
+}
+@keyframes railIn { from { transform: translateX(-30px); opacity: 0; } }
+
+/* ≤900px — panel columns become right-side drawers */
+@media (max-width: 900px) {
+  .center { min-width: 0; }
+  .panel-col { position: absolute; right: 0; top: 0; bottom: 0; width: min(440px, 88vw) !important; z-index: 60; box-shadow: -16px 0 48px rgba(0,0,0,0.5); border-left: 1px solid var(--border-strong); }
+  .col-grip { display: none; }
+}
+
+/* ≤640px — compact paddings, tighter chrome */
+@media (max-width: 640px) {
+  .chat { padding: 14px 14px 8px; }
+  .composer { padding: 8px 14px 12px; }
+  .chat-head .chip.dim { display: none; }
+  .model-label { display: none; }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home { padding-top: 24px; }
+  .home-greet { font-size: 20px; }
+  .ws-chips { flex-wrap: wrap; }
+  .settings-modal { height: 96vh; max-height: 96vh; width: 98vw; }
+  .settings-nav { width: 152px; }
+}
