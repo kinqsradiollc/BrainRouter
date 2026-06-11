@@ -78,6 +78,8 @@ export function SettingsDialog(props: {
   onChatWidth: (w: string) => void;
   chatSize: string;
   onChatSize: (z: string) => void;
+  accent: string;
+  onAccent: (a: string) => void;
 }): React.ReactElement | null {
   const { snapshot, section } = props;
   const [modelDraft, setModelDraft] = useState<string | null>(null);
@@ -231,6 +233,10 @@ export function SettingsDialog(props: {
       case 'appearance': return (
         <>
           <div className="set-h">Appearance</div>
+          <Row title="Accent color" desc="Interactive accent across the app — pick anything. Empty resets to the theme default.">
+            <input type="color" className="ctl color-ctl" value={props.accent || '#7aa2f7'} onChange={(e) => props.onAccent(e.target.value)} />
+            {props.accent ? <button className="btn" onClick={() => props.onAccent('')}>Reset</button> : null}
+          </Row>
           <Row title="Desktop theme" desc="Claude Dark = warm charcoal (the desktop default). High-contrast = near-black.">
             <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Claude Dark'} options={['Claude Dark', 'High-contrast dark']}
               onChange={(v) => props.onTheme(v === 'High-contrast dark' ? 'hc' : 'dark')} />

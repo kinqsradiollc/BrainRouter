@@ -337,9 +337,11 @@ export function App(): React.ReactElement {
   const [grepHits, setGrepHits] = useState<import('./panels.js').GrepHit[] | null>(null);
   const [inlineDiffs, setInlineDiffs] = useState<Record<string, string>>({});
   const [branches, setBranches] = useState<{ current: string | null; branches: string[] }>({ current: null, branches: [] });
+  const [endpointModels, setEndpointModels] = useState<string[]>([]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [trustAsk, setTrustAsk] = useState<string | null>(null);
+  const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
   const commands = useMemo(() => buildCommandList(catalog), [catalog]);
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
@@ -422,6 +424,19 @@ export function App(): React.ReactElement {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('br-desktop-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    // Codex-style accent customization: one color drives accent + its soft tint.
+    const root = document.documentElement.style;
+    if (accent) {
+      root.setProperty('--accent', accent);
+      root.setProperty('--accent-soft', `${accent}21`);
+    } else {
+      root.removeProperty('--accent');
+      root.removeProperty('--accent-soft');
+    }
+    localStorage.setItem('br-accent', accent);
+  }, [accent]);
 
   // Narrow windows: the rail overlays content (CSS ≤1100px), so it starts
   // closed there and auto-closes when the window shrinks across the line.
@@ -540,6 +555,7 @@ export function App(): React.ReactElement {
       case 'q-git': if (result && typeof result === 'object') setGitInfo(result as typeof gitInfo); return;
       case 'q-home': if (result && typeof result === 'object') setHomeStats(result as typeof homeStats); return;
       case 'q-branches': if (result && typeof result === 'object') setBranches(result as typeof branches); return;
+      case 'q-models': if (result && typeof result === 'object') setEndpointModels(((result as { models?: string[] }).models ?? [])); return;
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
@@ -684,7 +700,7 @@ export function App(): React.ReactElement {
             onPick={(p) => q('q-diff', 'file-diff', { path: p })}
             onBack={() => setDiffView(null)} onOpenFile={openFile} />
         </Panel>);
-      case 'terminal': return <Panel key={id} title={def.title} onClose={close}><TerminalPanel lines={termLines} onExec={(cmd) => { setTermLines((l) => [...l.slice(-400), `❯ ${cmd}`]); q('a-term', 'action:term-exec', { cmd }); }} /></Panel>;
+      case 'terminal': return <Panel key={id} title={def.title} onClose={close}><TerminalPanel /></Panel>;
       case 'tools': return <Panel key={id} title={def.title} onClose={close}><ToolsPanel log={toolLog} /></Panel>;
       case 'tasks': return <Panel key={id} title={def.title} onClose={close}><TasksPanel fleet={fleet} finished={finishedTasks} onClear={() => setFinishedTasks([])} /></Panel>;
       case 'plan': return <Panel key={id} title={def.title} onClose={close}><PlanPanel plan={lastPlan} /></Panel>;
@@ -957,17 +973,26 @@ export function App(): React.ReactElement {
                   <span className="composer-spacer" />
                   <span className="pop-wrap">
                     {pop === 'model' ? (
-                      <div className="menu-pop">
-                        <div className="menu-head"><span>Models</span><span>⇧⌃I</span></div>
-                        {modelChoices.map((m, i) => (
+                      <div className="menu-pop model-menu">
+                        <div className="menu-head"><span>Reasoning</span></div>
+                        {EFFORT_LEVELS.map((lvl) => (
+                          <button key={lvl} className="menu-item" onClick={() => q('a-pref', 'action:set-pref', { key: 'effort', value: lvl })}>
+                            <span className="mi-check">{effort === lvl ? '✓' : ''}</span>{lvl === 'xhigh' ? 'Extra high' : lvl[0].toUpperCase() + lvl.slice(1)}
+                          </button>
+                        ))}
+                        <div className="menu-sep" />
+                        <div className="menu-head"><span>Models{endpointModels.length ? ` · ${endpointModels.length} on endpoint` : ''}</span><span>⇧⌃I</span></div>
+                        <div className="model-list">
+                        {(endpointModels.length ? endpointModels : modelChoices).map((m, i) => (
                           <button key={m} className="menu-item" onClick={() => {
                             window.brainrouter.send({ kind: 'set-model', model: m, persist: true });
                             setPop('');
                           }}>
                             <span className="mi-check">{m === info.model ? '✓' : ''}</span>{m}
-                            <span className="mi-hint">{i + 1}</span>
+                            <span className="mi-hint">{i < 9 ? i + 1 : ''}</span>
                           </button>
                         ))}
+                        </div>
                         <button className="menu-item" onClick={() => { setPop(''); openSettings('general'); }}>
                           <span className="mi-check" />Custom model…
                         </button>
@@ -980,19 +1005,7 @@ export function App(): React.ReactElement {
                         </div>
                       </div>
                     ) : null}
-                    <span className="dim model-label" style={{ cursor: 'pointer' }} onClick={() => setPop(pop === 'model' ? '' : 'model')}>{info.model ?? ''}</span>
-                  </span>
-                  <span className="pop-wrap">
-                    {pop === 'effort' ? (
-                      <div className="menu-pop effort-pop">
-                        <div className="menu-head"><span>Effort <b style={{ color: 'var(--text)' }}>{effort}</b></span></div>
-                        <div className="effort-labels"><span>Faster</span><span>Smarter</span></div>
-                        <input type="range" className="effort-slider" min={0} max={3} step={1}
-                          value={Math.max(0, EFFORT_LEVELS.indexOf(effort))}
-                          onChange={(e) => q('a-pref', 'action:set-pref', { key: 'effort', value: EFFORT_LEVELS[Number(e.target.value)] })} />
-                      </div>
-                    ) : null}
-                    <span className="chip dim" onClick={() => setPop(pop === 'effort' ? '' : 'effort')}>{effort}</span>
+                    <span className="dim model-label" style={{ cursor: 'pointer' }} onClick={() => { if (pop !== 'model') q('q-models', 'list-models'); setPop(pop === 'model' ? '' : 'model'); }}>{info.model ?? ''} · {effort}</span>
                   </span>
                   <span className={`orb${running ? ' busy' : ''}`} title={running ? 'Working' : 'Idle'} />
                 </div>
@@ -1040,6 +1053,8 @@ export function App(): React.ReactElement {
         onChatWidth={setChatWidth}
         chatSize={chatSize}
         onChatSize={setChatSize}
+        accent={accent}
+        onAccent={setAccent}
       />
 
       {interaction && interaction.type === 'choice' ? (

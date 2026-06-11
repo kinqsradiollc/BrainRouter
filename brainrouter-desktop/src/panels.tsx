@@ -5,7 +5,10 @@
  * Search). Each panel is a dumb component over App-owned state; the App
  * owns column widths and the drag-to-resize grips.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 import { Prism } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -106,6 +109,68 @@ export function PanelPicker({ open, onToggle }: {
 
 export interface GrepHit { file: string; line: number; snippet: string }
 
+// DESK-5c — VS Code-style folder tree built from the flat git file list.
+interface TreeDir { dirs: Map<string, TreeDir>; files: string[] }
+
+export function buildFileTree(paths: string[]): TreeDir {
+  const root: TreeDir = { dirs: new Map(), files: [] };
+  for (const p of paths) {
+    const parts = p.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      let next = node.dirs.get(parts[i]);
+      if (!next) { next = { dirs: new Map(), files: [] }; node.dirs.set(parts[i], next); }
+      node = next;
+    }
+    node.files.push(parts[parts.length - 1]);
+  }
+  return root;
+}
+
+function TreeLevel({ dir, base, depth, expanded, onToggle, onOpen, statuses }: {
+  dir: TreeDir;
+  base: string;
+  depth: number;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
+  onOpen: (path: string) => void;
+  statuses: Map<string, string>;
+}): React.ReactElement {
+  const dirNames = [...dir.dirs.keys()].sort();
+  const fileNames = [...dir.files].sort();
+  return (
+    <>
+      {dirNames.map((name) => {
+        const full = base ? `${base}/${name}` : name;
+        const open = expanded.has(full);
+        return (
+          <React.Fragment key={full}>
+            <div className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => onToggle(full)}>
+              <span className="tree-chevron">{open ? '▾' : '▸'}</span>
+              <span className="tree-folder">🗀</span>
+              <span className="file-name">{name}</span>
+            </div>
+            {open ? (
+              <TreeLevel dir={dir.dirs.get(name)!} base={full} depth={depth + 1}
+                expanded={expanded} onToggle={onToggle} onOpen={onOpen} statuses={statuses} />
+            ) : null}
+          </React.Fragment>
+        );
+      })}
+      {fileNames.map((name) => {
+        const full = base ? `${base}/${name}` : name;
+        return (
+          <div key={full} className="tree-row file" style={{ paddingLeft: 8 + depth * 14 + 14 }}
+            onClick={() => onOpen(full)} title={full}>
+            <span className="file-name">{name}</span>
+            {statuses.has(full) ? <span className={`fstat s-${(statuses.get(full) ?? '').replace('?', 'u')}`}>{statuses.get(full)}</span> : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function FilesPanel({ files, statuses, onOpen, grepHits, onGrep }: {
   files: string[];
   statuses: Map<string, string>;
@@ -114,6 +179,8 @@ export function FilesPanel({ files, statuses, onOpen, grepHits, onGrep }: {
   onGrep: (q: string) => void;
 }): React.ReactElement {
   const [filter, setFilter] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const tree = useMemo(() => buildFileTree(files), [files]);
   const contentMode = filter.startsWith('?');
   const shown = useMemo(() => {
     if (contentMode) return [];
@@ -138,6 +205,10 @@ export function FilesPanel({ files, statuses, onOpen, grepHits, onGrep }: {
             ))
         ) : files.length === 0 ? (
           <div className="empty center-empty">Folder is empty</div>
+        ) : !filter.trim() ? (
+          <TreeLevel dir={tree} base="" depth={0} expanded={expanded}
+            onToggle={(path) => setExpanded((e) => { const n = new Set(e); if (n.has(path)) n.delete(path); else n.add(path); return n; })}
+            onOpen={onOpen} statuses={statuses} />
         ) : (
           <>
             {shown.map((f) => (
@@ -288,40 +359,70 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
   );
 }
 
-export function TerminalPanel({ lines, onExec }: { lines: string[]; onExec: (cmd: string) => void }): React.ReactElement {
-  const [cmd, setCmd] = useState('');
-  const histRef = React.useRef<string[]>([]);
-  const histIdx = React.useRef(-1);
-  const endRef = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'auto' }); }, [lines.length]);
+/**
+ * DESK-5c — the real terminal: a persistent host-side shell session
+ * rendered through xterm. The panel owns its bridge round-trips directly
+ * (query ids namespaced per mount) and polls term-read on a 200ms cadence.
+ */
+export function TerminalPanel(): React.ReactElement {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [dead, setDead] = useState(false);
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const mono = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace';
+    const styles = getComputedStyle(document.documentElement);
+    const term = new Terminal({
+      fontFamily: mono,
+      fontSize: 12,
+      cursorBlink: true,
+      theme: {
+        background: styles.getPropertyValue('--term-bg').trim() || '#1a1a18',
+        foreground: styles.getPropertyValue('--text').trim() || '#ecebe8',
+        cursor: styles.getPropertyValue('--brand').trim() || '#d97757',
+      },
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+    fit.fit();
+
+    const ns = `term${Math.random().toString(36).slice(2, 8)}`;
+    let termId = '';
+    let next = 0;
+    const off = window.brainrouter.onEvent((msg) => {
+      const e = msg.event as { kind: string; id?: string; ok?: boolean; result?: { id?: string; chunk?: string; next?: number; alive?: boolean } };
+      if (e.kind !== 'query-result' || !e.id?.startsWith(ns)) return;
+      if (e.id === `${ns}:open` && e.ok && e.result?.id) { termId = e.result.id; return; }
+      if (e.id === `${ns}:read` && e.ok && e.result) {
+        if (e.result.chunk) term.write(e.result.chunk);
+        next = e.result.next ?? next;
+        if (e.result.alive === false) setDead(true);
+      }
+    });
+    window.brainrouter.send({ kind: 'query', id: `${ns}:open`, name: 'term-open' });
+    const data = term.onData((d) => {
+      if (termId) window.brainrouter.send({ kind: 'query', id: `${ns}:w`, name: 'term-write', args: { id: termId, data: d } });
+    });
+    const poll = setInterval(() => {
+      if (termId) window.brainrouter.send({ kind: 'query', id: `${ns}:read`, name: 'term-read', args: { id: termId, from: next } });
+    }, 200);
+    const ro = new ResizeObserver(() => { try { fit.fit(); } catch { /* detached */ } });
+    ro.observe(el);
+    return () => {
+      clearInterval(poll);
+      ro.disconnect();
+      data.dispose();
+      off();
+      if (termId) window.brainrouter.send({ kind: 'query', id: `${ns}:kill`, name: 'term-kill', args: { id: termId } });
+      term.dispose();
+    };
+  }, []);
   return (
-    <>
-      <pre className="term scroll">{lines.length ? lines.join('\n') : 'Run a command below, or watch run_command / background output here.'}<div ref={endRef} /></pre>
-      <div className="term-input-row">
-        <span className="prompt-ch">❯</span>
-        <input value={cmd} placeholder="Run a command in the workspace…  (↑ history)" spellCheck={false}
-          onChange={(e) => { setCmd(e.target.value); histIdx.current = -1; }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && cmd.trim()) {
-              histRef.current = [cmd.trim(), ...histRef.current.slice(0, 49)];
-              histIdx.current = -1;
-              onExec(cmd.trim());
-              setCmd('');
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              const next = Math.min(histIdx.current + 1, histRef.current.length - 1);
-              if (histRef.current[next] !== undefined) { histIdx.current = next; setCmd(histRef.current[next]); }
-            }
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              const next = histIdx.current - 1;
-              if (next < 0) { histIdx.current = -1; setCmd(''); }
-              else { histIdx.current = next; setCmd(histRef.current[next]); }
-            }
-          }} />
-      </div>
-    </>
+    <div className="xterm-wrap">
+      <div className="xterm-host" ref={hostRef} />
+      {dead ? <div className="empty">Shell exited — close and reopen the Terminal view to restart it.</div> : null}
+    </div>
   );
 }
 
