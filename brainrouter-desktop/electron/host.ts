@@ -327,6 +327,18 @@ async function main(): Promise<void> {
               ].filter(Boolean),
             };
           }
+          case 'briefing': {
+            const a = agent as unknown as { lastBriefingSources?: string[]; lastBriefingDetails?: Record<string, unknown> };
+            const sources = a.lastBriefingSources ?? [];
+            const details = a.lastBriefingDetails ?? {};
+            if (!sources.length && !Object.keys(details).length) return { lines: ['No briefing yet — run a turn first.'] };
+            return {
+              lines: [
+                sources.length ? `Sources queried: ${sources.join(', ')}` : 'Sources queried: —',
+                ...Object.entries(details).slice(0, 12).map(([k, v]) => `${k}: ${typeof v === 'string' ? v.slice(0, 120) : JSON.stringify(v)?.slice(0, 120)}`),
+              ],
+            };
+          }
           case 'memory':
           case 'recall': {
             if (!rest) return { lines: [`Usage: /${cmd} <query>`] };

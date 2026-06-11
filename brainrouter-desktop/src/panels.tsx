@@ -216,6 +216,8 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
 
 export function TerminalPanel({ lines, onExec }: { lines: string[]; onExec: (cmd: string) => void }): React.ReactElement {
   const [cmd, setCmd] = useState('');
+  const histRef = React.useRef<string[]>([]);
+  const histIdx = React.useRef(-1);
   const endRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'auto' }); }, [lines.length]);
   return (
@@ -223,9 +225,27 @@ export function TerminalPanel({ lines, onExec }: { lines: string[]; onExec: (cmd
       <pre className="term scroll">{lines.length ? lines.join('\n') : 'Run a command below, or watch run_command / background output here.'}<div ref={endRef} /></pre>
       <div className="term-input-row">
         <span className="prompt-ch">❯</span>
-        <input value={cmd} placeholder="Run a command in the workspace…" spellCheck={false}
-          onChange={(e) => setCmd(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && cmd.trim()) { onExec(cmd.trim()); setCmd(''); } }} />
+        <input value={cmd} placeholder="Run a command in the workspace…  (↑ history)" spellCheck={false}
+          onChange={(e) => { setCmd(e.target.value); histIdx.current = -1; }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && cmd.trim()) {
+              histRef.current = [cmd.trim(), ...histRef.current.slice(0, 49)];
+              histIdx.current = -1;
+              onExec(cmd.trim());
+              setCmd('');
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              const next = Math.min(histIdx.current + 1, histRef.current.length - 1);
+              if (histRef.current[next] !== undefined) { histIdx.current = next; setCmd(histRef.current[next]); }
+            }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              const next = histIdx.current - 1;
+              if (next < 0) { histIdx.current = -1; setCmd(''); }
+              else { histIdx.current = next; setCmd(histRef.current[next]); }
+            }
+          }} />
       </div>
     </>
   );

@@ -37,7 +37,7 @@ export type Wire =
   | { kind: 'cli' };
 
 /** Commands the host bridge executes natively (single source for composer interception). */
-export const BRIDGE_COMMANDS = new Set(['goal', 'plan', 'workers', 'ps', 'tools', 'status', 'memory', 'recall']);
+export const BRIDGE_COMMANDS = new Set(['goal', 'plan', 'workers', 'ps', 'tools', 'status', 'memory', 'recall', 'briefing']);
 
 export interface CatalogCategory { key: string; title: string; entries: Array<{ cmd: string; desc: string }> }
 export interface CommandsCatalog { categories: CatalogCategory[]; all: string[] }
@@ -79,6 +79,7 @@ export const WIRED: Record<string, Wire> = {
   '/status': { kind: 'bridge', cmd: 'status' },
   '/memory': { kind: 'bridge', cmd: 'memory', takesArgs: true },
   '/recall': { kind: 'bridge', cmd: 'recall', takesArgs: true },
+  '/briefing': { kind: 'bridge', cmd: 'briefing' },
 
   // -- settings deep links --
   '/model': { kind: 'settings', section: 'general' },
