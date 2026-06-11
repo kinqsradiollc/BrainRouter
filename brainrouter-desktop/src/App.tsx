@@ -52,6 +52,7 @@ type ChatRow =
   | { id: number; kind: 'status'; text: string; ts: number }
   | { id: number; kind: 'error'; text: string; detail?: string; ts: number }
   | { id: number; kind: 'cmd-out'; cmd: string; lines: string[]; ts: number }
+  | { id: number; kind: 'loading'; ts: number }
   | { id: number; kind: 'tool-group'; items: ToolItem[]; ts: number };
 
 function fmtRel(ts: number): string {
@@ -370,6 +371,16 @@ export function App(): React.ReactElement {
     localStorage.setItem('br-desktop-theme', theme);
   }, [theme]);
 
+  // Narrow windows: the rail overlays content (CSS ≤1100px), so it starts
+  // closed there and auto-closes when the window shrinks across the line.
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1100px)');
+    if (mq.matches) setRailOpen(false);
+    const onChange = (e: MediaQueryListEvent) => { if (e.matches) setRailOpen(false); };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   useEffect(() => {
     const push = (row: ChatRow) => setRows((r) => [...r, row]);
     const pushTool = (item: ToolItem) => setRows((r) => {
@@ -419,8 +430,14 @@ export function App(): React.ReactElement {
         case 'tokens-updated': setTokens({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, turns: e.turns }); break;
         case 'interaction-request': setInteraction(e.request); setPicked([]); break;
         case 'session-changed':
-          if (e.loadedMessages >= 0) {
-            setRows([{ id: rid(), kind: 'status', text: e.loadedMessages > 0 ? `Resumed ${e.sessionKey} (${e.loadedMessages} prior messages).` : 'New chat started.', ts: Date.now() }]);
+          if (e.loadedMessages > 0) {
+            // Observed: a centered spinner while the transcript loads, then
+            // the full history renders scrolled to the bottom.
+            setRows([{ id: rid(), kind: 'loading', ts: Date.now() }]);
+            setSearchHits(null);
+            q('q-transcript', 'transcript', { sessionKey: e.sessionKey });
+          } else if (e.loadedMessages === 0) {
+            setRows([{ id: rid(), kind: 'status', text: 'New chat started.', ts: Date.now() }]);
             setSearchHits(null);
           }
           setInfo((i) => ({ ...i, sessionKey: e.sessionKey, model: e.model || i.model }));
@@ -470,6 +487,22 @@ export function App(): React.ReactElement {
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
+      case 'q-transcript': {
+        const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number }> };
+        const mapped: ChatRow[] = (data?.rows ?? []).map((r) => {
+          if (r.kind === 'user') return { id: rid(), kind: 'user' as const, text: r.text ?? '', ts: Date.now() };
+          if (r.kind === 'assistant') return { id: rid(), kind: 'assistant' as const, text: r.text ?? '', ts: Date.now() };
+          return { id: rid(), kind: 'status' as const, text: `⚙ Used ${r.tools ?? 0} tool${(r.tools ?? 0) === 1 ? '' : 's'}`, ts: Date.now() };
+        });
+        setRows([
+          { id: rid(), kind: 'status', text: `Resumed ${data?.sessionKey ?? 'session'} — ${mapped.length} entries.`, ts: Date.now() },
+          ...mapped,
+        ]);
+        atBottomRef.current = true;
+        setAtBottom(true);
+        setTimeout(() => chatEnd.current?.scrollIntoView({ behavior: 'auto' }), 50);
+        return;
+      }
       case 'q-cmd': {
         const lines = result && typeof result === 'object' && Array.isArray((result as { lines?: unknown }).lines)
           ? (result as { lines: string[] }).lines : [fmt(result)];
@@ -708,6 +741,9 @@ export function App(): React.ReactElement {
                         {r.detail ? <div className="error-detail">{r.detail}</div> : null}
                       </div>
                     </div>
+                  );
+                  case 'loading': return (
+                    <div key={r.id} className="row history-loading"><span className="spinner big" /></div>
                   );
                   case 'cmd-out': return (
                     <div key={r.id} className="row">
