@@ -10,6 +10,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Prism } from 'react-syntax-highlighter';
+import { Icon } from './icons.js';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Same @types/react clash as react-markdown — runtime component is fine.
@@ -50,15 +51,15 @@ export function CodeBlock({ code, language, showLineNumbers }: {
 export type PanelId = 'context' | 'files' | 'file' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
-  { id: 'context', title: 'Context', icon: '◳' },
-  { id: 'files', title: 'Files', icon: '🗂' },
-  { id: 'file', title: 'File', icon: '📄' },
-  { id: 'diff', title: 'Diff', icon: '±' },
-  { id: 'terminal', title: 'Terminal', icon: '❯' },
-  { id: 'tools', title: 'Tool calls', icon: '⚙' },
-  { id: 'tasks', title: 'Background tasks', icon: '◐' },
-  { id: 'plan', title: 'Plan', icon: '☰' },
-  { id: 'search', title: 'Search session', icon: '🔎' },
+  { id: 'context', title: 'Context', icon: 'layout-right' },
+  { id: 'files', title: 'Files', icon: 'folder' },
+  { id: 'file', title: 'File', icon: 'file' },
+  { id: 'diff', title: 'Diff', icon: 'diff' },
+  { id: 'terminal', title: 'Terminal', icon: 'terminal' },
+  { id: 'tools', title: 'Tool calls', icon: 'bolt' },
+  { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
+  { id: 'plan', title: 'Plan', icon: 'plan' },
+  { id: 'search', title: 'Search session', icon: 'search' },
 ];
 
 export function Panel({ title, onClose, children, actions }: {
@@ -71,7 +72,7 @@ export function Panel({ title, onClose, children, actions }: {
     <section className="panel">
       <header className="panel-head">
         <span className="panel-title">{title}</span>
-        <span className="panel-actions">{actions}<button className="icon-btn" title="Close" onClick={onClose}>✕</button></span>
+        <span className="panel-actions">{actions}<button className="icon-btn" title="Close" onClick={onClose}><Icon name="close" size={12} /></button></span>
       </header>
       <div className="panel-body">{children}</div>
     </section>
@@ -86,7 +87,7 @@ export function PanelPicker({ open, onToggle }: {
   const SHORTCUTS: Partial<Record<PanelId, string>> = { diff: '⇧⌘D', terminal: '⌃`', files: '⇧⌘F' };
   return (
     <div className="picker">
-      <button className="chip" onClick={() => setMenu((m) => !m)} title="Views">⊞ Views</button>
+      <button className="chip chip-ic" onClick={() => setMenu((m) => !m)} title="Views"><Icon name="layout-right" size={13} /> Views</button>
       {menu ? (
         <>
           <div className="picker-backdrop" onClick={() => setMenu(false)} />
@@ -94,7 +95,7 @@ export function PanelPicker({ open, onToggle }: {
             {PANEL_DEFS.map((d) => (
               <button key={d.id} className="picker-item" onClick={() => onToggle(d.id)}>
                 <span className="picker-check">{open.includes(d.id) ? '✓' : ''}</span>
-                <span className="picker-icon">{d.icon}</span>{d.title}
+                <span className="picker-icon"><Icon name={d.icon} size={14} /></span>{d.title}
                 {SHORTCUTS[d.id] ? <span className="picker-hint">{SHORTCUTS[d.id]}</span> : null}
               </button>
             ))}
@@ -146,8 +147,8 @@ function TreeLevel({ dir, base, depth, expanded, onToggle, onOpen, statuses }: {
         return (
           <React.Fragment key={full}>
             <div className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => onToggle(full)}>
-              <span className="tree-chevron">{open ? '▾' : '▸'}</span>
-              <span className="tree-folder">🗀</span>
+              <span className="tree-chevron"><Icon name={open ? 'chev-down' : 'chev-right'} size={10} /></span>
+              <span className="tree-folder"><Icon name={open ? 'folder-open' : 'folder'} size={13} /></span>
               <span className="file-name">{name}</span>
             </div>
             {open ? (
@@ -234,7 +235,7 @@ export function FileViewerPanel({ view }: {
     <>
       <div className="pathbar" title={view.path}>
         <span className="path-text">{view.path}</span>
-        <button className="icon-btn" title="Copy contents" onClick={() => void navigator.clipboard.writeText(view.content)}>🗗</button>
+        <button className="icon-btn" title="Copy contents" onClick={() => void navigator.clipboard.writeText(view.content)}><Icon name="copy" size={13} /></button>
       </div>
       <div className="scroll code-view">
         <CodeBlock code={view.content} language={langForPath(view.path)} showLineNumbers />
@@ -331,7 +332,7 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
     <>
       {gitInfo?.branch ? (
         <div className="gitbar">
-          <span className="gitbranch">⎇ {gitInfo.branch}</span>
+          <span className="gitbranch"><Icon name="branch" size={12} /> {gitInfo.branch}</span>
           {gitInfo.insertions + gitInfo.deletions > 0 ? (
             <span><span className="add-n">+{gitInfo.insertions.toLocaleString()}</span> <span className="del-n">-{gitInfo.deletions.toLocaleString()}</span></span>
           ) : <span className="dim">clean</span>}
@@ -350,7 +351,7 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
             <div key={f.path} className="file-row" title={f.path}>
               <span className={`fstat s-${f.status.replace('?', 'u')}`}>{f.status}</span>
               <span className="file-name" onClick={() => onPick(f.path)}>{f.path}</span>
-              <button className="icon-btn" title="Open file" onClick={() => onOpenFile(f.path)}>↗</button>
+              <button className="icon-btn" title="Open file" onClick={() => onOpenFile(f.path)}><Icon name="file" size={12} /></button>
             </div>
           ))}
         </div>

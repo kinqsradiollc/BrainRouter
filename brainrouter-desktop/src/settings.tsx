@@ -8,6 +8,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
+import { Icon } from './icons.js';
 
 export interface ConfigSnapshot {
   model?: string;
@@ -22,14 +23,14 @@ export interface ConfigSnapshot {
 }
 
 const NAV: Array<{ section: SettingsSection; icon: string; title: string; group: 'Settings' | 'Desktop app' }> = [
-  { section: 'general', icon: '⚙', title: 'General', group: 'Settings' },
-  { section: 'permissions', icon: '🛡', title: 'Permissions', group: 'Settings' },
-  { section: 'memory', icon: '🧠', title: 'Memory', group: 'Settings' },
-  { section: 'hooks', icon: '⛓', title: 'Hooks', group: 'Settings' },
-  { section: 'connectors', icon: '🔌', title: 'Connectors', group: 'Settings' },
-  { section: 'observability', icon: '📈', title: 'Usage', group: 'Settings' },
-  { section: 'appearance', icon: '🎨', title: 'Appearance', group: 'Desktop app' },
-  { section: 'commands', icon: '⌘', title: 'Commands', group: 'Desktop app' },
+  { section: 'general', icon: 'gear', title: 'General', group: 'Settings' },
+  { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },
+  { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
+  { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
+  { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
+  { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
+  { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },
+  { section: 'commands', icon: 'command', title: 'Commands', group: 'Desktop app' },
 ];
 
 function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children?: React.ReactNode }): React.ReactElement {
@@ -317,14 +318,14 @@ export function SettingsDialog(props: {
               <div className="nav-head">{group}</div>
               {NAV.filter((n) => n.group === group).map((n) => (
                 <button key={n.section} className={`nav-item${section === n.section ? ' active' : ''}`} onClick={() => props.setSection(n.section)}>
-                  <span className="nav-icon">{n.icon}</span>{n.title}
+                  <span className="nav-icon"><Icon name={n.icon} size={14} /></span>{n.title}
                 </button>
               ))}
             </React.Fragment>
           ))}
         </nav>
         <div className="settings-content">{body}</div>
-        <button className="icon-btn settings-close" onClick={props.onClose}>✕</button>
+        <button className="icon-btn settings-close" onClick={props.onClose}><Icon name="close" size={13} /></button>
       </div>
     </div>
   );

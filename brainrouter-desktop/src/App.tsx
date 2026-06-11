@@ -40,6 +40,7 @@ import { BRIDGE_COMMANDS, buildCommandList, runCommand, type CmdCtx, type Comman
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
+import { Icon } from './icons.js';
 
 installDevBridge();
 
@@ -485,7 +486,7 @@ export function App(): React.ReactElement {
           pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, child: `${e.role}·${e.childId.slice(-4)}` });
           break;
         case 'child-complete':
-          push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '🏁' : '💥'} agent ${e.childId} (${e.role}) ${e.status}`, ts: Date.now() });
+          push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '✓' : '✗'} agent ${e.childId} (${e.role}) ${e.status}`, ts: Date.now() });
           setFinishedTasks((f) => [...f.slice(-30), { id: `${e.childId}-${Date.now()}`, label: `${e.role}·${e.childId.slice(-4)}`, status: e.status === 'completed' ? 'Agent · Completed' : 'Agent · Failed' }]);
           break;
         case 'plan-update':
@@ -714,23 +715,23 @@ export function App(): React.ReactElement {
       {railOpen ? (
         <nav className="rail">
           <div className="rail-top">
-            <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}>◧</button>
-            <button className="icon-btn" title="Search commands (⌘K)" onClick={() => setPaletteOpen(true)}>🔍</button>
+            <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}><Icon name="layout" size={15} /></button>
+            <button className="icon-btn" title="Search commands (⌘K)" onClick={() => setPaletteOpen(true)}><Icon name="search" size={14} /></button>
           </div>
           <div className="rail-card">
-          <button className="rail-row primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><span className="ri">＋</span>New session</button>
-          <button className="rail-row" onClick={() => setPaletteOpen(true)}><span className="ri">⌘</span>Commands<span className="account-chev">⌘K</span></button>
-          <button className="rail-row" onClick={() => void window.brainrouter.addWorkspace()}><span className="ri">🗂</span>Add workspace…</button>
+          <button className="rail-row primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><span className="ri"><Icon name="plus" size={14} /></span>New session</button>
+          <button className="rail-row" onClick={() => setPaletteOpen(true)}><span className="ri"><Icon name="command" size={14} /></span>Commands<span className="rail-hint">⌘K</span></button>
+          <button className="rail-row" onClick={() => void window.brainrouter.addWorkspace()}><span className="ri"><Icon name="folder" size={14} /></span>Add workspace…</button>
           {workspaces.recents.filter((w) => w !== workspaces.current).slice(0, 3).map((w) => (
             <button key={w} className="rail-row" title={w} onClick={() => {
               const trusted: string[] = JSON.parse(localStorage.getItem('br-trusted') ?? '[]');
               if (trusted.includes(w)) void window.brainrouter.openWorkspace(w);
               else setTrustAsk(w);
-            }}><span className="ri">▸</span>{w.split('/').pop()}</button>
+            }}><span className="ri"><Icon name="chev-right" size={11} /></span>{w.split('/').pop()}</button>
           ))}
           <div className="recents-head">
             <span className="rail-section" style={{ margin: 0 }}>Recents</span>
-            <button className="icon-btn" title={`Sort: ${recentsSort}`} onClick={() => setRecentsSort((s) => (s === 'recent' ? 'alpha' : 'recent'))}>⇅</button>
+            <button className="icon-btn" title={`Sort: ${recentsSort}`} onClick={() => setRecentsSort((s) => (s === 'recent' ? 'alpha' : 'recent'))}><Icon name="sort" size={13} /></button>
           </div>
           <div className="rail-scroll">
             {(recentsSort === 'alpha'
@@ -749,14 +750,14 @@ export function App(): React.ReactElement {
               <div className="menu-pop left" style={{ minWidth: 230 }}>
                 <div className="menu-head"><span>{info.username ?? 'BrainRouter'} · {workspaces.current?.split('/').pop() ?? 'workspace'}</span></div>
                 <button className="menu-item" onClick={() => { setPop(''); openSettings('general'); }}><span className="mi-check" />Settings<span className="mi-hint">⌃,</span></button>
-                <button className="menu-item" onClick={() => { setPop(''); openSettings('commands'); }}><span className="mi-check" />All commands<span className="mi-hint">⌘K</span></button>
+                <button className="menu-item" onClick={() => { setPop(''); openSettings('commands'); }}><span className="mi-check" />All commands</button>
                 <button className="menu-item" onClick={() => { setPop(''); setInfoDialog({ title: 'About BrainRouter Desktop', body: `Workspace: ${info.workspaceRoot ?? '—'}\nSession: ${info.sessionKey ?? '—'}\nModel: ${info.model ?? '—'}\n\nState is shared with the brainrouter CLI — same config.json, same sessions, same brain.` }); }}><span className="mi-check" />About</button>
               </div>
             ) : null}
             <div className="account-row" onClick={() => setPop(pop === 'account' ? '' : 'account')} title="Account">
               <span className="avatar">{(info.username ?? 'br').slice(0, 2)}</span>
               <span className="account-name">{info.username ?? 'BrainRouter'} <span className="account-sub">· {workspaces.current?.split('/').pop() ?? 'workspace'}</span></span>
-              <span className="account-chev">⌄</span>
+              <span className="account-chev"><Icon name="chev-down" size={12} /></span>
             </div>
           </div>
           </div>
@@ -767,14 +768,13 @@ export function App(): React.ReactElement {
         <div className="workrow">
           <main className="center">
             <header className="chat-head">
-              {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}>◨</button> : null}
+              {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}><Icon name="layout" size={15} /></button> : null}
               <span className="crumb"><b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b><span className="crumb-sep">/</span>{sessionTitle}</span>
               <span className="topbar-right">
-                {gitInfo?.branch ? <span className="chip dim" title="branch">⎇ {gitInfo.branch}</span> : null}
-                <button className="chip dim" title="Command palette (⌘K)" onClick={() => setPaletteOpen(true)}>⌘K</button>
-                <button className="icon-btn" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}>⬆</button>
+                {gitInfo?.branch ? <span className="chip dim chip-ic" title="branch"><Icon name="branch" size={11} /> {gitInfo.branch}</span> : null}
+                <button className="icon-btn" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}><Icon name="export" size={14} /></button>
                 <PanelPicker open={openPanels} onToggle={togglePanel} />
-                <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}>⚙</button>
+                <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={14} /></button>
               </span>
             </header>
             <div className="chat" ref={chatRef} onScroll={() => {
@@ -797,7 +797,7 @@ export function App(): React.ReactElement {
                     <div key={r.id} className="row user-row">
                       <div className="user">{r.text}</div>
                       <span className="msg-actions">
-                        <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}>🗗</button>
+                        <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
                         <span>{fmtRel(r.ts)}</span>
                       </span>
                     </div>
@@ -807,7 +807,7 @@ export function App(): React.ReactElement {
                       <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{r.text}</Markdown>
                       <div className="turn-mark">✺</div>
                       <span className="msg-actions">
-                        <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}>🗗</button>
+                        <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
                         <span>{fmtRel(r.ts)}</span>
                       </span>
                     </div>
@@ -817,7 +817,7 @@ export function App(): React.ReactElement {
                     <div key={r.id} className="row">
                       <div className="error-card">
                         <button className="icon-btn err-x" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))}>✕</button>
-                        <span className="error-icon">⚠</span>
+                        <span className="error-icon"><Icon name="warn" size={15} /></span>
                         <div className="error-title">{r.text}</div>
                         <div className="error-advice">Try sending your message again — your draft was kept. If it keeps happening, check the host log.</div>
                         {r.detail ? <div className="error-detail">{r.detail}</div> : null}
@@ -896,8 +896,8 @@ export function App(): React.ReactElement {
             <div className="composer">
               {rows.length === 0 && !running ? (
                 <div className="ws-chips">
-                  <button className="ws-chip" title={info.workspaceRoot}>🖥 {info.workspaceRoot?.split('/').pop() ?? 'Local'}</button>
-                  <button className="ws-chip" onClick={() => void window.brainrouter.addWorkspace()}>🗂 Select folder…</button>
+                  <button className="ws-chip" title={info.workspaceRoot}><Icon name="monitor" size={12} /> {info.workspaceRoot?.split('/').pop() ?? 'Local'}</button>
+                  <button className="ws-chip" onClick={() => void window.brainrouter.addWorkspace()}><Icon name="folder" size={12} /> Select folder…</button>
                 </div>
               ) : null}
               <div className="box">
@@ -908,7 +908,7 @@ export function App(): React.ReactElement {
                 ) : null}
                 <textarea
                   rows={1}
-                  placeholder={running ? 'Working…' : 'Message BrainRouter…  ( / for commands · ⌘K for the palette )'}
+                  placeholder={running ? 'Working…' : 'Message BrainRouter…  ( / for commands )'}
                   value={draft}
                   onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
                   onKeyDown={(e) => {
@@ -924,10 +924,10 @@ export function App(): React.ReactElement {
                 />
                 <button className={`input-send icon-btn${running ? ' stop-red' : ''}`} title={running ? 'Stop' : 'Send'}
                   onClick={() => running ? window.brainrouter.send({ kind: 'interrupt' }) : submit()}
-                  disabled={!running && !draft.trim()}>{running ? '⏹' : '⏎'}</button>
+                  disabled={!running && !draft.trim()}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
               </div>
                 <div className="context-chips">
-                <span className="ctx-chip" title={info.workspaceRoot}>🗀 {info.workspaceRoot?.split('/').pop() ?? 'workspace'}</span>
+                <span className="ctx-chip" title={info.workspaceRoot}><Icon name="folder" size={11} /> {info.workspaceRoot?.split('/').pop() ?? 'workspace'}</span>
                 <span className="pop-wrap">
                   {pop === 'branch' ? (
                     <div className="menu-pop left" style={{ bottom: 'calc(100% + 8px)' }}>
@@ -947,7 +947,7 @@ export function App(): React.ReactElement {
                     </div>
                   ) : null}
                   {branches.current ? (
-                    <span className="ctx-chip" onClick={() => setPop(pop === 'branch' ? '' : 'branch')}>⎇ {branches.current} ⌄</span>
+                    <span className="ctx-chip" onClick={() => setPop(pop === 'branch' ? '' : 'branch')}><Icon name="branch" size={11} /> {branches.current} <Icon name="chev-down" size={9} /></span>
                   ) : null}
                 </span>
               </div>
