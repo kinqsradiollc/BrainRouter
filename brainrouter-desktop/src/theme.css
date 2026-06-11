@@ -1,26 +1,26 @@
 :root, [data-theme="dark"] {
-  /* Claude Dark — warm charcoal (matches the desktop app default) */
-  --bg: #262624;
-  --surface: #21211f;
-  --sidebar: #1e1e1c;
-  --raised: #32312e;
-  --input: #30302e;
+  /* Neutral Dark — flat near-black, blue accent (the modern default) */
+  --bg: #181818;
+  --surface: #1f1f1f;
+  --sidebar: #151515;
+  --raised: #272727;
+  --input: #212121;
   --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --text: #ececea;
-  --text-dim: #9d9b95;
-  --text-faint: #6b6960;
-  --accent: #7aa2f7;
-  --accent-soft: rgba(122, 162, 247, 0.13);
+  --border-strong: rgba(255, 255, 255, 0.13);
+  --text: #ececec;
+  --text-dim: #9b9b9b;
+  --text-faint: #5e5e5e;
+  --accent: #3b9eff;
+  --accent-soft: rgba(59, 158, 255, 0.13);
   --brand: #d97757;
   --brand-soft: rgba(217, 119, 87, 0.14);
-  --user-bubble: #2e2d2b;
-  --user-border: rgba(255, 255, 255, 0.09);
+  --user-bubble: #242424;
+  --user-border: rgba(255, 255, 255, 0.08);
   --ok: #3fb950;
   --warn: #d29922;
   --err: #f85149;
-  --term-bg: #1a1a18;
-  --r-sm: 8px; --r-md: 10px; --r-lg: 14px;
+  --term-bg: #121212;
+  --r-sm: 8px; --r-md: 10px; --r-lg: 16px;
   --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
   --mono: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
 }
@@ -319,12 +319,12 @@ input.ctl { min-width: 220px; }
 .session-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint); margin-right: 8px; flex: none; }
 .session { display: flex; align-items: center; }
 .session > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-row { display: flex; align-items: center; gap: 9px; padding: 9px 8px; border-top: 1px solid var(--border); margin-top: 8px; cursor: pointer; border-radius: var(--r-sm); transition: background .12s; }
-.account-row:hover { background: rgba(255,255,255,0.05); }
-.avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); font-size: 9.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: none; text-transform: uppercase; }
-.account-name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-sub { color: var(--text-dim); font-weight: 400; }
-.account-chev { margin-left: auto; color: var(--text-faint); flex: none; }
+.account-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 8px; cursor: pointer; border-radius: var(--r-md); transition: background .12s; min-width: 0; }
+.account-row:hover { background: rgba(255,255,255,0.06); }
+.avatar { width: 24px; height: 24px; border-radius: 8px; background: linear-gradient(135deg, var(--accent) 0%, var(--brand) 100%); color: #fff; font-size: 9.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: none; text-transform: uppercase; letter-spacing: .02em; }
+.account-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: flex; align-items: baseline; gap: 5px; }
+.account-sub { color: var(--text-faint); font-weight: 400; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.account-chev { margin-left: auto; color: var(--text-faint); flex: none; display: flex; align-items: center; }
 
 .home { max-width: 760px; margin: 0 auto; padding: 48px 0 12px; }
 .home-greet { display: flex; align-items: center; gap: 12px; font-size: 25px; font-weight: 650; letter-spacing: -0.01em; }
@@ -468,8 +468,8 @@ input.ctl { min-width: 220px; }
 .pathbar { display: flex; align-items: center; gap: 8px; }
 .pathbar .path-text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
-.md-code { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); margin: 8px 0; overflow: hidden; }
-.md-code-bar { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--border); color: var(--text-faint); font-size: 11px; font-family: var(--mono); }
+.md-code { background: var(--term-bg); border: 0; border-radius: var(--r-md); margin: 10px 0; overflow: hidden; }
+.md-code-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 2px 13px; color: var(--text-faint); font-size: 11px; font-family: var(--mono); }
 .md-code pre { margin: 0 !important; padding: 10px 13px !important; background: transparent !important; border: 0 !important; }
 .chat .md .md-code code { background: transparent; padding: 0; }
 
@@ -535,7 +535,7 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 
 /* ---------- DESK-4i — sidebar card + slim composer (side-by-side pass) ---------- */
 .rail-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--sidebar); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 10px 10px; overflow: hidden; }
-[data-theme="dark"] .rail-card { background: var(--surface); }
+[data-theme="dark"] .rail-card { background: #1b1b1b; }
 .rail-card .rail-row { padding: 9px 12px; font-size: 13.5px; border-radius: var(--r-md); }
 .rail-card .session { padding: 8px 12px; font-size: 13px; border-radius: var(--r-md); }
 .rail-card .recents-head { margin: 16px 6px 6px; }
@@ -576,3 +576,28 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .model-menu { min-width: 250px; }
 .model-list { max-height: 220px; overflow-y: auto; }
 .color-ctl { width: 52px; height: 32px; padding: 2px; cursor: pointer; }
+
+/* ---------- DESK-4k — icon system + alignment ---------- */
+.ic { display: inline-block; vertical-align: -3px; flex: none; }
+button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+.icon-btn .ic { vertical-align: 0; }
+.rail-row .ri { display: inline-flex; align-items: center; justify-content: center; width: 18px; }
+.rail-hint { margin-left: auto; color: var(--text-faint); font-size: 11px; font-family: var(--mono); }
+.picker-icon { display: inline-flex; align-items: center; justify-content: center; }
+.nav-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; color: var(--text-dim); }
+.nav-item.active .nav-icon { color: var(--text); }
+.chip-ic { display: inline-flex; align-items: center; gap: 5px; }
+.tree-chevron, .tree-folder { display: inline-flex; align-items: center; }
+.tree-folder { color: var(--text-dim); }
+.input-send { display: inline-flex; align-items: center; justify-content: center; }
+.error-icon { color: var(--err); display: inline-flex; }
+.session-dot { background: var(--text-faint); }
+
+/* DESK-4k — Codex-direction final touches */
+.input-send { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; right: 9px; }
+.input-send:not(:disabled):hover { color: #fff; filter: brightness(1.1); }
+.input-send:disabled { background: var(--raised); color: var(--text-faint); }
+.input-send.stop-red { background: transparent; color: var(--err); }
+.chat .md pre { border: 0; background: var(--term-bg); }
+.chat .md code { background: var(--raised); }
