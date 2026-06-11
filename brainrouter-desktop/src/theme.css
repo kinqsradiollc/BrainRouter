@@ -490,6 +490,7 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 @media (max-width: 900px) {
   .center { min-width: 0; }
   .panel-col { position: absolute; right: 0; top: 0; bottom: 0; width: min(440px, 88vw) !important; z-index: 60; box-shadow: -16px 0 48px rgba(0,0,0,0.5); border-left: 1px solid var(--border-strong); }
+  .panel-col:not(:last-of-type) { display: none; }
   .col-grip { display: none; }
 }
 
@@ -505,4 +506,29 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
   .ws-chips { flex-wrap: wrap; }
   .settings-modal { height: 96vh; max-height: 96vh; width: 98vw; }
   .settings-nav { width: 152px; }
+}
+
+/* ---------- DESK-4h — inspect-diff hunk cards ---------- */
+.diffview { display: flex; flex-direction: column; gap: 12px; }
+.hunk-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; animation: rowIn .16s ease-out; }
+.hunk-path { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.hunk-path .path-text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hunk-stats { flex: none; font-family: var(--mono); font-size: 11.5px; }
+.hunk-lines { font-family: var(--mono); font-size: 12px; line-height: 1.6; overflow-x: auto; padding: 4px 0; }
+.hunk-line { display: flex; min-width: max-content; }
+.hunk-line .hno { width: 40px; flex: none; text-align: right; padding-right: 10px; color: var(--text-faint); user-select: none; }
+.hunk-line .hmark { width: 16px; flex: none; text-align: center; color: var(--text-faint); user-select: none; }
+.hunk-line .htext { white-space: pre; padding-right: 16px; }
+.hunk-line.add { background: rgba(63,185,80,0.13); }
+.hunk-line.add .htext, .hunk-line.add .hmark { color: #7ee2a8; }
+.hunk-line.del { background: rgba(248,81,73,0.13); }
+.hunk-line.del .htext, .hunk-line.del .hmark { color: #ffa198; }
+.hunk-line.meta { color: var(--text-faint); font-style: italic; }
+.inline-diff { margin: 4px 0 8px 24px; }
+.diff-chip { flex: none; font-family: var(--mono); font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 1.5px 7px; cursor: pointer; transition: background .12s; }
+.diff-chip:hover { background: rgba(122,162,247,0.25); }
+
+/* composer row wraps instead of overflowing at small widths */
+@media (max-width: 640px) {
+  .composer-row { flex-wrap: wrap; row-gap: 6px; }
 }
