@@ -429,9 +429,12 @@ test('runTurn forces wait_agents before final answer after spawn_agents', async 
       const messages = Array.isArray(body.messages) ? body.messages : [];
       const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
 
-      if (lastUser === 'child-one' || lastUser === 'child-two') {
+      // PARITY-Q: a terse child prompt gets a one-line return-format nudge
+      // appended, so match the prefix rather than the exact string.
+      const childName = lastUser.startsWith('child-one') ? 'child-one' : lastUser.startsWith('child-two') ? 'child-two' : '';
+      if (childName) {
         return new Response(JSON.stringify({
-          choices: [{ message: { content: `child output for ${lastUser}` } }],
+          choices: [{ message: { content: `child output for ${childName}` } }],
           usage: { prompt_tokens: 20, completion_tokens: 5 },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }

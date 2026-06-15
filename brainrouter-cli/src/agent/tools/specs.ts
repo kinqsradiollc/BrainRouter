@@ -269,34 +269,64 @@ export const LOCAL_TOOLS = [
       '(`askYesNo` is wired into approval gates already), NOT for things you can decide yourself with the available context, ' +
       'and NOT as a substitute for thinking. ' +
       'Errors in non-interactive runs (CI / piped / `brainrouter run`) and when the user cancels (Esc/q/Ctrl+C); ' +
-      'on either error, decide yourself and say which option you picked and why.',
+      'on either error, decide yourself and say which option you picked and why. ' +
+      'OPTION QUALITY (this is what separates a good question from a survey): each `description` states the real CONSEQUENCE, tradeoff, and risk of that choice — written so the user can decide with NO outside knowledge — not a restatement of the label. Put the option YOU would pick FIRST and mark its label "(Recommended)". Add a sequencing/hedge option ("A now, B later") when viable. ' +
+      'To ask several related questions at once, pass a `questions` array instead of the single-question fields — each is asked in turn and all answers come back together; prefer this over dripping one question per turn.',
     inputSchema: {
       type: 'object',
       properties: {
-        question: { type: 'string', description: 'The question to ask the user (complete sentence ending with `?`).' },
+        question: { type: 'string', description: 'The question to ask the user (complete sentence ending with `?`). Single-question form. For several related questions at once, use `questions` instead.' },
         header: { type: 'string', description: 'Short chip-style label (≤12 chars) shown above the question, e.g. "Auth method" or "Storage".' },
         options: {
           type: 'array',
-          description: '2–4 mutually exclusive choices. Each option needs a short label and a one-line description.',
+          description: '2–4 mutually exclusive choices. Each description states the consequence/tradeoff/risk (not the label); recommended option first, marked "(Recommended)".',
           minItems: 2,
           maxItems: 4,
           items: {
             type: 'object',
             properties: {
               label: { type: 'string', description: 'Short display text (1–5 words).' },
-              description: { type: 'string', description: 'One-line explanation of what this option means or what will happen if chosen.' },
+              description: { type: 'string', description: 'The consequence/tradeoff/risk of choosing this — enough that the user needs no outside knowledge.' },
             },
             required: ['label', 'description'],
           },
         },
         multiSelect: { type: 'boolean', description: 'When true, allow the user to pick multiple options (comma-separated input). Defaults to false.' },
+        questions: {
+          type: 'array',
+          description: 'Batched form: 1–4 related questions asked in one pause; all answers return together. Use INSTEAD of the single-question fields, not alongside.',
+          minItems: 1,
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              question: { type: 'string', description: 'A complete question ending with `?`.' },
+              header: { type: 'string', description: 'Short chip label (≤12 chars).' },
+              options: {
+                type: 'array', minItems: 2, maxItems: 4,
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string', description: 'Short display text (1–5 words).' },
+                    description: { type: 'string', description: 'The consequence/tradeoff/risk of choosing this.' },
+                  },
+                  required: ['label', 'description'],
+                },
+              },
+              multiSelect: { type: 'boolean', description: 'Allow multiple picks for this question.' },
+            },
+            required: ['question', 'header', 'options'],
+          },
+        },
       },
-      required: ['question', 'header', 'options'],
     },
   },
   {
     name: 'update_plan',
-    description: 'Create or update the durable CLI task plan. Use this for multi-step work and keep at most one item in_progress.',
+    description:
+      'Create or update the durable CLI task plan. Use it ONLY for work with ≥3 non-trivial steps (1–2 steps: just do them). ' +
+      'Each item is ONE verifiable outcome in imperative voice ("Add the migration", not "Database work") — and give it an `acceptance` cue where it helps (how you\'ll know it\'s done: "tests pass", "endpoint returns 200"). ' +
+      'Keep at most one item `in_progress` and mark each `completed` the moment it\'s done, never in batches. Rewrite the plan as you learn — a stale plan is worse than none. Never start an item too large to finish in one focused pass; decompose it first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -307,8 +337,9 @@ export const LOCAL_TOOLS = [
           items: {
             type: 'object',
             properties: {
-              step: { type: 'string' },
-              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] }
+              step: { type: 'string', description: 'One verifiable outcome, imperative voice.' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+              acceptance: { type: 'string', description: 'Optional: how you will know this item is done (e.g. "tests pass", "file written", "benchmark hit").' }
             },
             required: ['step', 'status']
           }

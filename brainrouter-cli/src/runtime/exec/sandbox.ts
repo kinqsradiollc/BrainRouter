@@ -118,24 +118,26 @@ export interface SandboxRunResult {
   refused?: boolean;
   /** CODEX-SANDBOX-FAILCLOSED — true when stderr looks like a sandbox denial. */
   sandboxDenied?: boolean;
+  /** DESK-6 — true when the user pressed Stop and the child was killed mid-run. */
+  interrupted?: boolean;
 }
 
 /**
  * Execute `command` (a shell string) with optional sandboxing. Returns a
  * normalized result. Always returns; never throws on non-zero exit.
  */
-export async function runShell(command: string, config: SandboxConfig, timeoutMs = 120_000): Promise<SandboxRunResult> {
+export async function runShell(command: string, config: SandboxConfig, timeoutMs = 120_000, signal?: AbortSignal): Promise<SandboxRunResult> {
   // Always pin cwd to the workspace root so `run_command` never inherits a
   // drifted process.cwd() (and writes test files into ~/.brainrouter).
   const cwd = config.workspaceRoot;
   if (!config.enabled) {
-    return execShell(command, undefined, cwd, timeoutMs, false, 'none');
+    return execShell(command, undefined, cwd, timeoutMs, false, 'none', signal);
   }
 
   if (process.platform === 'darwin') {
     const profilePath = writeMacSandboxProfile(config);
     const wrapped = ['sandbox-exec', '-f', profilePath, '/bin/sh', '-c', command];
-    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec');
+    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec', signal);
     r.sandboxDenied = detectSandboxDenial(r.stderr);
     return r;
   }
@@ -143,21 +145,21 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
   if (process.platform === 'linux') {
     if (await binaryAvailable('bwrap')) {
       const args = buildBwrapArgs(config, command);
-      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap');
+      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap', signal);
       r.sandboxDenied = detectSandboxDenial(r.stderr);
       return r;
     }
     if (await binaryAvailable('firejail')) {
       const args = buildFirejailArgs(config, command);
-      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail');
+      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail', signal);
       r.sandboxDenied = detectSandboxDenial(r.stderr);
       return r;
     }
-    return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Linux (no bwrap/firejail)');
+    return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Linux (no bwrap/firejail)', signal);
   }
 
   // Windows / other — no portable sandbox in stdlib.
-  return handleUnavailableSandbox(config, command, cwd, timeoutMs, process.platform);
+  return handleUnavailableSandbox(config, command, cwd, timeoutMs, process.platform, signal);
 }
 
 /**
@@ -172,6 +174,7 @@ async function handleUnavailableSandbox(
   cwd: string,
   timeoutMs: number,
   platformLabel: string,
+  signal?: AbortSignal,
 ): Promise<SandboxRunResult> {
   const verdict = decideUnavailableSandbox(config.unavailableMode, platformLabel);
   if (!verdict.run) {
@@ -185,7 +188,7 @@ async function handleUnavailableSandbox(
       refused: true,
     };
   }
-  const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none');
+  const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none', signal);
   fallback.notice = verdict.notice;
   return fallback;
 }
@@ -197,26 +200,46 @@ function execShell(
   timeoutMs: number,
   sandboxed: boolean,
   tool: SandboxRunResult['sandboxTool'],
+  signal?: AbortSignal,
 ): Promise<SandboxRunResult> {
   return new Promise((resolve) => {
+    // DESK-6 — already stopped before we even spawned.
+    if (signal?.aborted) {
+      resolve({ stdout: '', stderr: 'interrupted by user', exitCode: 130, sandboxed, sandboxTool: tool, interrupted: true });
+      return;
+    }
     const useShell = !args; // when no args provided, run as a single shell string
     const child = useShell
       ? spawn(cmd, { cwd, shell: true })
       : spawn(cmd, args, { cwd });
     let stdout = '';
     let stderr = '';
+    let settled = false;
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* noop */ }
     }, timeoutMs);
+    // DESK-6 — the user pressed Stop: SIGKILL the child NOW (sandbox wrappers may
+    // not forward SIGTERM to the inner shell, so go straight to SIGKILL) and
+    // resolve with a clean interrupted envelope (exit 130), not a generic 127.
+    const onAbort = (): void => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      finish({ stdout, stderr: stderr || 'interrupted by user', exitCode: 130, sandboxed, sandboxTool: tool, interrupted: true });
+    };
+    const finish = (r: SandboxRunResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(r);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr, exitCode: code ?? 0, sandboxed, sandboxTool: tool });
+      finish({ stdout, stderr, exitCode: code ?? 0, sandboxed, sandboxTool: tool });
     });
     child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ stdout: '', stderr: err.message, exitCode: 127, sandboxed, sandboxTool: tool });
+      finish({ stdout: '', stderr: err.message, exitCode: 127, sandboxed, sandboxTool: tool });
     });
   });
 }

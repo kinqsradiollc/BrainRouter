@@ -6,6 +6,8 @@ export type PlanItemStatus = 'pending' | 'in_progress' | 'completed';
 export interface PlanItem {
   step: string;
   status: PlanItemStatus;
+  /** PARITY-Q: optional acceptance cue — how this item is verified done. */
+  acceptance?: string;
 }
 
 export interface PlanState {
@@ -75,7 +77,7 @@ export function formatPlan(state: PlanState): string {
     lines.push(state.explanation);
   }
   for (const item of state.items) {
-    lines.push(`- [${statusMarker(item.status)}] ${item.step}`);
+    lines.push(`- [${statusMarker(item.status)}] ${item.step}${item.acceptance ? `  — ✓ ${item.acceptance}` : ''}`);
   }
   return lines.join('\n');
 }
@@ -92,7 +94,10 @@ function normalizePlanItem(item: PlanItem, index: number): PlanItem {
   if (!isPlanItemStatus(status)) {
     throw new Error(`Plan item ${index + 1} has invalid status "${String(status)}".`);
   }
-  return { step, status };
+  const acceptance = typeof item.acceptance === 'string' && item.acceptance.trim()
+    ? item.acceptance.trim()
+    : undefined;
+  return acceptance ? { step, status, acceptance } : { step, status };
 }
 
 function isPlanItemStatus(value: unknown): value is PlanItemStatus {

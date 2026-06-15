@@ -278,7 +278,7 @@ export class McpClientWrapper {
     return res;
   }
 
-  async callTool(name: string, args: Record<string, any>) {
+  async callTool(name: string, args: Record<string, any>, options?: { signal?: AbortSignal }) {
     // Offline mode: synthesize an error envelope that downstream consumers
     // (callMcpTool, agent.captureTurn, memory_recall pipelines) already know
     // how to ignore via their existing isError checks. Without this the SDK
@@ -298,9 +298,16 @@ export class McpClientWrapper {
     // rounds. Race the tool call against a configurable timeout so a flaky
     // child server can't lock up the whole CLI.
     const timeoutMs = getCliKnobs().mcpTimeoutMs;
+    // DESK-6 — already stopped: don't even dispatch.
+    if (options?.signal?.aborted) {
+      return { isError: true, content: [{ type: 'text' as const, text: `Tool "${name}" interrupted by user.` }] };
+    }
     const invoke = () =>
       Promise.race([
-        this.client.callTool({ name, arguments: args }),
+        // DESK-6 — forward the Stop signal + timeout to the SDK so it sends
+        // notifications/cancelled and rejects promptly (belt-and-suspenders with
+        // the race timeout below).
+        this.client.callTool({ name, arguments: args }, undefined, { signal: options?.signal, timeout: timeoutMs }),
         new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error(`MCP tool "${name}" timed out after ${timeoutMs}ms`)),

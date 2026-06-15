@@ -175,6 +175,55 @@ test('CODEX-PARENT-APPROVAL silent child forwards write_file approval before mut
   });
 });
 
+test('DESK-5n Auto mode (parent fast+proceed) auto-allows a silent child write without forwarding approval', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const target = path.join(workspace, 'auto-write.txt');
+    const restore = stubLlmTool('write_file', { path: 'auto-write.txt', content: 'auto write' });
+    const approvals: Array<{ tool: string }> = [];
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        accessMode: 'write',
+        silent: true,
+        // Parent is in Auto mode — the child write must NOT pop the gate.
+        parentExecutionMode: 'fast',
+        parentReviewPolicy: 'proceed',
+        confirmToolApproval: async (info) => { approvals.push(info); return true; },
+      });
+      await agent.runTurn('write child file', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
+      assert.equal(approvals.length, 0, 'Auto mode should not forward child write approval');
+      assert.equal(fs.readFileSync(target, 'utf8'), 'auto write');
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('DESK-5n non-Auto parent (fast + request) STILL forwards the silent child write gate', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const target = path.join(workspace, 'gated-write.txt');
+    const restore = stubLlmTool('write_file', { path: 'gated-write.txt', content: 'gated write' });
+    const approvals: Array<{ tool: string }> = [];
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        accessMode: 'write',
+        silent: true,
+        parentExecutionMode: 'fast',
+        parentReviewPolicy: 'request', // Accept-edits-style: proceed NOT set → gate still asks
+        confirmToolApproval: async (info) => { approvals.push(info); return true; },
+      });
+      await agent.runTurn('write child file', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
+      assert.equal(approvals.length, 1, 'without proceed the gate must still ask');
+      assert.equal(fs.readFileSync(target, 'utf8'), 'gated write');
+    } finally {
+      restore();
+    }
+  });
+});
+
 test('CODEX-PARENT-APPROVAL silent child does not write_file when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const target = path.join(workspace, 'rejected-write.txt');

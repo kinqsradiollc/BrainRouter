@@ -34,6 +34,28 @@ test('ask_user_choice answers through the interaction port (no TTY needed)', asy
   });
 });
 
+test('PARITY-Q ask_user_choice batched form asks each question and returns aggregated answers', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const asked: string[] = [];
+    const agent = portAgent(workspace, {
+      confirm: async () => true,
+      // answer each question with its second option's label
+      choice: async (req: any) => { asked.push(req.header); return [req.options[1].label]; },
+    });
+    const res = JSON.parse(await runTool(agent, 'ask_user_choice', {
+      questions: [
+        { question: 'Which runner?', header: 'Runner', options: [{ label: 'MLX', description: 'a' }, { label: 'llama.cpp', description: 'b' }] },
+        { question: 'Which scope?', header: 'Scope', options: [{ label: 'Phase 1', description: 'a' }, { label: 'Full', description: 'b' }] },
+      ],
+    }));
+    // Both questions were asked, in order; answers keyed by header.
+    assert.deepEqual(asked, ['Runner', 'Scope']);
+    assert.equal(res.answer, undefined, 'batched form returns `answers`, not `answer`');
+    assert.equal(res.answers.Runner, 'llama.cpp');
+    assert.equal(res.answers.Scope, 'Full');
+  });
+});
+
 test('ask_user_choice: dismissed dialog falls back to the decide-yourself contract', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const agent = portAgent(workspace, { confirm: async () => true, choice: async () => null });

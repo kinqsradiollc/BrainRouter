@@ -36,7 +36,7 @@ export type AgentEvent =
   | { kind: 'child-tool-start'; childId: string; role: string; tool: string; args: Record<string, unknown> }
   | { kind: 'child-tool-end'; childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }
   | { kind: 'child-complete'; childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }
-  | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed' }>; explanation?: string }
+  | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>; explanation?: string }
   | { kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
   | { kind: 'memory'; level: 'info' | 'warn'; text: string }
   | { kind: 'approval-decision'; tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }
@@ -198,7 +198,7 @@ export interface BridgedCallbacks {
   onAssistantDelta: (chunk: string) => void;
   onAssistantTurnEnd: () => void;
   onReasoningDelta: (chunk: string) => void;
-  onPlanUpdate: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed' }>, explanation?: string) => void;
+  onPlanUpdate: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>, explanation?: string) => void;
   onCompactionEvent: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
   onMemoryEvent: (event: { kind?: string; level?: 'info' | 'warn'; text?: string; reason?: string }) => void;
   onApproval: (event: { tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }) => void;
