@@ -113,6 +113,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .crumb { font-size: 12.5px; color: var(--text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .72; }
 .crumb b { color: var(--text); font-weight: 600; }
 .crumb-sep { margin: 0 7px; color: var(--text-faint); }
+/* DESK-6v — sub-agent breadcrumb: clickable parent (= back) + current role + status, one header. */
+.crumb-link { display: inline; background: 0; border: 0; padding: 0; margin: 0; font: inherit; color: var(--text-dim); cursor: pointer; }
+.crumb-link:hover { color: var(--text); text-decoration: underline; }
+.crumb-cur { color: var(--text); font-weight: 600; }
+.crumb .task-status { margin-left: 8px; vertical-align: middle; font-size: 10.5px; }
 /* DESK-5g/5h — top-bar buttons: ONE size (30px), quiet until hovered, smooth.
    The cluster is PINNED to the content area's top-right (absolute in .main),
    so it never moves when panels open — it sits on top of the side panel the
@@ -477,8 +482,9 @@ input.ctl { min-width: 220px; }
 .picker-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; padding-left: 14px; }
 
 /* ---------- DESK-4e — live-app parity ---------- */
-/* user messages: right-aligned bubbles (observed) */
-.row.user-row { display: flex; justify-content: flex-end; }
+/* user messages: right-aligned bubbles (observed). Column so the action row
+   stacks directly UNDER the bubble (right-aligned), not floating off-screen. */
+.row.user-row { display: flex; flex-direction: column; align-items: flex-end; }
 .chat .user { max-width: 82%; font-size: var(--chat-fs, 13.5px); }
 
 /* working status: spark + elapsed + state (observed: "✺ 3s · 14 tokens · thinking…") */
@@ -512,10 +518,13 @@ input.ctl { min-width: 220px; }
 .error-advice { color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
 .error-detail { background: var(--term-bg); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-top: 9px; white-space: pre-wrap; max-height: 160px; overflow: auto; }
 
-/* DESK-6u — Codex-style per-message action row: copy + fork pills that fade in
-   on hover, with the timestamp trailing behind a faint divider. */
-.msg-actions { position: absolute; right: 0; bottom: -16px; height: 16px; display: none; align-items: center; gap: 1px; color: var(--text-faint); font-size: 11px; }
-.row:hover .msg-actions { display: flex; }
+/* DESK-6v — Codex-style per-message action row. Flows INLINE directly under
+   the message (left under assistant prose, right under the user bubble via the
+   column layouts) instead of floating to the far edge; space is always
+   reserved (fixed height) so hovering never shifts the transcript, and the row
+   fades in on hover. */
+.msg-actions { display: flex; align-items: center; gap: 1px; height: 20px; margin-top: 2px; color: var(--text-faint); font-size: 11px; opacity: 0; pointer-events: none; transition: opacity .1s ease; }
+.row:hover .msg-actions { opacity: 1; pointer-events: auto; }
 .msg-actions .icon-btn { font-size: 11.5px; padding: 3px 5px; border-radius: 6px; color: var(--text-faint); }
 .msg-actions .msg-time { margin-left: 5px; padding-left: 7px; border-left: 1px solid var(--border); }
 
@@ -759,23 +768,22 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .st-task.worker .task-dot { background: var(--accent, #6ea8fe); }
 .st-task.workflow .task-dot { background: var(--ok, #5bd6a0); }
 
-/* DESK-5w — a background task's conversation, opened in place of the chat. */
-.task-convo { display: flex; flex-direction: column; gap: 10px; }
-.task-convo-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 2;
-  padding: 4px 0 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); background: var(--bg, #0d0d0f); }
+/* DESK-5w — a background task's conversation, opened in place of the chat.
+   DESK-6v — MUST be a plain block (not a flex column): the rows are the same
+   `.chat .row` elements as the main chat (centered 840 column via margin:auto),
+   and inside a flex column their auto margins made short rows (the tool group)
+   shrink-to-content and float to the middle, out of sync with the prose. As a
+   block they fill the column and left-align exactly like the normal chat. */
+.task-convo { display: block; }
+/* .task-back is still used by the WorkflowCard's back button. */
 .task-back { border: 1px solid var(--border, rgba(255,255,255,0.12)); background: transparent; color: var(--text-dim);
   border-radius: 7px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
 .task-back:hover { color: var(--text); background: rgba(255,255,255,0.06); }
-.task-convo-title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-convo-kind { margin-left: auto; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
-/* DESK-6t — de-emphasized short id next to the role in a task header. */
-.task-id-mini { font-size: 11px; color: var(--text-faint, #777); font-variant-numeric: tabular-nums; }
+/* DESK-6v — the status pill now rides in the header breadcrumb (see .crumb .task-status). */
 .task-status { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(255,255,255,0.07); color: var(--text-dim); }
 .task-status.running { background: rgba(110,168,254,0.16); color: #8fbcff; }
 .task-status.completed { background: rgba(91,214,160,0.16); color: #5bd6a0; }
 .task-status.failed, .task-status.stale { background: rgba(255,120,120,0.16); color: #ff9a9a; }
-.task-convo-goal { font-size: 13px; color: var(--text-dim); padding: 8px 12px; border-left: 2px solid #b18cff;
-  background: rgba(177,140,255,0.06); border-radius: 0 8px 8px 0; }
 
 /* clickable Running rows in the Background-tasks panel */
 .task-row.clickable { width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; }
