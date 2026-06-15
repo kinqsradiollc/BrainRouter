@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   decodeSessionKey,
   encodeSessionKey,
@@ -125,6 +126,39 @@ function resolveExistingTranscriptPath(workspaceRoot: string, sessionKey: string
   const legacy = path.join(getCliStateDir(workspaceRoot), 'transcripts', `${encodeSessionKey(sessionKey)}.jsonl`);
   if (fs.existsSync(legacy)) return legacy;
   return undefined;
+}
+
+/**
+ * DESK-6m — permanently delete a session: its `sessions/<key>/` state dir AND
+ * any legacy `transcripts/<key>.jsonl`. Best-effort; returns whether anything
+ * was removed. The caller also drops the session's UI meta.
+ */
+export function deleteSession(workspaceRoot: string, sessionKey: string): boolean {
+  let removed = false;
+  try {
+    const dir = path.join(getCliStateDir(workspaceRoot), 'sessions', encodeSessionKey(sessionKey));
+    if (fs.existsSync(dir)) { fs.rmSync(dir, { recursive: true, force: true }); removed = true; }
+  } catch { /* best-effort */ }
+  try {
+    const legacy = path.join(getCliStateDir(workspaceRoot), 'transcripts', `${encodeSessionKey(sessionKey)}.jsonl`);
+    if (fs.existsSync(legacy)) { fs.rmSync(legacy, { force: true }); removed = true; }
+  } catch { /* best-effort */ }
+  return removed;
+}
+
+/**
+ * DESK-6m — duplicate a session's transcript into a brand-new sessionKey so the
+ * user can branch a conversation. Returns the new key, or null if the source
+ * has no transcript yet.
+ */
+export function forkSession(workspaceRoot: string, sessionKey: string): string | null {
+  const src = resolveExistingTranscriptPath(workspaceRoot, sessionKey);
+  if (!src) return null;
+  const prefix = sessionKey.includes(':') ? sessionKey.slice(0, sessionKey.indexOf(':')) : sessionKey;
+  const forkKey = `${prefix}:fork-${randomUUID().slice(0, 8)}`;
+  const destDir = getSessionStateDir(workspaceRoot, forkKey); // creates the dir
+  fs.copyFileSync(src, path.join(destDir, TRANSCRIPT_FILE));
+  return forkKey;
 }
 
 export function redactText(value: string): string {

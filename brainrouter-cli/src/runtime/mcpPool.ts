@@ -316,7 +316,7 @@ export class McpClientPool {
    *     server providing that tool. Returns a helpful error if two
    *     servers expose the same name (caller must use the prefix).
    */
-  async callTool(name: string, args: Record<string, any>): Promise<any> {
+  async callTool(name: string, args: Record<string, any>, options?: { signal?: AbortSignal }): Promise<any> {
     const resolved = this.resolveToolCall(name);
     if (!resolved) {
       // Distinguish the two failure modes — gives the LLM (and humans
@@ -351,7 +351,7 @@ export class McpClientPool {
         }],
       };
     }
-    return wrapper.callTool(resolved.tool, args);
+    return wrapper.callTool(resolved.tool, args, options); // DESK-6 — forward Stop signal
   }
 
   /** Internal — map a name (prefixed OR raw) to a concrete server + tool. */

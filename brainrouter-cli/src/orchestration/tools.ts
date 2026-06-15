@@ -64,6 +64,10 @@ export interface OrchestrationContext {
   parentTier?: Tier;
   /** Current spawn-chain depth (0 = direct child of chat root). */
   depth?: number;
+  /** DESK-6 — the parent turn's interrupt signal, so a Stop makes wait_agent(s)
+   *  return immediately ({status:'interrupted'}) instead of blocking up to the
+   *  wait timeout. The children keep running (detached) and auto-drain later. */
+  interruptSignal?: AbortSignal;
   mcpClient: McpClientWrapper;
   llmConfig: LLMConfig;
   launchCwd: string;
@@ -235,6 +239,21 @@ const runningPromises = new Map<string, Promise<void>>();
 
 export function trackedPromiseFor(id: string): Promise<void> | undefined {
   return runningPromises.get(id);
+}
+
+// DESK-6 — live child Agent handles keyed by child id, so a parent Stop can
+// cascade requestInterrupt() into in-flight delegated children. Holds the
+// agent (not just the Promise) and the parent session that owns it, so the
+// cascade is scoped to one session and never touches a sibling chat's children.
+const runningChildAgents = new Map<string, { agent: Agent; parentSessionKey: string }>();
+
+/** DESK-6 — live child agents whose parent is `parentSessionKey` (for interrupt cascade). */
+export function childAgentsFor(parentSessionKey: string): Agent[] {
+  const out: Agent[] = [];
+  for (const { agent, parentSessionKey: p } of runningChildAgents.values()) {
+    if (p === parentSessionKey) out.push(agent);
+  }
+  return out;
 }
 
 function isInside(parent: string, candidate: string): boolean {
@@ -667,6 +686,20 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
   const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
 
+  // PARITY-Q — soft delegation-prompt nudge. A terse child prompt with no
+  // return-format cue tends to come back vague; rather than reject it (the
+  // parent already committed to spawning), append ONE role-appropriate line
+  // steering the child to a self-contained, evidence-quoting answer. Read-only
+  // children are told to report findings only; write/shell children to report
+  // what they changed and how they verified. Untouched when the parent already
+  // briefed well (long prompt) or stated a return/format cue.
+  const hasReturnCue = /\b(return|report back|format|output|provide|summar|list|table|pseudocode|cite|quote|file:line)\b/i.test(prompt);
+  const effectivePrompt = (prompt.length < 220 && !hasReturnCue)
+    ? `${prompt}\n\n${access === 'read'
+        ? 'Return a self-contained answer: lead with the conclusion, then the evidence — quote key `file:line` references. Report findings only; do not modify files.'
+        : 'Return a self-contained answer: lead with what you changed and why, then quote the key `file:line` edits and how you verified them (tests/output).'}`
+    : prompt;
+
   // MAS-P4-T2 — supervisor gate. Consult the delegation policy before
   // creating the session. `no-children` denies outright; `ask-*` policies
   // prompt the interactive parent (and fail closed in headless runs).
@@ -848,8 +881,15 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     confirmToolApproval: ctx.confirmToolApproval
       ? (info) => ctx.confirmToolApproval!({ childId: record.id, role: role.name, ...info })
       : undefined,
+    // DESK-5n — thread the parent's review stance so the child's write/edit/
+    // patch gate can honor the user's "Auto mode" (proceed) without asking.
+    // ctx types these as plain string; the Agent narrows them.
+    parentReviewPolicy: ctx.parentReviewPolicy as 'request' | 'proceed' | undefined,
+    parentExecutionMode: ctx.parentExecutionMode as 'planning' | 'fast' | undefined,
   });
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
+  // DESK-6 — register the live handle so a parent Stop can cascade into it.
+  runningChildAgents.set(record.id, { agent: childAgent, parentSessionKey: ctx.parentSessionKey });
 
   updateSession(ctx.workspaceRoot, record.id, { status: 'running' });
 
@@ -871,7 +911,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       // Synthetic dangling-tool-call recovery: every child must resolve to
       // an explicit result instead of leaving
       // the session running forever when an LLM/MCP call hangs.
-      const output = await childAgent.runTurn(prompt, {
+      const output = await childAgent.runTurn(effectivePrompt, {
         onStatusUpdate: () => {},
         onToolStart: (tool, args) => {
           childToolStarts.set(tool, Date.now());
@@ -1121,6 +1161,7 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
       }
     } finally {
       runningPromises.delete(record.id);
+      runningChildAgents.delete(record.id); // DESK-6 — handle no longer interruptible
       // CODEX-WORKTREE-CLEANUP — tear down the child's git worktree when it
       // finishes (success or failure). Captures a capped diff into the record
       // first so the child's work isn't silently lost, then removes the
@@ -1184,18 +1225,36 @@ async function handleWait(args: any, ctx: OrchestrationContext): Promise<string>
 
   const promise = runningPromises.get(id);
   if (promise) {
+    // DESK-6 — a Stop makes the wait return immediately. The child is NOT
+    // killed (it keeps running detached and auto-drains next turn via
+    // lastTurnPendingChildIds); the parent just stops blocking on it.
+    const interruptedJson = (): string => {
+      const record = getSession(ctx.workspaceRoot, id);
+      return JSON.stringify({
+        id, status: 'interrupted', childStatus: record?.status ?? 'running',
+        role: record?.role, label: record?.label,
+        summary: 'Wait interrupted by user — the child keeps running in the background.',
+      }, null, 2);
+    };
+    const sig = ctx.interruptSignal;
+    if (sig?.aborted) return interruptedJson();
+    const interruptRacer = sig
+      ? new Promise<void>((resolve) => sig.addEventListener('abort', () => resolve(), { once: true }))
+      : null;
     if (timeoutMs <= 0) {
-      await promise;
+      await (interruptRacer ? Promise.race([promise, interruptRacer]) : promise);
+      if (sig?.aborted) return interruptedJson();
     } else {
       let timedOut = false;
       let timeout: NodeJS.Timeout | undefined;
-      await Promise.race([
+      const racers: Promise<void>[] = [
         promise,
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
-        }),
-      ]);
+        new Promise<void>((resolve) => { timeout = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs); }),
+      ];
+      if (interruptRacer) racers.push(interruptRacer);
+      await Promise.race(racers);
       if (timeout) clearTimeout(timeout);
+      if (sig?.aborted) return interruptedJson();
       if (timedOut) {
         const record = getSession(ctx.workspaceRoot, id);
         return JSON.stringify({

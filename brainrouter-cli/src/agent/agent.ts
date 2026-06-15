@@ -36,6 +36,7 @@ import {
   executeOrchestrationTool,
   isOrchestrationToolName,
   synthesizeDelegateTools,
+  childAgentsFor,
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
@@ -480,6 +481,17 @@ export interface AgentOptions {
     choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null>;
   };
   confirmToolApproval?: (info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean; arguments?: Record<string, unknown> }) => Promise<boolean>;
+  /**
+   * DESK-5n — the PARENT session's review stance, threaded into a silent
+   * child so its write/edit/patch gate can honor "Auto mode" the same way the
+   * parent's own gates do. A silent child may run in an isolated worktree
+   * whose local prefs diverge, so the authoritative "is the user in Auto mode"
+   * signal is the parent's, passed at spawn time — not the child's own
+   * readPreferences. Unset on the user-facing parent (its gates read prefs
+   * directly), so omitting these keeps existing behavior unchanged.
+   */
+  parentReviewPolicy?: 'request' | 'proceed';
+  parentExecutionMode?: 'planning' | 'fast';
 }
 
 
@@ -645,6 +657,12 @@ export class Agent {
   // boundary so a long multi-tool turn stops at the next seam instead of
   // running to completion. Reset at the top of each runTurn.
   private interruptRequested = false;
+  // DESK-6 — the per-turn abort controller. requestInterrupt() aborts it, which
+  // cancels the in-flight LLM fetch, running shell/MCP tools, and child waits
+  // IMMEDIATELY (not at the next cooperative seam). Recreated each turn.
+  private turnAbort: AbortController | null = null;
+  /** The current turn's interrupt signal — threaded into LLM calls + tools. */
+  public get interruptSignal(): AbortSignal | undefined { return this.turnAbort?.signal; }
   /**
    * 9b: gated recall state. `recallHasFiredThisSession` flips to true on the
    * first successful briefing injection so subsequent turns can skip the
@@ -705,6 +723,9 @@ export class Agent {
   private effortOverride?: EffortLevel;
   private confirmToolApproval?: AgentOptions['confirmToolApproval'];
   private interactionPort?: AgentOptions['interactionPort'];
+  // DESK-5n — parent's review stance, for the silent-child Auto-mode bypass.
+  private parentReviewPolicy?: AgentOptions['parentReviewPolicy'];
+  private parentExecutionMode?: AgentOptions['parentExecutionMode'];
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -737,6 +758,8 @@ export class Agent {
     this.agentDepth = options.agentDepth ?? 0;
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
+    this.parentReviewPolicy = options.parentReviewPolicy;
+    this.parentExecutionMode = options.parentExecutionMode;
   }
 
   /** Expose for orchestration so spawn_agent can record the parent linkage. */
@@ -757,6 +780,17 @@ export class Agent {
     dangerous?: boolean;
   }): Promise<string | null> {
     if (!this.silent || !this.confirmToolApproval) return null;
+    // DESK-5n — honor the parent's "Auto mode" the same way the parent honors
+    // its own gates: when the user has opted into proceed-without-asking
+    // (executionMode=fast + reviewPolicy=proceed, the yolo predicate at the
+    // parent's ask_user_choice gate), a silent child's write/edit/patch
+    // proceeds without surfacing the "Allow child-agent tool?" card. Sourced
+    // from the PARENT (threaded at spawn) so an isolated-worktree child's
+    // diverging local prefs can't defeat it. Dangerous patches keep the gate
+    // unless the user is in full proceed — `dangerous` only short-circuits
+    // under proceed, which it already satisfies here. Non-fast / request
+    // modes are unchanged: the gate still asks.
+    if (this.parentExecutionMode === 'fast' && this.parentReviewPolicy === 'proceed') return null;
     const approved = await this.confirmToolApproval(info);
     if (!approved) return `Tool "${info.tool}" rejected by parent approval.`;
     return null;
@@ -840,6 +874,9 @@ export class Agent {
     this.mutatedThisTurn = false;
     this.verifiedThisTurn = false;
     this.interruptRequested = false;
+    // DESK-6 — fresh abort controller per turn (AFTER the reset), so a stale
+    // pre-turn abort can never poison this turn's first LLM call.
+    this.turnAbort = new AbortController();
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -1047,7 +1084,7 @@ export class Agent {
           // strategies); it needs no deep reasoning. Run it at low effort so
           // reasoning-capable models don't burn a long thinking pass here — the main
           // lever on the planner's pre-turn latency. Providers that ignore effort no-op.
-          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), [], { effort: 'low' });
+          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), [], { effort: 'low', signal: this.turnAbort?.signal });
           const plan = parseNextActionPlan(planResp?.content, { buildLoop });
           if (plan) {
             planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
@@ -1205,6 +1242,7 @@ export class Agent {
     const buildOrchestrationContext = (): OrchestrationContext => ({
       workspaceRoot: this.workspaceRoot,
       parentSessionKey: this.sessionKey,
+      interruptSignal: this.turnAbort?.signal, // DESK-6 — Stop unblocks child waits
       parentAccessMode: this.accessMode,
       // Thread the parent's trace context so child agents nest their
       // per-turn spans under THIS turn instead of starting a fresh
@@ -1339,7 +1377,7 @@ export class Agent {
               this.llmConfig,
               this.chatHistory,
               allTools,
-              { effort },
+              { effort, signal: this.turnAbort?.signal },
               {
                 onTextDelta: (text) => {
                   if (!started) {
@@ -1356,6 +1394,10 @@ export class Agent {
             if (started) callbacks.onAssistantTurnEnd?.(final.content);
             return { content: final.content, toolCalls: final.toolCalls, usage: final.usage };
           } catch (streamErr: any) {
+            // DESK-6 — a user Stop must NOT silently restart as a non-streaming
+            // call; rethrow the interrupt so the turn unwinds. (Detect by the
+            // sentinel/flag, never message-substring — "aborted" is overloaded.)
+            if (isInterrupt(streamErr) || this.interruptRequested) throw streamErr;
             // Streaming failed (provider doesn't support SSE, malformed
             // chunks, network blip). Fall back transparently to the
             // non-streaming path so the turn still completes — log via
@@ -1363,7 +1405,7 @@ export class Agent {
             callbacks.onStatusUpdate(`Streaming failed (${String(streamErr?.message ?? streamErr).slice(0, 120)}) — falling back to non-streaming.`);
           }
         }
-        return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort });
+        return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort, signal: this.turnAbort?.signal });
       };
       // Transient connectivity failures (fetch failed / ECONNRESET / socket
       // hang up / timeouts) are retried with backoff before giving up — a
@@ -1388,9 +1430,15 @@ export class Agent {
         let attempt = 0;
         let offlineWaits = 0;
         for (;;) {
+          // DESK-6 — a Stop ends the turn here, BEFORE the reconnect classifier:
+          // a user interrupt must never be mistaken for a transient blip and
+          // retried (CONNECTIVITY_RE matches "aborted", so a naive abort would
+          // reconnect — re-firing the exact request the user tried to stop).
+          if (this.interruptRequested) throw new InterruptError();
           try {
             return await invokeLlm();
           } catch (err: any) {
+            if (this.interruptRequested || isInterrupt(err)) throw isInterrupt(err) ? err : new InterruptError();
             // Only transient transport / server failures reconnect; deterministic
             // errors (4xx, context overflow, model-not-found) fall straight through.
             const serverSide = isRetryableServerError(err);
@@ -1403,7 +1451,7 @@ export class Agent {
               offlineWaits += 1;
               const delay = reconnectBackoffMs(Math.min(offlineWaits, 6), { capMs: 15_000 });
               callbacks.onStatusUpdate(`Waiting for connection… offline — retrying in ${(delay / 1000).toFixed(1)}s (${offlineWaits})`);
-              await new Promise((r) => setTimeout(r, delay));
+              await abortableDelay(delay, this.turnAbort?.signal); // DESK-6 — Stop wakes the wait
               continue;
             }
             attempt += 1;
@@ -1413,13 +1461,26 @@ export class Agent {
             callbacks.onStatusUpdate(
               `Reconnecting… ${attempt}/${maxReconnects} — ${String(err?.message ?? err).slice(0, 60)} (in ${(delay / 1000).toFixed(1)}s)`,
             );
-            await new Promise((r) => setTimeout(r, delay));
+            await abortableDelay(delay, this.turnAbort?.signal); // DESK-6 — Stop wakes the wait
           }
         }
       };
       try {
         response = await invokeLlmResilient();
       } catch (err: any) {
+        // DESK-6 — a user Stop unwinds to the SAME clean "interrupted" answer as
+        // the loop-top check, BEFORE any reactive compaction / model-fallback
+        // recovery (so a Stop during a 504-ish moment isn't re-routed into a
+        // retry path). Mirrors the loop-top handler exactly.
+        if (isInterrupt(err) || this.interruptRequested) {
+          this.interruptRequested = false;
+          const note = '⏹ Turn interrupted by user.';
+          const interruptMsg = { role: 'system', content: 'The user interrupted this turn before it finished; the work above may be incomplete.' };
+          this.chatHistory.push(interruptMsg);
+          this.recordTranscript(interruptMsg);
+          callbacks.onStatusUpdate('Interrupted');
+          return note;
+        }
         // Layered LLM recovery. We detect context-
         // window-exceeded errors (the single failure mode where a fresh
         // request is guaranteed to fail the same way) and trigger a
@@ -1674,7 +1735,9 @@ export class Agent {
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
-        if (unobservedChildIds.length > 0) {
+        // DESK-6 — a Stop skips the auto-drain (it bypasses both interrupt
+        // seams); the loop-top check below returns the clean interrupted answer.
+        if (unobservedChildIds.length > 0 && !this.interruptRequested) {
           const drainTimeoutMs = Math.max(1, getCliKnobs().childDrainTimeoutMs);
           const waitName = 'wait_agents';
           const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };
@@ -2269,7 +2332,7 @@ export class Agent {
                 }
               }
             }
-            const mcpRes = await this.mcpClient.callTool(name, mcpArgs);
+            const mcpRes = await this.mcpClient.callTool(name, mcpArgs, { signal: this.turnAbort?.signal });
             if (mcpRes.isError) {
               isError = true;
             }
@@ -2434,6 +2497,24 @@ export class Agent {
           // spawn_agent, update_plan) completes before the next call starts.
           processed[i] = await processOneToolCall(toolCalls[i], normalizedNames[i]);
           i++;
+        }
+        // DESK-6 — a Stop landed while a tool was running (Bundle A/B already
+        // killed the in-flight one): don't dispatch the rest. Every remaining
+        // tool_call STILL needs a tool_result or the next provider call 400s on
+        // an unmatched tool_call — fill them with the interrupted-skip envelope
+        // (same shape as the per-tool skip at the top of processOneToolCall).
+        if (this.interruptRequested) {
+          for (let k = i; k < toolCalls.length; k++) {
+            if (processed[k]) continue;
+            const tc = toolCalls[k];
+            const name = normalizedNames[k];
+            callbacks.onToolEnd(name, { success: false, summary: 'turn interrupted — tool skipped' }, tc.id);
+            processed[k] = {
+              toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: 'Skipped: turn interrupted by user.', isError: true },
+              fullResultText: 'Skipped: turn interrupted by user.',
+            };
+          }
+          break;
         }
       }
 
@@ -2842,7 +2923,7 @@ export class Agent {
           readPaths: prefs.sandboxReadPaths,
           writePaths: prefs.sandboxWritePaths,
         });
-        const result = await runShell(cmd, sandboxConfig);
+        const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         const sandboxBadge = result.sandboxed
           ? `[sandboxed via ${result.sandboxTool}] `
           : sandboxConfig.enabled
@@ -2859,10 +2940,16 @@ export class Agent {
           return `fetch_url blocked by egress policy: ${egress.reason}.`;
         }
         try {
+          // DESK-6 — abort on Stop OR a 30s ceiling (this fetch had neither).
+          const fetchUrlSignal = AbortSignal.any([
+            AbortSignal.timeout(30_000),
+            ...(this.turnAbort?.signal ? [this.turnAbort.signal] : []),
+          ]);
           const res = await fetch(url, {
             headers: {
               'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.8)'
-            }
+            },
+            signal: fetchUrlSignal,
           });
           if (!res.ok) {
             throw new Error(`Failed to fetch URL: ${res.status} ${res.statusText}`);
@@ -3062,21 +3149,35 @@ export class Agent {
         return `Workflow "${slug}": step "${step}" → ${status} (${done}/${total} done, run ${run.status}).`;
       }
       case 'ask_user_choice': {
-        const question = String(args.question ?? '').trim();
-        const header = String(args.header ?? '').trim();
-        const rawOptions: any[] = Array.isArray(args.options) ? args.options : [];
-        if (!question) throw new Error('ask_user_choice requires a non-empty `question`.');
-        if (!header) throw new Error('ask_user_choice requires a non-empty `header`.');
-        if (rawOptions.length < 2 || rawOptions.length > 4) {
-          throw new Error(`ask_user_choice requires 2–4 options; received ${rawOptions.length}.`);
-        }
-        const options = rawOptions.map((o, i) => {
-          const label = String(o?.label ?? '').trim();
-          const description = String(o?.description ?? '').trim();
-          if (!label) throw new Error(`ask_user_choice option ${i + 1} is missing "label".`);
-          if (!description) throw new Error(`ask_user_choice option ${i + 1} is missing "description".`);
-          return { label, description };
+        // PARITY — accept either the single-question fields or a batched
+        // `questions[]` array (asked in turn, answers returned together). The
+        // single form keeps its `{answer}` shape; batched returns `{answers}`.
+        const rawQuestions: any[] = Array.isArray(args.questions) && args.questions.length
+          ? args.questions
+          : [{ question: args.question, header: args.header, options: args.options, multiSelect: args.multiSelect }];
+        const specs = rawQuestions.map((rq, qi) => {
+          const where = rawQuestions.length > 1 ? ` (question ${qi + 1})` : '';
+          const q = String(rq?.question ?? '').trim();
+          const h = String(rq?.header ?? '').trim();
+          const rawOptions: any[] = Array.isArray(rq?.options) ? rq.options : [];
+          if (!q) throw new Error(`ask_user_choice requires a non-empty \`question\`${where}.`);
+          if (!h) throw new Error(`ask_user_choice requires a non-empty \`header\`${where}.`);
+          if (rawOptions.length < 2 || rawOptions.length > 4) {
+            throw new Error(`ask_user_choice requires 2–4 options${where}; received ${rawOptions.length}.`);
+          }
+          const options = rawOptions.map((o, i) => {
+            const label = String(o?.label ?? '').trim();
+            const description = String(o?.description ?? '').trim();
+            if (!label) throw new Error(`ask_user_choice option ${i + 1}${where} is missing "label".`);
+            if (!description) throw new Error(`ask_user_choice option ${i + 1}${where} is missing "description".`);
+            return { label, description };
+          });
+          return { question: q, header: h, options, multiSelect: !!rq?.multiSelect };
         });
+        const batched = specs.length > 1;
+        // Back-compat aliases for the guard/trace code below (single-question).
+        const question = specs[0].question;
+        const options = specs[0].options;
         // Silent child agents have no parent stdin/REPL bridge, so the
         // helper's TTY check would error anyway — but giving a clearer message
         // up front saves the LLM an iteration.
@@ -3126,31 +3227,42 @@ export class Agent {
         // means the LLM gets a clean error before the picker tries to render.
         // DESK-3 — UI dialog path: no TTY needed when an interaction port is
         // attached. A dismissed dialog mirrors the NoTTY contract verbatim.
-        if (this.interactionPort) {
-          const labels = await this.interactionPort.choice({
-            question, header, options, multiSelect: !!args.multiSelect,
-          });
-          if (!labels || labels.length === 0) {
+        // Ask ONE spec, returning the chosen label(s). Same gates for every
+        // spec — the DESK-3 UI dialog path when a port is attached, else the
+        // TTY picker.
+        const askOne = async (spec: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect: boolean }): Promise<string | string[]> => {
+          if (this.interactionPort) {
+            const labels = await this.interactionPort.choice({
+              question: spec.question, header: spec.header, options: spec.options, multiSelect: spec.multiSelect,
+            });
+            if (!labels || labels.length === 0) {
+              throw new NoTTYError(
+                'The user dismissed the choice dialog. ' +
+                'Fall back to deciding yourself and state which option you picked and why.',
+              );
+            }
+            return spec.multiSelect ? labels : labels[0];
+          }
+          if (!getActiveReadline() || !process.stdin.isTTY) {
             throw new NoTTYError(
-              'The user dismissed the choice dialog. ' +
+              'ask_user_choice requires an interactive TTY. ' +
               'Fall back to deciding yourself and state which option you picked and why.',
             );
           }
-          return JSON.stringify({ answer: args.multiSelect ? labels : labels[0] });
+          // header is rendered by the picker itself (chip line at the top of
+          // the frame), so we just thread it through opts.
+          return await askChoice(spec.question, spec.options, { multiSelect: spec.multiSelect, header: spec.header });
+        };
+
+        if (!batched) {
+          return JSON.stringify({ answer: await askOne(specs[0]) });
         }
-        if (!getActiveReadline() || !process.stdin.isTTY) {
-          throw new NoTTYError(
-            'ask_user_choice requires an interactive TTY. ' +
-            'Fall back to deciding yourself and state which option you picked and why.',
-          );
+        // Batched: ask each in turn, key answers by header (fallback question).
+        const answers: Record<string, string | string[]> = {};
+        for (const spec of specs) {
+          answers[spec.header || spec.question] = await askOne(spec);
         }
-        // header is rendered by the picker itself (chip line at the top of
-        // the frame), so we just thread it through opts.
-        const answer = await askChoice(question, options, {
-          multiSelect: !!args.multiSelect,
-          header,
-        });
-        return JSON.stringify({ answer });
+        return JSON.stringify({ answers });
       }
       case 'goal_complete': {
         const proof = String(args.proof ?? '').trim();
@@ -3201,6 +3313,11 @@ export class Agent {
   clearHistory() {
     this.chatHistory = [this.createSystemMessage()];
     this.initialized = true;
+    // DESK-5t — a new session has no accumulated context; drop the prior
+    // session's authoritative prompt count so getCurrentContextTokens() falls
+    // back to estimating the (now-empty) history instead of reporting the old
+    // session's fill.
+    this.lastSeenPromptTokens = undefined;
   }
 
   /**
@@ -3242,6 +3359,16 @@ export class Agent {
    */
   public requestInterrupt(): void {
     this.interruptRequested = true;
+    // DESK-6 — abort the in-flight LLM fetch / shell child / MCP call / child
+    // waits NOW, so Stop unwinds in well under a second instead of waiting out
+    // the whole model response (up to llmTimeoutMs) or a long tool.
+    this.turnAbort?.abort();
+    // DESK-6 — cascade to any in-flight delegated children of THIS session so a
+    // Stop winds the whole tree down, not just the parent (scoped by sessionKey
+    // so sibling sessions are untouched).
+    try {
+      for (const child of childAgentsFor(this.sessionKey)) child.requestInterrupt();
+    } catch { /* orchestration module not loaded / no children */ }
   }
 
   /** Runtime model switch. Used by `/model` slash command. */
@@ -3462,6 +3589,11 @@ export class Agent {
       });
     this.chatHistory = [this.createSystemMessage(), ...replay];
     this.initialized = true;
+    // DESK-5t — the resumed history is a DIFFERENT session; the prior
+    // session's last prompt count no longer describes this context. Reset so
+    // getCurrentContextTokens() estimates the freshly-loaded history (the
+    // context ring then reflects THIS session immediately, before any turn).
+    this.lastSeenPromptTokens = undefined;
     this.filesReadThisSession.clear(); // CC-P6.4 — replayed reads aren't fresh reads
     // 9b: a freshly-loaded history is a session boundary; reset gated
     // recall state so the next turn refreshes the briefing.
@@ -4332,6 +4464,8 @@ export function supportsReasoningEffortField(config: LLMConfig): boolean {
 export interface BuildPayloadOptions {
   /** Reasoning-depth preference, when provider supports it. `medium` is a no-op. */
   effort?: EffortLevel;
+  /** DESK-6 — abort the in-flight request the instant the user presses Stop. */
+  signal?: AbortSignal;
 }
 
 export function buildChatCompletionPayload(
@@ -4396,6 +4530,30 @@ export function buildChatCompletionPayload(
   return body;
 }
 
+/**
+ * DESK-6 — sentinel thrown when an in-flight LLM call is aborted because the
+ * USER pressed Stop (not a timeout / connectivity blip). The resilient loop
+ * must NOT reconnect on this (a Stop is deliberate), and the turn unwinds with
+ * the clean "interrupted" answer. Kept distinct from the timeout error, whose
+ * message intentionally matches CONNECTIVITY_RE so genuine timeouts still retry.
+ */
+export class InterruptError extends Error {
+  readonly isInterrupt = true;
+  constructor(message = 'Interrupted by user') { super(message); this.name = 'InterruptError'; }
+}
+export function isInterrupt(err: any): boolean {
+  return !!err && (err.name === 'InterruptError' || err.isInterrupt === true);
+}
+/** A delay that resolves early (no throw) the instant `signal` aborts. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const t = setTimeout(done, ms);
+    function done() { clearTimeout(t); signal?.removeEventListener('abort', done); resolve(); }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
 export async function callOpenAI(
   config: LLMConfig,
   messages: any[],
@@ -4447,6 +4605,9 @@ export async function callOpenAI(
   const timeoutMs = getCliKnobs().llmTimeoutMs;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // DESK-6 — abort on EITHER the timeout OR the user's Stop signal; the catch
+  // disambiguates so a Stop never masquerades as a (retryable) timeout.
+  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
   // Gate every chat LLM call through the process-wide semaphore. This
   // prevents a fan-out of N parallel children from firing N simultaneous
@@ -4461,11 +4622,12 @@ export async function callOpenAI(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: fetchSignal,
     });
   } catch (err: any) {
     release();
     if (err?.name === 'AbortError') {
+      if (options.signal?.aborted) throw new InterruptError();
       throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} is running and that model "${config.model}" can answer chat/completions requests with tools enabled.`);
     }
     throw err;
@@ -4599,6 +4761,8 @@ export async function callOpenAIStream(
   const timeoutMs = getCliKnobs().llmTimeoutMs;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // DESK-6 — abort on timeout OR the user's Stop; disambiguate in the catch.
+  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
   const release = await acquireLLMSlot();
   let res: Response;
@@ -4607,12 +4771,13 @@ export async function callOpenAIStream(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: fetchSignal,
     });
   } catch (err: any) {
     release();
     clearTimeout(timeout);
     if (err?.name === 'AbortError') {
+      if (options.signal?.aborted) throw new InterruptError();
       throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
     }
     throw err;
@@ -4637,6 +4802,10 @@ export async function callOpenAIStream(
 
   try {
     while (true) {
+      // DESK-6 — bail the instant the user presses Stop, even mid-stream: stop
+      // reading the SSE and stop firing deltas. (The fetch abort also rejects
+      // reader.read(), but this is the prompt, deterministic exit.)
+      if (options.signal?.aborted) { try { await reader.cancel(); } catch { /* already closed */ } throw new InterruptError(); }
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
