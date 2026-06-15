@@ -1,15 +1,15 @@
 :root, [data-theme="dark"] {
   /* Neutral Dark — flat near-black, blue accent (the modern default) */
-  --bg: #181818;
-  --surface: #1f1f1f;
-  --sidebar: #151515;
-  --raised: #272727;
-  --input: #212121;
+  --bg: #101010;
+  --surface: #181818;
+  --sidebar: #202020;
+  --raised: #292929;
+  --input: #2c2c2c;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
   --text: #ececec;
-  --text-dim: #9b9b9b;
-  --text-faint: #5e5e5e;
+  --text-dim: #b7b7b7;
+  --text-faint: #707070;
   --accent: #3b9eff;
   --accent-soft: rgba(59, 158, 255, 0.13);
   --brand: #d97757;
@@ -20,7 +20,7 @@
   --warn: #d29922;
   --err: #f85149;
   --term-bg: #121212;
-  --r-sm: 8px; --r-md: 10px; --r-lg: 16px;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 20px;
   --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
   --mono: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
 }
@@ -46,27 +46,54 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
-body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; -webkit-font-smoothing: antialiased; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 12.5px; -webkit-font-smoothing: antialiased; }
 button { font-family: var(--font); }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
-::-webkit-scrollbar-track { background: transparent; }
+button, input, textarea, select, label, a,
+.composer, .composer *, .chat, .chat *, .branchbar,
+.menu-pop, .menu-pop *, .env-pop, .env-pop *, .env-col, .env-col *,
+.topbar-right, .topbar-right *, .panel-col, .panel-col *,
+.views-rail, .views-rail *, .term-dock, .term-dock *,
+.palette, .palette *, .dialog, .dialog *, .settings-modal, .settings-modal * {
+  -webkit-app-region: no-drag;
+}
+/* quiet focus: no system ring on click; subtle ring for keyboard nav only */
+button:focus { outline: none; }
+button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+/* DESK-5o — thin FLOATING scrollbars: the thumb is a 5px rounded pill inset
+   inside a transparent 12px gutter (border + background-clip), so it reads as
+   a floating overlay rather than a hard strip — and the track is invisible.
+   In the packaged app the OverlayScrollbar switch reserves zero width on top
+   of this; here (and in the vite preview) this keeps it subtle. */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.16) transparent; }
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.13); border-radius: 999px; border: 3.5px solid transparent; background-clip: padding-box; min-height: 36px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.26); background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; border: 0; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- app frame ---------- */
-.app { display: flex; height: 100vh; }
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }
+.main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .workrow { flex: 1; min-height: 0; display: flex; overflow-x: hidden; }
-.center { flex: 1 1 0; min-width: 400px; display: flex; flex-direction: column; min-height: 0; }
+/* DESK-5k — the chat column is a size container: at extreme zoom / tight
+   widths its CONTENT compresses (Codex model) instead of the app
+   restructuring — hero wraps, pills go icon-only, paddings tighten. */
+.center { flex: 1 1 0; min-width: 280px; display: flex; flex-direction: column; min-height: 0; background: var(--bg); container-type: inline-size; container-name: center; }
 
 /* ---------- left rail ---------- */
-.rail { width: 264px; flex: none; background: var(--bg); padding: 6px 0 10px 10px; display: flex; flex-direction: column; min-height: 0; -webkit-app-region: drag; }
+.rail { position: relative; width: 268px; flex: none; background: var(--sidebar); padding: 10px 10px 12px; display: flex; flex-direction: column; min-height: 0; -webkit-app-region: drag; border-right: 1px solid rgba(255,255,255,0.06); animation: railIn .18s ease-out; }
+/* DESK-5i — drag-resize on the sidebar's right edge (mirrors the side panel's grip) */
+.rail-grip { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 40; -webkit-app-region: no-drag; }
+.rail-grip:hover, .rail-grip:active { background: var(--accent-soft); box-shadow: inset -2px 0 0 var(--accent); }
+.rail.closing { animation: railOut .16s ease-in forwards; pointer-events: none; }
 .rail > * { -webkit-app-region: no-drag; }
-.rail-top { display: flex; align-items: center; gap: 2px; height: 34px; padding: 0 2px; flex: none; }
-.rail-section { margin: 13px 4px 5px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
+.rail-top { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 2px 3px; flex: none; }
+/* DESK-5m — clear the macOS traffic lights: the frameless hiddenInset window
+   draws close/min/max over the top-left, exactly where rail-top sits. */
+[data-os="mac"] .rail-top { margin-top: 24px; }
+.rail-section { margin: 12px 6px 6px; font-size: 11.5px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-faint); }
 .rail-scroll { flex: 1; overflow-y: auto; min-height: 0; margin: 0 -4px; padding: 0 4px; }
-.session { padding: 6.5px 10px; border-radius: var(--r-sm); color: var(--text-dim); font-size: 12.5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background .12s, color .12s; }
+.session { padding: 5px 7px; border-radius: var(--r-sm); color: var(--text-dim); font-size: 12.5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background .12s, color .12s; }
 .session:hover { background: rgba(255,255,255,0.06); color: var(--text); }
 .session.active { background: var(--raised); color: var(--text); }
 .rail-btn { display: block; width: 100%; margin: 3px 0; padding: 7.5px 10px; background: transparent; color: var(--text-dim); border: 1px solid transparent; border-radius: var(--r-sm); font-size: 12.5px; cursor: pointer; text-align: left; transition: background .12s, color .12s; }
@@ -75,12 +102,31 @@ button { font-family: var(--font); }
 .rail-btn.primary:hover { border-color: var(--accent); }
 
 /* ---------- top bar ---------- */
-.chat-head { height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--bg); -webkit-app-region: drag; }
+.chat-head { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 14px 0; border-bottom: 0; background: transparent; -webkit-app-region: drag; position: relative; z-index: 20; }
+/* reserve the pinned cluster's footprint so the crumb never runs under it */
+.chat-head { padding-right: 196px; }
+/* DESK-5m — when the left rail is COLLAPSED the chat-head reaches the window
+   edge where the macOS traffic lights live; push its content (open-sidebar
+   button + crumb) to the RIGHT of the lights so nothing hides behind them. */
+[data-os="mac"] .center.no-rail .chat-head { padding-left: 80px; }
 .chat-head button, .chat-head .picker { -webkit-app-region: no-drag; }
-.crumb { font-size: 12.5px; color: var(--text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.crumb { font-size: 12.5px; color: var(--text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .72; }
 .crumb b { color: var(--text); font-weight: 600; }
 .crumb-sep { margin: 0 7px; color: var(--text-faint); }
-.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+/* DESK-5g/5h — top-bar buttons: ONE size (30px), quiet until hovered, smooth.
+   The cluster is PINNED to the content area's top-right (absolute in .main),
+   so it never moves when panels open — it sits on top of the side panel the
+   way the left rail's controls sit on the sidebar. */
+.topbar-right { position: absolute; top: 9px; right: 12px; z-index: 66; display: flex; align-items: center; gap: 5px; -webkit-app-region: no-drag; }
+.topbar-right button { -webkit-app-region: no-drag; } /* belt & braces for Electron drag regions */
+.app-switcher { height: 30px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .18s ease, color .18s ease, border-color .18s ease; }
+.app-switcher:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.app-switcher.active { background: #2e2e2e; border-color: rgba(255,255,255,0.2); }
+.top-toggle { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: var(--text-dim); cursor: pointer; transition: background .18s ease, color .18s ease, transform .15s ease; }
+.top-toggle:hover { background: rgba(255,255,255,0.07); color: var(--text); }
+.top-toggle.active { background: rgba(255,255,255,0.11); color: var(--text); }
+.rail-top .icon-btn { width: 28px; height: 28px; border-radius: 8px; transition: background .18s ease, color .18s ease; }
+.top-quiet { opacity: .62; }
 
 .chip { background: var(--raised); border: 1px solid var(--border); color: var(--text); border-radius: 999px; padding: 3.5px 11px; font-size: 11.5px; cursor: pointer; transition: border-color .12s; }
 .chip:hover { border-color: var(--accent); }
@@ -97,11 +143,41 @@ button { font-family: var(--font); }
 .picker-check { width: 14px; color: var(--accent); font-weight: 700; }
 .picker-icon { width: 18px; text-align: center; color: var(--text-dim); }
 
+/* DESK-5e — PINNED Environment card (Codex density: quiet header, 13px
+   regular rows, compact spacing). Stays open until the toggle closes it, so
+   it must read like furniture, not a menu. */
+.env-pop { position: absolute; right: 0; top: calc(100% + 8px); width: 288px; max-width: calc(100vw - 24px); padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 14px; background: #1f1f1f; color: var(--text); box-shadow: 0 14px 44px rgba(0,0,0,0.45); z-index: 70; animation: popIn .13s ease-out; }
+.env-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 4px; color: var(--text-dim); font-size: 12.5px; font-weight: 500; }
+.env-row { width: 100%; min-height: 29px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 7px; border: 0; border-radius: 7px; background: transparent; color: var(--text); padding: 0 4px; text-align: left; cursor: pointer; font-size: 13px; font-weight: 400; line-height: 1.2; }
+.env-row:hover { background: rgba(255,255,255,0.06); }
+.env-row.inert { cursor: default; }
+.env-row.inert:hover { background: transparent; }
+.env-row.muted { color: var(--text-faint); }
+.env-row .ic { color: var(--text-dim); }
+.env-row span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.env-row b { color: var(--text-faint); font: 500 11px var(--mono); }
+.env-row.checks-ok .ic { color: var(--ok); }
+.env-row.checks-bad .ic { color: var(--warn); }
+.env-row.checks-bad { color: var(--warn); }
+.env-row .st-branch { display: inline-flex; justify-content: center; }
+.env-sep { height: 1px; margin: 8px 2px; background: var(--border); }
+.env-label { margin: 2px 4px 3px; color: var(--text-faint); font-size: 12.5px; font-weight: 500; }
+/* DESK-5h — Environment as a layout COLUMN: the chat reflows beside it, so
+   it can never cover content; visibility is measured in JS (envRoom). */
+.env-col { flex: none; width: 316px; min-width: 316px; padding: 44px 14px 14px 6px; border-left: 1px solid rgba(255,255,255,0.06); overflow-y: auto; animation: fadeIn .16s ease-out; }
+.env-col.closing { animation: popOut .14s ease-in forwards; pointer-events: none; }
+/* DESK-5o — inside the column the card is a PANEL, not a floating popover:
+   no heavy shadow, no big radius, transparent surface — it belongs to the
+   column, matching Codex's flat Environment list. */
+.env-col .env-pop { position: static; width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; animation: none; }
+
 /* ---------- chat ---------- */
-.chat { flex: 1; overflow-y: auto; padding: 22px 28px 12px; }
-.chat .row { margin: 0 auto 16px; max-width: var(--chat-w, 760px); position: relative; animation: rowIn .16s ease-out; }
-.chat .user { background: var(--user-bubble); border: 1px solid var(--user-border); border-radius: var(--r-md); padding: 10px 14px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
-.chat .assistant { line-height: 1.62; font-size: var(--chat-fs, 13.5px); }
+.chat { flex: 1; overflow-y: auto; padding: 18px clamp(18px, 3.5vw, 44px) 12px; }
+.chat .row { margin: 0 auto 18px; max-width: min(var(--chat-w, 840px), calc(100% - 8px)); position: relative; animation: rowIn .16s ease-out; }
+.chat .user { background: #262626; border: 1px solid rgba(255,255,255,0.075); border-radius: 14px; padding: 9px 13px; font-size: 13px; line-height: 1.52; white-space: pre-wrap; box-shadow: 0 8px 28px rgba(0,0,0,0.12); }
+.chat .assistant { line-height: 1.62; font-size: var(--chat-fs, 13.5px); color: #dfdfdf; }
+.chat .assistant p { margin: 0 0 12px; }
+.chat .assistant ul, .chat .assistant ol { margin-top: 8px; margin-bottom: 14px; padding-left: 24px; }
 .chat .status { color: var(--text-faint); font-size: 12px; padding: 1px 2px; }
 .chat .md > :first-child { margin-top: 0; }
 .chat .md > :last-child { margin-bottom: 0; }
@@ -138,16 +214,16 @@ button { font-family: var(--font); }
 .reasoning { color: var(--text-faint); font-style: italic; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 /* branch bar + composer */
-.branchbar { display: flex; align-items: center; gap: 12px; margin: 0 auto; max-width: 760px; width: 100%; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); font-size: 12px; color: var(--text-dim); cursor: pointer; transition: border-color .12s; }
+.branchbar { display: flex; align-items: center; gap: 10px; margin: 0 auto 7px; max-width: min(900px, calc(100% - 36px)); width: 100%; padding: 6px 12px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.025); font-size: 12px; color: var(--text-dim); cursor: pointer; transition: border-color .12s; }
 .branchbar:hover { border-color: var(--border-strong); }
 .gitbranch { color: var(--text); font-family: var(--mono); font-size: 11.5px; }
 .add-n { color: var(--ok); font-family: var(--mono); }
 .del-n { color: var(--err); font-family: var(--mono); }
 
-.composer { padding: 10px 28px 16px; }
-.composer .box { position: relative; max-width: 760px; margin: 0 auto; background: var(--input); border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 11px 13px 9px; transition: border-color .15s, box-shadow .15s; }
-.composer .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.composer textarea { width: 100%; background: transparent; border: 0; outline: 0; resize: none; color: var(--text); font-family: var(--font); font-size: 13.5px; line-height: 1.5; max-height: 180px; }
+.composer { padding: 8px clamp(18px, 3.5vw, 44px) 14px; }
+.composer .box { position: relative; max-width: min(900px, 100%); margin: 0 auto; background: #282828; border: 1px solid rgba(255,255,255,0.07); border-radius: 20px; padding: 0; transition: border-color .15s, box-shadow .15s; box-shadow: 0 10px 34px rgba(0,0,0,0.18); }
+.composer .box:focus-within { border-color: rgba(255,255,255,0.18); box-shadow: 0 0 0 2px rgba(255,255,255,0.05), 0 12px 38px rgba(0,0,0,0.22); }
+.composer textarea { width: 100%; background: transparent; border: 0; outline: 0; resize: none; color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.45; max-height: 180px; }
 .composer textarea::placeholder { color: var(--text-faint); }
 .composer-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
 .composer-spacer { flex: 1; }
@@ -158,17 +234,20 @@ button { font-family: var(--font); }
 .send.stop { width: auto; padding: 0 13px; font-size: 12px; background: transparent; border: 1px solid var(--err); color: var(--err); }
 
 /* ---------- panel columns (the workbench windows) ---------- */
-.panel-col { position: relative; flex: 0 1 auto; min-width: 250px; display: flex; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); animation: colIn .18s ease-out; }
 .col-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; }
 .col-grip:hover, .col-grip.active { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-.panel-head { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 6px 0 14px; border-bottom: 1px solid var(--border); }
+.panel-head { height: 38px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); }
 .panel-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .panel-actions { display: flex; align-items: center; gap: 2px; }
-.panel-body { flex: 1; min-height: 0; padding: 10px 12px; display: flex; flex-direction: column; font-size: 12.5px; }
+.panel-body { flex: 1; min-height: 0; padding: 9px 11px; display: flex; flex-direction: column; font-size: 12.5px; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 .empty { color: var(--text-faint); font-size: 12.5px; padding: 8px 2px; }
 .center-empty { text-align: center; margin: auto; line-height: 2; font-size: 13px; color: var(--text-dim); }
+/* tidy icon-led empty states (no lone oversized glyphs in small panels) */
+.panel-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; line-height: 1.5; padding: 18px 10px; }
+.panel-empty .ic { color: var(--text-faint); margin-bottom: 2px; }
+.panel-empty .dim { font-size: 12px; color: var(--text-faint); }
 
 .kv { display: flex; justify-content: space-between; gap: 10px; color: var(--text-dim); padding: 3.5px 0; font-size: 12.5px; }
 .kv b { color: var(--text); font-weight: 500; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -192,6 +271,11 @@ button { font-family: var(--font); }
 .lc { white-space: pre; }
 
 .gitbar { display: flex; align-items: center; gap: 10px; padding: 2px 2px 9px; font-size: 12px; flex: none; }
+/* DESK-5j — review actions in the Changes tab (commit / push / pull) */
+.review-actions { display: flex; align-items: center; gap: 6px; flex: none; padding-bottom: 8px; }
+.review-actions .commit-msg { flex: 1; min-width: 0; margin-bottom: 0; }
+.review-actions .btn { padding: 6px 11px; font-size: 12px; }
+.review-actions .btn:disabled { opacity: .45; cursor: default; }
 .backlink { background: transparent; border: 0; color: var(--accent); font-size: 12px; font-family: var(--mono); cursor: pointer; text-align: left; padding: 2px 0 8px; }
 .diff { margin: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre; }
 .diff .add { color: #7ee2a8; background: rgba(63,185,80,0.13); }
@@ -206,10 +290,14 @@ button { font-family: var(--font); }
 .task-row { display: flex; align-items: center; gap: 9px; padding: 5px 6px; border-radius: 6px; font-size: 12.5px; color: var(--text-dim); }
 .task-kind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 7px; }
 
-.plan-item { padding: 3px 2px; color: var(--text-dim); font-size: 12.5px; }
+.plan-item { display: flex; align-items: baseline; padding: 3px 2px; color: var(--text-dim); font-size: 12.5px; }
 .plan-item.in_progress { color: var(--warn); }
-.plan-item.completed { color: var(--text-faint); text-decoration: line-through; }
-.plan-mark { display: inline-block; width: 20px; }
+.plan-item.completed { color: var(--text-faint); }
+.plan-mark { display: inline-block; width: 20px; flex: none; }
+.plan-step { min-width: 0; }
+/* PARITY-Q — acceptance cue under each plan item */
+.plan-acceptance { display: block; margin-top: 1px; color: var(--text-faint); font-size: 11.5px; }
+.plan-acceptance::before { content: ''; }
 .plan-why { color: var(--text-faint); font-style: italic; padding-bottom: 6px; }
 
 .search-hit { padding: 6px 8px; border-radius: var(--r-sm); margin-bottom: 4px; cursor: default; }
@@ -302,7 +390,7 @@ input.ctl { min-width: 220px; }
 .cmd-run { flex: none; background: transparent; border: 1px solid var(--border-strong); color: var(--text-dim); border-radius: 6px; padding: 2px 10px; font-size: 11px; cursor: pointer; transition: border-color .12s, color .12s; }
 .cmd-run:hover { border-color: var(--accent); color: var(--text); }
 
-.picker-backdrop { position: fixed; inset: 0; z-index: 55; }
+.picker-backdrop { position: fixed; inset: 0; z-index: 2; }
 .legend-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 12px; color: var(--text-dim); padding: 4px 0 6px; }
 .legend-row > span { display: inline-flex; align-items: center; gap: 6px; }
 
@@ -319,18 +407,31 @@ input.ctl { min-width: 220px; }
 .session-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint); margin-right: 8px; flex: none; }
 .session { display: flex; align-items: center; }
 .session > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 8px; cursor: pointer; border-radius: var(--r-md); transition: background .12s; min-width: 0; }
-.account-row:hover { background: rgba(255,255,255,0.06); }
+/* DESK-5m — static identity row, not a control */
+.account-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 8px; cursor: default; border-radius: var(--r-md); min-width: 0; }
 .avatar { width: 24px; height: 24px; border-radius: 8px; background: linear-gradient(135deg, var(--accent) 0%, var(--brand) 100%); color: #fff; font-size: 9.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: none; text-transform: uppercase; letter-spacing: .02em; }
 .account-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: flex; align-items: baseline; gap: 5px; }
 .account-sub { color: var(--text-faint); font-weight: 400; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .account-chev { margin-left: auto; color: var(--text-faint); flex: none; display: flex; align-items: center; }
 
-.home { max-width: 760px; margin: 0 auto; padding: 48px 0 12px; }
-.home-greet { display: flex; align-items: center; gap: 12px; font-size: 25px; font-weight: 650; letter-spacing: -0.01em; }
-.home-greet .spark { color: var(--brand); font-size: 26px; }
+.home { max-width: 860px; margin: 0 auto; padding: 0 0 0; }
+/* DESK-5g — true vertical centering at ANY window size: hero bottom-aligns
+   in the top flexible half, composer top-aligns in the bottom half, so the
+   pair stays glued to the midline through every resize (Codex behavior). */
+.home-mode .chat { flex: 1 1 0; min-height: 0; overflow: visible; display: flex; flex-direction: column; justify-content: flex-end; padding-top: 0; padding-bottom: 18px; }
+.home-mode .crumb { opacity: 0; }
+.home-mode .composer { flex: 1 1 0; min-height: 0; padding-top: 0; padding-bottom: 18px; }
+.home-mode .composer .box { max-width: 860px; min-height: 92px; border-radius: 20px; background: #2b2b2b; }
+.home-mode .composer textarea { min-height: 46px; padding-top: 4px; padding-bottom: 8px; font-size: 15px; }
+.home-mode .composer-controls { max-width: none; margin-top: 3px; padding: 0; position: relative; z-index: 3; }
+/* DESK-5h — NO shell-open modifiers: typography and controls stay identical
+   whether panels are open or closed (the columns just reflow). */
+/* hero WRAPS at tight widths — same size at every zoom, never shrinks */
+.home-greet { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; font-size: 30px; font-weight: 540; letter-spacing: 0; text-align: center; line-height: 1.22; }
+.home-greet .spark { display: none; }
 .home-greet .whatsnew { margin-left: auto; font-size: 12px; color: var(--text-dim); font-weight: 400; cursor: pointer; }
 .home-greet .whatsnew:hover { color: var(--text); }
+.home-mode .home-greet .whatsnew, .home-mode .stats-card, .home-mode .home-recents { display: none; }
 .stats-card { margin-top: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px 16px; }
 .stats-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .seg { display: flex; gap: 2px; }
@@ -341,8 +442,8 @@ input.ctl { min-width: 220px; }
 .stat-card { background: var(--raised); border-radius: var(--r-sm); padding: 10px 12px; }
 .stat-label { font-size: 12px; color: var(--text-dim); }
 .stat-value { font-size: 16px; font-weight: 700; margin-top: 3px; }
-.heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 10px); grid-auto-columns: 10px; gap: 3px; margin-top: 14px; justify-content: start; overflow-x: auto; padding-bottom: 2px; }
-.heat-cell { width: 10px; height: 10px; border-radius: 2.5px; background: var(--raised); }
+.heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 8px); grid-auto-columns: 8px; gap: 2px; margin-top: 14px; justify-content: start; overflow: hidden; }
+.heat-cell { width: 8px; height: 8px; border-radius: 2px; background: var(--raised); }
 .heat-cell.h1 { background: rgba(217,119,87,0.35); }
 .heat-cell.h2 { background: rgba(217,119,87,0.6); }
 .heat-cell.h3 { background: var(--brand); }
@@ -354,7 +455,9 @@ input.ctl { min-width: 220px; }
 
 /* ---------- DESK-4d² — popovers from the live-app walkthrough ---------- */
 .pop-wrap { position: relative; display: inline-flex; }
-.menu-pop { position: absolute; bottom: calc(100% + 10px); right: 0; min-width: 215px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 5px; z-index: 80; box-shadow: 0 14px 40px rgba(0,0,0,0.5); }
+.menu-pop { position: absolute; bottom: calc(100% + 10px); right: 0; min-width: 215px; max-height: min(440px, 72vh); overflow-y: auto; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 5px; z-index: 100; box-shadow: 0 14px 40px rgba(0,0,0,0.5); }
+.menu-pop.down { bottom: auto; top: calc(100% + 8px); }
+.menu-pop .mi-check .ic { color: var(--text-dim); }
 .menu-pop.left { left: 0; right: auto; }
 .menu-head { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--text-faint); padding: 6px 9px 5px; font-weight: 600; }
 .menu-item { display: flex; align-items: center; gap: 7px; width: 100%; background: transparent; border: 0; border-radius: var(--r-sm); padding: 7px 9px; color: var(--text); font-size: 12.5px; cursor: pointer; text-align: left; transition: background .12s; }
@@ -366,7 +469,6 @@ input.ctl { min-width: 220px; }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }
-.turn-mark { color: var(--brand); font-size: 13px; margin: 8px 0 2px; user-select: none; }
 .slash-split { display: flex; align-items: stretch; }
 .slash-split .pal-list { flex: 1; max-height: 300px; }
 .slash-desc { width: 46%; flex: none; border-left: 1px solid var(--border); padding: 12px 14px; font-size: 12px; color: var(--text-dim); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
@@ -410,15 +512,22 @@ input.ctl { min-width: 220px; }
 .error-advice { color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
 .error-detail { background: var(--term-bg); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-top: 9px; white-space: pre-wrap; max-height: 160px; overflow: auto; }
 
-/* hover actions + relative time (observed under messages) */
-.msg-actions { position: absolute; right: 0; bottom: -15px; height: 14px; display: none; align-items: center; gap: 4px; color: var(--text-faint); font-size: 11px; }
+/* DESK-6u — Codex-style per-message action row: copy + fork pills that fade in
+   on hover, with the timestamp trailing behind a faint divider. */
+.msg-actions { position: absolute; right: 0; bottom: -16px; height: 16px; display: none; align-items: center; gap: 1px; color: var(--text-faint); font-size: 11px; }
 .row:hover .msg-actions { display: flex; }
-.msg-actions .icon-btn { font-size: 11.5px; padding: 2px 5px; }
+.msg-actions .icon-btn { font-size: 11.5px; padding: 3px 5px; border-radius: 6px; color: var(--text-faint); }
+.msg-actions .msg-time { margin-left: 5px; padding-left: 7px; border-left: 1px solid var(--border); }
+
+/* DESK-6u — fork lineage. Sidebar marker for a forked chat + a back-link banner
+   at the top of the forked conversation that opens the original. */
+.st-fork { color: var(--text-dim); }
+.fork-banner { display: inline-flex; align-items: center; gap: 7px; margin: 2px 0 16px; padding: 6px 11px; font-size: 12px; color: var(--accent); background: var(--accent-soft); border: 0; border-radius: 9px; cursor: pointer; transition: background .12s ease; }
+.fork-banner:hover { background: rgba(59, 158, 255, 0.22); }
+.fork-banner strong { font-weight: 600; }
+.fork-banner .ic { opacity: .85; }
 
 /* stacked panels: a dock column holds up to two panels (observed) */
-.panel-col .col-stack { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.panel-col .col-stack > .panel { flex: 1 1 0; min-height: 0; }
-.panel-col .col-stack > .panel + .panel { border-top: 1px solid var(--border-strong); }
 
 /* terminal exec input row */
 .term-input-row { display: flex; align-items: center; gap: 7px; margin-top: 8px; flex: none; }
@@ -452,6 +561,12 @@ input.ctl { min-width: 220px; }
 @keyframes popIn { from { opacity: 0; transform: scale(0.97) translateY(4px); } }
 @keyframes fadeIn { from { opacity: 0; } }
 @keyframes toastUp { from { opacity: 0; transform: translate(-50%, 8px); } }
+/* DESK-5f — exit animations (paired with .closing + delayed unmount) */
+@keyframes popOut { to { opacity: 0; transform: scale(0.97) translateY(4px); } }
+@keyframes sideIn { from { opacity: 0; transform: translateX(18px); } }
+@keyframes sideOut { to { opacity: 0; transform: translateX(18px); } }
+@keyframes dockDown { to { opacity: 0; transform: translateY(14px); } }
+@keyframes railOut { to { opacity: 0; transform: translateX(-22px); } }
 .overlay { animation: fadeIn .14s ease-out; }
 .dialog, .settings-modal { animation: popIn .16s ease-out; }
 .menu-pop, .picker-menu, .slash-pop, .palette { animation: popIn .13s ease-out; }
@@ -459,7 +574,7 @@ input.ctl { min-width: 220px; }
 .approval-card, .error-card { animation: rowIn .18s ease-out; }
 .heatmap { overflow: hidden; }
 
-.jump-latest { position: absolute; bottom: 162px; left: 50%; transform: translateX(-50%); z-index: 40; background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); animation: toastUp .15s ease-out; }
+.jump-latest { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); z-index: 40; background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); animation: toastUp .15s ease-out; }
 .jump-latest:hover { border-color: var(--accent); }
 .center { position: relative; }
 
@@ -468,8 +583,12 @@ input.ctl { min-width: 220px; }
 .pathbar { display: flex; align-items: center; gap: 8px; }
 .pathbar .path-text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
-.md-code { background: var(--term-bg); border: 0; border-radius: var(--r-md); margin: 10px 0; overflow: hidden; }
-.md-code-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 2px 13px; color: var(--text-faint); font-size: 11px; font-family: var(--mono); }
+/* DESK-5i — code blocks read as a SURFACE: visible bg + hairline border so
+   they separate from the page; the bar and copy control are legible. */
+.md-code { background: #171717; border: 1px solid rgba(255,255,255,0.08); border-radius: var(--r-md); margin: 10px 0; overflow: hidden; }
+.md-code-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 3px 13px; color: var(--text-dim); font-size: 11px; font-family: var(--mono); border-bottom: 1px solid rgba(255,255,255,0.05); }
+.md-code-bar .icon-btn { color: var(--text-dim); }
+.md-code-bar .icon-btn:hover { color: var(--text); }
 .md-code pre { margin: 0 !important; padding: 10px 13px !important; background: transparent !important; border: 0 !important; }
 .chat .md .md-code code { background: transparent; padding: 0; }
 
@@ -480,32 +599,38 @@ input.ctl { min-width: 220px; }
 button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97); }
 .session, .rail-row, .menu-item, .picker-item, .pal-item { transition: background .12s, color .12s; }
 
-/* ≤1100px — the rail overlays instead of pushing */
-@media (max-width: 1100px) {
-  .rail { position: absolute; left: 0; top: 0; bottom: 0; z-index: 70; box-shadow: 12px 0 40px rgba(0,0,0,0.45); animation: railIn .18s ease-out; }
-}
+/* DESK-5j — NO width-breakpoint restructuring: ⌘+/- zoom shrinks the CSS
+   viewport, and layout-mode jumps at a px threshold made zooming look like
+   the app "broke apart". Columns shrink in place instead (VS Code model);
+   the env column already yields via measured room. */
 @keyframes railIn { from { transform: translateX(-30px); opacity: 0; } }
 
 /* ≤900px — panel columns become right-side drawers */
 @media (max-width: 900px) {
   .center { min-width: 0; }
-  .panel-col { position: absolute; right: 0; top: 0; bottom: 0; width: min(440px, 88vw) !important; z-index: 60; box-shadow: -16px 0 48px rgba(0,0,0,0.5); border-left: 1px solid var(--border-strong); }
-  .panel-col:not(:last-of-type) { display: none; }
-  .col-grip { display: none; }
 }
 
-/* ≤640px — compact paddings, tighter chrome */
+/* ≤640px window — only window-scoped chrome (dialogs); content compression
+   is handled by the center container query below, so zoom never shrinks text */
 @media (max-width: 640px) {
-  .chat { padding: 14px 14px 8px; }
-  .composer { padding: 8px 14px 12px; }
-  .chat-head .chip.dim { display: none; }
-  .model-label { display: none; }
-  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .home { padding-top: 24px; }
-  .home-greet { font-size: 20px; }
-  .ws-chips { flex-wrap: wrap; }
   .settings-modal { height: 96vh; max-height: 96vh; width: 98vw; }
   .settings-nav { width: 152px; }
+}
+
+/* DESK-5k — Codex-style graceful compression, driven by the CHAT COLUMN's
+   own width (zoom, panels, and window size all funnel into the same path):
+   text keeps its size and wraps; pills drop labels and keep icons. */
+@container center (max-width: 620px) {
+  .center .chat { padding: 14px 14px 8px; }
+  .center .composer { padding-left: 14px; padding-right: 14px; }
+  .center .composer-controls .ctx-chip span { display: none; }
+  .center .composer-controls .ctx-chip { min-width: 0; padding: 4px 7px; }
+  .center .composer-controls .model-pill { max-width: 110px; }
+  .center .branchbar .dim { display: none; }
+}
+@container center (max-width: 430px) {
+  .center .composer-controls { flex-wrap: wrap; row-gap: 5px; }
+  .center .chat-head .crumb { opacity: 0; }
 }
 
 /* ---------- DESK-4h — inspect-diff hunk cards ---------- */
@@ -534,28 +659,222 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 }
 
 /* ---------- DESK-4i — sidebar card + slim composer (side-by-side pass) ---------- */
-.rail-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--sidebar); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 10px 10px; overflow: hidden; }
-[data-theme="dark"] .rail-card { background: #1b1b1b; }
-.rail-card .rail-row { padding: 9px 12px; font-size: 13.5px; border-radius: var(--r-md); }
-.rail-card .session { padding: 8px 12px; font-size: 13px; border-radius: var(--r-md); }
-.rail-card .recents-head { margin: 16px 6px 6px; }
+.rail-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: transparent; border: 0; border-radius: 0; padding: 0; overflow: hidden; }
+[data-theme="dark"] .rail-card { background: transparent; }
+.rail-card .rail-row { padding: 6px 7px; font-size: 12.5px; border-radius: var(--r-sm); }
+.rail-card .session { padding: 5px 7px; font-size: 12.5px; border-radius: var(--r-sm); }
+.rail-card .recents-head { margin: 12px 6px 6px; }
+.rail-card .workspace-row { color: var(--text); background: rgba(255,255,255,0.045); cursor: default; }
 
-.composer .box { padding: 0; border-radius: var(--r-md); }
-.composer textarea { padding: 12px 44px 12px 14px; max-height: 140px; min-height: 20px; }
-.input-send { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 14px; color: var(--text-faint); }
+.rail-actions { display: grid; grid-template-columns: 1fr 30px 30px 30px; gap: 4px; flex: none; padding: 4px 2px 10px; }
+.rail-action { height: 31px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); font-size: 12.5px; font-weight: 520; cursor: pointer; white-space: nowrap; overflow: hidden; min-width: 0; }
+.rail-action .ic { flex: none; }
+.rail-action.primary { justify-content: flex-start; gap: 6px; padding: 0 8px; background: rgba(255,255,255,0.07); color: var(--text); text-overflow: ellipsis; }
+.rail-action:hover { background: rgba(255,255,255,0.07); color: var(--text); }
+.projects-head { display: flex; align-items: center; justify-content: space-between; flex: none; padding: 5px 6px 7px; color: var(--text-faint); font-size: 19px; line-height: 1.1; font-weight: 500; letter-spacing: 0; }
+.projects-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 2px 8px; }
+.project-block { margin-bottom: 4px; }
+.project-row { width: 100%; min-height: 30px; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); padding: 5px 8px; text-align: left; cursor: pointer; font-size: 13px; font-weight: 520; }
+.project-row:hover { background: rgba(255,255,255,0.06); }
+.project-row.active { color: var(--text); }
+.project-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-chev { color: var(--text-faint); }
+.project-sessions { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 7px 22px; }
+.project-session { min-height: 28px; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); padding: 4px 8px; text-align: left; cursor: pointer; font-size: 12.5px; }
+.project-session:hover { background: rgba(255,255,255,0.055); color: var(--text); }
+.project-session.active { background: rgba(255,255,255,0.10); color: var(--text); }
+.project-session .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.show-more { align-self: flex-start; border: 0; background: transparent; color: var(--text-faint); font-size: 12.5px; padding: 5px 8px; border-radius: 7px; cursor: pointer; }
+.show-more:hover { background: rgba(255,255,255,0.055); color: var(--text-dim); }
+.add-project { color: var(--text-dim); }
+
+/* ---------- DESK-5d — project switching + session status icons ---------- */
+.project-meta { display: inline-flex; align-items: center; gap: 6px; justify-self: end; }
+.project-open { padding: 2px 4px; opacity: 0; transition: opacity .12s; }
+.project-row:hover .project-open { opacity: 1; }
+.proj-empty { color: var(--text-faint); font-size: 12px; padding: 4px 8px; }
+
+/* status cell: every session row leads with one of these (Codex/Claude-style) */
+.st { display: inline-flex; align-items: center; justify-content: center; width: 14px; flex: none; }
+.spinner.sm { width: 9px; height: 9px; border-width: 1.5px; }
+.st-ring { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--text-faint); opacity: .75; }
+.project-session.active .st-ring, .project-session:hover .st-ring { border-color: var(--text-dim); opacity: 1; }
+.st-dot { width: 8px; height: 8px; border-radius: 50%; }
+.st-dot.warn { background: var(--warn); }
+.st-branch { color: #b18cff; }
+.project-session.task { cursor: pointer; }
+.project-session.task .session-title { color: var(--text-dim); }
+/* DESK-5w — a background task NESTED under its owning chat: indented, dimmer,
+   with a small kind dot; click to open its conversation. */
+.project-session.task.nested { padding-left: 22px; font-size: 12px; }
+.project-session.task.nested:hover { background: rgba(255,255,255,0.055); }
+.project-session.task.nested:hover .session-title { color: var(--text); }
+.project-session.task.nested.active { background: rgba(177,140,255,0.14); }
+.st-task { display: inline-flex; align-items: center; justify-content: center; }
+.st-task .task-dot { width: 6px; height: 6px; border-radius: 50%; background: #b18cff; opacity: 0.9; }
+/* DESK-6w (#5) — inactive chat's background-task count chip (not expanded). */
+.session-bg { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px;
+  padding: 0 4px; border-radius: 8px; font-size: 10.5px; font-variant-numeric: tabular-nums; color: #cdb8ff;
+  background: rgba(177,140,255,0.16); }
+.session-bg::before { content: '⛬'; margin-right: 2px; opacity: 0.7; font-size: 9px; }
+
+/* DESK-6m — chat row wrapper hosting the inline ⋮ menu trigger + states. */
+.session-wrap { position: relative; display: flex; align-items: center; border-radius: 8px; }
+.session-wrap.active { background: rgba(255,255,255,0.10); }
+.session-wrap:hover { background: rgba(255,255,255,0.055); }
+.session-wrap .project-session { flex: 1; min-width: 0; background: transparent !important; }
+.session-menu-btn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); opacity: 0;
+  width: 22px; height: 22px; border-radius: 6px; color: var(--text-dim); background: transparent; border: 0;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.session-wrap:hover .session-menu-btn, .session-wrap.menu-open .session-menu-btn { opacity: 1; }
+.session-wrap:hover .session-age { opacity: 0; } /* the ⋮ takes the age's slot on hover */
+.session-menu-btn:hover { color: var(--text); background: rgba(255,255,255,0.12); }
+.st-pin { color: var(--accent, #6ea8fe); display: inline-flex; align-items: center; justify-content: center; }
+.session-done { color: var(--ok, #5bd6a0); display: inline-flex; margin-left: 4px; }
+.session-wrap.completed .session-title { color: var(--text-dim); }
+.session-rename { flex: 1; margin: 2px 6px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--accent, #6ea8fe);
+  background: var(--surface, #1a1a1d); color: var(--text); font-size: 12.5px; outline: none; }
+.session-group { margin-top: 6px; }
+.session-group-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px 3px; font-size: 10.5px;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+.session-group-head .dim { margin-left: auto; }
+
+/* DESK-6m — the per-chat context menu + its hover flyout submenus. */
+.menu-scrim { position: fixed; inset: 0; z-index: 60; }
+.ctx-menu { position: fixed; z-index: 61; min-width: 222px; padding: 5px; border-radius: 12px;
+  background: #1c1c1f; border: 1px solid var(--border, rgba(255,255,255,0.1)); box-shadow: 0 18px 50px rgba(0,0,0,0.5); }
+.ctx-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.ctx-item > span:first-of-type { flex: 1; }
+.ctx-item:hover { background: rgba(255,255,255,0.07); }
+.ctx-key { color: var(--text-faint, #777); font-size: 11px; display: inline-flex; align-items: center; }
+.ctx-sep { height: 1px; margin: 5px 6px; background: var(--border, rgba(255,255,255,0.08)); }
+.ctx-item.danger { color: #ff8a8a; }
+.ctx-item.danger:hover { background: rgba(255,120,120,0.12); }
+.ctx-sub { position: relative; }
+.ctx-flyout { position: absolute; left: 100%; top: -5px; margin-left: 3px; min-width: 152px; padding: 5px; border-radius: 12px;
+  background: #1c1c1f; border: 1px solid var(--border, rgba(255,255,255,0.1)); box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  opacity: 0; pointer-events: none; transform: translateX(-4px); transition: opacity .12s, transform .12s; }
+.ctx-sub:hover .ctx-flyout { opacity: 1; pointer-events: auto; transform: translateX(0); }
+.st-task.worker .task-dot { background: var(--accent, #6ea8fe); }
+.st-task.workflow .task-dot { background: var(--ok, #5bd6a0); }
+
+/* DESK-5w — a background task's conversation, opened in place of the chat. */
+.task-convo { display: flex; flex-direction: column; gap: 10px; }
+.task-convo-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 2;
+  padding: 4px 0 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); background: var(--bg, #0d0d0f); }
+.task-back { border: 1px solid var(--border, rgba(255,255,255,0.12)); background: transparent; color: var(--text-dim);
+  border-radius: 7px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.task-back:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.task-convo-title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-convo-kind { margin-left: auto; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+/* DESK-6t — de-emphasized short id next to the role in a task header. */
+.task-id-mini { font-size: 11px; color: var(--text-faint, #777); font-variant-numeric: tabular-nums; }
+.task-status { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(255,255,255,0.07); color: var(--text-dim); }
+.task-status.running { background: rgba(110,168,254,0.16); color: #8fbcff; }
+.task-status.completed { background: rgba(91,214,160,0.16); color: #5bd6a0; }
+.task-status.failed, .task-status.stale { background: rgba(255,120,120,0.16); color: #ff9a9a; }
+.task-convo-goal { font-size: 13px; color: var(--text-dim); padding: 8px 12px; border-left: 2px solid #b18cff;
+  background: rgba(177,140,255,0.06); border-radius: 0 8px 8px 0; }
+
+/* clickable Running rows in the Background-tasks panel */
+.task-row.clickable { width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.task-row.clickable:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.task-row .task-open { margin-left: auto; opacity: 0.5; }
+.task-row.clickable:hover .task-open { opacity: 1; }
+
+/* DESK-6w — workflow run card (Claude /workflows style): phases → agents. */
+.wf-card { display: flex; flex-direction: column; gap: 14px; }
+.wf-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 2;
+  padding: 4px 0 10px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); background: var(--bg, #0d0d0f); }
+.wf-title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-elapsed { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12.5px; }
+.wf-meta { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; margin-top: -4px; }
+.wf-meta b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.wf-phase { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; overflow: hidden; }
+.wf-phase-head { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  background: rgba(255,255,255,0.025); border-bottom: 1px solid var(--border, rgba(255,255,255,0.06)); }
+.wf-phase-title { font-weight: 600; color: var(--text); }
+.wf-dots { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
+.wf-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.18); display: inline-block; flex: 0 0 auto; }
+.wf-dot.done { background: var(--ok, #5bd6a0); }
+.wf-dot.run { background: var(--accent, #6ea8fe); animation: stopping-pulse 1.2s ease-in-out infinite; }
+.wf-dot.fail { background: #ff7a7a; }
+.wf-dot.warn { background: var(--warn, #e6b450); }
+
+.wf-table { display: flex; flex-direction: column; }
+.wf-row { display: grid; grid-template-columns: minmax(0,1fr) 72px 56px 72px; align-items: center; gap: 8px;
+  padding: 7px 12px; font-size: 12.5px; color: var(--text); border-top: 1px solid var(--border, rgba(255,255,255,0.04)); }
+.wf-row:first-child { border-top: 0; }
+.wf-row > span:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+.wf-row-head { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; background: transparent; }
+.wf-row-head > span:not(:first-child) { color: var(--text-dim); }
+.wf-agent { display: inline-flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-row:not(.wf-row-head):hover { background: rgba(255,255,255,0.03); }
+.wf-step { display: flex; align-items: center; gap: 9px; padding: 7px 12px; font-size: 12.5px; border-top: 1px solid var(--border, rgba(255,255,255,0.04)); }
+.wf-step-status { margin-left: auto; }
+.wf-empty { padding: 10px 12px; font-size: 12px; }
+
+/* DESK-6 — Stop pressed, waiting for the turn to unwind: dim + pulse the button. */
+.input-send.stopping { opacity: 0.6; cursor: default; animation: stopping-pulse 1s ease-in-out infinite; }
+@keyframes stopping-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 0.3; } }
+
+/* current branch's PR state on the project row (tooltip: "#395 · Open") */
+.pr-chip { display: inline-flex; align-items: center; }
+.pr-chip.open { color: var(--ok); }
+.pr-chip.merged { color: #b18cff; }
+.pr-chip.closed { color: var(--err); }
+
+.composer .box { padding: 10px 12px 8px; border-radius: 20px; }
+.composer textarea { position: relative; z-index: 1; display: block; padding: 0 38px 6px 0; max-height: 160px; min-height: 34px; }
+.input-send { position: absolute; z-index: 6; right: 10px; top: 10px; transform: none; font-size: 14px; color: var(--text-faint); pointer-events: auto; }
 .input-send:not(:disabled):hover { color: var(--text); }
 .input-send.stop-red { color: var(--err); }
-.composer-controls { display: flex; align-items: center; gap: 8px; max-width: var(--chat-w, 760px); margin: 8px auto 0; width: 100%; }
+.composer-controls { position: relative; z-index: 5; display: flex; align-items: center; gap: 7px; max-width: none; margin: 5px 0 0; width: 100%; min-width: 0; overflow: visible; pointer-events: auto; }
 .composer-controls .composer-spacer { flex: 1; }
+.composer-controls button { font: inherit; }
 
 /* mode/effort controls render as quiet text below the box (observed) */
-.composer-controls .chip { background: transparent; border-color: transparent; padding: 4px 6px; font-size: 12.5px; color: var(--text); font-weight: 550; }
+.composer-controls .chip { display: inline-flex; align-items: center; gap: 4px; background: transparent; border-color: transparent; padding: 4px 4px; font-size: 13px; color: var(--text); font-weight: 550; }
 .composer-controls .chip:hover { background: rgba(255,255,255,0.06); border-color: transparent; }
-.composer-controls .model-label { font-size: 12.5px; }
+/* chips never crush below readable: ellipsize at 64px floor, the quiet
+   model label absorbs the squeeze instead */
+.composer-controls .ctx-chip { max-width: min(280px, 32vw); min-width: 64px; flex: 0 1 auto; background: #1a1a1a; border-color: rgba(255,255,255,0.08); padding: 4px 9px; }
+.composer-controls .ctx-chip span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-controls .model-pill { flex: 0 1 auto; min-width: 0; }
+.composer-controls .chip { flex: none; }
+.composer-controls .model-pill { max-width: min(420px, 44vw); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); padding: 4px 5px; cursor: pointer; font-size: 13px; }
+.composer-controls .model-pill:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.composer-controls .chip, .composer-controls .ctx-chip, .composer-controls .model-pill { white-space: nowrap; }
+/* DESK-5q — effort is its own chip; context ring replaces the busy orb */
+.composer-controls .effort-pill { flex: none; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); padding: 4px 8px; cursor: pointer; font-size: 13px; white-space: nowrap; transition: background .14s, color .14s; }
+.composer-controls .effort-pill:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.effort-menu .menu-head span:last-child { color: var(--text-faint); font-weight: 400; }
+.ctx-ring { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.ctx-ring svg { display: block; }
+.ctx-pct { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ctx-ring-btn { flex: none; border: 0; background: transparent; padding: 3px 4px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; transition: background .14s; }
+.ctx-ring-btn:hover { background: rgba(255,255,255,0.06); }
+
+/* DESK-5s — context + usage breakdown popover (click the ring) */
+.ctx-pop { width: 300px; padding: 10px 12px 8px; }
+.usage-row { padding: 6px 2px 2px; }
+.usage-row-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 5px; }
+.usage-label { font-size: 12.5px; color: var(--text); }
+.usage-val { font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.usage-track { height: 5px; border-radius: 999px; background: rgba(255,255,255,0.10); overflow: hidden; }
+.usage-fill { display: block; height: 100%; border-radius: 999px; transition: width .3s ease; }
+.ctx-note { font-size: 11px; line-height: 1.5; color: var(--text-faint); padding: 8px 2px 2px; }
+.ctx-note code { font-family: var(--mono); font-size: 10.5px; background: var(--raised); padding: 1px 4px; border-radius: 4px; }
+.ctx-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 4px 2px 8px; }
+.ctx-stats > div { display: flex; flex-direction: column; gap: 1px; }
+.ctx-stats b { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.ctx-stats span { font-size: 10.5px; color: var(--text-faint); }
 
 /* ---------- DESK-4j — reference-pattern wave ---------- */
 .session-age { margin-left: auto; flex: none; color: var(--text-faint); font-size: 11px; padding-left: 8px; }
-.context-chips { display: flex; align-items: center; gap: 6px; max-width: var(--chat-w, 760px); margin: 6px auto 0; width: 100%; }
+.context-chips { display: flex; align-items: center; gap: 6px; max-width: var(--chat-w, 840px); margin: 6px auto 0; width: 100%; }
 .ctx-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 3px 9px; cursor: pointer; transition: border-color .12s, color .12s; font-family: var(--mono); }
 .ctx-chip:hover { border-color: var(--border-strong); color: var(--text); }
 .home-recents { margin-top: 22px; }
@@ -573,8 +892,25 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .xterm-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .xterm-host { flex: 1; min-height: 0; }
 .xterm-host .xterm { height: 100%; padding: 4px; }
-.model-menu { min-width: 250px; }
-.model-list { max-height: 220px; overflow-y: auto; }
+.model-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: min(360px, calc(100vw - 28px));
+  max-height: min(330px, calc(100vh - 190px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+.model-list {
+  flex: 1 1 96px;
+  min-height: 76px;
+  max-height: min(170px, 24vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
 .color-ctl { width: 52px; height: 32px; padding: 2px; cursor: pointer; }
 
 /* ---------- DESK-4k — icon system + alignment ---------- */
@@ -601,3 +937,59 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .input-send.stop-red { background: transparent; color: var(--err); }
 .chat .md pre { border: 0; background: var(--term-bg); }
 .chat .md code { background: var(--raised); }
+
+/* ---------- DESK-4l — Codex-like side panel + terminal dock ---------- */
+/* DESK-5f — the tabbed side panel: one view at a time, switched via tabs.
+   No fixed width (inline, drag the left grip); slides in/out. */
+/* overflow stays VISIBLE so the "+" dropdown and the left resize grip are
+   never clipped; inner bodies own their scrolling */
+.views-rail { position: relative; flex: none; min-width: 280px; border-left: 1px solid rgba(255,255,255,0.08); background: #111111; padding: 46px 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: sideIn .18s ease-out; }
+.views-rail.closing { animation: sideOut .16s ease-in forwards; pointer-events: none; }
+.side-tabs { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 2px 0 6px; }
+/* tabs SHRINK (label ellipsis) so + and × never get pushed out of view */
+.term-tab { min-width: 0; }
+.tab-label { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-tabs .pop-wrap, .side-tabs > .icon-btn, .term-tabs .pop-wrap, .term-tabs > .icon-btn { flex: none; }
+.side-tabs .term-tab { font-family: var(--font); }
+.side-body { flex: 1; min-height: 0; overflow: hidden; padding: 6px 2px 0; animation: fadeIn .15s ease-out; }
+.side-chooser { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 2px; animation: fadeIn .15s ease-out; }
+.side-chooser .side-launcher { flex: none; }
+/* DESK-5e — the launcher list is the panel's CONTENT: top-aligned, no void */
+.side-launchers { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
+.side-launcher { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; min-height: 42px; border: 0; border-radius: 9px; background: rgba(0,0,0,0.30); color: var(--text); padding: 0 11px; cursor: pointer; text-align: left; font-size: 13.5px; font-weight: 520; transition: background .12s, transform .12s; }
+.side-launcher:hover, .side-launcher.active { background: rgba(255,255,255,0.06); }
+.side-launcher kbd { border: 0; border-radius: 999px; background: #2c2c2c; color: var(--text-dim); font: 500 11px var(--font); padding: 2px 7px; white-space: nowrap; }
+.launcher-meta { justify-self: end; display: inline-flex; align-items: center; gap: 6px; }
+.launcher-badge { min-width: 18px; text-align: center; border-radius: 999px; background: rgba(255,255,255,0.09); color: var(--text-dim); font: 550 10.5px var(--mono); padding: 2.5px 6px; }
+.side-launcher.active .launcher-badge { background: rgba(255,255,255,0.14); color: var(--text); }
+
+.term-dock { position: relative; flex: none; height: 210px; border-top: 1px solid var(--border-strong); background: var(--term-bg); display: flex; flex-direction: column; animation: dockUp .16s ease-out; }
+.term-dock.closing { animation: dockDown .16s ease-in forwards; pointer-events: none; }
+.dock-view { flex: 1; min-height: 0; overflow: hidden; padding: 4px 10px 8px; animation: fadeIn .15s ease-out; }
+.term-dock-grip { position: absolute; top: -4px; left: 0; right: 0; height: 8px; cursor: row-resize; z-index: 12; }
+.term-dock-grip::after { content: ''; position: absolute; top: 3px; left: 50%; width: 64px; height: 2px; transform: translateX(-50%); border-radius: 999px; background: rgba(255,255,255,0.14); opacity: 0; transition: opacity .12s; }
+.term-dock-grip:hover::after { opacity: 1; }
+@keyframes dockUp { from { transform: translateY(14px); opacity: 0; } }
+.term-tabs { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px 0; }
+.term-tab { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; border-radius: 7px; padding: 5px 10px; color: var(--text-dim); font-size: 12px; font-family: var(--mono); cursor: pointer; transition: background .12s, color .12s; }
+.term-tab:hover { background: rgba(255,255,255,0.05); }
+.term-tab.active { background: var(--raised); color: var(--text); }
+.term-tab-x { padding: 0 2px; }
+.term-dock-body { flex: 1; min-height: 0; display: flex; padding: 6px 8px 8px; }
+.term-dock-body .xterm-wrap { flex: 1; }
+
+.rail-section.collapser { display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 0; cursor: pointer; color: var(--text-faint); font: inherit; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; padding: 0; }
+.rail-section.collapser:hover { color: var(--text-dim); }
+.session-cmd { flex: none; margin-left: auto; color: var(--text-faint); font-size: 10px; font-family: var(--mono); opacity: 0; transition: opacity .12s; }
+.session:hover .session-cmd { opacity: 1; }
+.session-cmd + .session-age { margin-left: 6px; }
+
+/* (≤1100px overlay mode removed — see DESK-5j zoom-stability note above) */
+
+/* terminal dock: xterm chrome blends into the dock */
+.term-dock-body .xterm-viewport, .term-dock-body .xterm-screen { background: transparent !important; }
+.xterm-host .xterm-viewport { background: transparent !important; }
+.term-dock-body { overflow: hidden; }
+
+.stat-sub { font-size: 11.5px; color: var(--text-faint); font-weight: 500; }
+.home-recent { padding: 9px 12px; }
