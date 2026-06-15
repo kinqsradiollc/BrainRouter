@@ -55,6 +55,76 @@ test('start-turn while running → turn-error (no concurrent turns)', async () =
     release();
     await first;
 });
+test('DESK-5q resume during a running turn is deferred until the turn unwinds', async () => {
+    const { out, send } = collect();
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    let interrupted = false;
+    const agent = {
+        sessionKey: 'sess:A',
+        runTurn: async () => { await gate; return 'done-A'; },
+        requestInterrupt: () => { interrupted = true; },
+        resetSessionCounters: () => { },
+        loadHistory: () => 7,
+        getModel: () => 'm',
+    };
+    const core = createHostCore({ agent, send, loadTranscript: () => [{ role: 'user', content: 'hi' }] });
+    const first = core.handle({ kind: 'start-turn', prompt: 'long A' });
+    // switch to B while A is still running
+    await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+    // The switch must NOT have applied yet: agent still on A, no session-changed,
+    // interrupt requested, and a "stopping…" status surfaced.
+    assert.equal(agent.sessionKey, 'sess:A', 'agent.sessionKey not swapped mid-turn');
+    assert.ok(interrupted, 'running turn was interrupted');
+    assert.ok(!out.some((m) => m.event.kind === 'session-changed'), 'no session-changed before the turn ends');
+    assert.ok(out.some((m) => m.event.kind === 'status' && /Stopping the current turn/.test(m.event.text)));
+    release();
+    await first;
+    // Now the deferred switch has applied.
+    assert.equal(agent.sessionKey, 'sess:B', 'deferred switch applied after the turn ended');
+    const sc = out.find((m) => m.event.kind === 'session-changed');
+    assert.ok(sc && sc.event.sessionKey === 'sess:B');
+});
+test('DESK-5v concurrent sessions: a mid-turn switch spawns a second agent and never stops the first', async () => {
+    const { out, send } = collect();
+    let releaseA, releaseB;
+    const gateA = new Promise((r) => { releaseA = r; });
+    const gateB = new Promise((r) => { releaseB = r; });
+    let interruptedA = false;
+    const agentA = {
+        sessionKey: 'sess:A',
+        runTurn: async (_p, cb) => { cb.onAssistantDelta('A'); await gateA; return 'done-A'; },
+        requestInterrupt: () => { interruptedA = true; },
+        resetSessionCounters: () => { }, loadHistory: () => 3, getModel: () => 'm',
+    };
+    const agentB = {
+        sessionKey: 'sess:spawn',
+        runTurn: async (_p, cb) => { cb.onAssistantDelta('B'); await gateB; return 'done-B'; },
+        resetSessionCounters: () => { }, loadHistory: () => 5, getModel: () => 'm', clearHistory: () => { },
+    };
+    const core = createHostCore({
+        agent: agentA, send,
+        spawnAgent: () => agentB, // a second session gets its own agent
+        loadTranscript: (k) => (k === 'sess:B' ? [{ role: 'user', content: 'hi' }] : []),
+    });
+    const firstA = core.handle({ kind: 'start-turn', prompt: 'long A' }); // A running
+    await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' }); // switch mid-turn
+    assert.equal(interruptedA, false, 'switching sessions did NOT stop the running turn');
+    assert.equal(agentA.sessionKey, 'sess:A', 'the running agent keeps its own session/history');
+    assert.equal(agentB.sessionKey, 'sess:B', 'the spawned agent took the switched-to session');
+    const scB = out.find((m) => m.event.kind === 'session-changed' && m.event.sessionKey === 'sess:B');
+    assert.ok(scB, 'session-changed to B emitted immediately, while A is still running');
+    // Start a turn in B — runs concurrently, no "already running" rejection.
+    const firstB = core.handle({ kind: 'start-turn', prompt: 'long B' });
+    assert.ok(!out.some((m) => m.event.kind === 'turn-error'), 'a concurrent turn in another session is allowed');
+    releaseA();
+    releaseB();
+    await Promise.all([firstA, firstB]);
+    const completes = out.filter((m) => m.event.kind === 'turn-complete');
+    assert.deepEqual(completes.map((m) => m.sessionKey).sort(), ['sess:A', 'sess:B'], 'both sessions completed, each tagged with its own key');
+    assert.ok(out.some((m) => m.sessionKey === 'sess:A' && m.event.kind === 'assistant-delta'), "A's stream stayed tagged A");
+    assert.ok(out.some((m) => m.sessionKey === 'sess:B' && m.event.kind === 'assistant-delta'), "B's stream stayed tagged B");
+});
 test('interaction-response resolves the broker; stale ids are ignored politely', async () => {
     const { out, send } = collect();
     const core = createHostCore({ agent: fakeAgent(), send });
@@ -125,7 +195,7 @@ test('new-session: fresh key + cleared history + session-changed event', async (
     const ev = out.find((m) => m.event.kind === 'session-changed').event;
     assert.equal(ev.loadedMessages, 0);
 });
-test('resume-session: loads the transcript; unknown key errors', async () => {
+test('DESK-6t resume-session: switches + emits count, but LAZY-loads history on the first turn (not on resume)', async () => {
     const { out, send } = collect();
     let loadedWith = [];
     const agent = {
@@ -139,10 +209,15 @@ test('resume-session: loads the transcript; unknown key errors', async () => {
         loadTranscript: (key) => (key === 'sess-known' ? [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }] : []),
     });
     await core.handle({ kind: 'resume-session', sessionKey: 'sess-known' });
+    // Resume switches the session + reports the count for the renderer to render…
     assert.equal(agent.sessionKey, 'sess-known');
-    assert.equal(loadedWith.length, 2);
-    const ok = out.find((m) => m.event.kind === 'session-changed').event;
-    assert.equal(ok.loadedMessages, 2);
+    const sc = out.find((m) => m.event.kind === 'session-changed').event;
+    assert.equal(sc.loadedMessages, 2);
+    // …but does NOT load the transcript into the agent yet (the expensive part is lazy).
+    assert.equal(loadedWith.length, 0, 'history is NOT loaded on resume');
+    // It loads on the FIRST turn (when the user actually sends a message).
+    await core.handle({ kind: 'start-turn', prompt: 'continue' });
+    assert.equal(loadedWith.length, 2, 'history loaded on the first turn');
     await core.handle({ kind: 'resume-session', sessionKey: 'missing' });
     assert.ok(out.some((m) => m.event.kind === 'turn-error' && m.event.message.includes('missing')));
 });

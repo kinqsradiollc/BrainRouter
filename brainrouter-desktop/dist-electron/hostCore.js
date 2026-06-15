@@ -4,8 +4,22 @@
  * (same loadConfig / McpClientPool / Agent as the CLI — that's the
  * settings-reuse contract) and hands it here; tests hand in a fake. No
  * Electron imports in this file, so the whole router is unit-testable.
+ *
+ * DESK-5v — CONCURRENT SESSIONS. The host keeps a POOL of agents keyed by
+ * sessionKey instead of one mutable agent. Switching sessions no longer stops
+ * the turn you were running: the running session keeps its own agent (and keeps
+ * streaming, tagged with its sessionKey) while the session you switch to gets
+ * its own agent. You can start a turn in the new session while the first is
+ * still going — work on several chats at once, the way you would with several
+ * terminals. Memory stays bounded: the pool only holds sessions that are
+ * actually running plus the one you're viewing; a finished background agent is
+ * dropped (its result is on disk, re-read on switch-back).
+ *
+ * When no `spawnAgent` factory is supplied (unit tests), the core degrades to
+ * the original single-agent behavior — including interrupt-and-defer for a
+ * switch requested mid-turn — because one agent can't safely run two turns.
  */
-import { createCallbackBridge, createEnvelopeWriter, InteractionBroker, isAgentCommand, } from '@kinqs/brainrouter-agent-protocol';
+import { createCallbackBridge, InteractionBroker, isAgentCommand, } from '@kinqs/brainrouter-agent-protocol';
 /**
  * DESK-3 — InteractionPort backed by the broker: agent approval/choice asks
  * become `interaction-request` events; the renderer answers with an
@@ -29,32 +43,144 @@ export function createBrokerPort(broker, emit, timeoutMs = 300_000) {
     };
 }
 export function createHostCore(input) {
-    const emit = createEnvelopeWriter(input.agent.sessionKey, input.send);
     const broker = input.broker ?? new InteractionBroker();
-    let turnRunning = false;
-    // Bridge: every RunTurnCallbacks callback becomes a protocol event. The
-    // bridge object is reused across turns (the envelope writer owns seq).
-    const callbacks = createCallbackBridge(emit);
+    // One shared, monotonic seq across every session stream — the renderer can
+    // rely on global ordering; each event still carries its own sessionKey.
+    let seq = 0;
+    const stamp = (sessionKey, event) => input.send({ seq: ++seq, ts: Date.now(), sessionKey, event });
+    // DESK-5v — the agent pool. Seeded with the initial agent; grows only with
+    // sessions that are running or being viewed.
+    const pool = new Map();
+    pool.set(input.agent.sessionKey, { agent: input.agent, running: false });
+    let activeKey = input.agent.sessionKey;
+    // Control/status events (interrupt notices, model changes) belong to whatever
+    // session the user is currently looking at.
+    const emit = (event) => stamp(activeKey, event);
+    function setActive(key) {
+        activeKey = key;
+        const rt = pool.get(key);
+        if (rt)
+            input.onActiveAgentChange?.(rt.agent);
+    }
+    // DESK-5q (retained for the single-agent path) — a switch requested while the
+    // ONLY agent is busy is queued here and applied once its turn unwinds.
+    let pendingSwitch = null;
     async function startTurn(prompt) {
-        if (turnRunning) {
-            emit({ kind: 'turn-error', message: 'A turn is already running — interrupt it first or queue the prompt.' });
+        const rt = pool.get(activeKey);
+        if (!rt) {
+            emit({ kind: 'turn-error', message: 'No active session to run in.' });
             return;
         }
-        turnRunning = true;
-        emit({ kind: 'turn-start', prompt });
+        if (rt.running) {
+            emit({ kind: 'turn-error', message: 'A turn is already running in this session — interrupt it first or queue the prompt.' });
+            return;
+        }
+        rt.running = true;
+        // DESK-6t — LAZY HISTORY lands here: if this session was resumed for viewing
+        // and never loaded into the agent, load its transcript NOW (before the turn)
+        // so the model has the full conversation. Hidden behind LLM latency.
+        if (rt.pendingHistoryKey) {
+            const entries = input.loadTranscript?.(rt.pendingHistoryKey) ?? [];
+            if (entries.length)
+                rt.agent.loadHistory?.(entries);
+            rt.pendingHistoryKey = undefined;
+        }
+        // Capture the session this turn belongs to: the user may switch away while
+        // it runs, but every event it emits stays tagged with ITS key so the
+        // renderer routes it to the right chat (and never the one now on screen).
+        const sk = rt.agent.sessionKey;
+        const turnEmit = (event) => stamp(sk, event);
+        const turnCallbacks = createCallbackBridge(turnEmit);
+        turnEmit({ kind: 'turn-start', prompt });
         try {
-            const answer = await input.agent.runTurn(prompt, callbacks);
-            emit({ kind: 'turn-complete', answer });
-            const u = input.agent.sessionUsage;
+            const answer = await rt.agent.runTurn(prompt, turnCallbacks);
+            turnEmit({ kind: 'turn-complete', answer });
+            const u = rt.agent.sessionUsage;
             if (u)
-                emit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns });
+                turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns });
         }
         catch (err) {
-            emit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
+            turnEmit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
         }
         finally {
-            turnRunning = false;
+            rt.running = false;
+            // A finished BACKGROUND agent (not the one on screen) is disposable — its
+            // result is persisted to the transcript and re-read on switch-back. Drop
+            // it so the pool can't grow without bound. Only spawned agents are dropped;
+            // the single shared agent of the no-factory path is never evicted.
+            if (sk !== activeKey && input.spawnAgent)
+                pool.delete(sk);
+            // Single-agent path: a switch was deferred until this turn ended.
+            if (pendingSwitch) {
+                const fn = pendingSwitch;
+                pendingSwitch = null;
+                fn();
+            }
         }
+    }
+    /**
+     * Acquire a runtime to host `targetKey`. Reuses the currently-viewed agent
+     * when it's idle (no need to spawn); otherwise spawns a fresh one. Returns
+     * null only when the viewed agent is busy AND there's no spawn factory — the
+     * single-agent path, which the caller handles by deferring.
+     */
+    function acquireRuntime() {
+        const cur = pool.get(activeKey);
+        if (cur && !cur.running) {
+            pool.delete(activeKey);
+            return cur;
+        }
+        if (input.spawnAgent)
+            return { agent: input.spawnAgent(activeKey), running: false };
+        return null;
+    }
+    /** Switch the viewed session to `targetKey`, loading it via `init`. Never
+     *  stops a running turn (it keeps going in the pool, in the background). */
+    function focusOrCreate(targetKey, init) {
+        // Already pooled — i.e. running in the background, or the active one. Just
+        // refocus; the renderer reloads the view from the (on-disk) transcript.
+        const existing = pool.get(targetKey);
+        if (existing) {
+            setActive(targetKey);
+            const count = input.loadTranscript?.(targetKey)?.length ?? 1;
+            stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: count, model: existing.agent.getModel?.() ?? '' });
+            return;
+        }
+        const rt = acquireRuntime();
+        if (!rt) {
+            // Single-agent path, agent busy: preserve the safe interrupt-and-defer.
+            pendingSwitch = () => focusOrCreate(targetKey, init);
+            pool.get(activeKey)?.agent.requestInterrupt?.();
+            broker.dismissAll();
+            emit({ kind: 'status', text: `Stopping the current turn to switch to ${targetKey}…` });
+            return;
+        }
+        rt.agent.sessionKey = targetKey;
+        rt.agent.resetSessionCounters?.();
+        const loaded = init(rt);
+        pool.set(targetKey, rt);
+        setActive(targetKey);
+        stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: loaded, model: rt.agent.getModel?.() ?? '' });
+    }
+    function applyResume(sessionKey) {
+        // An already-pooled (running) session refocuses without touching history.
+        if (!pool.has(sessionKey)) {
+            const entries = input.loadTranscript?.(sessionKey) ?? []; // memoized in host.ts → renderer's q-transcript reuses it
+            if (entries.length === 0) {
+                emit({ kind: 'turn-error', message: `No transcript found for "${sessionKey}".` });
+                return;
+            }
+            // DESK-6t — LAZY: do NOT loadHistory now (the expensive replay). Park the
+            // key; the first turn loads it. Resume just renders the transcript.
+            focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return entries.length; });
+            return;
+        }
+        focusOrCreate(sessionKey, () => 0);
+    }
+    function applyNew(label) {
+        const safe = (label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
+        const targetKey = `${activeKey.split(':')[0]}:${safe}`;
+        focusOrCreate(targetKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
     }
     async function handle(message) {
         if (!isAgentCommand(message))
@@ -65,10 +191,10 @@ export function createHostCore(input) {
                 await startTurn(cmd.prompt);
                 return;
             case 'interrupt': {
-                // DESK-2 — cooperative stop: flag the agent (it unwinds at the next
-                // LLM/tool boundary) AND dismiss pending approvals so a turn blocked
-                // on a dialog fails closed instead of hanging.
-                input.agent.requestInterrupt?.();
+                // DESK-2 — cooperative stop of the VIEWED session's turn: flag its agent
+                // (it unwinds at the next LLM/tool boundary) AND dismiss pending
+                // approvals so a turn blocked on a dialog fails closed instead of hanging.
+                pool.get(activeKey)?.agent.requestInterrupt?.();
                 const dismissed = broker.dismissAll();
                 emit({ kind: 'status', text: `Interrupt requested${dismissed ? ` — dismissed ${dismissed} pending approval(s)` : ''}.` });
                 return;
@@ -95,39 +221,29 @@ export function createHostCore(input) {
                 return;
             }
             case 'new-session': {
-                const label = (cmd.label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
-                input.agent.sessionKey = `${input.agent.sessionKey.split(':')[0]}:${label}`;
-                input.agent.resetSessionCounters?.();
-                input.agent.clearHistory?.();
-                emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: 0, model: input.agent.getModel?.() ?? '' });
+                const label = (cmd.label ?? '').trim() || undefined;
+                applyNew(label);
                 return;
             }
             case 'resume-session': {
-                const entries = input.loadTranscript?.(cmd.sessionKey) ?? [];
-                if (entries.length === 0) {
-                    emit({ kind: 'turn-error', message: `No transcript found for "${cmd.sessionKey}".` });
-                    return;
-                }
-                input.agent.sessionKey = cmd.sessionKey;
-                input.agent.resetSessionCounters?.();
-                const loaded = input.agent.loadHistory?.(entries) ?? 0;
-                emit({ kind: 'session-changed', sessionKey: cmd.sessionKey, loadedMessages: loaded, model: input.agent.getModel?.() ?? '' });
+                applyResume(cmd.sessionKey);
                 return;
             }
             case 'set-model': {
-                input.agent.setModel?.(cmd.model);
+                const a = pool.get(activeKey)?.agent;
+                a?.setModel?.(cmd.model);
                 if (cmd.persist) {
                     try {
                         input.persistModel?.(cmd.model);
                     }
                     catch (err) {
                         emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
-                        emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: -1, model: cmd.model });
+                        emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
                         return;
                     }
                 }
                 emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ''}.` });
-                emit({ kind: 'session-changed', sessionKey: input.agent.sessionKey, loadedMessages: -1, model: cmd.model });
+                emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
                 return;
             }
             case 'shutdown':

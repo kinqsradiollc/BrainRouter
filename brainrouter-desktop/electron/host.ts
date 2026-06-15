@@ -9,8 +9,8 @@
  * (.brainrouter/cli/ sessions, workers, plans, goals) is shared with the CLI.
  * Sign in once, configure once — both heads see it.
  */
-import { createBrokerPort, createHostCore } from './hostCore.js';
-import { exec, execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createBrokerPort, createHostCore, type AgentLike } from './hostCore.js';
+import { exec, execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,11 +18,14 @@ import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent } from '@kinqs/brainrouter-cli/dist/agent/agent.js';
-import { loadConfig, saveConfig } from '@kinqs/brainrouter-cli/dist/config/config.js';
+import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist/config/config.js';
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
-import { listTranscripts, loadTranscript } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
+import { listTranscripts, loadTranscript, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
+import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
+import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
+import { contextWindowFor } from '@kinqs/brainrouter-cli/dist/runtime/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
@@ -37,7 +40,11 @@ import { buildUsageBreakdown } from '@kinqs/brainrouter-cli/dist/runtime/usageBr
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import { readGoal, setGoal, clearGoal } from '@kinqs/brainrouter-cli/dist/state/goalStore.js';
 import { readPlan, formatPlan } from '@kinqs/brainrouter-cli/dist/state/taskStore.js';
-import { listWorkers, readWorkerSummary } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
+import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
+import { listSessions } from '@kinqs/brainrouter-cli/dist/orchestration/orchestrator.js';
+import { readRun } from '@kinqs/brainrouter-cli/dist/state/workflowRun.js';
+import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundReconcile.js';
+import { childSessionKey } from '@kinqs/brainrouter-cli/dist/runtime/mcpUtils.js';
 
 interface ParentPortLike {
   on(event: 'message', listener: (e: { data: unknown }) => void): void;
@@ -83,8 +90,172 @@ async function fetchEndpointModels(endpoint: string | undefined, apiKey: string)
   }
 }
 
+/**
+ * DESK-5d — a session's resting state, read from the transcript tail:
+ * an assistant tail means the turn finished ("done"); a user tail means the
+ * turn never completed (interrupted / crashed → "needs a reply"). Tool
+ * messages and named-user tool results are skipped, mirroring the
+ * transcript renderer. Tail window only — transcripts can be megabytes.
+ */
+function lastTranscriptRole(filePath: string): 'user' | 'assistant' | undefined {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 16_384);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    const lines = buf.toString('utf-8').split('\n').filter((l) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const e = JSON.parse(lines[i]) as { role?: string; name?: string };
+        if (e.role === 'assistant') return 'assistant';
+        if (e.role === 'user' && !e.name) return 'user';
+      } catch { /* the tail window may start mid-line */ }
+    }
+  } catch { /* unreadable */ }
+  return undefined;
+}
+
+// DESK-5w — stale-task reconcile is the CLI's shared, unit-tested function
+// (brainrouter-cli/src/runtime/backgroundReconcile.ts) so the boot path here is
+// the exact code covered by backgroundReconcile.test.ts.
+
+// DESK-5p/5w — a reconstructed transcript row: prose verbatim + collapsed tool
+// groups. Shared by the main-session `transcript` query and the `task-transcript`
+// query (child agents + workers), so a subagent reads like a normal chat.
+// DESK-6t — each row carries `ts` (epoch ms) sourced from the persisted entry's
+// own timestamp, so resumed history shows the REAL relative time ("3h ago"),
+// not "just now". Undefined only for legacy entries without a timestamp.
+type ReconRow =
+  | { kind: 'user'; text: string; ts?: number }
+  | { kind: 'assistant'; text: string; ts?: number }
+  | { kind: 'tool-group'; items: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }>; ts?: number };
+
+/** Parse a persisted ISO `timestamp` to epoch ms; undefined when absent/bad. */
+function entryTs(e: { timestamp?: unknown }): number | undefined {
+  if (typeof e.timestamp !== 'string') return undefined;
+  const t = Date.parse(e.timestamp);
+  return Number.isFinite(t) ? t : undefined;
+}
+
+/** Reconstruct user/assistant prose + tool-group rows from OpenAI-format entries. */
+function reconstructTranscriptRows(
+  entries: Array<{ role?: string; content?: unknown; name?: string; tool_calls?: unknown[]; tool_call_id?: string; isError?: boolean; timestamp?: string }>,
+): ReconRow[] {
+  const rows: ReconRow[] = [];
+  const callMeta = new Map<string, { name: string; args: Record<string, unknown> }>();
+  let group: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> | null = null;
+  let groupTs: number | undefined;
+  const flush = (): void => { if (group && group.length) rows.push({ kind: 'tool-group', items: group, ts: groupTs }); group = null; groupTs = undefined; };
+  const firstLine = (s: string): string => {
+    const line = s.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+    return line.replace(/\s+/g, ' ').slice(0, 90);
+  };
+  const summarize = (name: string, a: Record<string, unknown>, content: string): string => {
+    const arg = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : undefined);
+    const primary = arg('path') ?? arg('command') ?? arg('query') ?? arg('pattern') ?? arg('url') ?? arg('targetFile');
+    if (primary) return primary.slice(0, 120);
+    return firstLine(content) || '(no output)';
+  };
+  for (const e of entries) {
+    const text = typeof e.content === 'string' ? e.content : '';
+    const ts = entryTs(e);
+    if (e.role === 'user' && text.trim() && !e.name) {
+      flush();
+      rows.push({ kind: 'user', text: text.slice(0, 20_000), ts });
+    } else if (e.role === 'assistant') {
+      if (Array.isArray(e.tool_calls)) {
+        for (const c of e.tool_calls as Array<{ id?: string; function?: { name?: string; arguments?: unknown } }>) {
+          if (!c?.id) continue;
+          let parsed: Record<string, unknown> = {};
+          const raw = c.function?.arguments;
+          try { parsed = typeof raw === 'string' ? JSON.parse(raw) : (raw as Record<string, unknown>) ?? {}; } catch { /* unparseable */ }
+          callMeta.set(c.id, { name: String(c.function?.name ?? 'tool'), args: parsed });
+        }
+      }
+      if (text.trim()) { flush(); rows.push({ kind: 'assistant', text: text.slice(0, 40_000), ts }); }
+    } else if (e.role === 'tool') {
+      const meta = e.tool_call_id ? callMeta.get(e.tool_call_id) : undefined;
+      const name = e.name ?? meta?.name ?? 'tool';
+      const a = meta?.args ?? {};
+      const filePath = /edit|write|patch|apply/i.test(name) && typeof a.path === 'string' ? (a.path as string) : undefined;
+      if (!group) group = [];
+      groupTs = ts ?? groupTs; // the group's time = its last tool's time
+      group.push({ tool: name, summary: summarize(name, a, text), preview: text ? text.slice(0, 3_000) : undefined, ok: !e.isError, file: filePath });
+    }
+  }
+  flush();
+  return rows;
+}
+
+/**
+ * DESK-5w — map a WORKER's event-log transcript (a different shape from the
+ * OpenAI-format one: {role:'system'|'tool'|'assistant', event, tool, content})
+ * to the same row shape, so a worker reads like a chat too. The spawn goal
+ * becomes the opening "user" turn.
+ */
+function workerEventsToRows(entries: Array<Record<string, unknown>>): ReconRow[] {
+  const rows: ReconRow[] = [];
+  let group: Array<{ tool: string; summary: string; ok: boolean }> | null = null;
+  let groupTs: number | undefined;
+  const flush = (): void => { if (group && group.length) rows.push({ kind: 'tool-group', items: group, ts: groupTs }); group = null; groupTs = undefined; };
+  for (const e of entries) {
+    const role = String(e.role ?? '');
+    const event = String(e.event ?? '');
+    const content = typeof e.content === 'string' ? e.content : '';
+    const ts = entryTs(e as { timestamp?: unknown }) ?? (typeof e.ts === 'string' ? (Number.isFinite(Date.parse(e.ts)) ? Date.parse(e.ts) : undefined) : undefined);
+    if (role === 'system' && event === 'spawn') {
+      flush();
+      const goal = typeof e.goal === 'string' ? e.goal : '';
+      if (goal) rows.push({ kind: 'user', text: goal.slice(0, 20_000), ts });
+    } else if (role === 'tool' && event === 'end') {
+      if (!group) group = [];
+      groupTs = ts ?? groupTs;
+      group.push({ tool: String(e.tool ?? 'tool'), summary: typeof e.summary === 'string' ? e.summary : '', ok: e.ok !== false });
+    } else if ((role === 'assistant' || role === 'user') && content.trim()) {
+      flush();
+      rows.push({ kind: role === 'user' ? 'user' : 'assistant', text: content.slice(0, 40_000), ts });
+    }
+  }
+  flush();
+  return rows;
+}
+
+/**
+ * DESK-6t — run a git command ASYNCHRONOUSLY and return stdout (captured even on
+ * a non-zero exit — e.g. `git diff --no-index` exits 1 with the diff on stdout).
+ * Async (execFile, not execFileSync) so a slow `git` never blocks the host's
+ * single message loop and stall an unrelated New-chat / resume command behind it.
+ */
+function git(args: string[], cwd: string, opts?: { timeout?: number; maxBuffer?: number }): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, encoding: 'utf-8', timeout: opts?.timeout ?? 5_000, maxBuffer: opts?.maxBuffer ?? 8_000_000 },
+      (_err, stdout) => resolve(String(stdout ?? '')));
+  });
+}
+
+/** Sidebar row payload: transcript summary + the status the icons render. */
+function sessionRows(root: string, limit: number): Array<TranscriptSummary & { lastRole?: string }> {
+  return listTranscripts(root).slice(0, limit).map((s) => {
+    const file = s.sessionDir
+      ? path.join(s.sessionDir, s.fileName)
+      : path.join(getCliStateDir(root), 'transcripts', s.fileName);
+    return { ...s, lastRole: lastTranscriptRole(file) };
+  });
+}
+
 async function main(): Promise<void> {
   const workspaceRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd();
+  // DESK-5w — clear phantom "running" background tasks left by a previous,
+  // now-dead host BEFORE anything queries the fleet (the renderer polls it on
+  // boot). In-process actors don't survive a restart; their on-disk state does.
+  try {
+    const r = reconcileStaleBackgroundTasks(workspaceRoot);
+    if (r.sessions + r.workers + r.runs > 0) {
+      console.error(`[brainrouter-desktop host] reconciled stale tasks on boot: ${r.sessions} agents, ${r.workers} workers, ${r.runs} workflows`);
+    }
+  } catch { /* best-effort */ }
   // utilityProcess gives us process.parentPort; plain `node host.js` (dev
   // smoke) falls back to a console sink so the bootstrap is runnable solo.
   const port = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
@@ -106,23 +277,69 @@ async function main(): Promise<void> {
   // events; the renderer's dialogs answer them. Shares the hostCore broker so
   // interrupt/shutdown dismiss pending dialogs fail-closed.
   const broker = new InteractionBroker();
-  let emitForPort: (e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest }) => void = () => {};
+  // DESK-5v — interaction-request events ride a separate seq namespace AND
+  // carry the ASKING agent's own sessionKey, so an approval raised by a
+  // background turn surfaces against the right chat (same `send` wire).
+  let portSeq = 1_000_000; // offset so port events never collide with core seq
+  const emitPortFor = (
+    sessionKey: string,
+    e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest },
+  ): void => send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: e });
   const agent = new Agent(mcpClient, llm, {
     workspaceRoot,
     launchCwd: workspaceRoot,
-    interactionPort: createBrokerPort(broker, (e) => emitForPort(e)),
+    interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
   });
+  // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
+  // agents (one per running/active session) and tells us which is active via
+  // onActiveAgentChange; every read-only query below reports THIS agent so the
+  // ring/tokens/recap/transcript track the chat on screen, not a background one.
+  let activeAgent = agent;
+  // DESK-5v — an independent agent for a SECOND, concurrent session: shares the
+  // one MCP pool / llm / broker but keeps its own history, counters and key, so
+  // two chats can run turns at the same time.
+  const spawnAgent = (sessionKey: string): AgentLike => {
+    const a = new Agent(mcpClient, llm, {
+      workspaceRoot,
+      launchCwd: workspaceRoot,
+      interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
+    });
+    a.sessionKey = sessionKey;
+    return a as unknown as AgentLike;
+  };
 
   // DESK-5c — terminal session registry + endpoint-models cache.
   const terms = new Map<string, TermSession>();
   let termSeq = 0;
   let modelsCache: { models: string[]; at: number } | null = null;
+  // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
+  let prCache: { at: number; pr: { number: number; state: string; title?: string } | null } | null = null;
+  // DESK-6t — short-lived transcript-read cache. Resuming a session reads the
+  // transcript (for lazy-load bookkeeping) and the renderer immediately reads it
+  // AGAIN to render — this memo makes that a single read. Also stashes a token
+  // estimate so the context ring is right on a lazily-resumed (not-yet-loaded)
+  // chat. 3s TTL: long enough for resume→render, short enough to stay fresh.
+  type TxEntry = { role?: string; content?: unknown; name?: string; tool_calls?: unknown[]; tool_call_id?: string; isError?: boolean; timestamp?: string };
+  const transcriptCache = new Map<string, { entries: TxEntry[]; tokens: number; at: number }>();
+  const readTranscriptCached = (key: string): TxEntry[] => {
+    const now = Date.now();
+    const hit = transcriptCache.get(key);
+    if (hit && now - hit.at < 3_000) return hit.entries;
+    const entries = loadTranscript(workspaceRoot, key) as TxEntry[];
+    let chars = 0;
+    for (const e of entries) if (typeof e?.content === 'string') chars += (e.content as string).length;
+    transcriptCache.set(key, { entries, tokens: Math.round(chars / 4), at: now });
+    if (transcriptCache.size > 8) transcriptCache.delete(transcriptCache.keys().next().value as string);
+    return entries;
+  };
 
   const core = createHostCore({
     agent,
+    spawnAgent,
+    onActiveAgentChange: (a) => { activeAgent = a as unknown as typeof agent; },
     send: send as never,
     broker,
-    loadTranscript: (key) => loadTranscript(workspaceRoot, key),
+    loadTranscript: (key) => readTranscriptCached(key),
     persistModel: (model) => {
       // Both heads read this file — a model picked in the desktop settings is
       // the CLI's model on its next launch, and vice versa.
@@ -132,13 +349,71 @@ async function main(): Promise<void> {
     },
     queries: {
       // Read-only surfaces — same pure modules the TUI commands use.
-      'list-sessions': () => listTranscripts(workspaceRoot).slice(0, 50),
+      // DESK-6m — sidebar sessions merged with their UI meta (title override,
+      // pinned/archived/status/group) and sorted pinned-first; the renderer's
+      // per-chat ⋮ menu reads/writes this meta.
+      'list-sessions': () => {
+        const meta = readSessionMetaAll(workspaceRoot);
+        const rows = sessionRows(workspaceRoot, 80).map((s) => {
+          const m = meta[s.sessionKey] ?? {};
+          return {
+            ...s,
+            firstUserMessage: m.title || s.firstUserMessage, // title overrides the snippet
+            pinned: !!m.pinned, archived: !!m.archived, status: m.status ?? 'active', group: m.group ?? null,
+            forkedFrom: m.forkedFrom ?? null, // DESK-6u — lineage for the fork icon + back-link
+
+          };
+        });
+        // pinned first, then the store's recency order (sessionRows already sorts).
+        return rows.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+      },
+      // DESK-5d — another project's chat history, for the sidebar's expanded
+      // project folders. Read-only transcript summaries; the trust gate still
+      // guards SWITCHING into the workspace.
+      'workspace-sessions': (args) => {
+        const root = typeof args.root === 'string' ? args.root : '';
+        if (!root || !fs.existsSync(root)) return [];
+        try { return sessionRows(root, 20); } catch { return []; }
+      },
+      // DESK-5d — current branch's PR, for the project-row status chip.
+      // Quietly null when gh is missing, unauthenticated, or there is no PR.
+      'git-pr': async () => {
+        const now = Date.now();
+        if (prCache && now - prCache.at < 60_000) return { pr: prCache.pr };
+        const pr = await new Promise<{ number: number; state: string; title?: string } | null>((resolve) => {
+          exec('gh pr view --json number,state,title', { cwd: workspaceRoot, timeout: 4_000, maxBuffer: 200_000 }, (err, stdout) => {
+            if (err) { resolve(null); return; }
+            try {
+              const j = JSON.parse(stdout) as { number?: number; state?: string; title?: string };
+              resolve(typeof j.number === 'number' ? { number: j.number, state: String(j.state ?? 'OPEN'), title: j.title } : null);
+            } catch { resolve(null); }
+          });
+        });
+        prCache = { at: now, pr };
+        return { pr };
+      },
       'recap': (args) => {
-        const key = typeof args.sessionKey === 'string' ? args.sessionKey : agent.sessionKey;
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : activeAgent.sessionKey;
         return buildRecap({ entries: loadTranscript(workspaceRoot, key), sessionKey: key });
       },
-      'fleet': () => collectRunningTasks(workspaceRoot),
-      'session-info': () => ({ sessionKey: agent.sessionKey, model: llm.model, workspaceRoot, username: os.userInfo().username }),
+      // DESK-5w — running background tasks, each TAGGED with the chat session
+      // that owns it (parentSessionKey), so the renderer can nest a task under
+      // its session and never leak one session's tasks into another's view.
+      'fleet': () => {
+        const tasks = collectRunningTasks(workspaceRoot) as Array<{ kind: string; id: string; label: string; startedAt?: string; role?: string; worktree?: boolean }>;
+        const sessions = listSessions(workspaceRoot);
+        const workers = listWorkers(workspaceRoot);
+        return tasks.map((t) => {
+          let parentSessionKey: string | null = null;
+          if (t.kind === 'agent') parentSessionKey = sessions.find((s) => s.id === t.id)?.parentSessionKey ?? null;
+          else if (t.kind === 'worker') parentSessionKey = workers.find((w) => w.id === t.id)?.parentSessionKey ?? null;
+          return { ...t, parentSessionKey };
+        });
+      },
+      // DESK-5l — live model, not the boot-time snapshot: session-info runs on
+      // every sidebar refresh, and returning stale llm.model used to stomp the
+      // UI back to the old model right after a switch.
+      'session-info': () => ({ sessionKey: activeAgent.sessionKey, model: activeAgent.getModel?.() ?? llm.model, workspaceRoot, username: os.userInfo().username }),
       // DESK-4d — the home/greeting view: real numbers from the workspace's
       // persisted transcripts (sessions, messages, active days, streaks, and
       // a per-day activity map for the heatmap).
@@ -173,18 +448,16 @@ async function main(): Promise<void> {
           activeDays: perDay.size,
           currentStreak: current,
           longestStreak: longest,
-          model: llm.model,
+          model: activeAgent.getModel?.() ?? llm.model,
           perDay: Object.fromEntries(perDay),
         };
       },
-      // DESK-4c — workspace browsing panels.
-      'list-files': () => {
-        try {
-          const tracked = execFileSync('git', ['ls-files'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 8_000_000 });
-          const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 8_000_000 });
-          const all = (tracked + '\n' + untracked).split('\n').filter(Boolean).sort();
-          return { files: all.slice(0, 3000), truncated: all.length > 3000 };
-        } catch { return { files: [], truncated: false }; }
+      // DESK-4c — workspace browsing panels. (DESK-6t — async git, non-blocking.)
+      'list-files': async () => {
+        const tracked = await git(['ls-files'], workspaceRoot);
+        const untracked = await git(['ls-files', '--others', '--exclude-standard'], workspaceRoot);
+        const all = (tracked + '\n' + untracked).split('\n').filter(Boolean).sort();
+        return { files: all.slice(0, 3000), truncated: all.length > 3000 };
       },
       'read-file': (args) => {
         const file = typeof args.path === 'string' ? args.path : '';
@@ -202,53 +475,36 @@ async function main(): Promise<void> {
       // DESK-4j — branch picker (pattern: branch chip with dropdown in the
       // composer context row). Listing is read-only; checkout runs through
       // the same user-command path as the terminal input.
-      'git-branches': () => {
-        try {
-          const out = execFileSync('git', ['branch', '--list', '--sort=-committerdate'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 });
-          const branches = out.split('\n').map((l) => l.replace(/^[*+]?\s*/, '').trim()).filter(Boolean).slice(0, 20);
-          const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 }).trim();
-          return { current, branches };
-        } catch { return { current: null, branches: [] }; }
+      'git-branches': async () => {
+        const out = await git(['branch', '--list', '--sort=-committerdate'], workspaceRoot);
+        const branches = out.split('\n').map((l) => l.replace(/^[*+]?\s*/, '').trim()).filter(Boolean).slice(0, 20);
+        const current = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], workspaceRoot)).trim();
+        return { current: current || null, branches };
       },
-      'git-info': () => {
-        try {
-          const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 }).trim();
-          let insertions = 0, deletions = 0, files = 0;
-          try {
-            const stat = execFileSync('git', ['diff', 'HEAD', '--shortstat'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 });
-            files = Number(/(\d+) files? changed/.exec(stat)?.[1] ?? 0);
-            insertions = Number(/(\d+) insertions?/.exec(stat)?.[1] ?? 0);
-            deletions = Number(/(\d+) deletions?/.exec(stat)?.[1] ?? 0);
-          } catch { /* clean tree */ }
-          return { repo: path.basename(workspaceRoot), branch, files, insertions, deletions };
-        } catch { return { repo: path.basename(workspaceRoot), branch: null, files: 0, insertions: 0, deletions: 0 }; }
+      // DESK-4m — recent commit subjects for the Environment panel.
+      'git-log': async () => ({ subjects: (await git(['log', '-5', '--pretty=%s'], workspaceRoot)).split('\n').filter(Boolean) }),
+      'git-info': async () => {
+        const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], workspaceRoot)).trim();
+        if (!branch) return { repo: path.basename(workspaceRoot), branch: null, files: 0, insertions: 0, deletions: 0 };
+        const stat = await git(['diff', 'HEAD', '--shortstat'], workspaceRoot);
+        return {
+          repo: path.basename(workspaceRoot), branch,
+          files: Number(/(\d+) files? changed/.exec(stat)?.[1] ?? 0),
+          insertions: Number(/(\d+) insertions?/.exec(stat)?.[1] ?? 0),
+          deletions: Number(/(\d+) deletions?/.exec(stat)?.[1] ?? 0),
+        };
       },
       // DESK-4 — diff/review surfaces. git-backed, tolerant of non-repos.
-      'changed-files': () => {
-        try {
-          const out = execFileSync('git', ['status', '--porcelain'], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000 });
-          return out.split('\n').filter(Boolean).slice(0, 200).map((line) => ({
-            status: line.slice(0, 2).trim() || '??',
-            path: line.slice(3).trim(),
-          }));
-        } catch { return []; }
-      },
-      'file-diff': (args) => {
+      'changed-files': async () => (await git(['status', '--porcelain'], workspaceRoot))
+        .split('\n').filter(Boolean).slice(0, 200).map((line) => ({ status: line.slice(0, 2).trim() || '??', path: line.slice(3).trim() })),
+      'file-diff': async (args) => {
         const file = typeof args.path === 'string' ? args.path : '';
         if (!file) return { path: file, diff: '' };
-        try {
-          // HEAD diff covers staged + unstaged; untracked files get a synthetic add-diff.
-          let diff = execFileSync('git', ['diff', 'HEAD', '--', file], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 4_000_000 });
-          if (!diff.trim()) {
-            diff = execFileSync('git', ['diff', '--no-index', '--', '/dev/null', file], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 5_000, maxBuffer: 4_000_000 }).toString();
-          }
-          return { path: file, diff: diff.slice(0, 200_000) };
-        } catch (err) {
-          // git diff --no-index exits 1 when files differ — its stdout IS the diff.
-          const out = (err as { stdout?: string }).stdout;
-          if (typeof out === 'string' && out.trim()) return { path: file, diff: out.slice(0, 200_000) };
-          return { path: file, diff: '' };
-        }
+        // HEAD diff covers staged + unstaged; untracked files get a synthetic add-diff
+        // (git diff --no-index exits 1 but its stdout — captured by `git` — IS the diff).
+        let diff = await git(['diff', 'HEAD', '--', file], workspaceRoot, { maxBuffer: 4_000_000 });
+        if (!diff.trim()) diff = await git(['diff', '--no-index', '--', '/dev/null', file], workspaceRoot, { maxBuffer: 4_000_000 });
+        return { path: file, diff: diff.slice(0, 200_000) };
       },
       // DESK-4c — every CLI slash command, straight from the CLI's catalog.
       'commands-catalog': () => ({ categories: HELP_CATEGORIES, all: [...SLASH_COMMANDS] }),
@@ -269,59 +525,118 @@ async function main(): Promise<void> {
           servers: mcpClient.getStatuses().map((s) => ({ id: s.serverId, online: s.status === 'connected', detail: s.identity !== 'unknown' ? s.identity : undefined })),
         };
       },
-      'usage-breakdown': () => buildUsageBreakdown({ parent: agent.sessionUsage, children: [], offload: undefined }),
+      'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined }),
+      // DESK-5r — context fill for the composer ring. `used` is the agent's
+      // authoritative last prompt_tokens (the live context size, updated after
+      // every LLM call within a turn). The ring fills toward the AUTO-COMPACT
+      // threshold — the point where BrainRouter summarizes old history and the
+      // context RESETS — because that's the operative limit the user feels (the
+      // raw model window is shown too, for context). After a compaction the
+      // agent clears lastSeenPromptTokens, so `used` drops and the ring resets.
+      'context-usage': () => {
+        // getCurrentContextTokens() = last authoritative prompt_tokens OR a
+        // content estimate of the CURRENT chatHistory — so right after a
+        // session switch (history loaded, no LLM call yet) it reflects THIS
+        // session's size instead of the previous one's stale count.
+        const a = activeAgent as unknown as { getCurrentContextTokens?: () => number; lastSeenPromptTokens?: number };
+        // DESK-6t — with LAZY history, a freshly-resumed chat hasn't loaded its
+        // transcript into the agent yet, so the agent estimate would read ~0.
+        // Fall back to the resumed transcript's token estimate (from the cache
+        // populated on resume) so the ring isn't wrong while you're browsing.
+        const agentTokens = Number(a.getCurrentContextTokens?.() ?? a.lastSeenPromptTokens ?? 0);
+        const c = transcriptCache.get(activeAgent.sessionKey);
+        // Only the FRESH (resume-window) estimate counts; once the cache ages
+        // out or a turn runs, the agent's own (authoritative) value wins.
+        const cached = c && Date.now() - c.at < 3_000 ? c.tokens : 0;
+        const used = Math.max(agentTokens, cached);
+        const model = activeAgent.getModel?.() ?? llm.model;
+        const window = contextWindowFor(model) ?? 0;
+        const compactAt = getCliKnobs().autoCompactTokens || 80_000;
+        const limit = compactAt > 0 ? compactAt : window;
+        return { used, window, compactAt, limit, pct: limit > 0 ? Math.min(1, used / limit) : 0 };
+      },
       'search-transcript': (args) => {
         const query = typeof args.q === 'string' ? args.q : '';
-        return searchTranscript(loadTranscript(workspaceRoot, agent.sessionKey), query, { limit: 50 })
+        return searchTranscript(loadTranscript(workspaceRoot, activeAgent.sessionKey), query, { limit: 50 })
           .map((m) => ({ index: (m as { index?: number }).index ?? 0, role: (m as { role?: string }).role ?? '?', snippet: (m as { snippet?: string }).snippet ?? '' }));
       },
-      'chapters': () => listChapters(loadTranscript(workspaceRoot, agent.sessionKey)),
-      // DESK-4g — render a resumed session's history in the chat. Persisted
-      // entries become renderable rows: user/assistant prose verbatim, tool
-      // traffic collapsed into counts (the reference renders those as
-      // collapsed outcome rows).
+      'chapters': () => listChapters(loadTranscript(workspaceRoot, activeAgent.sessionKey)),
+      // DESK-5p — render a resumed session's FULL history: user/assistant prose
+      // verbatim AND the real tool calls (name + arg-derived summary + output
+      // preview + ok), reconstructed from the persisted OpenAI-format entries
+      // (assistant `tool_calls` request the call; the `tool` result message
+      // carries name + content + isError). Consecutive tool activity collapses
+      // into one tool-group row, exactly like the live stream — so the resumed
+      // view shows the same expandable tool cards instead of a bare count.
       'transcript': (args) => {
-        const key = typeof args.sessionKey === 'string' ? args.sessionKey : agent.sessionKey;
-        const entries = loadTranscript(workspaceRoot, key) as Array<{ role?: string; content?: unknown; name?: string; tool_calls?: unknown[] }>;
-        const rows: Array<{ kind: string; text?: string; tools?: number }> = [];
-        let toolRun = 0;
-        const flushTools = () => { if (toolRun > 0) { rows.push({ kind: 'tools', tools: toolRun }); toolRun = 0; } };
-        for (const e of entries) {
-          const text = typeof e.content === 'string' ? e.content : '';
-          if (e.role === 'user' && text.trim() && !e.name) {
-            flushTools();
-            rows.push({ kind: 'user', text: text.slice(0, 20_000) });
-          } else if (e.role === 'assistant') {
-            if (Array.isArray(e.tool_calls) && e.tool_calls.length) toolRun += e.tool_calls.length;
-            if (text.trim()) { flushTools(); rows.push({ kind: 'assistant', text: text.slice(0, 40_000) }); }
-          } else if (e.role === 'tool') {
-            // counted via the assistant tool_calls that requested them
-          }
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : activeAgent.sessionKey;
+        // DESK-6t — cache hit: this is the same read the resume just did.
+        const entries = readTranscriptCached(key) as Parameters<typeof reconstructTranscriptRows>[0];
+        return { sessionKey: key, rows: reconstructTranscriptRows(entries).slice(-400) };
+      },
+      // DESK-5w — the conversation of a background task (a delegated child agent
+      // OR a worker), reconstructed like a normal chat. The renderer opens this
+      // read-only when you click a task nested under its session, so you can see
+      // exactly what a subagent is doing and what it has said/done so far.
+      'task-transcript': (args) => {
+        const kind = typeof args.kind === 'string' ? args.kind : 'agent';
+        const id = typeof args.id === 'string' ? args.id : '';
+        const parent = typeof args.parentSessionKey === 'string' ? args.parentSessionKey : '';
+        if (kind === 'worker') {
+          const meta = readWorkerMeta(workspaceRoot, id);
+          const raw = readWorkerTranscript(workspaceRoot, id, 400) as Array<Record<string, unknown>>;
+          return { id, kind, role: meta?.role, goal: meta?.goal, status: meta?.status, rows: workerEventsToRows(raw) };
         }
-        flushTools();
-        return { sessionKey: key, rows: rows.slice(-200) };
+        // Child agent: its history lives at childSessionKey(parent, id); an
+        // isolated-worktree child persists under its own childWorkspaceRoot.
+        const session = listSessions(workspaceRoot).find((s) => s.id === id);
+        const childKey = parent ? childSessionKey(parent, id) : id;
+        const readRoot = session?.childWorkspaceRoot ?? workspaceRoot;
+        const entries = loadTranscript(readRoot, childKey) as Parameters<typeof reconstructTranscriptRows>[0];
+        return { id, kind, role: session?.role, goal: session?.prompt, status: session?.status, rows: reconstructTranscriptRows(entries).slice(-400) };
+      },
+      // DESK-6w — a workflow run's full breakdown for the Claude-/workflows-style
+      // card: each phase with its spawned child AGENTS resolved to live stats
+      // (role/label/status + tokens, tool calls, wall-clock). Step-based runs
+      // (no phases) fall back to a flat step list.
+      'workflow-detail': (args) => {
+        const slug = typeof args.slug === 'string' ? args.slug : '';
+        const run = readRun(workspaceRoot, slug);
+        if (!run) return null;
+        const byId = new Map(listSessions(workspaceRoot).map((s) => [s.id, s]));
+        const resolveAgents = (childIds: string[]) => childIds.map((id) => {
+          const s = byId.get(id);
+          const tokens = (s?.usage?.promptTokens ?? 0) + (s?.usage?.completionTokens ?? 0);
+          const started = s?.startedAt ? new Date(s.startedAt).getTime() : 0;
+          const ended = s?.completedAt ? new Date(s.completedAt).getTime() : Date.now();
+          const ms = s?.usage?.wallClockMs ?? (started ? Math.max(0, ended - started) : 0);
+          return { id, label: s?.label || s?.role || id, role: s?.role ?? '?', status: s?.status ?? 'unknown', tokens, tools: s?.usage?.calls ?? 0, ms };
+        });
+        const phases = (run.phases ?? []).map((p) => ({ id: p.id, title: p.title, status: p.status, agents: resolveAgents(p.childIds ?? []) }));
+        const steps = (!run.phases || run.phases.length === 0) ? run.steps.map((st) => ({ id: st.id, title: st.title, status: st.status })) : [];
+        let totalAgents = 0, totalTokens = 0;
+        for (const p of phases) { totalAgents += p.agents.length; for (const a of p.agents) totalTokens += a.tokens; }
+        return { slug: run.slug, kind: run.kind, status: run.status, startedAt: run.startedAt, updatedAt: run.updatedAt, phases, steps, totalAgents, totalTokens };
       },
       'export-chat': (args) => {
         const format = args.format === 'json' ? 'json' : 'md';
-        const entries = loadTranscript(workspaceRoot, agent.sessionKey);
+        const entries = loadTranscript(workspaceRoot, activeAgent.sessionKey);
         const exportedAt = new Date().toISOString();
-        const meta = { sessionKey: agent.sessionKey, exportedAt };
+        const meta = { sessionKey: activeAgent.sessionKey, exportedAt };
         return {
-          filename: exportFileName(agent.sessionKey, format, exportedAt),
+          filename: exportFileName(activeAgent.sessionKey, format, exportedAt),
           content: format === 'json' ? exportTranscriptJson(entries, meta) : exportTranscriptMarkdown(entries, meta),
         };
       },
       // DESK-4e — content search (the Files panel's "?text" mode, observed).
-      'search-content': (args) => {
+      'search-content': async (args) => {
         const query = typeof args.q === 'string' ? args.q : '';
         if (!query.trim()) return [];
-        try {
-          const out = execFileSync('git', ['grep', '-n', '-I', '--max-count', '3', '--', query], { cwd: workspaceRoot, encoding: 'utf-8', timeout: 8_000, maxBuffer: 4_000_000 });
-          return out.split('\n').filter(Boolean).slice(0, 50).map((line) => {
-            const [file, ln, ...rest] = line.split(':');
-            return { file, line: Number(ln) || 0, snippet: rest.join(':').trim().slice(0, 160) };
-          });
-        } catch { return []; }
+        const out = await git(['grep', '-n', '-I', '--max-count', '3', '--', query], workspaceRoot, { timeout: 8_000, maxBuffer: 4_000_000 });
+        return out.split('\n').filter(Boolean).slice(0, 50).map((line) => {
+          const [file, ln, ...rest] = line.split(':');
+          return { file, line: Number(ln) || 0, snippet: rest.join(':').trim().slice(0, 160) };
+        });
       },
       // DESK-4e — "Always allow" on inline approval cards persists a glob rule
       // into the SAME cli.permissions store the CLI's policy gate evaluates.
@@ -359,16 +674,16 @@ async function main(): Promise<void> {
         const rest = typeof args.args === 'string' ? args.args.trim() : '';
         switch (cmd) {
           case 'goal': {
-            if (rest === 'clear') { clearGoal(workspaceRoot, agent.sessionKey); return { lines: ['Goal cleared.'] }; }
+            if (rest === 'clear') { clearGoal(workspaceRoot, activeAgent.sessionKey); return { lines: ['Goal cleared.'] }; }
             if (rest) {
-              const g = setGoal(workspaceRoot, rest, agent.sessionKey);
+              const g = setGoal(workspaceRoot, rest, activeAgent.sessionKey);
               return { lines: [`Goal set: ${g.text}`, `status: ${g.status}`] };
             }
-            const g = readGoal(workspaceRoot, agent.sessionKey);
+            const g = readGoal(workspaceRoot, activeAgent.sessionKey);
             return { lines: g ? [`Goal: ${g.text}`, `status: ${g.status} · set ${g.setAt}`] : ['No active goal.', 'Usage: /goal <text> · /goal clear'] };
           }
           case 'plan': {
-            const text = formatPlan(readPlan(workspaceRoot, agent.sessionKey));
+            const text = formatPlan(readPlan(workspaceRoot, activeAgent.sessionKey));
             return { lines: text.trim() ? text.split('\n') : ['No plan yet.'] };
           }
           case 'workers': {
@@ -399,16 +714,16 @@ async function main(): Promise<void> {
             const st = mcpClient.getStatuses();
             return {
               lines: [
-                `model: ${agent.getModel?.() ?? llm.model} (${llm.provider})`,
+                `model: ${activeAgent.getModel?.() ?? llm.model} (${llm.provider})`,
                 `workspace: ${workspaceRoot}`,
-                `session: ${agent.sessionKey}`,
+                `session: ${activeAgent.sessionKey}`,
                 ...st.map((x) => `mcp ${x.serverId}: ${x.status}${x.identity !== 'unknown' ? ` (${x.identity})` : ''}`),
                 st.length === 0 ? 'mcp: no servers configured' : '',
               ].filter(Boolean),
             };
           }
           case 'briefing': {
-            const a = agent as unknown as { lastBriefingSources?: string[]; lastBriefingDetails?: Record<string, unknown> };
+            const a = activeAgent as unknown as { lastBriefingSources?: string[]; lastBriefingDetails?: Record<string, unknown> };
             const sources = a.lastBriefingSources ?? [];
             const details = a.lastBriefingDetails ?? {};
             if (!sources.length && !Object.keys(details).length) return { lines: ['No briefing yet — run a turn first.'] };
@@ -447,15 +762,18 @@ async function main(): Promise<void> {
         saveConfig(fresh);
         return { ok: true, provider: llmCfg.provider, model: llmCfg.model, endpoint: llmCfg.endpoint ?? null };
       },
-      // DESK-5c — live model list from the configured endpoint (cached 60s).
+      // DESK-5c/5l — live model list from the configured endpoint (cached 60s).
+      // Empty results are NOT cached: a transient endpoint hiccup used to pin
+      // an empty list for a minute, leaving the picker with nothing to switch
+      // to. Failures fall back to the last good list when there is one.
       'list-models': async () => {
         const fresh = loadConfig();
         const l = fresh.llm ?? llm;
         const now = Date.now();
-        if (modelsCache && now - modelsCache.at < 60_000) return { models: modelsCache.models, current: agent.getModel?.() ?? l.model };
+        if (modelsCache && now - modelsCache.at < 60_000) return { models: modelsCache.models, current: activeAgent.getModel?.() ?? l.model };
         const models = await fetchEndpointModels(l.endpoint, l.apiKey ?? '');
-        modelsCache = { models, at: now };
-        return { models, current: agent.getModel?.() ?? l.model };
+        if (models.length) modelsCache = { models, at: now };
+        return { models: models.length ? models : (modelsCache?.models ?? []), current: activeAgent.getModel?.() ?? l.model };
       },
       // DESK-5c — real terminal sessions (offset-poll streaming).
       'term-open': () => {
@@ -497,8 +815,8 @@ async function main(): Promise<void> {
       },
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
-      'action:clear': () => { agent.clearHistory(); return { ok: true }; },
-      'action:compact': async () => agent.compactHistory(),
+      'action:clear': () => { activeAgent.clearHistory(); return { ok: true }; },
+      'action:compact': async () => activeAgent.compactHistory(),
       'action:set-pref': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
         const SETTABLE = new Set(['executionMode', 'reviewPolicy', 'delegationPolicy', 'autoChain', 'effort', 'personality', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
@@ -512,7 +830,7 @@ async function main(): Promise<void> {
       'action:set-access': (args) => {
         const mode = args.mode;
         if (mode !== 'read' && mode !== 'write' && mode !== 'shell') throw new Error(`Unknown access mode "${String(mode)}".`);
-        agent.setAccessMode(mode);
+        activeAgent.setAccessMode(mode);
         return { ok: true, mode };
       },
       'action:reconnect-mcp': async (args) => {
@@ -520,16 +838,68 @@ async function main(): Promise<void> {
         await mcpClient.reconnectOne(id);
         return { ok: true };
       },
+      // DESK-6m — per-chat context-menu actions (Pin / Mark completed / Rename /
+      // Move to group / Archive / Delete / Fork / Open). All write the shared
+      // CLI stores, so the terminal sees the same titles/pins/groups.
+      'action:session-meta': (args) => {
+        const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
+        if (!sessionKey) throw new Error('session-meta: missing sessionKey');
+        const patch = (args.patch ?? {}) as Partial<SessionMeta>;
+        const meta = setSessionMeta(workspaceRoot, sessionKey, patch);
+        return { ok: true, sessionKey, meta, groups: listSessionGroups(workspaceRoot) };
+      },
+      'action:session-delete': (args) => {
+        const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
+        if (!sessionKey) throw new Error('session-delete: missing sessionKey');
+        const removed = deleteSession(workspaceRoot, sessionKey);
+        removeSessionMeta(workspaceRoot, sessionKey);
+        return { ok: removed, sessionKey };
+      },
+      'action:session-fork': (args) => {
+        const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
+        if (!sessionKey) throw new Error('session-fork: missing sessionKey');
+        const newKey = forkSession(workspaceRoot, sessionKey);
+        if (newKey) {
+          // Record the lineage + carry the title forward with a "(fork)" suffix so
+          // it's recognizable. forkedFrom drives the sidebar fork icon and the
+          // "Forked from conversation" back-link in the renderer.
+          const src = getSessionMeta(workspaceRoot, sessionKey);
+          setSessionMeta(workspaceRoot, newKey, { forkedFrom: sessionKey, ...(src.title ? { title: `${src.title} (fork)` } : {}) });
+        }
+        return { ok: !!newKey, newKey };
+      },
+      'action:session-groups': () => ({ groups: listSessionGroups(workspaceRoot) }),
+      // DESK-6m — "Open PR" / "Open in {editor,finder,terminal}" for the workspace.
+      'action:open-external': (args) => {
+        const what = typeof args.what === 'string' ? args.what : '';
+        const root = workspaceRoot;
+        const sh = (cmd: string) => new Promise<void>((resolve) => exec(cmd, { cwd: root, timeout: 8_000 }, () => resolve()));
+        const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+        const isWin = process.platform === 'win32', isMac = process.platform === 'darwin';
+        if (what === 'pr') { void sh('gh pr view --web'); return { ok: true, what }; }
+        if (what === 'editor') { void sh(`code ${q(root)} || cursor ${q(root)} || ${isMac ? `open ${q(root)}` : isWin ? `start "" ${q(root)}` : `xdg-open ${q(root)}`}`); return { ok: true, what }; }
+        if (what === 'finder') { void sh(isMac ? `open ${q(root)}` : isWin ? `explorer ${q(root)}` : `xdg-open ${q(root)}`); return { ok: true, what }; }
+        if (what === 'terminal') { void sh(isMac ? `open -a Terminal ${q(root)}` : isWin ? `start cmd /K cd /d ${q(root)}` : `x-terminal-emulator --working-directory=${q(root)} || gnome-terminal --working-directory=${q(root)}`); return { ok: true, what }; }
+        return { ok: false, what };
+      },
     },
     onShutdown: () => { void mcpClient.close?.(); process.exit(0); },
   });
 
-  // Route the port's interaction-request emissions through a dedicated
-  // envelope stream (same wire, own seq namespace is unnecessary — reuse send).
-  let seq = 1_000_000; // offset so port events never collide with core seq
-  emitForPort = (e) => send({ seq: ++seq, ts: Date.now(), sessionKey: agent.sessionKey, event: e });
-
   if (port) port.on('message', (e) => { void core.handle(e.data); });
+
+  // DESK-5d/5u — boot announcement. Emitted AFTER the message listener is
+  // attached, so a renderer that waits for it can safely start querying. The
+  // renderer treats a fresh `session-changed` as "reset surfaces".
+  //
+  // DESK-5u — open on a FRESH NEW CHAT (the agent's randomUUID session), not
+  // a restored previous one. Every past transcript is still on disk and listed
+  // in the sidebar, so nothing is lost — the user picks one to resume. (This
+  // reverts the 5t boot-resume: "open on a new chat" is the wanted behavior.)
+  send({
+    seq: 0, ts: Date.now(), sessionKey: activeAgent.sessionKey,
+    event: { kind: 'session-changed', sessionKey: activeAgent.sessionKey, loadedMessages: 0, model: activeAgent.getModel?.() ?? llm.model },
+  });
 }
 
 main().catch((err) => {
