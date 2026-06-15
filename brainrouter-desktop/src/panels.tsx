@@ -54,7 +54,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
   { id: 'files', title: 'Files', icon: 'folder' },
   { id: 'file', title: 'File', icon: 'file' },
-  { id: 'diff', title: 'Diff', icon: 'diff' },
+  { id: 'diff', title: 'Changes', icon: 'diff' },
   { id: 'terminal', title: 'Terminal', icon: 'terminal' },
   { id: 'tools', title: 'Tool calls', icon: 'bolt' },
   { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
@@ -320,14 +320,19 @@ export function DiffView({ diff }: { diff: string }): React.ReactElement {
   );
 }
 
-export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }: {
+export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, gitBusy }: {
   gitInfo: { repo: string; branch: string | null; insertions: number; deletions: number } | null;
   changed: Array<{ status: string; path: string }>;
   diff: { path: string; diff: string } | null;
   onPick: (path: string) => void;
   onBack: () => void;
   onOpenFile: (path: string) => void;
+  /** DESK-5j — the review surface acts on git: commit all / push / pull. */
+  onGit?: (kind: 'commit' | 'push' | 'pull', msg?: string) => void;
+  gitBusy?: boolean;
 }): React.ReactElement {
+  const [msg, setMsg] = useState('');
+  const commit = () => { if (msg.trim() && changed.length) { onGit?.('commit', msg.trim()); setMsg(''); } };
   return (
     <>
       {gitInfo?.branch ? (
@@ -336,6 +341,17 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile }
           {gitInfo.insertions + gitInfo.deletions > 0 ? (
             <span><span className="add-n">+{gitInfo.insertions.toLocaleString()}</span> <span className="del-n">-{gitInfo.deletions.toLocaleString()}</span></span>
           ) : <span className="dim">clean</span>}
+        </div>
+      ) : null}
+      {onGit && gitInfo?.branch && !diff ? (
+        <div className="review-actions">
+          <input className="filter commit-msg" placeholder={changed.length ? 'Commit message' : 'Working tree clean'}
+            value={msg} disabled={!changed.length || gitBusy}
+            onChange={(e) => setMsg(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') commit(); }} />
+          <button className="btn" disabled={!changed.length || !msg.trim() || gitBusy} onClick={commit}>Commit</button>
+          <button className="btn" disabled={gitBusy} onClick={() => onGit('push')}>Push</button>
+          <button className="btn" disabled={gitBusy} onClick={() => onGit('pull')}>Pull</button>
         </div>
       ) : null}
       {diff ? (
@@ -378,9 +394,10 @@ export function TerminalPanel(): React.ReactElement {
       fontSize: 12,
       cursorBlink: true,
       theme: {
-        background: styles.getPropertyValue('--term-bg').trim() || '#1a1a18',
-        foreground: styles.getPropertyValue('--text').trim() || '#ecebe8',
+        background: styles.getPropertyValue('--term-bg').trim() || '#121212',
+        foreground: styles.getPropertyValue('--text').trim() || '#ececec',
         cursor: styles.getPropertyValue('--brand').trim() || '#d97757',
+        selectionBackground: 'rgba(255,255,255,0.18)',
       },
     });
     const fit = new FitAddon();
@@ -439,16 +456,20 @@ export function ToolsPanel({ log }: { log: Array<{ id: number; tool: string; ok:
 
 export interface FinishedTask { id: string; label: string; status: string }
 
-export function TasksPanel({ fleet, finished, onClear }: {
+export function TasksPanel({ fleet, finished, onClear, onOpen }: {
   fleet: Array<{ kind: string; id: string; label: string }>;
   finished: FinishedTask[];
   onClear: () => void;
+  /** DESK-5w — open a running task's conversation (read-only). */
+  onOpen?: (id: string) => void;
 }): React.ReactElement {
   return (
     <div className="scroll">
-      <div className="tasks-section"><span>Running</span></div>
-      {fleet.length === 0 ? <div className="empty">Nothing running.</div> : fleet.map((f) => (
-        <div key={f.id} className="task-row"><span className="task-kind">{f.kind}</span><span className="file-name">{f.label}</span></div>
+      <div className="tasks-section"><span>Running in this chat</span></div>
+      {fleet.length === 0 ? <div className="empty">Nothing running in this chat.</div> : fleet.map((f) => (
+        <button key={f.id} className="task-row clickable" onClick={() => onOpen?.(f.id)} title="Open this task's conversation">
+          <span className="task-kind">{f.kind}</span><span className="file-name">{f.label}</span><span className="task-open">→</span>
+        </button>
       ))}
       <div className="tasks-section"><span>Finished</span>{finished.length ? <button className="tasks-clear" onClick={onClear}>Clear</button> : null}</div>
       {finished.length === 0 ? <div className="empty">Nothing finished yet.</div> : finished.map((f) => (
@@ -488,17 +509,24 @@ export function SearchPanel({ hits, onSearch }: {
 }
 
 export function PlanPanel({ plan }: {
-  plan: { items: Array<{ step: string; status: string }>; explanation?: string } | null;
+  plan: { items: Array<{ step: string; status: string; acceptance?: string }>; explanation?: string } | null;
 }): React.ReactElement {
   if (!plan || plan.items.length === 0) {
-    return <div className="empty center-empty">☰<br />No plan yet<br /><span className="dim">The agent writes its plan here as it works.</span></div>;
+    return (
+      <div className="empty center-empty panel-empty">
+        <Icon name="plan" size={18} />
+        <div>No plan yet</div>
+        <span className="dim">The agent writes its plan here as it works.</span>
+      </div>
+    );
   }
   return (
     <div className="scroll">
       {plan.explanation ? <div className="plan-why">{plan.explanation}</div> : null}
       {plan.items.map((it, i) => (
         <div key={i} className={`plan-item ${it.status}`}>
-          <span className="plan-mark">{it.status === 'completed' ? '✓' : it.status === 'in_progress' ? '◐' : '○'}</span>{it.step}
+          <span className="plan-mark">{it.status === 'completed' ? '✓' : it.status === 'in_progress' ? '◐' : '○'}</span>
+          <span className="plan-step">{it.step}{it.acceptance ? <span className="plan-acceptance">✓ {it.acceptance}</span> : null}</span>
         </div>
       ))}
     </div>
