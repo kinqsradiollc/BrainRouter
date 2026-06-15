@@ -151,13 +151,26 @@ export function deleteSession(workspaceRoot: string, sessionKey: string): boolea
  * user can branch a conversation. Returns the new key, or null if the source
  * has no transcript yet.
  */
-export function forkSession(workspaceRoot: string, sessionKey: string): string | null {
+export function forkSession(workspaceRoot: string, sessionKey: string, upToTs?: number): string | null {
   const src = resolveExistingTranscriptPath(workspaceRoot, sessionKey);
   if (!src) return null;
   const prefix = sessionKey.includes(':') ? sessionKey.slice(0, sessionKey.indexOf(':')) : sessionKey;
   const forkKey = `${prefix}:fork-${randomUUID().slice(0, 8)}`;
   const destDir = getSessionStateDir(workspaceRoot, forkKey); // creates the dir
-  fs.copyFileSync(src, path.join(destDir, TRANSCRIPT_FILE));
+  const destPath = path.join(destDir, TRANSCRIPT_FILE);
+  if (upToTs == null) {
+    fs.copyFileSync(src, destPath); // whole-conversation fork
+  } else {
+    // DESK-6v — branch from a specific message: keep only entries at or before
+    // its timestamp, so the fork is the conversation UP TO that point. Lines
+    // without a parseable timestamp are kept rather than silently dropped.
+    const kept = fs.readFileSync(src, 'utf8').split('\n').filter((line) => {
+      if (!line.trim()) return false;
+      try { const ts = Date.parse((JSON.parse(line) as TranscriptEntry).timestamp); return Number.isNaN(ts) || ts <= upToTs; }
+      catch { return true; }
+    });
+    fs.writeFileSync(destPath, kept.length ? `${kept.join('\n')}\n` : '', 'utf8');
+  }
   return forkKey;
 }
 

@@ -1172,14 +1172,25 @@ export function App(): React.ReactElement {
       // DESK-5w — a background task's conversation, opened read-only over the chat.
       case 'q-task-transcript': {
         const data = result as { id: string; kind: string; role?: string; goal?: string; status?: string; rows?: Array<{ kind: string; text?: string; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
-        const mapped: ChatRow[] = (data?.rows ?? []).map((r) => {
+        const mapped: ChatRow[] = (data?.rows ?? []).map((r, i) => {
           const ts = r.ts ?? Date.now();
-          if (r.kind === 'user') return { id: rid(), kind: 'user' as const, text: r.text ?? '', ts };
-          if (r.kind === 'assistant') return { id: rid(), kind: 'assistant' as const, text: r.text ?? '', ts };
-          if (r.kind === 'tool-group') return { id: rid(), kind: 'tool-group' as const, ts, items: (r.items ?? []).map((it) => ({ id: rid(), tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })) };
-          return { id: rid(), kind: 'status' as const, text: r.text ?? '', ts };
+          // DESK-6v — STABLE, index-based keys: the 2.5s live poll re-sends the
+          // same rows, and random ids made React remount EVERY row each time
+          // (the flashing). Stable keys let it reconcile in place instead.
+          if (r.kind === 'user') return { id: i, kind: 'user' as const, text: r.text ?? '', ts };
+          if (r.kind === 'assistant') return { id: i, kind: 'assistant' as const, text: r.text ?? '', ts };
+          if (r.kind === 'tool-group') return { id: i, kind: 'tool-group' as const, ts, items: (r.items ?? []).map((it, j) => ({ id: j, tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })) };
+          return { id: i, kind: 'status' as const, text: r.text ?? '', ts };
         });
-        setTaskView((prev) => ({ id: data.id, kind: data.kind, role: data.role, goal: data.goal, status: data.status, parentSessionKey: prev?.parentSessionKey, rows: mapped }));
+        // DESK-6v — and skip the state update entirely when nothing changed, so a
+        // stable transcript doesn't re-render (and flash) every poll.
+        const sig = (rows: ChatRow[], status?: string): string => `${status ?? ''}|` + rows.map((r) => r.kind === 'tool-group'
+          ? `tg:${(r.items ?? []).map((it) => it.tool + it.summary + (it.ok ? '1' : '0')).join(',')}`
+          : `${r.kind}:${(r as { text?: string }).text ?? ''}`).join('§');
+        setTaskView((prev) => {
+          if (prev && sig(prev.rows, prev.status) === sig(mapped, data.status)) return prev;
+          return { id: data.id, kind: data.kind, role: data.role, goal: data.goal, status: data.status, parentSessionKey: prev?.parentSessionKey, rows: mapped };
+        });
         return;
       }
       // DESK-6w — workflow run breakdown for the /workflows-style card.
@@ -1407,7 +1418,9 @@ export function App(): React.ReactElement {
   const moveToGroup = (key: string, group: string | null): void => setMeta(key, { group });
   const startRename = (s: SessionRow): void => { setRenamingKey(s.sessionKey); setRenameDraft(s.firstUserMessage || ''); closeSessionMenu(); };
   const commitRename = (): void => { if (renamingKey) q('q-session-meta', 'action:session-meta', { sessionKey: renamingKey, patch: { title: renameDraft.trim() } }); setRenamingKey(null); };
-  const forkSessionAction = (key: string): void => { q('q-session-fork', 'action:session-fork', { sessionKey: key }); closeSessionMenu(); };
+  // DESK-6v — upToTs (a message's epoch-ms ts) branches the fork at that message;
+  // omitted (the ⋮ menu) forks the whole conversation.
+  const forkSessionAction = (key: string, upToTs?: number): void => { q('q-session-fork', 'action:session-fork', { sessionKey: key, ...(upToTs != null ? { upToTs } : {}) }); closeSessionMenu(); };
   const deleteSessionAction = (key: string): void => {
     closeSessionMenu();
     if (!window.confirm('Delete this chat permanently? This removes its transcript from disk.')) return;
@@ -1471,7 +1484,6 @@ export function App(): React.ReactElement {
           <div className="user">{r.text}</div>
           <span className="msg-actions">
             <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
-            <button className="icon-btn" title="Fork into a new chat from here" onClick={() => forkSessionAction(sessionKeyRef.current ?? '')}><Icon name="fork" size={11} /></button>
             <span className="msg-time">{fmtRel(r.ts)}</span>
           </span>
         </div>
@@ -1481,7 +1493,7 @@ export function App(): React.ReactElement {
           <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{r.text}</Markdown>
           <span className="msg-actions">
             <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
-            <button className="icon-btn" title="Fork into a new chat from here" onClick={() => forkSessionAction(sessionKeyRef.current ?? '')}><Icon name="fork" size={11} /></button>
+            <button className="icon-btn" title="Fork into a new chat from this message" onClick={() => forkSessionAction(sessionKeyRef.current ?? '', r.ts)}><Icon name="fork" size={11} /></button>
             <span className="msg-time">{fmtRel(r.ts)}</span>
           </span>
         </div>
@@ -1736,7 +1748,20 @@ export function App(): React.ReactElement {
           <main className={`center${homeMode ? ' home-mode' : ''}${railOpen ? '' : ' no-rail'}`}>
             <header className="chat-head">
               {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}><Icon name="layout" size={15} /></button> : null}
-              <span className="crumb"><b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b><span className="crumb-sep">/</span>{sessionTitle}</span>
+              <span className="crumb">
+                <b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b>
+                <span className="crumb-sep">/</span>
+                {taskView ? (
+                  /* DESK-6v — viewing a sub-agent: ONE breadcrumb (no second header
+                     bar). The parent session is clickable = back. */
+                  <>
+                    <button className="crumb-link" onClick={() => setTaskView(null)}>{sessionTitle}</button>
+                    <span className="crumb-sep">/</span>
+                    <span className="crumb-cur">{taskView.role || taskView.kind}</span>
+                    {taskView.status ? <span className={`task-status ${taskView.status}`}>{taskView.status}</span> : null}
+                  </>
+                ) : sessionTitle}
+              </span>
             </header>
             <div className="chat" ref={chatRef} onScroll={() => {
               const el = chatRef.current;
@@ -1749,19 +1774,12 @@ export function App(): React.ReactElement {
                 /* DESK-6w — the /workflows-style card for a workflow run. */
                 <WorkflowCard wf={workflowView} onBack={() => setWorkflowView(null)} />
               ) : taskView ? (
-                /* DESK-5w (#3) — a background task's conversation, read-only, in
-                   place of the chat; Back returns to the main session. */
+                /* DESK-6v — a background task's conversation, read-only, in place
+                   of the chat. The header breadcrumb (Repo / Session / Role +
+                   status) now carries the title and back-link, so there's no
+                   second header bar here — that double header was the confusing
+                   part. The prompt is already the first user bubble. */
                 <div className="task-convo">
-                  <div className="task-convo-head">
-                    <button className="task-back" onClick={() => setTaskView(null)}>← Back</button>
-                    {/* DESK-6t — friendlier header: role prominent, id de-emphasized. */}
-                    <span className="task-convo-title">{taskView.role || taskView.kind}</span>
-                    <span className="task-id-mini" title={taskView.id}>#{taskView.id.replace(/^agent-/, '').slice(-8)}</span>
-                    <span className={`task-status ${taskView.status ?? ''}`}>{taskView.status ?? ''}</span>
-                    <span className="task-convo-kind">{taskView.kind}</span>
-                  </div>
-                  {/* DESK-6t — the conversation already opens with the prompt as the
-                      first user bubble, so the separate goal banner was redundant. */}
                   {taskView.rows.map((r) => renderRow(r, false))}
                 </div>
               ) : (
@@ -1791,7 +1809,7 @@ export function App(): React.ReactElement {
               ) : null}
               {!taskView && !workflowView && running ? (
                 <div className="row workline">
-                  <span className="spark">✺</span>
+                  <span className="spinner sm" />
                   <WorkElapsed startedAt={turnStart} />
                   <span>·</span>
                   <span>{liveText ? 'writing…' : reasoningTail ? 'thinking…' : statusLine || 'working…'}</span>

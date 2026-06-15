@@ -858,7 +858,9 @@ async function main(): Promise<void> {
       'action:session-fork': (args) => {
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-fork: missing sessionKey');
-        const newKey = forkSession(workspaceRoot, sessionKey);
+        // DESK-6v — upToTs (epoch ms) branches from a specific message; absent = whole-conversation fork.
+        const upToTs = typeof args.upToTs === 'number' ? args.upToTs : undefined;
+        const newKey = forkSession(workspaceRoot, sessionKey, upToTs);
         if (newKey) {
           // Record the lineage + carry the title forward with a "(fork)" suffix so
           // it's recognizable. forkedFrom drives the sidebar fork icon and the
