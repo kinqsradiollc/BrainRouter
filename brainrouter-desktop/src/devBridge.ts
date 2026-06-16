@@ -204,7 +204,11 @@ export function installDevBridge(): void {
       ],
       truncated: false,
     }),
-    'git-info': () => ({ repo: 'BrainRouter', branch: 'release/0.4.15', files: 4, insertions: 7670, deletions: 112 }),
+    'git-info': () => ({
+      repo: 'BrainRouter', branch: 'release/0.4.15', files: 4, insertions: 7670, deletions: 112,
+      // T4 — demo a SUBDIR workspace so the env panel's "Git repo" row shows.
+      workspaceRoot: wsCurrent, gitRoot: '/Users/dev/BrainRouter', repoRelativePath: 'brainrouter-desktop', isSubdir: true,
+    }),
     'git-log': () => ({ subjects: ['feat(desktop): DESK-4l — interactive views rail, tabbed bottom terminal', 'feat(desktop): DESK-4k — modern skin', 'feat(desktop): DESK-5c — file tree, real terminal'] }),
     'context-usage': () => ({ used: devCtxUsed, window: 256_000, compactAt: 80_000, limit: 80_000, pct: Math.min(1, devCtxUsed / 80_000) }),
     'git-branches': () => ({ current: 'release/0.4.15', branches: ['release/0.4.15', 'main', 'feat/desk-4j-reference-patterns', 'release/0.4.14'] }),
