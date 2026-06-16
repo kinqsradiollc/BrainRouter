@@ -407,7 +407,13 @@ export function installDevBridge(): void {
             { step: 'Re-run the 6-split sweep', status: 'pending', acceptance: 'all 6 splits green' },
           ] }, 1900, ts);
           emit({ kind: 'assistant-turn-start' }, 2100, ts);
-          const answer = `Here's what I found in the workspace:\n\n- The recall blend lives in \`src/memory/recall.ts\` and the reranker score **replaces** the retriever order.\n- Fix: blend with the recency/RRF score instead — *score → sort → take top-N, never hard-drop*.\n\n\`\`\`ts\nconst blended = 0.6 * rerank + 0.4 * rrf;\n\`\`\`\n\n| split | before | after |\n|---|---|---|\n| MemBench | 0.41 | **0.58** |\n| LoCoMo | 0.37 | **0.52** |`;
+          // T10 — when the prompt asks the model to "think"/"reason", prepend a
+          // leading <think> block (as DeepSeek-R1/QwQ do) so the renderer's
+          // reasoning extraction + collapsible block is exercisable in preview.
+          const think = /\b(think|thinking|reason|reasoning)\b/i.test(command.prompt)
+            ? `<think>\nThe reranker currently REPLACES the retriever order, which hard-drops good candidates. Blending the scores and then sorting keeps them. Past sweeps liked 0.6/0.4. So: score → sort → take top-N, never hard-drop.\n</think>\n\n`
+            : '';
+          const answer = `${think}Here's what I found in the workspace:\n\n- The recall blend lives in \`src/memory/recall.ts\` and the reranker score **replaces** the retriever order.\n- Fix: blend with the recency/RRF score instead — *score → sort → take top-N, never hard-drop*.\n\n\`\`\`ts\nconst blended = 0.6 * rerank + 0.4 * rrf;\n\`\`\`\n\n| split | before | after |\n|---|---|---|\n| MemBench | 0.41 | **0.58** |\n| LoCoMo | 0.37 | **0.52** |`;
           answer.split(/(?<=\s)/).forEach((chunk, i) => emit({ kind: 'assistant-delta', text: chunk }, 2200 + i * 18, ts));
           const end = 2200 + answer.split(/(?<=\s)/).length * 18 + 200;
           emit({ kind: 'assistant-turn-end' }, end, ts);
