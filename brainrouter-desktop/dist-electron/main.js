@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-cli/dist/state/workspaceTrust.js';
 import { emptyPool, planActivate, applyActivate, setRunning, removeEntry, } from './hostPoolPolicy.js';
+import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const wins = new Map(); // webContents.id → WinPool
 const recentsPath = () => path.join(app.getPath('userData'), 'recent-workspaces.json');
@@ -149,6 +150,18 @@ function openWorkspaceWindow(workspaceRoot) {
     });
     const wp = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
     wins.set(win.webContents.id, wp);
+    // SEC: deny all renderer-initiated window.open (target=_blank, window.open, etc.).
+    // The renderer has no legitimate need to spawn a second BrowserWindow.
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // SEC: block top-level navigation away from the app's own origin (phishing,
+    // data:/javascript: payloads). Allowed: the packaged file:// load and, in dev,
+    // the Vite dev origin. Policy is a pure, unit-tested helper.
+    const devUrl = process.env.VITE_DEV_SERVER_URL;
+    const allowedOrigin = allowedOriginFor(devUrl);
+    win.webContents.on('will-navigate', (event, url) => {
+        if (!isAllowedNavigation(url, allowedOrigin))
+            event.preventDefault();
+    });
     win.on('closed', () => {
         for (const [id, w] of wins) {
             if (w.win !== win)
@@ -164,7 +177,6 @@ function openWorkspaceWindow(workspaceRoot) {
         }
     });
     activateWorkspace(wp, workspaceRoot); // spawns the first host
-    const devUrl = process.env.VITE_DEV_SERVER_URL;
     if (devUrl)
         void win.loadURL(devUrl);
     else
