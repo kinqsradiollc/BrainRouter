@@ -275,6 +275,12 @@ export interface TranscriptSummary {
  * `transcripts/<encodedKey>.jsonl` files so the picker shows every session
  * even after the upgrade. Per-session files always win on dedupe.
  */
+/** Ephemeral/internal sessions (e.g. the isolated AI reviewer) must never show
+ *  up in the session picker. They use a reserved `review:`/`internal:` segment. */
+export function isInternalSessionKey(sessionKey: string): boolean {
+  return /(^|:)(review|internal):/i.test(sessionKey);
+}
+
 export function listTranscripts(workspaceRoot: string): TranscriptSummary[] {
   const stateDir = getCliStateDir(workspaceRoot);
   const seen = new Map<string, TranscriptSummary>();
@@ -288,6 +294,7 @@ export function listTranscripts(workspaceRoot: string): TranscriptSummary[] {
       const transcriptPath = path.join(sessionDir, TRANSCRIPT_FILE);
       if (!fs.existsSync(transcriptPath)) continue;
       const sessionKey = decodeSessionKey(entry.name);
+      if (isInternalSessionKey(sessionKey)) continue; // hide ephemeral reviewer/internal sessions
       const summary = summarizeTranscript(transcriptPath, sessionKey, sessionDir);
       seen.set(sessionKey, summary);
     }
@@ -300,7 +307,7 @@ export function listTranscripts(workspaceRoot: string): TranscriptSummary[] {
       if (!fileName.endsWith('.jsonl')) continue;
       const encoded = fileName.slice(0, -'.jsonl'.length);
       const sessionKey = decodeSessionKey(encoded);
-      if (seen.has(sessionKey)) continue;
+      if (seen.has(sessionKey) || isInternalSessionKey(sessionKey)) continue;
       const filePath = path.join(legacyDir, fileName);
       seen.set(sessionKey, summarizeTranscript(filePath, sessionKey));
     }
