@@ -20,6 +20,8 @@ import { buildWorkflowRunKickoff, parseTemplateArgs, renderPhaseTimelineLines } 
 import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
+import { hashDiff, reviewGate } from '../../orchestration/reviewModel.js';
+import { getLatestReview } from '../../state/reviewStore.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
@@ -289,6 +291,23 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       } catch (err: any) {
         spinner.fail(chalk.red(`Failed to read git status: ${err.message}`));
         return true;
+      }
+      // Review gate (shared with the desktop): block the commit when the local
+      // AI review is missing/stale or has unresolved critical/high findings,
+      // unless `--force`. The review store is shared, so a review run in the
+      // desktop gates the CLI commit and vice versa.
+      {
+        const { force } = parseForceFlag(args);
+        const gate = reviewGate(getLatestReview(agent.workspaceRoot), hashDiff(diffOut));
+        if (gate.blocked && !force) {
+          console.log(chalk.yellow(`\n⚠ Review gate — ${gate.reason}`));
+          for (const f of gate.blockingFindings.slice(0, 8)) {
+            console.log(chalk.gray(`  • [${f.severity}] ${f.file}${f.line ? `:${f.line}` : ''} — ${f.summary}`));
+          }
+          console.log(chalk.gray('  Run a local review and resolve/dismiss the findings (desktop Review panel), then retry — or `/commit --force` to bypass.\n'));
+          return true;
+        }
+        if (force && gate.blocked) console.log(chalk.gray('  (review gate bypassed with --force)\n'));
       }
       console.log(chalk.bold('\nGit changes detected:'));
       console.log(chalk.gray(statusOut));
