@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run build:electron && vite build",
     "build:electron": "rm -rf dist-electron && tsc -p tsconfig.electron.json",
-    "test": "npm run build:electron && node --test \"dist-electron/**/*.test.js\"",
+    "test": "npm run build:electron && node --test \"dist-electron/**/*.test.js\" && tsx --test \"src/**/*.test.ts\"",
     "dev": "vite",
     "start": "electron ."
   },
@@ -30,6 +30,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^33.0.0",
+    "tsx": "^4.7.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.6"
   }
