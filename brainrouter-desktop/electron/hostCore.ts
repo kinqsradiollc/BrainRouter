@@ -123,8 +123,14 @@ export function createHostCore(input: {
   /** OOM-safe — cheap O(1) existence check used by lazy resume to avoid a full
    *  transcript read just to compute "are there messages to render". */
   transcriptExists?: (sessionKey: string) => boolean;
-  /** DESK-3 — persist a model choice into the shared config.json. */
+  /** DESK-3 — persist a model choice into the shared config.json (GLOBAL default). */
   persistModel?: (model: string) => void;
+  /** Item 10 — the model stored for a SPECIFIC session (per-session override),
+   *  applied when that session's agent is (re)spawned so it keeps its own model. */
+  getSessionModel?: (sessionKey: string) => string | undefined;
+  /** Item 10 — persist a model choice for THIS session only (sessionRuntimeStore),
+   *  not the global config. Used when set-model arrives with persist:false. */
+  setSessionModel?: (sessionKey: string, model: string) => void;
   /** DESK-3 — share the broker with the agent's InteractionPort adapter. */
   broker?: InteractionBroker;
   /** Called on `shutdown` after pending interactions are dismissed. */
@@ -239,6 +245,11 @@ export function createHostCore(input: {
     }
     rt.agent.sessionKey = targetKey;
     rt.agent.resetSessionCounters?.();
+    // Item 10 — restore this session's per-session model override (if any) so a
+    // resumed/backgrounded chat keeps the model it was set to, independent of the
+    // global default and of whatever the previous agent in this slot was using.
+    const sessModel = input.getSessionModel?.(targetKey);
+    if (sessModel) rt.agent.setModel?.(sessModel);
     const loaded = init(rt);
     pool.set(targetKey, rt);
     setActive(targetKey);
@@ -320,14 +331,19 @@ export function createHostCore(input: {
       case 'set-model': {
         const a = pool.get(activeKey)?.agent;
         a?.setModel?.(cmd.model);
+        // Item 10 — persist:true → GLOBAL default (config.json, shared with the
+        // CLI). persist:false → THIS SESSION ONLY (sessionRuntimeStore), so it
+        // survives a respawn for this chat without changing every other chat.
         if (cmd.persist) {
           try { input.persistModel?.(cmd.model); } catch (err) {
             emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
             emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
             return;
           }
+        } else {
+          try { input.setSessionModel?.(activeKey, cmd.model); } catch { /* in-memory set already applied */ }
         }
-        emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ''}.` });
+        emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` });
         emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
         return;
       }

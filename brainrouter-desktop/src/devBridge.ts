@@ -51,6 +51,10 @@ export function installDevBridge(): void {
   // DESK-5l — stateful model, mirroring the real host (agent.getModel):
   // session-info must reflect a switch, or refreshes revert the UI.
   let devModel = 'claude-opus-4-8';
+  // Item 10 — per-session model overrides (mirrors sessionRuntimeStore). The
+  // resolved model is the session override if present, else the global default.
+  const devSessionModels: Record<string, string> = {};
+  const resolvedModel = (sessionKey: string): string => devSessionModels[sessionKey] ?? devModel;
   let bootAnnounced = false;
   // DESK-5r — mock context fill: grows during a turn, drops on compaction,
   // so the composer ring's live + reset behavior is exercisable in preview.
@@ -176,7 +180,7 @@ export function installDevBridge(): void {
         ],
       };
     },
-    'session-info': () => ({ sessionKey: 'dev:demo', model: devModel, workspaceRoot: wsCurrent, username: 'anhdang' }),
+    'session-info': () => ({ sessionKey: 'dev:demo', model: resolvedModel(activeSession), workspaceRoot: wsCurrent, username: 'anhdang' }),
     'home-stats': () => {
       const perDay: Record<string, number> = {};
       const today = new Date();
@@ -212,7 +216,7 @@ export function installDevBridge(): void {
     'git-log': () => ({ subjects: ['feat(desktop): DESK-4l — interactive views rail, tabbed bottom terminal', 'feat(desktop): DESK-4k — modern skin', 'feat(desktop): DESK-5c — file tree, real terminal'] }),
     'context-usage': () => ({ used: devCtxUsed, window: 256_000, compactAt: 80_000, limit: 80_000, pct: Math.min(1, devCtxUsed / 80_000) }),
     'git-branches': () => ({ current: 'release/0.4.15', branches: ['release/0.4.15', 'main', 'feat/desk-4j-reference-patterns', 'release/0.4.14'] }),
-    'list-models': () => ({ current: devModel, models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
+    'list-models': () => ({ current: resolvedModel(activeSession), models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
     'term-open': () => { termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },
     'term-write': (a) => {
       const d = String(a.data ?? '');
@@ -439,14 +443,20 @@ export function installDevBridge(): void {
           // the host estimating the loaded history). Switching must change it.
           const perSession = 14_000 + (([...key].reduce((s, c) => s + c.charCodeAt(0), 0)) % 5) * 13_000;
           devCtxUsed = perSession;
-          emit({ kind: 'session-changed', sessionKey: key, loadedMessages: 12, model: devModel }, 60, key);
+          // Item 10 — a resumed chat reports ITS resolved model (per-session override or global).
+          emit({ kind: 'session-changed', sessionKey: key, loadedMessages: 12, model: resolvedModel(key) }, 60, key);
           return;
         }
-        case 'set-model':
-          devModel = (command as { model: string }).model;
-          emit({ kind: 'status', text: `Model set to ${devModel} (saved to config.json — shared with the CLI).` }, 60, activeSession);
-          emit({ kind: 'session-changed', sessionKey: activeSession, loadedMessages: -1, model: devModel }, 80, activeSession);
+        case 'set-model': {
+          const m = (command as { model: string }).model;
+          const persist = (command as { persist?: boolean }).persist;
+          // Item 10 — persist:true → global default; persist:false → this chat only.
+          if (persist) { devModel = m; delete devSessionModels[activeSession]; }
+          else { devSessionModels[activeSession] = m; }
+          emit({ kind: 'status', text: `Model set to ${m}${persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` }, 60, activeSession);
+          emit({ kind: 'session-changed', sessionKey: activeSession, loadedMessages: -1, model: resolvedModel(activeSession) }, 80, activeSession);
           return;
+        }
         case 'interrupt':
           // DESK-5v — interrupt only the chat on screen; others keep running.
           emit({ kind: 'status', text: 'Interrupt requested.' }, 30, activeSession);

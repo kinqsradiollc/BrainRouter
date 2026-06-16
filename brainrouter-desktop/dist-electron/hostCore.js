@@ -160,6 +160,12 @@ export function createHostCore(input) {
         }
         rt.agent.sessionKey = targetKey;
         rt.agent.resetSessionCounters?.();
+        // Item 10 — restore this session's per-session model override (if any) so a
+        // resumed/backgrounded chat keeps the model it was set to, independent of the
+        // global default and of whatever the previous agent in this slot was using.
+        const sessModel = input.getSessionModel?.(targetKey);
+        if (sessModel)
+            rt.agent.setModel?.(sessModel);
         const loaded = init(rt);
         pool.set(targetKey, rt);
         setActive(targetKey);
@@ -241,6 +247,9 @@ export function createHostCore(input) {
             case 'set-model': {
                 const a = pool.get(activeKey)?.agent;
                 a?.setModel?.(cmd.model);
+                // Item 10 — persist:true → GLOBAL default (config.json, shared with the
+                // CLI). persist:false → THIS SESSION ONLY (sessionRuntimeStore), so it
+                // survives a respawn for this chat without changing every other chat.
                 if (cmd.persist) {
                     try {
                         input.persistModel?.(cmd.model);
@@ -251,7 +260,13 @@ export function createHostCore(input) {
                         return;
                     }
                 }
-                emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ''}.` });
+                else {
+                    try {
+                        input.setSessionModel?.(activeKey, cmd.model);
+                    }
+                    catch { /* in-memory set already applied */ }
+                }
+                emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` });
                 emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
                 return;
             }
