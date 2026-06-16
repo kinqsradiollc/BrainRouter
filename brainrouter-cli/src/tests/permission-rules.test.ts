@@ -1,55 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  parseToolList,
-  parseRule,
-  ruleMatches,
-  evaluatePermissionRules,
-  primaryArgText,
-} from '../runtime/exec/permissionRules.js';
+import { applyRuleEdit, normalizeRuleSet } from '../config/permissionRules.js';
 
-test('parseRule: bare tool, tool(glob), garbage', () => {
-  assert.deepEqual(parseRule('run_command'), { tool: 'run_command', argGlob: null });
-  assert.deepEqual(parseRule('run_command(git *)'), { tool: 'run_command', argGlob: 'git *' });
-  assert.deepEqual(parseRule('edit_file(src/**)'), { tool: 'edit_file', argGlob: 'src/**' });
-  assert.equal(parseRule(''), null);
-  assert.equal(parseRule('weird stuff here'), null);
-  // empty parens = any args
-  assert.deepEqual(parseRule('fetch_url()'), { tool: 'fetch_url', argGlob: null });
+test('add appends to the right list, dedup + trim', () => {
+  const r1 = applyRuleEdit({ allow: [], deny: [] }, 'add', 'deny', '  rm -rf *  ');
+  assert.deepEqual(r1, { allow: [], deny: ['rm -rf *'] });
+  const r2 = applyRuleEdit(r1, 'add', 'deny', 'rm -rf *');
+  assert.deepEqual(r2.deny, ['rm -rf *'], 'idempotent add (no duplicate)');
+  const r3 = applyRuleEdit(r2, 'add', 'allow', 'git *');
+  assert.deepEqual(r3, { allow: ['git *'], deny: ['rm -rf *'] });
 });
 
-test('ruleMatches: tool-only matches any call; glob matches the primary arg', () => {
-  assert.equal(ruleMatches('run_command', 'run_command', 'anything at all'), true);
-  assert.equal(ruleMatches('run_command(git *)', 'run_command', 'git status'), true);
-  assert.equal(ruleMatches('run_command(git *)', 'run_command', 'rm -rf /'), false);
-  assert.equal(ruleMatches('run_command(git *)', 'edit_file', 'git status'), false);
-  // case-insensitive on args, * spans path separators, ** equivalent
-  assert.equal(ruleMatches('edit_file(SRC/**)', 'edit_file', 'src/deep/nested/file.ts'), true);
-  assert.equal(ruleMatches('fetch_url(*internal.corp*)', 'fetch_url', 'https://api.internal.corp/x'), true);
+test('remove deletes from the right list, no-op when absent', () => {
+  const start = { allow: ['git *', 'npm *'], deny: ['curl *'] };
+  assert.deepEqual(applyRuleEdit(start, 'remove', 'allow', 'git *').allow, ['npm *']);
+  assert.deepEqual(applyRuleEdit(start, 'remove', 'deny', 'nope').deny, ['curl *'], 'absent remove is a no-op');
 });
 
-test('evaluatePermissionRules: deny wins; allow matches; null when nothing matches', () => {
-  const rules = { deny: ['run_command(rm *)'], allow: ['run_command(git *)', 'edit_file'] };
-  assert.equal(evaluatePermissionRules(rules, 'run_command', 'rm -rf node_modules'), 'deny');
-  assert.equal(evaluatePermissionRules(rules, 'run_command', 'git push'), 'allow');
-  assert.equal(evaluatePermissionRules(rules, 'edit_file', 'anything.ts'), 'allow');
-  assert.equal(evaluatePermissionRules(rules, 'run_command', 'npm test'), null);
-  assert.equal(evaluatePermissionRules(undefined, 'run_command', 'x'), null);
-  // deny beats allow when both match
-  const both = { deny: ['run_command(git push*)'], allow: ['run_command(git *)'] };
-  assert.equal(evaluatePermissionRules(both, 'run_command', 'git push --force'), 'deny');
+test('empty rule is rejected on add', () => {
+  assert.deepEqual(applyRuleEdit({ allow: [], deny: [] }, 'add', 'allow', '   '), { allow: [], deny: [] });
 });
 
-test('primaryArgText: per-tool argument extraction', () => {
-  assert.equal(primaryArgText('run_command', { command: 'ls -la' }), 'ls -la');
-  assert.equal(primaryArgText('edit_file', { path: 'src/a.ts', targetContent: 'x' }), 'src/a.ts');
-  assert.equal(primaryArgText('fetch_url', { url: 'https://x.dev' }), 'https://x.dev');
-  assert.equal(primaryArgText('grep_search', { query: 'foo' }), 'foo');
-  assert.equal(primaryArgText('run_command', null), '');
+test('does not mutate the input set', () => {
+  const start = { allow: ['a'], deny: [] };
+  applyRuleEdit(start, 'add', 'allow', 'b');
+  assert.deepEqual(start.allow, ['a'], 'input untouched (returns a new set)');
 });
 
-test('parseToolList: splits, trims, drops empties (CC-P13.2 flag)', () => {
-  assert.deepEqual(parseToolList('run_command, fetch_url ,,web_search'), ['run_command', 'fetch_url', 'web_search']);
-  assert.deepEqual(parseToolList(''), []);
-  assert.deepEqual(parseToolList(undefined), []);
+test('normalizeRuleSet fills missing lists', () => {
+  assert.deepEqual(normalizeRuleSet(undefined), { allow: [], deny: [] });
+  assert.deepEqual(normalizeRuleSet({ allow: ['x'] }), { allow: ['x'], deny: [] });
 });

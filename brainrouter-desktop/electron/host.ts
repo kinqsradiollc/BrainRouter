@@ -27,6 +27,7 @@ import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, 
 import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime, type ResolvedRuntime } from '@kinqs/brainrouter-cli/dist/state/sessionRuntimeStore.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-cli/dist/state/scheduleStore.js';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
+import { applyRuleEdit } from '@kinqs/brainrouter-cli/dist/config/permissionRules.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
@@ -750,6 +751,19 @@ async function main(): Promise<void> {
         saveConfig(fresh as never);
         return { ok: true, rule };
       },
+      // T7 — full permission-rules editor (add/remove on allow OR deny), via the
+      // pure tested applyRuleEdit. Shared config.json — the CLI gate reads it too.
+      'action:rule-edit': (args) => {
+        const op = args.op === 'remove' ? 'remove' : 'add';
+        const kind = args.kind === 'deny' ? 'deny' : 'allow';
+        const rule = typeof args.rule === 'string' ? args.rule : '';
+        if (op === 'add' && !rule.trim()) throw new Error('Empty permission rule.');
+        const fresh = loadConfig() as { cli?: { permissions?: { allow?: string[]; deny?: string[] } } };
+        fresh.cli = fresh.cli ?? {};
+        fresh.cli.permissions = applyRuleEdit(fresh.cli.permissions, op, kind, rule);
+        saveConfig(fresh as never);
+        return { ok: true, permissions: fresh.cli.permissions };
+      },
       // DESK-4e — user-typed terminal commands (the Terminal panel's input
       // row). Equivalent to the CLI's `!` shell escape: the USER runs it, so
       // no approval gate; cwd is the workspace.
@@ -936,6 +950,32 @@ async function main(): Promise<void> {
         const id = typeof args.id === 'string' ? args.id : '';
         await mcpClient.reconnectOne(id);
         return { ok: true };
+      },
+      // T6 — add an MCP server: write the profile to config.json (shared with the
+      // CLI) and connect it now. type 'stdio' needs a command; 'http' needs a url.
+      'action:add-mcp': async (args) => {
+        const id = String(args.id ?? '').trim();
+        const type = args.type === 'http' ? 'http' : 'stdio';
+        if (!/^[A-Za-z0-9._-]+$/.test(id)) return { ok: false, error: 'Server id must be letters, digits, dash, underscore or dot.' };
+        const cfg = type === 'http'
+          ? { type: 'http' as const, url: String(args.url ?? '').trim() }
+          : { type: 'stdio' as const, command: String(args.command ?? '').trim(), args: typeof args.args === 'string' ? args.args.trim().split(/\s+/).filter(Boolean) : [] };
+        if (type === 'http' ? !cfg.url : !cfg.command) return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
+        const fresh = loadConfig() as { servers?: Record<string, unknown> };
+        fresh.servers = fresh.servers ?? {};
+        if (fresh.servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
+        fresh.servers[id] = cfg;
+        saveConfig(fresh as never);
+        try { await mcpClient.connectOne(id, cfg as never, loadConfig().llm ?? llm, 5_000); } catch { /* offline — config saved, connect on next boot */ }
+        return { ok: true, id };
+      },
+      'action:remove-mcp': async (args) => {
+        const id = String(args.id ?? '').trim();
+        if (!id) return { ok: false, error: 'No server id.' };
+        try { await mcpClient.disconnectOne(id); } catch { /* already gone */ }
+        const fresh = loadConfig() as { servers?: Record<string, unknown> };
+        if (fresh.servers && fresh.servers[id]) { delete fresh.servers[id]; saveConfig(fresh as never); }
+        return { ok: true, id };
       },
       // DESK-6m — per-chat context-menu actions (Pin / Mark completed / Rename /
       // Move to group / Archive / Delete / Fork / Open). All write the shared
