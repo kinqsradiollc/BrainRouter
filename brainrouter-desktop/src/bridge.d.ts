@@ -21,6 +21,8 @@ declare global {
       trustWorkspace(workspaceRoot: string): Promise<{ trusted: boolean }>;
       untrustWorkspace(workspaceRoot: string): Promise<{ trusted: boolean }>;
       trustedWorkspaces(): Promise<{ trusted: string[] }>;
+      /** Wave 1/4 — report real activity main can't see (commit/push/create-pr). */
+      markActivity?(workspaceRoot: string, reason: string): Promise<{ ok: boolean }>;
     };
   }
 }

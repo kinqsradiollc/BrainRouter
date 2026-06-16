@@ -42,4 +42,7 @@ contextBridge.exposeInMainWorld('brainrouter', {
   trustedWorkspaces(): Promise<{ trusted: string[] }> {
     return ipcRenderer.invoke('workspace:trustedList');
   },
+  markActivity(workspaceRoot: string, reason: string): Promise<{ ok: boolean }> {
+    return ipcRenderer.invoke('workspace:activity', workspaceRoot, reason);
+  },
 });

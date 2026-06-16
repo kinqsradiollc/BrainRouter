@@ -29,6 +29,8 @@ import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
 import { applyRuleEdit } from '@kinqs/brainrouter-cli/dist/config/permissionRules.js';
 import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT } from '@kinqs/brainrouter-cli/dist/orchestration/reviewFindings.js';
+import { hashDiff, reviewGate, staleIfDiffChanged } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
+import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-cli/dist/state/reviewStore.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
@@ -334,6 +336,75 @@ async function main() {
             transcriptCache.delete(transcriptCache.keys().next().value);
         return entries;
     };
+    // Review v2 helpers (shared by the review-* queries + the commit/push gate).
+    const isoNow = () => new Date().toISOString();
+    const collectWorkingDiff = async () => {
+        const changed = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).split('\n').filter(Boolean).slice(0, 30);
+        const files = changed.map((l) => l.slice(3).trim());
+        let diff = '';
+        for (const f of files) {
+            if (diff.length > 60_000)
+                break;
+            let d = await git(['diff', 'HEAD', '--', f], workspaceRoot, { maxBuffer: 4_000_000 });
+            if (!d.trim())
+                d = await git(['diff', '--no-index', '--', '/dev/null', f], workspaceRoot, { maxBuffer: 4_000_000 });
+            diff += `\n# ${f}\n${d.slice(0, 12_000)}`;
+        }
+        return { diff, files };
+    };
+    // Map the model's free-form severities onto the v2 scale.
+    const SEV_MAP = { security: 'critical', critical: 'critical', bug: 'high', high: 'high', perf: 'medium', medium: 'medium', style: 'low', nit: 'low', low: 'low', info: 'info' };
+    const runReview = async () => {
+        const { diff, files } = await collectWorkingDiff();
+        const base = {
+            id: `rev_${Date.now().toString(36)}`, workspaceRoot, repoRoot: wsGit.gitRoot ?? workspaceRoot,
+            baseRef: 'HEAD', headRef: 'WORKTREE', diffHash: hashDiff(diff), createdAt: isoNow(), updatedAt: isoNow(),
+            status: 'completed', summary: '', findings: [],
+        };
+        if (files.length === 0) {
+            const r = { ...base, summary: 'No working-tree changes to review.' };
+            saveReview(workspaceRoot, r);
+            return { ...r, files: 0 };
+        }
+        const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\nDiff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
+        // Isolated reviewer: its review: session is filtered from the picker.
+        const reviewer = spawnAgent(`review:${Date.now().toString(36)}`);
+        const noop = () => { };
+        const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop };
+        let answer = '';
+        try {
+            answer = await reviewer.runTurn(prompt, cb);
+        }
+        catch (err) {
+            const r = { ...base, status: 'failed', summary: `Review failed: ${err instanceof Error ? err.message : String(err)}` };
+            saveReview(workspaceRoot, r);
+            return { ...r, files: files.length };
+        }
+        const findings = parseReviewFindings(answer).map((f, i) => ({
+            id: `f${i}_${Date.now().toString(36)}`, file: f.file, line: f.line ?? undefined,
+            severity: SEV_MAP[String(f.severity ?? '').toLowerCase()] ?? 'medium',
+            confidence: f.confidence ?? 70, summary: f.summary,
+            patch: f.patch, status: 'open',
+            canApply: !!f.patch, source: 'ai-review',
+        }));
+        const summary = answer.split('```')[0].trim().slice(0, 600) || `${findings.length} finding(s) across ${files.length} file(s).`;
+        const run = { ...base, summary, findings };
+        saveReview(workspaceRoot, run);
+        return { ...run, files: files.length };
+    };
+    const reviewSnapshot = async () => {
+        const { diff, files } = await collectWorkingDiff();
+        const diffHash = hashDiff(diff);
+        let run = getLatestReview(workspaceRoot);
+        if (run) {
+            const staled = staleIfDiffChanged(run, diffHash);
+            if (staled !== run) {
+                saveReview(workspaceRoot, staled);
+                run = staled;
+            }
+        }
+        return { run, gate: reviewGate(run, diffHash), diffHash, files: files.length };
+    };
     const core = createHostCore({
         agent,
         spawnAgent,
@@ -577,39 +648,43 @@ async function main() {
                 await git(['worktree', 'prune'], root);
                 return { ok: !fs.existsSync(wtPath) };
             },
-            // T12 — local AI review of the working tree: gather the diff, run ONE
-            // ephemeral review turn (its own session, not persisted into the chat),
-            // and parse structured findings. Real LLM required; the parser + panel are
-            // independently tested/mocked. Returns {findings, summary, files}.
-            'review-diff': async () => {
-                const changed = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).split('\n').filter(Boolean).slice(0, 30);
-                if (changed.length === 0)
-                    return { findings: [], summary: 'No working-tree changes to review.', files: 0 };
-                const files = changed.map((l) => l.slice(3).trim());
-                let diff = '';
-                for (const f of files) {
-                    if (diff.length > 60_000)
-                        break;
-                    let d = await git(['diff', 'HEAD', '--', f], workspaceRoot, { maxBuffer: 4_000_000 });
-                    if (!d.trim())
-                        d = await git(['diff', '--no-index', '--', '/dev/null', f], workspaceRoot, { maxBuffer: 4_000_000 });
-                    diff += `\n# ${f}\n${d.slice(0, 12_000)}`;
-                }
-                const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\nDiff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
-                const reviewer = spawnAgent(`review:${Date.now().toString(36)}`);
-                const noop = () => { };
-                const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop };
-                let answer = '';
+            // T12 / Review v2 — local AI review of the working tree. Gathers the diff,
+            // runs ONE ephemeral review turn in an ISOLATED review: session (filtered
+            // from the session picker — never pollutes the user's chats), parses
+            // structured findings into a ReviewRun keyed by the diff hash, and persists
+            // it (reviewStore, shared with the CLI). Returns the run (+ files count for
+            // the panel). Real LLM required; the parser/model/gate are unit-tested.
+            'review-diff': async () => runReview(),
+            'review-rerun': async () => runReview(),
+            // Lightweight: the gate + current run for the diff on disk right now. Marks
+            // a prior run stale if the working diff changed since it ran.
+            'review-current': async () => reviewSnapshot(),
+            'review-status': async () => { const s = await reviewSnapshot(); return { status: s.gate.status, blocked: s.gate.blocked, reason: s.gate.reason }; },
+            'review-gate': async () => reviewSnapshot(),
+            'review-dismiss-finding': (a) => ({ ok: !!updateReviewFinding(workspaceRoot, String(a.id ?? ''), 'dismissed', isoNow()) }),
+            'review-resolve-finding': (a) => ({ ok: !!updateReviewFinding(workspaceRoot, String(a.id ?? ''), 'fixed', isoNow()) }),
+            'review-apply-suggestion': async (a) => {
+                // Best-effort: apply the finding's unified-diff patch with `git apply`.
+                const run = getLatestReview(workspaceRoot);
+                const f = run?.findings.find((x) => x.id === String(a.id ?? ''));
+                if (!f?.patch)
+                    return { ok: false, error: 'This finding has no applicable patch — use "Ask agent to fix" instead.' };
+                const tmp = path.join(getCliStateDir(workspaceRoot), `review-${Date.now().toString(36)}.patch`);
                 try {
-                    answer = await reviewer.runTurn(prompt, cb);
+                    fs.writeFileSync(tmp, f.patch.endsWith('\n') ? f.patch : f.patch + '\n');
+                    const check = await git(['apply', '--check', tmp], wsGit.gitRoot ?? workspaceRoot);
+                    await git(['apply', tmp], wsGit.gitRoot ?? workspaceRoot);
+                    fs.rmSync(tmp, { force: true });
+                    updateReviewFinding(workspaceRoot, f.id, 'applied', isoNow());
+                    return { ok: true };
                 }
                 catch (err) {
-                    return { findings: [], summary: `Review failed: ${err instanceof Error ? err.message : String(err)}`, files: files.length };
+                    try {
+                        fs.rmSync(tmp, { force: true });
+                    }
+                    catch { /* ignore */ }
+                    return { ok: false, error: `Patch did not apply cleanly — use "Ask agent to fix". (${err instanceof Error ? err.message : err})` };
                 }
-                const findings = parseReviewFindings(answer);
-                // The prose before the json block is a useful human summary.
-                const summary = answer.split('```')[0].trim().slice(0, 600) || `${findings.length} finding(s) across ${files.length} file(s).`;
-                return { findings, summary, files: files.length };
             },
             // DESK-4c — every CLI slash command, straight from the CLI's catalog.
             'commands-catalog': () => {
