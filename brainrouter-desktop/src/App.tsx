@@ -774,11 +774,13 @@ export function App(): React.ReactElement {
     }).catch(() => { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; });
   }
 
-  /** Trust gate in front of every project switch (Codex-style: ask first). */
+  /** Trust gate in front of every project switch (Codex-style: ask first).
+   *  T1 — trust now comes from the shared CLI store via main, not localStorage. */
   function openProject(root: string, resumeKey?: string): void {
-    const trusted: string[] = JSON.parse(localStorage.getItem('br-trusted') ?? '[]');
-    if (trusted.includes(root)) switchToWorkspace(root, resumeKey);
-    else setTrustAsk({ root, resume: resumeKey });
+    void window.brainrouter.isWorkspaceTrusted(root).then(({ trusted }) => {
+      if (trusted) switchToWorkspace(root, resumeKey);
+      else setTrustAsk({ root, resume: resumeKey });
+    });
   }
 
   /** DESK-5j — Changes-tab review actions; results toast + refresh git state. */
@@ -792,10 +794,16 @@ export function App(): React.ReactElement {
     q('a-git', 'action:term-exec', { cmd });
   }
 
-  /** Add project = pick folder → trust dialog right away → open in place. */
+  /** Add project = pick folder → trust dialog right away → open in place.
+   *  T1 — optimistically insert the folder into the sidebar's project list the
+   *  moment it's picked, so it appears instantly (the real recents reconcile on
+   *  open). De-duped against the existing recents. */
   function addProject(): void {
     void window.brainrouter.addWorkspace().then((res) => {
-      if (res?.workspaceRoot) openProject(res.workspaceRoot);
+      if (!res?.workspaceRoot) return;
+      const root = res.workspaceRoot;
+      setWorkspaces((prev) => prev.recents.includes(root) ? prev : { ...prev, recents: [root, ...prev.recents] });
+      openProject(root);
     }).catch(() => {});
   }
 
@@ -2341,10 +2349,11 @@ export function App(): React.ReactElement {
             <div className="dialog-actions">
               <button className="deny" onClick={() => setTrustAsk(null)}>Cancel</button>
               <button className="approve" autoFocus onClick={() => {
-                const trusted: string[] = JSON.parse(localStorage.getItem('br-trusted') ?? '[]');
-                localStorage.setItem('br-trusted', JSON.stringify([...new Set([...trusted, trustAsk.root])]));
-                switchToWorkspace(trustAsk.root, trustAsk.resume);
+                // T1 — persist trust in the shared CLI store (main enforces it),
+                // not renderer localStorage. Optimistically show the project now.
+                const root = trustAsk.root, resume = trustAsk.resume;
                 setTrustAsk(null);
+                void window.brainrouter.trustWorkspace(root).then(() => switchToWorkspace(root, resume));
               }}>Trust & open</button>
             </div>
           </div>

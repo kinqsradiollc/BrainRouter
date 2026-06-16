@@ -19,7 +19,20 @@ contextBridge.exposeInMainWorld('brainrouter', {
   workspaceRecents(): Promise<{ current: string | null; recents: string[] }> {
     return ipcRenderer.invoke('workspace:recents');
   },
-  openWorkspace(workspaceRoot: string): Promise<{ opened: boolean }> {
+  openWorkspace(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
     return ipcRenderer.invoke('workspace:open', workspaceRoot);
+  },
+  // T1 — workspace trust, backed by the shared CLI store (not localStorage).
+  isWorkspaceTrusted(workspaceRoot: string): Promise<{ trusted: boolean }> {
+    return ipcRenderer.invoke('workspace:isTrusted', workspaceRoot);
+  },
+  trustWorkspace(workspaceRoot: string): Promise<{ trusted: boolean }> {
+    return ipcRenderer.invoke('workspace:trust', workspaceRoot);
+  },
+  untrustWorkspace(workspaceRoot: string): Promise<{ trusted: boolean }> {
+    return ipcRenderer.invoke('workspace:untrust', workspaceRoot);
+  },
+  trustedWorkspaces(): Promise<{ trusted: string[] }> {
+    return ipcRenderer.invoke('workspace:trustedList');
   },
 });

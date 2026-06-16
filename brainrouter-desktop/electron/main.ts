@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-cli/dist/state/workspaceTrust.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -99,7 +100,11 @@ function openWorkspaceWindow(workspaceRoot: string): void {
 app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
 
 app.whenReady().then(() => {
-  openWorkspaceWindow(process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd());
+  // T1 — the folder the app launched in is implicitly trusted (the user chose
+  // it); every OTHER workspace must be trusted before main will open it.
+  const launchRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd();
+  trustWorkspace(launchRoot);
+  openWorkspaceWindow(launchRoot);
 
   ipcMain.on('agent-command', (event, raw: unknown) => {
     const pair = pairs.get(event.sender.id);
@@ -126,11 +131,21 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('workspace:open', (event, workspaceRoot: unknown) => {
     if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot)) return { opened: false };
+    // T1 — main ENFORCES trust (defense-in-depth): even if the renderer gate is
+    // bypassed, an untrusted workspace is never opened. The renderer asks, then
+    // calls workspace:trust, then retries open.
+    if (!isWorkspaceTrusted(workspaceRoot)) return { opened: false, needsTrust: true };
     const pair = pairs.get(event.sender.id);
     if (pair) switchWorkspace(pair, workspaceRoot);
     else openWorkspaceWindow(workspaceRoot);
     return { opened: true };
   });
+  // T1 — trust persistence lives in the shared CLI store (not renderer
+  // localStorage), so CLI + desktop agree and it survives reinstalls.
+  ipcMain.handle('workspace:isTrusted', (_e, root: unknown) => ({ trusted: typeof root === 'string' && isWorkspaceTrusted(root) }));
+  ipcMain.handle('workspace:trust', (_e, root: unknown) => { if (typeof root === 'string') trustWorkspace(root); return { trusted: true }; });
+  ipcMain.handle('workspace:untrust', (_e, root: unknown) => { if (typeof root === 'string') untrustWorkspace(root); return { trusted: false }; });
+  ipcMain.handle('workspace:trustedList', () => ({ trusted: listTrustedWorkspaces() }));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

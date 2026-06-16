@@ -57,6 +57,8 @@ export function installDevBridge(): void {
   // re-announces a boot session-changed, mirroring the real in-place swap.
   let wsCurrent = '/Users/dev/BrainRouter';
   let wsRecents = ['/Users/dev/BrainRouter', '/Users/dev/side-project', '/Users/dev/TradingAgents'];
+  // T1 — mock trust set (existing projects pre-trusted so the dev UI isn't gated).
+  const trustedRoots = new Set<string>(wsRecents);
   const SESSIONS_BY_ROOT: Record<string, unknown[]> = {
     '/Users/dev/BrainRouter': [
       { sessionKey: 'dev:fix-recall-blend', firstUserMessage: 'fix the reranker blend regression', modifiedAt: new Date(Date.now() - 3600_000).toISOString(), turnCount: 24, lastRole: 'assistant' },
@@ -466,5 +468,10 @@ export function installDevBridge(): void {
       emit({ kind: 'session-changed', sessionKey: `dev:${root.split('/').pop()}`, loadedMessages: 0, model: 'claude-opus-4-8' }, 350);
       return { opened: true };
     },
+    // T1 — workspace trust mocks (real impl is the shared CLI store via main).
+    isWorkspaceTrusted: async (root: string) => ({ trusted: trustedRoots.has(root) }),
+    trustWorkspace: async (root: string) => { trustedRoots.add(root); return { trusted: true }; },
+    untrustWorkspace: async (root: string) => { trustedRoots.delete(root); return { trusted: false }; },
+    trustedWorkspaces: async () => ({ trusted: [...trustedRoots] }),
   };
 }

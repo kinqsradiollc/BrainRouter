@@ -23,4 +23,17 @@ contextBridge.exposeInMainWorld('brainrouter', {
     openWorkspace(workspaceRoot) {
         return ipcRenderer.invoke('workspace:open', workspaceRoot);
     },
+    // T1 — workspace trust, backed by the shared CLI store (not localStorage).
+    isWorkspaceTrusted(workspaceRoot) {
+        return ipcRenderer.invoke('workspace:isTrusted', workspaceRoot);
+    },
+    trustWorkspace(workspaceRoot) {
+        return ipcRenderer.invoke('workspace:trust', workspaceRoot);
+    },
+    untrustWorkspace(workspaceRoot) {
+        return ipcRenderer.invoke('workspace:untrust', workspaceRoot);
+    },
+    trustedWorkspaces() {
+        return ipcRenderer.invoke('workspace:trustedList');
+    },
 });
