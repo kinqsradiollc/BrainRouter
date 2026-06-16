@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult } from './workspaceEvents.js';
 
 const A = '/ws/alpha', B = '/ws/beta';
 const ev = (workspaceRoot: string | undefined, kind: string) => ({ workspaceRoot, event: { kind } });
@@ -52,4 +52,26 @@ test('workspaceChanged: first event / boot (prev=null) → full refresh so git s
 
 test('workspaceChanged: untagged event keeps the current tier', () => {
   assert.equal(workspaceChanged(undefined, A), false);
+});
+
+test('query generation: tag + parse round-trips, including ids with colons/slashes', () => {
+  assert.equal(tagQueryId('q-git', 3), 'q-git#3');
+  assert.deepEqual(parseQueryId('q-git#3'), { base: 'q-git', generation: 3 });
+  assert.deepEqual(parseQueryId('q-wsess:/Users/x/proj#5'), { base: 'q-wsess:/Users/x/proj', generation: 5 });
+});
+
+test('query generation: an untagged (legacy) id parses with null generation', () => {
+  assert.deepEqual(parseQueryId('q-git'), { base: 'q-git', generation: null });
+});
+
+test('isStaleQueryResult: a result from an OLDER generation is dropped', () => {
+  assert.equal(isStaleQueryResult('q-git#2', 3), true);
+});
+
+test('isStaleQueryResult: a result from the CURRENT generation is kept', () => {
+  assert.equal(isStaleQueryResult('q-git#3', 3), false);
+});
+
+test('isStaleQueryResult: an untagged id is never considered stale (no regression)', () => {
+  assert.equal(isStaleQueryResult('q-git', 3), false);
 });

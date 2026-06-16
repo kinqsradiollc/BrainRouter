@@ -56,3 +56,24 @@ export function workspaceChanged(eventWorkspace: string | undefined, prevWorkspa
   if (!eventWorkspace) return false;        // untagged → caller keeps its current tier
   return eventWorkspace !== prevWorkspace;  // includes prev === null (boot/first switch)
 }
+
+/**
+ * Workspace GENERATION tagging for async query results. Each query id is sent as
+ * `base#generation`; the generation bumps on every workspace switch. A result
+ * whose generation no longer matches the current one is stale (it was in flight
+ * when the user switched away) and must be dropped, so workspace A's late
+ * list-sessions/git/files results can't paint into workspace B's surfaces.
+ */
+export function tagQueryId(baseId: string, generation: number): string {
+  return `${baseId}#${generation}`;
+}
+
+export function parseQueryId(id: string): { base: string; generation: number | null } {
+  const m = id.match(/^(.*)#(\d+)$/);
+  return m ? { base: m[1], generation: Number(m[2]) } : { base: id, generation: null };
+}
+
+export function isStaleQueryResult(id: string, currentGeneration: number): boolean {
+  const { generation } = parseQueryId(id);
+  return generation !== null && generation !== currentGeneration;
+}
