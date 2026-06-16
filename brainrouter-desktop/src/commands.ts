@@ -139,6 +139,36 @@ export function buildCommandList(catalog: CommandsCatalog | null): DeskCommand[]
   return out;
 }
 
+/**
+ * T8 — classify composer input so a slash command is NEVER sent to the LLM.
+ * `submit()` runs this first: a known command routes through the registry, an
+ * unknown slash surfaces a command-output card, plain text becomes a turn.
+ */
+export type SlashResolution =
+  | { kind: 'not-slash' }
+  | { kind: 'bridge'; cmd: string; args: string }
+  | { kind: 'command'; command: DeskCommand; args: string }
+  | { kind: 'unknown'; base: string };
+
+export function resolveSlashInput(input: string, commands: DeskCommand[]): SlashResolution {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('/')) return { kind: 'not-slash' };
+  const m = trimmed.match(/^\/([a-z0-9-]+)(?:\s+([\s\S]+))?$/i);
+  if (!m) return { kind: 'unknown', base: trimmed.split(/\s+/)[0].toLowerCase() };
+  const word = m[1].toLowerCase();
+  const args = (m[2] ?? '').trim();
+  const base = `/${word}`;
+  // Bridge fast-path — resolves even before the host command catalog loads.
+  if (BRIDGE_COMMANDS.has(word)) return { kind: 'bridge', cmd: word, args };
+  const command = commands.find((c) => c.base === base);
+  if (command) {
+    // A bridge command typed WITH args runs immediately with them.
+    if (command.wire.kind === 'bridge' && command.wire.takesArgs && args) return { kind: 'bridge', cmd: command.wire.cmd, args };
+    return { kind: 'command', command, args };
+  }
+  return { kind: 'unknown', base };
+}
+
 export function runCommand(c: DeskCommand, ctx: CmdCtx): void {
   switch (c.wire.kind) {
     case 'native': c.wire.run(ctx); return;

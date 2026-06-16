@@ -36,7 +36,7 @@ import {
   CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
-import { BRIDGE_COMMANDS, buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
+import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -1315,11 +1315,17 @@ export function App(): React.ReactElement {
   function submit(): void {
     const prompt = draft.trim();
     if (!prompt || running || stopping) return;
-    // DESK-5 — bridge commands run against the CLI's stores, not as a turn.
-    const bridgeMatch = prompt.match(/^\/([a-z-]+)(?:\s+([\s\S]+))?$/);
-    if (bridgeMatch && BRIDGE_COMMANDS.has(bridgeMatch[1])) {
+    // T8 — a slash command is NEVER sent to the LLM. Route it through the
+    // command registry: bridge runs against the CLI stores, known commands run
+    // their wire (panel/settings/native/cli fallback), and an UNKNOWN slash
+    // surfaces a command-output card instead of becoming a chat prompt.
+    const slash = resolveSlashInput(prompt, commands);
+    if (slash.kind !== 'not-slash') {
       setDraft('');
-      runBridge(bridgeMatch[1], bridgeMatch[2] ?? '');
+      if (slash.kind === 'bridge') runBridge(slash.cmd, slash.args);
+      else if (slash.kind === 'command') runCommand(slash.command, cmdCtx);
+      else setRows((r) => [...r, { id: rid(), kind: 'cmd-out', cmd: prompt,
+        lines: [`Unknown command \`${slash.base}\` — type \`/\` to browse commands, or run it in the terminal CLI.`], ts: Date.now() }]);
       return;
     }
     lastPromptRef.current = prompt;
