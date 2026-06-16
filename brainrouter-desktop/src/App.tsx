@@ -736,6 +736,7 @@ export function App(): React.ReactElement {
     if (id === 'terminal') { openBottomDock(); return; }
     if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
     if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
+    if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -1790,7 +1791,8 @@ export function App(): React.ReactElement {
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           onPick={(p) => q('q-diff', 'file-diff', { path: p })}
           onBack={() => setDiffView(null)} onOpenFile={openFile}
-          onGit={runGit} gitBusy={gitBusy} />);
+          onGit={runGit} gitBusy={gitBusy}
+          reviewGate={reviewGate} onReview={() => ensurePanel('review')} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'tasks': return <TasksPanel fleet={activeSessionTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = activeSessionTasks.find((t) => t.id === id); if (f) openTask(f); }} />;

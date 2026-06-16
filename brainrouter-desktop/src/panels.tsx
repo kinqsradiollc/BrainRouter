@@ -325,7 +325,7 @@ export function DiffView({ diff }: { diff: string }): React.ReactElement {
   );
 }
 
-export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, gitBusy }: {
+export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, gitBusy, reviewGate, onReview }: {
   gitInfo: { repo: string; branch: string | null; insertions: number; deletions: number } | null;
   changed: Array<{ status: string; path: string }>;
   diff: { path: string; diff: string } | null;
@@ -335,9 +335,13 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
   /** DESK-5j — the review surface acts on git: commit all / push / pull. */
   onGit?: (kind: 'commit' | 'push' | 'pull', msg?: string) => void;
   gitBusy?: boolean;
+  /** Wave 7 — surface the review gate right in the Changes area. */
+  reviewGate?: ReviewGateView | null;
+  onReview?: () => void;
 }): React.ReactElement {
   const [msg, setMsg] = useState('');
   const commit = () => { if (msg.trim() && changed.length) { onGit?.('commit', msg.trim()); setMsg(''); } };
+  const blockedReason = reviewGate?.blocked ? reviewGate.reason : '';
   return (
     <>
       {gitInfo?.branch ? (
@@ -349,15 +353,24 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
         </div>
       ) : null}
       {onGit && gitInfo?.branch && !diff ? (
-        <div className="review-actions">
-          <input className="filter commit-msg" placeholder={changed.length ? 'Commit message' : 'Working tree clean'}
-            value={msg} disabled={!changed.length || gitBusy}
-            onChange={(e) => setMsg(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') commit(); }} />
-          <button className="btn" disabled={!changed.length || !msg.trim() || gitBusy} onClick={commit}>Commit</button>
-          <button className="btn" disabled={gitBusy} onClick={() => onGit('push')}>Push</button>
-          <button className="btn" disabled={gitBusy} onClick={() => onGit('pull')}>Pull</button>
-        </div>
+        <>
+          {/* Wave 7 — review status + entry point, right above the commit row. */}
+          {changed.length && reviewGate ? (
+            <div className={`diff-review-status gate-${reviewGate.status}`}>
+              <span className="drs-label">{GATE_LABEL[reviewGate.status] ?? reviewGate.status}</span>
+              {onReview ? <button className="drs-btn" onClick={onReview}>{reviewGate.status === 'clean' ? 'View review' : reviewGate.status === 'needs-review' ? 'Run review' : 'Open review'}</button> : null}
+            </div>
+          ) : null}
+          <div className="review-actions">
+            <input className="filter commit-msg" placeholder={changed.length ? 'Commit message' : 'Working tree clean'}
+              value={msg} disabled={!changed.length || gitBusy}
+              onChange={(e) => setMsg(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') commit(); }} />
+            <button className="btn" disabled={!changed.length || !msg.trim() || gitBusy} title={blockedReason || undefined} onClick={commit}>Commit{blockedReason ? ' ⚠' : ''}</button>
+            <button className="btn" disabled={gitBusy} title={blockedReason || undefined} onClick={() => onGit('push')}>Push{blockedReason ? ' ⚠' : ''}</button>
+            <button className="btn" disabled={gitBusy} onClick={() => onGit('pull')}>Pull</button>
+          </div>
+        </>
       ) : null}
       {diff ? (
         <>
