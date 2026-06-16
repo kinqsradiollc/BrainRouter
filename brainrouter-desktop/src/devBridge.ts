@@ -12,6 +12,8 @@ export function installDevBridge(): void {
   if (typeof window === 'undefined' || (window as { brainrouter?: unknown }).brainrouter) return;
 
   const listeners = new Set<(msg: AgentEventMessage) => void>();
+  // Wave 1 — recents-changed listeners (activity-based project reorder).
+  const recentsListeners = new Set<(d: { recents: string[]; reason: string; workspaceRoot: string }) => void>();
   let termBuf = '';
   let seq = 0;
   // DESK-5v — CONCURRENT SESSIONS in the mock: `activeSession` is the chat on
@@ -423,6 +425,9 @@ export function installDevBridge(): void {
           const ts = activeSession;
           if (runningSessions.has(ts)) return; // one turn per chat (other chats run in parallel)
           runningSessions.add(ts);
+          // Wave 1 — a user message is ACTIVITY: promote this workspace to the top.
+          wsRecents = [wsCurrent, ...wsRecents.filter((w) => w !== wsCurrent)];
+          recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'user-message', workspaceRoot: wsCurrent }));
           emit({ kind: 'turn-start', prompt: command.prompt }, 0, ts);
           // DESK-5u — a prompt containing "fail"/"error"/"402" surfaces a real
           // turn-error card, so the per-session error-persistence path is testable.
@@ -535,11 +540,13 @@ export function installDevBridge(): void {
     },
     addWorkspace: async () => ({ opened: false, workspaceRoot: '/Users/dev/new-project' }),
     workspaceRecents: async () => ({ current: wsCurrent, recents: wsRecents }),
+    onRecentsChanged: (l: (d: { recents: string[]; reason: string; workspaceRoot: string }) => void) => { recentsListeners.add(l); return () => recentsListeners.delete(l); },
     openWorkspace: async (root: string) => {
-      // Mirror the real main-process swap: recents update, then the "new
-      // host" announces itself with a boot session-changed.
+      // Mirror the real main-process swap. Wave 1 — opening is "opened", NOT
+      // activity: ensure membership WITHOUT promoting to the top (only a turn/
+      // output/commit reorders). New roots land at the bottom.
       wsCurrent = root;
-      wsRecents = [root, ...wsRecents.filter((r) => r !== root)].slice(0, 10);
+      if (!wsRecents.includes(root)) wsRecents = [...wsRecents, root].slice(0, 10);
       if (!SESSIONS_BY_ROOT[root]) SESSIONS_BY_ROOT[root] = [];
       emit({ kind: 'session-changed', sessionKey: `dev:${root.split('/').pop()}`, loadedMessages: 0, model: 'claude-opus-4-8' }, 350);
       return { opened: true };
