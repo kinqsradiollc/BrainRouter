@@ -39,6 +39,7 @@ import {
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 import { duplicateTitleKeys } from './sessionDisplay.js';
+import { parseThink } from './thinkParse.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -1553,16 +1554,28 @@ export function App(): React.ReactElement {
           </span>
         </div>
       );
-      case 'assistant': return (
+      case 'assistant': {
+        // T10 — model-aware reasoning: lift a leading <think> block (DeepSeek-R1,
+        // QwQ, etc.) out of the answer into a collapsible "Thought process" so it
+        // doesn't render as literal markup. No-op for models that don't emit it.
+        const { reasoning, visible } = parseThink(r.text);
+        return (
         <div key={r.id} className="row assistant md">
-          <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{r.text}</Markdown>
+          {reasoning ? (
+            <details className="think-block">
+              <summary>Thought process</summary>
+              <div className="think-body md"><Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{reasoning}</Markdown></div>
+            </details>
+          ) : null}
+          <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{visible}</Markdown>
           <span className="msg-actions">
-            <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
+            <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(visible || r.text)}><Icon name="copy" size={11} /></button>
             <button className="icon-btn" title="Fork into a new chat from this message" onClick={() => forkSessionAction(sessionKeyRef.current ?? '', r.ts)}><Icon name="fork" size={11} /></button>
             <span className="msg-time">{fmtRel(r.ts)}</span>
           </span>
         </div>
-      );
+        );
+      }
       case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} live={liveLast} inlineDiffs={inlineDiffs} onRequestDiff={(f) => q('q-inline-diff', 'file-diff', { path: f })} /></div>;
       case 'error': return (
         <div key={r.id} className="row">
