@@ -117,9 +117,12 @@ export function createHostCore(input: {
   onActiveAgentChange?: (agent: AgentLike) => void;
   send: (msg: AgentEventMessage) => void;
   queries?: Record<string, QueryHandler>;
-  /** DESK-3 — load a persisted transcript for resume-session. */
+  /** DESK-3 — load a persisted transcript (FULL) — for agent continuation only. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTranscript?: (sessionKey: string) => any[];
+  /** OOM-safe — cheap O(1) existence check used by lazy resume to avoid a full
+   *  transcript read just to compute "are there messages to render". */
+  transcriptExists?: (sessionKey: string) => boolean;
   /** DESK-3 — persist a model choice into the shared config.json. */
   persistModel?: (model: string) => void;
   /** DESK-3 — share the broker with the agent's InteractionPort adapter. */
@@ -218,7 +221,10 @@ export function createHostCore(input: {
     const existing = pool.get(targetKey);
     if (existing) {
       setActive(targetKey);
-      const count = input.loadTranscript?.(targetKey)?.length ?? 1;
+      // OOM-safe: sentinel (1 = "has history to render", 0 = empty) via the cheap
+      // existence check — the renderer fetches the real rows via the bounded
+      // transcript query. Avoids a full read just to refocus.
+      const count = input.transcriptExists ? (input.transcriptExists(targetKey) ? 1 : 0) : (input.loadTranscript?.(targetKey)?.length ?? 1);
       stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: count, model: existing.agent.getModel?.() ?? '' });
       return;
     }
@@ -242,14 +248,20 @@ export function createHostCore(input: {
   function applyResume(sessionKey: string): void {
     // An already-pooled (running) session refocuses without touching history.
     if (!pool.has(sessionKey)) {
-      const entries = input.loadTranscript?.(sessionKey) ?? []; // memoized in host.ts → renderer's q-transcript reuses it
-      if (entries.length === 0) {
+      // OOM-safe: cheap existence check, NOT a full transcript read, just to
+      // decide whether there's anything to render (huge sessions used to be
+      // fully read here on every resume → heap OOM).
+      const exists = input.transcriptExists
+        ? input.transcriptExists(sessionKey)
+        : ((input.loadTranscript?.(sessionKey)?.length ?? 0) > 0);
+      if (!exists) {
         emit({ kind: 'turn-error', message: `No transcript found for "${sessionKey}".` });
         return;
       }
       // DESK-6t — LAZY: do NOT loadHistory now (the expensive replay). Park the
-      // key; the first turn loads it. Resume just renders the transcript.
-      focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return entries.length; });
+      // key; the first turn loads it. Resume just renders the (bounded) transcript;
+      // loadedMessages=1 is a sentinel — the real rows come from q-transcript.
+      focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return 1; });
       return;
     }
     focusOrCreate(sessionKey, () => 0);

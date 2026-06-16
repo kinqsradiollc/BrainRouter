@@ -20,7 +20,7 @@ import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import { Agent } from '@kinqs/brainrouter-cli/dist/agent/agent.js';
 import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist/config/config.js';
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, deleteSession, forkSession } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
@@ -303,6 +303,9 @@ async function main() {
     let modelsCache = null;
     // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
     let prCache = null;
+    // Short-lived dedup cache for the FULL agent-continuation read (loadHistory).
+    // The context-fill estimate no longer reads this (it uses transcriptSizeBytes),
+    // so there's no O(n) token loop here anymore.
     const transcriptCache = new Map();
     const readTranscriptCached = (key) => {
         const now = Date.now();
@@ -310,11 +313,7 @@ async function main() {
         if (hit && now - hit.at < 3_000)
             return hit.entries;
         const entries = loadTranscript(workspaceRoot, key);
-        let chars = 0;
-        for (const e of entries)
-            if (typeof e?.content === 'string')
-                chars += e.content.length;
-        transcriptCache.set(key, { entries, tokens: Math.round(chars / 4), at: now });
+        transcriptCache.set(key, { entries, at: now });
         if (transcriptCache.size > 8)
             transcriptCache.delete(transcriptCache.keys().next().value);
         return entries;
@@ -325,7 +324,8 @@ async function main() {
         onActiveAgentChange: (a) => { activeAgent = a; },
         send: send,
         broker,
-        loadTranscript: (key) => readTranscriptCached(key),
+        loadTranscript: (key) => readTranscriptCached(key), // FULL — agent continuation only
+        transcriptExists: (key) => transcriptExists(workspaceRoot, key), // OOM-safe cheap resume count
         persistModel: (model) => {
             // Both heads read this file — a model picked in the desktop settings is
             // the CLI's model on its next launch, and vice versa.
@@ -558,11 +558,12 @@ async function main() {
                 // Fall back to the resumed transcript's token estimate (from the cache
                 // populated on resume) so the ring isn't wrong while you're browsing.
                 const agentTokens = Number(a.getCurrentContextTokens?.() ?? a.lastSeenPromptTokens ?? 0);
-                const c = transcriptCache.get(activeAgent.sessionKey);
-                // Only the FRESH (resume-window) estimate counts; once the cache ages
-                // out or a turn runs, the agent's own (authoritative) value wins.
-                const cached = c && Date.now() - c.at < 3_000 ? c.tokens : 0;
-                const used = Math.max(agentTokens, cached);
+                // OOM-safe ring estimate: a lazily-resumed chat hasn't loaded history into
+                // the agent yet, so approximate context from the transcript's BYTE SIZE
+                // (~4 bytes/token) — O(1), no content read, no cache dependency. The
+                // agent's authoritative prompt_tokens takes over once a turn runs.
+                const sizeEstimate = Math.round(transcriptSizeBytes(workspaceRoot, activeAgent.sessionKey) / 4);
+                const used = Math.max(agentTokens, sizeEstimate);
                 const model = activeAgent.getModel?.() ?? llm.model;
                 const window = contextWindowFor(model) ?? 0;
                 const compactAt = getCliKnobs().autoCompactTokens || 80_000;
