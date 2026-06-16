@@ -647,6 +647,9 @@ export function App(): React.ReactElement {
   const [branches, setBranches] = useState<{ current: string | null; branches: string[]; loading?: boolean }>({ current: null, branches: [] });
   const [endpointModels, setEndpointModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Item 10 — where a model pick is saved: 'global' = config.json (shared with
+  // the CLI, every chat), 'session' = this chat only (sessionRuntimeStore).
+  const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   // DESK-5d — the trust gate runs BEFORE a project opens (and before a chat
@@ -2061,7 +2064,8 @@ export function App(): React.ReactElement {
                                 ) : null}
                                 {listed.map((m, i) => (
                                   <button key={m} className="menu-item" onClick={() => {
-                                    window.brainrouter.send({ kind: 'set-model', model: m, persist: true });
+                                    // Item 10 — scope decides where it's saved: global (config.json) or this chat only.
+                                    window.brainrouter.send({ kind: 'set-model', model: m, persist: modelScope === 'global' });
                                     setPop('');
                                   }}>
                                     <span className="mi-check">{m === info.model ? '✓' : ''}</span>{m}
@@ -2079,6 +2083,12 @@ export function App(): React.ReactElement {
                           <span className="mi-check" />Custom model…
                         </button>
                         <div className="menu-sep" />
+                        <div className="menu-row">
+                          <span>Apply to</span>
+                          <button className="seg-toggle" title="Where a model pick is saved" onClick={() => setModelScope((s) => s === 'global' ? 'session' : 'global')}>
+                            {modelScope === 'global' ? 'All chats' : 'This chat only'}
+                          </button>
+                        </div>
                         <div className="menu-row">
                           <span>Fast mode</span>
                           <button className={`switch${execMode === 'fast' ? ' on' : ''}`} onClick={() => {

@@ -24,6 +24,7 @@ import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, 
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
+import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime } from '@kinqs/brainrouter-cli/dist/state/sessionRuntimeStore.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
@@ -288,8 +289,18 @@ async function main() {
     // DESK-5v — an independent agent for a SECOND, concurrent session: shares the
     // one MCP pool / llm / broker but keeps its own history, counters and key, so
     // two chats can run turns at the same time.
+    // Item 10 — the global runtime is the config.json LLM; a session can override
+    // provider/model/endpoint (sessionRuntimeStore). spawnAgent resolves THIS
+    // session's runtime so concurrent chats can run different models/providers.
+    const globalRuntime = {
+        provider: llm.provider, model: llm.model, endpoint: llm.endpoint, mcpProfiles: [],
+    };
+    const llmForSession = (sessionKey) => {
+        const resolved = resolveSessionRuntime(globalRuntime, undefined, getSessionRuntime(workspaceRoot, sessionKey));
+        return { ...llm, provider: resolved.provider, model: resolved.model, endpoint: resolved.endpoint };
+    };
     const spawnAgent = (sessionKey) => {
-        const a = new Agent(mcpClient, llm, {
+        const a = new Agent(mcpClient, llmForSession(sessionKey), {
             workspaceRoot,
             launchCwd: workspaceRoot,
             interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
@@ -333,6 +344,10 @@ async function main() {
             fresh.llm = { ...(fresh.llm ?? llm), model };
             saveConfig(fresh);
         },
+        // Item 10 — per-session model: read on (re)spawn so a chat keeps its model;
+        // written when set-model arrives with persist:false ("this chat only").
+        getSessionModel: (sessionKey) => getSessionRuntime(workspaceRoot, sessionKey).model || undefined,
+        setSessionModel: (sessionKey, model) => { setSessionRuntime(workspaceRoot, sessionKey, { model }); },
         queries: {
             // Read-only surfaces — same pure modules the TUI commands use.
             // DESK-6m — sidebar sessions merged with their UI meta (title override,

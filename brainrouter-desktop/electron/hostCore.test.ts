@@ -295,3 +295,62 @@ test('turn-complete is followed by tokens-updated when the agent exposes usage',
   const tok = out[out.length - 1].event as { promptTokens: number };
   assert.equal(tok.promptTokens, 1200);
 });
+
+// Item 10 — per-session model (set-model scope + restore on spawn).
+function modelAgent(key = 'sess-test'): AgentLike & { _model: string } {
+  return {
+    sessionKey: key,
+    _model: 'init-model',
+    runTurn: async () => 'ok',
+    resetSessionCounters() {},
+    setModel(m: string) { (this as { _model: string })._model = m; },
+    getModel() { return (this as { _model: string })._model; },
+  };
+}
+
+test('set-model persist:false saves for THIS SESSION only (not global config)', async () => {
+  const { out, send } = collect();
+  const global: string[] = [];
+  const session: Array<[string, string]> = [];
+  const agent = modelAgent();
+  const core = createHostCore({
+    agent, send,
+    persistModel: (m) => global.push(m),
+    setSessionModel: (k, m) => session.push([k, m]),
+  });
+  await core.handle({ kind: 'set-model', model: 'gpt-5.5', persist: false });
+  assert.deepEqual(session, [['sess-test', 'gpt-5.5']], 'wrote per-session override');
+  assert.deepEqual(global, [], 'did NOT touch global config');
+  assert.equal(agent.getModel?.(), 'gpt-5.5', 'applied in-memory immediately');
+  const sc = out.find((m) => m.event.kind === 'session-changed');
+  assert.equal((sc!.event as { model: string }).model, 'gpt-5.5');
+});
+
+test('set-model persist:true saves the GLOBAL default (not per-session)', async () => {
+  const { send } = collect();
+  const global: string[] = [];
+  const session: Array<[string, string]> = [];
+  const core = createHostCore({
+    agent: modelAgent(), send,
+    persistModel: (m) => global.push(m),
+    setSessionModel: (k, m) => session.push([k, m]),
+  });
+  await core.handle({ kind: 'set-model', model: 'claude-opus-4-8', persist: true });
+  assert.deepEqual(global, ['claude-opus-4-8'], 'wrote global config');
+  assert.deepEqual(session, [], 'did NOT write a per-session override');
+});
+
+test('a spawned/focused session restores its stored per-session model', async () => {
+  const { out, send } = collect();
+  const agent = modelAgent('sess-test');
+  const core = createHostCore({
+    agent, send,
+    spawnAgent: (k) => modelAgent(k),
+    getSessionModel: (k) => (k === 'sess-test:feature' ? 'qwen3-coder' : undefined),
+  });
+  await core.handle({ kind: 'new-session', label: 'feature' });
+  // The agent now serving sess-test:feature must carry that session's model.
+  const sc = out.filter((m) => m.event.kind === 'session-changed').pop();
+  assert.equal(sc!.sessionKey, 'sess-test:feature');
+  assert.equal((sc!.event as { model: string }).model, 'qwen3-coder', 'restored per-session model on focus');
+});

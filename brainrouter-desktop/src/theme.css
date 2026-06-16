@@ -471,6 +471,9 @@ input.ctl { min-width: 220px; }
 .menu-item .mi-check { width: 13px; color: var(--accent); font-weight: 700; flex: none; }
 .menu-sep { height: 1px; background: var(--border); margin: 5px 4px; }
 .menu-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; font-size: 12.5px; color: var(--text); }
+/* item 10 — small segmented toggle for the model save scope (this chat vs all chats) */
+.seg-toggle { border: 1px solid var(--border-strong); background: var(--raised); color: var(--text-dim); font-size: 11px; font-weight: 560; padding: 3px 9px; border-radius: 999px; cursor: pointer; transition: color .12s, background .12s; }
+.seg-toggle:hover { color: var(--text); background: rgba(255,255,255,0.06); }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }
