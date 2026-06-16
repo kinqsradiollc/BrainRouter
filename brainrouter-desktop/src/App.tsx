@@ -37,7 +37,7 @@ import {
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult } from './workspaceEvents.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -602,6 +602,10 @@ export function App(): React.ReactElement {
   // by session-changed. Events tagged with a DIFFERENT workspace are dropped so
   // one project's stream can never paint into another's surfaces.
   const activeWsRef = useRef<string | null>(null);
+  // Stability fix — workspace GENERATION: bumped on every workspace switch so
+  // late async query results from the previous project are dropped, never
+  // painting workspace A's data into workspace B's surfaces.
+  const workspaceGenRef = useRef(0);
   // DESK-5u — current viewed session key, kept in a ref so the (mount-once)
   // event handler can read it without going stale.
   const sessionKeyRef = useRef<string | undefined>(undefined);
@@ -665,7 +669,7 @@ export function App(): React.ReactElement {
   const commands = useMemo(() => buildCommandList(catalog), [catalog]);
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
-    window.brainrouter.send({ kind: 'query', id, name, args });
+    window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
 
   /** Open the bottom dock, re-seeding the default Terminal tab if all were closed. */
   function openBottomDock(): void {
@@ -752,6 +756,10 @@ export function App(): React.ReactElement {
       return;
     }
     pendingResumeRef.current = resumeKey ?? null;
+    // Stability fix — bump the workspace generation the moment a switch STARTS,
+    // so any old-workspace query results still in flight are dropped instead of
+    // repainting the now-cleared surfaces with the previous project's data.
+    workspaceGenRef.current++;
     setToast(`Opening ${root.split('/').pop()}…`);
     // Clear workspace-scoped surfaces; the new host's boot session-changed
     // refreshes everything against the new root.
@@ -1134,7 +1142,11 @@ export function App(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function handleQueryResult(id: string, result: unknown, error?: string): void {
+  function handleQueryResult(rawId: string, result: unknown, error?: string): void {
+    // Stability fix — drop results from an older workspace generation (they were
+    // in flight when the user switched projects); then route by the base id.
+    if (isStaleQueryResult(rawId, workspaceGenRef.current)) return;
+    const id = parseQueryId(rawId).base;
     if (error) { setToast(`✗ ${error}`); return; }
     // DESK-5d — per-project chat lists route by the root encoded in the id.
     if (id.startsWith('q-wsess:')) {
