@@ -109,6 +109,9 @@ export function installDevBridge(): void {
     { path: '/Users/dev/BrainRouter', branch: 'release/0.4.15', detached: false },
     { path: '/Users/dev/BrainRouter/.worktrees/experiment', branch: 'spike-new-recall', detached: false },
   ];
+  // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
+  const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
+  const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(wsCurrent),
@@ -309,12 +312,12 @@ export function installDevBridge(): void {
     'config-snapshot': () => ({
       model: 'claude-opus-4-8', provider: 'anthropic', fallbackModel: null,
       workspaceRoot: '/Users/dev/BrainRouter', sandbox: 'off', prefs: { ...prefs },
-      permissionRules: { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] },
+      permissionRules: { allow: [...devRules.allow], deny: [...devRules.deny] },
       hooks: [
         { id: 'h1', event: 'pre-tool', command: './hooks/guard-prod.sh', enabled: true, match: 'run_command' },
         { id: 'h2', event: 'user-prompt-submit', command: './hooks/inject-ticket.sh', enabled: false },
       ],
-      servers: [{ id: 'brainrouter', online: true }, { id: 'github', online: false }],
+      servers: devServers.map((s) => ({ ...s })),
     }),
     'usage-breakdown': () => [
       'parent      48,213 in · 1,904 out · cache hit 92%',
@@ -366,7 +369,15 @@ export function installDevBridge(): void {
         ],
       };
     },
-    'action:allow-rule': (a) => ({ ok: true, rule: a.rule }),
+    'action:allow-rule': (a) => { const r = String(a.rule ?? '').trim(); if (r && !devRules.allow.includes(r)) devRules.allow.push(r); return { ok: true, rule: r }; },
+    'action:rule-edit': (a) => {
+      const kind = a.kind === 'deny' ? 'deny' : 'allow'; const op = a.op === 'remove' ? 'remove' : 'add'; const r = String(a.rule ?? '').trim();
+      const list = devRules[kind];
+      if (op === 'add') { if (r && !list.includes(r)) list.push(r); } else { const i = list.indexOf(r); if (i >= 0) list.splice(i, 1); }
+      return { ok: true, permissions: { allow: [...devRules.allow], deny: [...devRules.deny] } };
+    },
+    'action:add-mcp': (a) => { const id = String(a.id ?? '').trim(); if (!id || devServers.some((s) => s.id === id)) return { ok: false, error: 'invalid or duplicate id' }; devServers.push({ id, online: true, detail: `${a.type ?? 'stdio'}` }); return { ok: true, id }; },
+    'action:remove-mcp': (a) => { const i = devServers.findIndex((s) => s.id === a.id); if (i >= 0) devServers.splice(i, 1); return { ok: i >= 0, id: a.id }; },
     'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
     'command:dispatch': (a) => {
       const cmd = String(a.cmd ?? '');

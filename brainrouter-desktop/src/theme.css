@@ -505,6 +505,16 @@ input.ctl { min-width: 220px; }
 .wt-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
 .wt-btn.danger:hover { color: #ffa198; border-color: #ffa198; }
 .wt-diff { margin-top: 8px; max-height: 360px; overflow: auto; border-top: 1px solid var(--border); padding-top: 6px; }
+/* T7 — permission-rule editor; T6 — MCP add-server form */
+.rule-row { display: flex; align-items: center; gap: 8px; }
+.rule-text { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-x { border: 0; background: transparent; color: var(--text-faint); cursor: pointer; font-size: 12px; padding: 2px 5px; border-radius: 6px; }
+.rule-x:hover { color: #ffa198; background: rgba(255,255,255,0.06); }
+.rule-add { display: flex; flex-direction: row; align-items: center; gap: 6px; margin-top: 10px; }
+.rule-add .ctl:nth-child(2) { flex: 1; }
+.mcp-add { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.mcp-add-row { display: flex; gap: 6px; }
+.mcp-add-row .ctl:first-child { flex: 1; }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }

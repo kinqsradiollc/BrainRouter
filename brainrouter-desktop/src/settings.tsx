@@ -86,6 +86,10 @@ export function SettingsDialog(props: {
   const [modelDraft, setModelDraft] = useState<string | null>(null);
   const [llmDraft, setLlmDraft] = useState<{ provider?: string; endpoint?: string; apiKey?: string }>({});
   const [search, setSearch] = useState('');
+  // T7 — permission-rule editor draft; T6 — MCP add-server draft.
+  const [ruleKind, setRuleKind] = useState<'allow' | 'deny'>('deny');
+  const [ruleDraft, setRuleDraft] = useState('');
+  const [mcp, setMcp] = useState<{ id: string; type: 'stdio' | 'http'; command: string; url: string }>({ id: '', type: 'stdio', command: '', url: '' });
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
@@ -156,10 +160,24 @@ export function SettingsDialog(props: {
           </Row>
           <Row title="Sandbox" desc={<>run_command isolation is <code>{snapshot?.sandbox ?? 'off'}</code> (cli.sandbox in config.json). Grants managed via /sandbox in the CLI.</>} />
           <div className="set-h2">Permission rules (cli.permissions)</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Edit in config.json.</div>
-          {(snapshot?.permissionRules?.deny ?? []).map((r) => <div key={`d${r}`} className="rule-row"><span className="rule-kind deny">deny</span>{r}</div>)}
-          {(snapshot?.permissionRules?.allow ?? []).map((r) => <div key={`a${r}`} className="rule-row"><span className="rule-kind allow">allow</span>{r}</div>)}
+          <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Shared with the CLI.</div>
+          {(snapshot?.permissionRules?.deny ?? []).map((r) => (
+            <div key={`d${r}`} className="rule-row"><span className="rule-kind deny">deny</span><span className="rule-text">{r}</span>
+              <button className="rule-x" title="Remove rule" onClick={() => props.onAction('a-rule', 'action:rule-edit', { op: 'remove', kind: 'deny', rule: r })}>✕</button></div>
+          ))}
+          {(snapshot?.permissionRules?.allow ?? []).map((r) => (
+            <div key={`a${r}`} className="rule-row"><span className="rule-kind allow">allow</span><span className="rule-text">{r}</span>
+              <button className="rule-x" title="Remove rule" onClick={() => props.onAction('a-rule', 'action:rule-edit', { op: 'remove', kind: 'allow', rule: r })}>✕</button></div>
+          ))}
           {!(snapshot?.permissionRules?.allow?.length || snapshot?.permissionRules?.deny?.length) ? <div className="empty">No rules configured.</div> : null}
+          <div className="rule-add">
+            <select className="ctl" value={ruleKind} onChange={(e) => setRuleKind(e.target.value as 'allow' | 'deny')}>
+              <option value="deny">deny</option><option value="allow">allow</option>
+            </select>
+            <input className="ctl" placeholder="glob rule, e.g. rm -rf *" value={ruleDraft} onChange={(e) => setRuleDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && ruleDraft.trim()) { props.onAction('a-rule', 'action:rule-edit', { op: 'add', kind: ruleKind, rule: ruleDraft.trim() }); setRuleDraft(''); } }} />
+            <button className="btn" disabled={!ruleDraft.trim()} onClick={() => { props.onAction('a-rule', 'action:rule-edit', { op: 'add', kind: ruleKind, rule: ruleDraft.trim() }); setRuleDraft(''); }}>Add rule</button>
+          </div>
         </>
       );
       case 'memory': return (
@@ -215,8 +233,28 @@ export function SettingsDialog(props: {
           {(snapshot?.servers ?? []).map((s) => (
             <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{s.detail ? ` — ${s.detail}` : ''}</>}>
               <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
+              <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
             </Row>
           ))}
+          <div className="mcp-add">
+            <div className="mcp-add-row">
+              <input className="ctl" placeholder="server id" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
+              <select className="ctl" value={mcp.type} onChange={(e) => setMcp((m) => ({ ...m, type: e.target.value as 'stdio' | 'http' }))}>
+                <option value="stdio">stdio</option><option value="http">http</option>
+              </select>
+            </div>
+            {mcp.type === 'stdio'
+              ? <input className="ctl" placeholder="command + args, e.g. npx -y @modelcontextprotocol/server-filesystem ." value={mcp.command} onChange={(e) => setMcp((m) => ({ ...m, command: e.target.value }))} />
+              : <input className="ctl" placeholder="https://mcp.example.com/sse" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />}
+            <button className="btn primary" disabled={!mcp.id.trim() || !(mcp.type === 'stdio' ? mcp.command.trim() : mcp.url.trim())}
+              onClick={() => {
+                const parts = mcp.command.trim().split(/\s+/);
+                props.onAction('a-addmcp', 'action:add-mcp', mcp.type === 'http'
+                  ? { id: mcp.id.trim(), type: 'http', url: mcp.url.trim() }
+                  : { id: mcp.id.trim(), type: 'stdio', command: parts[0] ?? '', args: parts.slice(1).join(' ') });
+                setMcp({ id: '', type: 'stdio', command: '', url: '' });
+              }}>Add server</button>
+          </div>
         </>
       );
       case 'observability': return (
