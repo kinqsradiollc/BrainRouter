@@ -21,6 +21,7 @@ import { Agent } from '@kinqs/brainrouter-cli/dist/agent/agent.js';
 import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist/config/config.js';
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
 import { listTranscripts, loadTranscript, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
+import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
@@ -247,6 +248,13 @@ function sessionRows(root: string, limit: number): Array<TranscriptSummary & { l
 
 async function main(): Promise<void> {
   const workspaceRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd();
+  // DESK-6w (T4) — resolve how this workspace relates to its owning git repo
+  // once (repo name, owning git root, subdir-vs-root). Workspace-scoped status/
+  // diff run in workspaceRoot with a `-- .` pathspec: that limits results to the
+  // workspace subtree (so a monorepo subfolder or a nested clone like openSrc/*
+  // never pulls in unrelated parent changes) AND keeps paths workspace-relative
+  // for the renderer. `workspaceGitScope` is for repo-root ops (worktrees) later.
+  const wsGit = resolveWorkspaceGit(workspaceRoot);
   // DESK-5w — clear phantom "running" background tasks left by a previous,
   // now-dead host BEFORE anything queries the fleet (the renderer polls it on
   // boot). In-process actors don't survive a restart; their on-disk state does.
@@ -484,18 +492,28 @@ async function main(): Promise<void> {
       // DESK-4m — recent commit subjects for the Environment panel.
       'git-log': async () => ({ subjects: (await git(['log', '-5', '--pretty=%s'], workspaceRoot)).split('\n').filter(Boolean) }),
       'git-info': async () => {
+        // DESK-6w (T4) — repo name from the OWNING git root (so a subdir workspace
+        // shows "BrainRouter", not "brainrouter-desktop"); diff scoped to the
+        // workspace subtree (`-- .`) so a monorepo subfolder doesn't report the
+        // parent's churn. workspaceRoot/gitRoot/repoRelativePath feed the env panel.
+        const base = {
+          repo: wsGit.repoName, workspaceRoot, gitRoot: wsGit.gitRoot,
+          repoRelativePath: wsGit.repoRelativePath, isSubdir: wsGit.isSubdir,
+        };
         const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], workspaceRoot)).trim();
-        if (!branch) return { repo: path.basename(workspaceRoot), branch: null, files: 0, insertions: 0, deletions: 0 };
-        const stat = await git(['diff', 'HEAD', '--shortstat'], workspaceRoot);
+        if (!branch) return { ...base, branch: null, files: 0, insertions: 0, deletions: 0 };
+        const stat = await git(['diff', 'HEAD', '--shortstat', '--', '.'], workspaceRoot);
         return {
-          repo: path.basename(workspaceRoot), branch,
+          ...base, branch,
           files: Number(/(\d+) files? changed/.exec(stat)?.[1] ?? 0),
           insertions: Number(/(\d+) insertions?/.exec(stat)?.[1] ?? 0),
           deletions: Number(/(\d+) deletions?/.exec(stat)?.[1] ?? 0),
         };
       },
       // DESK-4 — diff/review surfaces. git-backed, tolerant of non-repos.
-      'changed-files': async () => (await git(['status', '--porcelain'], workspaceRoot))
+      // DESK-6w (T4) — `-- .` scopes to the workspace subtree with workspace-
+      // relative paths (so file-open/diff resolution is unchanged).
+      'changed-files': async () => (await git(['status', '--porcelain', '--', '.'], workspaceRoot))
         .split('\n').filter(Boolean).slice(0, 200).map((line) => ({ status: line.slice(0, 2).trim() || '??', path: line.slice(3).trim() })),
       'file-diff': async (args) => {
         const file = typeof args.path === 'string' ? args.path : '';

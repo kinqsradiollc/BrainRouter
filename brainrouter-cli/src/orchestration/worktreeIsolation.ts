@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import type { AccessMode } from './roles.js';
 import { getBrainrouterHome, getCliStateDir } from '../state/cliState.js';
 import { getCliKnobs } from '../config/config.js';
+import { findGitRoot } from '../config/workspaceGit.js';
 
 export type ChildWorkspaceIsolationMode = 'off' | 'auto' | 'git-worktree';
 
@@ -46,17 +47,9 @@ function runGit(cwd: string, args: string[]): { ok: boolean; stdout: string; std
   };
 }
 
-function gitRoot(workspaceRoot: string): string | null {
-  const result = runGit(workspaceRoot, ['rev-parse', '--show-toplevel']);
-  if (!result.ok) return null;
-  const root = result.stdout.trim();
-  if (!root) return null;
-  try {
-    return fs.realpathSync(root);
-  } catch {
-    return path.resolve(root);
-  }
-}
+// DESK-6w (T4) — owning-git-root resolution is now the shared helper, so CLI
+// worktrees and desktop workspace identity agree on the same repo root.
+const gitRoot = findGitRoot;
 
 function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'child';
