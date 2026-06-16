@@ -28,6 +28,7 @@ import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime, type Resol
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-cli/dist/state/scheduleStore.js';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
 import { applyRuleEdit } from '@kinqs/brainrouter-cli/dist/config/permissionRules.js';
+import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT } from '@kinqs/brainrouter-cli/dist/orchestration/reviewFindings.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
@@ -572,6 +573,33 @@ async function main(): Promise<void> {
         await git(['worktree', 'remove', '--force', wtPath], root);
         await git(['worktree', 'prune'], root);
         return { ok: !fs.existsSync(wtPath) };
+      },
+      // T12 — local AI review of the working tree: gather the diff, run ONE
+      // ephemeral review turn (its own session, not persisted into the chat),
+      // and parse structured findings. Real LLM required; the parser + panel are
+      // independently tested/mocked. Returns {findings, summary, files}.
+      'review-diff': async () => {
+        const changed = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).split('\n').filter(Boolean).slice(0, 30);
+        if (changed.length === 0) return { findings: [], summary: 'No working-tree changes to review.', files: 0 };
+        const files = changed.map((l) => l.slice(3).trim());
+        let diff = '';
+        for (const f of files) {
+          if (diff.length > 60_000) break;
+          let d = await git(['diff', 'HEAD', '--', f], workspaceRoot, { maxBuffer: 4_000_000 });
+          if (!d.trim()) d = await git(['diff', '--no-index', '--', '/dev/null', f], workspaceRoot, { maxBuffer: 4_000_000 });
+          diff += `\n# ${f}\n${d.slice(0, 12_000)}`;
+        }
+        const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\nDiff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
+        const reviewer = spawnAgent(`review:${Date.now().toString(36)}`);
+        const noop = (): void => {};
+        const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop } as never;
+        let answer = '';
+        try { answer = await (reviewer as { runTurn(p: string, c: unknown): Promise<string> }).runTurn(prompt, cb); }
+        catch (err) { return { findings: [], summary: `Review failed: ${err instanceof Error ? err.message : String(err)}`, files: files.length }; }
+        const findings = parseReviewFindings(answer);
+        // The prose before the json block is a useful human summary.
+        const summary = answer.split('```')[0].trim().slice(0, 600) || `${findings.length} finding(s) across ${files.length} file(s).`;
+        return { findings, summary, files: files.length };
       },
       // DESK-4c — every CLI slash command, straight from the CLI's catalog.
       'commands-catalog': () => {

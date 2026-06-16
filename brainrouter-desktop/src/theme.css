@@ -515,6 +515,22 @@ input.ctl { min-width: 220px; }
 .mcp-add { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .mcp-add-row { display: flex; gap: 6px; }
 .mcp-add-row .ctl:first-child { flex: 1; }
+/* T12 — local review panel */
+.review-panel { padding: 4px 4px; }
+.review-bar { display: flex; align-items: center; gap: 10px; padding: 4px 4px 10px; }
+.review-count { font-size: 11px; color: var(--text-faint); }
+.review-summary { font-size: 12px; color: var(--text-dim); line-height: 1.5; padding: 6px 6px 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.review-file { margin-bottom: 10px; }
+.review-file-head { font-family: var(--mono); font-size: 11px; color: var(--text-dim); padding: 4px 6px; }
+.review-finding { padding: 7px 8px; border-left: 2px solid var(--border-strong); margin: 0 0 6px 6px; }
+.review-finding-head { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+.review-line { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.review-conf { margin-left: auto; font-size: 10.5px; color: var(--text-faint); }
+.review-finding-body { font-size: 12.5px; color: var(--text); line-height: 1.45; margin-bottom: 6px; }
+.sev { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; }
+.sev-bug, .sev-security { background: rgba(255,161,152,0.18); color: #ffa198; }
+.sev-perf, .sev-warn { background: rgba(229,192,123,0.18); color: #e5c07b; }
+.sev-style, .sev-nit, .sev-info { background: rgba(108,192,74,0.16); color: #6cc04a; }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }

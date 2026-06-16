@@ -33,8 +33,8 @@ const MD_COMPONENTS: Record<string, unknown> = {
 };
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel,
-  TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
+  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
+  TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels.js';
 import type { ScheduleRecordView } from './scheduleView.js';
 import { parseWorktreeList, type WorktreeEntry } from './worktreeParser.js';
@@ -653,6 +653,9 @@ export function App(): React.ReactElement {
   // T13 — git worktrees for this repo + a per-worktree diff cache.
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const [worktreeDiffs, setWorktreeDiffs] = useState<Record<string, string>>({});
+  // T12 — local AI review of the working diff: findings + running state.
+  const [review, setReview] = useState<{ findings: ReviewFindingView[]; summary: string; files: number } | null>(null);
+  const [reviewRunning, setReviewRunning] = useState(false);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   // DESK-5d — the trust gate runs BEFORE a project opens (and before a chat
@@ -1222,6 +1225,12 @@ export function App(): React.ReactElement {
         if (r && typeof r.path === 'string') setWorktreeDiffs((d) => ({ ...d, [r.path!]: r.diff ?? '' }));
         return;
       }
+      case 'q-review-diff': {
+        setReviewRunning(false);
+        const r = result as { findings?: ReviewFindingView[]; summary?: string; files?: number } | null;
+        setReview(r ? { findings: r.findings ?? [], summary: r.summary ?? '', files: r.files ?? 0 } : { findings: [], summary: 'Review failed.', files: 0 });
+        return;
+      }
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
       case 'q-transcript': {
         const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
@@ -1732,6 +1741,9 @@ export function App(): React.ReactElement {
         onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onOpen={(path) => openProject(path)}
         onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
+      case 'review': return <ReviewPanel review={review} running={reviewRunning}
+        onRun={() => { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); }}
+        onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)} />;
       default: return null;
     }
   };
@@ -2309,6 +2321,8 @@ export function App(): React.ReactElement {
                       badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
                     { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
                       badge: worktrees.length ? String(worktrees.length) : '' },
+                    { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review',
+                      badge: review?.findings.length ? String(review.findings.length) : '' },
                     { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
                   ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>).map((l) => (
                     <button key={l.id} className="side-launcher" onClick={() => openSideView(l.id)}>
