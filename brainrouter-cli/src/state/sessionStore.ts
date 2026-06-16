@@ -102,6 +102,68 @@ export function readTranscriptEntries(workspaceRoot: string, sessionKey: string,
 }
 
 /**
+ * Bounded TAIL read for UI rendering — returns only the last `maxEntries`
+ * transcript entries WITHOUT loading the whole file into memory. `readFileSync`
+ * (used by readTranscriptEntries/loadTranscript) allocates the entire
+ * multi-megabyte transcript before slicing, which is the desktop's heap-OOM
+ * source. This reads the file BACKWARD in chunks, stops once it has enough
+ * complete lines, parses them, and caps per-entry content so a single huge tool
+ * result can't bloat the payload. Use this for any UI/sidebar/recap/search/
+ * chapters/task view; keep loadTranscript() only for agent continuation export.
+ */
+export function readTranscriptTail(
+  workspaceRoot: string,
+  sessionKey: string,
+  maxEntries = 400,
+  maxCharsPerEntry = 50_000,
+): TranscriptEntry[] {
+  const filePath = resolveExistingTranscriptPath(workspaceRoot, sessionKey);
+  if (!filePath) return [];
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fd).size;
+    const CHUNK = 64 * 1024;
+    let pos = size;
+    let buf = Buffer.alloc(0);
+    let newlines = 0;
+    // Read backward until we have one more newline than requested (so the first
+    // kept line is whole) or reach the start of the file.
+    while (pos > 0 && newlines <= maxEntries) {
+      const readLen = Math.min(CHUNK, pos);
+      pos -= readLen;
+      const chunk = Buffer.alloc(readLen);
+      fs.readSync(fd, chunk, 0, readLen, pos);
+      for (let i = 0; i < chunk.length; i++) if (chunk[i] === 0x0a) newlines++;
+      buf = Buffer.concat([chunk, buf]);
+    }
+    const lines = buf.toString('utf8').split('\n').filter(Boolean);
+    const tail = lines.slice(Math.max(0, lines.length - maxEntries));
+    const entries: TranscriptEntry[] = [];
+    for (const line of tail) {
+      try {
+        const e = JSON.parse(line) as TranscriptEntry;
+        if (maxCharsPerEntry > 0 && typeof e.content === 'string' && e.content.length > maxCharsPerEntry) {
+          e.content = `${e.content.slice(0, maxCharsPerEntry)}\n…[${e.content.length - maxCharsPerEntry} more chars truncated for display]`;
+        }
+        entries.push(e);
+      } catch { /* a partial boundary line — tolerate, like readTranscriptEntries */ }
+    }
+    return entries;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+  }
+}
+
+/** Cheap O(1) check that a session has a transcript on disk — used by lazy
+ *  resume to avoid a full read just to know "are there messages to render". */
+export function transcriptExists(workspaceRoot: string, sessionKey: string): boolean {
+  return resolveExistingTranscriptPath(workspaceRoot, sessionKey) != null;
+}
+
+/**
  * Resolve the transcript path for writes. Always uses the per-session bucket
  * at `<state>/sessions/<encodedKey>/transcript.jsonl` so each chat session
  * keeps its history co-located with its goal/plan/etc.

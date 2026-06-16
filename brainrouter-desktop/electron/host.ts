@@ -20,7 +20,7 @@ import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import { Agent } from '@kinqs/brainrouter-cli/dist/agent/agent.js';
 import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist/config/config.js';
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
-import { listTranscripts, loadTranscript, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
@@ -403,7 +403,8 @@ async function main(): Promise<void> {
       },
       'recap': (args) => {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : activeAgent.sessionKey;
-        return buildRecap({ entries: loadTranscript(workspaceRoot, key), sessionKey: key });
+        // OOM-safe: recap summarizes recent state — a bounded tail is enough.
+        return buildRecap({ entries: readTranscriptTail(workspaceRoot, key, 2000), sessionKey: key });
       },
       // DESK-5w — running background tasks, each TAGGED with the chat session
       // that owns it (parentSessionKey), so the renderer can nest a task under
@@ -569,10 +570,11 @@ async function main(): Promise<void> {
       },
       'search-transcript': (args) => {
         const query = typeof args.q === 'string' ? args.q : '';
-        return searchTranscript(loadTranscript(workspaceRoot, activeAgent.sessionKey), query, { limit: 50 })
+        // OOM-safe: search a bounded recent window (50 capped results anyway).
+        return searchTranscript(readTranscriptTail(workspaceRoot, activeAgent.sessionKey, 5000), query, { limit: 50 })
           .map((m) => ({ index: (m as { index?: number }).index ?? 0, role: (m as { role?: string }).role ?? '?', snippet: (m as { snippet?: string }).snippet ?? '' }));
       },
-      'chapters': () => listChapters(loadTranscript(workspaceRoot, activeAgent.sessionKey)),
+      'chapters': () => listChapters(readTranscriptTail(workspaceRoot, activeAgent.sessionKey, 2000)),
       // DESK-5p — render a resumed session's FULL history: user/assistant prose
       // verbatim AND the real tool calls (name + arg-derived summary + output
       // preview + ok), reconstructed from the persisted OpenAI-format entries
@@ -582,8 +584,10 @@ async function main(): Promise<void> {
       // view shows the same expandable tool cards instead of a bare count.
       'transcript': (args) => {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : activeAgent.sessionKey;
-        // DESK-6t — cache hit: this is the same read the resume just did.
-        const entries = readTranscriptCached(key) as Parameters<typeof reconstructTranscriptRows>[0];
+        // OOM-safe: bounded TAIL read (not the full-history cache) — the UI only
+        // renders the last 400 rows, so ~1200 recent entries is plenty and the
+        // host never allocates a multi-megabyte transcript for rendering.
+        const entries = readTranscriptTail(workspaceRoot, key, 1200) as Parameters<typeof reconstructTranscriptRows>[0];
         return { sessionKey: key, rows: reconstructTranscriptRows(entries).slice(-400) };
       },
       // DESK-5w — the conversation of a background task (a delegated child agent
@@ -604,7 +608,8 @@ async function main(): Promise<void> {
         const session = listSessions(workspaceRoot).find((s) => s.id === id);
         const childKey = parent ? childSessionKey(parent, id) : id;
         const readRoot = session?.childWorkspaceRoot ?? workspaceRoot;
-        const entries = loadTranscript(readRoot, childKey) as Parameters<typeof reconstructTranscriptRows>[0];
+        // OOM-safe: bounded tail (the task view renders the last 400 rows).
+        const entries = readTranscriptTail(readRoot, childKey, 1200) as Parameters<typeof reconstructTranscriptRows>[0];
         return { id, kind, role: session?.role, goal: session?.prompt, status: session?.status, rows: reconstructTranscriptRows(entries).slice(-400) };
       },
       // DESK-6w — a workflow run's full breakdown for the Claude-/workflows-style
