@@ -539,6 +539,39 @@ async function main(): Promise<void> {
         if (!diff.trim()) diff = await git(['diff', '--no-index', '--', '/dev/null', file], workspaceRoot, { maxBuffer: 4_000_000 });
         return { path: file, kind: 'file', diff: diff.slice(0, 200_000) };
       },
+      // T13 — git worktrees (repo-level, so operate on the git root). The host
+      // returns the raw porcelain; the renderer owns the (tested) parser.
+      'git-worktrees': async () => {
+        const root = wsGit.gitRoot ?? workspaceRoot;
+        const raw = await git(['worktree', 'list', '--porcelain'], root);
+        return { raw, gitRoot: root, current: workspaceRoot };
+      },
+      'worktree-diff': async (args) => {
+        const wtPath = typeof args.path === 'string' ? args.path : '';
+        if (!wtPath || !fs.existsSync(wtPath)) return { path: wtPath, diff: '', files: 0 };
+        const diff = await git(['diff', 'HEAD'], wtPath, { maxBuffer: 4_000_000 });
+        const stat = await git(['diff', 'HEAD', '--shortstat'], wtPath);
+        return { path: wtPath, diff: diff.slice(0, 200_000), files: Number(/(\d+) files? changed/.exec(stat)?.[1] ?? 0) };
+      },
+      'worktree-create': async (args) => {
+        const name = String(args.name ?? '').trim();
+        const ref = String(args.ref ?? '').trim() || 'HEAD';
+        if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') return { ok: false, error: 'Name must be letters, digits, dash, underscore or dot.' };
+        const root = wsGit.gitRoot ?? workspaceRoot;
+        const wtPath = path.join(root, '.worktrees', name);
+        // execFile-based git() never invokes a shell, so name/ref aren't shell-expanded.
+        const out = await git(['worktree', 'add', wtPath, ref], root);
+        if (!fs.existsSync(wtPath)) return { ok: false, error: out.trim() || `Failed to create worktree "${name}".` };
+        return { ok: true, path: wtPath };
+      },
+      'worktree-remove': async (args) => {
+        const wtPath = String(args.path ?? '').trim();
+        const root = wsGit.gitRoot ?? workspaceRoot;
+        if (!wtPath) return { ok: false, error: 'No worktree path.' };
+        await git(['worktree', 'remove', '--force', wtPath], root);
+        await git(['worktree', 'prune'], root);
+        return { ok: !fs.existsSync(wtPath) };
+      },
       // DESK-4c — every CLI slash command, straight from the CLI's catalog.
       'commands-catalog': () => {
         // T16 — surface catalog drift at runtime (not just in tests): the desktop

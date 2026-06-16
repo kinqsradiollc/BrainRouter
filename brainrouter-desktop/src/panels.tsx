@@ -12,6 +12,7 @@ import '@xterm/xterm/css/xterm.css';
 import { Prism } from 'react-syntax-highlighter';
 import { Icon } from './icons.js';
 import { partitionSchedules, describeSchedule, relTime, type ScheduleRecordView } from './scheduleView.js';
+import { type WorktreeEntry } from './worktreeParser.js';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Same @types/react clash as react-markdown — runtime component is fine.
@@ -49,7 +50,7 @@ export function CodeBlock({ code, language, showLineNumbers }: {
   );
 }
 
-export type PanelId = 'context' | 'files' | 'file' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule';
+export type PanelId = 'context' | 'files' | 'file' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -62,6 +63,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'plan', title: 'Plan', icon: 'plan' },
   { id: 'search', title: 'Search session', icon: 'search' },
   { id: 'schedule', title: 'Schedules', icon: 'clock' },
+  { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
 ];
 
 export function Panel({ title, onClose, children, actions }: {
@@ -530,6 +532,61 @@ export function SchedulePanel({ schedules, now, onAdd, onRemove, onToggle }: {
       {active.length === 0 ? <div className="empty">No active schedules.</div> : active.map(row)}
       {disabled.length ? <><div className="tasks-section"><span>Paused</span></div>{disabled.map(row)}</> : null}
       <div className="sched-note">Schedules persist in <code>.brainrouter/schedules.json</code> — shared with the CLI <code>/schedule</code>. They fire while the CLI agent runs.</div>
+    </div>
+  );
+}
+
+export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, onDiff }: {
+  worktrees: WorktreeEntry[];
+  diffs: Record<string, string>;
+  onCreate: (name: string, ref: string) => void;
+  onRemove: (path: string) => void;
+  onOpen: (path: string) => void;
+  onDiff: (path: string) => void;
+}): React.ReactElement {
+  const [name, setName] = useState('');
+  const [ref, setRef] = useState('');
+  const [openPath, setOpenPath] = useState<string | null>(null);
+  const submit = (): void => { if (name.trim()) { onCreate(name.trim(), ref.trim()); setName(''); setRef(''); } };
+  const toggleDiff = (p: string): void => {
+    const next = openPath === p ? null : p;
+    setOpenPath(next);
+    if (next && diffs[next] === undefined) onDiff(next);
+  };
+  return (
+    <div className="scroll wt-panel">
+      <div className="sched-add">
+        <div className="sched-add-row">
+          <input className="filter" placeholder="new worktree name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input className="filter" placeholder="base ref (HEAD)" value={ref} onChange={(e) => setRef(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} />
+          <button className="sched-add-btn" onClick={submit}>Add</button>
+        </div>
+      </div>
+      {worktrees.length === 0 ? <div className="empty">No worktrees. The main checkout plus any you add appear here.</div> : worktrees.map((w) => (
+        <div key={w.path} className="wt-row">
+          <div className="wt-head">
+            <Icon name="branch" size={13} />
+            <span className="wt-branch">{w.isDetached ? '(detached)' : w.branch || '—'}</span>
+            {w.isMain ? <span className="wt-tag">main</span> : null}
+            {w.isCurrent ? <span className="wt-tag cur">open</span> : null}
+          </div>
+          <div className="wt-path" title={w.path}>{w.path}</div>
+          <div className="wt-actions">
+            {!w.isCurrent ? <button className="wt-btn" onClick={() => onOpen(w.path)}>Open</button> : null}
+            <button className="wt-btn" onClick={() => toggleDiff(w.path)}>{openPath === w.path ? 'Hide diff' : 'Diff'}</button>
+            {!w.isMain ? <button className="wt-btn danger" onClick={() => onRemove(w.path)}>Remove</button> : null}
+          </div>
+          {openPath === w.path ? (
+            <div className="wt-diff">
+              {diffs[w.path] === undefined ? <div className="empty">Loading diff…</div>
+                : diffs[w.path].trim() ? <DiffView diff={diffs[w.path]} />
+                : <div className="empty">No uncommitted changes in this worktree.</div>}
+            </div>
+          ) : null}
+        </div>
+      ))}
+      <div className="sched-note">Worktrees are sibling checkouts under <code>.worktrees/</code> — run an agent in one without touching your main checkout. “Open” switches this window to it.</div>
     </div>
   );
 }

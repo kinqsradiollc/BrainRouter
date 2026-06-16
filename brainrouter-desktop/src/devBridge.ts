@@ -98,6 +98,11 @@ export function installDevBridge(): void {
     { id: 'sch_demo1', kind: 'cron', expr: '*/15 * * * *', command: '/status', owner: 'dev:new-chat', enabled: true, createdAt: new Date(Date.now() - 86400_000).toISOString(), nextRun: new Date(Date.now() + 600_000).toISOString(), lastRun: new Date(Date.now() - 300_000).toISOString() },
     { id: 'sch_demo2', kind: 'once', expr: new Date(Date.now() + 3600_000).toISOString(), command: '/usage', owner: 'dev:new-chat', enabled: false, createdAt: new Date(Date.now() - 1800_000).toISOString(), nextRun: new Date(Date.now() + 3600_000).toISOString() },
   ];
+  // T13 — in-memory worktrees for the panel preview.
+  const devWorktrees: Array<{ path: string; branch: string; detached: boolean }> = [
+    { path: '/Users/dev/BrainRouter', branch: 'release/0.4.15', detached: false },
+    { path: '/Users/dev/BrainRouter/.worktrees/experiment', branch: 'spike-new-recall', detached: false },
+  ];
 
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(wsCurrent),
@@ -111,6 +116,11 @@ export function installDevBridge(): void {
     },
     'schedule-remove': (a) => { const i = devSchedules.findIndex((s) => s.id === a.id); if (i >= 0) devSchedules.splice(i, 1); return { ok: i >= 0 }; },
     'schedule-toggle': (a) => { const s = devSchedules.find((x) => x.id === a.id); if (s) s.enabled = a.enabled !== false; return { ok: !!s, enabled: a.enabled !== false }; },
+    // T13 — mock git worktrees (raw porcelain, parsed in the renderer).
+    'git-worktrees': () => ({ raw: devWorktrees.map((w) => `worktree ${w.path}\nHEAD ${'a'.repeat(40)}\n${w.detached ? 'detached' : `branch refs/heads/${w.branch}`}\n`).join('\n'), gitRoot: '/Users/dev/BrainRouter', current: wsCurrent }),
+    'worktree-diff': () => ({ path: '', diff: DEMO_DIFF, files: 1 }),
+    'worktree-create': (a) => { const name = String(a.name ?? ''); const p = `/Users/dev/BrainRouter/.worktrees/${name}`; devWorktrees.push({ path: p, branch: name, detached: false }); return { ok: true, path: p }; },
+    'worktree-remove': (a) => { const i = devWorktrees.findIndex((w) => w.path === a.path); if (i >= 0) devWorktrees.splice(i, 1); return { ok: i >= 0 }; },
     'workspace-sessions': (a) => mergeMeta(String(a.root ?? '')),
     // DESK-6m — per-chat ⋮ menu actions, mutating the in-memory devMeta.
     'action:session-meta': (a) => {
