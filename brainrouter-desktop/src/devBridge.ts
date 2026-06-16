@@ -111,6 +111,28 @@ export function installDevBridge(): void {
     { path: '/Users/dev/BrainRouter', branch: 'release/0.4.15', detached: false },
     { path: '/Users/dev/BrainRouter/.worktrees/experiment', branch: 'spike-new-recall', detached: false },
   ];
+  // Review v2 — a shared mock run + gate so the commit/push review gate is exercisable.
+  const DEV_DIFF_HASH = 'devhash';
+  type DevFinding = { id: string; file: string; line?: number; severity: string; confidence: number; summary: string; status: string; canApply: boolean; source: string };
+  let devReview: { id: string; diffHash: string; status: string; summary: string; findings: DevFinding[] } | null = null;
+  const devRunReview = () => {
+    devReview = {
+      id: 'rev_dev', diffHash: DEV_DIFF_HASH, status: 'completed',
+      summary: 'Reviewed 2 changed files. One real bug and one perf nit; the rest looks good.',
+      findings: [
+        { id: 'f0', file: 'src/memory/recall.ts', line: 1247, severity: 'high', confidence: 92, summary: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.', status: 'open', canApply: false, source: 'ai-review' },
+        { id: 'f1', file: 'src/memory/recall.ts', line: 1260, severity: 'medium', confidence: 71, summary: 'Re-sorts the full candidate list per call; sort once after blending.', status: 'open', canApply: false, source: 'ai-review' },
+        { id: 'f2', file: 'src/agent/agent.ts', line: 880, severity: 'low', confidence: 60, summary: 'Unused local `mutatedThisTurn` after the refactor.', status: 'open', canApply: false, source: 'ai-review' },
+      ],
+    };
+    return { ...devReview, files: 2 };
+  };
+  const devGate = () => {
+    if (!devReview || devReview.diffHash !== DEV_DIFF_HASH) return { status: 'needs-review', blocked: true, reason: 'No review has run for the current changes.', blockingFindings: [] };
+    const blocking = devReview.findings.filter((f) => f.status === 'open' && (f.severity === 'critical' || f.severity === 'high'));
+    if (blocking.length) return { status: 'blocked', blocked: true, reason: `${blocking.length} unresolved high+ finding(s) must be resolved, fixed, or dismissed.`, blockingFindings: blocking };
+    return { status: 'clean', blocked: false, reason: 'Review passed — no unresolved blocking findings.', blockingFindings: [] };
+  };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
@@ -133,15 +155,15 @@ export function installDevBridge(): void {
     'worktree-create': (a) => { const name = String(a.name ?? ''); const p = `/Users/dev/BrainRouter/.worktrees/${name}`; devWorktrees.push({ path: p, branch: name, detached: false }); return { ok: true, path: p }; },
     'worktree-remove': (a) => { const i = devWorktrees.findIndex((w) => w.path === a.path); if (i >= 0) devWorktrees.splice(i, 1); return { ok: i >= 0 }; },
     // T12 — mock a local review pass over the working diff.
-    'review-diff': () => ({
-      summary: 'Reviewed 2 changed files. One real bug and one perf nit; the rest looks good.',
-      files: 2,
-      findings: [
-        { file: 'src/memory/recall.ts', line: 1247, severity: 'bug', confidence: 92, summary: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.' },
-        { file: 'src/memory/recall.ts', line: 1260, severity: 'perf', confidence: 71, summary: 'Re-sorts the full candidate list per call; sort once after blending.' },
-        { file: 'src/agent/agent.ts', line: 880, severity: 'nit', confidence: 60, summary: 'Unused local `mutatedThisTurn` after the refactor.' },
-      ],
-    }),
+    // Review v2 — shared run + gate so the commit/push gate is demonstrable.
+    'review-diff': () => devRunReview(),
+    'review-rerun': () => devRunReview(),
+    'review-current': () => ({ run: devReview, gate: devGate(), diffHash: DEV_DIFF_HASH, files: 2 }),
+    'review-gate': () => ({ run: devReview, gate: devGate(), diffHash: DEV_DIFF_HASH, files: 2 }),
+    'review-status': () => { const g = devGate(); return { status: g.status, blocked: g.blocked, reason: g.reason }; },
+    'review-dismiss-finding': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'dismissed'; return { ok: !!f }; },
+    'review-resolve-finding': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'fixed'; return { ok: !!f }; },
+    'review-apply-suggestion': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'applied'; return { ok: !!f }; },
     'workspace-sessions': (a) => mergeMeta(String(a.root ?? '')),
     // DESK-6m — per-chat ⋮ menu actions, mutating the in-memory devMeta.
     'action:session-meta': (a) => {
@@ -541,6 +563,7 @@ export function installDevBridge(): void {
     addWorkspace: async () => ({ opened: false, workspaceRoot: '/Users/dev/new-project' }),
     workspaceRecents: async () => ({ current: wsCurrent, recents: wsRecents }),
     onRecentsChanged: (l: (d: { recents: string[]; reason: string; workspaceRoot: string }) => void) => { recentsListeners.add(l); return () => recentsListeners.delete(l); },
+    markActivity: async (root: string) => { wsRecents = [root, ...wsRecents.filter((w) => w !== root)]; recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'commit', workspaceRoot: root })); return { ok: true }; },
     openWorkspace: async (root: string) => {
       // Mirror the real main-process swap. Wave 1 — opening is "opened", NOT
       // activity: ensure membership WITHOUT promoting to the top (only a turn/

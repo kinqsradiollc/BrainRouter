@@ -241,6 +241,12 @@ app.whenReady().then(() => {
   ipcMain.handle('workspace:trust', (_e, root: unknown) => { if (typeof root === 'string') trustWorkspace(root); return { trusted: true }; });
   ipcMain.handle('workspace:untrust', (_e, root: unknown) => { if (typeof root === 'string') untrustWorkspace(root); return { trusted: false }; });
   ipcMain.handle('workspace:trustedList', () => ({ trusted: listTrustedWorkspaces() }));
+  // Wave 1/4 — the renderer reports real activity that main can't see on the
+  // agent-event stream (commit / push / create-pr) so the project promotes.
+  ipcMain.handle('workspace:activity', (_e, root: unknown, reason: unknown) => {
+    if (typeof root === 'string' && typeof reason === 'string') markWorkspaceActivity(root, reason as ActivityReason);
+    return { ok: true };
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

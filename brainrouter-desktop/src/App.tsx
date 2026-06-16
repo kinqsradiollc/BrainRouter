@@ -638,6 +638,10 @@ export function App(): React.ReactElement {
   // DESK-5j — Changes tab review actions (commit/push/pull via the host's
   // user-command shell path — same trust level as the terminal input row).
   const [gitBusy, setGitBusy] = useState(false);
+  // Wave 4 — review gate: a pending commit/push waiting on the gate check, and
+  // the block dialog shown when the gate refuses (with an explicit bypass).
+  const pendingGitRef = useRef<{ kind: 'commit' | 'push'; msg?: string } | null>(null);
+  const [gateBlock, setGateBlock] = useState<{ kind: 'commit' | 'push'; msg?: string; reason: string; status: string } | null>(null);
   const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
   // DESK-5w — the background task whose conversation is open (read-only),
   // shown in place of the chat. null = normal chat view.
@@ -823,15 +827,26 @@ export function App(): React.ReactElement {
     });
   }
 
-  /** DESK-5j — Changes-tab review actions; results toast + refresh git state. */
-  function runGit(kind: 'commit' | 'push' | 'pull', msg?: string): void {
+  /** DESK-5j / Wave 4 — Changes-tab git actions. commit/push are GATED by the
+   *  local AI review: the gate is checked first; if it blocks, a dialog explains
+   *  why and offers an explicit bypass. pull is never gated. */
+  function runGit(kind: 'commit' | 'push' | 'pull', msg?: string, opts?: { bypass?: boolean }): void {
+    if ((kind === 'commit' || kind === 'push') && !opts?.bypass) {
+      pendingGitRef.current = { kind, msg };
+      setToast('Checking review status…');
+      q('q-review-gate', 'review-gate');
+      return;
+    }
     const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
     const cmd = kind === 'commit'
       ? `git add -A && git commit -m ${sq(msg ?? '')}`
       : kind === 'push' ? 'git push' : 'git pull --ff-only';
     setGitBusy(true);
-    setToast(kind === 'commit' ? 'Committing…' : kind === 'push' ? 'Pushing…' : 'Pulling…');
+    if (opts?.bypass) console.warn(`[review-gate] ${kind} BYPASSED without a clean review`);
+    setToast(kind === 'commit' ? (opts?.bypass ? 'Committing (review bypassed)…' : 'Committing…') : kind === 'push' ? (opts?.bypass ? 'Pushing (review bypassed)…' : 'Pushing…') : 'Pulling…');
     q('a-git', 'action:term-exec', { cmd });
+    // Wave 1 (D) — commit/push are real ACTIVITY → promote this project.
+    if (kind !== 'pull') { const r = workspaces.current ?? info.workspaceRoot; if (r) void window.brainrouter.markActivity?.(r, kind); }
   }
 
   /** Add project = pick folder → trust dialog right away → open in place.
@@ -1251,6 +1266,21 @@ export function App(): React.ReactElement {
         setReviewRunning(false);
         const r = result as { findings?: ReviewFindingView[]; summary?: string; files?: number } | null;
         setReview(r ? { findings: r.findings ?? [], summary: r.summary ?? '', files: r.files ?? 0 } : { findings: [], summary: 'Review failed.', files: 0 });
+        // If a commit/push was waiting on a freshly-run review, re-check the gate.
+        if (pendingGitRef.current) q('q-review-gate', 'review-gate');
+        return;
+      }
+      case 'q-review-gate': {
+        const r = result as { gate?: { blocked?: boolean; reason?: string; status?: string } } | null;
+        const gate = r?.gate ?? { blocked: true, reason: 'Review status unavailable.', status: 'needs-review' };
+        const pending = pendingGitRef.current;
+        if (!pending) return;
+        if (gate.blocked) {
+          setGateBlock({ kind: pending.kind, msg: pending.msg, reason: gate.reason ?? 'Review required.', status: gate.status ?? 'needs-review' });
+        } else {
+          pendingGitRef.current = null;
+          runGit(pending.kind, pending.msg, { bypass: true }); // gate clean → proceed
+        }
         return;
       }
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
@@ -2594,6 +2624,24 @@ export function App(): React.ReactElement {
             <pre className="dialog-detail">{infoDialog.body}</pre>
             <div className="dialog-actions">
               <button className="deny" onClick={() => setInfoDialog(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {/* Wave 4 — review gate block: commit/push refused until review is clean. */}
+      {gateBlock ? (
+        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setGateBlock(null); }}>
+          <div className="dialog">
+            <div className="dialog-title"><Icon name="shield" size={15} /> Review required before {gateBlock.kind}</div>
+            <div className="dialog-detail">{gateBlock.reason}</div>
+            <div className="dialog-actions" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="primary" onClick={() => { const g = gateBlock; setGateBlock(null); ensurePanel('review'); if (g.status !== 'blocked') { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); } }}>
+                {gateBlock.status === 'blocked' ? 'Open review' : 'Run review'}
+              </button>
+              <button className="deny" onClick={() => { const g = gateBlock; setGateBlock(null); pendingGitRef.current = null; runGit(g.kind, g.msg, { bypass: true }); setToast(`${g.kind === 'commit' ? 'Commit' : 'Push'} — review bypassed.`); }}>
+                {gateBlock.kind === 'commit' ? 'Commit without review' : 'Push without review'}
+              </button>
+              <button className="deny" onClick={() => { setGateBlock(null); pendingGitRef.current = null; setGitBusy(false); }}>Cancel</button>
             </div>
           </div>
         </div>

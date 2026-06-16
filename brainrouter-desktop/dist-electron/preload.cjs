@@ -43,4 +43,7 @@ contextBridge.exposeInMainWorld('brainrouter', {
     trustedWorkspaces() {
         return ipcRenderer.invoke('workspace:trustedList');
     },
+    markActivity(workspaceRoot, reason) {
+        return ipcRenderer.invoke('workspace:activity', workspaceRoot, reason);
+    },
 });
