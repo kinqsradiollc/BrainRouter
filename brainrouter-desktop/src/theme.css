@@ -555,6 +555,15 @@ input.ctl { min-width: 220px; }
 .finding-status { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
 .review-finding.resolved { opacity: 0.55; }
 .review-finding.resolved .review-finding-body { text-decoration: line-through; }
+/* Wave 7 — review status surfaced in the Changes/Diff area */
+.diff-review-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; padding: 6px 10px; border-radius: 8px; font-size: 11.5px; font-weight: 560; }
+.diff-review-status .drs-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-review-status.gate-clean { background: rgba(108,192,74,0.14); color: #6cc04a; }
+.diff-review-status.gate-blocked { background: rgba(255,161,152,0.14); color: #ffa198; }
+.diff-review-status.gate-stale, .diff-review-status.gate-running { background: rgba(229,192,123,0.14); color: #e5c07b; }
+.diff-review-status.gate-needs-review { background: var(--ov-06); color: var(--text-dim); }
+.diff-review-status .drs-btn { flex: none; border: 1px solid currentColor; background: transparent; color: inherit; font-size: 11px; font-weight: 560; padding: 2px 9px; border-radius: 999px; cursor: pointer; opacity: 0.9; }
+.diff-review-status .drs-btn:hover { opacity: 1; background: var(--ov-06); }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }
