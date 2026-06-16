@@ -550,7 +550,7 @@ export function App(): React.ReactElement {
   const [diffView, setDiffView] = useState<{ path: string; diff: string } | null>(null);
   const [allFiles, setAllFiles] = useState<string[]>([]);
   const [fileView, setFileView] = useState<{ path: string; content: string; error?: string } | null>(null);
-  const [gitInfo, setGitInfo] = useState<{ repo: string; branch: string | null; insertions: number; deletions: number } | null>(null);
+  const [gitInfo, setGitInfo] = useState<{ repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null>(null);
   const [commitSubjects, setCommitSubjects] = useState<string[]>([]);
   const [tokens, setTokens] = useState<{ promptTokens: number; completionTokens: number; turns: number } | null>(null);
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
@@ -1640,6 +1640,12 @@ export function App(): React.ReactElement {
           <div className="kv"><span>Host</span><b><span className={`dot ${hostUp ? 'on' : 'off'}`} />{hostUp ? 'online' : 'starting…'}</b></div>
           <div className="kv"><span>Model</span><b>{info.model ?? '—'}</b></div>
           <div className="kv"><span>Workspace</span><b title={info.workspaceRoot}>{info.workspaceRoot?.split('/').pop() ?? '—'}</b></div>
+          {/* Stability fix (T4) — when the workspace is a SUBDIR of a larger repo
+              (monorepo / nested clone), show the owning git repo + the repo-
+              relative path so it's clear what git operations are scoped to. */}
+          {gitInfo?.isSubdir && gitInfo.gitRoot ? (
+            <div className="kv"><span>Git repo</span><b title={gitInfo.gitRoot}>{gitInfo.repo}<span style={{ opacity: 0.55 }}>{` / ${gitInfo.repoRelativePath}`}</span></b></div>
+          ) : null}
           <div className="kv"><span>Tokens</span><b>{tokens ? `${tokens.promptTokens.toLocaleString()} in / ${tokens.completionTokens.toLocaleString()} out` : '—'}</b></div>
           <div className="kv"><span>Config</span><b>~/.config/brainrouter</b></div>
         </>);
