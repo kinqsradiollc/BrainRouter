@@ -130,6 +130,16 @@ export function installDevBridge(): void {
     'worktree-diff': () => ({ path: '', diff: DEMO_DIFF, files: 1 }),
     'worktree-create': (a) => { const name = String(a.name ?? ''); const p = `/Users/dev/BrainRouter/.worktrees/${name}`; devWorktrees.push({ path: p, branch: name, detached: false }); return { ok: true, path: p }; },
     'worktree-remove': (a) => { const i = devWorktrees.findIndex((w) => w.path === a.path); if (i >= 0) devWorktrees.splice(i, 1); return { ok: i >= 0 }; },
+    // T12 — mock a local review pass over the working diff.
+    'review-diff': () => ({
+      summary: 'Reviewed 2 changed files. One real bug and one perf nit; the rest looks good.',
+      files: 2,
+      findings: [
+        { file: 'src/memory/recall.ts', line: 1247, severity: 'bug', confidence: 92, summary: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.' },
+        { file: 'src/memory/recall.ts', line: 1260, severity: 'perf', confidence: 71, summary: 'Re-sorts the full candidate list per call; sort once after blending.' },
+        { file: 'src/agent/agent.ts', line: 880, severity: 'nit', confidence: 60, summary: 'Unused local `mutatedThisTurn` after the refactor.' },
+      ],
+    }),
     'workspace-sessions': (a) => mergeMeta(String(a.root ?? '')),
     // DESK-6m — per-chat ⋮ menu actions, mutating the in-memory devMeta.
     'action:session-meta': (a) => {

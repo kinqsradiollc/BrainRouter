@@ -50,7 +50,7 @@ export function CodeBlock({ code, language, showLineNumbers }: {
   );
 }
 
-export type PanelId = 'context' | 'files' | 'file' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees';
+export type PanelId = 'context' | 'files' | 'file' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -64,6 +64,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'search', title: 'Search session', icon: 'search' },
   { id: 'schedule', title: 'Schedules', icon: 'clock' },
   { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
+  { id: 'review', title: 'Review', icon: 'review' },
 ];
 
 export function Panel({ title, onClose, children, actions }: {
@@ -587,6 +588,49 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
         </div>
       ))}
       <div className="sched-note">Worktrees are sibling checkouts under <code>.worktrees/</code> — run an agent in one without touching your main checkout. “Open” switches this window to it.</div>
+    </div>
+  );
+}
+
+export interface ReviewFindingView { file: string; line?: number; severity: string; confidence: number; summary: string }
+
+export function ReviewPanel({ review, running, onRun, onDiscuss }: {
+  review: { findings: ReviewFindingView[]; summary: string; files: number } | null;
+  running: boolean;
+  onRun: () => void;
+  onDiscuss: (f: ReviewFindingView) => void;
+}): React.ReactElement {
+  const byFile = new Map<string, ReviewFindingView[]>();
+  for (const f of review?.findings ?? []) { const a = byFile.get(f.file) ?? []; a.push(f); byFile.set(f.file, a); }
+  return (
+    <div className="scroll review-panel">
+      <div className="review-bar">
+        <button className="btn primary" disabled={running} onClick={onRun}>{running ? 'Reviewing…' : 'Review working changes'}</button>
+        {review ? <span className="review-count">{review.findings.length} finding{review.findings.length === 1 ? '' : 's'} · {review.files} file{review.files === 1 ? '' : 's'}</span> : null}
+      </div>
+      {running ? <div className="row status"><span className="spinner" /> Running a local review over the working diff…</div> : null}
+      {review && !running ? (
+        <>
+          {review.summary ? <div className="review-summary">{review.summary}</div> : null}
+          {review.findings.length === 0 ? <div className="empty">No issues found in the working changes. ✓</div> : null}
+          {[...byFile.entries()].map(([file, fs]) => (
+            <div key={file} className="review-file">
+              <div className="review-file-head">{file}</div>
+              {fs.map((f, i) => (
+                <div key={i} className="review-finding">
+                  <div className="review-finding-head">
+                    <span className={`sev sev-${f.severity}`}>{f.severity}</span>
+                    {f.line ? <span className="review-line">:{f.line}</span> : null}
+                    <span className="review-conf">{f.confidence}%</span>
+                  </div>
+                  <div className="review-finding-body">{f.summary}</div>
+                  <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss in chat</button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      ) : !running ? <div className="empty">Run a review of your uncommitted changes before a commit/PR — findings appear here grouped by file.</div> : null}
     </div>
   );
 }
