@@ -39,6 +39,7 @@ import {
 import type { ScheduleRecordView } from './scheduleView.js';
 import { parseWorktreeList, type WorktreeEntry } from './worktreeParser.js';
 import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './sessionPagination.js';
+import { mergeOptimistic, dropPending } from './sessionOrder.js';
 import { toolGroupLabel } from './toolGroupLabel.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
@@ -602,6 +603,10 @@ export function App(): React.ReactElement {
   // throttling never drops content.
   const liveFlushPending = useRef(false);
   const sessionsRef = useRef<SessionRow[]>([]);
+  // Wave 2 — optimistic new-chat rows not yet confirmed by the host's
+  // list-sessions. Kept across refreshes (merged) so a fresh chat's row never
+  // flickers out while the transcript flush races the refresh.
+  const pendingSessionsRef = useRef<SessionRow[]>([]);
   const lastPromptRef = useRef('');
   // T2/T3 — the workspace the on-screen surfaces belong to, set authoritatively
   // by session-changed. Events tagged with a DIFFERENT workspace are dropped so
@@ -1197,7 +1202,14 @@ export function App(): React.ReactElement {
       return;
     }
     switch (id) {
-      case 'q-sessions': if (Array.isArray(result)) { setSessions(result as SessionRow[]); sessionsRef.current = result as SessionRow[]; } return;
+      case 'q-sessions': if (Array.isArray(result)) {
+        const hostRows = result as SessionRow[];
+        // Wave 2 — drop optimistic rows the host now confirms, then merge the
+        // still-pending ones so a brand-new chat never vanishes on a refresh.
+        pendingSessionsRef.current = dropPending(pendingSessionsRef.current, hostRows.map((r) => r.sessionKey));
+        const merged = mergeOptimistic(hostRows, pendingSessionsRef.current);
+        setSessions(merged); sessionsRef.current = merged;
+      } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
       case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
       case 'q-fleet': if (Array.isArray(result)) setFleet(result as FleetRow[]); return;
@@ -1437,9 +1449,12 @@ export function App(): React.ReactElement {
     // refreshSession() shortly after reconciles it with the host-backed row.
     const sk = sessionKeyRef.current ?? info.sessionKey;
     if (sk) {
-      setSessions((prev) => prev.some((s) => s.sessionKey === sk)
-        ? prev
-        : [{ sessionKey: sk, firstUserMessage: prompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user' }, ...prev]);
+      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: prompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user' };
+      // Wave 2 — track it as pending so subsequent list-sessions refreshes MERGE
+      // it (instead of replacing it away) until the host transcript confirms it.
+      if (!pendingSessionsRef.current.some((s) => s.sessionKey === sk)) pendingSessionsRef.current = [optimistic, ...pendingSessionsRef.current];
+      setSessions((prev) => mergeOptimistic(prev.filter((s) => s.sessionKey !== sk), [optimistic]));
+      sessionsRef.current = mergeOptimistic(sessionsRef.current.filter((s) => s.sessionKey !== sk), [optimistic]);
       setTimeout(() => refreshSession(), 400);
     }
     window.brainrouter.send({ kind: 'start-turn', prompt });
