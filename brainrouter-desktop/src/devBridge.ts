@@ -113,16 +113,27 @@ export function installDevBridge(): void {
   ];
   // Review v2 — a shared mock run + gate so the commit/push review gate is exercisable.
   const DEV_DIFF_HASH = 'devhash';
-  type DevFinding = { id: string; file: string; line?: number; severity: string; confidence: number; summary: string; status: string; canApply: boolean; source: string };
+  type DevFinding = { id: string; file: string; line?: number; endLine?: number; severity: string; confidence: number; summary: string; status: string; canApply: boolean; source: string; details?: string; suggestion?: string; codeExcerpt?: string; diffHunk?: string; patch?: string };
   let devReview: { id: string; diffHash: string; status: string; summary: string; findings: DevFinding[] } | null = null;
   const devRunReview = () => {
     devReview = {
       id: 'rev_dev', diffHash: DEV_DIFF_HASH, status: 'completed',
       summary: 'Reviewed 2 changed files. One real bug and one perf nit; the rest looks good.',
       findings: [
-        { id: 'f0', file: 'src/memory/recall.ts', line: 1247, severity: 'high', confidence: 92, summary: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.', status: 'open', canApply: false, source: 'ai-review' },
-        { id: 'f1', file: 'src/memory/recall.ts', line: 1260, severity: 'medium', confidence: 71, summary: 'Re-sorts the full candidate list per call; sort once after blending.', status: 'open', canApply: false, source: 'ai-review' },
-        { id: 'f2', file: 'src/agent/agent.ts', line: 880, severity: 'low', confidence: 60, summary: 'Unused local `mutatedThisTurn` after the refactor.', status: 'open', canApply: false, source: 'ai-review' },
+        { id: 'f0', file: 'src/memory/recall.ts', line: 1247, endLine: 1249, severity: 'high', confidence: 92,
+          summary: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.', status: 'open', canApply: true, source: 'ai-review',
+          details: 'The reranker output overwrites the retriever ranking, so any candidate the reranker scores low is discarded even when the retriever ranked it highly. Blend the two scores instead of replacing.',
+          suggestion: 'Blend the scores: const blended = 0.6 * rerank + 0.4 * rrf; then sort + take top-N.',
+          codeExcerpt: 'const ranked = reranked.map(r => r.score);\nresults.sort((a, b) => ranked[b] - ranked[a]);\nreturn results.slice(0, topN);',
+          diffHunk: '@@ -1247,3 +1247,3 @@\n-const ranked = reranked.map(r => r.score);\n-results.sort((a, b) => ranked[b] - ranked[a]);\n+const blended = reranked.map((r, i) => 0.6 * r.score + 0.4 * rrf[i]);\n+results.sort((a, b) => blended[b] - blended[a]);\n return results.slice(0, topN);',
+          patch: '--- a/src/memory/recall.ts\n+++ b/src/memory/recall.ts\n@@ -1247,2 +1247,2 @@\n-const ranked = reranked.map(r => r.score);\n-results.sort((a, b) => ranked[b] - ranked[a]);\n+const blended = reranked.map((r, i) => 0.6 * r.score + 0.4 * rrf[i]);\n+results.sort((a, b) => blended[b] - blended[a]);' },
+        { id: 'f1', file: 'src/memory/recall.ts', line: 1260, severity: 'medium', confidence: 71,
+          summary: 'Re-sorts the full candidate list per call; sort once after blending.', status: 'open', canApply: false, source: 'ai-review',
+          details: 'sortCandidates() runs inside the per-result loop, so the list is re-sorted O(n) times. Sort once after the blend.',
+          codeExcerpt: 'for (const r of results) {\n  sortCandidates(results);\n  emit(r);\n}' },
+        { id: 'f2', file: 'src/agent/agent.ts', line: 880, severity: 'low', confidence: 60,
+          summary: 'Unused local `mutatedThisTurn` after the refactor.', status: 'open', canApply: false, source: 'ai-review',
+          codeExcerpt: 'let mutatedThisTurn = false;' },
       ],
     };
     return { ...devReview, files: 2 };
@@ -264,6 +275,7 @@ export function installDevBridge(): void {
       return { sessions: 23, turns: 412, activeDays: 64, currentStreak: 3, longestStreak: 11, model: 'claude-opus-4-8', perDay };
     },
     'changed-files': () => [
+      { status: 'M', path: 'src/memory/recall.ts' },
       { status: 'M', path: 'src/agent/agent.ts' },
       { status: 'M', path: 'src/cli/ink/ChatApp.tsx' },
       { status: 'A', path: 'src/state/completionInbox.ts' },

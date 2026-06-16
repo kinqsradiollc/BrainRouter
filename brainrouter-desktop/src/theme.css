@@ -554,10 +554,43 @@ input.ctl { min-width: 220px; }
 .review-gate.gate-blocked { background: rgba(255,161,152,0.14); color: #ffa198; }
 .review-gate.gate-stale, .review-gate.gate-running { background: rgba(229,192,123,0.14); color: #e5c07b; }
 .review-gate.gate-needs-review { background: var(--ov-06); color: var(--text-dim); }
-.finding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.finding-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .finding-status { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
-.review-finding.resolved { opacity: 0.55; }
+.review-finding.resolved { opacity: 0.5; }
 .review-finding.resolved .review-finding-body { text-decoration: line-through; }
+/* §2/§5 — PR-style finding card: details, code frame, suggestion, file header */
+.review-file-head { display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 1; background: var(--surface); padding: 5px 8px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+.review-file-head .rfh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-file-head .rfh-count { flex: none; font-family: var(--font); font-size: 10px; background: var(--ov-08); color: var(--text-dim); border-radius: 999px; padding: 1px 7px; }
+.review-finding { padding: 8px 8px 9px; border-left: 2px solid var(--border-strong); margin: 7px 0 7px 6px; }
+.review-finding-details { font-size: 12px; color: var(--text-dim); line-height: 1.5; margin: 3px 0 7px; }
+.review-suggestion { font-size: 12px; color: var(--text); line-height: 1.5; margin: 7px 0; padding: 6px 9px; border-radius: 7px; background: rgba(108,192,74,0.10); border-left: 2px solid #6cc04a; }
+.review-suggestion .rs-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #6cc04a; margin-right: 6px; }
+.wt-btn.primary-ghost { border-color: var(--accent); color: var(--accent); }
+/* The shared review code frame (Review panel + matches the Diff viewer styling) */
+.rcf { margin: 7px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--term-bg); }
+.rcf-code { font-family: var(--mono); font-size: 11.5px; line-height: 1.55; overflow-x: auto; }
+.rcf-row { display: flex; white-space: pre; }
+.rcf-gutter { flex: none; width: 38px; text-align: right; padding: 0 8px 0 0; color: var(--text-faint); user-select: none; opacity: 0.7; }
+.rcf-sign { flex: none; width: 12px; text-align: center; color: var(--text-faint); user-select: none; }
+.rcf-text { flex: 1; padding-right: 10px; color: var(--text-dim); }
+.rcf-row.rcf-ctx .rcf-text { color: var(--text-dim); }
+.rcf-row.rcf-problem { background: rgba(255,161,152,0.13); } .rcf-row.rcf-problem .rcf-text, .rcf-row.rcf-problem .rcf-sign { color: #ffb3a8; }
+.rcf-row.rcf-del { background: rgba(255,161,152,0.13); } .rcf-row.rcf-del .rcf-text, .rcf-row.rcf-del .rcf-sign { color: #ffb3a8; }
+.rcf-row.rcf-add { background: rgba(108,192,74,0.13); } .rcf-row.rcf-add .rcf-text, .rcf-row.rcf-add .rcf-sign { color: #8fe0a0; }
+.rcf-row.rcf-meta .rcf-text { color: var(--text-faint); opacity: 0.7; }
+.rcf-patch { border-top: 1px solid var(--border); }
+.rcf-patch-toggle { width: 100%; text-align: left; border: 0; background: transparent; color: var(--text-faint); font-size: 11px; padding: 5px 10px; cursor: pointer; }
+.rcf-patch-toggle:hover { color: var(--text-dim); background: var(--ov-04); }
+.rcf-patch-body { max-height: 280px; overflow: auto; border-top: 1px solid var(--border); }
+/* §4 — file finding badge in the Changes list */
+.file-findings { flex: none; min-width: 16px; text-align: center; font-size: 10px; font-weight: 600; color: #ffb3a8; background: rgba(255,161,152,0.16); border-radius: 999px; padding: 1px 6px; margin-left: auto; }
+.file-row .file-findings + .icon-btn { margin-left: 6px; }
+/* §7 — explicit bypass row when the gate blocks */
+.review-bypass { display: flex; gap: 6px; margin: 4px 0 2px; }
+.bypass-btn { flex: 1; border: 1px dashed var(--border-strong); background: transparent; color: var(--text-faint); font-size: 11px; padding: 4px 8px; border-radius: 7px; cursor: pointer; }
+.bypass-btn:hover:not(:disabled) { color: #ffa198; border-color: #ffa198; }
+.bypass-btn:disabled { opacity: 0.45; cursor: default; }
 /* Wave 7 — review status surfaced in the Changes/Diff area */
 .diff-review-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; padding: 6px 10px; border-radius: 8px; font-size: 11.5px; font-weight: 560; }
 .diff-review-status .drs-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

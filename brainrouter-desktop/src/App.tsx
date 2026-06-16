@@ -40,6 +40,7 @@ import type { ScheduleRecordView } from './scheduleView.js';
 import { parseWorktreeList, type WorktreeEntry } from './worktreeParser.js';
 import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './sessionPagination.js';
 import { mergeOptimistic, dropPending } from './sessionOrder.js';
+import { gitActionTag } from './reviewGateUi.js';
 import { toolGroupLabel } from './toolGroupLabel.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
@@ -666,6 +667,12 @@ export function App(): React.ReactElement {
   const [review, setReview] = useState<{ findings: ReviewFindingView[]; summary: string; files: number } | null>(null);
   const [reviewGate, setReviewGate] = useState<{ status: string; blocked: boolean; reason: string } | null>(null);
   const [reviewRunning, setReviewRunning] = useState(false);
+  // §4 — per-file count of OPEN findings, for the Changes-list badges.
+  const reviewFindingsByFile = useMemo<Record<string, number>>(() => {
+    const m: Record<string, number> = {};
+    for (const f of review?.findings ?? []) if (!f.status || f.status === 'open') m[f.file] = (m[f.file] ?? 0) + 1;
+    return m;
+  }, [review]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   // DESK-5d — the trust gate runs BEFORE a project opens (and before a chat
@@ -849,7 +856,8 @@ export function App(): React.ReactElement {
     setGitBusy(true);
     // §7 — a CLEAN gate is "reviewed", NOT a bypass: no warning, no "bypassed" label.
     if (opts?.bypass) console.warn(`[review-gate] ${kind} BYPASSED without a clean review`);
-    const tag = opts?.bypass ? ' (review bypassed)' : opts?.reviewed ? ' (reviewed)' : '';
+    const state = gitActionTag(opts); // '' | 'reviewed' | 'bypassed'
+    const tag = state === 'bypassed' ? ' (review bypassed)' : state === 'reviewed' ? ' (reviewed)' : '';
     setToast(kind === 'commit' ? `Committing${tag}…` : kind === 'push' ? `Pushing${tag}…` : 'Pulling…');
     q('a-git', 'action:term-exec', { cmd });
     // Wave 1 (D) — commit/push are real ACTIVITY → promote this project.
@@ -1795,8 +1803,9 @@ export function App(): React.ReactElement {
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           onPick={(p) => q('q-diff', 'file-diff', { path: p })}
           onBack={() => setDiffView(null)} onOpenFile={openFile}
-          onGit={runGit} gitBusy={gitBusy}
-          reviewGate={reviewGate} onReview={() => ensurePanel('review')} />);
+          onGit={runGit} onGitBypass={(kind, msg) => runGit(kind, msg, { bypass: true })} gitBusy={gitBusy}
+          reviewGate={reviewGate} onReview={() => ensurePanel('review')}
+          findingsByFile={reviewFindingsByFile} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'tasks': return <TasksPanel fleet={activeSessionTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = activeSessionTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
@@ -1817,10 +1826,12 @@ export function App(): React.ReactElement {
         return <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
           onRun={() => { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); }}
           onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
-          onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); } }}
+          onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
           onAskFix={(f) => { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }}
           onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
-          onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }} />;
+          onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }}
+          onOpenFile={(f) => openFile(f.file)}
+          onOpenDiff={(f) => { ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
       default: return null;
     }
