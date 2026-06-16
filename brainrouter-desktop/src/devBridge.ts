@@ -480,4 +480,12 @@ export function installDevBridge(): void {
     untrustWorkspace: async (root: string) => { trustedRoots.delete(root); return { trusted: false }; },
     trustedWorkspaces: async () => ({ trusted: [...trustedRoots] }),
   };
+
+  // Dev-only — fire a turn event tagged with ANY workspaceRoot (even one not on
+  // screen), so the sidebar's "running elsewhere" dot (item 4) is exercisable in
+  // the browser preview. Not present in the Electron preload bridge.
+  (window as unknown as { __devEmitWs?: (root: string, kind: string, sessionKey?: string) => void }).__devEmitWs =
+    (workspaceRoot, kind, sessionKey = 'bg:task') => {
+      listeners.forEach((l) => l({ seq: ++seq, ts: Date.now(), sessionKey, event: { kind } as AgentEvent, workspaceRoot } as AgentEventMessage & { workspaceRoot: string }));
+    };
 }

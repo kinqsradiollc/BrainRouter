@@ -77,3 +77,29 @@ export function isStaleQueryResult(id: string, currentGeneration: number): boole
   const { generation } = parseQueryId(id);
   return generation !== null && generation !== currentGeneration;
 }
+
+/**
+ * Item 4 — fold a tagged turn event into the set of WORKSPACES with a turn in
+ * flight. Because the host pool keeps background work alive, the sidebar can
+ * show a "running" dot on a project that isn't on screen. Must be applied
+ * BEFORE the stale-workspace drop (above), since a background workspace's turn
+ * events are exactly the ones that drop would discard. Returns the SAME set
+ * reference when nothing changes, so it's a cheap no-op for the common case.
+ */
+export function nextRunningWorkspaces(
+  current: Set<string>,
+  eventKind: string | undefined,
+  workspaceRoot: string | undefined,
+): Set<string> {
+  if (!workspaceRoot) return current;
+  if (eventKind === 'turn-start') {
+    return current.has(workspaceRoot) ? current : new Set(current).add(workspaceRoot);
+  }
+  if (eventKind === 'turn-complete' || eventKind === 'turn-error') {
+    if (!current.has(workspaceRoot)) return current;
+    const next = new Set(current);
+    next.delete(workspaceRoot);
+    return next;
+  }
+  return current;
+}

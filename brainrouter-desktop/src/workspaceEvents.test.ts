@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 
 const A = '/ws/alpha', B = '/ws/beta';
 const ev = (workspaceRoot: string | undefined, kind: string) => ({ workspaceRoot, event: { kind } });
@@ -74,4 +74,28 @@ test('isStaleQueryResult: a result from the CURRENT generation is kept', () => {
 
 test('isStaleQueryResult: an untagged id is never considered stale (no regression)', () => {
   assert.equal(isStaleQueryResult('q-git', 3), false);
+});
+
+test('running workspaces: turn-start adds the project, turn-complete removes it', () => {
+  let s = new Set<string>();
+  s = nextRunningWorkspaces(s, 'turn-start', A);
+  assert.deepEqual([...s], [A]);
+  s = nextRunningWorkspaces(s, 'turn-start', B);
+  assert.deepEqual([...s].sort(), [A, B].sort());
+  s = nextRunningWorkspaces(s, 'turn-complete', A);
+  assert.deepEqual([...s], [B]);
+});
+
+test('running workspaces: turn-error clears a project too (failed background turn)', () => {
+  let s = nextRunningWorkspaces(new Set<string>(), 'turn-start', A);
+  s = nextRunningWorkspaces(s, 'turn-error', A);
+  assert.equal(s.size, 0);
+});
+
+test('running workspaces: returns the SAME set reference on a no-op (cheap re-render guard)', () => {
+  const s = new Set<string>([A]);
+  assert.equal(nextRunningWorkspaces(s, 'turn-start', A), s, 'already-running → same ref');
+  assert.equal(nextRunningWorkspaces(s, 'status', A), s, 'irrelevant kind → same ref');
+  assert.equal(nextRunningWorkspaces(s, 'turn-complete', B), s, 'unknown ws complete → same ref');
+  assert.equal(nextRunningWorkspaces(s, 'turn-start', undefined), s, 'untagged event → same ref');
 });

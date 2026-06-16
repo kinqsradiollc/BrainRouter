@@ -37,7 +37,7 @@ import {
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 import { duplicateTitleKeys } from './sessionDisplay.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
@@ -513,6 +513,11 @@ export function App(): React.ReactElement {
     if (on) s.add(key); else s.delete(key);
     setRunningSessions([...s]);
   };
+  // Stability item 4 — which WORKSPACES (projects) currently have a turn in
+  // flight, including ones not on screen. The host pool keeps that work alive
+  // in the background; this lets the sidebar show a "running" dot on other
+  // projects so the user knows it didn't vanish when they switched away.
+  const [runningWs, setRunningWs] = useState<Set<string>>(() => new Set());
   const [statusLine, setStatusLine] = useState('');
   const [reasoningTail, setReasoningTail] = useState('');
   const [liveText, setLiveText] = useState('');
@@ -998,6 +1003,10 @@ export function App(): React.ReactElement {
       // active workspace. Untagged events (single-host) pass through unchanged.
       const wsMsg = msg as AgentEventMessage & { workspaceRoot?: string };
       const prevWs = activeWsRef.current;
+      // Item 4 — record per-WORKSPACE running state BEFORE the stale-drop below:
+      // a background project's turn events are exactly what that drop discards,
+      // and they're what powers the sidebar's "running elsewhere" dot.
+      setRunningWs((s) => nextRunningWorkspaces(s, msg.event?.kind, wsMsg.workspaceRoot));
       if (isStaleWorkspaceEvent(wsMsg, prevWs)) return;
       activeWsRef.current = nextActiveWorkspace(wsMsg, prevWs);
       setHostUp(true);
@@ -1765,10 +1774,11 @@ export function App(): React.ReactElement {
                 const list = projSessions[w];
                 return (
                   <div key={w} className="project-block">
-                    <button className="project-row" title={w} onClick={() => toggleProject(w)}>
+                    <button className="project-row" title={runningWs.has(w) ? `${w} — running in the background` : w} onClick={() => toggleProject(w)}>
                       <Icon name={open ? 'folder-open' : 'folder'} size={15} />
                       <span>{w.split('/').pop()}</span>
                       <span className="project-meta">
+                        {runningWs.has(w) ? <span className="ws-running-dot" title="Running in the background" /> : null}
                         <span className="icon-btn project-open" title="Open this project here"
                           onClick={(ev) => { ev.stopPropagation(); openProject(w); }}>
                           <Icon name="arrow-right" size={12} />

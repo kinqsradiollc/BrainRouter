@@ -701,6 +701,9 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .project-meta { display: inline-flex; align-items: center; gap: 6px; justify-self: end; }
 .project-open { padding: 2px 4px; opacity: 0; transition: opacity .12s; }
 .project-row:hover .project-open { opacity: 1; }
+/* item 4 — a running project (work alive in the background host pool) gets a soft pulsing dot */
+.ws-running-dot { width: 7px; height: 7px; border-radius: 50%; background: #6cc04a; flex: none; animation: wsPulse 1.6s ease-out infinite; }
+@keyframes wsPulse { 0% { box-shadow: 0 0 0 0 rgba(108,192,74,0.5); } 70% { box-shadow: 0 0 0 5px rgba(108,192,74,0); } 100% { box-shadow: 0 0 0 0 rgba(108,192,74,0); } }
 .proj-empty { color: var(--text-faint); font-size: 12px; padding: 4px 8px; }
 
 /* status cell: every session row leads with one of these (Codex/Claude-style) */
