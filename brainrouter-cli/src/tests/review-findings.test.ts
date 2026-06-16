@@ -41,3 +41,35 @@ test('accepts a {findings:[...]} wrapper and string line numbers', () => {
 test('lastJsonBlock picks the final block when several exist', () => {
   assert.equal(lastJsonBlock('```json\n1\n```\nthen\n```json\n2\n```'), '2');
 });
+
+// Review v2 — the parser must preserve the rich fields a PR-style UI needs.
+test('preserves details, suggestion, codeExcerpt, diffHunk, patch, endLine', () => {
+  const out = '```json\n' + JSON.stringify([{
+    file: 'src/a.ts', line: 12, endLine: 15, severity: 'high', confidence: 88,
+    summary: 'off-by-one', details: 'loops to <= length, reads past the end',
+    suggestion: 'use < length', codeExcerpt: 'for (let i = 0; i <= xs.length; i++) {',
+    diffHunk: '- for (let i = 0; i <= xs.length; i++) {\n+ for (let i = 0; i < xs.length; i++) {',
+    patch: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -12 +12 @@\n- i <= xs.length\n+ i < xs.length',
+  }]) + '\n```';
+  const [f] = parseReviewFindings(out);
+  assert.equal(f.endLine, 15);
+  assert.equal(f.details, 'loops to <= length, reads past the end');
+  assert.equal(f.suggestion, 'use < length');
+  assert.ok(f.codeExcerpt?.includes('xs.length'));
+  assert.ok(f.diffHunk?.includes('+ for (let i = 0; i < xs.length'));
+  assert.ok(f.patch?.includes('@@ -12 +12 @@'));
+});
+
+test('accepts excerpt/hunk aliases and string line numbers', () => {
+  const [f] = parseReviewFindings('```json\n[{"file":"a.ts","summary":"x","line":"7","excerpt":"const a=1","hunk":"+const a=2"}]\n```');
+  assert.equal(f.line, 7);
+  assert.equal(f.codeExcerpt, 'const a=1');
+  assert.equal(f.diffHunk, '+const a=2');
+});
+
+test('rich fields are simply absent when the model omits them (no crash)', () => {
+  const [f] = parseReviewFindings('```json\n[{"file":"a.ts","summary":"x","severity":"high"}]\n```');
+  assert.equal(f.details, undefined);
+  assert.equal(f.patch, undefined);
+  assert.equal(f.codeExcerpt, undefined);
+});

@@ -833,8 +833,10 @@ export function App(): React.ReactElement {
   /** DESK-5j / Wave 4 — Changes-tab git actions. commit/push are GATED by the
    *  local AI review: the gate is checked first; if it blocks, a dialog explains
    *  why and offers an explicit bypass. pull is never gated. */
-  function runGit(kind: 'commit' | 'push' | 'pull', msg?: string, opts?: { bypass?: boolean }): void {
-    if ((kind === 'commit' || kind === 'push') && !opts?.bypass) {
+  function runGit(kind: 'commit' | 'push' | 'pull', msg?: string, opts?: { bypass?: boolean; reviewed?: boolean }): void {
+    // commit/push run the gate first UNLESS we're already cleared — either the
+    // gate came back clean (reviewed) or the user explicitly bypassed it.
+    if ((kind === 'commit' || kind === 'push') && !opts?.bypass && !opts?.reviewed) {
       pendingGitRef.current = { kind, msg };
       setToast('Checking review status…');
       q('q-review-gate', 'review-gate');
@@ -845,8 +847,10 @@ export function App(): React.ReactElement {
       ? `git add -A && git commit -m ${sq(msg ?? '')}`
       : kind === 'push' ? 'git push' : 'git pull --ff-only';
     setGitBusy(true);
+    // §7 — a CLEAN gate is "reviewed", NOT a bypass: no warning, no "bypassed" label.
     if (opts?.bypass) console.warn(`[review-gate] ${kind} BYPASSED without a clean review`);
-    setToast(kind === 'commit' ? (opts?.bypass ? 'Committing (review bypassed)…' : 'Committing…') : kind === 'push' ? (opts?.bypass ? 'Pushing (review bypassed)…' : 'Pushing…') : 'Pulling…');
+    const tag = opts?.bypass ? ' (review bypassed)' : opts?.reviewed ? ' (reviewed)' : '';
+    setToast(kind === 'commit' ? `Committing${tag}…` : kind === 'push' ? `Pushing${tag}…` : 'Pulling…');
     q('a-git', 'action:term-exec', { cmd });
     // Wave 1 (D) — commit/push are real ACTIVITY → promote this project.
     if (kind !== 'pull') { const r = workspaces.current ?? info.workspaceRoot; if (r) void window.brainrouter.markActivity?.(r, kind); }
@@ -1289,7 +1293,7 @@ export function App(): React.ReactElement {
           setGateBlock({ kind: pending.kind, msg: pending.msg, reason: gate.reason ?? 'Review required.', status: gate.status ?? 'needs-review' });
         } else {
           pendingGitRef.current = null;
-          runGit(pending.kind, pending.msg, { bypass: true }); // gate clean → proceed
+          runGit(pending.kind, pending.msg, { reviewed: true }); // §7 — gate CLEAN → proceed as reviewed (not a bypass)
         }
         return;
       }

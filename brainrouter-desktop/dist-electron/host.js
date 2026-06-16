@@ -315,6 +315,25 @@ async function main() {
         a.sessionKey = sessionKey;
         return a;
     };
+    // §6 — the local reviewer runs in an ISOLATED, READ-ONLY, NON-PROMPTING agent:
+    //  - a deny-all interaction port (confirm→false, choice→null) that NEVER emits
+    //    an interaction-request to the UI, so review can't pop an approval dialog;
+    //  - read access mode (look-only: no file writes, no shell, no mutating tools).
+    // Its review: sessionKey is filtered from the picker. Even if the model ignores
+    // the "don't call tools" instruction, it fails closed instead of prompting.
+    const spawnReviewer = () => {
+        const a = new Agent(mcpClient, llmForSession('review'), {
+            workspaceRoot,
+            launchCwd: workspaceRoot,
+            interactionPort: { confirm: async () => false, choice: async () => null },
+        });
+        a.sessionKey = `review:${Date.now().toString(36)}`;
+        try {
+            a.setAccessMode?.('read');
+        }
+        catch { /* older agent */ }
+        return a;
+    };
     // DESK-5c — terminal session registry + endpoint-models cache.
     const terms = new Map();
     let termSeq = 0;
@@ -367,8 +386,8 @@ async function main() {
             return { ...r, files: 0 };
         }
         const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\nDiff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
-        // Isolated reviewer: its review: session is filtered from the picker.
-        const reviewer = spawnAgent(`review:${Date.now().toString(36)}`);
+        // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
+        const reviewer = spawnReviewer();
         const noop = () => { };
         const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop };
         let answer = '';
@@ -381,11 +400,11 @@ async function main() {
             return { ...r, files: files.length };
         }
         const findings = parseReviewFindings(answer).map((f, i) => ({
-            id: `f${i}_${Date.now().toString(36)}`, file: f.file, line: f.line ?? undefined,
+            id: `f${i}_${Date.now().toString(36)}`, file: f.file, line: f.line ?? undefined, endLine: f.endLine ?? undefined,
             severity: SEV_MAP[String(f.severity ?? '').toLowerCase()] ?? 'medium',
             confidence: f.confidence ?? 70, summary: f.summary,
-            patch: f.patch, status: 'open',
-            canApply: !!f.patch, source: 'ai-review',
+            details: f.details, suggestion: f.suggestion, codeExcerpt: f.codeExcerpt, diffHunk: f.diffHunk,
+            patch: f.patch, status: 'open', canApply: !!f.patch, source: 'ai-review',
         }));
         const summary = answer.split('```')[0].trim().slice(0, 600) || `${findings.length} finding(s) across ${files.length} file(s).`;
         const run = { ...base, summary, findings };

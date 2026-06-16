@@ -23,6 +23,10 @@ export interface ReviewFinding {
   summary: string;
   details?: string;
   suggestion?: string;
+  /** A few verbatim lines of the affected code, for in-panel context. */
+  codeExcerpt?: string;
+  /** An optional unified-diff hunk (problem `-` lines + suggested `+` lines). */
+  diffHunk?: string;
   /** A unified-diff/patch the UI can preview + apply, when the model provided one. */
   patch?: string;
   status: FindingStatus;
