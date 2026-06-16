@@ -92,8 +92,25 @@ export function installDevBridge(): void {
   }).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
   const devGroups = () => [...new Set(Object.values(devMeta).map((m) => m.group).filter((g): g is string => !!g))].sort();
 
+  // T14 — in-memory schedules so the Schedules panel is fully exercisable in dev.
+  let schedSeq = 2;
+  const devSchedules: Array<{ id: string; kind: 'cron' | 'once'; expr: string; command: string; owner: string; enabled: boolean; nextRun: string; lastRun?: string; createdAt: string }> = [
+    { id: 'sch_demo1', kind: 'cron', expr: '*/15 * * * *', command: '/status', owner: 'dev:new-chat', enabled: true, createdAt: new Date(Date.now() - 86400_000).toISOString(), nextRun: new Date(Date.now() + 600_000).toISOString(), lastRun: new Date(Date.now() - 300_000).toISOString() },
+    { id: 'sch_demo2', kind: 'once', expr: new Date(Date.now() + 3600_000).toISOString(), command: '/usage', owner: 'dev:new-chat', enabled: false, createdAt: new Date(Date.now() - 1800_000).toISOString(), nextRun: new Date(Date.now() + 3600_000).toISOString() },
+  ];
+
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(wsCurrent),
+    'schedule-list': () => devSchedules,
+    'schedule-add': (a) => {
+      const kind = a.kind === 'once' ? 'once' : 'cron';
+      const expr = String(a.expr ?? ''); const command = String(a.command ?? '');
+      const nextRun = kind === 'once' ? new Date(expr).toISOString() : new Date(Date.now() + 900_000).toISOString();
+      const rec = { id: `sch_dev${++schedSeq}`, kind: kind as 'cron' | 'once', expr, command, owner: activeSession, enabled: true, createdAt: new Date().toISOString(), nextRun };
+      devSchedules.push(rec); return { ok: true, schedule: rec };
+    },
+    'schedule-remove': (a) => { const i = devSchedules.findIndex((s) => s.id === a.id); if (i >= 0) devSchedules.splice(i, 1); return { ok: i >= 0 }; },
+    'schedule-toggle': (a) => { const s = devSchedules.find((x) => x.id === a.id); if (s) s.enabled = a.enabled !== false; return { ok: !!s, enabled: a.enabled !== false }; },
     'workspace-sessions': (a) => mergeMeta(String(a.root ?? '')),
     // DESK-6m — per-chat ⋮ menu actions, mutating the in-memory devMeta.
     'action:session-meta': (a) => {

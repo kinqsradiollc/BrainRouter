@@ -33,9 +33,10 @@ const MD_COMPONENTS: Record<string, unknown> = {
 };
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel,
+  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
+import type { ScheduleRecordView } from './scheduleView.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 import { duplicateTitleKeys } from './sessionDisplay.js';
@@ -227,6 +228,7 @@ const VIEW_MENU: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
   { id: 'tools', title: 'Tool calls', icon: 'bolt' },
   { id: 'search', title: 'Search session', icon: 'search' },
+  { id: 'schedule', title: 'Schedules', icon: 'clock' },
   { id: 'context', title: 'Context', icon: 'layout-right' },
 ];
 
@@ -650,6 +652,8 @@ export function App(): React.ReactElement {
   // Item 10 — where a model pick is saved: 'global' = config.json (shared with
   // the CLI, every chat), 'session' = this chat only (sessionRuntimeStore).
   const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
+  // T14 — scheduled tasks for the viewed session (cron/once), from the CLI store.
+  const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   // DESK-5d — the trust gate runs BEFORE a project opens (and before a chat
@@ -875,6 +879,14 @@ export function App(): React.ReactElement {
   useEffect(() => {
     const t = setInterval(() => q('q-fleet', 'fleet'), 3000);
     q('q-fleet', 'fleet');
+    return () => clearInterval(t);
+  }, []);
+
+  // T14 — keep the Schedules panel fresh (cheap store read) so nextRun/lastRun
+  // tick and another head's /schedule edits show up.
+  useEffect(() => {
+    const t = setInterval(() => q('q-schedule', 'schedule-list'), 5000);
+    q('q-schedule', 'schedule-list');
     return () => clearInterval(t);
   }, []);
 
@@ -1196,6 +1208,7 @@ export function App(): React.ReactElement {
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
+      case 'q-schedule': if (Array.isArray(result)) setSchedules(result as ScheduleRecordView[]); return;
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
       case 'q-transcript': {
         const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
@@ -1694,6 +1707,10 @@ export function App(): React.ReactElement {
       case 'tasks': return <TasksPanel fleet={activeSessionTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = activeSessionTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
       case 'plan': return <PlanPanel plan={lastPlan} />;
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
+      case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
+        onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
+        onRemove={(id) => { q('q-schedule', 'schedule-remove', { id }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
+        onToggle={(id, enabled) => { q('q-schedule', 'schedule-toggle', { id, enabled }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }} />;
       default: return null;
     }
   };
@@ -2265,6 +2282,8 @@ export function App(): React.ReactElement {
                     { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt',
                       badge: toolLog.length ? String(toolLog.length) : '' },
                     { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '' },
+                    { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock',
+                      badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
                     { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
                   ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>).map((l) => (
                     <button key={l.id} className="side-launcher" onClick={() => openSideView(l.id)}>
