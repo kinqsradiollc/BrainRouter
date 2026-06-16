@@ -38,6 +38,7 @@ import {
 } from './panels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult } from './workspaceEvents.js';
+import { duplicateTitleKeys } from './sessionDisplay.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -1483,6 +1484,10 @@ export function App(): React.ReactElement {
     setSessionMenu({ key, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 4 });
   };
 
+  // Item 9 — sessions that share an opening prompt get their age appended inline
+  // so identical-looking rows stay distinguishable.
+  const dupeTitleKeys = useMemo(() => duplicateTitleKeys(sessions), [sessions]);
+
   // DESK-6m — one chat row (with its ⋮ menu trigger + pinned/completed state +
   // inline rename) plus its nested background tasks. Reused for grouped sections.
   const renderSessionNode = (s: SessionRow, i: number): React.ReactElement => (
@@ -1494,21 +1499,24 @@ export function App(): React.ReactElement {
             onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') setRenamingKey(null); }}
             onBlur={commitRename} />
         ) : (
-          <button className="project-session" title={s.sessionKey}
+          <button className="project-session" title={s.firstUserMessage || s.sessionKey}
             onClick={() => resumeSession(s.sessionKey)}>
             {s.pinned ? <span className="st st-pin" title="Pinned"><Icon name="pin" size={11} /></span>
               : (s.forkedFrom && !runningSessions.includes(s.sessionKey))
                 ? <span className="st st-fork" title="Forked conversation"><Icon name="branch" size={11} /></span>
                 : <SessionStatus s={s} working={runningSessions.includes(s.sessionKey)} />}
-            <span className="session-title">{s.firstUserMessage || s.sessionKey}</span>
+            <span className="session-title">
+              {s.firstUserMessage || s.sessionKey}
+              {dupeTitleKeys.has(s.sessionKey) && s.modifiedAt ? <span className="title-age"> · {fmtAge(s.modifiedAt)}</span> : null}
+            </span>
             {s.status === 'completed' ? <span className="session-done" title="Completed"><Icon name="check-circle" size={11} /></span> : null}
             {!s.group && i < 9 ? <span className="session-cmd">⌘{i + 1}</span> : null}
             {s.sessionKey !== viewKey && bgTaskCount(s.sessionKey) > 0
               ? <span className="session-bg" title={`${bgTaskCount(s.sessionKey)} background task(s) — open this chat to view`}>{bgTaskCount(s.sessionKey)}</span> : null}
-            {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
+            {s.modifiedAt && !dupeTitleKeys.has(s.sessionKey) ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
           </button>
         )}
-        <button className="session-menu-btn icon-btn" title="Chat options" onClick={(e) => openSessionMenu(e, s.sessionKey)}><Icon name="dots" size={13} /></button>
+        <button className="session-menu-btn icon-btn" aria-label="Chat options" onClick={(e) => openSessionMenu(e, s.sessionKey)}><Icon name="dots" size={13} /></button>
       </div>
       {tasksForSession(s.sessionKey).map((f) => (
         <button key={f.id} className={`project-session task nested${taskView?.id === f.id ? ' active' : ''}`}

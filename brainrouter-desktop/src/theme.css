@@ -882,6 +882,8 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 
 /* ---------- DESK-4j — reference-pattern wave ---------- */
 .session-age { margin-left: auto; flex: none; color: var(--text-faint); font-size: 11px; padding-left: 8px; }
+/* item 9 — inline age disambiguator for duplicate-prompt rows */
+.session-title .title-age { color: var(--text-faint); font-weight: 400; }
 .context-chips { display: flex; align-items: center; gap: 6px; max-width: var(--chat-w, 840px); margin: 6px auto 0; width: 100%; }
 .ctx-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 3px 9px; cursor: pointer; transition: border-color .12s, color .12s; font-family: var(--mono); }
 .ctx-chip:hover { border-color: var(--border-strong); color: var(--text); }
