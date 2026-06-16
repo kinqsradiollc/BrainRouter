@@ -474,6 +474,23 @@ input.ctl { min-width: 220px; }
 /* item 10 — small segmented toggle for the model save scope (this chat vs all chats) */
 .seg-toggle { border: 1px solid var(--border-strong); background: var(--raised); color: var(--text-dim); font-size: 11px; font-weight: 560; padding: 3px 9px; border-radius: 999px; cursor: pointer; transition: color .12s, background .12s; }
 .seg-toggle:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.seg-toggle.active { color: var(--text); background: var(--accent-soft, rgba(255,255,255,0.1)); border-color: var(--accent, var(--border-strong)); }
+/* T14 — schedules panel */
+.sched-panel { padding: 4px 2px; }
+.sched-add { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.sched-add-row { display: flex; gap: 6px; align-items: center; }
+.sched-add-row .filter { flex: 1; margin: 0; }
+.sched-add-btn { border: 0; background: var(--accent, #6cc04a); color: #fff; font-weight: 560; font-size: 12px; padding: 5px 12px; border-radius: 7px; cursor: pointer; flex: none; }
+.sched-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 8px; }
+.sched-row:hover { background: rgba(255,255,255,0.05); }
+.sched-row.off { opacity: 0.6; }
+.sched-toggle { border: 0; background: transparent; cursor: pointer; padding: 2px; flex: none; }
+.sched-main { flex: 1; min-width: 0; }
+.sched-cmd { font-family: var(--mono); font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-meta { font-size: 11px; color: var(--text-faint); margin-top: 1px; }
+.session-dot.on { background: var(--accent, #6cc04a); }
+.sched-note { font-size: 10.5px; color: var(--text-faint); padding: 10px 6px 4px; line-height: 1.5; }
+.sched-note code { font-size: 10px; }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }

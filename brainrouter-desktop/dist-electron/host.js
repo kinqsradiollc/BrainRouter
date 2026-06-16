@@ -25,6 +25,8 @@ import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspac
 import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
 import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime } from '@kinqs/brainrouter-cli/dist/state/sessionRuntimeStore.js';
+import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-cli/dist/state/scheduleStore.js';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
@@ -543,6 +545,33 @@ async function main() {
                 const parity = validateCatalogParity(SLASH_COMMANDS, HELP_CATEGORIES);
                 return { categories: HELP_CATEGORIES, all: [...SLASH_COMMANDS], parityValid: parity.valid, parityErrors: parity.errors };
             },
+            // T14 — scheduler: read/manage the CLI scheduleStore (same schedules.json
+            // the /schedule REPL command uses). Filtered to the viewed session's owner.
+            'schedule-list': () => loadSchedules(workspaceRoot).filter((s) => s.owner === activeAgent.sessionKey),
+            'schedule-add': (a) => {
+                const kind = a.kind === 'once' ? 'once' : 'cron';
+                const expr = String(a.expr ?? '').trim();
+                const command = String(a.command ?? '').trim();
+                if (!command.startsWith('/'))
+                    return { ok: false, error: 'Command must start with "/".' };
+                let nextRun;
+                if (kind === 'cron') {
+                    const cron = parseCron(expr);
+                    if (!cron)
+                        return { ok: false, error: `Invalid cron expression: "${expr}" (need 5 fields).` };
+                    nextRun = nextCronFire(cron, new Date()).toISOString();
+                }
+                else {
+                    const at = new Date(expr);
+                    if (Number.isNaN(at.getTime()))
+                        return { ok: false, error: `Invalid date/time: "${expr}".` };
+                    nextRun = at.toISOString();
+                }
+                const rec = addSchedule(workspaceRoot, { kind, expr, command, owner: activeAgent.sessionKey, nextRun, enabled: true });
+                return { ok: true, schedule: rec };
+            },
+            'schedule-remove': (a) => ({ ok: removeSchedule(workspaceRoot, String(a.id ?? '')) }),
+            'schedule-toggle': (a) => ({ ok: setScheduleEnabled(workspaceRoot, String(a.id ?? ''), a.enabled !== false), enabled: a.enabled !== false }),
             // DESK-4c — one snapshot powering the whole Settings dialog. All values
             // come from the stores the CLI itself reads/writes.
             'config-snapshot': () => {
