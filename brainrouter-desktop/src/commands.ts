@@ -40,7 +40,17 @@ export type Wire =
 export const BRIDGE_COMMANDS = new Set(['goal', 'plan', 'workers', 'ps', 'tools', 'status', 'memory', 'recall', 'briefing']);
 
 export interface CatalogCategory { key: string; title: string; entries: Array<{ cmd: string; desc: string }> }
-export interface CommandsCatalog { categories: CatalogCategory[]; all: string[] }
+export interface CommandsCatalog {
+  categories: CatalogCategory[];
+  all: string[];
+  /** T16 — host-computed parity flags (CLI catalog drift surfaced at runtime). */
+  parityValid?: boolean;
+  parityErrors?: string[];
+}
+
+/** T16 — every Wire kind the desktop knows how to route. A catalog command that
+ *  resolves to none of these would (wrongly) fall through to the LLM. */
+export const WIRE_KINDS = ['native', 'panel', 'settings', 'bridge', 'cli'] as const;
 
 export interface DeskCommand {
   cmd: string;        // full form, e.g. "/export-chat [md|json] [path]"

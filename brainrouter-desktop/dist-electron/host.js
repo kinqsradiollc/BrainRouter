@@ -33,6 +33,7 @@ import { contextWindowFor } from '@kinqs/brainrouter-cli/dist/runtime/contextWin
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
 import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-cli/dist/cli/repl.js';
+import { validateCatalogParity } from '@kinqs/brainrouter-cli/dist/runtime/catalogParity.js';
 import { readPreferences, writePreferences } from '@kinqs/brainrouter-cli/dist/state/preferencesStore.js';
 import { readHooks, setHookEnabled } from '@kinqs/brainrouter-cli/dist/state/hooksStore.js';
 import { searchTranscript } from '@kinqs/brainrouter-cli/dist/state/transcriptSearch.js';
@@ -536,7 +537,12 @@ async function main() {
                 return { path: file, kind: 'file', diff: diff.slice(0, 200_000) };
             },
             // DESK-4c — every CLI slash command, straight from the CLI's catalog.
-            'commands-catalog': () => ({ categories: HELP_CATEGORIES, all: [...SLASH_COMMANDS] }),
+            'commands-catalog': () => {
+                // T16 — surface catalog drift at runtime (not just in tests): the desktop
+                // serves the CLI's own lists, so any drift here is a real regression.
+                const parity = validateCatalogParity(SLASH_COMMANDS, HELP_CATEGORIES);
+                return { categories: HELP_CATEGORIES, all: [...SLASH_COMMANDS], parityValid: parity.valid, parityErrors: parity.errors };
+            },
             // DESK-4c — one snapshot powering the whole Settings dialog. All values
             // come from the stores the CLI itself reads/writes.
             'config-snapshot': () => {
