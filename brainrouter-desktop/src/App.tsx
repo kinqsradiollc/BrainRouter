@@ -37,7 +37,7 @@ import {
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
-import { isStaleWorkspaceEvent, nextActiveWorkspace } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged } from './workspaceEvents.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -633,7 +633,7 @@ export function App(): React.ReactElement {
   const [workflowView, setWorkflowView] = useState<WorkflowDetail | null>(null);
   const [grepHits, setGrepHits] = useState<import('./panels.js').GrepHit[] | null>(null);
   const [inlineDiffs, setInlineDiffs] = useState<Record<string, string>>({});
-  const [branches, setBranches] = useState<{ current: string | null; branches: string[] }>({ current: null, branches: [] });
+  const [branches, setBranches] = useState<{ current: string | null; branches: string[]; loading?: boolean }>({ current: null, branches: [] });
   const [endpointModels, setEndpointModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
@@ -759,7 +759,9 @@ export function App(): React.ReactElement {
     setRows([]);
     setGitInfo(null);
     setPrInfo(null);
-    setBranches({ current: null, branches: [] });
+    // Stability fix — show a LOADING branch chip during the switch instead of
+    // letting the selector silently vanish; the new host's full refresh fills it.
+    setBranches({ current: null, branches: [], loading: true });
     setChangedFiles([]);
     setAllFiles([]);
     setFileView(null);
@@ -986,8 +988,9 @@ export function App(): React.ReactElement {
       // a non-active workspace generation, then let session-changed advance the
       // active workspace. Untagged events (single-host) pass through unchanged.
       const wsMsg = msg as AgentEventMessage & { workspaceRoot?: string };
-      if (isStaleWorkspaceEvent(wsMsg, activeWsRef.current)) return;
-      activeWsRef.current = nextActiveWorkspace(wsMsg, activeWsRef.current);
+      const prevWs = activeWsRef.current;
+      if (isStaleWorkspaceEvent(wsMsg, prevWs)) return;
+      activeWsRef.current = nextActiveWorkspace(wsMsg, prevWs);
       setHostUp(true);
       const e: AgentEvent = msg.event;
       // DESK-5v — route by session: a turn you started can keep running after
@@ -1077,9 +1080,13 @@ export function App(): React.ReactElement {
               if (e.sessionKey !== want) window.brainrouter.send({ kind: 'resume-session', sessionKey: want });
             }
           }
-          // DESK-6t — light refresh only: switching/creating a chat doesn't change
-          // the workspace's git state, so don't fire the slow git/gh queries here.
-          refreshSession();
+          // Stability fix — refresh tier by whether the WORKSPACE changed: a
+          // project/workspace switch needs the FULL git/workspace refresh so
+          // branches + git state reload (they were cleared on switch); a same-
+          // workspace session change (new chat / switch chat) only needs the
+          // light refresh (git is identical across chats in one workspace).
+          if (workspaceChanged(wsMsg.workspaceRoot, prevWs)) refreshSidebar();
+          else refreshSession();
           break;
         // DESK-5v — turn lifecycle is tracked PER SESSION so a background turn
         // keeps its spinner and lands its result/error in the right chat.
@@ -1960,6 +1967,10 @@ export function App(): React.ReactElement {
                         <span>{branches.current}</span>
                         <Icon name="chev-down" size={9} />
                       </button>
+                    ) : branches.loading ? (
+                      <span className="ctx-chip" style={{ opacity: 0.6 }}>
+                        <Icon name="branch" size={11} /><span>loading…</span>
+                      </span>
                     ) : null}
                   </span>
                   <span className="composer-spacer" />

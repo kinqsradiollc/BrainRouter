@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isStaleWorkspaceEvent, nextActiveWorkspace } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged } from './workspaceEvents.js';
 
 const A = '/ws/alpha', B = '/ws/beta';
 const ev = (workspaceRoot: string | undefined, kind: string) => ({ workspaceRoot, event: { kind } });
@@ -36,4 +36,20 @@ test('nextActiveWorkspace: non-session-changed events do NOT change the active w
 
 test('nextActiveWorkspace: a session-changed WITHOUT a workspaceRoot leaves it unchanged', () => {
   assert.equal(nextActiveWorkspace({ event: { kind: 'session-changed' } }, A), A);
+});
+
+test('workspaceChanged: switching to a different workspace → FULL refresh (branches reload)', () => {
+  assert.equal(workspaceChanged(B, A), true);
+});
+
+test('workspaceChanged: same-workspace session change (new chat / switch chat) → light refresh', () => {
+  assert.equal(workspaceChanged(A, A), false);
+});
+
+test('workspaceChanged: first event / boot (prev=null) → full refresh so git state loads', () => {
+  assert.equal(workspaceChanged(A, null), true);
+});
+
+test('workspaceChanged: untagged event keeps the current tier', () => {
+  assert.equal(workspaceChanged(undefined, A), false);
 });

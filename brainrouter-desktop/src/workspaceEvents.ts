@@ -43,3 +43,16 @@ export function nextActiveWorkspace(
   if (msg.event?.kind === 'session-changed' && msg.workspaceRoot) return msg.workspaceRoot;
   return current;
 }
+
+/**
+ * Did a session-changed land us in a DIFFERENT workspace than before? Drives the
+ * refresh tier: a workspace change needs the FULL workspace/git refresh (branches,
+ * git-info, changed-files, PR, log) so branch state doesn't vanish; a same-
+ * workspace session change only needs the light refresh (git is identical across
+ * chats in one workspace). Untagged / first event → treat as a workspace change
+ * so the initial git state always loads.
+ */
+export function workspaceChanged(eventWorkspace: string | undefined, prevWorkspace: string | null): boolean {
+  if (!eventWorkspace) return false;        // untagged → caller keeps its current tier
+  return eventWorkspace !== prevWorkspace;  // includes prev === null (boot/first switch)
+}
