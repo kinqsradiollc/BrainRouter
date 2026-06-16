@@ -22,7 +22,9 @@ export function installDevBridge(): void {
   const runningSessions = new Set<string>();
   const emit = (event: AgentEvent, delay = 0, sessionKey: string = activeSession) => {
     setTimeout(() => {
-      const msg: AgentEventMessage = { seq: ++seq, ts: Date.now(), sessionKey, event };
+      // T2/T3 — mirror main: tag every event with the current workspace so the
+      // renderer's workspace-identity + stale-drop logic is exercised in dev.
+      const msg = { seq: ++seq, ts: Date.now(), sessionKey, event, workspaceRoot: wsCurrent } as AgentEventMessage & { workspaceRoot: string };
       listeners.forEach((l) => l(msg));
     }, delay);
   };

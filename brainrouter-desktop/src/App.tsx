@@ -37,6 +37,7 @@ import {
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace } from './workspaceEvents.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
@@ -597,6 +598,10 @@ export function App(): React.ReactElement {
   const liveFlushPending = useRef(false);
   const sessionsRef = useRef<SessionRow[]>([]);
   const lastPromptRef = useRef('');
+  // T2/T3 — the workspace the on-screen surfaces belong to, set authoritatively
+  // by session-changed. Events tagged with a DIFFERENT workspace are dropped so
+  // one project's stream can never paint into another's surfaces.
+  const activeWsRef = useRef<string | null>(null);
   // DESK-5u — current viewed session key, kept in a ref so the (mount-once)
   // event handler can read it without going stale.
   const sessionKeyRef = useRef<string | undefined>(undefined);
@@ -977,6 +982,12 @@ export function App(): React.ReactElement {
       if (text) push({ id: rid(), kind: 'assistant', text, ts: Date.now() });
     };
     const off = window.brainrouter.onEvent((msg: AgentEventMessage) => {
+      // T2/T3 — main tags each event with its owning workspace. Drop events from
+      // a non-active workspace generation, then let session-changed advance the
+      // active workspace. Untagged events (single-host) pass through unchanged.
+      const wsMsg = msg as AgentEventMessage & { workspaceRoot?: string };
+      if (isStaleWorkspaceEvent(wsMsg, activeWsRef.current)) return;
+      activeWsRef.current = nextActiveWorkspace(wsMsg, activeWsRef.current);
       setHostUp(true);
       const e: AgentEvent = msg.event;
       // DESK-5v — route by session: a turn you started can keep running after
@@ -1052,7 +1063,11 @@ export function App(): React.ReactElement {
             setSearchHits(null);
             setTimeout(() => { if (chatRef.current) chatRef.current.scrollTop = 0; }, 50);
           }
-          setInfo((i) => ({ ...i, sessionKey: e.sessionKey, model: e.model || i.model }));
+          // T3 — identity is set ATOMICALLY here from the event's own workspace,
+          // so breadcrumb / env / sidebar all flip to the new project in one go
+          // instead of lagging behind a separate session-info refresh.
+          setInfo((i) => ({ ...i, sessionKey: e.sessionKey, model: e.model || i.model, workspaceRoot: wsMsg.workspaceRoot ?? i.workspaceRoot }));
+          if (wsMsg.workspaceRoot) setWorkspaces((w) => w.current === wsMsg.workspaceRoot ? w : { ...w, current: wsMsg.workspaceRoot! });
           // DESK-5d — a chat clicked under ANOTHER project: the new host has
           // just announced itself; now land on the chat that was clicked.
           {

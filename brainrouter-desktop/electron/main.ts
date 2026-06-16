@@ -33,7 +33,13 @@ function spawnHost(win: BrowserWindow, workspaceRoot: string): UtilityProcess {
     env: { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspaceRoot },
     serviceName: `brainrouter-agent-host:${path.basename(workspaceRoot)}`,
   });
-  host.on('message', (msg) => { if (!win.isDestroyed()) win.webContents.send('agent-event', msg); });
+  // T2/T3 — tag every event with the OWNING workspace so the renderer can keep
+  // surfaces straight (and drop stale-workspace events once multiple hosts run).
+  host.on('message', (msg) => {
+    if (win.isDestroyed()) return;
+    const tagged = (msg && typeof msg === 'object') ? { ...(msg as object), workspaceRoot } : msg;
+    win.webContents.send('agent-event', tagged);
+  });
   host.on('exit', (code) => {
     if (!win.isDestroyed()) win.webContents.send('agent-event', {
       seq: -1, ts: Date.now(), sessionKey: 'host',
