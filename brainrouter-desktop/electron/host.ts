@@ -22,6 +22,7 @@ import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
 import { listTranscripts, loadTranscript, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
+import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
@@ -467,19 +468,9 @@ async function main(): Promise<void> {
         const all = (tracked + '\n' + untracked).split('\n').filter(Boolean).sort();
         return { files: all.slice(0, 3000), truncated: all.length > 3000 };
       },
-      'read-file': (args) => {
-        const file = typeof args.path === 'string' ? args.path : '';
-        const resolved = path.resolve(workspaceRoot, file);
-        if (!file || !(resolved === path.resolve(workspaceRoot) || resolved.startsWith(path.resolve(workspaceRoot) + path.sep))) {
-          return { path: file, content: '', error: 'path escapes the workspace' };
-        }
-        try {
-          const content = fs.readFileSync(resolved, 'utf-8');
-          return { path: file, content: content.slice(0, 200_000), truncated: content.length > 200_000 };
-        } catch (err) {
-          return { path: file, content: '', error: err instanceof Error ? err.message : String(err) };
-        }
-      },
+      // DESK-6w (T9) — directory-aware: a folder path returns a typed listing
+      // instead of the old raw EISDIR. Pure logic lives in fsRead.ts (tested).
+      'read-file': (args) => readWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
       // DESK-4j — branch picker (pattern: branch chip with dropdown in the
       // composer context row). Listing is read-only; checkout runs through
       // the same user-command path as the terminal input.
@@ -518,11 +509,14 @@ async function main(): Promise<void> {
       'file-diff': async (args) => {
         const file = typeof args.path === 'string' ? args.path : '';
         if (!file) return { path: file, diff: '' };
+        // DESK-6w (T9) — a directory has no single-file diff; return a typed
+        // payload rather than letting `git diff --no-index` misbehave on a folder.
+        if (isWorkspaceDirectory(workspaceRoot, file)) return { path: file, kind: 'directory', diff: '' };
         // HEAD diff covers staged + unstaged; untracked files get a synthetic add-diff
         // (git diff --no-index exits 1 but its stdout — captured by `git` — IS the diff).
         let diff = await git(['diff', 'HEAD', '--', file], workspaceRoot, { maxBuffer: 4_000_000 });
         if (!diff.trim()) diff = await git(['diff', '--no-index', '--', '/dev/null', file], workspaceRoot, { maxBuffer: 4_000_000 });
-        return { path: file, diff: diff.slice(0, 200_000) };
+        return { path: file, kind: 'file', diff: diff.slice(0, 200_000) };
       },
       // DESK-4c — every CLI slash command, straight from the CLI's catalog.
       'commands-catalog': () => ({ categories: HELP_CATEGORIES, all: [...SLASH_COMMANDS] }),
