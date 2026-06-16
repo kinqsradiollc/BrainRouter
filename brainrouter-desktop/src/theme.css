@@ -541,9 +541,20 @@ input.ctl { min-width: 220px; }
 .review-conf { margin-left: auto; font-size: 10.5px; color: var(--text-faint); }
 .review-finding-body { font-size: 12.5px; color: var(--text); line-height: 1.45; margin-bottom: 6px; }
 .sev { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; }
-.sev-bug, .sev-security { background: rgba(255,161,152,0.18); color: #ffa198; }
-.sev-perf, .sev-warn { background: rgba(229,192,123,0.18); color: #e5c07b; }
-.sev-style, .sev-nit, .sev-info { background: rgba(108,192,74,0.16); color: #6cc04a; }
+.sev-bug, .sev-security, .sev-critical { background: rgba(255,161,152,0.18); color: #ffa198; }
+.sev-high { background: rgba(255,140,120,0.16); color: #ff9d88; }
+.sev-perf, .sev-warn, .sev-medium { background: rgba(229,192,123,0.18); color: #e5c07b; }
+.sev-style, .sev-nit, .sev-info, .sev-low { background: rgba(108,192,74,0.16); color: #6cc04a; }
+/* Wave 5 — review gate banner + per-finding actions */
+.review-gate { font-size: 11.5px; font-weight: 560; padding: 7px 10px; border-radius: 8px; margin: 0 4px 8px; }
+.review-gate.gate-clean { background: rgba(108,192,74,0.14); color: #6cc04a; }
+.review-gate.gate-blocked { background: rgba(255,161,152,0.14); color: #ffa198; }
+.review-gate.gate-stale, .review-gate.gate-running { background: rgba(229,192,123,0.14); color: #e5c07b; }
+.review-gate.gate-needs-review { background: var(--ov-06); color: var(--text-dim); }
+.finding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.finding-status { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
+.review-finding.resolved { opacity: 0.55; }
+.review-finding.resolved .review-finding-body { text-decoration: line-through; }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }

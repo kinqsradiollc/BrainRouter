@@ -592,45 +592,68 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
   );
 }
 
-export interface ReviewFindingView { file: string; line?: number; severity: string; confidence: number; summary: string }
+export interface ReviewFindingView { id?: string; file: string; line?: number; severity: string; confidence: number; summary: string; status?: string; canApply?: boolean }
+export interface ReviewGateView { status: string; blocked: boolean; reason: string }
 
-export function ReviewPanel({ review, running, onRun, onDiscuss }: {
+const GATE_LABEL: Record<string, string> = { clean: '✓ Review passed', blocked: '⚠ Blocking findings', stale: '↻ Review out of date', 'needs-review': '○ Needs review', running: '… Reviewing' };
+
+export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve }: {
   review: { findings: ReviewFindingView[]; summary: string; files: number } | null;
+  gate: ReviewGateView | null;
   running: boolean;
   onRun: () => void;
   onDiscuss: (f: ReviewFindingView) => void;
+  onApply: (f: ReviewFindingView) => void;
+  onAskFix: (f: ReviewFindingView) => void;
+  onDismiss: (f: ReviewFindingView) => void;
+  onResolve: (f: ReviewFindingView) => void;
 }): React.ReactElement {
+  const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const findings = [...(review?.findings ?? [])].sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
   const byFile = new Map<string, ReviewFindingView[]>();
-  for (const f of review?.findings ?? []) { const a = byFile.get(f.file) ?? []; a.push(f); byFile.set(f.file, a); }
+  for (const f of findings) { const a = byFile.get(f.file) ?? []; a.push(f); byFile.set(f.file, a); }
   return (
     <div className="scroll review-panel">
       <div className="review-bar">
-        <button className="btn primary" disabled={running} onClick={onRun}>{running ? 'Reviewing…' : 'Review working changes'}</button>
-        {review ? <span className="review-count">{review.findings.length} finding{review.findings.length === 1 ? '' : 's'} · {review.files} file{review.files === 1 ? '' : 's'}</span> : null}
+        <button className="btn primary" disabled={running} onClick={onRun}>{running ? 'Reviewing…' : review ? 'Re-run review' : 'Review working changes'}</button>
+        {review ? <span className="review-count">{findings.length} finding{findings.length === 1 ? '' : 's'} · {review.files} file{review.files === 1 ? '' : 's'}</span> : null}
       </div>
+      {gate ? <div className={`review-gate gate-${gate.status}`}>{GATE_LABEL[gate.status] ?? gate.status} — {gate.reason}</div> : null}
       {running ? <div className="row status"><span className="spinner" /> Running a local review over the working diff…</div> : null}
       {review && !running ? (
         <>
           {review.summary ? <div className="review-summary">{review.summary}</div> : null}
-          {review.findings.length === 0 ? <div className="empty">No issues found in the working changes. ✓</div> : null}
+          {findings.length === 0 ? <div className="empty">No issues found in the working changes. ✓</div> : null}
           {[...byFile.entries()].map(([file, fs]) => (
             <div key={file} className="review-file">
               <div className="review-file-head">{file}</div>
-              {fs.map((f, i) => (
-                <div key={i} className="review-finding">
+              {fs.map((f, i) => {
+                const resolved = f.status && f.status !== 'open';
+                return (
+                <div key={f.id ?? i} className={`review-finding${resolved ? ' resolved' : ''}`}>
                   <div className="review-finding-head">
                     <span className={`sev sev-${f.severity}`}>{f.severity}</span>
                     {f.line ? <span className="review-line">:{f.line}</span> : null}
+                    {resolved ? <span className="finding-status">{f.status}</span> : null}
                     <span className="review-conf">{f.confidence}%</span>
                   </div>
                   <div className="review-finding-body">{f.summary}</div>
-                  <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss in chat</button>
+                  {!resolved ? (
+                    <div className="finding-actions">
+                      {f.canApply ? <button className="wt-btn" onClick={() => onApply(f)}>Apply</button> : null}
+                      <button className="wt-btn" onClick={() => onAskFix(f)}>Ask agent to fix</button>
+                      <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss</button>
+                      <button className="wt-btn" onClick={() => onResolve(f)}>Mark resolved</button>
+                      <button className="wt-btn" onClick={() => onDismiss(f)}>Dismiss</button>
+                    </div>
+                  ) : null}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </>
-      ) : !running ? <div className="empty">Run a review of your uncommitted changes before a commit/PR — findings appear here grouped by file.</div> : null}
+      ) : !running ? <div className="empty">Run a review of your uncommitted changes before a commit/PR — findings appear here grouped by file, and commit/push stay blocked until critical/high findings are resolved.</div> : null}
     </div>
   );
 }

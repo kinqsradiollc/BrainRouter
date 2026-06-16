@@ -662,8 +662,9 @@ export function App(): React.ReactElement {
   // T13 — git worktrees for this repo + a per-worktree diff cache.
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const [worktreeDiffs, setWorktreeDiffs] = useState<Record<string, string>>({});
-  // T12 — local AI review of the working diff: findings + running state.
+  // T12 / Review v2 — findings + the commit/push gate state + running flag.
   const [review, setReview] = useState<{ findings: ReviewFindingView[]; summary: string; files: number } | null>(null);
+  const [reviewGate, setReviewGate] = useState<{ status: string; blocked: boolean; reason: string } | null>(null);
   const [reviewRunning, setReviewRunning] = useState(false);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
@@ -734,6 +735,7 @@ export function App(): React.ReactElement {
   function ensurePanel(id: PanelId): void {
     if (id === 'terminal') { openBottomDock(); return; }
     if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
+    if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -1266,8 +1268,15 @@ export function App(): React.ReactElement {
         setReviewRunning(false);
         const r = result as { findings?: ReviewFindingView[]; summary?: string; files?: number } | null;
         setReview(r ? { findings: r.findings ?? [], summary: r.summary ?? '', files: r.files ?? 0 } : { findings: [], summary: 'Review failed.', files: 0 });
+        q('q-review-current', 'review-current'); // refresh the gate + finding statuses
         // If a commit/push was waiting on a freshly-run review, re-check the gate.
         if (pendingGitRef.current) q('q-review-gate', 'review-gate');
+        return;
+      }
+      case 'q-review-current': {
+        const r = result as { run?: { findings?: ReviewFindingView[]; summary?: string } | null; gate?: { status: string; blocked: boolean; reason: string }; files?: number } | null;
+        setReviewGate(r?.gate ?? null);
+        if (r?.run) setReview({ findings: r.run.findings ?? [], summary: r.run.summary ?? '', files: r.files ?? 0 });
         return;
       }
       case 'q-review-gate': {
@@ -1796,9 +1805,17 @@ export function App(): React.ReactElement {
         onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onOpen={(path) => openProject(path)}
         onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
-      case 'review': return <ReviewPanel review={review} running={reviewRunning}
-        onRun={() => { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); }}
-        onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)} />;
+      case 'review': {
+        const refresh = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
+        const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
+        return <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
+          onRun={() => { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); }}
+          onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
+          onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); } }}
+          onAskFix={(f) => { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }}
+          onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
+          onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }} />;
+      }
       default: return null;
     }
   };
