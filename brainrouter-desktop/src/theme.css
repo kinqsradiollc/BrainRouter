@@ -491,6 +491,20 @@ input.ctl { min-width: 220px; }
 .session-dot.on { background: var(--accent, #6cc04a); }
 .sched-note { font-size: 10.5px; color: var(--text-faint); padding: 10px 6px 4px; line-height: 1.5; }
 .sched-note code { font-size: 10px; }
+/* T13 — worktrees panel */
+.wt-panel { padding: 4px 2px; }
+.wt-row { padding: 7px 6px; border-radius: 8px; }
+.wt-row:hover { background: rgba(255,255,255,0.04); }
+.wt-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 560; color: var(--text); }
+.wt-branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: var(--raised); color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.wt-tag.cur { background: var(--accent-soft, rgba(108,192,74,0.18)); color: var(--accent, #6cc04a); }
+.wt-path { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin: 2px 0 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-actions { display: flex; gap: 6px; }
+.wt-btn { border: 1px solid var(--border-strong); background: transparent; color: var(--text-dim); font-size: 11px; padding: 3px 9px; border-radius: 7px; cursor: pointer; }
+.wt-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.wt-btn.danger:hover { color: #ffa198; border-color: #ffa198; }
+.wt-diff { margin-top: 8px; max-height: 360px; overflow: auto; border-top: 1px solid var(--border); padding-top: 6px; }
 .effort-pop { width: 230px; padding: 8px 12px 12px; }
 .effort-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11.5px; margin: 8px 0 4px; }
 .effort-slider { width: 100%; accent-color: var(--brand); cursor: pointer; }

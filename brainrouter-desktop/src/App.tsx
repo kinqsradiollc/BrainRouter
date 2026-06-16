@@ -33,10 +33,11 @@ const MD_COMPONENTS: Record<string, unknown> = {
 };
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel,
+  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit,
 } from './panels.js';
 import type { ScheduleRecordView } from './scheduleView.js';
+import { parseWorktreeList, type WorktreeEntry } from './worktreeParser.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 import { duplicateTitleKeys } from './sessionDisplay.js';
@@ -654,6 +655,9 @@ export function App(): React.ReactElement {
   const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
   // T14 — scheduled tasks for the viewed session (cron/once), from the CLI store.
   const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
+  // T13 — git worktrees for this repo + a per-worktree diff cache.
+  const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
+  const [worktreeDiffs, setWorktreeDiffs] = useState<Record<string, string>>({});
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   // DESK-5d — the trust gate runs BEFORE a project opens (and before a chat
@@ -719,6 +723,7 @@ export function App(): React.ReactElement {
   /** Show a view as the side panel's active tab (terminal lives in the dock). */
   function ensurePanel(id: PanelId): void {
     if (id === 'terminal') { openBottomDock(); return; }
+    if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -1209,6 +1214,16 @@ export function App(): React.ReactElement {
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-schedule': if (Array.isArray(result)) setSchedules(result as ScheduleRecordView[]); return;
+      case 'q-worktrees': {
+        const r = result as { raw?: string; current?: string } | null;
+        if (r && typeof r.raw === 'string') setWorktrees(parseWorktreeList(r.raw, r.current));
+        return;
+      }
+      case 'q-worktree-diff': {
+        const r = result as { path?: string; diff?: string } | null;
+        if (r && typeof r.path === 'string') setWorktreeDiffs((d) => ({ ...d, [r.path!]: r.diff ?? '' }));
+        return;
+      }
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
       case 'q-transcript': {
         const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
@@ -1711,6 +1726,11 @@ export function App(): React.ReactElement {
         onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
         onRemove={(id) => { q('q-schedule', 'schedule-remove', { id }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
         onToggle={(id, enabled) => { q('q-schedule', 'schedule-toggle', { id, enabled }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }} />;
+      case 'worktrees': return <WorktreesPanel worktrees={worktrees} diffs={worktreeDiffs}
+        onCreate={(name, ref) => { q('q-worktree-create', 'worktree-create', { name, ref }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
+        onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
+        onOpen={(path) => openProject(path)}
+        onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
       default: return null;
     }
   };
@@ -2284,6 +2304,8 @@ export function App(): React.ReactElement {
                     { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '' },
                     { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock',
                       badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
+                    { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
+                      badge: worktrees.length ? String(worktrees.length) : '' },
                     { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
                   ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>).map((l) => (
                     <button key={l.id} className="side-launcher" onClick={() => openSideView(l.id)}>
