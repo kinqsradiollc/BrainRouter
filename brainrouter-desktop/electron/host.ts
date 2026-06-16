@@ -20,7 +20,7 @@ import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import { Agent } from '@kinqs/brainrouter-cli/dist/agent/agent.js';
 import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist/config/config.js';
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
@@ -329,15 +329,16 @@ async function main(): Promise<void> {
   // estimate so the context ring is right on a lazily-resumed (not-yet-loaded)
   // chat. 3s TTL: long enough for resume→render, short enough to stay fresh.
   type TxEntry = { role?: string; content?: unknown; name?: string; tool_calls?: unknown[]; tool_call_id?: string; isError?: boolean; timestamp?: string };
-  const transcriptCache = new Map<string, { entries: TxEntry[]; tokens: number; at: number }>();
+  // Short-lived dedup cache for the FULL agent-continuation read (loadHistory).
+  // The context-fill estimate no longer reads this (it uses transcriptSizeBytes),
+  // so there's no O(n) token loop here anymore.
+  const transcriptCache = new Map<string, { entries: TxEntry[]; at: number }>();
   const readTranscriptCached = (key: string): TxEntry[] => {
     const now = Date.now();
     const hit = transcriptCache.get(key);
     if (hit && now - hit.at < 3_000) return hit.entries;
     const entries = loadTranscript(workspaceRoot, key) as TxEntry[];
-    let chars = 0;
-    for (const e of entries) if (typeof e?.content === 'string') chars += (e.content as string).length;
-    transcriptCache.set(key, { entries, tokens: Math.round(chars / 4), at: now });
+    transcriptCache.set(key, { entries, at: now });
     if (transcriptCache.size > 8) transcriptCache.delete(transcriptCache.keys().next().value as string);
     return entries;
   };
@@ -348,7 +349,8 @@ async function main(): Promise<void> {
     onActiveAgentChange: (a) => { activeAgent = a as unknown as typeof agent; },
     send: send as never,
     broker,
-    loadTranscript: (key) => readTranscriptCached(key),
+    loadTranscript: (key) => readTranscriptCached(key), // FULL — agent continuation only
+    transcriptExists: (key) => transcriptExists(workspaceRoot, key), // OOM-safe cheap resume count
     persistModel: (model) => {
       // Both heads read this file — a model picked in the desktop settings is
       // the CLI's model on its next launch, and vice versa.
@@ -557,11 +559,12 @@ async function main(): Promise<void> {
         // Fall back to the resumed transcript's token estimate (from the cache
         // populated on resume) so the ring isn't wrong while you're browsing.
         const agentTokens = Number(a.getCurrentContextTokens?.() ?? a.lastSeenPromptTokens ?? 0);
-        const c = transcriptCache.get(activeAgent.sessionKey);
-        // Only the FRESH (resume-window) estimate counts; once the cache ages
-        // out or a turn runs, the agent's own (authoritative) value wins.
-        const cached = c && Date.now() - c.at < 3_000 ? c.tokens : 0;
-        const used = Math.max(agentTokens, cached);
+        // OOM-safe ring estimate: a lazily-resumed chat hasn't loaded history into
+        // the agent yet, so approximate context from the transcript's BYTE SIZE
+        // (~4 bytes/token) — O(1), no content read, no cache dependency. The
+        // agent's authoritative prompt_tokens takes over once a turn runs.
+        const sizeEstimate = Math.round(transcriptSizeBytes(workspaceRoot, activeAgent.sessionKey) / 4);
+        const used = Math.max(agentTokens, sizeEstimate);
         const model = activeAgent.getModel?.() ?? llm.model;
         const window = contextWindowFor(model) ?? 0;
         const compactAt = getCliKnobs().autoCompactTokens || 80_000;

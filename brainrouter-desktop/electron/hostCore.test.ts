@@ -231,10 +231,12 @@ test('DESK-6t resume-session: switches + emits count, but LAZY-loads history on 
     loadTranscript: (key) => (key === 'sess-known' ? [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }] : []),
   });
   await core.handle({ kind: 'resume-session', sessionKey: 'sess-known' });
-  // Resume switches the session + reports the count for the renderer to render…
+  // Resume switches the session + emits a SENTINEL loadedMessages (1 = "has
+  // history to render") — OOM-safe: it no longer full-reads the transcript just
+  // to count; the renderer fetches the real rows via the bounded transcript query.
   assert.equal(agent.sessionKey, 'sess-known');
   const sc = out.find((m) => m.event.kind === 'session-changed')!.event as { loadedMessages: number };
-  assert.equal(sc.loadedMessages, 2);
+  assert.equal(sc.loadedMessages, 1);
   // …but does NOT load the transcript into the agent yet (the expensive part is lazy).
   assert.equal(loadedWith.length, 0, 'history is NOT loaded on resume');
   // It loads on the FIRST turn (when the user actually sends a message).

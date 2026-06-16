@@ -163,6 +163,14 @@ export function transcriptExists(workspaceRoot: string, sessionKey: string): boo
   return resolveExistingTranscriptPath(workspaceRoot, sessionKey) != null;
 }
 
+/** Cheap O(1) transcript byte size — a fast proxy for context fill on a lazily
+ *  resumed session, so the context ring is ~right WITHOUT reading the content. */
+export function transcriptSizeBytes(workspaceRoot: string, sessionKey: string): number {
+  const p = resolveExistingTranscriptPath(workspaceRoot, sessionKey);
+  if (!p) return 0;
+  try { return fs.statSync(p).size; } catch { return 0; }
+}
+
 /**
  * Resolve the transcript path for writes. Always uses the per-session bucket
  * at `<state>/sessions/<encodedKey>/transcript.jsonl` so each chat session
