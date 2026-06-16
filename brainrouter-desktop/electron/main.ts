@@ -17,6 +17,7 @@ import {
   type HostPoolState,
 } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
+import { addOpened, bumpActivity, type ActivityReason } from './recents.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,9 +41,22 @@ const recentsPath = (): string => path.join(app.getPath('userData'), 'recent-wor
 function readRecents(): string[] {
   try { return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8')) as string[]; } catch { return []; }
 }
-function pushRecent(workspaceRoot: string): void {
-  const next = [workspaceRoot, ...readRecents().filter((w) => w !== workspaceRoot)].slice(0, 10);
+function writeRecents(next: string[]): void {
   try { fs.mkdirSync(path.dirname(recentsPath()), { recursive: true }); fs.writeFileSync(recentsPath(), JSON.stringify(next, null, 2)); } catch { /* best-effort */ }
+}
+/** Membership without promotion — opening/switching/viewing a project must NOT
+ *  move it to the top (only real activity does). */
+function markWorkspaceOpened(workspaceRoot: string): void {
+  writeRecents(addOpened(readRecents(), workspaceRoot));
+}
+/** Promote a workspace after REAL activity (a turn, output, commit/push/PR).
+ *  Notifies open windows so the sidebar reorders live. */
+function markWorkspaceActivity(workspaceRoot: string, reason: ActivityReason): void {
+  const next = bumpActivity(readRecents(), workspaceRoot);
+  writeRecents(next);
+  for (const wp of wins.values()) {
+    if (!wp.win.isDestroyed()) wp.win.webContents.send('recents-changed', { recents: next, reason, workspaceRoot });
+  }
 }
 
 /** Fork an agent host for a workspace, pool it, and pipe its events into the
@@ -60,8 +74,10 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       const ev = (msg as { event?: { kind?: string; sessionKey?: string } }).event;
       const kind = ev?.kind;
       // Track work-in-flight so the pool never reaps a running workspace.
-      if (kind === 'turn-start') wp.pool = setRunning(wp.pool, workspaceRoot, true);
-      else if (kind === 'turn-complete' || kind === 'turn-error') wp.pool = setRunning(wp.pool, workspaceRoot, false);
+      if (kind === 'turn-start') { wp.pool = setRunning(wp.pool, workspaceRoot, true); markWorkspaceActivity(workspaceRoot, 'user-message'); }
+      else if (kind === 'turn-complete' || kind === 'turn-error') { wp.pool = setRunning(wp.pool, workspaceRoot, false); markWorkspaceActivity(workspaceRoot, 'agent-response'); }
+      // Real background work (a child/worker produced output) is activity too.
+      else if (kind === 'child-tool-end' || kind === 'child-complete') markWorkspaceActivity(workspaceRoot, 'background-task');
       // Remember each workspace's last-viewed session so we can re-announce it
       // when the user switches back to a parked (reused) host.
       else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') wp.lastSession.set(workspaceRoot, ev.sessionKey);
@@ -120,7 +136,9 @@ function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
     if (host && last) { try { host.postMessage({ kind: 'resume-session', sessionKey: last }); } catch { /* gone */ } }
   }
   wp.win.setTitle(`BrainRouter — ${path.basename(workspaceRoot)}`);
-  pushRecent(workspaceRoot);
+  // Activating/switching is "opened", NOT activity — it must not promote the
+  // project to the top. Only real work (turn/output/commit) does that.
+  markWorkspaceOpened(workspaceRoot);
 }
 
 function openWorkspaceWindow(workspaceRoot: string): void {

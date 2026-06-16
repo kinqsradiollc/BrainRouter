@@ -6,6 +6,9 @@ declare global {
     brainrouter: {
       send(command: AgentCommand): void;
       onEvent(listener: (msg: AgentEventMessage) => void): () => void;
+      /** Activity-based ordering: main pushes the reordered project list when a
+       *  workspace sees real activity. May be absent on older preloads. */
+      onRecentsChanged?(listener: (data: { recents: string[]; reason: string; workspaceRoot: string }) => void): () => void;
       /** Folder picker ONLY — returns the picked path; the renderer runs the
        * trust gate and then calls openWorkspace (DESK-5d). */
       addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }>;

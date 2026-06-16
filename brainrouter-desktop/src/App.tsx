@@ -896,6 +896,16 @@ export function App(): React.ReactElement {
     return () => clearInterval(t);
   }, []);
 
+  // Wave 1 — live project reorder: main pushes the reordered recents the moment
+  // a workspace sees REAL activity (turn/output/commit). Merely opening/viewing
+  // a project does NOT fire this, so the list stays stable while you browse.
+  useEffect(() => {
+    const off = window.brainrouter.onRecentsChanged?.((data) => {
+      setWorkspaces((w) => ({ ...w, recents: data.recents }));
+    });
+    return () => off?.();
+  }, []);
+
   // DESK-5w — while a task's conversation is open, refresh it so a running
   // worker/subagent's chat updates as it works.
   useEffect(() => {

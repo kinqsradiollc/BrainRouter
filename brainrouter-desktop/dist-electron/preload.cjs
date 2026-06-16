@@ -14,6 +14,13 @@ contextBridge.exposeInMainWorld('brainrouter', {
         ipcRenderer.on('agent-event', wrapped);
         return () => ipcRenderer.removeListener('agent-event', wrapped);
     },
+    // Activity-based project ordering: main pushes the reordered recents when a
+    // workspace sees real activity (a turn, output, commit/push/PR).
+    onRecentsChanged(listener) {
+        const wrapped = (_e, data) => listener(data);
+        ipcRenderer.on('recents-changed', wrapped);
+        return () => ipcRenderer.removeListener('recents-changed', wrapped);
+    },
     addWorkspace() {
         return ipcRenderer.invoke('workspace:add');
     },
