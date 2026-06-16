@@ -13,6 +13,8 @@ import { Prism } from 'react-syntax-highlighter';
 import { Icon } from './icons.js';
 import { partitionSchedules, describeSchedule, relTime, type ScheduleRecordView } from './scheduleView.js';
 import { type WorktreeEntry } from './worktreeParser.js';
+import { findingRows } from './reviewCode.js';
+import { commitBlocked } from './reviewGateUi.js';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Same @types/react clash as react-markdown — runtime component is fine.
@@ -325,7 +327,7 @@ export function DiffView({ diff }: { diff: string }): React.ReactElement {
   );
 }
 
-export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, gitBusy, reviewGate, onReview }: {
+export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, onGitBypass, gitBusy, reviewGate, onReview, findingsByFile }: {
   gitInfo: { repo: string; branch: string | null; insertions: number; deletions: number } | null;
   changed: Array<{ status: string; path: string }>;
   diff: { path: string; diff: string } | null;
@@ -334,14 +336,19 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
   onOpenFile: (path: string) => void;
   /** DESK-5j — the review surface acts on git: commit all / push / pull. */
   onGit?: (kind: 'commit' | 'push' | 'pull', msg?: string) => void;
+  /** §7 — explicit bypass (Commit/Push without review) when the gate blocks. */
+  onGitBypass?: (kind: 'commit' | 'push', msg?: string) => void;
   gitBusy?: boolean;
   /** Wave 7 — surface the review gate right in the Changes area. */
   reviewGate?: ReviewGateView | null;
   onReview?: () => void;
+  /** §4 — count of review findings per file, for the badge next to each file. */
+  findingsByFile?: Record<string, number>;
 }): React.ReactElement {
   const [msg, setMsg] = useState('');
   const commit = () => { if (msg.trim() && changed.length) { onGit?.('commit', msg.trim()); setMsg(''); } };
-  const blockedReason = reviewGate?.blocked ? reviewGate.reason : '';
+  const blocked = commitBlocked(reviewGate, changed.length);
+  const reason = reviewGate?.reason ?? '';
   return (
     <>
       {gitInfo?.branch ? (
@@ -354,10 +361,10 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
       ) : null}
       {onGit && gitInfo?.branch && !diff ? (
         <>
-          {/* Wave 7 — review status + entry point, right above the commit row. */}
+          {/* §7 — review status + entry point, right above the commit row. */}
           {changed.length && reviewGate ? (
             <div className={`diff-review-status gate-${reviewGate.status}`}>
-              <span className="drs-label">{GATE_LABEL[reviewGate.status] ?? reviewGate.status}</span>
+              <span className="drs-label" title={reason}>{GATE_LABEL[reviewGate.status] ?? reviewGate.status}</span>
               {onReview ? <button className="drs-btn" onClick={onReview}>{reviewGate.status === 'clean' ? 'View review' : reviewGate.status === 'needs-review' ? 'Run review' : 'Open review'}</button> : null}
             </div>
           ) : null}
@@ -366,10 +373,18 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
               value={msg} disabled={!changed.length || gitBusy}
               onChange={(e) => setMsg(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') commit(); }} />
-            <button className="btn" disabled={!changed.length || !msg.trim() || gitBusy} title={blockedReason || undefined} onClick={commit}>Commit{blockedReason ? ' ⚠' : ''}</button>
-            <button className="btn" disabled={gitBusy} title={blockedReason || undefined} onClick={() => onGit('push')}>Push{blockedReason ? ' ⚠' : ''}</button>
+            {/* §7 — when blocked, the primary Commit/Push are DISABLED (use Run review
+                or the explicit bypass below); when clean, they proceed as reviewed. */}
+            <button className="btn" disabled={!changed.length || !msg.trim() || gitBusy || blocked} title={blocked ? reason : undefined} onClick={commit}>Commit</button>
+            <button className="btn" disabled={gitBusy || blocked} title={blocked ? reason : undefined} onClick={() => onGit('push')}>Push</button>
             <button className="btn" disabled={gitBusy} onClick={() => onGit('pull')}>Pull</button>
           </div>
+          {blocked && onGitBypass ? (
+            <div className="review-bypass">
+              <button className="bypass-btn" disabled={!changed.length || !msg.trim() || gitBusy} onClick={() => { onGitBypass('commit', msg.trim()); setMsg(''); }}>Commit without review</button>
+              <button className="bypass-btn" disabled={gitBusy} onClick={() => onGitBypass('push')}>Push without review</button>
+            </div>
+          ) : null}
         </>
       ) : null}
       {diff ? (
@@ -381,13 +396,17 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
         </>
       ) : (
         <div className="scroll">
-          {changed.length === 0 ? <div className="empty center-empty">No changes to show</div> : changed.map((f) => (
+          {changed.length === 0 ? <div className="empty center-empty">No changes to show</div> : changed.map((f) => {
+            const findings = findingsByFile?.[f.path] ?? 0;
+            return (
             <div key={f.path} className="file-row" title={f.path}>
               <span className={`fstat s-${f.status.replace('?', 'u')}`}>{f.status}</span>
               <span className="file-name" onClick={() => onPick(f.path)}>{f.path}</span>
+              {findings ? <span className="file-findings" title={`${findings} review finding${findings === 1 ? '' : 's'}`}>{findings}</span> : null}
               <button className="icon-btn" title="Open file" onClick={() => onOpenFile(f.path)}><Icon name="file" size={12} /></button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </>
@@ -605,12 +624,46 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
   );
 }
 
-export interface ReviewFindingView { id?: string; file: string; line?: number; severity: string; confidence: number; summary: string; status?: string; canApply?: boolean }
+export interface ReviewFindingView {
+  id?: string; file: string; line?: number; endLine?: number; severity: string; confidence: number;
+  summary: string; details?: string; suggestion?: string; codeExcerpt?: string; diffHunk?: string;
+  patch?: string; status?: string; canApply?: boolean;
+}
 export interface ReviewGateView { status: string; blocked: boolean; reason: string }
 
 const GATE_LABEL: Record<string, string> = { clean: '✓ Review passed', blocked: '⚠ Blocking findings', stale: '↻ Review out of date', 'needs-review': '○ Needs review', running: '… Reviewing' };
 
-export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve }: {
+/** §2 — line-numbered code frame: red problem/removed, green suggested/added,
+ *  neutral context — reusing the shared diff-line classification (reviewCode). */
+function ReviewCodeFrame({ f }: { f: ReviewFindingView }): React.ReactElement | null {
+  const [showPatch, setShowPatch] = useState(false);
+  const rows = findingRows(f);
+  if (!rows.length && !f.patch) return null;
+  const sign = (k: string) => (k === 'add' ? '+' : k === 'del' ? '−' : k === 'problem' ? '!' : '');
+  return (
+    <div className="rcf">
+      {rows.length ? (
+        <div className="rcf-code">
+          {rows.map((r, i) => (
+            <div key={i} className={`rcf-row rcf-${r.kind}`}>
+              <span className="rcf-gutter">{r.lineNo ?? ''}</span>
+              <span className="rcf-sign">{sign(r.kind)}</span>
+              <span className="rcf-text">{r.text || ' '}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {f.patch ? (
+        <div className="rcf-patch">
+          <button className="rcf-patch-toggle" onClick={() => setShowPatch((s) => !s)}>{showPatch ? '▾ Hide patch' : '▸ Preview patch'}</button>
+          {showPatch ? <div className="rcf-patch-body"><DiffView diff={f.patch} /></div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve, onOpenFile, onOpenDiff }: {
   review: { findings: ReviewFindingView[]; summary: string; files: number } | null;
   gate: ReviewGateView | null;
   running: boolean;
@@ -620,6 +673,8 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
   onAskFix: (f: ReviewFindingView) => void;
   onDismiss: (f: ReviewFindingView) => void;
   onResolve: (f: ReviewFindingView) => void;
+  onOpenFile: (f: ReviewFindingView) => void;
+  onOpenDiff: (f: ReviewFindingView) => void;
 }): React.ReactElement {
   const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
   const findings = [...(review?.findings ?? [])].sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
@@ -639,34 +694,42 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
           {findings.length === 0 ? <div className="empty">No issues found in the working changes. ✓</div> : null}
           {[...byFile.entries()].map(([file, fs]) => (
             <div key={file} className="review-file">
-              <div className="review-file-head">{file}</div>
+              <div className="review-file-head">
+                <span className="rfh-name" title={file}>{file}</span>
+                <span className="rfh-count">{fs.length}</span>
+              </div>
               {fs.map((f, i) => {
                 const resolved = f.status && f.status !== 'open';
                 return (
                 <div key={f.id ?? i} className={`review-finding${resolved ? ' resolved' : ''}`}>
                   <div className="review-finding-head">
                     <span className={`sev sev-${f.severity}`}>{f.severity}</span>
-                    {f.line ? <span className="review-line">:{f.line}</span> : null}
+                    {f.line ? <span className="review-line">L{f.line}{f.endLine && f.endLine !== f.line ? `–${f.endLine}` : ''}</span> : null}
                     {resolved ? <span className="finding-status">{f.status}</span> : null}
                     <span className="review-conf">{f.confidence}%</span>
                   </div>
                   <div className="review-finding-body">{f.summary}</div>
-                  {!resolved ? (
-                    <div className="finding-actions">
-                      {f.canApply ? <button className="wt-btn" onClick={() => onApply(f)}>Apply</button> : null}
-                      <button className="wt-btn" onClick={() => onAskFix(f)}>Ask agent to fix</button>
-                      <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss</button>
-                      <button className="wt-btn" onClick={() => onResolve(f)}>Mark resolved</button>
-                      <button className="wt-btn" onClick={() => onDismiss(f)}>Dismiss</button>
-                    </div>
+                  {f.details ? <div className="review-finding-details">{f.details}</div> : null}
+                  <ReviewCodeFrame f={f} />
+                  {f.suggestion && !f.diffHunk && !(f.codeExcerpt && /[\n;{}()=]/.test(f.suggestion)) ? (
+                    <div className="review-suggestion"><span className="rs-label">Suggested fix</span> {f.suggestion}</div>
                   ) : null}
+                  <div className="finding-actions">
+                    {!resolved && f.canApply ? <button className="wt-btn primary-ghost" onClick={() => onApply(f)}>Apply suggestion</button> : null}
+                    {!resolved ? <button className="wt-btn" onClick={() => onAskFix(f)}>Ask agent to fix</button> : null}
+                    {!resolved ? <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss</button> : null}
+                    <button className="wt-btn" onClick={() => onOpenDiff(f)} title="Open this file's diff">Open diff</button>
+                    <button className="wt-btn" onClick={() => onOpenFile(f)} title="Open the file">Open file</button>
+                    {!resolved ? <button className="wt-btn" onClick={() => onResolve(f)}>Resolve</button> : null}
+                    {!resolved ? <button className="wt-btn" onClick={() => onDismiss(f)}>Dismiss</button> : null}
+                  </div>
                 </div>
                 );
               })}
             </div>
           ))}
         </>
-      ) : !running ? <div className="empty">Run a review of your uncommitted changes before a commit/PR — findings appear here grouped by file, and commit/push stay blocked until critical/high findings are resolved.</div> : null}
+      ) : !running ? <div className="empty">Run a review of your uncommitted changes before a commit/PR — findings appear here grouped by file with the exact lines + suggested fix, and commit/push stay blocked until critical/high findings are resolved.</div> : null}
     </div>
   );
 }
