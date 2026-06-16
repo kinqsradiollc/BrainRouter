@@ -38,6 +38,8 @@ import {
 } from './panels.js';
 import type { ScheduleRecordView } from './scheduleView.js';
 import { parseWorktreeList, type WorktreeEntry } from './worktreeParser.js';
+import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './sessionPagination.js';
+import { toolGroupLabel } from './toolGroupLabel.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 import { duplicateTitleKeys } from './sessionDisplay.js';
@@ -305,16 +307,9 @@ function ToolGroup({ row, live, inlineDiffs, onRequestDiff }: {
   const [diffItem, setDiffItem] = useState<number | null>(null);
   // Observed: live groups read "Using {tool} *"; finished ones get an
   // outcome-phrased label ("Used N tools ›").
-  const last = row.items[row.items.length - 1];
-  // DESK-6t — collapsed multi-tool groups list the DISTINCT tool names so you
-  // can see what the step was about at a glance, instead of a bare "Used N tools".
-  const toolNames = [...new Set(row.items.map((i) => i.tool))];
-  const namesLabel = toolNames.slice(0, 4).join(' · ') + (toolNames.length > 4 ? ` +${toolNames.length - 4}` : '');
-  const label = live
-    ? `Using ${last.child ? `[${last.child}] ` : ''}${last.tool} ✶`
-    : row.items.length === 1
-      ? `${row.items[0].child ? `[${row.items[0].child}] ` : ''}${row.items[0].tool} — ${row.items[0].summary}`
-      : `${row.items.length} tools · ${namesLabel}`;
+  // DESK-6t / item 12 — collapsed label via the pure, tested toolGroupLabel
+  // (live "Using X ✶" · single "tool — summary" · multi "N tools · names…").
+  const label = toolGroupLabel(row.items, !!live);
   const failed = row.items.some((i) => !i.ok);
   return (
     <div className="step">
@@ -684,6 +679,9 @@ export function App(): React.ReactElement {
   const [activeTerm, setActiveTerm] = useState(1);
   const termSeq = useRef(1);
   const [recentsOpen, setRecentsOpen] = useState(true);
+  // Item 9 — how many of the current project's chats are shown (grows a page at
+  // a time via the show-more button). Collapsed view always shows the base few.
+  const [visibleCount, setVisibleCount] = useState(SESSION_BASE);
   const commands = useMemo(() => buildCommandList(catalog), [catalog]);
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
@@ -1682,7 +1680,7 @@ export function App(): React.ReactElement {
     for (const s of liveSessions) if (s.group) { const arr = m.get(s.group); if (arr) arr.push(s); else m.set(s.group, [s]); }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [liveSessions]);
-  const visibleProjectSessions = recentsOpen ? ungroupedSessions.slice(0, 7) : ungroupedSessions.slice(0, 3);
+  const visibleProjectSessions = recentsOpen ? ungroupedSessions.slice(0, visibleCount) : ungroupedSessions.slice(0, 3);
   const hiddenProjectSessions = Math.max(0, ungroupedSessions.length - visibleProjectSessions.length);
   const currentProjectName = workspaces.current?.split('/').pop() ?? info.workspaceRoot?.split('/').pop() ?? 'No workspace';
   const otherProjects = workspaces.recents.filter((w) => w !== workspaces.current && w !== info.workspaceRoot).slice(0, 6);
@@ -1803,9 +1801,11 @@ export function App(): React.ReactElement {
                   {/* DESK-5w/6m — chats (with per-chat ⋮ menu) + their nested
                       background tasks; pinned first, grouped sections below. */}
                   {visibleProjectSessions.map((s, i) => renderSessionNode(s, i))}
-                  {hiddenProjectSessions > 0 ? (
-                    <button className="show-more" onClick={() => setRecentsOpen((o) => !o)}>
-                      {recentsOpen ? 'Show fewer' : `Show ${hiddenProjectSessions} more`}
+                  {!recentsOpen && hiddenProjectSessions > 0 ? (
+                    <button className="show-more" onClick={() => setRecentsOpen(true)}>{`Show ${hiddenProjectSessions} more`}</button>
+                  ) : recentsOpen && showToggle(ungroupedSessions.length, visibleProjectSessions.length) ? (
+                    <button className="show-more" onClick={() => setVisibleCount((c) => toggleVisible(c, ungroupedSessions.length))}>
+                      {moreLabel(ungroupedSessions.length, visibleProjectSessions.length)}
                     </button>
                   ) : null}
                   {/* DESK-6m — grouped chats as their own labeled sections. */}

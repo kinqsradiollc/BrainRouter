@@ -70,6 +70,12 @@ export function installDevBridge(): void {
       { sessionKey: 'dev:fix-recall-blend', firstUserMessage: 'fix the reranker blend regression', modifiedAt: new Date(Date.now() - 3600_000).toISOString(), turnCount: 24, lastRole: 'assistant' },
       { sessionKey: 'dev:grid-tui', firstUserMessage: 'make the sidebar live', modifiedAt: new Date(Date.now() - 26 * 3600_000).toISOString(), turnCount: 51, lastRole: 'user' },
       { sessionKey: 'dev:release-0414', firstUserMessage: 'release 0.4.14 to npm', modifiedAt: new Date(Date.now() - 6 * 86400_000).toISOString(), turnCount: 12, lastRole: 'assistant' },
+      // Item 9 — extra sessions so the sidebar pagination (show more / fewer) is exercisable.
+      ...Array.from({ length: 12 }, (_, i) => ({
+        sessionKey: `dev:older-${i + 1}`,
+        firstUserMessage: `older task ${i + 1} — ${['tidy the recall logs', 'bump deps', 'fix flaky test', 'doc pass', 'perf probe'][i % 5]}`,
+        modifiedAt: new Date(Date.now() - (8 + i) * 86400_000).toISOString(), turnCount: 3 + i, lastRole: i % 2 ? 'user' : 'assistant',
+      })),
     ],
     '/Users/dev/side-project': [
       { sessionKey: 'dev:side-auth', firstUserMessage: 'add OAuth login flow', modifiedAt: new Date(Date.now() - 2 * 86400_000).toISOString(), turnCount: 9, lastRole: 'assistant' },
