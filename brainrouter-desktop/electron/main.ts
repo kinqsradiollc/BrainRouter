@@ -16,6 +16,7 @@ import {
   emptyPool, planActivate, applyActivate, setRunning, removeEntry,
   type HostPoolState,
 } from './hostPoolPolicy.js';
+import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -141,6 +142,20 @@ function openWorkspaceWindow(workspaceRoot: string): void {
   });
   const wp: WinPool = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
   wins.set(win.webContents.id, wp);
+
+  // SEC: deny all renderer-initiated window.open (target=_blank, window.open, etc.).
+  // The renderer has no legitimate need to spawn a second BrowserWindow.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  // SEC: block top-level navigation away from the app's own origin (phishing,
+  // data:/javascript: payloads). Allowed: the packaged file:// load and, in dev,
+  // the Vite dev origin. Policy is a pure, unit-tested helper.
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  const allowedOrigin = allowedOriginFor(devUrl);
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigation(url, allowedOrigin)) event.preventDefault();
+  });
+
   win.on('closed', () => {
     for (const [id, w] of wins) {
       if (w.win !== win) continue;
@@ -149,8 +164,6 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     }
   });
   activateWorkspace(wp, workspaceRoot); // spawns the first host
-
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) void win.loadURL(devUrl);
   else void win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
