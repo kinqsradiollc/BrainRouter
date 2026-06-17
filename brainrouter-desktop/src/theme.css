@@ -1202,3 +1202,11 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .ci-log { font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text-dim); background: var(--term-bg); border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; }
 .env-row.ci-env-failing span { color: var(--err); } .env-row.ci-env-passing span { color: var(--ok); }
 .env-row.ci-env-pending span { color: var(--warn); }
+
+/* T2 — per-workspace review badge on the project row */
+.review-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 4px; font-size: 10px; line-height: 1; }
+.review-badge.rb-blocked { background: color-mix(in srgb, var(--err) 20%, transparent); color: var(--err); }
+.review-badge.rb-stale { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.review-badge.rb-needs-review { background: var(--ov-1); color: var(--text-dim); }
+.review-badge.rb-passed { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.review-badge.rb-reviewing { background: var(--ov-1); color: var(--accent); }

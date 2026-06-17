@@ -16,6 +16,7 @@ import { parseWorktreeList, type WorktreeEntry } from './lib/worktree/worktreePa
 import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
 import { gitActionTag } from './lib/review/reviewGateUi.js';
+import { activeEntry, setEntry, shouldProceedGate, reviewBadgeFor } from './lib/review/reviewWorkspace.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
@@ -196,7 +197,7 @@ export function App(): React.ReactElement {
   const [gitBusy, setGitBusy] = useState(false);
   // Wave 4 — review gate: a pending commit/push waiting on the gate check, and
   // the block dialog shown when the gate refuses (with an explicit bypass).
-  const pendingGitRef = useRef<{ kind: 'commit' | 'push'; msg?: string } | null>(null);
+  const pendingGitRef = useRef<{ kind: 'commit' | 'push'; msg?: string; root: string } | null>(null);
   const [gateBlock, setGateBlock] = useState<{ kind: 'commit' | 'push'; msg?: string; reason: string; status: string } | null>(null);
   const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
   // DESK-5w — the background task whose conversation is open (read-only),
@@ -218,10 +219,21 @@ export function App(): React.ReactElement {
   // T13 — git worktrees for this repo + a per-worktree diff cache.
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const [worktreeDiffs, setWorktreeDiffs] = useState<Record<string, string>>({});
-  // T12 / Review v2 — findings + the commit/push gate state + running flag.
-  const [review, setReview] = useState<{ findings: ReviewFindingView[]; summary: string; files: number } | null>(null);
-  const [reviewGate, setReviewGate] = useState<{ status: string; blocked: boolean; reason: string } | null>(null);
-  const [reviewRunning, setReviewRunning] = useState(false);
+  // T12 / Review v2 + T2 multi-workspace — findings + the commit/push gate +
+  // running flag, ALL keyed by workspace root so switching projects shows that
+  // project's review (never leaks across workspaces). The active workspace's
+  // view is derived below; the q-review-* handlers write under activeWsRef.current.
+  type ReviewView = { findings: ReviewFindingView[]; summary: string; files: number };
+  type GateView = { status: string; blocked: boolean; reason: string };
+  const [reviewByWs, setReviewByWs] = useState<Record<string, ReviewView | null>>({});
+  const [reviewGateByWs, setReviewGateByWs] = useState<Record<string, GateView | null>>({});
+  const [reviewRunningByWs, setReviewRunningByWs] = useState<Record<string, boolean>>({});
+  const activeRoot = workspaces.current ?? info.workspaceRoot ?? '';
+  const review = activeEntry(reviewByWs, activeRoot);
+  const reviewGate = activeEntry(reviewGateByWs, activeRoot);
+  const reviewRunning = !!reviewRunningByWs[activeRoot];
+  // T2 — the active project's sidebar review badge (needs/reviewing/blocked/passed/stale).
+  const activeReviewBadge = reviewBadgeFor(reviewGate, changedFiles.length, reviewRunning);
   // §4 — per-file count of OPEN findings, for the Changes-list badges.
   const reviewFindingsByFile = useMemo<Record<string, number>>(() => {
     const m: Record<string, number> = {};
@@ -401,6 +413,11 @@ export function App(): React.ReactElement {
     setFileView(null);
     setDiffView(null);
     setTokens(null);
+    // T2 — review MAPS are keyed by workspace, so they survive the switch and the
+    // derived active view flips for free. But the pending-git + gate dialog are
+    // single-shot and must NOT carry into the new project.
+    pendingGitRef.current = null;
+    setGateBlock(null);
     setLastPlan(null);
     setFleet([]);
     setLiveChildren({});
@@ -431,7 +448,9 @@ export function App(): React.ReactElement {
     // commit/push run the gate first UNLESS we're already cleared — either the
     // gate came back clean (reviewed) or the user explicitly bypassed it.
     if ((kind === 'commit' || kind === 'push') && !opts?.bypass && !opts?.reviewed) {
-      pendingGitRef.current = { kind, msg };
+      // T2 — remember which workspace this action is for, so a gate result that
+      // arrives after a workspace switch can't clear it in the wrong project.
+      pendingGitRef.current = { kind, msg, root: workspaces.current ?? info.workspaceRoot ?? '' };
       setToast('Checking review status…');
       q('q-review-gate', 'review-gate');
       return;
@@ -861,30 +880,39 @@ export function App(): React.ReactElement {
         return;
       }
       case 'q-review-diff': {
-        setReviewRunning(false);
+        // T2 — write under the workspace that's active at result time (stale-gen
+        // results are already dropped upstream), so reviews never cross workspaces.
+        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        setReviewRunningByWs((m) => ({ ...m, [root]: false }));
         const r = result as { findings?: ReviewFindingView[]; summary?: string; files?: number } | null;
-        setReview(r ? { findings: r.findings ?? [], summary: r.summary ?? '', files: r.files ?? 0 } : { findings: [], summary: 'Review failed.', files: 0 });
+        setReviewByWs((m) => setEntry(m, root, r ? { findings: r.findings ?? [], summary: r.summary ?? '', files: r.files ?? 0 } : { findings: [], summary: 'Review failed.', files: 0 }));
         q('q-review-current', 'review-current'); // refresh the gate + finding statuses
         // If a commit/push was waiting on a freshly-run review, re-check the gate.
         if (pendingGitRef.current) q('q-review-gate', 'review-gate');
         return;
       }
       case 'q-review-current': {
+        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
         const r = result as { run?: { findings?: ReviewFindingView[]; summary?: string } | null; gate?: { status: string; blocked: boolean; reason: string }; files?: number } | null;
-        setReviewGate(r?.gate ?? null);
-        if (r?.run) setReview({ findings: r.run.findings ?? [], summary: r.run.summary ?? '', files: r.files ?? 0 });
+        setReviewGateByWs((m) => setEntry(m, root, r?.gate ?? null));
+        if (r?.run) setReviewByWs((m) => setEntry(m, root, { findings: r.run!.findings ?? [], summary: r.run!.summary ?? '', files: r.files ?? 0 }));
         return;
       }
       case 'q-review-gate': {
         const r = result as { gate?: { blocked?: boolean; reason?: string; status?: string } } | null;
         const gate = r?.gate ?? { blocked: true, reason: 'Review status unavailable.', status: 'needs-review' };
+        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        setReviewGateByWs((m) => setEntry(m, root, { status: gate.status ?? 'needs-review', blocked: !!gate.blocked, reason: gate.reason ?? '' }));
         const pending = pendingGitRef.current;
         if (!pending) return;
         if (gate.blocked) {
           setGateBlock({ kind: pending.kind, msg: pending.msg, reason: gate.reason ?? 'Review required.', status: gate.status ?? 'needs-review' });
         } else {
           pendingGitRef.current = null;
-          runGit(pending.kind, pending.msg, { reviewed: true }); // §7 — gate CLEAN → proceed as reviewed (not a bypass)
+          // §7 + T2 stale-guard: a CLEAN gate from workspace A must NOT clear a
+          // commit/push the user started in workspace B (after switching mid-flight).
+          if (shouldProceedGate(pending.root, root)) runGit(pending.kind, pending.msg, { reviewed: true });
+          else setToast('Workspace changed before the review cleared — commit cancelled, run it again.');
         }
         return;
       }
@@ -1365,7 +1393,7 @@ export function App(): React.ReactElement {
         const refresh = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
         const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
         return <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
-          onRun={() => { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); }}
+          onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
           onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
           onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
           onAskFix={(f) => { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }}
@@ -1433,6 +1461,11 @@ export function App(): React.ReactElement {
                   <Icon name="folder-open" size={15} />
                   <span>{currentProjectName}</span>
                   <span className="project-meta">
+                    {activeReviewBadge ? (
+                      <span className={`review-badge rb-${activeReviewBadge}`} title={`Review: ${activeReviewBadge.replace('-', ' ')}`}>
+                        {activeReviewBadge === 'blocked' ? '⚠' : activeReviewBadge === 'passed' ? '✓' : activeReviewBadge === 'stale' ? '↻' : activeReviewBadge === 'reviewing' ? '…' : '○'}
+                      </span>
+                    ) : null}
                     {prInfo ? (
                       <span className={`pr-chip ${prInfo.state.toLowerCase()}`}
                         title={`#${prInfo.number} · ${prInfo.state.charAt(0)}${prInfo.state.slice(1).toLowerCase()}${prInfo.title ? ` — ${prInfo.title}` : ''}`}>
@@ -2216,7 +2249,7 @@ export function App(): React.ReactElement {
             <div className="dialog-title"><Icon name="shield" size={15} /> Review required before {gateBlock.kind}</div>
             <div className="dialog-detail">{gateBlock.reason}</div>
             <div className="dialog-actions" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="primary" onClick={() => { const g = gateBlock; setGateBlock(null); ensurePanel('review'); if (g.status !== 'blocked') { setReviewRunning(true); setReview(null); q('q-review-diff', 'review-diff'); } }}>
+              <button className="primary" onClick={() => { const g = gateBlock; setGateBlock(null); ensurePanel('review'); if (g.status !== 'blocked') { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); } }}>
                 {gateBlock.status === 'blocked' ? 'Open review' : 'Run review'}
               </button>
               <button className="deny" onClick={() => { const g = gateBlock; setGateBlock(null); pendingGitRef.current = null; runGit(g.kind, g.msg, { bypass: true }); setToast(`${g.kind === 'commit' ? 'Commit' : 'Push'} — review bypassed.`); }}>
