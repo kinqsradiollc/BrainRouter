@@ -8,6 +8,7 @@
  */
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
+import { Button } from '../components/Button.js';
 import {
   planHistoryRows, planApprovalState, approvalLabel, isEmptyDiff,
   type PlanDecisionView,
@@ -62,7 +63,7 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges }: {
 
       {onApprove ? (
         <div className="plan-review-controls">
-          <button className="wt-btn primary" onClick={onApprove} title="Record an approval — snapshots the plan as a version">Approve plan</button>
+          <Button variant="primary" onClick={onApprove} title="Record an approval — snapshots the plan as a version">Approve plan</Button>
           <div className="sched-add-row">
             <input className="filter" placeholder="request changes (feedback returns to the session)" value={feedback}
               onChange={(e) => setFeedback(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitChanges(); }} />
