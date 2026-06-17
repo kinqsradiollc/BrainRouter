@@ -1172,6 +1172,14 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
 }
+/* §13 — provider capability badges in the model picker. */
+.model-item .model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-caps { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-left: 6px; }
+.cap-chip { font-size: 9.5px; line-height: 1.4; padding: 0 5px; border-radius: 5px; background: var(--ov-08, var(--ov-10)); color: var(--text-dim); white-space: nowrap; }
+.cap-chip.cap-reasoning { color: var(--accent); background: var(--accent-soft); }
+.cap-chip.cap-vision { color: var(--ok); background: rgba(63,185,80,0.12); }
+.cap-chip.cap-audio { color: var(--warn); background: rgba(210,153,34,0.12); }
+.cap-chip.cap-cost { font-style: italic; }
 .color-ctl { width: 52px; height: 32px; padding: 2px; cursor: pointer; }
 
 /* ---------- DESK-4k — icon system + alignment ---------- */
