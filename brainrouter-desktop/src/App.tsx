@@ -42,7 +42,7 @@ import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/sessio
 import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
 import { gitActionTag } from './lib/review/reviewGateUi.js';
 import { toolGroupLabel } from './lib/chat/toolGroupLabel.js';
-import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
+import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
 import { parseThink } from './lib/chat/thinkParse.js';

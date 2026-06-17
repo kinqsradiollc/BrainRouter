@@ -4,7 +4,7 @@
  * catalog from the host); badges show how each lands on desktop.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { wireBadge, type DeskCommand } from './commands.js';
+import { wireBadge, type DeskCommand } from './lib/commands/commands.js';
 
 export function CommandList({ commands, filter, selected, onPick, onHover }: {
   commands: DeskCommand[];
