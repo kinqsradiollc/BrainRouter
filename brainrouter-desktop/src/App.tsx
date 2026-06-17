@@ -17,6 +17,7 @@ import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/sessio
 import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
 import { gitActionTag } from './lib/review/reviewGateUi.js';
 import { activeEntry, setEntry, shouldProceedGate, reviewBadgeFor } from './lib/review/reviewWorkspace.js';
+import { usePanels } from './lib/panels/usePanels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
@@ -27,7 +28,6 @@ import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
 import { fileFromSummary, fmtAge, fmtElapsed, fmt, download } from './lib/format.js';
 import { EFFORT_LEVELS, NON_CHAT_MODEL, VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
-import { devFlag, devPanels } from './lib/devFlags.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
 import { useEditor } from './lib/editor/useEditor.js';
@@ -100,10 +100,6 @@ export function App(): React.ReactElement {
 
   // DESK-5f — ONE tabbed side panel (Codex model): views are tabs you switch
   // between, never extra window columns. Empty tab list = the view chooser.
-  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => devPanels());
-  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => devPanels()[0] ?? null);
-  const [sidePanelOpen, setSidePanelOpen] = useState(() => devFlag('side') || devPanels().length > 0);
-  const [sideWidth, setSideWidth] = useState(330);
   // DESK-5h — measured room: the Environment COLUMN (it reserves layout space,
   // never overlays the chat) and its toggle yield when the chat would squeeze.
   const workrowRef = useRef<HTMLDivElement>(null);
@@ -257,14 +253,6 @@ export function App(): React.ReactElement {
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Stable handle so the mount-once keyboard handler always calls the latest one.
   const resumeSessionRef = useRef<(key: string) => void>(() => {});
-  // DESK-4l/5f — bottom dock: tabbed like the side panel. Default tab is a
-  // terminal; "+" adds more shells or any view as a tab. Shell sessions stay
-  // mounted per tab.
-  const [termDockOpen, setTermDockOpen] = useState(() => devFlag('terminal'));
-  const [termDockHeight, setTermDockHeight] = useState(210);
-  const [termTabs, setTermTabs] = useState<Array<{ id: number; kind: 'shell' | PanelId }>>([{ id: 1, kind: 'shell' }]);
-  const [activeTerm, setActiveTerm] = useState(1);
-  const termSeq = useRef(1);
   const [recentsOpen, setRecentsOpen] = useState(true);
   // Item 9 — how many of the current project's chats are shown (grows a page at
   // a time via the show-more button). Collapsed view always shows the base few.
@@ -273,6 +261,14 @@ export function App(): React.ReactElement {
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
+
+  // T4 — panel/dock state + handlers live in usePanels (q injected so ensurePanel
+  // can refresh worktrees/review on open).
+  const {
+    sideTabs, activeSideTab, sidePanelOpen, sideWidth, termDockOpen, termDockHeight, termTabs, activeTerm,
+    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
+    ensurePanel, closeSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+  } = usePanels(q);
 
   // T5 — in-app code editor. Self-contained (own host round-trips); on a save it
   // refreshes git status + changed files and re-checks the review gate (the
@@ -293,78 +289,6 @@ export function App(): React.ReactElement {
   const openUrl = (url: string): void => { if (url) q('q-open-url', 'action:open-external', { url }); };
   const openCiPanel = (): void => { ensurePanel('ci'); ci.refresh(); };
 
-  /** Open the bottom dock, re-seeding the default Terminal tab if all were closed. */
-  function openBottomDock(): void {
-    setTermTabs((tabs) => {
-      if (tabs.length) return tabs;
-      const id = ++termSeq.current;
-      setActiveTerm(id);
-      return [{ id, kind: 'shell' }];
-    });
-    setTermDockOpen(true);
-  }
-  /** Add (or focus) a bottom-dock tab; 'shell' always adds a fresh terminal. */
-  function addBottomTab(kind: 'shell' | PanelId): void {
-    setTermTabs((tabs) => {
-      if (kind !== 'shell') {
-        const existing = tabs.find((t) => t.kind === kind);
-        if (existing) { setActiveTerm(existing.id); return tabs; }
-      }
-      const id = ++termSeq.current;
-      setActiveTerm(id);
-      return [...tabs, { id, kind }];
-    });
-    setTermDockOpen(true);
-  }
-  function closeBottomTab(id: number): void {
-    setTermTabs((tabs) => {
-      const next = tabs.filter((t) => t.id !== id);
-      if (id === activeTerm && next.length) setActiveTerm(next[next.length - 1].id);
-      if (next.length === 0) setTermDockOpen(false);
-      return next;
-    });
-  }
-  /** Show a view as the side panel's active tab (terminal lives in the dock). */
-  function ensurePanel(id: PanelId): void {
-    if (id === 'terminal') { openBottomDock(); return; }
-    if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
-    if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
-    if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
-    setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
-    setActiveSideTab(id);
-    setSidePanelOpen(true);
-  }
-  function closeSideTab(id: PanelId): void {
-    setSideTabs((tabs) => {
-      const next = tabs.filter((t) => t !== id);
-      if (activeSideTab === id) setActiveSideTab(next[next.length - 1] ?? null);
-      // Closing the last tab collapses the whole side panel (no separate close
-      // 'x' — the per-tab × is the only close affordance, plus the rail toggle).
-      if (next.length === 0) setSidePanelOpen(false);
-      return next;
-    });
-  }
-  function togglePanel(id: PanelId): void {
-    if (id === 'terminal') { setTermDockOpen((o) => !o); return; }
-    if (sidePanelOpen && activeSideTab === id) { closeSideTab(id); return; }
-    ensurePanel(id);
-  }
-  function openSideView(id: PanelId): void {
-    if (id === 'terminal') { openBottomDock(); return; }
-    ensurePanel(id);
-  }
-  function resizeTerminal(startHeight: number, startY: number, ev: React.PointerEvent): void {
-    ev.preventDefault();
-    const move = (e: PointerEvent) => {
-      setTermDockHeight(Math.max(140, Math.min(Math.floor(window.innerHeight * 0.72), startHeight + startY - e.clientY)));
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  }
   // T5 — opening a file now lands in the editable Monaco editor (not the
   // read-only viewer). The 'file' panel + read-only viewer remain available.
   function openFile(path: string): void {
@@ -424,9 +348,7 @@ export function App(): React.ReactElement {
     setCommitSubjects([]);
     // Terminal tabs belong to the retiring host's shells — close the dock so
     // reopening spawns fresh shells in the new workspace.
-    setTermDockOpen(false);
-    setTermTabs([{ id: ++termSeq.current, kind: 'shell' }]);
-    setActiveTerm(termSeq.current);
+    resetTermDock();
     void window.brainrouter.openWorkspace(root).then((r) => {
       if (!r.opened) { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; }
     }).catch(() => { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; });
