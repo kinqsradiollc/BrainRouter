@@ -19,19 +19,18 @@ import { gitActionTag } from './lib/review/reviewGateUi.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
-import { parseThink } from './lib/chat/thinkParse.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
-import { fileFromSummary, fmtAge, fmtRel, fmtElapsed, fmt, download } from './lib/format.js';
+import { fileFromSummary, fmtAge, fmtElapsed, fmt, download } from './lib/format.js';
 import { EFFORT_LEVELS, NON_CHAT_MODEL, VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
 import { devFlag, devPanels } from './lib/devFlags.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
 import { Markdown, MD_COMPONENTS } from './chat/markdown.js';
-import { ToolGroup } from './chat/ToolGroup.js';
+import { MessageRow } from './chat/MessageRow.js';
 import { WorkflowCard } from './chat/WorkflowCard.js';
 import { SessionStatus } from './components/SessionStatus.js';
 import { WorkElapsed } from './components/WorkElapsed.js';
@@ -1215,67 +1214,20 @@ export function App(): React.ReactElement {
   // DESK-5w (#4 lag) — render ONE transcript row. Extracted + memoized (below)
   // so streaming deltas / the per-second tick don't re-render the whole history
   // (every <Markdown> was re-parsing on every ~18ms delta — the source of lag).
-  const renderRow = (r: ChatRow, liveLast: boolean): React.ReactElement | null => {
-    switch (r.kind) {
-      case 'user': return (
-        <div key={r.id} className="row user-row">
-          <div className="user">{r.text}</div>
-          <span className="msg-actions">
-            <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
-            <span className="msg-time">{fmtRel(r.ts)}</span>
-          </span>
-        </div>
-      );
-      case 'assistant': {
-        // T10 — model-aware reasoning: lift a leading <think> block (DeepSeek-R1,
-        // QwQ, etc.) out of the answer into a collapsible "Thought process" so it
-        // doesn't render as literal markup. No-op for models that don't emit it.
-        const { reasoning, visible } = parseThink(r.text);
-        return (
-        <div key={r.id} className="row assistant md">
-          {reasoning ? (
-            <details className="think-block">
-              <summary>Thought process</summary>
-              <div className="think-body md"><Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{reasoning}</Markdown></div>
-            </details>
-          ) : null}
-          <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{visible}</Markdown>
-          <span className="msg-actions">
-            <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(visible || r.text)}><Icon name="copy" size={11} /></button>
-            <button className="icon-btn" title="Fork into a new chat from this message" onClick={() => forkSessionAction(sessionKeyRef.current ?? '', r.ts)}><Icon name="fork" size={11} /></button>
-            <span className="msg-time">{fmtRel(r.ts)}</span>
-          </span>
-        </div>
-        );
-      }
-      case 'tool-group': return <div key={r.id} className="row"><ToolGroup row={r} live={liveLast} inlineDiffs={inlineDiffs} onRequestDiff={(f) => q('q-inline-diff', 'file-diff', { path: f })} /></div>;
-      case 'error': return (
-        <div key={r.id} className="row">
-          <div className="error-card">
-            <button className="icon-btn err-x" onClick={() => {
-              setRows((rs) => rs.filter((x) => x.id !== r.id));
-              for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== r.id);
-            }}>✕</button>
-            <span className="error-icon"><Icon name="warn" size={15} /></span>
-            <div className="error-title">{r.text}</div>
-            <div className="error-advice">Try sending your message again — your draft was kept. If it keeps happening, check the host log.</div>
-            {r.detail ? <div className="error-detail">{r.detail}</div> : null}
-          </div>
-        </div>
-      );
-      case 'loading': return <div key={r.id} className="row history-loading"><span className="spinner big" /></div>;
-      case 'cmd-out': return (
-        <div key={r.id} className="row">
-          <div className="cmd-out">
-            <div className="cmd-out-head">{r.cmd}</div>
-            <pre>{r.lines.join('\n')}</pre>
-          </div>
-        </div>
-      );
-      case 'status': return <div key={r.id} className="row status">{r.text}</div>;
-      default: return null;
-    }
-  };
+  const renderRow = (r: ChatRow, liveLast: boolean): React.ReactElement => (
+    <MessageRow
+      key={r.id}
+      r={r}
+      liveLast={liveLast}
+      inlineDiffs={inlineDiffs}
+      onRequestDiff={(f) => q('q-inline-diff', 'file-diff', { path: f })}
+      onDismissError={(id) => {
+        setRows((rs) => rs.filter((x) => x.id !== id));
+        for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== id);
+      }}
+      onFork={(ts) => forkSessionAction(sessionKeyRef.current ?? '', ts)}
+    />
+  );
   // Memoized on [rows, inlineDiffs, running] ONLY — NOT liveText/nowTick — so the
   // in-progress stream below re-renders alone, leaving history untouched.
   const transcriptEls = useMemo(
