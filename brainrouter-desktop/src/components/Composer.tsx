@@ -9,6 +9,7 @@ import { SlashPopup } from '../palette.js';
 import { UsageBar } from './UsageBar.js';
 import { ContextRing } from './ContextRing.js';
 import { EFFORT_LEVELS, NON_CHAT_MODEL } from '../constants.js';
+import { modelCapabilities, capabilityBadges } from '../lib/models/modelCapabilities.js';
 import type { PopId } from '../types.js';
 import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
 
@@ -171,16 +172,26 @@ export function Composer(p: ComposerProps): React.ReactElement {
                         {!modelsLoading && !endpointModels.length ? (
                           <div className="empty" style={{ padding: '4px 9px' }}>Endpoint returned no models — check the connection in Settings.</div>
                         ) : null}
-                        {listed.map((m, i) => (
-                          <button key={m} className="menu-item" onClick={() => {
-                            // Item 10 — scope decides where it's saved: global (config.json) or this chat only.
-                            window.brainrouter.send({ kind: 'set-model', model: m, persist: modelScope === 'global' });
-                            setPop('');
-                          }}>
-                            <span className="mi-check">{m === info.model ? '✓' : ''}</span>{m}
-                            <span className="mi-hint">{i < 9 ? i + 1 : ''}</span>
-                          </button>
-                        ))}
+                        {listed.map((m, i) => {
+                          // §13 — capability hints derived from the model id (heuristic).
+                          const badges = capabilityBadges(modelCapabilities(m));
+                          return (
+                            <button key={m} className="menu-item model-item" onClick={() => {
+                              // Item 10 — scope decides where it's saved: global (config.json) or this chat only.
+                              window.brainrouter.send({ kind: 'set-model', model: m, persist: modelScope === 'global' });
+                              setPop('');
+                            }}>
+                              <span className="mi-check">{m === info.model ? '✓' : ''}</span>
+                              <span className="model-id">{m}</span>
+                              {badges.length ? (
+                                <span className="model-caps">
+                                  {badges.map((b) => <span key={b.key} className={`cap-chip cap-${b.key}`} title={b.title}>{b.label}</span>)}
+                                </span>
+                              ) : null}
+                              <span className="mi-hint">{i < 9 ? i + 1 : ''}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                       {hidden > 0 ? (
                         <div className="menu-head"><span>{hidden} non-chat model{hidden === 1 ? '' : 's'} hidden (embeddings, audio…)</span></div>
