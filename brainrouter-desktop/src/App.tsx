@@ -50,62 +50,15 @@ import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
+import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
+import { fileFromSummary, fmtAge, fmtRel, fmtElapsed, fmtDur, wfStatusClass, fmtTokens, fmt, download } from './lib/format.js';
+import { EFFORT_LEVELS, NON_CHAT_MODEL, VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
+import { devFlag, devPanels } from './lib/devFlags.js';
+import { useClosable } from './lib/useClosable.js';
+import { rid } from './lib/rid.js';
+import { sendReleaseNotes } from './lib/releaseNotes.js';
 
 installDevBridge();
-
-type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string };
-type ToolItem = { id: number; tool: string; summary: string; preview?: string; ok: boolean; child?: string; file?: string };
-
-/** Pull a workspace-relative path out of a tool summary ("Edited src/x.ts +3 -1"). */
-function fileFromSummary(tool: string, summary: string): string | undefined {
-  if (!/edit|write|patch|apply/i.test(tool)) return undefined;
-  const m = summary.match(/[\w./-]+\.[\w]+/);
-  return m?.[0];
-}
-
-type ChatRow =
-  | { id: number; kind: 'user'; text: string; ts: number }
-  | { id: number; kind: 'assistant'; text: string; ts: number }
-  | { id: number; kind: 'status'; text: string; ts: number }
-  | { id: number; kind: 'error'; text: string; detail?: string; ts: number }
-  | { id: number; kind: 'cmd-out'; cmd: string; lines: string[]; ts: number }
-  | { id: number; kind: 'loading'; ts: number }
-  | { id: number; kind: 'tool-group'; items: ToolItem[]; ts: number };
-
-function fmtAge(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '';
-  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
-
-function fmtRel(ts: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
-interface SessionRow { sessionKey: string; firstUserMessage?: string; modifiedAt?: string; turnCount?: number; lastRole?: string;
-  // DESK-6m — UI metadata from sessionMetaStore, merged in by list-sessions.
-  pinned?: boolean; archived?: boolean; status?: 'active' | 'completed'; group?: string | null;
-  // DESK-6u — parent session key this chat was forked from (null = not a fork).
-  forkedFrom?: string | null }
-// Mirrors the CLI's BackgroundTask (runtime/backgroundTasks.ts): the fleet is
-// sub-agents · workers · workflows, with start time and worktree isolation.
-interface FleetRow { kind: string; id: string; label: string; startedAt?: string; role?: string; worktree?: boolean; parentSessionKey?: string | null }
-
-function fmtElapsed(iso?: string): string {
-  if (!iso) return '';
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (!Number.isFinite(s) || s < 0) return '';
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  return `${Math.floor(s / 3600)}h`;
-}
 
 /**
  * DESK-5d — Codex/Claude-style session status icons. All real signal:
@@ -130,31 +83,6 @@ function WorkElapsed({ startedAt }: { startedAt: number }): React.ReactElement {
   }, []);
   return <span>{Math.max(0, Math.floor((Date.now() - startedAt) / 1000))}s</span>;
 }
-
-// DESK-6w — a workflow run's full breakdown, mirroring Claude Code's /workflows
-// card: phases, each with the child agents it spawned and their token/tool/time.
-interface WorkflowAgent { id: string; label: string; role: string; status: string; tokens: number; tools: number; ms: number }
-interface WorkflowPhase { id: string; title: string; status: string; agents: WorkflowAgent[] }
-interface WorkflowDetail {
-  slug: string; kind: string; status: string; startedAt: string; updatedAt: string;
-  totalAgents: number; totalTokens: number;
-  phases: WorkflowPhase[];
-  steps: Array<{ id: string; title: string; status: string }>;
-}
-const fmtDur = (ms: number): string => {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${String(s % 60).padStart(2, '0')}s`;
-};
-/** Status → the dot/badge modifier class shared by phases + agents. */
-const wfStatusClass = (status: string): string => {
-  if (status === 'completed' || status === 'done') return 'done';
-  if (status === 'running' || status === 'pending') return 'run';
-  if (status === 'failed') return 'fail';
-  if (status === 'partial' || status === 'interrupted' || status === 'stale') return 'warn';
-  return '';
-};
 
 // DESK-6w — the /workflows-style card. Header (kind·slug + status + elapsed +
 // totals), then one section per phase: title, a progress-dot strip (one dot per
@@ -207,95 +135,6 @@ function WorkflowCard({ wf, onBack }: { wf: WorkflowDetail; onBack: () => void }
       ))}
     </div>
   );
-}
-
-let nextId = 0;
-const rid = () => ++nextId;
-
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
-
-/**
- * DESK-5l — endpoints (LM Studio/Ollama/OpenAI) list EVERY model they serve,
- * including embedding/audio/rerank models that cannot hold a chat. Picking
- * one breaks the session ("model returned an empty response"), so the chat
- * picker hides them; Settings → Custom model… remains the escape hatch.
- */
-const NON_CHAT_MODEL = /embed|whisper|tts|rerank|moderation|audio|clip/i;
-
-/**
- * DESK-5f — view catalog for the tabbed side panel + bottom dock "+" menus.
- * One view = one tab; both surfaces switch tabs instead of opening windows.
- */
-const VIEW_MENU: Array<{ id: PanelId; title: string; icon: string }> = [
-  { id: 'plan', title: 'Plan', icon: 'review' },
-  { id: 'files', title: 'Files', icon: 'folder' },
-  { id: 'diff', title: 'Changes', icon: 'diff' },
-  { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
-  { id: 'tools', title: 'Tool calls', icon: 'bolt' },
-  { id: 'search', title: 'Search session', icon: 'search' },
-  { id: 'schedule', title: 'Schedules', icon: 'clock' },
-  { id: 'context', title: 'Context', icon: 'layout-right' },
-];
-
-/**
- * DESK-5f — animated presence: keeps a surface mounted through its exit
- * animation. `closing` drives a `.closing` class whose keyframes reverse the
- * entry animation; the node unmounts when they finish.
- */
-function useClosable(open: boolean, ms = 170): { mounted: boolean; closing: boolean } {
-  const [mounted, setMounted] = useState(open);
-  const [closing, setClosing] = useState(false);
-  useEffect(() => {
-    if (open) { setMounted(true); setClosing(false); return; }
-    setClosing(true);
-    const t = setTimeout(() => { setMounted(false); setClosing(false); }, ms);
-    return () => clearTimeout(t);
-  }, [open, ms]);
-  return { mounted: mounted || open, closing };
-}
-const VALID_PANEL_IDS = new Set<PanelId>(PANEL_DEFS.map((p) => p.id));
-
-// DESK-5v — CONCURRENT SESSIONS: events that only make sense for the chat ON
-// SCREEN. When one arrives tagged with a BACKGROUND session (a turn still
-// running in a chat you switched away from), it's dropped so it can't pollute
-// the viewed chat. The turn lifecycle + session-changed + query-result +
-// approval events are NOT in here — they're handled session-aware so a
-// background turn still updates its spinner and lands its result/error.
-const FOREGROUND_ONLY_KINDS = new Set<string>([
-  'status', 'reasoning-delta', 'assistant-turn-start', 'assistant-delta',
-  'assistant-turn-end', 'tool-end', 'child-tool-start', 'child-tool-end',
-  'child-complete', 'plan-update', 'compaction', 'memory', 'tokens-updated',
-]);
-
-function devSearchParams(): URLSearchParams | null {
-  return import.meta.env.DEV ? new URLSearchParams(window.location.search) : null;
-}
-
-function devFlag(name: string): boolean {
-  const value = devSearchParams()?.get(name);
-  return value === '1' || value === 'true';
-}
-
-function devPanels(): PanelId[] {
-  const raw = devSearchParams()?.get('panels');
-  if (!raw) return [];
-  return raw.split(',')
-    .map((p) => p.trim())
-    .filter((p): p is PanelId => VALID_PANEL_IDS.has(p as PanelId) && p !== 'terminal');
-}
-
-function fmt(result: unknown): string {
-  if (typeof result === 'string') return result;
-  if (Array.isArray(result) && result.every((x) => typeof x === 'string')) return result.join('\n');
-  return JSON.stringify(result, null, 2);
-}
-
-function download(filename: string, content: string): void {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
 }
 
 function ToolGroup({ row, live, inlineDiffs, onRequestDiff }: {
@@ -463,13 +302,6 @@ function ContextRing({ usage }: { usage: { used: number; window: number; compact
   );
 }
 
-/** Compact token count: 1234 → "1.2k", 1_000_000 → "1.0M". */
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 100_000 ? 0 : 1)}k`;
-  return String(n);
-}
-
 /** DESK-5s — one labeled progress bar for the context/usage popover. */
 function UsageBar({ label, value, total, suffix, tone = 'var(--accent)' }: {
   label: string; value: number; total: number; suffix?: string; tone?: string;
@@ -484,10 +316,6 @@ function UsageBar({ label, value, total, suffix, tone = 'var(--accent)' }: {
       <div className="usage-track"><span className="usage-fill" style={{ width: `${pct * 100}%`, background: tone }} /></div>
     </div>
   );
-}
-
-function sendReleaseNotes(): void {
-  window.brainrouter.send({ kind: 'query', id: 'q-recap', name: 'recap' });
 }
 
 export function App(): React.ReactElement {
