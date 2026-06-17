@@ -50,6 +50,12 @@ import { buildUsageBreakdown } from '@kinqs/brainrouter-cli/dist/runtime/usageBr
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import { readGoal, setGoal, clearGoal } from '@kinqs/brainrouter-cli/dist/state/goalStore.js';
 import { readPlan, formatPlan, seedPlanFromRequirement } from '@kinqs/brainrouter-cli/dist/state/taskStore.js';
+// §7 PLAN REVIEW — durable plan approval + version history (per-session decision
+// log that snapshots the plan). Shared with the CLI's /plan approve·request-changes·
+// history; the desktop panel reads/records through these thin wrappers — no
+// parallel store. A best-effort memory note is captured + linked, mirroring the CLI.
+import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/brainrouter-cli/dist/state/planHistoryStore.js';
+import { emitAgentEvent } from '@kinqs/brainrouter-cli/dist/orchestration/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement } from '@kinqs/brainrouter-cli/dist/state/requirementStore.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
@@ -1182,6 +1188,38 @@ async function main() {
             'plan-state': () => {
                 const p = readPlan(workspaceRoot, activeAgent.sessionKey);
                 return { items: p.items, explanation: p.explanation };
+            },
+            // §7 PLAN REVIEW — this session's plan decision log (oldest-first append
+            // order; the renderer reverses + diffs for display). Doubles as the plan's
+            // version history since each decision snapshots the plan at that moment.
+            'plan-history': () => readPlanHistory(workspaceRoot, activeAgent.sessionKey),
+            // Record an approval / changes-requested decision against THIS session's
+            // current plan (snapshotting it), then capture a best-effort memory note and
+            // link it back — exactly like the CLI's /plan approve·request-changes.
+            'plan-record-decision': async (a) => {
+                const verdict = a.verdict;
+                if (verdict !== 'approved' && verdict !== 'changes-requested')
+                    return { error: `Unknown plan verdict "${String(a.verdict)}".` };
+                const feedback = typeof a.feedback === 'string' ? a.feedback.trim() : '';
+                if (verdict === 'changes-requested' && !feedback)
+                    return { error: 'Requesting changes needs feedback to return to the session.' };
+                const cur = readPlan(workspaceRoot, activeAgent.sessionKey);
+                if (cur.items.length === 0)
+                    return { error: 'There is no plan to review in this session yet.' };
+                const decision = recordPlanDecision(workspaceRoot, activeAgent.sessionKey, {
+                    verdict, feedback: feedback || undefined, planSnapshot: cur.items, explanation: cur.explanation, requirementId: cur.requirementId,
+                });
+                try {
+                    const memoryId = await emitAgentEvent({ mcpClient, sessionKey: activeAgent.sessionKey }, {
+                        kind: 'agent_output',
+                        summary: `Plan ${decision.verdict} (${decision.id}) — ${decision.planSnapshot.length} item(s)${decision.feedback ? `: ${decision.feedback}` : ''}`,
+                        payload: { planDecisionId: decision.id, verdict: decision.verdict, feedback: decision.feedback, requirementId: decision.requirementId, itemCount: decision.planSnapshot.length },
+                    });
+                    if (memoryId)
+                        linkPlanDecision(workspaceRoot, activeAgent.sessionKey, decision.id, memoryId);
+                }
+                catch { /* advisory — never break the action */ }
+                return { ok: true, decision };
             },
             'search-transcript': (args) => {
                 const query = typeof args.q === 'string' ? args.q : '';
