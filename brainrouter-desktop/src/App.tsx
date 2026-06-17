@@ -752,6 +752,9 @@ export function App(): React.ReactElement {
     setSideTabs((tabs) => {
       const next = tabs.filter((t) => t !== id);
       if (activeSideTab === id) setActiveSideTab(next[next.length - 1] ?? null);
+      // Closing the last tab collapses the whole side panel (no separate close
+      // 'x' — the per-tab × is the only close affordance, plus the rail toggle).
+      if (next.length === 0) setSidePanelOpen(false);
       return next;
     });
   }
@@ -2387,7 +2390,6 @@ export function App(): React.ReactElement {
                       <button className="icon-btn" title="Add view" onClick={() => setPop(pop === 'splus' ? '' : 'splus')}><Icon name="plus" size={12} /></button>
                     </span>
                     <span className="composer-spacer" />
-                    <button className="icon-btn" title="Close panel" onClick={() => setSidePanelOpen(false)}><Icon name="close" size={12} /></button>
                   </div>
                   <div className="side-body panel-body" key={activeSideTab}>{renderPanelBody(activeSideTab)}</div>
                 </>

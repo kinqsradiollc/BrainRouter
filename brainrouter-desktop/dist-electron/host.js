@@ -28,7 +28,7 @@ import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime } from '@ki
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-cli/dist/state/scheduleStore.js';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
 import { applyRuleEdit } from '@kinqs/brainrouter-cli/dist/config/permissionRules.js';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT } from '@kinqs/brainrouter-cli/dist/orchestration/reviewFindings.js';
+import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-cli/dist/orchestration/reviewFindings.js';
 import { hashDiff, reviewGate, staleIfDiffChanged } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
 import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-cli/dist/state/reviewStore.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
@@ -406,7 +406,10 @@ async function main() {
             details: f.details, suggestion: f.suggestion, codeExcerpt: f.codeExcerpt, diffHunk: f.diffHunk,
             patch: f.patch, status: 'open', canApply: !!f.patch, source: 'ai-review',
         }));
-        const summary = answer.split('```')[0].trim().slice(0, 600) || `${findings.length} finding(s) across ${files.length} file(s).`;
+        // Strip the model's <think> reasoning so it never shows as the summary; when
+        // there are no findings the empty-state covers it, so leave the summary blank.
+        const visible = stripReasoning(answer).split('```')[0].trim();
+        const summary = findings.length === 0 ? '' : (visible.slice(0, 400) || `${findings.length} finding(s) across ${files.length} file(s).`);
         const run = { ...base, summary, findings };
         saveReview(workspaceRoot, run);
         return { ...run, files: files.length };

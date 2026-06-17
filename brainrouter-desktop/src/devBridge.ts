@@ -142,7 +142,7 @@ export function installDevBridge(): void {
     if (!devReview || devReview.diffHash !== DEV_DIFF_HASH) return { status: 'needs-review', blocked: true, reason: 'No review has run for the current changes.', blockingFindings: [] };
     const blocking = devReview.findings.filter((f) => f.status === 'open' && (f.severity === 'critical' || f.severity === 'high'));
     if (blocking.length) return { status: 'blocked', blocked: true, reason: `${blocking.length} unresolved high+ finding(s) must be resolved, fixed, or dismissed.`, blockingFindings: blocking };
-    return { status: 'clean', blocked: false, reason: 'Review passed — no unresolved blocking findings.', blockingFindings: [] };
+    return { status: 'clean', blocked: false, reason: 'No unresolved blocking findings.', blockingFindings: [] };
   };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };

@@ -88,3 +88,15 @@ export const REVIEW_OUTPUT_CONTRACT =
   '"diffHunk": "<optional unified-diff hunk: problem lines prefixed - , suggested lines prefixed + >", ' +
   '"patch": "<optional FULL git-apply-able unified diff, ONLY when the fix is small and safe to auto-apply>"}. ' +
   'Quote code verbatim (preserve indentation) in codeExcerpt/diffHunk/patch. Only flag real issues introduced by the diff — an empty array [] is correct when the changes look good.';
+
+/** Strip a model's reasoning block(s) — <think>/<thinking>/<thought>/<reasoning>,
+ *  closed or an unclosed leading one — so chain-of-thought never leaks into the
+ *  review summary shown in the panel. Pure + unit-tested. */
+export function stripReasoning(text: string): string {
+  const THINK = '(?:think|thinking|thought|reasoning)';
+  return (text ?? '')
+    .replace(new RegExp(`<(${THINK})>[\\s\\S]*?<\\/\\1>`, 'gi'), '')
+    .replace(new RegExp(`<${THINK}>[\\s\\S]*$`, 'i'), '')
+    .replace(new RegExp(`<\\/?${THINK}>`, 'gi'), '')
+    .trim();
+}
