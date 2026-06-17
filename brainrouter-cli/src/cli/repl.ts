@@ -133,7 +133,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/simplify [scope] [--dry-run]', desc: 'Behavior-preserving code-simplification pass; --dry-run proposes only' },
       { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
       { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
-      { cmd: '/requirement create <title> | list | show <id> | update <id> --status/--priority/--criteria', desc: 'Structured requirement records anchored to a session (status, priority, acceptance criteria)' },
+      { cmd: '/requirement create <title> | list | show <id> | ask <id> <q> | answer <id> <i> <a> | clarify <id> | seed-plan <id> | update <id> --status/--priority/--criteria', desc: 'Structured requirement records anchored to a session (status, priority, acceptance criteria, clarifying Q&A)' },
       { cmd: '/annotation add <kind> <id> <body> | list | show <id> | status <id> <s> | export', desc: 'Durable feedback records (alias /annot): anchor to plans/reqs/files/diffs/findings, suggest code, export to markdown' },
       { cmd: '/workflows [slug]', desc: 'List durable workflows with live run progress; <slug> drills into the step timeline' },
       { cmd: '/workflow switch <slug>', desc: 'Refocus on an existing workflow (migrates any session goal into the target)' },
