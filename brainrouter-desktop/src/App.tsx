@@ -26,14 +26,13 @@ import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
-import { fileFromSummary, fmtAge, fmtElapsed, fmt, download } from './lib/format.js';
+import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
 import { VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
 import { useEditor } from './lib/editor/useEditor.js';
 import { useCi } from './lib/ci/useCi.js';
 import { CIPanel } from './panels/CIPanel.js';
-import { summarizeChecks, ciStatusLabel } from './lib/ci/ciFormat.js';
 import { DashboardPanel } from './panels/DashboardPanel.js';
 import { type DashTab, type DashTask, type WorkspaceDash } from './lib/workspace/dashboard.js';
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
@@ -45,6 +44,12 @@ import { SessionStatus } from './components/SessionStatus.js';
 import { WorkElapsed } from './components/WorkElapsed.js';
 import { HomeView } from './components/HomeView.js';
 import { Composer } from './components/Composer.js';
+import { TopbarRight } from './components/TopbarRight.js';
+import { EnvironmentPanel } from './components/EnvironmentPanel.js';
+import { TerminalDock } from './components/TerminalDock.js';
+import { InfoAndGateDialogs } from './components/InfoAndGateDialogs.js';
+import { InteractionDialogs } from './components/InteractionDialogs.js';
+import { ExportAndMenuDialogs } from './components/ExportAndMenuDialogs.js';
 
 installDevBridge();
 
@@ -1652,67 +1657,9 @@ export function App(): React.ReactElement {
 
           {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
               to it; it can never cover content. Yields via envRoom. */}
-          {envAnim.mounted ? (
-            <aside className={`env-col${envAnim.closing ? ' closing' : ''}`}>
-              <div className="env-pop">
-                <div className="env-head">
-                  <span>Environment</span>
-                  <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={13} /></button>
-                </div>
-                {/* Sections render only when they apply: git rows need a
-                    repo, the checks row needs a finished turn. */}
-                {gitInfo?.branch ? (
-                  <button className="env-row" onClick={() => ensurePanel('diff')}>
-                    <Icon name="diff" size={14} /><span>Changes</span>
-                    {gitInfo.insertions + gitInfo.deletions > 0 ? <b>+{gitInfo.insertions.toLocaleString()} -{gitInfo.deletions.toLocaleString()}</b> : null}
-                  </button>
-                ) : null}
-                <button className="env-row" onClick={() => setTermDockOpen(true)}>
-                  <Icon name="monitor" size={14} /><span>Local</span><Icon name="chev-down" size={10} />
-                </button>
-                {gitInfo?.branch ? (
-                  <>
-                    <button className="env-row" onClick={() => q('q-branches', 'git-branches')}>
-                      <Icon name="branch" size={14} /><span>{branches.current ?? gitInfo.branch}</span><Icon name="chev-down" size={10} />
-                    </button>
-                    <button className="env-row" onClick={() => ensurePanel('diff')}>
-                      <Icon name="commit" size={14} /><span>Commit or push</span>
-                    </button>
-                    {commitSubjects[0] ? (
-                      <div className="env-row inert"><Icon name="merge" size={14} /><span>{commitSubjects[0]}</span></div>
-                    ) : null}
-                  </>
-                ) : null}
-                {/* T6 — REAL GitHub CI (gh), distinct from the local tool-call result below. */}
-                <button className={`env-row ci-env-${summarizeChecks(ci.checks).conclusion}`} onClick={openCiPanel} title="GitHub CI / checks (gh)">
-                  <Icon name="check-circle" size={14} />
-                  <span>{ci.checks.length ? ciStatusLabel(summarizeChecks(ci.checks)) : 'CI / checks — open'}</span>
-                </button>
-                {/* Local tool-call outcome of the last turn — NOT CI. */}
-                {lastTurnFails === null ? null : lastTurnFails === 0 ? (
-                  <div className="env-row inert checks-ok"><Icon name="check-circle" size={14} /><span>Last turn: all tool calls OK</span></div>
-                ) : (
-                  <div className="env-row inert checks-bad"><Icon name="warn" size={14} /><span>{lastTurnFails} tool call{lastTurnFails === 1 ? '' : 's'} failed last turn</span></div>
-                )}
-                <div className="env-sep" />
-                <div className="env-label">Background tasks{activeSessionTasks.length ? ` · ${activeSessionTasks.length}` : ''}</div>
-                {activeSessionTasks.length === 0 ? (
-                  <div className="env-row inert muted"><Icon name="tasks" size={14} /><span>Nothing running in this chat</span></div>
-                ) : activeSessionTasks.slice(0, 4).map((f) => (
-                  <button key={f.id} className="env-row" title={`${f.kind} · ${f.id} — open its conversation`} onClick={() => openTask(f)}>
-                    <span className="st-branch"><Icon name="merge" size={13} /></span>
-                    <span>{f.label}{f.worktree ? ' ⎇' : ''}</span>
-                    {fmtElapsed(f.startedAt) ? <b>{fmtElapsed(f.startedAt)}</b> : <span className="st"><span className="spinner sm" /></span>}
-                  </button>
-                ))}
-                {activeSessionTasks.length > 4 ? (
-                  <button className="env-row muted" onClick={() => ensurePanel('tasks')}>
-                    <span className="st-branch"><Icon name="tasks" size={13} /></span><span>and {activeSessionTasks.length - 4} more…</span>
-                  </button>
-                ) : null}
-              </div>
-            </aside>
-          ) : null}
+          <EnvironmentPanel envAnim={envAnim} openSettings={openSettings} gitInfo={gitInfo} ensurePanel={ensurePanel}
+            setTermDockOpen={setTermDockOpen} branches={branches} q={q} commitSubjects={commitSubjects} ci={ci}
+            openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} activeSessionTasks={activeSessionTasks} openTask={openTask} />
 
           {sideAnim.mounted ? (
             <aside className={`views-rail${sideAnim.closing ? ' closing' : ''}`} style={{ width: sideWidth }}>
@@ -1808,62 +1755,10 @@ export function App(): React.ReactElement {
           ) : null}
         </div>
 
-        {dockAnim.mounted ? (
-          <div className={`term-dock${dockAnim.closing ? ' closing' : ''}`} style={{ height: termDockHeight }}>
-            <div className="term-dock-grip" title="Drag to resize terminal height"
-              onPointerDown={(ev) => resizeTerminal(termDockHeight, ev.clientY, ev)} />
-            <div className="term-tabs">
-              {termTabs.map((t, i) => {
-                const shellNo = termTabs.slice(0, i + 1).filter((x) => x.kind === 'shell').length;
-                const manyShells = termTabs.filter((x) => x.kind === 'shell').length > 1;
-                const label = t.kind === 'shell'
-                  ? `${gitInfo?.repo ?? 'shell'}${manyShells ? ` ${shellNo}` : ''}`
-                  : tabTitle(t.kind);
-                const icon = t.kind === 'shell' ? 'terminal' : PANEL_DEFS.find((d) => d.id === t.kind)?.icon ?? 'file';
-                return (
-                  <button key={t.id} className={`term-tab${t.id === activeTerm ? ' active' : ''}`} onClick={() => setActiveTerm(t.id)}>
-                    <Icon name={icon} size={11} />
-                    <span className="tab-label">{label}</span>
-                    <span className="icon-btn term-tab-x" onClick={(ev) => { ev.stopPropagation(); closeBottomTab(t.id); }}><Icon name="close" size={9} /></span>
-                  </button>
-                );
-              })}
-              <span className="pop-wrap">
-                {pop === 'bplus' ? (
-                  /* drops UP over the chat — the dock is short and sits at the
-                     window edge, so a drop-down would run off-screen */
-                  <div className="menu-pop left">
-                    <button className="menu-item" onClick={() => { setPop(''); addBottomTab('shell'); }}>
-                      <span className="mi-check"><Icon name="terminal" size={13} /></span>New terminal<span className="mi-hint">⌃`</span>
-                    </button>
-                    <div className="menu-sep" />
-                    {VIEW_MENU.map((v) => (
-                      <button key={v.id} className="menu-item" onClick={() => { setPop(''); addBottomTab(v.id); }}>
-                        <span className="mi-check"><Icon name={v.icon} size={13} /></span>{v.title}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                <button className="icon-btn" title="Add tab" onClick={() => setPop(pop === 'bplus' ? '' : 'bplus')}><Icon name="plus" size={12} /></button>
-              </span>
-              <span className="composer-spacer" />
-              <button className="icon-btn" title="Hide panel (⌃`)" onClick={() => setTermDockOpen(false)}><Icon name="close" size={12} /></button>
-            </div>
-            <div className="term-dock-body">
-              {termTabs.filter((t) => t.kind === 'shell').map((t) => (
-                <div key={t.id} style={t.id === activeTerm ? { display: 'contents' } : { display: 'none' }}>
-                  <TerminalPanel />
-                </div>
-              ))}
-              {(() => {
-                const active = termTabs.find((t) => t.id === activeTerm);
-                return active && active.kind !== 'shell'
-                  ? <div className="dock-view panel-body" key={active.id}>{renderPanelBody(active.kind)}</div>
-                  : null;
-              })()}
-            </div>
-          </div>
-        ) : null}
+        <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}
+          termTabs={termTabs} activeTerm={activeTerm} setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab}
+          pop={pop} setPop={setPop} addBottomTab={addBottomTab} setTermDockOpen={setTermDockOpen}
+          tabTitle={tabTitle} gitInfo={gitInfo} renderPanelBody={renderPanelBody} />
 
         {/* DESK-5h — window control cluster, pinned top-right of the content
             area (absolute — visual position is unaffected by DOM order).
@@ -1873,21 +1768,9 @@ export function App(): React.ReactElement {
             region re-covers the buttons and swallows every click — the
             browser preview ignores app-region, which is why it only broke
             in the real Electron shell. */}
-        <span className="topbar-right">
-          {!homeMode && envRoom ? (
-            <button type="button" className={`app-switcher${envOpen ? ' active' : ''}`} title="Environment" onClick={() => {
-              if (!envOpen) { q('q-gitlog', 'git-log'); q('q-git', 'git-info'); q('q-branches', 'git-branches'); }
-              setEnvOpen((o) => !o);
-            }}>
-              <Icon name="brain" size={15} />
-              <Icon name="chev-down" size={11} />
-            </button>
-          ) : null}
-          <button type="button" className={`top-toggle${termDockOpen ? ' active' : ''}`} title="Toggle bottom panel (⌃`)" onClick={() => setTermDockOpen((o) => !o)}><Icon name="layout-bottom" size={16} /></button>
-          <button type="button" className={`top-toggle${sidePanelOpen ? ' active' : ''}`} title="Toggle side panel (⌥⌘B)" onClick={() => setSidePanelOpen((o) => !o)}><Icon name="sidebar-right" size={16} /></button>
-          <button type="button" className="top-toggle" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}><Icon name="export" size={15} /></button>
-          <button type="button" className="top-toggle" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={15} /></button>
-        </span>
+        <TopbarRight homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
+          termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen}
+          setSidePanelOpen={setSidePanelOpen} pop={pop} setPop={setPop} openSettings={openSettings} />
       </div>
 
       {pop && pop !== 'export' ? <div className="picker-backdrop" onClick={() => setPop('')} /> : null}
@@ -1924,142 +1807,16 @@ export function App(): React.ReactElement {
         onAccent={setAccent}
       />
 
-      {interaction && interaction.type === 'choice' ? (
-        <div className="overlay" onKeyDown={(e) => {
-          if (e.key === 'Escape') answerInteraction({ type: 'dismissed' });
-        }} tabIndex={-1} ref={(el) => el?.focus()}>
-          <div className="dialog">
-            {(
-              <>
-                <div className="dialog-title">{interaction.question}</div>
-                <div className="dialog-options">
-                  {interaction.options.map((o) => (
-                    <label key={o.label} className={`opt${picked.includes(o.label) ? ' picked' : ''}`}
-                      onClick={() => setPicked((p) => interaction.multiSelect
-                        ? (p.includes(o.label) ? p.filter((x) => x !== o.label) : [...p, o.label])
-                        : [o.label])}>
-                      <b>{o.label}</b><span>{o.description}</span>
-                    </label>
-                  ))}
-                </div>
-                <div className="dialog-actions">
-                  <button className="approve" disabled={picked.length === 0}
-                    onClick={() => answerInteraction({ type: 'choice', labels: picked })}>Answer</button>
-                  <button className="deny" onClick={() => answerInteraction({ type: 'dismissed' })}>Dismiss</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
+      <InteractionDialogs interaction={interaction} picked={picked} setPicked={setPicked} answerInteraction={answerInteraction}
+        trustAsk={trustAsk} setTrustAsk={setTrustAsk} switchToWorkspace={switchToWorkspace} />
 
-      {trustAsk ? (
-        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setTrustAsk(null); }}>
-          <div className="dialog" style={{ width: 460 }}>
-            <div className="dialog-title">Do you trust this folder?</div>
-            <div className="set-desc" style={{ marginBottom: 10 }}>
-              BrainRouter may read, write, and execute files in this project once it opens.
-              Trusting adds it to your projects — its chats live in the sidebar alongside your other projects.
-            </div>
-            <pre className="dialog-detail">{trustAsk.root}</pre>
-            <div className="dialog-actions">
-              <button className="deny" onClick={() => setTrustAsk(null)}>Cancel</button>
-              <button className="approve" autoFocus onClick={() => {
-                // T1 — persist trust in the shared CLI store (main enforces it),
-                // not renderer localStorage. Optimistically show the project now.
-                const root = trustAsk.root, resume = trustAsk.resume;
-                setTrustAsk(null);
-                void window.brainrouter.trustWorkspace(root).then(() => switchToWorkspace(root, resume));
-              }}>Trust & open</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {pop === 'export' ? (
-        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setPop(''); }}>
-          <div className="dialog" style={{ width: 420 }}>
-            <div className="dialog-title">Export session</div>
-            <div className="set-desc" style={{ marginBottom: 12 }}>Save this session's transcript to a file — same as /export-chat in the CLI.</div>
-            <div className="dialog-actions" style={{ justifyContent: 'flex-start' }}>
-              <button className="approve" onClick={() => { q('q-export', 'export-chat', { format: 'md' }); setPop(''); }}>Markdown</button>
-              <button className="deny" onClick={() => { q('q-export', 'export-chat', { format: 'json' }); setPop(''); }}>JSON</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* DESK-6m — per-chat ⋮ context menu (Open PR / Open in / Pin / Mark
-          completed / Rename / Fork / Move to group / Archive / Delete). */}
-      {sessionMenu ? (() => {
-        const s = sessions.find((x) => x.sessionKey === sessionMenu.key);
-        if (!s) return null;
-        return (
-          <>
-            <div className="menu-scrim" onClick={closeSessionMenu} onContextMenu={(e) => { e.preventDefault(); closeSessionMenu(); }} />
-            <div className="ctx-menu" style={{ left: sessionMenu.x, top: sessionMenu.y }} onClick={(e) => e.stopPropagation()}>
-              <button className="ctx-item" onClick={() => openExternal('pr')}><Icon name="merge" size={13} /><span>Open PR</span><span className="ctx-key">G</span></button>
-              <div className="ctx-sub">
-                <button className="ctx-item"><Icon name="external" size={13} /><span>Open in</span><span className="ctx-key"><Icon name="chev-right" size={10} /></span></button>
-                <div className="ctx-flyout">
-                  <button className="ctx-item" onClick={() => openExternal('editor')}><span>Editor</span></button>
-                  <button className="ctx-item" onClick={() => openExternal('finder')}><span>Finder</span></button>
-                  <button className="ctx-item" onClick={() => openExternal('terminal')}><span>Terminal</span></button>
-                </div>
-              </div>
-              <div className="ctx-sep" />
-              <button className="ctx-item" onClick={() => togglePin(s)}><Icon name="pin" size={13} /><span>{s.pinned ? 'Unpin' : 'Pin'}</span><span className="ctx-key">P</span></button>
-              <button className="ctx-item" onClick={() => toggleComplete(s)}><Icon name="check-circle" size={13} /><span>{s.status === 'completed' ? 'Mark as active' : 'Mark as completed'}</span><span className="ctx-key">U</span></button>
-              <button className="ctx-item" onClick={() => startRename(s)}><Icon name="edit" size={13} /><span>Rename</span><span className="ctx-key">R</span></button>
-              <button className="ctx-item" onClick={() => forkSessionAction(s.sessionKey)}><Icon name="fork" size={13} /><span>Fork</span><span className="ctx-key">F</span></button>
-              <div className="ctx-sub">
-                <button className="ctx-item"><Icon name="folder" size={13} /><span>Move to group</span><span className="ctx-key"><Icon name="chev-right" size={10} /></span></button>
-                <div className="ctx-flyout">
-                  {sessionGroups.map((g) => (
-                    <button key={g} className="ctx-item" onClick={() => moveToGroup(s.sessionKey, g)}><span>{g}</span>{s.group === g ? <span className="ctx-key">✓</span> : null}</button>
-                  ))}
-                  {s.group ? <button className="ctx-item" onClick={() => moveToGroup(s.sessionKey, null)}><span>Ungroup</span></button> : null}
-                  <button className="ctx-item" onClick={() => { const g = window.prompt('New group name'); if (g && g.trim()) moveToGroup(s.sessionKey, g.trim()); }}><span>New group…</span><span className="ctx-key">1</span></button>
-                </div>
-              </div>
-              <div className="ctx-sep" />
-              <button className="ctx-item" onClick={() => toggleArchive(s)}><Icon name="archive" size={13} /><span>{s.archived ? 'Unarchive' : 'Archive'}</span><span className="ctx-key">A</span></button>
-              <button className="ctx-item danger" onClick={() => deleteSessionAction(s.sessionKey)}><Icon name="trash" size={13} /><span>Delete</span><span className="ctx-key">D</span></button>
-            </div>
-          </>
-        );
-      })() : null}
-      {infoDialog ? (
-        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setInfoDialog(null); }}>
-          <div className="dialog">
-            <div className="dialog-title">{infoDialog.title}</div>
-            <pre className="dialog-detail">{infoDialog.body}</pre>
-            <div className="dialog-actions">
-              <button className="deny" onClick={() => setInfoDialog(null)}>Close</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {/* Wave 4 — review gate block: commit/push refused until review is clean. */}
-      {gateBlock ? (
-        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setGateBlock(null); }}>
-          <div className="dialog">
-            <div className="dialog-title"><Icon name="shield" size={15} /> Review required before {gateBlock.kind}</div>
-            <div className="dialog-detail">{gateBlock.reason}</div>
-            <div className="dialog-actions" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="primary" onClick={() => { const g = gateBlock; setGateBlock(null); ensurePanel('review'); if (g.status !== 'blocked') { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); } }}>
-                {gateBlock.status === 'blocked' ? 'Open review' : 'Run review'}
-              </button>
-              <button className="deny" onClick={() => { const g = gateBlock; setGateBlock(null); pendingGitRef.current = null; runGit(g.kind, g.msg, { bypass: true }); setToast(`${g.kind === 'commit' ? 'Commit' : 'Push'} — review bypassed.`); }}>
-                {gateBlock.kind === 'commit' ? 'Commit without review' : 'Push without review'}
-              </button>
-              <button className="deny" onClick={() => { setGateBlock(null); pendingGitRef.current = null; setGitBusy(false); }}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {toast ? <div className="toast">{toast}</div> : null}
+      <ExportAndMenuDialogs pop={pop} setPop={setPop} q={q} sessionMenu={sessionMenu} sessions={sessions}
+        closeSessionMenu={closeSessionMenu} openExternal={openExternal} togglePin={togglePin} toggleComplete={toggleComplete}
+        startRename={startRename} forkSessionAction={forkSessionAction} moveToGroup={moveToGroup} sessionGroups={sessionGroups}
+        toggleArchive={toggleArchive} deleteSessionAction={deleteSessionAction} />
+      <InfoAndGateDialogs infoDialog={infoDialog} setInfoDialog={setInfoDialog} gateBlock={gateBlock} setGateBlock={setGateBlock}
+        activeRoot={activeRoot} ensurePanel={ensurePanel} setReviewRunningByWs={setReviewRunningByWs} setReviewByWs={setReviewByWs}
+        q={q} pendingGitRef={pendingGitRef} runGit={runGit} setToast={setToast} setGitBusy={setGitBusy} toast={toast} />
     </div>
   );
 }
