@@ -568,6 +568,24 @@ input.ctl { min-width: 220px; }
 .req-status.st-rejected { color: #ffa198; }
 .req-status.st-resolved { color: var(--text-dim); }
 .req-status.st-ignored { opacity: 0.6; }
+/* ARTIFACT-RECORDS — Artifacts panel (reuses req-row / annot-* chrome). */
+.art-panel { padding: 4px 2px; }
+.art-format { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+/* Artifact lifecycle status pills. */
+.req-status.st-draft { background: var(--accent-soft, rgba(108,192,74,0.18)); color: var(--accent, #6cc04a); }
+.req-status.st-final { color: #6cc04a; }
+.req-status.st-archived { opacity: 0.6; }
+/* Markdown preview reuses the chat `.md` typography; HTML/text source is shown
+   as read-only preformatted text (never executed) via annot-quote. */
+.art-preview.md { font-size: 12.5px; line-height: 1.5; color: var(--text); margin: 2px 0 6px; }
+.art-preview.md > :first-child { margin-top: 0; }
+.art-preview.md > :last-child { margin-bottom: 0; }
+.art-preview.md pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 11px 13px; overflow-x: auto; font-family: var(--mono); font-size: 12px; }
+.art-preview.md code { font-family: var(--mono); font-size: 12px; background: var(--raised); padding: 1.5px 5px; border-radius: 5px; }
+.art-preview.md pre code { background: transparent; padding: 0; }
+.art-preview.md table { border-collapse: collapse; margin: 8px 0; }
+.art-preview.md th, .art-preview.md td { border: 1px solid var(--border-strong); padding: 5px 12px; font-size: 12px; }
+.art-source { max-height: 320px; }
 /* T7 — permission-rule editor; T6 — MCP add-server form */
 .rule-row { display: flex; align-items: center; gap: 8px; }
 .rule-text { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

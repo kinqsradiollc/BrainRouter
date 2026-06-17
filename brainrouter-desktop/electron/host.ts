@@ -59,6 +59,11 @@ import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-t
 import { listAnnotations, createAnnotation, setStatus as setAnnotationStatus, type AnnotationFilter, type CreateAnnotationInput } from '@kinqs/brainrouter-cli/dist/state/annotationStore.js';
 import { annotationsToMarkdown } from '@kinqs/brainrouter-cli/dist/state/annotationExport.js';
 import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, type AnnotationAnchor } from '@kinqs/brainrouter-types';
+// ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
+// CLI). Thin wrappers below keep all business logic in the CLI store; the
+// desktop panel only reads/mutates/previews through these endpoints.
+import { listArtifacts, createArtifact, updateArtifact, getArtifact, type ArtifactFilter, type CreateArtifactInput, type ArtifactPatch } from '@kinqs/brainrouter-cli/dist/state/artifactStore.js';
+import { isArtifactKind, isArtifactStatus, isArtifactFormat } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
 import { listSessions } from '@kinqs/brainrouter-cli/dist/orchestration/orchestrator.js';
 import { readRun } from '@kinqs/brainrouter-cli/dist/state/workflowRun.js';
@@ -238,6 +243,20 @@ function annotationAnchorFromArgs(raw: unknown): AnnotationAnchor | undefined {
   if (typeof a.block === 'string' && a.block) anchor.block = a.block;
   if (typeof a.selectedText === 'string' && a.selectedText) anchor.selectedText = a.selectedText;
   return Object.keys(anchor).length ? anchor : undefined;
+}
+
+/**
+ * ARTIFACT-RECORDS — narrow the renderer's loose query args to a typed,
+ * guard-validated {@link ArtifactFilter}. Unknown enum values are dropped
+ * rather than passed through, so a stale/bad filter just lists everything.
+ */
+function artifactFilterFromArgs(a: Record<string, unknown>): ArtifactFilter | undefined {
+  const filter: ArtifactFilter = {};
+  if (isArtifactKind(a.kind)) filter.kind = a.kind;
+  if (isArtifactStatus(a.status)) filter.status = a.status;
+  if (typeof a.sessionKey === 'string' && a.sessionKey) filter.sessionKey = a.sessionKey;
+  if (typeof a.requirementId === 'string' && a.requirementId) filter.requirementId = a.requirementId;
+  return Object.keys(filter).length ? filter : undefined;
 }
 
 /**
@@ -823,6 +842,65 @@ async function main(): Promise<void> {
       // for the renderer to drop into the chat composer — the "export feedback
       // to the session" path. Pure render; the composer draft is set renderer-side.
       'annotation-export': (a) => ({ markdown: annotationsToMarkdown(listAnnotations(workspaceRoot, annotationFilterFromArgs(a))) }),
+      // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records: a workflow output a
+      // chat produces or reviews (design note / sketch / HTML prototype / markdown
+      // report / verification summary / review export), with links back to the
+      // requirement / task / session / memory it relates to. Thin wrappers over the
+      // CLI's artifactStore (already unit-tested) so the desktop panel and the
+      // terminal CLI share the same artifacts.json. Enum inputs are guard-validated
+      // here so a bad kind/status/format is rejected, not silently written.
+      'artifact-list': (a) => listArtifacts(workspaceRoot, artifactFilterFromArgs(a)),
+      'artifact-create': (a) => {
+        if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };
+        const title = String(a.title ?? '').trim();
+        if (!title) return { error: 'Artifact title must be a non-empty string.' };
+        if (a.status !== undefined && !isArtifactStatus(a.status)) return { error: `Unknown artifact status "${String(a.status)}".` };
+        if (a.format !== undefined && !isArtifactFormat(a.format)) return { error: `Unknown artifact format "${String(a.format)}".` };
+        const input: CreateArtifactInput = { kind: a.kind, title, sessionKey: activeAgent?.sessionKey };
+        if (isArtifactStatus(a.status)) input.status = a.status;
+        if (isArtifactFormat(a.format)) input.format = a.format;
+        if (typeof a.path === 'string' && a.path.trim()) input.path = a.path.trim();
+        if (typeof a.content === 'string' && a.content.length) input.content = a.content;
+        if (typeof a.summary === 'string' && a.summary.trim()) input.summary = a.summary;
+        if (typeof a.requirementId === 'string' && a.requirementId) input.requirementId = a.requirementId;
+        if (typeof a.taskId === 'string' && a.taskId) input.taskId = a.taskId;
+        try {
+          return createArtifact(workspaceRoot, input);
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+      'artifact-update': (a) => {
+        const id = String(a.id ?? '');
+        const patch: ArtifactPatch = {};
+        if (a.status !== undefined) {
+          if (!isArtifactStatus(a.status)) return { error: `Unknown artifact status "${String(a.status)}".` };
+          patch.status = a.status;
+        }
+        if (a.summary !== undefined) {
+          if (typeof a.summary !== 'string') return { error: 'Artifact summary must be a string.' };
+          patch.summary = a.summary;
+        }
+        const updated = updateArtifact(workspaceRoot, id, patch);
+        return updated ?? { error: `No artifact "${id}".` };
+      },
+      // Resolve an artifact's content for the Preview area: a file-backed record
+      // (`path`) is read through the SAME safe workspace file-read helper the
+      // editor/file panel uses (readWorkspaceEntry — escape/symlink/size guards),
+      // so the preview can never read outside the workspace; an inline record
+      // returns its stored `content`.
+      'artifact-read': (a) => {
+        const id = String(a.id ?? '');
+        const rec = getArtifact(workspaceRoot, id);
+        if (!rec) return { error: `No artifact "${id}".` };
+        if (rec.path) {
+          const entry = readWorkspaceEntry(workspaceRoot, rec.path);
+          if (entry.error) return { id, error: entry.error };
+          if (entry.binary) return { id, error: 'Artifact file is binary — open it externally.' };
+          return { id, content: entry.content, truncated: entry.truncated };
+        }
+        return { id, content: rec.content ?? '' };
+      },
       // T12 / Review v2 — local AI review of the working tree. Gathers the diff,
       // runs ONE ephemeral review turn in an ISOLATED review: session (filtered
       // from the session picker — never pollutes the user's chats), parses

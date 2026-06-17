@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'ci';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -28,6 +28,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'review', title: 'Review', icon: 'review' },
   { id: 'requirements', title: 'Requirements', icon: 'tasks' },
   { id: 'annotations', title: 'Annotations', icon: 'review' },
+  { id: 'artifacts', title: 'Artifacts', icon: 'file' },
   { id: 'ci', title: 'CI / Checks', icon: 'check-circle' },
 ];
 

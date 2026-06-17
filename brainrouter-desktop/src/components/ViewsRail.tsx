@@ -36,6 +36,7 @@ export interface ViewsRailProps {
   review: { findings: unknown[] } | null;
   requirements: unknown[];
   annotations: Array<{ status: string }>;
+  artifacts: Array<{ status: string }>;
   ci: { checks: unknown[] };
 }
 
@@ -43,7 +44,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
   const {
     sideAnim, sideWidth, setSideWidth, setSidePanelOpen, activeSideTab, sideTabs, setActiveSideTab, closeSideTab,
     pop, setPop, ensurePanel, openBottomDock, tabTitle, renderPanelBody, openSideView,
-    lastPlan, changedFiles, activeSessionTasks, fleet, toolLog, schedules, worktrees, review, requirements, annotations, ci,
+    lastPlan, changedFiles, activeSessionTasks, fleet, toolLog, schedules, worktrees, review, requirements, annotations, artifacts, ci,
   } = p;
   if (!sideAnim.mounted) return null;
   return (
@@ -124,6 +125,8 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               badge: requirements.length ? String(requirements.length) : '' },
             { id: 'annotations' as PanelId, title: 'Annotations', hint: '', icon: 'review',
               badge: annotations.filter((a) => a.status === 'open').length ? String(annotations.filter((a) => a.status === 'open').length) : '' },
+            { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file',
+              badge: artifacts.filter((a) => a.status === 'draft').length ? String(artifacts.filter((a) => a.status === 'draft').length) : '' },
             { id: 'ci' as PanelId, title: 'CI / Checks', hint: '', icon: 'check-circle',
               badge: ci.checks.length ? String(ci.checks.length) : '' },
             { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },

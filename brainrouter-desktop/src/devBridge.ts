@@ -202,6 +202,48 @@ export function installDevBridge(): void {
     return lines.join('\n');
   };
 
+  // ARTIFACT-RECORDS — in-memory artifacts so the panel renders populated in the
+  // browser preview (varied kind / status / format; one inline markdown, one
+  // inline html, one file-backed via a path). Mirrors the host's artifactStore
+  // wrappers; the real store lives in the CLI. status-set + create mutate in place.
+  type DevArtifact = {
+    id: string; kind: string; title: string; status: string; format: string;
+    path?: string; content?: string; summary?: string; workspaceRoot: string;
+    sessionKey?: string; requirementId?: string; taskId?: string; linkedMemoryIds: string[];
+    createdAt: string; updatedAt: string;
+  };
+  let artSeq = 4;
+  const devArtifacts: DevArtifact[] = [
+    {
+      id: 'art_9', kind: 'markdown-report', title: 'Recall blend verification report', status: 'final', format: 'markdown',
+      summary: 'MemBench + LoCoMo results after blending reranker + retriever scores.',
+      content: '# Recall blend verification\n\nAfter blending **0.6·rerank + 0.4·rrf**, MemBench recovered across all splits.\n\n| Split | Before | After |\n| --- | --- | --- |\n| MemBench | 0.51 | **0.59** |\n| LoCoMo | 0.54 | **0.60** |\n\n```ts\nconst blended = reranked.map((r, i) => 0.6 * r.score + 0.4 * rrf[i]);\n```\n\n- Reranker no longer hard-drops top-retriever candidates.\n- LLM judge stage retained.\n',
+      workspaceRoot: wsCurrent, sessionKey: 'dev:fix-recall-blend', requirementId: 'req_a1b2c3d4',
+      taskId: 'task_2', linkedMemoryIds: ['mem_blend', 'mem_arch'],
+      createdAt: nowIso(2 * 3600_000), updatedAt: nowIso(2 * 3600_000),
+    },
+    {
+      id: 'art_html1', kind: 'html-prototype', title: 'Artifacts panel layout sketch', status: 'draft', format: 'html',
+      summary: 'Static HTML sketch of the list + detail + preview columns.',
+      content: '<section class="artifacts">\n  <ul class="rows">\n    <li><span class="kind">markdown-report</span> <span class="title">Recall report</span></li>\n  </ul>\n  <div class="detail">\n    <h3>Preview</h3>\n    <article>rendered markdown / html source</article>\n  </div>\n</section>',
+      workspaceRoot: wsCurrent, sessionKey: activeSession, linkedMemoryIds: [],
+      createdAt: nowIso(6 * 3600_000), updatedAt: nowIso(5 * 3600_000),
+    },
+    {
+      id: 'art_design1', kind: 'design-note', title: 'Persona injection design note', status: 'final', format: 'markdown',
+      summary: 'Where the Core Identity anchor is injected in the CLI briefing.',
+      path: 'brainrouter-docs/specs/persona-injection.md',
+      workspaceRoot: wsCurrent, requirementId: 'req_e5f6a7b8', linkedMemoryIds: ['mem_persona'],
+      createdAt: nowIso(1 * 86400_000), updatedAt: nowIso(12 * 3600_000),
+    },
+    {
+      id: 'art_verif1', kind: 'verification-summary', title: 'Release 0.4.14 verification summary', status: 'archived', format: 'text',
+      content: 'All 6 MemBench splits >= 0.58.\nGrid TUI renders on macOS Terminal + iTerm.\nModel-spawned workers report back to the completion inbox.\nNo regressions in the recall pipeline test suite.',
+      workspaceRoot: wsCurrent, linkedMemoryIds: [],
+      createdAt: nowIso(4 * 86400_000), updatedAt: nowIso(4 * 86400_000),
+    },
+  ];
+
   // Review v2 — a shared mock run + gate so the commit/push review gate is exercisable.
   const DEV_DIFF_HASH = 'devhash';
   type DevFinding = { id: string; file: string; line?: number; endLine?: number; severity: string; confidence: number; summary: string; status: string; canApply: boolean; source: string; details?: string; suggestion?: string; codeExcerpt?: string; diffHunk?: string; patch?: string };
@@ -332,6 +374,56 @@ export function installDevBridge(): void {
       return r;
     },
     'annotation-export': (a) => ({ markdown: devAnnotMarkdown(devAnnotations.filter((x) => (!a.status || x.status === a.status) && (!a.targetKind || x.type === a.targetKind))) }),
+    // ARTIFACT-RECORDS — mock the artifactStore wrappers (mutate in-memory).
+    // Filtering ANDs kind + status, mirroring the host. artifact-read returns the
+    // inline content, or sample file content for a path-backed artifact (the host
+    // reads the real file through the safe workspace read).
+    'artifact-list': (a) => devArtifacts
+      .filter((x) => (!a.kind || x.kind === a.kind) && (!a.status || x.status === a.status))
+      .sort((x, y) => y.createdAt.localeCompare(x.createdAt)),
+    'artifact-create': (a) => {
+      const kinds = ['design-note', 'sketch', 'html-prototype', 'markdown-report', 'verification-summary', 'review-export', 'other'];
+      if (!kinds.includes(String(a.kind))) return { error: `Unknown artifact kind "${String(a.kind)}".` };
+      const title = String(a.title ?? '').trim();
+      if (!title) return { error: 'Artifact title must be a non-empty string.' };
+      const formats = ['markdown', 'html', 'text'];
+      if (a.format !== undefined && !formats.includes(String(a.format))) return { error: `Unknown artifact format "${String(a.format)}".` };
+      const rec: DevArtifact = {
+        id: `art_dev${++artSeq}`, kind: String(a.kind), title,
+        status: typeof a.status === 'string' && ['draft', 'final', 'archived'].includes(a.status) ? a.status : 'draft',
+        format: typeof a.format === 'string' && formats.includes(a.format) ? a.format : 'markdown',
+        workspaceRoot: wsCurrent, sessionKey: activeSession, linkedMemoryIds: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      if (typeof a.summary === 'string' && a.summary.trim()) rec.summary = a.summary;
+      if (typeof a.content === 'string' && a.content.length) rec.content = a.content;
+      if (typeof a.path === 'string' && a.path.trim()) rec.path = a.path.trim();
+      devArtifacts.unshift(rec); return rec;
+    },
+    'artifact-update': (a) => {
+      const r = devArtifacts.find((x) => x.id === a.id);
+      if (!r) return { error: `No artifact "${String(a.id)}".` };
+      if (a.status !== undefined) {
+        if (!['draft', 'final', 'archived'].includes(String(a.status))) return { error: `Unknown artifact status "${String(a.status)}".` };
+        r.status = String(a.status);
+      }
+      if (a.summary !== undefined) {
+        if (typeof a.summary !== 'string') return { error: 'Artifact summary must be a string.' };
+        r.summary = a.summary;
+      }
+      r.updatedAt = new Date().toISOString();
+      return r;
+    },
+    'artifact-read': (a) => {
+      const r = devArtifacts.find((x) => x.id === a.id);
+      if (!r) return { error: `No artifact "${String(a.id)}".` };
+      if (r.path) {
+        // The host reads the real file via the safe workspace read; the preview
+        // shows sample file content here so the path-backed case is demonstrable.
+        return { id: r.id, content: `# ${r.title}\n\n_(file: ${r.path})_\n\nThe Core Identity anchor is injected **before** federation context in the CLI briefing, so the persona survives the recall blend.\n\n1. Distill Core Identity from the brain.\n2. Inject the anchor as the first briefing block.\n3. Append federation + recall context after it.\n` };
+      }
+      return { id: r.id, content: r.content ?? '' };
+    },
     // T12 — mock a local review pass over the working diff.
     // Review v2 — shared run + gate so the commit/push gate is demonstrable.
     'review-diff': () => devRunReview(),
