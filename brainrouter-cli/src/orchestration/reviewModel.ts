@@ -10,8 +10,28 @@
 import crypto from 'node:crypto';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
-export type FindingStatus = 'open' | 'applied' | 'dismissed' | 'fixed' | 'stale';
+/**
+ * Finding lifecycle. `open`/`stale` are the only BLOCKING states (see
+ * `unresolvedBlocking`). `applied`/`fixed`/`dismissed` are the existing resolved
+ * states. 0.4.15 adds three NON-BLOCKING triage states so a reviewer can clear a
+ * finding from the gate without claiming code changed: `acknowledged` (seen,
+ * accepted as-is), `disputed` (disagree with the finding), `out-of-scope` (real
+ * but not for this change). All three are non-blocking by construction — the
+ * gate only blocks `open`/`stale`.
+ */
+export type FindingStatus = 'open' | 'applied' | 'dismissed' | 'fixed' | 'stale' | 'acknowledged' | 'disputed' | 'out-of-scope';
 export type RunStatus = 'running' | 'completed' | 'failed' | 'stale';
+
+/** All finding statuses, for validation at the wire/store boundary. */
+export const FINDING_STATUSES: readonly FindingStatus[] = ['open', 'applied', 'dismissed', 'fixed', 'stale', 'acknowledged', 'disputed', 'out-of-scope'];
+
+/** Triage states a user can set to clear a finding from the gate (non-blocking, non-code-change). */
+export const TRIAGE_STATUSES: readonly FindingStatus[] = ['acknowledged', 'disputed', 'out-of-scope'];
+
+/** Narrow an unknown value to a {@link FindingStatus}. */
+export function isFindingStatus(x: unknown): x is FindingStatus {
+  return typeof x === 'string' && (FINDING_STATUSES as readonly string[]).includes(x);
+}
 
 export interface ReviewFinding {
   id: string;
