@@ -4,7 +4,7 @@
  * edge to resize). Every CLI slash command surfaces here: ⌘K palette, the
  * composer "/" popup, and the categorized Settings modal.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import remarkGfm from 'remark-gfm';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
@@ -29,6 +29,9 @@ import { EFFORT_LEVELS, NON_CHAT_MODEL, VIEW_MENU, FOREGROUND_ONLY_KINDS } from 
 import { devFlag, devPanels } from './lib/devFlags.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
+import { useEditor } from './lib/editor/useEditor.js';
+// Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
+const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
 import { Markdown, MD_COMPONENTS } from './chat/markdown.js';
 import { MessageRow } from './chat/MessageRow.js';
 import { WorkflowCard } from './chat/WorkflowCard.js';
@@ -256,6 +259,20 @@ export function App(): React.ReactElement {
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
 
+  // T5 — in-app code editor. Self-contained (own host round-trips); on a save it
+  // refreshes git status + changed files and re-checks the review gate (the
+  // working tree just changed). Reads/writes go through the host, never the fs.
+  const editor = useEditor({
+    onSaved: () => { q('q-git', 'git-info'); q('q-files', 'changed-files'); q('q-review-gate', 'review-gate'); },
+    onToast: setToast,
+  });
+  // T5 — warn before a reload/close drops unsaved editor changes.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => { if (editor.anyDirty) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [editor.anyDirty]);
+
   /** Open the bottom dock, re-seeding the default Terminal tab if all were closed. */
   function openBottomDock(): void {
     setTermTabs((tabs) => {
@@ -328,9 +345,19 @@ export function App(): React.ReactElement {
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   }
+  // T5 — opening a file now lands in the editable Monaco editor (not the
+  // read-only viewer). The 'file' panel + read-only viewer remain available.
   function openFile(path: string): void {
-    ensurePanel('file');
-    q('q-read', 'read-file', { path });
+    ensurePanel('editor');
+    editor.open(path);
+  }
+  /** Close an editor tab, confirming first if it has unsaved changes. */
+  function closeEditorTab(path: string): void {
+    const tab = editor.tabs.find((t) => t.path === path);
+    if (tab && tab.content !== tab.saved && !tab.readOnly && !tab.binary) {
+      if (!window.confirm(`Discard unsaved changes to ${path.split('/').pop()}?`)) return;
+    }
+    editor.close(path);
   }
   function openSettings(section: SettingsSection): void {
     setSettings({ open: true, section });
@@ -1296,6 +1323,14 @@ export function App(): React.ReactElement {
         </>);
       case 'files': return <FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits} onGrep={(gq) => q('q-grep', 'search-content', { q: gq })} />;
       case 'file': return <FileViewerPanel view={fileView} />;
+      case 'editor': return (
+        <Suspense fallback={<div className="row status"><span className="spinner" /> Loading editor…</div>}>
+          <EditorPanel
+            tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving}
+            onSelect={editor.select} onChange={editor.change} onSave={editor.save} onSaveAll={editor.saveAll}
+            onRevert={editor.revert} onClose={closeEditorTab} />
+        </Suspense>
+      );
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           onPick={(p) => q('q-diff', 'file-diff', { path: p })}

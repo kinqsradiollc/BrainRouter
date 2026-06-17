@@ -148,6 +148,20 @@ export function installDevBridge(): void {
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 
+  // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
+  // exercisable in the browser preview without a real host.
+  const devFiles: Record<string, { content: string; mtimeMs: number }> = {
+    'src/memory/recall.ts': { content: 'export function recall(query: string) {\n  // 4-stage pipeline: retrieve -> rerank -> judge -> expand\n  const ranked = rerank(retrieve(query));\n  return expand(judge(ranked));\n}\n', mtimeMs: 1_000 },
+    'src/state/completionInbox.ts': { content: '/** Completion inbox - detached workers report back here. */\nimport { randomUUID } from "node:crypto";\n\nexport interface Completion {\n  id: string;\n  parentSessionKey: string;\n  summary: string;\n}\n', mtimeMs: 1_000 },
+    'assets/logo.png': { content: 'binary-bytes', mtimeMs: 1_000 },
+  };
+  const devFileRead = (p: string): unknown => {
+    const f = devFiles[p];
+    if (!f) return { path: p, kind: 'file', content: '', error: 'ENOENT: no such file (dev bridge)' };
+    if (/\.(png|jpg|jpeg|gif|webp|ico|pdf|zip)$/i.test(p)) return { path: p, kind: 'file', content: '', binary: true, size: f.content.length, mtimeMs: f.mtimeMs };
+    return { path: p, kind: 'file', content: f.content, size: f.content.length, mtimeMs: f.mtimeMs };
+  };
+
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(wsCurrent),
     'schedule-list': () => devSchedules,
@@ -323,6 +337,15 @@ export function installDevBridge(): void {
         ...Array.from({ length: 20 }, (_, i) => `// line ${i + 9}`),
       ].join('\n'),
     }),
+    // T5 — editor backend (in-memory): read / stat / guarded save (stale-write).
+    'file-read': (a) => devFileRead(String(a.path ?? 'src/memory/recall.ts')),
+    'file-stat': (a) => { const p = String(a.path ?? ''); const f = devFiles[p]; return f ? { path: p, exists: true, kind: 'file', mtimeMs: f.mtimeMs, size: f.content.length } : { path: p, exists: false }; },
+    'action:file-save': (a) => {
+      const p = String(a.path ?? ''); const content = String(a.content ?? ''); const f = devFiles[p];
+      if (!f) { devFiles[p] = { content, mtimeMs: 2_000 }; return { ok: true, path: p, mtimeMs: 2_000, size: content.length }; }
+      if (typeof a.expectedMtimeMs === 'number' && a.expectedMtimeMs !== f.mtimeMs) return { ok: false, path: p, conflict: true, mtimeMs: f.mtimeMs };
+      f.content = content; f.mtimeMs += 1; return { ok: true, path: p, mtimeMs: f.mtimeMs, size: content.length };
+    },
     'commands-catalog': () => ({
       categories: [
         { key: 'session', title: 'Session & State', entries: [

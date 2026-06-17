@@ -9,12 +9,13 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
   { id: 'files', title: 'Files', icon: 'folder' },
   { id: 'file', title: 'File', icon: 'file' },
+  { id: 'editor', title: 'Editor', icon: 'file' },
   { id: 'diff', title: 'Changes', icon: 'diff' },
   { id: 'terminal', title: 'Terminal', icon: 'terminal' },
   { id: 'tools', title: 'Tool calls', icon: 'bolt' },
