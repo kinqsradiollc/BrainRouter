@@ -35,7 +35,7 @@ import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/b
 import {
   CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
-} from './panels.js';
+} from './panels/index.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { parseWorktreeList, type WorktreeEntry } from './lib/worktree/worktreeParser.js';
 import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/session/sessionPagination.js';
@@ -650,7 +650,7 @@ export function App(): React.ReactElement {
   // DESK-6w — a workflow run's breakdown (Claude /workflows-style card), shown
   // in place of the chat when you click a workflow background task.
   const [workflowView, setWorkflowView] = useState<WorkflowDetail | null>(null);
-  const [grepHits, setGrepHits] = useState<import('./panels.js').GrepHit[] | null>(null);
+  const [grepHits, setGrepHits] = useState<import('./panels/index.js').GrepHit[] | null>(null);
   const [inlineDiffs, setInlineDiffs] = useState<Record<string, string>>({});
   const [branches, setBranches] = useState<{ current: string | null; branches: string[]; loading?: boolean }>({ current: null, branches: [] });
   const [endpointModels, setEndpointModels] = useState<string[]>([]);
@@ -1308,7 +1308,7 @@ export function App(): React.ReactElement {
         }
         return;
       }
-      case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels.js').GrepHit[]); return;
+      case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels/index.js').GrepHit[]); return;
       case 'q-transcript': {
         const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
         const mapped: ChatRow[] = (data?.rows ?? []).map((r) => {

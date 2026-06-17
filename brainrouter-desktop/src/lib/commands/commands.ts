@@ -8,7 +8,7 @@
  * `settings` deep-links into a settings section, `cli` is catalogued with its
  * description but still terminal-only (the DESK-5 command bridge wires those).
  */
-import type { PanelId } from '../../panels.js';
+import type { PanelId } from '../../panels/index.js';
 
 export type SettingsSection =
   | 'general' | 'permissions' | 'memory' | 'hooks' | 'connectors'
