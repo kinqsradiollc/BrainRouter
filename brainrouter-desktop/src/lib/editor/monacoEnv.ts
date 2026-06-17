@@ -43,13 +43,39 @@ function defineThemes(): void {
       'editorLineNumber.foreground': cssVar('--text-faint', '#6e7681'),
       'editorLineNumber.activeForeground': cssVar('--text-dim', '#9198a1'),
       'editor.lineHighlightBackground': cssVar('--surface', '#151a22'),
-      'editor.selectionBackground': 'rgba(88,166,255,0.18)',
+      'editor.lineHighlightBorder': '#00000000', // no boxed border around the active line
+      // Selection = a subtle BLUE accent tint (never a raw red/green block).
+      'editor.selectionBackground': 'rgba(88,166,255,0.20)',
+      'editor.inactiveSelectionBackground': 'rgba(88,166,255,0.10)',
+      'editor.selectionHighlightBackground': 'rgba(88,166,255,0.12)',
+      'editor.wordHighlightBackground': 'rgba(88,166,255,0.10)',
+      'editor.findMatchBackground': 'rgba(210,153,34,0.40)',
+      'editor.findMatchHighlightBackground': 'rgba(210,153,34,0.18)',
       'editorCursor.foreground': cssVar('--accent', '#58a6ff'),
       'editorWidget.background': cssVar('--raised', '#21262d'),
       'editorWidget.border': cssVar('--border', '#30363d'),
       'editorIndentGuide.background1': cssVar('--border', '#21262d'),
       'editorGutter.background': cssVar('--bg', '#0d1117'),
       'editorWhitespace.foreground': '#30363d',
+      'editorBracketMatch.background': 'rgba(88,166,255,0.16)',
+      'editorBracketMatch.border': '#00000000',
+      // Diagnostics — semantic foregrounds, no heavy backgrounds.
+      'editorError.foreground': cssVar('--err', '#f85149'),
+      'editorWarning.foreground': cssVar('--warn', '#d29922'),
+      'editorInfo.foreground': cssVar('--accent', '#58a6ff'),
+      // Diff: green add / red remove, as ACCESSIBLE tints (intentional diff state).
+      'diffEditor.insertedTextBackground': 'rgba(63,185,80,0.22)',
+      'diffEditor.removedTextBackground': 'rgba(248,81,73,0.22)',
+      'diffEditor.insertedLineBackground': 'rgba(63,185,80,0.10)',
+      'diffEditor.removedLineBackground': 'rgba(248,81,73,0.10)',
+      // Change gutter ticks use the semantic add/del/modify tokens.
+      'editorGutter.addedBackground': cssVar('--ok', '#3fb950'),
+      'editorGutter.deletedBackground': cssVar('--err', '#f85149'),
+      'editorGutter.modifiedBackground': cssVar('--accent', '#58a6ff'),
+      'scrollbarSlider.background': 'rgba(110,118,129,0.20)',
+      'scrollbarSlider.hoverBackground': 'rgba(110,118,129,0.30)',
+      'scrollbarSlider.activeBackground': 'rgba(110,118,129,0.45)',
+      'editorOverviewRuler.border': '#00000000',
     },
   });
   monaco.editor.defineTheme('brainrouter-light', {
@@ -60,6 +86,13 @@ function defineThemes(): void {
       'editor.background': cssVar('--bg', '#ffffff'),
       'editor.foreground': cssVar('--text', '#1f2328'),
       'editor.lineHighlightBackground': cssVar('--surface', '#f6f8fa'),
+      'editor.selectionBackground': 'rgba(9,105,218,0.18)',
+      'editor.selectionHighlightBackground': 'rgba(9,105,218,0.10)',
+      'editorCursor.foreground': cssVar('--accent', '#0969da'),
+      'editorError.foreground': cssVar('--err', '#cf222e'),
+      'editorWarning.foreground': cssVar('--warn', '#9a6700'),
+      'diffEditor.insertedTextBackground': 'rgba(26,127,55,0.18)',
+      'diffEditor.removedTextBackground': 'rgba(207,34,46,0.18)',
     },
   });
 }
