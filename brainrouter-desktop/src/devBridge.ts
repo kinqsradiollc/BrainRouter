@@ -188,7 +188,9 @@ export function installDevBridge(): void {
     'review-status': () => { const g = devGate(); return { status: g.status, blocked: g.blocked, reason: g.reason }; },
     'review-dismiss-finding': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'dismissed'; return { ok: !!f }; },
     'review-resolve-finding': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'fixed'; return { ok: !!f }; },
-    'review-apply-suggestion': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'applied'; return { ok: !!f }; },
+    'review-apply-suggestion': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f && f.patch) { f.status = 'applied'; return { ok: true }; } return { ok: false, error: 'This finding has no applicable patch — use "Ask agent to fix".' }; },
+    // T3 — scoped fix agent (mock): mark fixed, return the re-run review.
+    'review-fix-finding': (a) => { const f = devReview?.findings.find((x) => x.id === a.id); if (f) f.status = 'fixed'; return { ok: !!f, findingId: a.id, files: 2, run: devReview }; },
     'workspace-sessions': (a) => mergeMeta(String(a.root ?? '')),
     // DESK-6m — per-chat ⋮ menu actions, mutating the in-memory devMeta.
     'action:session-meta': (a) => {

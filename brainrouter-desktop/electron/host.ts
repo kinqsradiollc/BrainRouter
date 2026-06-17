@@ -737,6 +737,41 @@ async function main(): Promise<void> {
           return { ok: false, error: `Patch did not apply cleanly — use "Ask agent to fix". (${err instanceof Error ? err.message : err})` };
         }
       },
+      // T3 — "Ask agent to fix": spawn a scoped WRITE agent for ONE finding,
+      // then mark it fixed and re-run the review so the gate re-evaluates against
+      // the new diff. The fixer can EDIT files (access 'write') but its
+      // interaction port denies confirmations, so it can't run shell/dangerous
+      // tools unprompted (fail-closed) — it just makes the minimal code edit.
+      'review-fix-finding': async (a) => {
+        const run = getLatestReview(workspaceRoot);
+        const f = run?.findings.find((x) => x.id === String(a.id ?? ''));
+        if (!f) return { ok: false, error: 'finding not found' };
+        const fixer = new Agent(mcpClient, llmForSession('review'), {
+          workspaceRoot,
+          launchCwd: workspaceRoot,
+          interactionPort: { confirm: async () => false, choice: async () => null },
+        });
+        fixer.sessionKey = `fix:${Date.now().toString(36)}`;
+        try { (fixer as { setAccessMode?: (m: string) => void }).setAccessMode?.('write'); } catch { /* older agent */ }
+        const prompt = [
+          'Fix EXACTLY this one code-review finding and nothing else. Make the minimal edit; do not touch unrelated code; do not commit.',
+          `File: ${f.file}${f.line ? ` (around line ${f.line}${f.endLine && f.endLine !== f.line ? `-${f.endLine}` : ''})` : ''}`,
+          `Severity: ${f.severity}`,
+          `Problem: ${f.summary}`,
+          f.details ? `Details: ${f.details}` : '',
+          f.suggestion ? `Suggested fix: ${f.suggestion}` : '',
+          f.diffHunk ? `Relevant hunk:\n${f.diffHunk}` : '',
+        ].filter(Boolean).join('\n');
+        try {
+          await (fixer as unknown as { runTurn: (p: string, cb: () => void) => Promise<unknown> }).runTurn(prompt, () => {});
+        } catch (err) {
+          return { ok: false, error: `Fix agent failed: ${err instanceof Error ? err.message : err}` };
+        }
+        updateReviewFinding(workspaceRoot, f.id, 'fixed', isoNow());
+        // Re-run the review over the new working diff so the gate + findings refresh.
+        const rerun = await runReview();
+        return { ok: true, findingId: f.id, files: rerun.files, run: rerun };
+      },
       // DESK-4c — every CLI slash command, straight from the CLI's catalog.
       'commands-catalog': () => {
         // T16 — surface catalog drift at runtime (not just in tests): the desktop

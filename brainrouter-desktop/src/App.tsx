@@ -107,6 +107,9 @@ export function App(): React.ReactElement {
   const [toolLog, setToolLog] = useState<Array<{ id: number; tool: string; ok: boolean; summary: string }>>([]);
   const [changedFiles, setChangedFiles] = useState<Array<{ status: string; path: string }>>([]);
   const [diffView, setDiffView] = useState<{ path: string; diff: string } | null>(null);
+  // T3 — when "Open diff" is clicked on a review finding, remember its line so the
+  // diff view scrolls/flashes to that hunk once the file-diff loads.
+  const [diffTarget, setDiffTarget] = useState<{ path: string; line?: number } | null>(null);
   const [allFiles, setAllFiles] = useState<string[]>([]);
   const [fileView, setFileView] = useState<{ path: string; content: string; error?: string } | null>(null);
   const [gitInfo, setGitInfo] = useState<{ repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null>(null);
@@ -838,6 +841,26 @@ export function App(): React.ReactElement {
         }
         return;
       }
+      case 'q-review-fix': {
+        // T3 — the scoped fix agent finished; it returns the re-run review.
+        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        setReviewRunningByWs((m) => ({ ...m, [root]: false }));
+        const r = result as { ok?: boolean; error?: string; run?: { findings?: ReviewFindingView[]; summary?: string }; files?: number } | null;
+        if (r?.ok && r.run) {
+          setReviewByWs((m) => setEntry(m, root, { findings: r.run!.findings ?? [], summary: r.run!.summary ?? '', files: r.files ?? 0 }));
+          setToast('Finding fixed — review re-run over the new changes.');
+          q('q-review-current', 'review-current'); q('q-files', 'changed-files'); q('q-git', 'git-info');
+        } else {
+          setToast(`Fix failed: ${r?.error ?? 'unknown error'}`);
+        }
+        return;
+      }
+      case 'q-review-apply': {
+        // T3 — surface apply-suggestion success/error (the refresh is fired by the caller).
+        const r = result as { ok?: boolean; error?: string } | null;
+        setToast(r?.ok ? 'Suggestion applied to the working tree.' : `Apply failed: ${r?.error ?? 'no patch — use Ask agent to fix'}`);
+        return;
+      }
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('./panels/index.js').GrepHit[]); return;
       case 'q-transcript': {
         const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
@@ -1292,8 +1315,9 @@ export function App(): React.ReactElement {
       case 'ci': return <CIPanel ci={ci} onOpenExternal={openUrl} />;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
-          onPick={(p) => q('q-diff', 'file-diff', { path: p })}
-          onBack={() => setDiffView(null)} onOpenFile={openFile}
+          scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}
+          onPick={(p) => { setDiffTarget(null); q('q-diff', 'file-diff', { path: p }); }}
+          onBack={() => { setDiffTarget(null); setDiffView(null); }} onOpenFile={openFile}
           onGit={runGit} onGitBypass={(kind, msg) => runGit(kind, msg, { bypass: true })} gitBusy={gitBusy}
           reviewGate={reviewGate} onReview={() => ensurePanel('review')}
           findingsByFile={reviewFindingsByFile} />);
@@ -1318,11 +1342,17 @@ export function App(): React.ReactElement {
           onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
           onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
           onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
-          onAskFix={(f) => { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }}
+          onAskFix={(f) => {
+            // T3 — launch a scoped fix agent for THIS finding (not just a draft);
+            // it edits the file, then the review re-runs. Falls back to a draft if
+            // the finding has no id.
+            if (f.id) { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setToast('Fixing this finding — the agent is editing the file…'); q('q-review-fix', 'review-fix-finding', { id: f.id }); }
+            else { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }
+          }}
           onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
           onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }}
           onOpenFile={(f) => openFile(f.file)}
-          onOpenDiff={(f) => { ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
+          onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
       default: return null;
     }

@@ -1215,3 +1215,10 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .review-badge.rb-needs-review { background: var(--ov-1); color: var(--text-dim); }
 .review-badge.rb-passed { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .review-badge.rb-reviewing { background: var(--ov-1); color: var(--accent); }
+
+/* T3 — flash the targeted line when "Open diff" jumps to a review finding's hunk. */
+.hunk-line.hl-flash { animation: hunkFlash 1.8s ease-out; }
+@keyframes hunkFlash {
+  0%, 30% { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  100% { background: transparent; }
+}

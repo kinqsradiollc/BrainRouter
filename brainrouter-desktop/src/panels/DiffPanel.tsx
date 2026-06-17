@@ -10,7 +10,7 @@ import { DiffView } from './diff.js';
 import { commitBlocked } from '../lib/review/reviewGateUi.js';
 import { GATE_LABEL, type ReviewGateView } from './reviewShared.js';
 
-export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, onGitBypass, gitBusy, reviewGate, onReview, findingsByFile }: {
+export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, onGitBypass, gitBusy, reviewGate, onReview, findingsByFile, scrollToLine }: {
   gitInfo: { repo: string; branch: string | null; insertions: number; deletions: number } | null;
   changed: Array<{ status: string; path: string }>;
   diff: { path: string; diff: string } | null;
@@ -27,6 +27,8 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
   onReview?: () => void;
   /** §4 — count of review findings per file, for the badge next to each file. */
   findingsByFile?: Record<string, number>;
+  /** T3 — scroll/flash the open file-diff to this line (a review finding's hunk). */
+  scrollToLine?: number;
 }): React.ReactElement {
   const [msg, setMsg] = useState('');
   const [skipReview, setSkipReview] = useState(false);
@@ -88,7 +90,7 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
         <>
           <button className="backlink" onClick={onBack}>← {diff.path}</button>
           <div className="scroll">
-            <DiffView diff={diff.diff} />
+            <DiffView diff={diff.diff} highlightLine={scrollToLine} />
           </div>
         </>
       ) : (

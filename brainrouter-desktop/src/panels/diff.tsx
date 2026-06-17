@@ -4,7 +4,7 @@
  * gutter, and red/green tinted blocks). Reused by the Changes panel, the
  * worktree diffs, and the review patch preview.
  */
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
 export interface DiffLine { type: 'ctx' | 'add' | 'del' | 'meta'; oldNo: number | null; newNo: number | null; text: string }
 export interface DiffHunk { header: string; lines: DiffLine[] }
@@ -50,11 +50,22 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
   return files.filter((f) => f.hunks.length);
 }
 
-export function DiffView({ diff }: { diff: string }): React.ReactElement {
+export function DiffView({ diff, highlightLine }: { diff: string; highlightLine?: number }): React.ReactElement {
   const files = useMemo(() => parseUnifiedDiff(diff), [diff]);
+  const ref = useRef<HTMLDivElement>(null);
+  // T3 — when a review finding opens its diff, scroll to + flash the finding's line.
+  useEffect(() => {
+    if (highlightLine == null || !ref.current) return;
+    const el = ref.current.querySelector<HTMLElement>(`[data-newno="${highlightLine}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('hl-flash');
+    const t = setTimeout(() => el.classList.remove('hl-flash'), 1800);
+    return () => clearTimeout(t);
+  }, [highlightLine, diff]);
   if (!files.length) return <div className="empty center-empty">No changes to show</div>;
   return (
-    <div className="diffview">
+    <div className="diffview" ref={ref}>
       {files.map((f, fi) => f.hunks.map((h, hi) => (
         <div key={`${fi}-${hi}`} className="hunk-card">
           <div className="hunk-path" title={f.path}>
@@ -63,7 +74,7 @@ export function DiffView({ diff }: { diff: string }): React.ReactElement {
           </div>
           <div className="hunk-lines">
             {h.lines.map((l, li) => (
-              <div key={li} className={`hunk-line ${l.type}`}>
+              <div key={li} className={`hunk-line ${l.type}`} data-newno={l.newNo ?? undefined}>
                 <span className="hno">{l.oldNo ?? ''}</span>
                 <span className="hno">{l.newNo ?? ''}</span>
                 <span className="hmark">{l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' '}</span>
