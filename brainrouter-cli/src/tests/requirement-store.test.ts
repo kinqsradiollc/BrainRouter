@@ -11,6 +11,9 @@ import {
   linkRequirement,
   deleteRequirement,
   readRequirementsAll,
+  addClarifyingQuestion,
+  answerClarifyingQuestion,
+  openClarifyingQuestions,
 } from '../state/requirementStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
@@ -30,6 +33,46 @@ test('requirementStore: create → read back; id generated; timestamps set', () 
 
     const back = getRequirement(workspace, rec.id);
     assert.deepEqual(back, rec);
+  });
+});
+
+test('requirementStore: clarification — ask appends + draft→clarifying, answer fills, openClarifyingQuestions filters', () => {
+  withTempWorkspace((workspace) => {
+    const rec = createRequirement(workspace, { title: 'Add export', sessionKey: 'sess:c' });
+    assert.equal(rec.status, 'draft');
+    // Ensure the clock advances so updatedAt is strictly newer (same guard the
+    // update test uses — millisecond-precision ISO stamps can otherwise collide).
+    const tick = Date.now();
+    while (Date.now() === tick) { /* spin ~1ms */ }
+
+    // ask: appends an unanswered question and moves draft → clarifying
+    const q1 = addClarifyingQuestion(workspace, rec.id, 'Which formats?');
+    assert.ok(q1);
+    assert.equal(q1!.status, 'clarifying');
+    assert.equal(q1!.clarifyingQuestions.length, 1);
+    assert.equal(q1!.clarifyingQuestions[0].question, 'Which formats?');
+    assert.equal(q1!.clarifyingQuestions[0].answer, undefined);
+    assert.notEqual(q1!.updatedAt, rec.updatedAt); // bumped
+
+    const q2 = addClarifyingQuestion(workspace, rec.id, 'Streaming or batch?');
+    assert.equal(q2!.clarifyingQuestions.length, 2);
+    assert.equal(openClarifyingQuestions(q2!).length, 2); // both open
+
+    // answer #0 → one open remains
+    const a0 = answerClarifyingQuestion(workspace, rec.id, 0, 'md and json');
+    assert.ok(a0);
+    assert.equal(a0!.clarifyingQuestions[0].answer, 'md and json');
+    assert.equal(openClarifyingQuestions(a0!).length, 1);
+
+    // out-of-range index → null, persists across a fresh read
+    assert.equal(answerClarifyingQuestion(workspace, rec.id, 9, 'x'), null);
+    const a1 = answerClarifyingQuestion(workspace, rec.id, 1, 'batch');
+    assert.equal(openClarifyingQuestions(a1!).length, 0); // all answered
+    assert.equal(openClarifyingQuestions(getRequirement(workspace, rec.id)!).length, 0);
+
+    // ask/answer on a missing requirement → null
+    assert.equal(addClarifyingQuestion(workspace, 'req_deadbeef', 'q'), null);
+    assert.equal(answerClarifyingQuestion(workspace, 'req_deadbeef', 0, 'a'), null);
   });
 });
 

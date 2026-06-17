@@ -26,6 +26,9 @@ import {
   getRequirement,
   listRequirements,
   linkRequirement,
+  addClarifyingQuestion,
+  answerClarifyingQuestion,
+  openClarifyingQuestions,
 } from '../../state/requirementStore.js';
 import { seedPlanFromRequirement, formatPlan } from '../../state/taskStore.js';
 import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
@@ -134,6 +137,74 @@ export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<
     if (meaningful) {
       await captureRequirementNote(ctx, updated, flags.status ? `status → ${updated.status}` : 'criterion added');
     }
+    return true;
+  }
+
+  if (sub === 'ask') {
+    const id = rest[0];
+    const question = rest.slice(1).join(' ').trim();
+    if (!id || !question) {
+      console.log(chalk.red('\nUsage: /requirement ask <id> <question…>\n'));
+      return true;
+    }
+    if (!getRequirement(agent.workspaceRoot, id)) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    const updated = addClarifyingQuestion(agent.workspaceRoot, id, question);
+    if (!updated) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    console.log(chalk.green(`\n✓ Added clarifying question to ${chalk.cyan(updated.id)} [${statusColor(updated.status)}]`));
+    printOpenQuestions(updated);
+    console.log();
+    // A new clarifying question is a meaningful decision — capture it to memory.
+    await captureRequirementNote(ctx, updated, 'question added');
+    return true;
+  }
+
+  if (sub === 'answer') {
+    const id = rest[0];
+    const index = Number.parseInt(rest[1] ?? '', 10);
+    const answer = rest.slice(2).join(' ').trim();
+    if (!id || !Number.isInteger(index) || !answer) {
+      console.log(chalk.red('\nUsage: /requirement answer <id> <index> <answer…>\n'));
+      return true;
+    }
+    const existing = getRequirement(agent.workspaceRoot, id);
+    if (!existing) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    const updated = answerClarifyingQuestion(agent.workspaceRoot, id, index, answer);
+    if (!updated) {
+      console.log(chalk.red(`\nNo clarifying question #${index} on "${id}". Indices are 0-based — see /requirement clarify ${id}.\n`));
+      return true;
+    }
+    const open = openClarifyingQuestions(updated).length;
+    console.log(chalk.green(`\n✓ Answered question #${index} on ${chalk.cyan(updated.id)} [${statusColor(updated.status)}]`));
+    console.log(open === 0
+      ? chalk.gray('  all clarifying questions answered')
+      : chalk.gray(`  ${open} clarifying question(s) still open`));
+    console.log();
+    // Answering a clarifying question is a meaningful decision — capture it.
+    await captureRequirementNote(ctx, updated, 'question answered');
+    return true;
+  }
+
+  if (sub === 'clarify') {
+    const id = rest[0];
+    if (!id) {
+      console.log(chalk.red('\nUsage: /requirement clarify <id>\n'));
+      return true;
+    }
+    const r = getRequirement(agent.workspaceRoot, id);
+    if (!r) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    printClarify(r);
     return true;
   }
 
@@ -298,6 +369,63 @@ function printRecord(r: RequirementRecord): void {
   console.log();
 }
 
+/**
+ * Print the still-open clarifying questions with their record-level indices, so
+ * the caller can answer them by number via `/requirement answer <id> <index>`.
+ * Indices are the position in `clarifyingQuestions`, not in the open subset.
+ */
+function printOpenQuestions(r: RequirementRecord): void {
+  const open = r.clarifyingQuestions
+    .map((qa, index) => ({ qa, index }))
+    .filter((e) => !e.qa.answer || e.qa.answer.trim() === '');
+  if (open.length === 0) {
+    console.log(chalk.gray('  No open questions — all answered.'));
+    return;
+  }
+  console.log(chalk.bold('  Open questions'));
+  for (const { qa, index } of open) {
+    console.log(`    ${chalk.cyan(`#${index}`)} • ${qa.question}`);
+  }
+}
+
+/**
+ * Render the full clarifying Q&A for a requirement (answered ✓ / open •) with
+ * record-level indices, then a contextual next-step hint:
+ *  - no acceptance criteria yet → nudge to add them;
+ *  - open questions remain      → show how to answer them;
+ *  - all answered AND criteria present → requirement is ready to advance + seed.
+ */
+function printClarify(r: RequirementRecord): void {
+  console.log(chalk.bold(`\nClarifying ${chalk.cyan(r.id)} [${statusColor(r.status)}]`));
+  console.log(`  ${chalk.cyan(r.title)}`);
+
+  console.log(chalk.bold('\n  Clarifying Q&A'));
+  if (r.clarifyingQuestions.length === 0) {
+    console.log(chalk.gray('    (none yet)'));
+  } else {
+    r.clarifyingQuestions.forEach((qa, index) => {
+      const answered = Boolean(qa.answer && qa.answer.trim() !== '');
+      const marker = answered ? chalk.green('✓') : chalk.yellow('•');
+      console.log(`    ${chalk.cyan(`#${index}`)} ${marker} Q: ${qa.question}`);
+      console.log(`        A: ${answered ? qa.answer : chalk.gray('(unanswered)')}`);
+    });
+  }
+
+  const open = openClarifyingQuestions(r);
+  console.log(chalk.bold('\n  Next'));
+  if (open.length > 0) {
+    const first = r.clarifyingQuestions.findIndex((qa) => !qa.answer || qa.answer.trim() === '');
+    console.log(chalk.gray(`    ${open.length} open question(s). Answer with: /requirement answer ${r.id} ${first} "<answer>"`));
+  } else if (r.acceptanceCriteria.length === 0) {
+    console.log(chalk.gray(`    No acceptance criteria yet. Add some with: /requirement update ${r.id} --criteria "<text>"`));
+  } else {
+    console.log(chalk.green('    Ready — all questions answered and acceptance criteria are set.'));
+    console.log(chalk.gray(`      /requirement update ${r.id} --status ready`));
+    console.log(chalk.gray(`      /requirement seed-plan ${r.id}`));
+  }
+  console.log();
+}
+
 function statusColor(status: RequirementStatus): string {
   switch (status) {
     case 'draft': return chalk.gray(status);
@@ -321,6 +449,9 @@ function printUsage(): void {
   console.log(chalk.gray('  /requirement create <title>                 Create a draft anchored to this session'));
   console.log(chalk.gray('  /requirement list                           List this workspace\'s requirements'));
   console.log(chalk.gray('  /requirement show <id>                      Full record + criteria + Q&A + links'));
+  console.log(chalk.gray('  /requirement ask <id> <question…>           Add a clarifying question (draft → clarifying)'));
+  console.log(chalk.gray('  /requirement answer <id> <index> <answer…>  Answer clarifying question #index (0-based)'));
+  console.log(chalk.gray('  /requirement clarify <id>                   Show the Q&A (✓ answered / • open) + next-step hint'));
   console.log(chalk.gray('  /requirement update <id> --status <s>       Change status (draft|clarifying|ready|in-progress|done|archived)'));
   console.log(chalk.gray('  /requirement update <id> --priority <p>     Change priority (low|medium|high)'));
   console.log(chalk.gray('  /requirement update <id> --criteria "<c>"   Append an acceptance criterion'));

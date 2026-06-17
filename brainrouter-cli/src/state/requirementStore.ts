@@ -172,6 +172,76 @@ export function linkRequirement(
   return updateRequirement(workspaceRoot, id, { taskIds, artifactIds, linkedMemoryIds });
 }
 
+/**
+ * The clarifying questions still awaiting an answer — pure, fs-free, so it can
+ * be unit-tested against a plain record. A question is "open" when its answer
+ * is missing or only whitespace.
+ */
+export function openClarifyingQuestions(rec: RequirementRecord): ClarifyingQA[] {
+  return rec.clarifyingQuestions.filter((qa) => !qa.answer || qa.answer.trim() === '');
+}
+
+/**
+ * Append a clarifying question (no answer yet) to a requirement, bumping
+ * `updatedAt`. A `draft` requirement transitions to `clarifying` the moment it
+ * gains an open question. Returns the updated record, or `null` when the id
+ * doesn't exist or `question` is empty after trimming.
+ */
+export function addClarifyingQuestion(
+  workspaceRoot: string,
+  id: string,
+  question: string,
+): RequirementRecord | null {
+  const text = question?.trim();
+  if (!text) return null;
+  const existing = getRequirement(workspaceRoot, id);
+  if (!existing) return null;
+  const clarifyingQuestions: ClarifyingQA[] = [...existing.clarifyingQuestions, { question: text }];
+  const patch: RequirementPatch = { clarifyingQuestions };
+  // Asking the first question of a still-draft requirement opens clarification.
+  if (existing.status === 'draft') patch.status = 'clarifying';
+  return updateRequirement(workspaceRoot, id, patch) ?? null;
+}
+
+/**
+ * Record the answer to the clarifying question at `index` (0-based), bumping
+ * `updatedAt`. Returns the updated record, `null` when the id doesn't exist,
+ * the index is out of range, or `answer` is empty after trimming. Other
+ * questions are left untouched.
+ */
+export function answerClarifyingQuestion(
+  workspaceRoot: string,
+  id: string,
+  index: number,
+  answer: string,
+): RequirementRecord | null {
+  const text = answer?.trim();
+  if (!text) return null;
+  const existing = getRequirement(workspaceRoot, id);
+  if (!existing) return null;
+  if (!Number.isInteger(index) || index < 0 || index >= existing.clarifyingQuestions.length) {
+    return null;
+  }
+  const clarifyingQuestions = existing.clarifyingQuestions.map((qa, i) =>
+    i === index ? { ...qa, answer: text } : qa,
+  );
+  return updateRequirement(workspaceRoot, id, { clarifyingQuestions }) ?? null;
+}
+
+/**
+ * Replace a requirement's clarifying Q&A wholesale, bumping `updatedAt`. Useful
+ * for bulk edits where per-item helpers would be awkward. Returns the updated
+ * record, or `null` when the id doesn't exist.
+ */
+export function setClarifyingQuestions(
+  workspaceRoot: string,
+  id: string,
+  qa: ClarifyingQA[],
+): RequirementRecord | null {
+  if (!getRequirement(workspaceRoot, id)) return null;
+  return updateRequirement(workspaceRoot, id, { clarifyingQuestions: [...qa] }) ?? null;
+}
+
 /** Delete a requirement. Returns `true` if one was removed, `false` otherwise. */
 export function deleteRequirement(workspaceRoot: string, id: string): boolean {
   const all = readRequirementsAll(workspaceRoot);
