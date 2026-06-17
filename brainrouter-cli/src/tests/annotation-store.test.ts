@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { isAnnotationRecord } from '@kinqs/brainrouter-types';
+import { isAnnotationRecord, isAnnotationComment, hashAnchorText, isAnchorStale } from '@kinqs/brainrouter-types';
 import { getCliStateFile } from '../state/cliState.js';
 import {
   createAnnotation,
   getAnnotation,
   updateAnnotation,
   setStatus,
+  addComment,
   listAnnotations,
   linkAnnotation,
   deleteAnnotation,
@@ -248,4 +249,71 @@ test('isAnnotationRecord: accepts a real record and rejects malformed shapes', (
     }),
     false,
   );
+});
+
+// ── §6 stale-detection + comment threads ──────────────────────────────────
+
+test('hashAnchorText: stable, whitespace-normalized, empty → ""', () => {
+  assert.equal(hashAnchorText(''), '');
+  assert.equal(hashAnchorText('   \n\t '), '');
+  // same logical text with different whitespace → same fingerprint
+  assert.equal(hashAnchorText('a.sort((x, y) => x - y)'), hashAnchorText('a.sort((x,   y) =>   x - y)'));
+  // a real change → different fingerprint
+  assert.notEqual(hashAnchorText('ranked[a] - ranked[b]'), hashAnchorText('blended[a] - blended[b]'));
+  // deterministic
+  assert.equal(hashAnchorText('const x = 1;'), hashAnchorText('const x = 1;'));
+});
+
+test('isAnchorStale: only stale when a recorded hash no longer matches', () => {
+  const text = 'results.sort((a, b) => ranked[b] - ranked[a]);';
+  const fresh = { contentHash: hashAnchorText(text) };
+  assert.equal(isAnchorStale(fresh, text), false);                 // unchanged
+  assert.equal(isAnchorStale(fresh, text.replace('ranked', 'blended')), true); // edited
+  assert.equal(isAnchorStale(undefined, 'anything'), false);        // no anchor
+  assert.equal(isAnchorStale({ filePath: 'a.ts' }, 'anything'), false); // no hash → never stale
+});
+
+test('createAnnotation: an anchor with selectedText gets a contentHash fingerprint', () => {
+  withTempWorkspace((workspace) => {
+    const sel = 'results.sort((a, b) => ranked[b] - ranked[a]);';
+    const rec = createAnnotation(workspace, {
+      type: 'file', body: 'reranker drops good candidates',
+      anchor: { filePath: 'src/memory/recall.ts', startLine: 1247, endLine: 1249, selectedText: sel },
+    });
+    assert.equal(rec.anchor?.contentHash, hashAnchorText(sel));
+    // and it survives the JSON round-trip
+    assert.equal(getAnnotation(workspace, rec.id)?.anchor?.contentHash, hashAnchorText(sel));
+    // an anchor with no selectedText carries no fingerprint
+    const noSel = createAnnotation(workspace, { type: 'file', body: 'x', anchor: { filePath: 'a.ts', startLine: 3 } });
+    assert.equal(noSel.anchor?.contentHash, undefined);
+  });
+});
+
+test('addComment: appends to the thread, bumps updatedAt, generates cmt_ ids; missing id → undefined', () => {
+  withTempWorkspace((workspace) => {
+    const rec = createAnnotation(workspace, { type: 'plan', body: 'opening comment' });
+    assert.equal(rec.comments, undefined);
+    const after1 = addComment(workspace, rec.id, 'first reply', 'reviewer');
+    assert.equal(after1?.comments?.length, 1);
+    assert.match(after1!.comments![0].id, /^cmt_[0-9a-f]{8}$/);
+    assert.equal(after1!.comments![0].body, 'first reply');
+    assert.equal(after1!.comments![0].author, 'reviewer');
+    assert.ok(after1!.updatedAt >= rec.updatedAt);
+    const after2 = addComment(workspace, rec.id, 'second reply');
+    assert.equal(after2?.comments?.length, 2);
+    assert.equal(after2!.comments![1].author, undefined); // anonymous reply
+    // the stored record + guard agree
+    assert.equal(isAnnotationRecord(getAnnotation(workspace, rec.id)), true);
+    assert.equal(isAnnotationComment(after2!.comments![0]), true);
+    assert.equal(addComment(workspace, 'ann_missing', 'x'), undefined);
+    assert.throws(() => addComment(workspace, rec.id, '   '), /non-empty/);
+  });
+});
+
+test('isAnnotationComment: rejects malformed comments', () => {
+  assert.equal(isAnnotationComment({ id: 'cmt_1', body: 'x', createdAt: 'now' }), true);
+  assert.equal(isAnnotationComment({ id: 'cmt_1', body: 'x', author: 'me', createdAt: 'now' }), true);
+  assert.equal(isAnnotationComment({ id: 'cmt_1', createdAt: 'now' }), false); // no body
+  assert.equal(isAnnotationComment({ body: 'x', createdAt: 'now' }), false);   // no id
+  assert.equal(isAnnotationComment(null), false);
 });

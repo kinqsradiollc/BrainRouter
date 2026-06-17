@@ -31,6 +31,7 @@ import {
   getAnnotation,
   listAnnotations,
   setStatus,
+  addComment,
   linkAnnotation,
   type AnnotationFilter,
 } from '../../state/annotationStore.js';
@@ -119,6 +120,28 @@ export async function tryHandleAnnotationCommand(ctx: CommandContext): Promise<b
     }
     console.log(chalk.green(`\n✓ Annotation ${chalk.cyan(updated.id)} status → ${statusColor(updated.status)}\n`));
     await captureAnnotationNote(ctx, updated, `status → ${updated.status}`);
+    return true;
+  }
+
+  if (sub === 'comment' || sub === 'reply') {
+    const id = rest[0];
+    const body = rest.slice(1).join(' ').trim();
+    if (!id || !body) {
+      console.log(chalk.red('\nUsage: /annotation comment <id> <text…>\n'));
+      return true;
+    }
+    if (!getAnnotation(agent.workspaceRoot, id)) {
+      console.log(chalk.yellow(`\nNo annotation with id "${id}".\n`));
+      return true;
+    }
+    const updated = addComment(agent.workspaceRoot, id, body);
+    if (!updated) {
+      console.log(chalk.yellow(`\nNo annotation with id "${id}".\n`));
+      return true;
+    }
+    const count = updated.comments?.length ?? 0;
+    console.log(chalk.green(`\n✓ Comment added to ${chalk.cyan(updated.id)} (${count} in thread)\n`));
+    await captureAnnotationNote(ctx, updated, `comment: ${truncateLine(body)}`);
     return true;
   }
 
@@ -399,6 +422,14 @@ function printRecord(a: AnnotationRecord): void {
     console.log(chalk.bold('\n  Suggested'));
     for (const line of a.suggestedText.split('\n')) console.log(`    ${line}`);
   }
+  if (a.anchor?.contentHash) console.log(`  Anchor fp: ${chalk.gray(a.anchor.contentHash)} ${chalk.gray('(stale-detection fingerprint)')}`);
+  if (a.comments?.length) {
+    console.log(chalk.bold(`\n  Thread (${a.comments.length})`));
+    for (const c of a.comments) {
+      console.log(`    ${chalk.gray(c.createdAt)}${c.author ? ` ${chalk.cyan(c.author)}` : ''}`);
+      console.log(`    ${c.body}`);
+    }
+  }
   if (a.author) console.log(`\n  Author:    ${chalk.gray(a.author)}`);
   if (a.sessionKey) console.log(`  Session:   ${chalk.gray(a.sessionKey)}`);
   if (a.requirementId) console.log(`  Req:       ${chalk.gray(a.requirementId)}`);
@@ -459,6 +490,7 @@ function printUsage(): void {
   console.log(chalk.gray(`  /annotation list [--status s] [--target kind] [--file path]   List this workspace's annotations`));
   console.log(chalk.gray('  /annotation show <id>                             Full record + anchor + suggested code + links'));
   console.log(chalk.gray(`  /annotation status <id> <${STATUSES}>   Transition status`));
+  console.log(chalk.gray('  /annotation comment <id> <text…>                  Add a comment to the annotation thread'));
   console.log(chalk.gray('  /annotation export [--status s] [--target kind]   Print grouped markdown + capture it as a session memory note'));
   console.log(chalk.gray(`  targetKind: ${TARGET_KINDS}`));
   console.log();

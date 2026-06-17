@@ -723,6 +723,7 @@ export function App(): React.ReactElement {
         return <AnnotationsPanel annotations={annotations}
           onSetStatus={(id, status) => { q('q-annot-status', 'annotation-set-status', { id, status }); refresh(); }}
           onExport={(filter) => { q('q-annot-export', 'annotation-export', filter); }}
+          onAddComment={(id, body) => { q('q-annot-comment', 'annotation-add-comment', { id, body }); refresh(); }}
           onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
       }
       case 'artifacts': {
