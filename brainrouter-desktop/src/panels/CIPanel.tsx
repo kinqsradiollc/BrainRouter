@@ -51,8 +51,10 @@ export function CIPanel({ ci, onOpenExternal }: { ci: CiApi; onOpenExternal: (ur
           <div key={id} className="ci-run">
             <button className="ci-run-head" onClick={() => ci.expandRun(id)}>
               <span className={`ci-dot ${runClass(r)}`} />
-              <span className="ci-run-title" title={r.displayTitle}>{r.workflowName || r.name}: {r.displayTitle}</span>
-              <span className="ci-run-meta">{r.headBranch} · {r.event}</span>
+              <span className="ci-run-main">
+                <span className="ci-run-title" title={r.displayTitle}>{r.workflowName || r.name}: {r.displayTitle}</span>
+                <span className="ci-run-meta">{r.headBranch}{r.event ? ` · ${r.event}` : ''}</span>
+              </span>
               <span className="step-chevron">{expanded ? '⌄' : '›'}</span>
             </button>
             {expanded ? (
