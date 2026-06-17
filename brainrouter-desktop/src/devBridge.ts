@@ -217,6 +217,21 @@ export function installDevBridge(): void {
     'git-pr': () => (wsCurrent === '/Users/dev/BrainRouter'
       ? { pr: { number: 395, state: 'OPEN', title: 'feat(desktop): DESK-4l — interactive views rail' } }
       : { pr: null }),
+    // T6 — GitHub CI/CD mocks (browser preview; real gh runs in the host).
+    'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, author: { login: 'anhdang' } } }),
+    'git-pr-checks': () => ({ checks: [
+      { name: 'Build & Test (Node 22.x)', bucket: 'pass', workflow: 'CI', link: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/1', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:03:06Z' },
+      { name: 'Lint', bucket: 'pass', workflow: 'CI', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:00:42Z' },
+      { name: 'e2e (flaky)', bucket: 'pending', workflow: 'CI' },
+    ] }),
+    'git-actions-runs': () => ({ runs: [
+      { databaseId: 27667328723, name: 'CI', displayTitle: 'in-app Monaco code editor', status: 'completed', conclusion: 'success', workflowName: 'Build & Test', headBranch: 'feat/0.4.15-monaco-editor', event: 'pull_request', createdAt: '2026-06-17T10:00:00Z', url: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/1' },
+      { databaseId: 27666466918, name: 'CI', displayTitle: 'host backend endpoints', status: 'completed', conclusion: 'failure', workflowName: 'Build & Test', headBranch: 'feat/0.4.15-host-backend-endpoints', event: 'pull_request', createdAt: '2026-06-17T09:30:00Z', url: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/2' },
+      { databaseId: 99, name: 'CI', displayTitle: 'release sweep', status: 'in_progress', workflowName: 'Build & Test', headBranch: 'release/0.4.15', event: 'push', createdAt: '2026-06-17T11:00:00Z', url: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/3' },
+    ] }),
+    'git-actions-run-detail': (a) => ({ run: { databaseId: Number(a.id) || 1, name: 'CI', displayTitle: 'run detail', status: 'completed', conclusion: 'failure', workflowName: 'Build & Test', updatedAt: '2026-06-17T10:03:06Z', jobs: [{ name: 'build', status: 'completed', conclusion: 'success' }, { name: 'test', status: 'completed', conclusion: 'failure' }] } }),
+    'git-actions-run-log': (a) => ({ log: `run ${a.id} — Build & Test\n> npm test\nFAIL src/foo.test.ts\n  ✗ does the thing\n    Expected: 1\n    Received: 2\nProcess completed with exit code 1.` }),
+    'action:git-actions-rerun-failed': (a) => ({ ok: true, id: String(a.id ?? '') }),
     // DESK-5w — each task tagged with the chat that owns it, so the sidebar can
     // nest it under its session and the env card scopes to the viewed chat.
     'fleet': () => [

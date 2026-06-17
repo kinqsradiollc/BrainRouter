@@ -30,6 +30,9 @@ import { devFlag, devPanels } from './lib/devFlags.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
 import { useEditor } from './lib/editor/useEditor.js';
+import { useCi } from './lib/ci/useCi.js';
+import { CIPanel } from './panels/CIPanel.js';
+import { summarizeChecks, ciStatusLabel } from './lib/ci/ciFormat.js';
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
 import { Markdown, MD_COMPONENTS } from './chat/markdown.js';
@@ -272,6 +275,11 @@ export function App(): React.ReactElement {
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [editor.anyDirty]);
+
+  // T6 — GitHub CI/CD (real `gh` status, kept separate from local tool success).
+  const ci = useCi({ onToast: setToast });
+  const openUrl = (url: string): void => { if (url) q('q-open-url', 'action:open-external', { url }); };
+  const openCiPanel = (): void => { ensurePanel('ci'); ci.refresh(); };
 
   /** Open the bottom dock, re-seeding the default Terminal tab if all were closed. */
   function openBottomDock(): void {
@@ -1331,6 +1339,7 @@ export function App(): React.ReactElement {
             onRevert={editor.revert} onClose={closeEditorTab} />
         </Suspense>
       );
+      case 'ci': return <CIPanel ci={ci} onOpenExternal={openUrl} />;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           onPick={(p) => q('q-diff', 'file-diff', { path: p })}
@@ -1845,8 +1854,14 @@ export function App(): React.ReactElement {
                     ) : null}
                   </>
                 ) : null}
+                {/* T6 — REAL GitHub CI (gh), distinct from the local tool-call result below. */}
+                <button className={`env-row ci-env-${summarizeChecks(ci.checks).conclusion}`} onClick={openCiPanel} title="GitHub CI / checks (gh)">
+                  <Icon name="check-circle" size={14} />
+                  <span>{ci.checks.length ? ciStatusLabel(summarizeChecks(ci.checks)) : 'CI / checks — open'}</span>
+                </button>
+                {/* Local tool-call outcome of the last turn — NOT CI. */}
                 {lastTurnFails === null ? null : lastTurnFails === 0 ? (
-                  <div className="env-row inert checks-ok"><Icon name="check-circle" size={14} /><span>Checks successful</span></div>
+                  <div className="env-row inert checks-ok"><Icon name="check-circle" size={14} /><span>Last turn: all tool calls OK</span></div>
                 ) : (
                   <div className="env-row inert checks-bad"><Icon name="warn" size={14} /><span>{lastTurnFails} tool call{lastTurnFails === 1 ? '' : 's'} failed last turn</span></div>
                 )}
@@ -1942,6 +1957,8 @@ export function App(): React.ReactElement {
                       badge: worktrees.length ? String(worktrees.length) : '' },
                     { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review',
                       badge: review?.findings.length ? String(review.findings.length) : '' },
+                    { id: 'ci' as PanelId, title: 'CI / Checks', hint: '', icon: 'check-circle',
+                      badge: ci.checks.length ? String(ci.checks.length) : '' },
                     { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
                   ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>).map((l) => (
                     <button key={l.id} className="side-launcher" onClick={() => openSideView(l.id)}>

@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'ci';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -25,6 +25,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'schedule', title: 'Schedules', icon: 'clock' },
   { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
   { id: 'review', title: 'Review', icon: 'review' },
+  { id: 'ci', title: 'CI / Checks', icon: 'check-circle' },
 ];
 
 export function Panel({ title, onClose, children, actions }: {
