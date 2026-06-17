@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBrokerPort, createHostCore, type AgentLike } from './hostCore.js';
+import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike } from './hostCore.js';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import type { AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 
@@ -353,4 +353,34 @@ test('a spawned/focused session restores its stored per-session model', async ()
   const sc = out.filter((m) => m.event.kind === 'session-changed').pop();
   assert.equal(sc!.sessionKey, 'sess-test:feature');
   assert.equal((sc!.event as { model: string }).model, 'qwen3-coder', 'restored per-session model on focus');
+});
+
+test('isUnsavedNewSessionKey marks only the new-* session segment', () => {
+  assert.equal(isUnsavedNewSessionKey('abc123:new-k1z9'), true);
+  assert.equal(isUnsavedNewSessionKey('new-k1z9'), true); // no workspace prefix
+  assert.equal(isUnsavedNewSessionKey('abc123:saved-chat'), false);
+  assert.equal(isUnsavedNewSessionKey('abc123:newish'), false); // must be the "new-" prefix
+  assert.equal(isUnsavedNewSessionKey('abc123:design-note'), false);
+});
+
+test('Bug-fix: resuming an unsaved new-* key with no transcript self-heals (no "No transcript found")', async () => {
+  const { out, send } = collect();
+  const core = createHostCore({ agent: fakeAgent(), send, transcriptExists: () => false });
+  await core.handle({ kind: 'resume-session', sessionKey: 'wshash:new-abc12' });
+  const kinds = out.map((m) => m.event.kind);
+  assert.ok(!kinds.includes('turn-error'), 'a brand-new chat must not hard-error on resume');
+  const sc = out.find((m) => m.event.kind === 'session-changed');
+  assert.ok(sc, 'self-heals to a fresh session');
+  const ev = sc!.event as Extract<AgentEventMessage['event'], { kind: 'session-changed' }>;
+  assert.equal(ev.sessionKey, 'wshash:new-abc12');
+  assert.equal(ev.loadedMessages, 0, 'fresh empty session');
+});
+
+test('Bug-fix: resuming a SAVED key with no transcript still emits a controlled error', async () => {
+  const { out, send } = collect();
+  const core = createHostCore({ agent: fakeAgent(), send, transcriptExists: () => false });
+  await core.handle({ kind: 'resume-session', sessionKey: 'wshash:saved-feature' });
+  const err = out.find((m) => m.event.kind === 'turn-error');
+  assert.ok(err, 'a missing transcript for a real saved session is still an error');
+  assert.match((err!.event as Extract<AgentEventMessage['event'], { kind: 'turn-error' }>).message, /No transcript found/);
 });

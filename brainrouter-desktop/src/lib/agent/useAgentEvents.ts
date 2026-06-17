@@ -233,6 +233,10 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           setRunning(runningSessionsRef.current.has(e.sessionKey));
           setStopping(false); // DESK-6 — a switch clears any pending stop indicator
           setStatusLine(''); setReasoningTail(''); setLiveText(''); liveBuf.current = '';
+          // Session-scoped surfaces must NOT carry over from the chat we just left:
+          // reset the context meter + plan now (the refresh below repopulates them
+          // from THIS session's data — a new chat → empty, not the old chat's 100%).
+          setContextUsage(null); setLastPlan(null);
           if (e.loadedMessages > 0) {
             // Observed: a centered spinner while the transcript loads, then
             // the full history renders scrolled to the bottom.
@@ -335,6 +339,13 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
       case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
+      case 'q-plan': {
+        // This session's durable plan (empty for a new chat). Null/empty → clear
+        // the panel rather than leave the previous session's plan showing.
+        const p = result as { items?: PlanItem[]; explanation?: string } | null;
+        setLastPlan(p && Array.isArray(p.items) && p.items.length ? { items: p.items, explanation: p.explanation } : null);
+        return;
+      }
       case 'q-fleet': if (Array.isArray(result)) setFleet(result as FleetRow[]); return;
       case 'q-info': if (result && typeof result === 'object') setInfo(result as typeof info); return;
       case 'q-files': if (Array.isArray(result)) setChangedFiles(result as Array<{ status: string; path: string }>); return;

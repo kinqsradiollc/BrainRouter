@@ -234,7 +234,7 @@ export function App(): React.ReactElement {
     setStopping, setStatusLine, setReasoningTail, setLiveText, setRows, setRunning, setInteraction,
     setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
-    setTokens, setGateBlock, setLastPlan, setFleet, setLiveChildren, setCommitSubjects, setToast,
+    setTokens, setContextUsage, setGateBlock, setLastPlan, setFleet, setLiveChildren, setCommitSubjects, setToast,
     setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });

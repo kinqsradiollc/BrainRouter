@@ -21,6 +21,18 @@
  */
 import { createCallbackBridge, InteractionBroker, isAgentCommand, } from '@kinqs/brainrouter-agent-protocol';
 /**
+ * A brand-new chat's transcript isn't written to disk until its first turn, so
+ * its `<workspaceHash>:new-…` key has no transcript yet. Resuming such a key
+ * must self-heal (create the empty session) rather than hard-error — whereas a
+ * missing transcript for a SAVED key is a real error. `applyNew` mints keys as
+ * `<hash>:new-<base36 ts>`, so the session-name segment (after the first ':')
+ * starting with `new-` is the unsaved-new marker.
+ */
+export function isUnsavedNewSessionKey(key) {
+    const seg = key.includes(':') ? key.slice(key.indexOf(':') + 1) : key;
+    return seg.startsWith('new-');
+}
+/**
  * DESK-3 — InteractionPort backed by the broker: agent approval/choice asks
  * become `interaction-request` events; the renderer answers with an
  * `interaction-response` command. 5-minute timeout → dismissed → the agent's
@@ -181,6 +193,13 @@ export function createHostCore(input) {
                 ? input.transcriptExists(sessionKey)
                 : ((input.loadTranscript?.(sessionKey)?.length ?? 0) > 0);
             if (!exists) {
+                // A brand-new chat (its transcript isn't written until the first turn)
+                // self-heals: create the empty session here so a turn can then write it,
+                // instead of the confusing `No transcript found for "<hash>:new-…"`.
+                if (isUnsavedNewSessionKey(sessionKey)) {
+                    focusOrCreate(sessionKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+                    return;
+                }
                 emit({ kind: 'turn-error', message: `No transcript found for "${sessionKey}".` });
                 return;
             }

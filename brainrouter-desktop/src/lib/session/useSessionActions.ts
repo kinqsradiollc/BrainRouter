@@ -60,6 +60,7 @@ export interface SessionActionsCtx {
   setFileView: React.Dispatch<React.SetStateAction<{ path: string; content: string; error?: string } | null>>;
   setDiffView: React.Dispatch<React.SetStateAction<{ path: string; diff: string } | null>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number } | null>>;
+  setContextUsage: React.Dispatch<React.SetStateAction<{ used: number; window: number; compactAt: number; limit: number; pct: number } | null>>;
   setGateBlock: React.Dispatch<React.SetStateAction<{ kind: 'commit' | 'push'; msg?: string; reason: string; status: string } | null>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: import('../../types.js').PlanItem[]; explanation?: string } | null>>;
   setFleet: React.Dispatch<React.SetStateAction<FleetRow[]>>;
@@ -126,7 +127,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     setStopping, setStatusLine, setReasoningTail, setLiveText, setRows, setRunning, setInteraction,
     setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
-    setTokens, setGateBlock, setLastPlan, setFleet, setLiveChildren, setCommitSubjects, setToast,
+    setTokens, setContextUsage, setGateBlock, setLastPlan, setFleet, setLiveChildren, setCommitSubjects, setToast,
     setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   } = ctx;
@@ -197,6 +198,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     setFileView(null);
     setDiffView(null);
     setTokens(null);
+    setContextUsage(null); // workspace switch: don't show the old project's context meter
     // T2 — review MAPS are keyed by workspace, so they survive the switch and the
     // derived active view flips for free. But the pending-git + gate dialog are
     // single-shot and must NOT carry into the new project.
@@ -255,6 +257,9 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     q('q-info', 'session-info');
     q('q-fleet', 'fleet');
     q('q-ctx', 'context-usage');
+    // Reload THIS session's durable plan so switching chats shows its own plan
+    // (a new chat → empty), never the previous chat's stale live plan.
+    q('q-plan', 'plan-state');
   }
   // Full refresh INCL. the slow git/workspace queries — only needed on boot, a
   // workspace switch, and after a turn (files may have changed), NOT on every

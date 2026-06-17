@@ -1176,6 +1176,13 @@ async function main() {
                 const limit = compactAt > 0 ? compactAt : window;
                 return { used, window, compactAt, limit, pct: limit > 0 ? Math.min(1, used / limit) : 0 };
             },
+            // Structured per-session plan for the renderer's Plan panel + the context
+            // surfaces. Read fresh from THIS session's durable plan so switching chats
+            // shows the right plan (a new chat → empty) instead of the last live one.
+            'plan-state': () => {
+                const p = readPlan(workspaceRoot, activeAgent.sessionKey);
+                return { items: p.items, explanation: p.explanation };
+            },
             'search-transcript': (args) => {
                 const query = typeof args.q === 'string' ? args.q : '';
                 // OOM-safe: search a bounded recent window (50 capped results anyway).
