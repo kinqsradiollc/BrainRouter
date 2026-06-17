@@ -603,6 +603,10 @@ input.ctl { min-width: 220px; }
 .annot-comment-meta { display: flex; gap: 6px; align-items: baseline; font-size: 10.5px; }
 .annot-comment-author { color: var(--accent); font-weight: 600; }
 .annot-comment-body { font-size: 12px; color: var(--text-dim); margin-top: 1px; white-space: pre-wrap; }
+/* §12 — artifact write-workspace edit buffer. */
+.art-edit-actions { display: inline-flex; gap: 6px; }
+.art-edit { width: 100%; min-height: 180px; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.5; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 8px; margin: 2px 0 6px; }
+.art-edit:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
 /* Annotation lifecycle status pills (req-status base provides the chrome). */
 .req-status.st-open { background: var(--accent-soft, rgba(108,192,74,0.18)); color: var(--accent, #6cc04a); }
 .req-status.st-accepted { color: #6cc04a; }

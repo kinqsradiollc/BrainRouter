@@ -948,6 +948,25 @@ async function main(): Promise<void> {
         }
         return { id, content: rec.content ?? '' };
       },
+      // §12 WRITE-WORKSPACE — save edited artifact content back to its source. A
+      // file-backed artifact (`path`) is written through the SAME safe workspace
+      // write the editor uses (writeWorkspaceEntry — escape/symlink guards); an
+      // inline artifact updates its stored `content`. Either way bumps updatedAt.
+      'artifact-save': (a) => {
+        const id = String(a.id ?? '');
+        const content = typeof a.content === 'string' ? a.content : null;
+        if (content === null) return { error: 'Artifact content must be a string.' };
+        const rec = getArtifact(workspaceRoot, id);
+        if (!rec) return { error: `No artifact "${id}".` };
+        if (rec.path) {
+          const res = writeWorkspaceEntry(workspaceRoot, rec.path, content);
+          if (!res.ok) return { id, error: res.error ?? 'write failed', conflict: res.conflict };
+          updateArtifact(workspaceRoot, id, {}); // bump updatedAt so the preview re-resolves
+          return { id, ok: true, path: rec.path };
+        }
+        const updated = updateArtifact(workspaceRoot, id, { content });
+        return updated ? { id, ok: true } : { error: `No artifact "${id}".` };
+      },
       // T12 / Review v2 — local AI review of the working tree. Gathers the diff,
       // runs ONE ephemeral review turn in an ISOLATED review: session (filtered
       // from the session picker — never pollutes the user's chats), parses
