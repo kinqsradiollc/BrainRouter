@@ -8,6 +8,7 @@
  */
 import React, { useState } from 'react';
 import { DiffView } from './diff.js';
+import { Button } from '../components/Button.js';
 import { findingRows } from '../lib/review/reviewCode.js';
 import { GATE_LABEL, type ReviewFindingView, type ReviewGateView } from './reviewShared.js';
 
@@ -98,19 +99,19 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
                     <div className="review-suggestion"><span className="rs-label">Suggested fix</span> {f.suggestion}</div>
                   ) : null}
                   <div className="finding-actions">
-                    {!resolved && f.canApply ? <button className="wt-btn primary-ghost" onClick={() => onApply(f)}>Apply suggestion</button> : null}
-                    {!resolved ? <button className="wt-btn" onClick={() => onAskFix(f)}>Ask agent to fix</button> : null}
-                    {!resolved ? <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss</button> : null}
+                    {!resolved && f.canApply ? <Button variant="primary-ghost" onClick={() => onApply(f)}>Apply suggestion</Button> : null}
+                    {!resolved ? <Button onClick={() => onAskFix(f)}>Ask agent to fix</Button> : null}
+                    {!resolved ? <Button onClick={() => onDiscuss(f)}>Discuss</Button> : null}
                     {/* §9 — capture this finding as a durable annotation (survives the review run). */}
-                    <button className="wt-btn" onClick={() => onAnnotate(f)} title="Save this finding as a durable annotation">Annotate</button>
-                    <button className="wt-btn" onClick={() => onOpenDiff(f)} title="Open this file's diff">Open diff</button>
-                    <button className="wt-btn" onClick={() => onOpenFile(f)} title="Open the file">Open file</button>
-                    {!resolved ? <button className="wt-btn" onClick={() => onResolve(f)}>Resolve</button> : null}
-                    {!resolved ? <button className="wt-btn" onClick={() => onDismiss(f)}>Dismiss</button> : null}
+                    <Button onClick={() => onAnnotate(f)} title="Save this finding as a durable annotation">Annotate</Button>
+                    <Button onClick={() => onOpenDiff(f)} title="Open this file's diff">Open diff</Button>
+                    <Button onClick={() => onOpenFile(f)} title="Open the file">Open file</Button>
+                    {!resolved ? <Button onClick={() => onResolve(f)}>Resolve</Button> : null}
+                    {!resolved ? <Button onClick={() => onDismiss(f)}>Dismiss</Button> : null}
                     {/* 0.4.15 triage — clear the gate without claiming code changed. */}
-                    {!resolved ? <button className="wt-btn" title="Seen, accepted as-is" onClick={() => onTriage(f, 'acknowledged')}>Acknowledge</button> : null}
-                    {!resolved ? <button className="wt-btn" title="Disagree with this finding" onClick={() => onTriage(f, 'disputed')}>Dispute</button> : null}
-                    {!resolved ? <button className="wt-btn" title="Real, but not for this change" onClick={() => onTriage(f, 'out-of-scope')}>Out of scope</button> : null}
+                    {!resolved ? <Button title="Seen, accepted as-is" onClick={() => onTriage(f, 'acknowledged')}>Acknowledge</Button> : null}
+                    {!resolved ? <Button title="Disagree with this finding" onClick={() => onTriage(f, 'disputed')}>Dispute</Button> : null}
+                    {!resolved ? <Button title="Real, but not for this change" onClick={() => onTriage(f, 'out-of-scope')}>Out of scope</Button> : null}
                   </div>
                 </div>
                 );

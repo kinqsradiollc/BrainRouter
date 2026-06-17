@@ -10,6 +10,8 @@
  */
 import React, { useState } from 'react';
 import type { AnnotationRecord, AnnotationStatus, AnnotationTargetKind } from '@kinqs/brainrouter-types';
+import { Button } from '../components/Button.js';
+import { Chip } from '../components/Badge.js';
 import {
   sortAnnotations, annotationCounts, severityClass, statusClass, anchorLabel, annotationLinkCounts,
   ANNOTATION_STATUS_OPTIONS, ANNOTATION_TARGET_KIND_OPTIONS,
@@ -63,15 +65,15 @@ export function AnnotationsPanel({ annotations, onSetStatus, onExport, onSelectT
               {TARGET_KIND_FILTER.map((k) => <option key={k || 'all'} value={k}>{k || 'all'}</option>)}
             </select>
           </label>
-          <button className="wt-btn" disabled={filtered.length === 0}
+          <Button disabled={filtered.length === 0}
             title={filtered.length === 0 ? 'No annotations to export' : 'Drop the filtered annotations into the chat as agent-readable feedback'}
-            onClick={() => onExport(exportFilter())}>Export feedback</button>
+            onClick={() => onExport(exportFilter())}>Export feedback</Button>
         </div>
         <div className="annot-counts">
-          <span className="req-link-chip">{counts.open} open</span>
-          <span className="req-link-chip">{counts.accepted} accepted</span>
-          <span className="req-link-chip">{counts.resolved} resolved</span>
-          <span className="req-link-chip">{counts.total} total</span>
+          <Chip>{counts.open} open</Chip>
+          <Chip>{counts.accepted} accepted</Chip>
+          <Chip>{counts.resolved} resolved</Chip>
+          <Chip>{counts.total} total</Chip>
         </div>
       </div>
 
@@ -135,7 +137,7 @@ function AnnotationDetail({ ann, onSetStatus, onSelectTarget, onAddComment }: {
           </select>
         </label>
         {ann.targetId && onSelectTarget ? (
-          <button className="wt-btn" title="Reveal this annotation's target" onClick={() => onSelectTarget(ann)}>Open target</button>
+          <Button title="Reveal this annotation's target" onClick={() => onSelectTarget(ann)}>Open target</Button>
         ) : null}
       </div>
 
@@ -175,11 +177,11 @@ function AnnotationDetail({ ann, onSetStatus, onSelectTarget, onAddComment }: {
 
       <div className="tasks-section"><span>Links</span></div>
       <div className="req-links">
-        {ann.targetId ? <span className="req-link-chip">target {ann.targetId}</span> : null}
-        {ann.requirementId ? <span className="req-link-chip">req {ann.requirementId}</span> : null}
-        {ann.taskId ? <span className="req-link-chip">task {ann.taskId}</span> : null}
-        {ann.artifactId ? <span className="req-link-chip">artifact {ann.artifactId}</span> : null}
-        <span className="req-link-chip">{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</span>
+        {ann.targetId ? <Chip>target {ann.targetId}</Chip> : null}
+        {ann.requirementId ? <Chip>req {ann.requirementId}</Chip> : null}
+        {ann.taskId ? <Chip>task {ann.taskId}</Chip> : null}
+        {ann.artifactId ? <Chip>artifact {ann.artifactId}</Chip> : null}
+        <Chip>{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</Chip>
       </div>
     </div>
   );

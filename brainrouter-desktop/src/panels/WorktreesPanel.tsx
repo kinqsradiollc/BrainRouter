@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 import { DiffView } from './diff.js';
+import { Button } from '../components/Button.js';
 import { type WorktreeEntry } from '../lib/worktree/worktreeParser.js';
 
 export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, onDiff }: {
@@ -45,9 +46,9 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
           </div>
           <div className="wt-path" title={w.path}>{w.path}</div>
           <div className="wt-actions">
-            {!w.isCurrent ? <button className="wt-btn" onClick={() => onOpen(w.path)}>Open</button> : null}
-            <button className="wt-btn" onClick={() => toggleDiff(w.path)}>{openPath === w.path ? 'Hide diff' : 'Diff'}</button>
-            {!w.isMain ? <button className="wt-btn danger" onClick={() => onRemove(w.path)}>Remove</button> : null}
+            {!w.isCurrent ? <Button onClick={() => onOpen(w.path)}>Open</Button> : null}
+            <Button onClick={() => toggleDiff(w.path)}>{openPath === w.path ? 'Hide diff' : 'Diff'}</Button>
+            {!w.isMain ? <Button variant="danger" onClick={() => onRemove(w.path)}>Remove</Button> : null}
           </div>
           {openPath === w.path ? (
             <div className="wt-diff">

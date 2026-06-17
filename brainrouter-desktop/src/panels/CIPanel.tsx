@@ -6,6 +6,7 @@
  */
 import React, { useEffect, useRef } from 'react';
 import { Icon } from '../icons.js';
+import { Button } from '../components/Button.js';
 import { summarizeChecks, ciStatusLabel, checkClass, runClass, ciDuration, type CheckRow } from '../lib/ci/ciFormat.js';
 import type { CiApi } from '../lib/ci/useCi.js';
 
@@ -18,7 +19,7 @@ export function CIPanel({ ci, onOpenExternal }: { ci: CiApi; onOpenExternal: (ur
     <div className="scroll ci-panel">
       <div className="ci-bar">
         <button className="btn primary" disabled={ci.loading} onClick={ci.refresh}>{ci.loading ? 'Refreshing…' : 'Refresh'}</button>
-        {ci.pr?.url ? <button className="wt-btn" onClick={() => onOpenExternal(ci.pr!.url!)}>Open on GitHub</button> : null}
+        {ci.pr?.url ? <Button onClick={() => onOpenExternal(ci.pr!.url!)}>Open on GitHub</Button> : null}
       </div>
 
       {ci.pr ? (
@@ -60,10 +61,10 @@ export function CIPanel({ ci, onOpenExternal }: { ci: CiApi; onOpenExternal: (ur
             {expanded ? (
               <div className="ci-run-body">
                 <div className="ci-run-actions">
-                  {r.url ? <button className="wt-btn" onClick={() => onOpenExternal(r.url!)}>Open</button> : null}
-                  <button className="wt-btn" onClick={() => ci.loadLog(id)}>Log tail</button>
-                  <button className="wt-btn" onClick={() => ci.loadLog(id, true)}>Failed log</button>
-                  <button className="wt-btn" onClick={() => ci.rerunFailed(id)}>Rerun failed</button>
+                  {r.url ? <Button onClick={() => onOpenExternal(r.url!)}>Open</Button> : null}
+                  <Button onClick={() => ci.loadLog(id)}>Log tail</Button>
+                  <Button onClick={() => ci.loadLog(id, true)}>Failed log</Button>
+                  <Button onClick={() => ci.rerunFailed(id)}>Rerun failed</Button>
                   <button className={`wt-btn${ci.watching === id ? ' primary-ghost' : ''}`} onClick={() => ci.toggleWatch(id)}>{ci.watching === id ? 'Watching…' : 'Watch'}</button>
                 </div>
                 {ci.runDetail && ci.runDetail.databaseId === id && ci.runDetail.jobs ? (

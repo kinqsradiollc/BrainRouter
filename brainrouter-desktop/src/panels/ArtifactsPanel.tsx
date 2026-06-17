@@ -14,6 +14,8 @@ import React, { useEffect, useState } from 'react';
 import type { ArtifactRecord, ArtifactKind, ArtifactStatus, AnnotationRecord } from '@kinqs/brainrouter-types';
 import remarkGfm from 'remark-gfm';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
+import { Button } from '../components/Button.js';
+import { Chip } from '../components/Badge.js';
 import {
   sortArtifacts, artifactCounts, kindLabel, statusClass,
   ARTIFACT_KIND_OPTIONS, ARTIFACT_STATUS_OPTIONS,
@@ -78,10 +80,10 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
           </label>
         </div>
         <div className="annot-counts">
-          <span className="req-link-chip">{counts.draft} draft</span>
-          <span className="req-link-chip">{counts.final} final</span>
-          <span className="req-link-chip">{counts.archived} archived</span>
-          <span className="req-link-chip">{counts.total} total</span>
+          <Chip>{counts.draft} draft</Chip>
+          <Chip>{counts.final} final</Chip>
+          <Chip>{counts.archived} archived</Chip>
+          <Chip>{counts.total} total</Chip>
         </div>
       </div>
 
@@ -150,7 +152,7 @@ function ArtifactDetail({ art, annotations, onSetStatus, onPreview, onSave, onAn
             {ARTIFACT_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </label>
-        <span className="req-link-chip">format: {art.format}</span>
+        <Chip>format: {art.format}</Chip>
       </div>
 
       {art.path ? <div className="annot-anchor-line">{art.path}</div> : null}
@@ -160,11 +162,11 @@ function ArtifactDetail({ art, annotations, onSetStatus, onPreview, onSave, onAn
         {onSave && (art.format === 'markdown' || art.format === 'text' || art.format === 'html') ? (
           editing ? (
             <span className="art-edit-actions">
-              <button className="wt-btn" onClick={() => { setDraft(content); setEditing(false); }}>Cancel</button>
-              <button className="wt-btn primary" onClick={() => { onSave(art.id, draft); setEditing(false); }}>Save{art.path ? ' to file' : ''}</button>
+              <Button onClick={() => { setDraft(content); setEditing(false); }}>Cancel</Button>
+              <Button variant="primary" onClick={() => { onSave(art.id, draft); setEditing(false); }}>Save{art.path ? ' to file' : ''}</Button>
             </span>
           ) : (
-            <button className="wt-btn" title={art.path ? `Edit and write back to ${art.path}` : 'Edit the artifact content'} onClick={() => { setDraft(content); setEditing(true); }}>Edit</button>
+            <Button title={art.path ? `Edit and write back to ${art.path}` : 'Edit the artifact content'} onClick={() => { setDraft(content); setEditing(true); }}>Edit</Button>
           )
         ) : null}
       </div>
@@ -199,10 +201,10 @@ function ArtifactDetail({ art, annotations, onSetStatus, onPreview, onSave, onAn
 
       <div className="tasks-section"><span>Links</span></div>
       <div className="req-links">
-        {art.requirementId ? <span className="req-link-chip">req {art.requirementId}</span> : null}
-        {art.taskId ? <span className="req-link-chip">task {art.taskId}</span> : null}
-        {art.sessionKey ? <span className="req-link-chip">session</span> : null}
-        <span className="req-link-chip">{art.linkedMemoryIds.length} memor{art.linkedMemoryIds.length === 1 ? 'y' : 'ies'}</span>
+        {art.requirementId ? <Chip>req {art.requirementId}</Chip> : null}
+        {art.taskId ? <Chip>task {art.taskId}</Chip> : null}
+        {art.sessionKey ? <Chip>session</Chip> : null}
+        <Chip>{art.linkedMemoryIds.length} memor{art.linkedMemoryIds.length === 1 ? 'y' : 'ies'}</Chip>
       </div>
     </div>
   );

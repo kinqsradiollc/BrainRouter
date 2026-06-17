@@ -9,6 +9,8 @@
  */
 import React, { useState } from 'react';
 import type { RequirementRecord, RequirementStatus, RequirementPriority } from '@kinqs/brainrouter-types';
+import { Button } from '../components/Button.js';
+import { Chip } from '../components/Badge.js';
 import {
   sortRequirements, linkCounts, priorityClass,
   REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
@@ -110,9 +112,9 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
             {REQUIREMENT_PRIORITY_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
-        <button className="wt-btn" disabled={req.acceptanceCriteria.length === 0}
+        <Button disabled={req.acceptanceCriteria.length === 0}
           title={req.acceptanceCriteria.length === 0 ? 'Add an acceptance criterion first' : 'Turn the acceptance criteria into this session\'s plan'}
-          onClick={() => onSeedPlan(req.id)}>Seed plan</button>
+          onClick={() => onSeedPlan(req.id)}>Seed plan</Button>
       </div>
 
       <div className="tasks-section"><span>Acceptance criteria</span></div>
@@ -143,9 +145,9 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
 
       <div className="tasks-section"><span>Links</span></div>
       <div className="req-links">
-        <span className="req-link-chip">{links.tasks} task{links.tasks === 1 ? '' : 's'}</span>
-        <span className="req-link-chip">{links.artifacts} artifact{links.artifacts === 1 ? '' : 's'}</span>
-        <span className="req-link-chip">{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</span>
+        <Chip>{links.tasks} task{links.tasks === 1 ? '' : 's'}</Chip>
+        <Chip>{links.artifacts} artifact{links.artifacts === 1 ? '' : 's'}</Chip>
+        <Chip>{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</Chip>
       </div>
     </div>
   );
