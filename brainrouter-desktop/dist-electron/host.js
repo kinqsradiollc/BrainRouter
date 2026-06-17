@@ -53,6 +53,12 @@ import { readPlan, formatPlan, seedPlanFromRequirement } from '@kinqs/brainroute
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement } from '@kinqs/brainrouter-cli/dist/state/requirementStore.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
+// ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
+// export (shared with the CLI). Thin wrappers below keep all business logic in
+// the CLI store; the desktop panel only reads/mutates through these endpoints.
+import { listAnnotations, createAnnotation, setStatus as setAnnotationStatus } from '@kinqs/brainrouter-cli/dist/state/annotationStore.js';
+import { annotationsToMarkdown } from '@kinqs/brainrouter-cli/dist/state/annotationExport.js';
+import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
 import { listSessions } from '@kinqs/brainrouter-cli/dist/orchestration/orchestrator.js';
 import { readRun } from '@kinqs/brainrouter-cli/dist/state/workflowRun.js';
@@ -184,6 +190,47 @@ function reconstructTranscriptRows(entries) {
     }
     flush();
     return rows;
+}
+/**
+ * ANNOTATION-RECORDS — narrow the renderer's loose query args to a typed,
+ * guard-validated {@link AnnotationFilter}. Unknown enum values are dropped
+ * rather than passed through, so a stale/bad filter just lists everything.
+ */
+function annotationFilterFromArgs(a) {
+    const filter = {};
+    if (isAnnotationStatus(a.status))
+        filter.status = a.status;
+    if (isAnnotationTargetKind(a.targetKind))
+        filter.targetKind = a.targetKind;
+    if (typeof a.file === 'string' && a.file)
+        filter.file = a.file;
+    if (typeof a.targetId === 'string' && a.targetId)
+        filter.targetId = a.targetId;
+    if (typeof a.requirementId === 'string' && a.requirementId)
+        filter.requirementId = a.requirementId;
+    return Object.keys(filter).length ? filter : undefined;
+}
+/**
+ * ANNOTATION-RECORDS — build an {@link AnnotationAnchor} from loose args, keeping
+ * only the meaningful fields. Returns undefined when nothing locational is set
+ * (the store then keeps the annotation anchor-less).
+ */
+function annotationAnchorFromArgs(raw) {
+    if (!raw || typeof raw !== 'object')
+        return undefined;
+    const a = raw;
+    const anchor = {};
+    if (typeof a.filePath === 'string' && a.filePath)
+        anchor.filePath = a.filePath;
+    if (typeof a.startLine === 'number')
+        anchor.startLine = a.startLine;
+    if (typeof a.endLine === 'number')
+        anchor.endLine = a.endLine;
+    if (typeof a.block === 'string' && a.block)
+        anchor.block = a.block;
+    if (typeof a.selectedText === 'string' && a.selectedText)
+        anchor.selectedText = a.selectedText;
+    return Object.keys(anchor).length ? anchor : undefined;
 }
 /**
  * DESK-5w — map a WORKER's event-log transcript (a different shape from the
@@ -806,6 +853,62 @@ async function main() {
                 }
                 return { ok: true, items: plan.items };
             },
+            // ANNOTATION-RECORDS (0.4.15) — durable feedback records anchored to a
+            // plan / requirement / artifact / doc / message / diff / file / review
+            // finding. Thin wrappers over the CLI's annotationStore + annotationExport
+            // (both already unit-tested) so the desktop panel and the terminal CLI
+            // share the same annotations.json. Enum inputs are guard-validated here so
+            // a bad targetKind/status/severity is rejected, not silently written.
+            'annotation-list': (a) => listAnnotations(workspaceRoot, annotationFilterFromArgs(a)),
+            'annotation-create': (a) => {
+                const type = a.type;
+                if (!isAnnotationTargetKind(type))
+                    return { error: `Unknown annotation target kind "${String(type)}".` };
+                const body = String(a.body ?? '').trim();
+                if (!body)
+                    return { error: 'Annotation body must be a non-empty string.' };
+                if (a.status !== undefined && !isAnnotationStatus(a.status))
+                    return { error: `Unknown annotation status "${String(a.status)}".` };
+                if (a.severity !== undefined && !isAnnotationSeverity(a.severity))
+                    return { error: `Unknown annotation severity "${String(a.severity)}".` };
+                const input = { type, body, sessionKey: activeAgent?.sessionKey };
+                if (typeof a.targetId === 'string' && a.targetId)
+                    input.targetId = a.targetId;
+                if (typeof a.requirementId === 'string' && a.requirementId)
+                    input.requirementId = a.requirementId;
+                if (typeof a.taskId === 'string' && a.taskId)
+                    input.taskId = a.taskId;
+                if (typeof a.artifactId === 'string' && a.artifactId)
+                    input.artifactId = a.artifactId;
+                if (typeof a.suggestedText === 'string' && a.suggestedText.trim())
+                    input.suggestedText = a.suggestedText;
+                if (typeof a.author === 'string' && a.author.trim())
+                    input.author = a.author.trim();
+                if (a.status !== undefined && isAnnotationStatus(a.status))
+                    input.status = a.status;
+                if (a.severity !== undefined && isAnnotationSeverity(a.severity))
+                    input.severity = a.severity;
+                const anchor = annotationAnchorFromArgs(a.anchor);
+                if (anchor)
+                    input.anchor = anchor;
+                try {
+                    return createAnnotation(workspaceRoot, input);
+                }
+                catch (err) {
+                    return { error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            'annotation-set-status': (a) => {
+                const id = String(a.id ?? '');
+                if (!isAnnotationStatus(a.status))
+                    return { error: `Unknown annotation status "${String(a.status)}".` };
+                const updated = setAnnotationStatus(workspaceRoot, id, a.status);
+                return updated ?? { error: `No annotation "${id}".` };
+            },
+            // Render the (optionally filtered) annotations as agent-readable markdown
+            // for the renderer to drop into the chat composer — the "export feedback
+            // to the session" path. Pure render; the composer draft is set renderer-side.
+            'annotation-export': (a) => ({ markdown: annotationsToMarkdown(listAnnotations(workspaceRoot, annotationFilterFromArgs(a))) }),
             // T12 / Review v2 — local AI review of the working tree. Gathers the diff,
             // runs ONE ephemeral review turn in an ISOLATED review: session (filtered
             // from the session picker — never pollutes the user's chats), parses

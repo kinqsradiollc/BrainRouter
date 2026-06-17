@@ -150,6 +150,57 @@ export function installDevBridge(): void {
       createdAt: nowIso(2 * 3600_000), updatedAt: nowIso(2 * 3600_000),
     },
   ];
+  // ANNOTATION-RECORDS — in-memory annotations so the panel renders populated in
+  // the browser preview (varied target kind / status / severity / anchor /
+  // suggestedText). Mirrors the host's annotationStore wrappers; the real store
+  // lives in the CLI. The status set + create mutate this list in place.
+  type DevAnnot = {
+    id: string; type: string; targetId?: string; body: string; workspaceRoot: string;
+    sessionKey?: string; requirementId?: string; taskId?: string; artifactId?: string;
+    anchor?: { filePath?: string; startLine?: number; endLine?: number; block?: string; selectedText?: string };
+    suggestedText?: string; severity?: string; status: string; author?: string;
+    linkedMemoryIds: string[]; createdAt: string; updatedAt: string;
+  };
+  let annotSeq = 4;
+  const devAnnotations: DevAnnot[] = [
+    {
+      id: 'ann_a1b2c3d4', type: 'review-finding', targetId: 'f0', body: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.',
+      workspaceRoot: wsCurrent, sessionKey: 'dev:fix-recall-blend', requirementId: 'req_a1b2c3d4',
+      anchor: { filePath: 'src/memory/recall.ts', startLine: 1247, endLine: 1249, selectedText: 'results.sort((a, b) => ranked[b] - ranked[a]);' },
+      suggestedText: 'const blended = reranked.map((r, i) => 0.6 * r.score + 0.4 * rrf[i]);\nresults.sort((a, b) => blended[b] - blended[a]);',
+      severity: 'high', status: 'open', author: 'review', linkedMemoryIds: ['mem_blend'],
+      createdAt: nowIso(2 * 3600_000), updatedAt: nowIso(2 * 3600_000),
+    },
+    {
+      id: 'ann_e5f6a7b8', type: 'file', body: 'This helper is duplicated in completionInbox.ts — extract a shared util.',
+      workspaceRoot: wsCurrent, anchor: { filePath: 'src/state/completionInbox.ts', startLine: 4 },
+      severity: 'medium', status: 'accepted', author: 'anhdang', linkedMemoryIds: [],
+      createdAt: nowIso(1 * 86400_000), updatedAt: nowIso(3600_000),
+    },
+    {
+      id: 'ann_c9d0e1f2', type: 'plan', taskId: 'task_2', body: 'Add a MemBench regression gate to this plan step before merging.',
+      workspaceRoot: wsCurrent, severity: 'low', status: 'resolved', linkedMemoryIds: [],
+      createdAt: nowIso(2 * 86400_000), updatedAt: nowIso(6 * 3600_000),
+    },
+    {
+      id: 'ann_b3c4d5e6', type: 'markdown', artifactId: 'art_9', body: 'The architecture doc still references the old 3-stage pipeline. Update to 4 stages.',
+      workspaceRoot: wsCurrent, anchor: { block: 'Recall pipeline', selectedText: '3-stage pipeline: retrieve → rerank → expand' },
+      suggestedText: '4-stage pipeline: retrieve → rerank → judge → expand',
+      severity: 'info', status: 'ignored', linkedMemoryIds: ['mem_arch', 'mem_pipeline'],
+      createdAt: nowIso(3 * 86400_000), updatedAt: nowIso(3 * 86400_000),
+    },
+  ];
+  const devAnnotMarkdown = (list: DevAnnot[]): string => {
+    if (list.length === 0) return '# Annotations\n\n_No annotations to export._\n';
+    const lines = ['# Annotations', ''];
+    for (const a of [...list].sort((x, y) => y.createdAt.localeCompare(x.createdAt))) {
+      const at = a.anchor?.filePath ? ` at ${a.anchor.filePath}${a.anchor.startLine ? `:${a.anchor.startLine}` : ''}` : '';
+      lines.push(`- **${a.id}** (${a.type}, status: ${a.status}${a.severity ? `, severity: ${a.severity}` : ''}${at})`, `  ${a.body}`);
+      if (a.suggestedText) lines.push('', '  Suggested:', '  ```', ...a.suggestedText.split('\n').map((l) => `  ${l}`), '  ```');
+      lines.push('');
+    }
+    return lines.join('\n');
+  };
 
   // Review v2 — a shared mock run + gate so the commit/push review gate is exercisable.
   const DEV_DIFF_HASH = 'devhash';
@@ -252,6 +303,35 @@ export function installDevBridge(): void {
       if (['draft', 'clarifying', 'ready'].includes(r.status)) r.status = 'in-progress';
       return { ok: true, items: r.acceptanceCriteria.map((c) => ({ step: c, status: 'pending', acceptance: c })) };
     },
+    // ANNOTATION-RECORDS — mock the annotationStore + annotationExport wrappers
+    // (mutate in-memory). Filtering ANDs status + targetKind, mirroring the host.
+    'annotation-list': (a) => devAnnotations
+      .filter((x) => (!a.status || x.status === a.status) && (!a.targetKind || x.type === a.targetKind))
+      .sort((x, y) => y.createdAt.localeCompare(x.createdAt)),
+    'annotation-create': (a) => {
+      const kinds = ['plan', 'requirement', 'artifact', 'markdown', 'html', 'message', 'diff', 'file', 'review-finding'];
+      if (!kinds.includes(String(a.type))) return { error: `Unknown annotation target kind "${String(a.type)}".` };
+      const body = String(a.body ?? '').trim();
+      if (!body) return { error: 'Annotation body must be a non-empty string.' };
+      const anchor = a.anchor && typeof a.anchor === 'object' ? (a.anchor as DevAnnot['anchor']) : undefined;
+      const rec: DevAnnot = {
+        id: `ann_dev${++annotSeq}`, type: String(a.type), body, workspaceRoot: wsCurrent, sessionKey: activeSession,
+        status: 'open', linkedMemoryIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      if (typeof a.targetId === 'string' && a.targetId) rec.targetId = a.targetId;
+      if (typeof a.severity === 'string') rec.severity = String(a.severity);
+      if (anchor) rec.anchor = anchor;
+      if (typeof a.suggestedText === 'string' && a.suggestedText) rec.suggestedText = a.suggestedText;
+      devAnnotations.unshift(rec); return rec;
+    },
+    'annotation-set-status': (a) => {
+      if (!['open', 'accepted', 'rejected', 'resolved', 'ignored'].includes(String(a.status))) return { error: `Unknown annotation status "${String(a.status)}".` };
+      const r = devAnnotations.find((x) => x.id === a.id);
+      if (!r) return { error: `No annotation "${String(a.id)}".` };
+      r.status = String(a.status); r.updatedAt = new Date().toISOString();
+      return r;
+    },
+    'annotation-export': (a) => ({ markdown: devAnnotMarkdown(devAnnotations.filter((x) => (!a.status || x.status === a.status) && (!a.targetKind || x.type === a.targetKind))) }),
     // T12 — mock a local review pass over the working diff.
     // Review v2 — shared run + gate so the commit/push gate is demonstrable.
     'review-diff': () => devRunReview(),

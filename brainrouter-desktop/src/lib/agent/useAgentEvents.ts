@@ -17,7 +17,7 @@ import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/b
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from '../../types.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
-import type { RequirementRecord } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
 import type { ConfigSnapshot } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
@@ -83,6 +83,7 @@ export interface AgentEventsCtx {
   setSearchHits: React.Dispatch<React.SetStateAction<SearchHit[] | null>>;
   setSchedules: React.Dispatch<React.SetStateAction<ScheduleRecordView[]>>;
   setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;
+  setAnnotations: React.Dispatch<React.SetStateAction<AnnotationRecord[]>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -134,7 +135,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
-    setSearchHits, setSchedules, setRequirements, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
@@ -365,6 +366,20 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-req-create': case 'q-req-update': case 'q-req-seed': {
         const r = result as { error?: string } | null;
         if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
+        return;
+      }
+      // ANNOTATION-RECORDS — the list populates the slice; status/create use their
+      // own ids and just refresh via q-annot (surfacing any error toast). Export
+      // round-trips the markdown into the composer draft (export-to-session path).
+      case 'q-annot': if (Array.isArray(result)) setAnnotations(result as AnnotationRecord[]); return;
+      case 'q-annot-status': case 'q-annot-create': {
+        const r = result as { error?: string } | null;
+        if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
+        return;
+      }
+      case 'q-annot-export': {
+        const r = result as { markdown?: string } | null;
+        if (r && typeof r.markdown === 'string') { setDraft(r.markdown); setToast('Annotations exported to the chat — press Enter to send the feedback to the agent.'); }
         return;
       }
       case 'q-worktrees': {

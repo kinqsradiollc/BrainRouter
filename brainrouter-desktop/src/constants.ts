@@ -28,6 +28,7 @@ export const VIEW_MENU: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'search', title: 'Search session', icon: 'search' },
   { id: 'schedule', title: 'Schedules', icon: 'clock' },
   { id: 'requirements', title: 'Requirements', icon: 'tasks' },
+  { id: 'annotations', title: 'Annotations', icon: 'review' },
   { id: 'context', title: 'Context', icon: 'layout-right' },
 ];
 

@@ -270,6 +270,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     q('q-pr', 'git-pr');
     q('q-gitlog', 'git-log'); // pinned Environment card shows the last commit
     q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — cheap store read; refresh after a turn
+    q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — cheap store read; refresh after a turn
     // Keep expanded project folders fresh (host caches make this cheap).
     for (const root of expandedProjectsRef.current) q(`q-wsess:${root}`, 'workspace-sessions', { root });
   }
