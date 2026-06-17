@@ -73,3 +73,11 @@ test('rich fields are simply absent when the model omits them (no crash)', () =>
   assert.equal(f.patch, undefined);
   assert.equal(f.codeExcerpt, undefined);
 });
+
+import { stripReasoning } from '../orchestration/reviewFindings.js';
+test('stripReasoning removes closed + unclosed think/reasoning blocks', () => {
+  assert.equal(stripReasoning('<think>plan is visible, 8 items</think>The fix is X.'), 'The fix is X.');
+  assert.equal(stripReasoning('<thinking>noise</thinking>\n\nClean summary.'), 'Clean summary.');
+  assert.equal(stripReasoning('<think>truncated reasoning with no close'), '');
+  assert.equal(stripReasoning('No reasoning here.'), 'No reasoning here.');
+});

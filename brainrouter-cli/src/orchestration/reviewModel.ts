@@ -98,7 +98,7 @@ export function reviewGate(run: ReviewRun | null, currentDiffHash: string, minSe
   if (blocking.length) {
     return { status: 'blocked', blocked: true, reason: `${blocking.length} unresolved ${minSeverity}+ finding(s) must be resolved, fixed, or dismissed.`, blockingFindings: blocking };
   }
-  return { status: 'clean', blocked: false, reason: 'Review passed — no unresolved blocking findings.', blockingFindings: [] };
+  return { status: 'clean', blocked: false, reason: 'No unresolved blocking findings.', blockingFindings: [] };
 }
 
 /** Apply a status change to one finding, returning a NEW run (updatedAt bumped). */
