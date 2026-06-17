@@ -1142,3 +1142,27 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 
 .stat-sub { font-size: 11.5px; color: var(--text-faint); font-weight: 500; }
 .home-recent { padding: 9px 12px; }
+
+/* T5 — in-app Monaco editor */
+.editor-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.editor-tabs { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); overflow-x: auto; flex: 0 0 auto; }
+.editor-tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
+.editor-tab:hover { background: var(--ov-1); color: var(--text); }
+.editor-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
+.editor-tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.editor-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; color: var(--text-faint); }
+.editor-tab-x:hover { background: var(--ov-2); color: var(--text); }
+.editor-dirty-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
+.editor-tab-empty { font-size: 12px; color: var(--text-faint); padding: 4px 8px; }
+.editor-tabs-spacer { flex: 1 1 auto; }
+.editor-act { font-size: 11.5px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); }
+.editor-act:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.editor-act:disabled { opacity: 0.4; cursor: default; }
+.editor-conflict { font-size: 12px; color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.editor-banner { font-size: 11.5px; color: var(--text-faint); background: var(--surface); padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.editor-body { flex: 1 1 auto; min-height: 0; position: relative; }
+.editor-preview-card { gap: 8px; }
+.editor-status { display: flex; align-items: center; gap: 12px; padding: 4px 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); flex: 0 0 auto; }
+.editor-status-path { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-status-dirty { color: var(--accent); }
+.editor-status-clean { color: var(--text-faint); }
