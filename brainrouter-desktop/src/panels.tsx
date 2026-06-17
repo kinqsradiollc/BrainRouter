@@ -11,10 +11,10 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Prism } from 'react-syntax-highlighter';
 import { Icon } from './icons.js';
-import { partitionSchedules, describeSchedule, relTime, type ScheduleRecordView } from './scheduleView.js';
-import { type WorktreeEntry } from './worktreeParser.js';
-import { findingRows } from './reviewCode.js';
-import { commitBlocked } from './reviewGateUi.js';
+import { partitionSchedules, describeSchedule, relTime, type ScheduleRecordView } from './lib/schedule/scheduleView.js';
+import { type WorktreeEntry } from './lib/worktree/worktreeParser.js';
+import { findingRows } from './lib/review/reviewCode.js';
+import { commitBlocked } from './lib/review/reviewGateUi.js';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Same @types/react clash as react-markdown — runtime component is fine.
