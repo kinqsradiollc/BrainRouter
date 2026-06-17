@@ -586,11 +586,13 @@ input.ctl { min-width: 220px; }
 /* §4 — file finding badge in the Changes list */
 .file-findings { flex: none; min-width: 16px; text-align: center; font-size: 10px; font-weight: 600; color: #ffb3a8; background: rgba(255,161,152,0.16); border-radius: 999px; padding: 1px 6px; margin-left: auto; }
 .file-row .file-findings + .icon-btn { margin-left: 6px; }
-/* §7 — explicit bypass row when the gate blocks */
-.review-bypass { display: flex; gap: 6px; margin: 4px 0 2px; }
-.bypass-btn { flex: 1; border: 1px dashed var(--border-strong); background: transparent; color: var(--text-faint); font-size: 11px; padding: 4px 8px; border-radius: 7px; cursor: pointer; }
-.bypass-btn:hover:not(:disabled) { color: #ffa198; border-color: #ffa198; }
-.bypass-btn:disabled { opacity: 0.45; cursor: default; }
+/* §7 — one "skip review" toggle (replaces the old duplicate bypass buttons). */
+.review-skip { display: flex; align-items: center; gap: 7px; margin: 6px 2px 2px; font-size: 11.5px; color: var(--text-dim); cursor: pointer; user-select: none; }
+.review-skip input { accent-color: var(--warn); cursor: pointer; }
+.review-skip:hover { color: var(--text); }
+/* When "skip review" is on, the normal Commit/Push turn amber to signal a bypass. */
+.btn.bypass { border-color: var(--warn); color: var(--warn); }
+.btn.bypass:hover:not(:disabled) { background: color-mix(in srgb, var(--warn) 16%, transparent); }
 /* Wave 7 — review status surfaced in the Changes/Diff area */
 .diff-review-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; padding: 6px 10px; border-radius: 8px; font-size: 11.5px; font-weight: 560; }
 .diff-review-status .drs-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1185,16 +1187,19 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .ci-dot.ok { background: var(--ok); } .ci-dot.fail { background: var(--err); }
 .ci-dot.pending { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
 .ci-dot.cancel { background: var(--text-faint); } .ci-dot.neutral { background: var(--text-faint); }
-.ci-check { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; }
+.ci-check { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; text-align: left; }
 .ci-check:hover { background: var(--ov-1); }
-.ci-check-name { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ci-check-wf { font-size: 11px; color: var(--text-faint); }
-.ci-check-dur { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ci-check-name { flex: 1 1 auto; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-check-wf { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); }
+.ci-check-dur { flex: 0 0 auto; min-width: 46px; text-align: right; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .ci-run { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; overflow: hidden; }
 .ci-run-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; font-size: 12px; text-align: left; }
 .ci-run-head:hover { background: var(--ov-1); }
-.ci-run-title { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ci-run-meta { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+/* min-width:0 lets the title ellipsize instead of stretching/centering the row. */
+.ci-run-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.ci-run-title { max-width: 100%; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-run-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.ci-run-head .step-chevron { flex: 0 0 auto; }
 .ci-run-body { padding: 8px 9px; border-top: 1px solid var(--border); background: var(--bg); }
 .ci-run-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .ci-jobs { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }

@@ -29,9 +29,20 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
   findingsByFile?: Record<string, number>;
 }): React.ReactElement {
   const [msg, setMsg] = useState('');
-  const commit = () => { if (msg.trim() && changed.length) { onGit?.('commit', msg.trim()); setMsg(''); } };
+  const [skipReview, setSkipReview] = useState(false);
   const blocked = commitBlocked(reviewGate, changed.length);
   const reason = reviewGate?.reason ?? '';
+  // One control governs the gate: when blocked, Commit/Push stay disabled until
+  // either the review passes OR "without review" is ticked (then they route to
+  // the explicit bypass). No duplicate button rows.
+  const gated = blocked && !skipReview;
+  const bypassing = blocked && skipReview;
+  const commit = () => {
+    if (!msg.trim() || !changed.length || gitBusy) return;
+    if (bypassing) onGitBypass?.('commit', msg.trim()); else onGit?.('commit', msg.trim());
+    setMsg('');
+  };
+  const push = () => { if (gitBusy) return; if (bypassing) onGitBypass?.('push'); else onGit?.('push'); };
   return (
     <>
       {gitInfo?.branch ? (
@@ -56,17 +67,20 @@ export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, 
               value={msg} disabled={!changed.length || gitBusy}
               onChange={(e) => setMsg(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') commit(); }} />
-            {/* §7 — when blocked, the primary Commit/Push are DISABLED (use Run review
-                or the explicit bypass below); when clean, they proceed as reviewed. */}
-            <button className="btn" disabled={!changed.length || !msg.trim() || gitBusy || blocked} title={blocked ? reason : undefined} onClick={commit}>Commit</button>
-            <button className="btn" disabled={gitBusy || blocked} title={blocked ? reason : undefined} onClick={() => onGit('push')}>Push</button>
+            {/* One Commit/one Push button. When the review gate blocks, they stay
+                disabled until the review passes OR "without review" is ticked —
+                then they turn amber and route to the explicit bypass. */}
+            <button className={`btn${bypassing ? ' bypass' : ''}`} disabled={!changed.length || !msg.trim() || gitBusy || gated}
+              title={gated ? reason : bypassing ? 'Commit WITHOUT a passing review' : undefined} onClick={commit}>Commit</button>
+            <button className={`btn${bypassing ? ' bypass' : ''}`} disabled={gitBusy || gated}
+              title={gated ? reason : bypassing ? 'Push WITHOUT a passing review' : undefined} onClick={push}>Push</button>
             <button className="btn" disabled={gitBusy} onClick={() => onGit('pull')}>Pull</button>
           </div>
           {blocked && onGitBypass ? (
-            <div className="review-bypass">
-              <button className="bypass-btn" disabled={!changed.length || !msg.trim() || gitBusy} onClick={() => { onGitBypass('commit', msg.trim()); setMsg(''); }}>Commit without review</button>
-              <button className="bypass-btn" disabled={gitBusy} onClick={() => onGitBypass('push')}>Push without review</button>
-            </div>
+            <label className="review-skip" title="Commit/push without waiting for a passing review">
+              <input type="checkbox" checked={skipReview} onChange={(e) => setSkipReview(e.target.checked)} />
+              <span>Commit / push without review</span>
+            </label>
           ) : null}
         </>
       ) : null}
