@@ -27,6 +27,7 @@ import {
   listRequirements,
   linkRequirement,
 } from '../../state/requirementStore.js';
+import { seedPlanFromRequirement, formatPlan } from '../../state/taskStore.js';
 import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -133,6 +134,33 @@ export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<
     if (meaningful) {
       await captureRequirementNote(ctx, updated, flags.status ? `status → ${updated.status}` : 'criterion added');
     }
+    return true;
+  }
+
+  if (sub === 'seed-plan' || sub === 'plan') {
+    const id = rest[0];
+    if (!id) {
+      console.log(chalk.red('\nUsage: /requirement seed-plan <id>\n'));
+      return true;
+    }
+    const r = getRequirement(agent.workspaceRoot, id);
+    if (!r) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    if (r.acceptanceCriteria.length === 0) {
+      console.log(chalk.yellow(`\nRequirement "${id}" has no acceptance criteria yet. Add some first: /requirement update ${id} --criteria "<text>"\n`));
+      return true;
+    }
+    // Seed one pending plan item per acceptance criterion, anchored to the
+    // requirement, into THIS session's plan.
+    const plan = seedPlanFromRequirement(agent.workspaceRoot, r, agent.sessionKey);
+    // Starting work on a draft/clarifying/ready requirement moves it to in-progress.
+    const early = r.status === 'draft' || r.status === 'clarifying' || r.status === 'ready';
+    const updated = (early ? updateRequirement(agent.workspaceRoot, id, { status: 'in-progress' }) : r) ?? r;
+    console.log(chalk.green(`\n✓ Seeded ${plan.items.length} plan item(s) from requirement ${chalk.cyan(r.id)} [${statusColor(updated.status)}]`));
+    console.log(formatPlan(plan));
+    await captureRequirementNote(ctx, updated, 'plan seeded');
     return true;
   }
 
@@ -296,5 +324,6 @@ function printUsage(): void {
   console.log(chalk.gray('  /requirement update <id> --status <s>       Change status (draft|clarifying|ready|in-progress|done|archived)'));
   console.log(chalk.gray('  /requirement update <id> --priority <p>     Change priority (low|medium|high)'));
   console.log(chalk.gray('  /requirement update <id> --criteria "<c>"   Append an acceptance criterion'));
+  console.log(chalk.gray('  /requirement seed-plan <id>                 Seed this session\'s plan from the acceptance criteria'));
   console.log();
 }
