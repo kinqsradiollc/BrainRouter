@@ -8,9 +8,9 @@ import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'rea
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
@@ -155,6 +155,8 @@ export function App(): React.ReactElement {
   const [requirements, setRequirements] = useState<RequirementRecord[]>([]);
   // ANNOTATION-RECORDS — this workspace's durable feedback records, from the CLI store.
   const [annotations, setAnnotations] = useState<AnnotationRecord[]>([]);
+  // ARTIFACT-RECORDS — this workspace's durable Artifact Records, from the CLI store.
+  const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
@@ -433,7 +435,7 @@ export function App(): React.ReactElement {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
@@ -714,6 +716,16 @@ export function App(): React.ReactElement {
           onExport={(filter) => { q('q-annot-export', 'annotation-export', filter); }}
           onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
       }
+      case 'artifacts': {
+        // ARTIFACT-RECORDS — create/status-set re-fetch the list; Preview resolves
+        // the artifact's content via q-art-read (file via the safe workspace read,
+        // or inline), which merges the content back onto the matching record.
+        const refresh = () => setTimeout(() => q('q-art', 'artifact-list'), 150);
+        return <ArtifactsPanel artifacts={artifacts}
+          onCreate={(title) => { q('q-art-create', 'artifact-create', { kind: 'markdown-report', title }); refresh(); }}
+          onSetStatus={(id, status) => { q('q-art-update', 'artifact-update', { id, status }); refresh(); }}
+          onPreview={(a) => { q('q-art-read', 'artifact-read', { id: a.id }); }} />;
+      }
       default: return null;
     }
   };
@@ -778,7 +790,7 @@ export function App(): React.ReactElement {
             pop={pop} setPop={setPop} ensurePanel={ensurePanel} openBottomDock={openBottomDock} tabTitle={tabTitle}
             renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
             activeSessionTasks={activeSessionTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
-            worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} ci={ci} />
+            worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci} />
         </div>
 
         <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}

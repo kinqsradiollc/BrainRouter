@@ -88,6 +88,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
     if (id === 'requirements') q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — list on open
     if (id === 'annotations') q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — list on open
+    if (id === 'artifacts') q('q-art', 'artifact-list'); // ARTIFACT-RECORDS — list on open
     if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
