@@ -24,6 +24,7 @@ import { tryHandleLoginCommand } from './commands/login.js';
 import { tryHandleScheduleCommand } from './commands/schedule.js';
 import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 import { tryHandleRequirementCommand } from './commands/requirement.js';
+import { tryHandleAnnotationCommand } from './commands/annotation.js';
 import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/customCommands.js';
 
 /**
@@ -37,7 +38,7 @@ export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
   '/doctor', '/policy', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
-  '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement',
+  '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/annotation',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain', '/blackboard',
   '/init', '/login', '/sessions', '/export-chat', '/find', '/recap', '/chapters', '/resume', '/rewind', '/model', '/mcp',
   '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
@@ -133,6 +134,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
       { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
       { cmd: '/requirement create <title> | list | show <id> | update <id> --status/--priority/--criteria', desc: 'Structured requirement records anchored to a session (status, priority, acceptance criteria)' },
+      { cmd: '/annotation add <kind> <id> <body> | list | show <id> | status <id> <s> | export', desc: 'Durable feedback records (alias /annot): anchor to plans/reqs/files/diffs/findings, suggest code, export to markdown' },
       { cmd: '/workflows [slug]', desc: 'List durable workflows with live run progress; <slug> drills into the step timeline' },
       { cmd: '/workflow switch <slug>', desc: 'Refocus on an existing workflow (migrates any session goal into the target)' },
       { cmd: '/workflow pause', desc: 'Pause the current workflow\'s goal' },
@@ -332,6 +334,7 @@ export async function handleSlashCommand(
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;
   if (await tryHandleRequirementCommand(cmdCtx)) return;
+  if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;
