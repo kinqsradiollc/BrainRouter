@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'reset-desktop.mjs');
+const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reset-desktop.mjs');
 const run = (args: string[], env: Record<string, string>) =>
   spawnSync('node', [SCRIPT, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
 

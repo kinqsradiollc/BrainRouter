@@ -7,7 +7,7 @@
  * sees it on next launch (and vice versa).
  */
 import React, { useMemo, useState } from 'react';
-import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
+import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 
 export interface ConfigSnapshot {
