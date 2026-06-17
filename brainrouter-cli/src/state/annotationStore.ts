@@ -17,9 +17,11 @@ import { randomUUID } from 'node:crypto';
 import {
   type AnnotationRecord,
   type AnnotationAnchor,
+  type AnnotationComment,
   type AnnotationStatus,
   type AnnotationSeverity,
   type AnnotationTargetKind,
+  hashAnchorText,
 } from '@kinqs/brainrouter-types';
 import { getCliStateFile, readJsonFile, writeJsonFile } from './cliState.js';
 
@@ -92,7 +94,15 @@ export function createAnnotation(
   if (input.requirementId) record.requirementId = input.requirementId;
   if (input.taskId) record.taskId = input.taskId;
   if (input.artifactId) record.artifactId = input.artifactId;
-  if (input.anchor && hasAnchorContent(input.anchor)) record.anchor = { ...input.anchor };
+  if (input.anchor && hasAnchorContent(input.anchor)) {
+    const anchor: AnnotationAnchor = { ...input.anchor };
+    // §6 — fingerprint the quoted text so later edits can be detected as stale.
+    if (anchor.selectedText && !anchor.contentHash) {
+      const hash = hashAnchorText(anchor.selectedText);
+      if (hash) anchor.contentHash = hash;
+    }
+    record.anchor = anchor;
+  }
   const suggested = input.suggestedText?.trim();
   if (suggested) record.suggestedText = suggested;
   if (input.severity) record.severity = input.severity;
@@ -144,6 +154,34 @@ export function setStatus(
   status: AnnotationStatus,
 ): AnnotationRecord | undefined {
   return updateAnnotation(workspaceRoot, id, { status });
+}
+
+/**
+ * §6 COMMENT THREADS — append a comment to an annotation's discussion thread
+ * and bump `updatedAt`. Generates a `cmt_<8hex>` id. Returns the updated record,
+ * or `undefined` when the id doesn't exist; throws on an empty body (matching
+ * createAnnotation's contract). The opening `body` is the first message; these
+ * are the follow-ups.
+ */
+export function addComment(
+  workspaceRoot: string,
+  id: string,
+  body: string,
+  author?: string,
+): AnnotationRecord | undefined {
+  const text = body?.trim();
+  if (!text) throw new Error('Comment body must be a non-empty string.');
+  const existing = getAnnotation(workspaceRoot, id);
+  if (!existing) return undefined;
+  const comment: AnnotationComment = {
+    id: `cmt_${randomUUID().slice(0, 8)}`,
+    body: text,
+    createdAt: new Date().toISOString(),
+  };
+  const who = author?.trim();
+  if (who) comment.author = who;
+  const comments = [...(existing.comments ?? []), comment];
+  return updateAnnotation(workspaceRoot, id, { comments });
 }
 
 export interface AnnotationFilter {

@@ -395,7 +395,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // own ids and just refresh via q-annot (surfacing any error toast). Export
       // round-trips the markdown into the composer draft (export-to-session path).
       case 'q-annot': if (Array.isArray(result)) setAnnotations(result as AnnotationRecord[]); return;
-      case 'q-annot-status': case 'q-annot-create': {
+      case 'q-annot-status': case 'q-annot-create': case 'q-annot-comment': {
         const r = result as { error?: string } | null;
         if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
         return;

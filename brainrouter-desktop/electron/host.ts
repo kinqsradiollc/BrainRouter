@@ -62,9 +62,9 @@ import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-t
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
 // the CLI store; the desktop panel only reads/mutates through these endpoints.
-import { listAnnotations, createAnnotation, setStatus as setAnnotationStatus, type AnnotationFilter, type CreateAnnotationInput } from '@kinqs/brainrouter-cli/dist/state/annotationStore.js';
+import { listAnnotations, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment, type AnnotationFilter, type CreateAnnotationInput } from '@kinqs/brainrouter-cli/dist/state/annotationStore.js';
 import { annotationsToMarkdown } from '@kinqs/brainrouter-cli/dist/state/annotationExport.js';
-import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, type AnnotationAnchor } from '@kinqs/brainrouter-types';
+import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, isAnchorStale, type AnnotationAnchor, type AnnotationRecord } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
 // desktop panel only reads/mutates/previews through these endpoints.
@@ -217,6 +217,31 @@ function reconstructTranscriptRows(
   }
   flush();
   return rows;
+}
+
+/**
+ * §6 STALE DETECTION — attach a transient `stale` flag to a record whose code
+ * anchor (filePath + line range + contentHash) no longer matches the file on
+ * disk. Reads the current lines through the SAME safe workspace read the editor
+ * uses, slices the anchored range, and re-hashes via {@link isAnchorStale}. Any
+ * read failure (missing/binary/oversize) → not stale, so a transient glitch
+ * never raises a false alarm. Records with no code-anchor fingerprint pass
+ * through untouched.
+ */
+function annotateStale(workspaceRoot: string, rec: AnnotationRecord): AnnotationRecord & { stale?: boolean } {
+  const anchor = rec.anchor;
+  if (!anchor?.filePath || !anchor.contentHash || anchor.startLine === undefined) return rec;
+  try {
+    const entry = readWorkspaceEntry(workspaceRoot, anchor.filePath);
+    if (entry.kind !== 'file' || entry.error) return rec;
+    const lines = entry.content.split('\n');
+    const start = Math.max(0, anchor.startLine - 1);
+    const end = anchor.endLine !== undefined ? anchor.endLine : anchor.startLine;
+    const current = lines.slice(start, end).join('\n');
+    return { ...rec, stale: isAnchorStale(anchor, current) };
+  } catch {
+    return rec;
+  }
 }
 
 /**
@@ -813,7 +838,10 @@ async function main(): Promise<void> {
       // (both already unit-tested) so the desktop panel and the terminal CLI
       // share the same annotations.json. Enum inputs are guard-validated here so
       // a bad targetKind/status/severity is rejected, not silently written.
-      'annotation-list': (a) => listAnnotations(workspaceRoot, annotationFilterFromArgs(a)),
+      // §6 — list, augmented with a transient `stale` flag for file-anchored
+      // annotations whose quoted code has since changed (re-hash the current lines
+      // and compare against the recorded fingerprint). Read failure → not stale.
+      'annotation-list': (a) => listAnnotations(workspaceRoot, annotationFilterFromArgs(a)).map((rec) => annotateStale(workspaceRoot, rec)),
       'annotation-create': (a) => {
         const type = a.type;
         if (!isAnnotationTargetKind(type)) return { error: `Unknown annotation target kind "${String(type)}".` };
@@ -843,6 +871,19 @@ async function main(): Promise<void> {
         if (!isAnnotationStatus(a.status)) return { error: `Unknown annotation status "${String(a.status)}".` };
         const updated = setAnnotationStatus(workspaceRoot, id, a.status);
         return updated ?? { error: `No annotation "${id}".` };
+      },
+      // §6 COMMENT THREADS — append a comment to an annotation's discussion.
+      'annotation-add-comment': (a) => {
+        const id = String(a.id ?? '');
+        const body = typeof a.body === 'string' ? a.body.trim() : '';
+        if (!body) return { error: 'Comment body must be a non-empty string.' };
+        const author = typeof a.author === 'string' && a.author.trim() ? a.author.trim() : undefined;
+        try {
+          const updated = addAnnotationComment(workspaceRoot, id, body, author);
+          return updated ? annotateStale(workspaceRoot, updated) : { error: `No annotation "${id}".` };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
       },
       // Render the (optionally filtered) annotations as agent-readable markdown
       // for the renderer to drop into the chat composer — the "export feedback

@@ -15,14 +15,19 @@ import {
   ANNOTATION_STATUS_OPTIONS, ANNOTATION_TARGET_KIND_OPTIONS,
 } from '../lib/annotations/annotationsView.js';
 
+// §6 — the host augments each record with a transient `stale` flag (computed by
+// re-hashing the anchored lines), so the panel works with this row shape.
+type AnnotationRow = AnnotationRecord & { stale?: boolean };
+
 const TARGET_KIND_FILTER: Array<'' | AnnotationTargetKind> = ['', ...ANNOTATION_TARGET_KIND_OPTIONS];
 const STATUS_FILTER: Array<'' | AnnotationStatus> = ['', ...ANNOTATION_STATUS_OPTIONS];
 
-export function AnnotationsPanel({ annotations, onSetStatus, onExport, onSelectTarget }: {
-  annotations: AnnotationRecord[];
+export function AnnotationsPanel({ annotations, onSetStatus, onExport, onSelectTarget, onAddComment }: {
+  annotations: AnnotationRow[];
   onSetStatus: (id: string, status: AnnotationStatus) => void;
   onExport: (filter: { status?: AnnotationStatus; targetKind?: AnnotationTargetKind }) => void;
   onSelectTarget?: (a: AnnotationRecord) => void;
+  onAddComment?: (id: string, body: string) => void;
 }): React.ReactElement {
   const [statusFilter, setStatusFilter] = useState<'' | AnnotationStatus>('');
   const [kindFilter, setKindFilter] = useState<'' | AnnotationTargetKind>('');
@@ -30,7 +35,7 @@ export function AnnotationsPanel({ annotations, onSetStatus, onExport, onSelectT
 
   const filtered = annotations.filter((a) =>
     (!statusFilter || a.status === statusFilter) && (!kindFilter || a.type === kindFilter));
-  const sorted = sortAnnotations(filtered);
+  const sorted = sortAnnotations(filtered) as AnnotationRow[]; // sortAnnotations only reorders — the transient `stale` field rides along.
   const counts = annotationCounts(annotations);
   // Keep a valid selection: the first row, unless the user picked one still in view.
   const selected = sorted.find((a) => a.id === selectedId) ?? sorted[0] ?? null;
@@ -82,13 +87,14 @@ export function AnnotationsPanel({ annotations, onSetStatus, onExport, onSelectT
                 <span className={`req-status ${statusClass(a.status)}`}>{a.status}</span>
                 <span className="annot-kind">{a.type}</span>
                 <span className="req-title">{a.body}</span>
+                {a.stale ? <span className="annot-stale" title="The anchored code has changed since this annotation was made">⚠ stale</span> : null}
                 {loc ? <span className="annot-anchor" title={loc}>{loc}</span> : null}
                 <span className="req-id">{a.id}</span>
               </button>
             );
           })}
 
-          {selected ? <AnnotationDetail ann={selected} onSetStatus={onSetStatus} onSelectTarget={onSelectTarget} /> : null}
+          {selected ? <AnnotationDetail ann={selected} onSetStatus={onSetStatus} onSelectTarget={onSelectTarget} onAddComment={onAddComment} /> : null}
         </>
       )}
 
@@ -97,13 +103,20 @@ export function AnnotationsPanel({ annotations, onSetStatus, onExport, onSelectT
   );
 }
 
-function AnnotationDetail({ ann, onSetStatus, onSelectTarget }: {
-  ann: AnnotationRecord;
+function AnnotationDetail({ ann, onSetStatus, onSelectTarget, onAddComment }: {
+  ann: AnnotationRow;
   onSetStatus: (id: string, status: AnnotationStatus) => void;
   onSelectTarget?: (a: AnnotationRecord) => void;
+  onAddComment?: (id: string, body: string) => void;
 }): React.ReactElement {
   const links = annotationLinkCounts(ann);
   const loc = anchorLabel(ann.anchor);
+  const [comment, setComment] = useState('');
+  const submitComment = (): void => {
+    if (!onAddComment || !comment.trim()) return;
+    onAddComment(ann.id, comment.trim());
+    setComment('');
+  };
   return (
     <div className="req-detail">
       <div className="req-detail-head">
@@ -128,9 +141,9 @@ function AnnotationDetail({ ann, onSetStatus, onSelectTarget }: {
 
       {loc || ann.anchor?.selectedText ? (
         <>
-          <div className="tasks-section"><span>Anchor</span></div>
+          <div className="tasks-section"><span>Anchor{ann.stale ? <span className="annot-stale"> ⚠ stale — code changed</span> : null}</span></div>
           {loc ? <div className="annot-anchor-line">{loc}</div> : null}
-          {ann.anchor?.selectedText ? <pre className="annot-quote">{ann.anchor.selectedText}</pre> : null}
+          {ann.anchor?.selectedText ? <pre className={`annot-quote${ann.stale ? ' stale' : ''}`}>{ann.anchor.selectedText}</pre> : null}
         </>
       ) : null}
 
@@ -139,6 +152,25 @@ function AnnotationDetail({ ann, onSetStatus, onSelectTarget }: {
           <div className="tasks-section"><span>Suggested</span></div>
           <pre className="annot-suggested">{ann.suggestedText}</pre>
         </>
+      ) : null}
+
+      <div className="tasks-section"><span>Thread{ann.comments?.length ? ` (${ann.comments.length})` : ''}</span></div>
+      {ann.comments?.length ? (
+        <ul className="annot-thread">
+          {ann.comments.map((c) => (
+            <li key={c.id} className="annot-comment">
+              <div className="annot-comment-meta">{c.author ? <span className="annot-comment-author">{c.author}</span> : null}<span className="dim">{fmtTime(c.createdAt)}</span></div>
+              <div className="annot-comment-body">{c.body}</div>
+            </li>
+          ))}
+        </ul>
+      ) : <div className="empty">No comments yet.</div>}
+      {onAddComment ? (
+        <div className="sched-add-row">
+          <input className="filter" placeholder="add a comment to this thread" value={comment}
+            onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitComment(); }} />
+          <button className="sched-add-btn" onClick={submitComment} disabled={!comment.trim()}>Comment</button>
+        </div>
       ) : null}
 
       <div className="tasks-section"><span>Links</span></div>
@@ -151,4 +183,8 @@ function AnnotationDetail({ ann, onSetStatus, onSelectTarget }: {
       </div>
     </div>
   );
+}
+
+function fmtTime(iso: string): string {
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }

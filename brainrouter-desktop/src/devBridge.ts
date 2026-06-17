@@ -157,8 +157,10 @@ export function installDevBridge(): void {
   type DevAnnot = {
     id: string; type: string; targetId?: string; body: string; workspaceRoot: string;
     sessionKey?: string; requirementId?: string; taskId?: string; artifactId?: string;
-    anchor?: { filePath?: string; startLine?: number; endLine?: number; block?: string; selectedText?: string };
+    anchor?: { filePath?: string; startLine?: number; endLine?: number; block?: string; selectedText?: string; contentHash?: string };
     suggestedText?: string; severity?: string; status: string; author?: string;
+    comments?: Array<{ id: string; body: string; author?: string; createdAt: string }>;
+    stale?: boolean;
     linkedMemoryIds: string[]; createdAt: string; updatedAt: string;
   };
   let annotSeq = 4;
@@ -166,9 +168,15 @@ export function installDevBridge(): void {
     {
       id: 'ann_a1b2c3d4', type: 'review-finding', targetId: 'f0', body: 'Reranker score replaces retriever order — good candidates are hard-dropped instead of blended.',
       workspaceRoot: wsCurrent, sessionKey: 'dev:fix-recall-blend', requirementId: 'req_a1b2c3d4',
-      anchor: { filePath: 'src/memory/recall.ts', startLine: 1247, endLine: 1249, selectedText: 'results.sort((a, b) => ranked[b] - ranked[a]);' },
+      anchor: { filePath: 'src/memory/recall.ts', startLine: 1247, endLine: 1249, selectedText: 'results.sort((a, b) => ranked[b] - ranked[a]);', contentHash: 'deadbeef' },
       suggestedText: 'const blended = reranked.map((r, i) => 0.6 * r.score + 0.4 * rrf[i]);\nresults.sort((a, b) => blended[b] - blended[a]);',
       severity: 'high', status: 'open', author: 'review', linkedMemoryIds: ['mem_blend'],
+      // §6 — a seeded comment thread + a stale anchor (the code at recall.ts:1247 moved since this was made).
+      comments: [
+        { id: 'cmt_seed1', body: 'Confirmed — the hard sort drops blended candidates. Will switch to the rrf blend.', author: 'anhdang', createdAt: nowIso(90 * 60_000) },
+        { id: 'cmt_seed2', body: 'Fix is in; re-running the recall benchmark to confirm the win.', author: 'agent', createdAt: nowIso(30 * 60_000) },
+      ],
+      stale: true,
       createdAt: nowIso(2 * 3600_000), updatedAt: nowIso(2 * 3600_000),
     },
     {
@@ -381,6 +389,16 @@ export function installDevBridge(): void {
       const r = devAnnotations.find((x) => x.id === a.id);
       if (!r) return { error: `No annotation "${String(a.id)}".` };
       r.status = String(a.status); r.updatedAt = new Date().toISOString();
+      return r;
+    },
+    // §6 COMMENT THREADS — append a comment to the in-memory thread so the panel updates live.
+    'annotation-add-comment': (a) => {
+      const body = typeof a.body === 'string' ? a.body.trim() : '';
+      if (!body) return { error: 'Comment body must be a non-empty string.' };
+      const r = devAnnotations.find((x) => x.id === a.id);
+      if (!r) return { error: `No annotation "${String(a.id)}".` };
+      r.comments = [...(r.comments ?? []), { id: `cmt_${(annotSeq++).toString(16).padStart(8, '0')}`, body, createdAt: new Date().toISOString() }];
+      r.updatedAt = new Date().toISOString();
       return r;
     },
     'annotation-export': (a) => ({ markdown: devAnnotMarkdown(devAnnotations.filter((x) => (!a.status || x.status === a.status) && (!a.targetKind || x.type === a.targetKind))) }),
