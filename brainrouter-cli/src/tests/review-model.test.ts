@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hashDiff, reviewGate, unresolvedBlocking, setFindingStatus, staleIfDiffChanged, type ReviewRun, type ReviewFinding } from '../orchestration/reviewModel.js';
+import { hashDiff, reviewGate, unresolvedBlocking, setFindingStatus, staleIfDiffChanged, isFindingStatus, FINDING_STATUSES, TRIAGE_STATUSES, type ReviewRun, type ReviewFinding } from '../orchestration/reviewModel.js';
 
 const finding = (over: Partial<ReviewFinding>): ReviewFinding => ({
   id: 'f1', file: 'a.ts', severity: 'high', confidence: 90, summary: 's', status: 'open', canApply: false, source: 'ai-review', ...over,
@@ -41,6 +41,20 @@ test('gate: a dismissed/fixed/applied HIGH finding no longer blocks', () => {
     const g = reviewGate(run({ findings: [finding({ severity: 'high', status: st })] }), 'h1');
     assert.equal(g.blocked, false, `${st} should not block`);
   }
+});
+
+test('gate: triage statuses (acknowledged/disputed/out-of-scope) clear a HIGH finding', () => {
+  for (const st of TRIAGE_STATUSES) {
+    const g = reviewGate(run({ findings: [finding({ severity: 'critical', status: st })] }), 'h1');
+    assert.equal(g.blocked, false, `${st} should not block`);
+  }
+  // sanity: an OPEN critical still blocks
+  assert.equal(reviewGate(run({ findings: [finding({ severity: 'critical', status: 'open' })] }), 'h1').blocked, true);
+});
+
+test('isFindingStatus narrows known statuses and rejects junk', () => {
+  for (const st of FINDING_STATUSES) assert.equal(isFindingStatus(st), true, st);
+  for (const bad of ['', 'nope', 'OPEN', 42, null, undefined, {}]) assert.equal(isFindingStatus(bad), false);
 });
 
 test('gate: only low/medium findings → clean (not blocked) at default high threshold', () => {

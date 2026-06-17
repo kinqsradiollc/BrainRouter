@@ -41,7 +41,9 @@ function ReviewCodeFrame({ f }: { f: ReviewFindingView }): React.ReactElement | 
   );
 }
 
-export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve, onOpenFile, onOpenDiff }: {
+export type TriageStatus = 'acknowledged' | 'disputed' | 'out-of-scope';
+
+export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve, onTriage, onOpenFile, onOpenDiff }: {
   review: { findings: ReviewFindingView[]; summary: string; files: number } | null;
   gate: ReviewGateView | null;
   running: boolean;
@@ -51,6 +53,7 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
   onAskFix: (f: ReviewFindingView) => void;
   onDismiss: (f: ReviewFindingView) => void;
   onResolve: (f: ReviewFindingView) => void;
+  onTriage: (f: ReviewFindingView, status: TriageStatus) => void;
   onOpenFile: (f: ReviewFindingView) => void;
   onOpenDiff: (f: ReviewFindingView) => void;
 }): React.ReactElement {
@@ -100,6 +103,10 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
                     <button className="wt-btn" onClick={() => onOpenFile(f)} title="Open the file">Open file</button>
                     {!resolved ? <button className="wt-btn" onClick={() => onResolve(f)}>Resolve</button> : null}
                     {!resolved ? <button className="wt-btn" onClick={() => onDismiss(f)}>Dismiss</button> : null}
+                    {/* 0.4.15 triage — clear the gate without claiming code changed. */}
+                    {!resolved ? <button className="wt-btn" title="Seen, accepted as-is" onClick={() => onTriage(f, 'acknowledged')}>Acknowledge</button> : null}
+                    {!resolved ? <button className="wt-btn" title="Disagree with this finding" onClick={() => onTriage(f, 'disputed')}>Dispute</button> : null}
+                    {!resolved ? <button className="wt-btn" title="Real, but not for this change" onClick={() => onTriage(f, 'out-of-scope')}>Out of scope</button> : null}
                   </div>
                 </div>
                 );

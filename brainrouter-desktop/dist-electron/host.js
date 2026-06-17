@@ -29,7 +29,7 @@ import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
 import { applyRuleEdit } from '@kinqs/brainrouter-cli/dist/config/permissionRules.js';
 import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-cli/dist/orchestration/reviewFindings.js';
-import { hashDiff, reviewGate, staleIfDiffChanged } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
+import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
 import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-cli/dist/state/reviewStore.js';
 import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
 import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
@@ -776,6 +776,15 @@ async function main() {
             'review-gate': async () => reviewSnapshot(),
             'review-dismiss-finding': (a) => ({ ok: !!updateReviewFinding(workspaceRoot, String(a.id ?? ''), 'dismissed', isoNow()) }),
             'review-resolve-finding': (a) => ({ ok: !!updateReviewFinding(workspaceRoot, String(a.id ?? ''), 'fixed', isoNow()) }),
+            // Generic, validated status set — covers the 0.4.15 triage states
+            // (acknowledged/disputed/out-of-scope) plus the existing ones. An unknown
+            // status is rejected rather than silently written.
+            'review-set-finding-status': (a) => {
+                const status = a.status;
+                if (!isFindingStatus(status))
+                    return { ok: false, error: `Unknown finding status "${String(status)}".` };
+                return { ok: !!updateReviewFinding(workspaceRoot, String(a.id ?? ''), status, isoNow()) };
+            },
             'review-apply-suggestion': async (a) => {
                 // Best-effort: apply the finding's unified-diff patch with `git apply`.
                 const run = getLatestReview(workspaceRoot);
