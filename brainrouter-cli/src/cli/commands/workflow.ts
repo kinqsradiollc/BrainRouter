@@ -23,6 +23,8 @@ import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestra
 import { hashDiff, reviewGate } from '../../orchestration/reviewModel.js';
 import { getLatestReview } from '../../state/reviewStore.js';
 import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
+import { recordPlanDecision, readPlanHistory, diffSnapshots, linkPlanDecision, type PlanDecision } from '../../state/planHistoryStore.js';
+import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
@@ -222,13 +224,59 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         }
         return true;
       }
+      // §7 — plan approval/review: record a durable decision that snapshots the
+      // plan (the decision list is the version history), and return requested-
+      // change feedback to the session. Reusable decisions flow into memory.
+      if (args[0] === 'approve') {
+        const cur = readPlan(agent.workspaceRoot, agent.sessionKey);
+        if (cur.items.length === 0) { console.log(chalk.yellow('\nNo plan to approve — create one first.\n')); return true; }
+        const decision = recordPlanDecision(agent.workspaceRoot, agent.sessionKey, {
+          verdict: 'approved', planSnapshot: cur.items, explanation: cur.explanation, requirementId: cur.requirementId,
+        });
+        console.log(chalk.green(`\n✓ Plan approved — decision ${chalk.cyan(decision.id)} snapshotted ${cur.items.length} item${cur.items.length === 1 ? '' : 's'}.\n`));
+        await capturePlanDecision(ctx, decision);
+        return true;
+      }
+      if (args[0] === 'request-changes') {
+        const feedback = args.slice(1).join(' ').trim();
+        if (!feedback) { console.log(chalk.red('\nUsage: /plan request-changes <feedback…>\n')); return true; }
+        const cur = readPlan(agent.workspaceRoot, agent.sessionKey);
+        const decision = recordPlanDecision(agent.workspaceRoot, agent.sessionKey, {
+          verdict: 'changes-requested', feedback, planSnapshot: cur.items, explanation: cur.explanation, requirementId: cur.requirementId,
+        });
+        console.log(chalk.yellow(`\n↩ Changes requested — decision ${chalk.cyan(decision.id)}.`));
+        console.log(chalk.gray('  Feedback (returns to this session):'));
+        console.log(`  ${feedback}\n`);
+        await capturePlanDecision(ctx, decision);
+        return true;
+      }
+      if (args[0] === 'history') {
+        const decisions = readPlanHistory(agent.workspaceRoot, agent.sessionKey);
+        if (decisions.length === 0) { console.log(chalk.yellow('\nNo plan decisions yet. Use /plan approve or /plan request-changes.\n')); return true; }
+        console.log(chalk.bold('\nPlan history') + chalk.gray(` (${decisions.length})`));
+        decisions.forEach((d, i) => {
+          const verdict = d.verdict === 'approved' ? chalk.green('approved') : chalk.yellow('changes-requested');
+          console.log(`  ${chalk.cyan(d.id)} ${verdict} · ${d.planSnapshot.length} item${d.planSnapshot.length === 1 ? '' : 's'} · ${d.createdAt}`);
+          if (d.feedback) console.log(chalk.gray(`      “${d.feedback}”`));
+          if (i > 0) {
+            const diff = diffSnapshots(decisions[i - 1].planSnapshot, d.planSnapshot);
+            const parts: string[] = [];
+            if (diff.added.length) parts.push(chalk.green(`+${diff.added.length}`));
+            if (diff.removed.length) parts.push(chalk.red(`-${diff.removed.length}`));
+            if (diff.changed.length) parts.push(chalk.gray(`~${diff.changed.length} status`));
+            if (parts.length) console.log(chalk.gray(`      vs prev: `) + parts.join(' '));
+          }
+        });
+        console.log();
+        return true;
+      }
       const state = readPlan(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nPlan:'));
       console.log(chalk.gray(formatPlan(state)));
       if (state.updatedAt) {
         console.log(chalk.gray(`Updated: ${state.updatedAt}`));
       }
-      console.log(chalk.gray('\nSubcommands: /plan | /plan clear\n'));
+      console.log(chalk.gray('\nSubcommands: /plan | /plan clear | /plan approve | /plan request-changes <text> | /plan history\n'));
       return true;
     }
     case '/diff':
@@ -1297,4 +1345,31 @@ export function normalizeSkillsList(payload: any): SkillListItem[] | undefined {
       if (typeof item.description === 'string') normalized.description = item.description;
       return normalized;
     });
+}
+
+/**
+ * §7 — capture a plan review decision into BrainRouter memory (best-effort) and
+ * link the returned memory id back onto the decision. A brain miss must never
+ * break the command.
+ */
+async function capturePlanDecision(ctx: CommandContext, decision: PlanDecision): Promise<void> {
+  try {
+    const memoryId = await emitAgentEvent(
+      { mcpClient: ctx.mcpClient, sessionKey: ctx.agent.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Plan ${decision.verdict} (${decision.id}) — ${decision.planSnapshot.length} item(s)${decision.feedback ? `: ${decision.feedback}` : ''}`,
+        payload: {
+          planDecisionId: decision.id,
+          verdict: decision.verdict,
+          feedback: decision.feedback,
+          requirementId: decision.requirementId,
+          itemCount: decision.planSnapshot.length,
+        },
+      },
+    );
+    if (memoryId) linkPlanDecision(ctx.agent.workspaceRoot, ctx.agent.sessionKey, decision.id, memoryId);
+  } catch {
+    // advisory — never break the command
+  }
 }
