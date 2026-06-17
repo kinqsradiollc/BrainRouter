@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getCliStateDir, getCliStateFile } from '../state/cliState.js';
 import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../state/sessionStore.js';
-import { formatPlan, readPlan, updatePlan } from '../state/taskStore.js';
+import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../state/taskStore.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../state/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../state/hooksStore.js';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../state/preferencesStore.js';
@@ -23,6 +23,29 @@ test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
     assert.equal(fs.existsSync(path.join(fs.realpathSync(workspace), '.brainrouter', 'cli')), false);
     assert.equal(getCliStateFile(workspace, 'tasks.json'), path.join(stateDir, 'tasks.json'));
     assert.throws(() => getCliStateFile(workspace, '../tasks.json'), /Invalid CLI state file name/);
+  });
+});
+
+test('seedPlanFromRequirement anchors a plan to a requirement and updatePlan preserves the anchor', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'sess-req';
+    const seeded = seedPlanFromRequirement(
+      workspace,
+      { id: 'req_abc12345', acceptanceCriteria: ['handles empty input', 'returns 200 on success'] },
+      sessionKey,
+    );
+    // one pending item per criterion, anchored to the requirement
+    assert.equal(seeded.requirementId, 'req_abc12345');
+    assert.deepEqual(seeded.items.map((i) => i.step), ['handles empty input', 'returns 200 on success']);
+    assert.ok(seeded.items.every((i) => i.status === 'pending'));
+    assert.equal(readPlan(workspace, sessionKey).requirementId, 'req_abc12345');
+
+    // a routine update_plan (no requirementId) must NOT drop the anchor
+    const edited = updatePlan(workspace, { plan: [{ step: 'handles empty input', status: 'completed' }] }, sessionKey);
+    assert.equal(edited.requirementId, 'req_abc12345');
+
+    // the anchor is per-session: a different session's plan is independent
+    assert.equal(readPlan(workspace, 'other-session').requirementId, undefined);
   });
 });
 
