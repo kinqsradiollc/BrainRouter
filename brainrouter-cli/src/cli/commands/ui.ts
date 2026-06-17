@@ -12,6 +12,7 @@ import { LOCAL_TOOLS } from '../../agent/agent.js';
 import { callMcpTool, hasMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '../../state/preferencesStore.js';
+import { getSessionMode, resolveActiveMode, setSessionMode } from '../../state/sessionModeStore.js';
 import { readPlan } from '../../state/taskStore.js';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher
@@ -471,15 +472,27 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
     case '/effort':
     {
+      // Per-session reasoning depth: session override > cli.effort config >
+      // workspace preference > default. With a session active the toggle
+      // writes the per-chat override so each chat keeps its own depth;
+      // without one it falls back to the workspace preference (unchanged).
+      const sessionKey = agent.sessionKey;
       const arg = (args[0] ?? '').toLowerCase();
       const valid: ReadonlyArray<string> = ['low', 'medium', 'high', 'xhigh', 'max'];
       if (!arg) {
         const resolved = resolveEffort(agent.workspaceRoot);
+        const sessionOverride = sessionKey ? getSessionMode(agent.workspaceRoot, sessionKey).effort : undefined;
+        const activeEffort = resolveActiveMode(agent.workspaceRoot, sessionKey).effort;
+        // The config knob still wins this process even over a session
+        // override; reflect that in both the value and the source tag.
+        const showEffort = resolved.source === 'config' ? resolved.effort : activeEffort;
+        const effectiveSource: typeof resolved.source =
+          resolved.source === 'config' ? 'config' : sessionOverride ? 'preference' : resolved.source;
         const sourceTag =
-          resolved.source === 'config' ? chalk.gray(' (cli.effort in config.json)') :
-          resolved.source === 'preference' ? chalk.gray(' (preference)') :
+          effectiveSource === 'config' ? chalk.gray(' (cli.effort in config.json)') :
+          effectiveSource === 'preference' ? chalk.gray(sessionOverride ? ' (session)' : ' (preference)') :
           chalk.gray(' (default)');
-        console.log(chalk.bold(`\nReasoning depth: ${chalk.cyan(resolved.effort)}${sourceTag}`));
+        console.log(chalk.bold(`\nReasoning depth: ${chalk.cyan(showEffort)}${sourceTag}`));
         console.log(chalk.gray('  low     — terse, one-paragraph answers; minimal ceremony.'));
         console.log(chalk.gray('  medium  — current default; no overlay, no provider reasoning slot. (default)'));
         console.log(chalk.gray('  high    — step-by-step reasoning; audits evidence before each tool call.'));
@@ -498,15 +511,19 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.red(`\nUnknown level "${arg}". Choose: ${valid.join(' | ')}  (max == xhigh)\n`));
         return true;
       }
-      writePreferences(agent.workspaceRoot, { effort: canonical });
+      if (sessionKey) {
+        setSessionMode(agent.workspaceRoot, sessionKey, { effort: canonical });
+      } else {
+        writePreferences(agent.workspaceRoot, { effort: canonical });
+      }
       agent.refreshSystemPrompt();
       const after = resolveEffort(agent.workspaceRoot);
       // Show the alias the user typed alongside the canonical value so `max` isn't silently rewritten.
       const shown = arg === 'max' ? `${canonical} (max)` : canonical;
       // Surface a friendly nudge when `cli.effort` in `config.json` is still
-      // explicitly set and would shadow the workspace preference next boot.
+      // explicitly set and would shadow the preference/override next boot.
       if (after.source === 'config' && after.effort !== canonical) {
-        console.log(chalk.yellow(`\n✓ Preference saved as ${shown}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
+        console.log(chalk.yellow(`\n✓ ${sessionKey ? 'Session' : 'Preference'} saved as ${shown}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
       } else {
         console.log(chalk.green(`\n✓ Reasoning depth → ${shown}. Applies on the next turn.\n`));
       }

@@ -73,6 +73,7 @@ import { runHooks, parseHookDecision } from '../state/hooksStore.js';
 import { resolveSandboxConfig, runShell } from '../runtime/exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../runtime/exec/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../state/preferencesStore.js';
+import { resolveActiveMode } from '../state/sessionModeStore.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
 // the second provider dispatch). Anthropic models can still be reached through
@@ -1337,8 +1338,12 @@ export class Agent {
         } catch { return null; }
       },
       parentVisibleTools: () => mcpTools.map((t: any) => String(t.name)).filter(Boolean),
-      parentExecutionMode: readPreferences(this.workspaceRoot).executionMode,
-      parentReviewPolicy: readPreferences(this.workspaceRoot).reviewPolicy,
+      // Snapshot the parent's ACTIVE SESSION stance at spawn time (session
+      // override > workspace pref) so the child records the mode the parent
+      // was actually running — not a workspace default a later, unrelated
+      // session switch might change.
+      parentExecutionMode: resolveActiveMode(this.workspaceRoot, this.sessionKey).executionMode,
+      parentReviewPolicy: resolveActiveMode(this.workspaceRoot, this.sessionKey).reviewPolicy,
     });
 
     while (loopCount < maxLoops) {
@@ -1360,9 +1365,11 @@ export class Agent {
       const invokeLlm = async () => {
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
-        // request's reasoning_effort slot — no restart needed. A spawned
-        // child with a per-run effort override (0.4.x-5) uses that instead.
-        const effort = this.effortOverride ?? resolveEffort(this.workspaceRoot).effort;
+        // request's reasoning_effort slot — no restart needed. Resolve from
+        // the ACTIVE SESSION (session override > workspace pref/config) so a
+        // per-chat `/effort` sticks to that chat. A spawned child with a
+        // per-run effort override (0.4.x-5) uses that instead.
+        const effort = this.effortOverride ?? resolveActiveMode(this.workspaceRoot, this.sessionKey).effort;
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
         // callback is supplied — silent mode / children / tests stay on
@@ -2824,6 +2831,11 @@ export class Agent {
         //     commands need parent opt-in (fast mode) and dangerous commands
         //     are always denied.
         const prefs = readPreferences(this.workspaceRoot);
+        // Gate from the ACTIVE SESSION's executionMode (session override >
+        // workspace pref) so two chats in the same workspace can sit in
+        // different modes — a `fast` chat auto-approves safe commands while a
+        // `planning` chat still confirms.
+        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
         // 0.3.9 — pass `goalActive` so the resolver can auto-approve
         // SAFE commands when a /goal is active. Without this, the very
         // first run_command of a goal-mode session blocks the auto-
@@ -2831,7 +2843,7 @@ export class Agent {
         // "type a goal, walk away". Dangerous commands still ask.
         const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
         const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
-        const approval = resolveRunCommandApproval(prefs, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
+        const approval = resolveRunCommandApproval(activeMode, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
         let parentApproved = false;
         if (approval === 'deny-silent') {
           const dangerous = isDangerousCommand(cmd);
@@ -2866,7 +2878,7 @@ export class Agent {
         if (approval === 'auto-approve' || parentApproved) {
           const tag = this.silent
             ? (parentApproved ? 'Parent-approved (silent child)' : 'Auto-approved (silent child)')
-            : goalIsActive && prefs.executionMode !== 'fast'
+            : goalIsActive && activeMode.executionMode !== 'fast'
               ? 'Auto-approved (/goal active)'
               : 'Auto-approved';
           console.log(chalk.gray(`▶  ${tag}: ${chalk.cyan(cmd)}`));
@@ -3199,7 +3211,7 @@ export class Agent {
         // Both refusal messages use NoTTYError so the existing model
         // contract ("fall back to deciding yourself") fires verbatim.
         // A trace event records which axis triggered the bypass.
-        const yoloPrefs = readPreferences(this.workspaceRoot);
+        const yoloPrefs = resolveActiveMode(this.workspaceRoot, this.sessionKey);
         const yoloOn = yoloPrefs.executionMode === 'fast' && yoloPrefs.reviewPolicy === 'proceed';
         const goalForPicker = readGoal(this.workspaceRoot, this.sessionKey);
         const goalActiveForPicker = !!(goalForPicker?.text && goalForPicker.status === 'active');
@@ -3827,6 +3839,7 @@ export class Agent {
 
   private createSystemMessage() {
     const prefs = readPreferences(this.workspaceRoot);
+    const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
     // 10b: pass the connected MCP tool inventory so `buildSystemPrompt`
     // can omit the BrainRouter memory section when the brain is offline.
     // The cached `lastKnownMcpTools` is populated by every successful
@@ -3841,9 +3854,13 @@ export class Agent {
       instructionSummary: loadWorkspaceInstructionSummary(this.workspaceRoot),
       personality: prefs.personality,
       activeSkill: this.activeSkill,
-      executionMode: prefs.executionMode,
-      reviewPolicy: prefs.reviewPolicy,
-      effort: this.effortOverride ?? resolveEffort(this.workspaceRoot).effort,
+      // Planning/fast framing + review-policy framing reflect the ACTIVE
+      // SESSION's stance (session override > workspace pref) so each chat's
+      // system prompt matches its own mode. `effortOverride` (a per-run
+      // child override) still wins when set.
+      executionMode: activeMode.executionMode,
+      reviewPolicy: activeMode.reviewPolicy,
+      effort: this.effortOverride ?? activeMode.effort,
       connectedMcpTools,
       // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
       // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)

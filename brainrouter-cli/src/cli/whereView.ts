@@ -6,6 +6,7 @@ import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '../state/w
 import { listSessions, type ChildSessionRecord } from '../orchestration/orchestrator.js';
 import type { RecalledRecord } from '../memory/briefing.js';
 import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
+import { getSessionMode, resolveActiveMode } from '../state/sessionModeStore.js';
 import { getCliKnobs } from '../config/config.js';
 import { BOX, type Theme } from './theme.js';
 import { formatContextWindow } from '../runtime/contextWindow.js';
@@ -319,14 +320,21 @@ export function gatherWhereInputs(args: {
   })();
   const prefs = readPreferences(args.workspaceRoot);
   const resolvedEffort = resolveEffort(args.workspaceRoot);
+  // Resolve the ACTIVE SESSION's stance (session override > workspace pref)
+  // so `/where` reports the mode this chat is actually running. The effort
+  // SOURCE label still describes where the effort value originated; when a
+  // session overrides it we surface it as a preference-level source.
+  const activeMode = resolveActiveMode(args.workspaceRoot, args.sessionKey);
+  const sessionOverride = getSessionMode(args.workspaceRoot, args.sessionKey);
+  const effortSource = sessionOverride.effort ? 'preference' as const : resolvedEffort.source;
   const configOff = getCliKnobs().personaAnchor === 'off';
   const personaStat = args.briefingSourceStats?.find((s) => s.source === 'memory_persona');
   return {
     ...args,
-    executionMode: prefs.executionMode,
-    reviewPolicy: prefs.reviewPolicy,
-    effort: resolvedEffort.effort,
-    effortSource: resolvedEffort.source,
+    executionMode: activeMode.executionMode,
+    reviewPolicy: activeMode.reviewPolicy,
+    effort: activeMode.effort,
+    effortSource,
     workflowSlug,
     workflowMeta,
     goal,
