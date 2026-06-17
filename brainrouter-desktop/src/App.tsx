@@ -11,20 +11,18 @@ import {
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
-import { parseWorktreeList, type WorktreeEntry } from './lib/worktree/worktreeParser.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
-import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
-import { gitActionTag } from './lib/review/reviewGateUi.js';
-import { activeEntry, setEntry, shouldProceedGate, reviewBadgeFor } from './lib/review/reviewWorkspace.js';
+import { mergeOptimistic } from './lib/session/sessionOrder.js';
+import { setEntry } from './lib/review/reviewWorkspace.js';
 import { usePanels } from './lib/panels/usePanels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
+import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
 import { CommandPalette } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
-import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
+import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow } from './types.js';
 import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
 import { FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
@@ -42,6 +40,9 @@ import { SessionStatus } from './components/SessionStatus.js';
 import { Composer } from './components/Composer.js';
 import { useComposerDerived } from './lib/composer/useComposerDerived.js';
 import { useSessionSidebar } from './lib/session/useSessionSidebar.js';
+import { useGitState } from './lib/git/useGitState.js';
+import { useSessionState } from './lib/session/useSessionState.js';
+import { useSessionActions } from './lib/session/useSessionActions.js';
 import { TopbarRight } from './components/TopbarRight.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ChatThread } from './components/ChatThread.js';
@@ -57,47 +58,28 @@ installDevBridge();
 export function App(): React.ReactElement {
   const [rows, setRows] = useState<ChatRow[]>([]);
   const [draft, setDraft] = useState('');
-  // `running` = the VIEWED session has a turn in flight (drives the composer).
-  const [running, setRunning] = useState(false);
-  // DESK-6 — Stop was pressed and we're waiting for the turn to actually unwind.
-  // Gives immediate visual feedback (the old code only fired IPC and showed a
-  // volatile status line that the next 'Thinking…' overwrote). Cleared when the
-  // turn really ends (turn-complete/turn-error) or on a session switch.
-  const [stopping, setStopping] = useState(false);
-  // DESK-5v — CONCURRENT SESSIONS: every session key with a turn in flight, so
-  // switching away never stops a turn and the sidebar shows a spinner on each
-  // chat that's still working. `running` above is just "is the viewed one in
-  // this set". Ref mirror so the persistent onEvent listener reads live state.
-  const runningSessionsRef = useRef<Set<string>>(new Set());
-  const [runningSessions, setRunningSessions] = useState<string[]>([]);
-  // DESK-5w — the viewed session key as REACTIVE state (sessionKeyRef is the
-  // ref mirror). Drives session-scoped background-task views.
-  const [viewKey, setViewKey] = useState<string>('');
-  const setSessionRunning = (key: string, on: boolean): void => {
-    const s = runningSessionsRef.current;
-    if (on) s.add(key); else s.delete(key);
-    setRunningSessions([...s]);
-  };
-  // Stability item 4 — which WORKSPACES (projects) currently have a turn in
-  // flight, including ones not on screen. The host pool keeps that work alive
-  // in the background; this lets the sidebar show a "running" dot on other
-  // projects so the user knows it didn't vanish when they switched away.
-  const [runningWs, setRunningWs] = useState<Set<string>>(() => new Set());
+  // T4 — session/workspace STATE container. Every symbol is destructured back so
+  // existing references (render JSX, useAgentEvents ctx, action hooks) are unchanged.
+  const {
+    viewKey, setViewKey, running, setRunning, stopping, setStopping,
+    runningSessions, setRunningSessions, runningSessionsRef,
+    sessions, setSessions, sessionsRef, pendingSessionsRef,
+    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renameDraft, setRenameDraft,
+    showArchived, setShowArchived, sessionGroups, setSessionGroups,
+    finishedTasks, setFinishedTasks, taskView, setTaskView, workflowView, setWorkflowView,
+    sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, turnFailsRef,
+    workspaces, setWorkspaces, expandedProjects, setExpandedProjects, expandedProjectsRef, projSessions, setProjSessions,
+    activeWsRef, workspaceGenRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
+    setSessionRunning,
+  } = useSessionState();
   const [statusLine, setStatusLine] = useState('');
   const [reasoningTail, setReasoningTail] = useState('');
   const [liveText, setLiveText] = useState('');
-  const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [fleet, setFleet] = useState<FleetRow[]>([]);
-  // DESK-5n — in-turn child agents (workers/sub-agents) live ONLY in the
-  // streamed child-* events, never in the disk-backed fleet the host polls,
-  // so the Background-tasks panel was blind to them mid-turn. Track them live
-  // here keyed by childId; upsert on child-tool-start/end, drop on complete.
-  const [liveChildren, setLiveChildren] = useState<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>({});
   const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string; username?: string }>({});
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [workspaces, setWorkspaces] = useState<{ current: string | null; recents: string[] }>({ current: null, recents: [] });
   const [railOpen, setRailOpen] = useState(true);
   // DESK-5i — the left sidebar is drag-resizable too (persisted).
   const [railWidth, setRailWidth] = useState(() => {
@@ -112,15 +94,6 @@ export function App(): React.ReactElement {
   const workrowRef = useRef<HTMLDivElement>(null);
   const [workW, setWorkW] = useState(0);
   const [toolLog, setToolLog] = useState<Array<{ id: number; tool: string; ok: boolean; summary: string }>>([]);
-  const [changedFiles, setChangedFiles] = useState<Array<{ status: string; path: string }>>([]);
-  const [diffView, setDiffView] = useState<{ path: string; diff: string } | null>(null);
-  // T3 — when "Open diff" is clicked on a review finding, remember its line so the
-  // diff view scrolls/flashes to that hunk once the file-diff loads.
-  const [diffTarget, setDiffTarget] = useState<{ path: string; line?: number } | null>(null);
-  const [allFiles, setAllFiles] = useState<string[]>([]);
-  const [fileView, setFileView] = useState<{ path: string; content: string; error?: string } | null>(null);
-  const [gitInfo, setGitInfo] = useState<{ repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null>(null);
-  const [commitSubjects, setCommitSubjects] = useState<string[]>([]);
   const [tokens, setTokens] = useState<{ promptTokens: number; completionTokens: number; turns: number } | null>(null);
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -138,12 +111,6 @@ export function App(): React.ReactElement {
   const [codeFont, setCodeFont] = useState(() => localStorage.getItem('br-code-font') ?? '');
   const [theme, setTheme] = useState(() => localStorage.getItem('br-desktop-theme') ?? 'dark');
   const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
-  // DESK-6m — per-chat ⋮ context menu + its sub-flows.
-  const [sessionMenu, setSessionMenu] = useState<{ key: string; x: number; y: number } | null>(null);
-  const [renamingKey, setRenamingKey] = useState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
-  const [sessionGroups, setSessionGroups] = useState<string[]>([]);
   const [homeStats, setHomeStats] = useState<{
     sessions: number; turns: number; activeDays: number; currentStreak: number;
     longestStreak: number; model: string; perDay: Record<string, number>;
@@ -165,55 +132,15 @@ export function App(): React.ReactElement {
   // less often. The final text always comes from liveBuf (flushAssistant), so
   // throttling never drops content.
   const liveFlushPending = useRef(false);
-  const sessionsRef = useRef<SessionRow[]>([]);
-  // Wave 2 — optimistic new-chat rows not yet confirmed by the host's
-  // list-sessions. Kept across refreshes (merged) so a fresh chat's row never
-  // flickers out while the transcript flush races the refresh.
-  const pendingSessionsRef = useRef<SessionRow[]>([]);
-  const lastPromptRef = useRef('');
-  // T2/T3 — the workspace the on-screen surfaces belong to, set authoritatively
-  // by session-changed. Events tagged with a DIFFERENT workspace are dropped so
-  // one project's stream can never paint into another's surfaces.
-  const activeWsRef = useRef<string | null>(null);
-  // Stability fix — workspace GENERATION: bumped on every workspace switch so
-  // late async query results from the previous project are dropped, never
-  // painting workspace A's data into workspace B's surfaces.
-  const workspaceGenRef = useRef(0);
-  // DESK-5u — current viewed session key, kept in a ref so the (mount-once)
-  // event handler can read it without going stale.
-  const sessionKeyRef = useRef<string | undefined>(undefined);
-  // DESK-5u — error cards aren't part of the persisted transcript, so cache
-  // them per session here and re-inject on resume — a turn failure stays
-  // visible when you switch away and come back.
-  const errorsBySession = useRef<Record<string, Array<{ id: number; text: string; detail?: string; ts: number }>>>({});
   const chatEnd = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
-  // DESK-6w — true while a read-only card view (task convo / workflow) is open,
-  // so the transcript auto-scroll never yanks the card down on a refresh.
-  const cardOpenRef = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
   const [turnStart, setTurnStart] = useState(0);
   // DESK-5e — the Environment "Checks" row is real signal: failed tool calls
   // in the last completed turn (null until a turn has finished here).
   const [lastTurnFails, setLastTurnFails] = useState<number | null>(null);
-  const turnFailsRef = useRef(0);
-  // DESK-5j — Changes tab review actions (commit/push/pull via the host's
-  // user-command shell path — same trust level as the terminal input row).
-  const [gitBusy, setGitBusy] = useState(false);
-  // Wave 4 — review gate: a pending commit/push waiting on the gate check, and
-  // the block dialog shown when the gate refuses (with an explicit bypass).
-  const pendingGitRef = useRef<{ kind: 'commit' | 'push'; msg?: string; root: string } | null>(null);
-  const [gateBlock, setGateBlock] = useState<{ kind: 'commit' | 'push'; msg?: string; reason: string; status: string } | null>(null);
-  const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
-  // DESK-5w — the background task whose conversation is open (read-only),
-  // shown in place of the chat. null = normal chat view.
-  const [taskView, setTaskView] = useState<{ id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null>(null);
-  // DESK-6w — a workflow run's breakdown (Claude /workflows-style card), shown
-  // in place of the chat when you click a workflow background task.
-  const [workflowView, setWorkflowView] = useState<WorkflowDetail | null>(null);
   const [grepHits, setGrepHits] = useState<import('./panels/index.js').GrepHit[] | null>(null);
-  const [inlineDiffs, setInlineDiffs] = useState<Record<string, string>>({});
   const [branches, setBranches] = useState<{ current: string | null; branches: string[]; loading?: boolean }>({ current: null, branches: [] });
   const [endpointModels, setEndpointModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -222,47 +149,10 @@ export function App(): React.ReactElement {
   const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
   // T14 — scheduled tasks for the viewed session (cron/once), from the CLI store.
   const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
-  // T13 — git worktrees for this repo + a per-worktree diff cache.
-  const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
-  const [worktreeDiffs, setWorktreeDiffs] = useState<Record<string, string>>({});
-  // T12 / Review v2 + T2 multi-workspace — findings + the commit/push gate +
-  // running flag, ALL keyed by workspace root so switching projects shows that
-  // project's review (never leaks across workspaces). The active workspace's
-  // view is derived below; the q-review-* handlers write under activeWsRef.current.
-  type ReviewView = { findings: ReviewFindingView[]; summary: string; files: number };
-  type GateView = { status: string; blocked: boolean; reason: string };
-  const [reviewByWs, setReviewByWs] = useState<Record<string, ReviewView | null>>({});
-  const [reviewGateByWs, setReviewGateByWs] = useState<Record<string, GateView | null>>({});
-  const [reviewRunningByWs, setReviewRunningByWs] = useState<Record<string, boolean>>({});
-  const activeRoot = workspaces.current ?? info.workspaceRoot ?? '';
-  const review = activeEntry(reviewByWs, activeRoot);
-  const reviewGate = activeEntry(reviewGateByWs, activeRoot);
-  const reviewRunning = !!reviewRunningByWs[activeRoot];
-  // T2 — the active project's sidebar review badge (needs/reviewing/blocked/passed/stale).
-  const activeReviewBadge = reviewBadgeFor(reviewGate, changedFiles.length, reviewRunning);
-  // §4 — per-file count of OPEN findings, for the Changes-list badges.
-  const reviewFindingsByFile = useMemo<Record<string, number>>(() => {
-    const m: Record<string, number> = {};
-    for (const f of review?.findings ?? []) if (!f.status || f.status === 'open') m[f.file] = (m[f.file] ?? 0) + 1;
-    return m;
-  }, [review]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
-  // DESK-5d — the trust gate runs BEFORE a project opens (and before a chat
-  // in another project resumes); `resume` carries the chat to land on.
-  const [trustAsk, setTrustAsk] = useState<{ root: string; resume?: string } | null>(null);
   const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
-  // DESK-5d — per-project chat histories + expansion (lazy-fetched), the
-  // current branch's PR chip, and the chat to resume after a host swap.
-  const [projSessions, setProjSessions] = useState<Record<string, SessionRow[]>>({});
-  const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
-  const expandedProjectsRef = useRef<string[]>([]);
   const [prInfo, setPrInfo] = useState<{ number: number; state: string; title?: string } | null>(null);
-  const pendingResumeRef = useRef<string | null>(null);
-  // DESK-6t — debounce rapid session clicks: only the LAST target resumes.
-  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Stable handle so the mount-once keyboard handler always calls the latest one.
-  const resumeSessionRef = useRef<(key: string) => void>(() => {});
   const [recentsOpen, setRecentsOpen] = useState(true);
   // Item 9 — how many of the current project's chats are shown (grows a page at
   // a time via the show-more button). Collapsed view always shows the base few.
@@ -271,6 +161,19 @@ export function App(): React.ReactElement {
 
   const q = (id: string, name: string, args?: Record<string, unknown>) =>
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
+
+  // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
+  // is destructured back so existing references (render JSX, useAgentEvents ctx)
+  // keep compiling unchanged.
+  const {
+    changedFiles, setChangedFiles, diffView, setDiffView, diffTarget, setDiffTarget,
+    allFiles, setAllFiles, fileView, setFileView, gitInfo, setGitInfo, commitSubjects, setCommitSubjects,
+    gitBusy, setGitBusy, pendingGitRef, gateBlock, setGateBlock,
+    worktrees, setWorktrees, worktreeDiffs, setWorktreeDiffs, inlineDiffs, setInlineDiffs,
+    reviewByWs, setReviewByWs, reviewGateByWs, setReviewGateByWs, reviewRunningByWs, setReviewRunningByWs,
+    activeRoot, review, reviewGate, reviewRunning, activeReviewBadge, reviewFindingsByFile,
+    runGit,
+  } = useGitState({ q, setToast, workspaces, info });
 
   // T4 — panel/dock state + handlers live in usePanels (q injected so ensurePanel
   // can refresh worktrees/review on open).
@@ -296,8 +199,6 @@ export function App(): React.ReactElement {
 
   // T6 — GitHub CI/CD (real `gh` status, kept separate from local tool success).
   const ci = useCi({ onToast: setToast });
-  const openUrl = (url: string): void => { if (url) q('q-open-url', 'action:open-external', { url }); };
-  const openCiPanel = (): void => { ensurePanel('ci'); ci.refresh(); };
 
   // T1 — workflow/background dashboard. Workspace scope uses the live fleet +
   // finished tasks; All scope disk-reads every recent workspace via main.
@@ -305,15 +206,31 @@ export function App(): React.ReactElement {
   const [dashTab, setDashTab] = useState<DashTab>('running');
   const [globalBoards, setGlobalBoards] = useState<WorkspaceDash[] | null>(null);
   const [dashBusy, setDashBusy] = useState(false);
-  const refreshDashboard = (): void => {
-    if (!window.brainrouter.globalDashboard) return;
-    setDashBusy(true);
-    window.brainrouter.globalDashboard()
-      .then((r) => setGlobalBoards((r.workspaces ?? []) as unknown as WorkspaceDash[]))
-      .catch(() => { /* gh/disk unreadable */ })
-      .finally(() => setDashBusy(false));
-  };
-  const openDashboard = (): void => { ensurePanel('dashboard'); refreshDashboard(); };
+
+  // T4 — session/workspace/panel ACTION functions (no command-catalog deps) live
+  // in useSessionActions. Every symbol is destructured back so existing references
+  // (render JSX, useAgentEvents ctx, effects) keep compiling unchanged. Called here
+  // — after q / git state / panels / editor / ci / dashboard state are available —
+  // so useAgentEvents below can reference refreshSession/refreshSidebar as consts.
+  const {
+    refreshSession, refreshSidebar, resumeSession, resumeSessionRef, resumeTimerRef,
+    openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
+    switchToWorkspace, openProject, addProject, toggleProject,
+    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
+    closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
+    startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
+  } = useSessionActions({
+    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions,
+    runningSessionsRef, sessionKeyRef, pendingResumeRef, workspaceGenRef, expandedProjectsRef,
+    liveBuf, chatRef, atBottomRef,
+    setStopping, setStatusLine, setReasoningTail, setLiveText, setRows, setRunning, setInteraction,
+    setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
+    setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
+    setTokens, setGateBlock, setLastPlan, setFleet, setLiveChildren, setCommitSubjects, setToast,
+    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
+    pendingGitRef, ensurePanel, resetTermDock, editor, ci,
+  });
+
   const dashBoards = useMemo<WorkspaceDash[]>(() => {
     if (dashScope === 'all') return globalBoards ?? [];
     const tasks: DashTask[] = [
@@ -322,132 +239,6 @@ export function App(): React.ReactElement {
     ];
     return [{ workspaceRoot: activeRoot, tasks, reviewGate }];
   }, [dashScope, globalBoards, fleet, finishedTasks, activeRoot, reviewGate]);
-
-  // T5 — opening a file now lands in the editable Monaco editor (not the
-  // read-only viewer). The 'file' panel + read-only viewer remain available.
-  function openFile(path: string): void {
-    ensurePanel('editor');
-    editor.open(path);
-  }
-  /** Close an editor tab, confirming first if it has unsaved changes. */
-  function closeEditorTab(path: string): void {
-    const tab = editor.tabs.find((t) => t.path === path);
-    if (tab && tab.content !== tab.saved && !tab.readOnly && !tab.binary) {
-      if (!window.confirm(`Discard unsaved changes to ${path.split('/').pop()}?`)) return;
-    }
-    editor.close(path);
-  }
-  function openSettings(section: SettingsSection): void {
-    setSettings({ open: true, section });
-    q('q-snapshot', 'config-snapshot');
-    q('q-usage', 'usage-breakdown');
-  }
-
-  // ---- DESK-5d — single-window project switching --------------------------
-  /** Swap the host to another workspace in THIS window; optionally land on a chat. */
-  function switchToWorkspace(root: string, resumeKey?: string): void {
-    const current = workspaces.current ?? info.workspaceRoot;
-    if (root === current) {
-      if (resumeKey) window.brainrouter.send({ kind: 'resume-session', sessionKey: resumeKey });
-      return;
-    }
-    pendingResumeRef.current = resumeKey ?? null;
-    // Stability fix — bump the workspace generation the moment a switch STARTS,
-    // so any old-workspace query results still in flight are dropped instead of
-    // repainting the now-cleared surfaces with the previous project's data.
-    workspaceGenRef.current++;
-    setToast(`Opening ${root.split('/').pop()}…`);
-    // Clear workspace-scoped surfaces; the new host's boot session-changed
-    // refreshes everything against the new root.
-    setHostUp(false);
-    setRows([]);
-    setGitInfo(null);
-    setPrInfo(null);
-    // Stability fix — show a LOADING branch chip during the switch instead of
-    // letting the selector silently vanish; the new host's full refresh fills it.
-    setBranches({ current: null, branches: [], loading: true });
-    setChangedFiles([]);
-    setAllFiles([]);
-    setFileView(null);
-    setDiffView(null);
-    setTokens(null);
-    // T2 — review MAPS are keyed by workspace, so they survive the switch and the
-    // derived active view flips for free. But the pending-git + gate dialog are
-    // single-shot and must NOT carry into the new project.
-    pendingGitRef.current = null;
-    setGateBlock(null);
-    setLastPlan(null);
-    setFleet([]);
-    setLiveChildren({});
-    setCommitSubjects([]);
-    // Terminal tabs belong to the retiring host's shells — close the dock so
-    // reopening spawns fresh shells in the new workspace.
-    resetTermDock();
-    void window.brainrouter.openWorkspace(root).then((r) => {
-      if (!r.opened) { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; }
-    }).catch(() => { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; });
-  }
-
-  /** Trust gate in front of every project switch (Codex-style: ask first).
-   *  T1 — trust now comes from the shared CLI store via main, not localStorage. */
-  function openProject(root: string, resumeKey?: string): void {
-    void window.brainrouter.isWorkspaceTrusted(root).then(({ trusted }) => {
-      if (trusted) switchToWorkspace(root, resumeKey);
-      else setTrustAsk({ root, resume: resumeKey });
-    });
-  }
-
-  /** DESK-5j / Wave 4 — Changes-tab git actions. commit/push are GATED by the
-   *  local AI review: the gate is checked first; if it blocks, a dialog explains
-   *  why and offers an explicit bypass. pull is never gated. */
-  function runGit(kind: 'commit' | 'push' | 'pull', msg?: string, opts?: { bypass?: boolean; reviewed?: boolean }): void {
-    // commit/push run the gate first UNLESS we're already cleared — either the
-    // gate came back clean (reviewed) or the user explicitly bypassed it.
-    if ((kind === 'commit' || kind === 'push') && !opts?.bypass && !opts?.reviewed) {
-      // T2 — remember which workspace this action is for, so a gate result that
-      // arrives after a workspace switch can't clear it in the wrong project.
-      pendingGitRef.current = { kind, msg, root: workspaces.current ?? info.workspaceRoot ?? '' };
-      setToast('Checking review status…');
-      q('q-review-gate', 'review-gate');
-      return;
-    }
-    const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-    const cmd = kind === 'commit'
-      ? `git add -A && git commit -m ${sq(msg ?? '')}`
-      : kind === 'push' ? 'git push' : 'git pull --ff-only';
-    setGitBusy(true);
-    // §7 — a CLEAN gate is "reviewed", NOT a bypass: no warning, no "bypassed" label.
-    if (opts?.bypass) console.warn(`[review-gate] ${kind} BYPASSED without a clean review`);
-    const state = gitActionTag(opts); // '' | 'reviewed' | 'bypassed'
-    const tag = state === 'bypassed' ? ' (review bypassed)' : state === 'reviewed' ? ' (reviewed)' : '';
-    setToast(kind === 'commit' ? `Committing${tag}…` : kind === 'push' ? `Pushing${tag}…` : 'Pulling…');
-    q('a-git', 'action:term-exec', { cmd });
-    // Wave 1 (D) — commit/push are real ACTIVITY → promote this project.
-    if (kind !== 'pull') { const r = workspaces.current ?? info.workspaceRoot; if (r) void window.brainrouter.markActivity?.(r, kind); }
-  }
-
-  /** Add project = pick folder → trust dialog right away → open in place.
-   *  T1 — optimistically insert the folder into the sidebar's project list the
-   *  moment it's picked, so it appears instantly (the real recents reconcile on
-   *  open). De-duped against the existing recents. */
-  function addProject(): void {
-    void window.brainrouter.addWorkspace().then((res) => {
-      if (!res?.workspaceRoot) return;
-      const root = res.workspaceRoot;
-      setWorkspaces((prev) => prev.recents.includes(root) ? prev : { ...prev, recents: [root, ...prev.recents] });
-      openProject(root);
-    }).catch(() => {});
-  }
-
-  /** Expand/collapse a project folder; first expand lazy-loads its chats. */
-  function toggleProject(root: string): void {
-    setExpandedProjects((prev) => {
-      const next = prev.includes(root) ? prev.filter((r) => r !== root) : [...prev, root];
-      expandedProjectsRef.current = next;
-      return next;
-    });
-    if (!projSessions[root]) q(`q-wsess:${root}`, 'workspace-sessions', { root });
-  }
 
   const pendingCmdRef = useRef('');
   function runBridge(cmd: string, argText = ''): void {
@@ -626,51 +417,6 @@ export function App(): React.ReactElement {
     q, refreshSession, refreshSidebar, runGit, setSessionRunning, info, gitInfo, homeStats, branches,
   });
 
-  // DESK-6t — FAST, session-scoped refresh: the sidebar chat list, active-session
-  // info, running tasks, and the context ring — NO git/gh calls. Fired on every
-  // session switch / New chat so creating or switching a chat stays snappy and
-  // never blocks the host's message loop on `git ls-files` / `gh pr view`.
-  function refreshSession(): void {
-    q('q-sessions', 'list-sessions');
-    q('q-info', 'session-info');
-    q('q-fleet', 'fleet');
-    q('q-ctx', 'context-usage');
-  }
-  // Full refresh INCL. the slow git/workspace queries — only needed on boot, a
-  // workspace switch, and after a turn (files may have changed), NOT on every
-  // session switch (the git state is identical across chats in one workspace).
-  function refreshSidebar(): void {
-    void window.brainrouter.workspaceRecents().then(setWorkspaces).catch(() => {});
-    refreshSession();
-    q('q-files', 'changed-files');
-    q('q-list', 'list-files');
-    q('q-git', 'git-info');
-    q('q-home', 'home-stats');
-    q('q-branches', 'git-branches');
-    q('q-pr', 'git-pr');
-    q('q-gitlog', 'git-log'); // pinned Environment card shows the last commit
-    // Keep expanded project folders fresh (host caches make this cheap).
-    for (const root of expandedProjectsRef.current) q(`q-wsess:${root}`, 'workspace-sessions', { root });
-  }
-
-  function answerInteraction(response: { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' }): void {
-    if (!interaction) return;
-    window.brainrouter.send({ kind: 'interaction-response', id: interaction.id, response });
-    setInteraction(null);
-  }
-
-  // DESK-6 — press Stop: fire the interrupt AND give instant feedback. The host
-  // now aborts the in-flight LLM call / tool / children, so the turn unwinds in
-  // well under a second; this just makes the UI say so immediately instead of
-  // looking frozen behind a status line the next event overwrites.
-  function requestStop(): void {
-    if (!running || stopping) return;
-    window.brainrouter.send({ kind: 'interrupt' });
-    setStopping(true);
-    setStatusLine('Stopping…');
-    setRows((r) => [...r, { id: rid(), kind: 'status', text: '⏹ Stopping…', ts: Date.now() }]);
-  }
-
   function submit(): void {
     const prompt = draft.trim();
     if (!prompt || running || stopping) return;
@@ -751,66 +497,6 @@ export function App(): React.ReactElement {
     const fk = sessions.find((s) => s.sessionKey === viewKey)?.forkedFrom;
     return fk ? { key: fk, title: sessions.find((s) => s.sessionKey === fk)?.firstUserMessage } : null;
   }, [sessions, viewKey]);
-  // DESK-5w/6w — open a background task. A workflow opens the /workflows-style
-  // card (phases + agents); an agent/worker opens its conversation. Read-only
-  // views open at the TOP and don't auto-follow new content.
-  const viewToTop = (): void => { atBottomRef.current = false; setTimeout(() => { if (chatRef.current) chatRef.current.scrollTop = 0; }, 50); };
-
-  // DESK-6t — switch chats responsively: a no-op when you're already there;
-  // otherwise show the loading state INSTANTLY (so the click never feels stuck)
-  // and debounce the actual resume so spam-clicking only loads the final target.
-  const resumeSession = (key: string): void => {
-    if (!key || key === sessionKeyRef.current) return;
-    setTaskView(null); setWorkflowView(null);
-    sessionKeyRef.current = key; setViewKey(key);
-    setRows([{ id: rid(), kind: 'loading', ts: Date.now() }]);
-    setSearchHits(null); setStatusLine(''); setReasoningTail(''); setLiveText(''); liveBuf.current = '';
-    setRunning(runningSessionsRef.current.has(key));
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    resumeTimerRef.current = setTimeout(() => { window.brainrouter.send({ kind: 'resume-session', sessionKey: key }); }, 120);
-  };
-  resumeSessionRef.current = resumeSession;
-
-  const openTask = (f: FleetRow): void => {
-    if (f.kind === 'workflow') { openWorkflow(f.id); return; }
-    setTaskView({ id: f.id, kind: f.kind, role: f.role, status: 'running', parentSessionKey: f.parentSessionKey, rows: [{ id: rid(), kind: 'loading', ts: Date.now() }] });
-    q('q-task-transcript', 'task-transcript', { kind: f.kind, id: f.id, parentSessionKey: f.parentSessionKey ?? '' });
-    viewToTop();
-  };
-  const openWorkflow = (slug: string): void => {
-    const now = new Date().toISOString();
-    setWorkflowView({ slug, kind: '', status: 'running', startedAt: now, updatedAt: now, totalAgents: 0, totalTokens: 0, phases: [], steps: [] });
-    q('q-workflow-detail', 'workflow-detail', { slug });
-    viewToTop();
-  };
-
-  // DESK-6m — per-chat ⋮ menu actions. Each writes the shared CLI store via a
-  // host action, then refreshes the sidebar list.
-  const closeSessionMenu = (): void => setSessionMenu(null);
-  const setMeta = (key: string, patch: Record<string, unknown>): void => { q('q-session-meta', 'action:session-meta', { sessionKey: key, patch }); closeSessionMenu(); };
-  const togglePin = (s: SessionRow): void => setMeta(s.sessionKey, { pinned: !s.pinned });
-  const toggleComplete = (s: SessionRow): void => setMeta(s.sessionKey, { status: s.status === 'completed' ? 'active' : 'completed' });
-  const toggleArchive = (s: SessionRow): void => setMeta(s.sessionKey, { archived: !s.archived });
-  const moveToGroup = (key: string, group: string | null): void => setMeta(key, { group });
-  const startRename = (s: SessionRow): void => { setRenamingKey(s.sessionKey); setRenameDraft(s.firstUserMessage || ''); closeSessionMenu(); };
-  const commitRename = (): void => { if (renamingKey) q('q-session-meta', 'action:session-meta', { sessionKey: renamingKey, patch: { title: renameDraft.trim() } }); setRenamingKey(null); };
-  // DESK-6v — upToTs (a message's epoch-ms ts) branches the fork at that message;
-  // omitted (the ⋮ menu) forks the whole conversation.
-  const forkSessionAction = (key: string, upToTs?: number): void => { q('q-session-fork', 'action:session-fork', { sessionKey: key, ...(upToTs != null ? { upToTs } : {}) }); closeSessionMenu(); };
-  const deleteSessionAction = (key: string): void => {
-    closeSessionMenu();
-    if (!window.confirm('Delete this chat permanently? This removes its transcript from disk.')) return;
-    q('q-session-delete', 'action:session-delete', { sessionKey: key });
-    if (sessionKeyRef.current === key) window.brainrouter.send({ kind: 'new-session' });
-  };
-  const openExternal = (what: string): void => { q('q-open-external', 'action:open-external', { what }); closeSessionMenu(); };
-  const openSessionMenu = (e: React.MouseEvent, key: string): void => {
-    e.preventDefault(); e.stopPropagation();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    q('q-session-groups', 'action:session-groups'); // refresh the Move-to-group list
-    setSessionMenu({ key, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 4 });
-  };
-
   // Item 9 — sessions that share an opening prompt get their age appended inline
   // so identical-looking rows stay distinguishable.
   const dupeTitleKeys = useMemo(() => duplicateTitleKeys(sessions), [sessions]);
