@@ -17,6 +17,7 @@ import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/b
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from '../../types.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
+import type { PlanDecisionView } from '../plan/planReviewView.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
 import type { ConfigSnapshot } from '../../settings.js';
@@ -49,6 +50,7 @@ export interface AgentEventsCtx {
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
+  setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number } | null>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
@@ -131,7 +133,7 @@ export interface AgentEventsCtx {
 export function useAgentEvents(ctx: AgentEventsCtx): void {
   const {
     setRows, setRunning, setStopping, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setTokens, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -236,7 +238,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // Session-scoped surfaces must NOT carry over from the chat we just left:
           // reset the context meter + plan now (the refresh below repopulates them
           // from THIS session's data — a new chat → empty, not the old chat's 100%).
-          setContextUsage(null); setLastPlan(null);
+          setContextUsage(null); setLastPlan(null); setPlanHistory([]);
           if (e.loadedMessages > 0) {
             // Observed: a centered spinner while the transcript loads, then
             // the full history renders scrolled to the bottom.
@@ -344,6 +346,15 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         // the panel rather than leave the previous session's plan showing.
         const p = result as { items?: PlanItem[]; explanation?: string } | null;
         setLastPlan(p && Array.isArray(p.items) && p.items.length ? { items: p.items, explanation: p.explanation } : null);
+        return;
+      }
+      // §7 PLAN REVIEW — this session's plan decision history (the version log).
+      case 'q-plan-history': if (Array.isArray(result)) setPlanHistory(result as PlanDecisionView[]); return;
+      // Approve / request-changes round-trips: surface an error, else refresh the
+      // history so the new decision appears (the App layer re-fetches q-plan-history).
+      case 'q-plan-decision': {
+        const r = result as { error?: string } | null;
+        if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
         return;
       }
       case 'q-fleet': if (Array.isArray(result)) setFleet(result as FleetRow[]); return;

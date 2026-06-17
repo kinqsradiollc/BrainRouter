@@ -245,6 +245,16 @@ export function installDevBridge(): void {
   ];
 
   // Review v2 — a shared mock run + gate so the commit/push review gate is exercisable.
+  // §7 PLAN REVIEW — a mutable in-memory decision log so Approve / Request-changes
+  // actually grow the version history in the browser preview (append order;
+  // oldest-first, exactly as the host's planHistoryStore returns it).
+  type DevPlanItem = { step: string; status: string; acceptance?: string };
+  type DevPlanDecision = { id: string; verdict: 'approved' | 'changes-requested'; feedback?: string; planSnapshot: DevPlanItem[]; explanation?: string; createdAt: string; linkedMemoryIds: string[] };
+  const devPlanState: { items: DevPlanItem[]; explanation?: string } = { items: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix' };
+  const devPlanDecisions: DevPlanDecision[] = [
+    { id: 'pdec_seed', verdict: 'changes-requested', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
+  ];
+  let devPlanSeq = 1;
   const DEV_DIFF_HASH = 'devhash';
   type DevFinding = { id: string; file: string; line?: number; endLine?: number; severity: string; confidence: number; summary: string; status: string; canApply: boolean; source: string; details?: string; suggestion?: string; codeExcerpt?: string; diffHunk?: string; patch?: string };
   let devReview: { id: string; diffHash: string; status: string; summary: string; findings: DevFinding[] } | null = null;
@@ -574,7 +584,20 @@ export function installDevBridge(): void {
     }),
     'git-log': () => ({ subjects: ['feat(desktop): DESK-4l — interactive views rail, tabbed bottom terminal', 'feat(desktop): DESK-4k — modern skin', 'feat(desktop): DESK-5c — file tree, real terminal'] }),
     'context-usage': () => ({ used: devCtxUsed, window: 256_000, compactAt: 80_000, limit: 80_000, pct: Math.min(1, devCtxUsed / 80_000) }),
-    'plan-state': () => ({ items: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix' }),
+    'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
+    // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
+    'plan-history': () => [...devPlanDecisions],
+    'plan-record-decision': (a) => {
+      const verdict = a.verdict === 'approved' || a.verdict === 'changes-requested' ? a.verdict : null;
+      if (!verdict) return { error: `Unknown plan verdict "${String(a.verdict)}".` };
+      const feedback = typeof a.feedback === 'string' ? a.feedback.trim() : '';
+      if (verdict === 'changes-requested' && !feedback) return { error: 'Requesting changes needs feedback to return to the session.' };
+      if (devPlanState.items.length === 0) return { error: 'There is no plan to review in this session yet.' };
+      const decision: DevPlanDecision = { id: `pdec_${devPlanSeq++}`, verdict, planSnapshot: devPlanState.items.map((i) => ({ ...i })), explanation: devPlanState.explanation, createdAt: new Date().toISOString(), linkedMemoryIds: [] };
+      if (feedback) decision.feedback = feedback;
+      devPlanDecisions.push(decision);
+      return { ok: true, decision };
+    },
     'git-branches': () => ({ current: 'release/0.4.15', branches: ['release/0.4.15', 'main', 'feat/desk-4j-reference-patterns', 'release/0.4.14'] }),
     'list-models': () => ({ current: resolvedModel(activeSession), models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
     'term-open': () => { termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },

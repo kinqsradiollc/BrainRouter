@@ -324,6 +324,36 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .plan-acceptance::before { content: ''; }
 .plan-why { color: var(--text-faint); font-style: italic; padding-bottom: 6px; }
 
+/* §7 PLAN REVIEW — approval banner, controls, version history. */
+.plan-review-banner { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 9px; border-radius: var(--r-sm); margin-bottom: 8px; font-size: 12px; border: 1px solid var(--border); }
+.plan-review-state { font-weight: 600; }
+.plan-review-fb { color: var(--text-dim); font-style: italic; }
+.plan-review-banner.pr-approved { background: rgba(63,185,80,0.10); border-color: rgba(63,185,80,0.35); }
+.plan-review-banner.pr-approved .plan-review-state { color: var(--ok); }
+.plan-review-banner.pr-changes-requested { background: rgba(210,153,34,0.10); border-color: rgba(210,153,34,0.35); }
+.plan-review-banner.pr-changes-requested .plan-review-state { color: var(--warn); }
+.plan-review-banner.pr-changed-since-approval { background: rgba(210,153,34,0.08); border-color: rgba(210,153,34,0.3); }
+.plan-review-banner.pr-changed-since-approval .plan-review-state { color: var(--warn); }
+.plan-review-banner.pr-none { background: var(--ov-04, var(--ov-06)); }
+.plan-review-banner.pr-none .plan-review-state { color: var(--text-dim); }
+.plan-review-controls { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.wt-btn.primary { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); align-self: flex-start; }
+.wt-btn.primary:hover { background: var(--accent-soft); color: var(--text); }
+.plan-history-toggle { background: transparent; border: 0; color: var(--text-dim); font-size: 11.5px; text-align: left; cursor: pointer; padding: 2px 0; }
+.plan-history-toggle:hover { color: var(--text); }
+.plan-history { margin-top: 8px; display: flex; flex-direction: column; gap: 7px; }
+.plan-decision { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 9px; background: var(--surface); }
+.plan-decision-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
+.plan-verdict { font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 5px; }
+.plan-verdict.v-approved { color: var(--ok); background: rgba(63,185,80,0.14); }
+.plan-verdict.v-changes-requested { color: var(--warn); background: rgba(210,153,34,0.14); }
+.plan-decision-meta { color: var(--text-faint); }
+.plan-decision-fb { margin-top: 4px; color: var(--text-dim); font-style: italic; font-size: 12px; }
+.plan-decision-diff { margin-top: 4px; display: flex; gap: 7px; align-items: baseline; font-size: 11px; }
+.plan-decision-diff .diff-add { color: var(--ok); }
+.plan-decision-diff .diff-del { color: var(--err); }
+.plan-decision-diff .diff-mod { color: var(--accent); }
+
 .search-hit { padding: 6px 8px; border-radius: var(--r-sm); margin-bottom: 4px; cursor: default; }
 .search-hit:hover { background: var(--ov-05); }
 .search-role { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); }

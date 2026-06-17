@@ -24,6 +24,7 @@ import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow } from './types.js';
+import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
 import { FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
@@ -98,6 +99,7 @@ export function App(): React.ReactElement {
   const [toolLog, setToolLog] = useState<Array<{ id: number; tool: string; ok: boolean; summary: string }>>([]);
   const [tokens, setTokens] = useState<{ promptTokens: number; completionTokens: number; turns: number } | null>(null);
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
+  const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
 
   // Command surfaces + settings
@@ -234,7 +236,7 @@ export function App(): React.ReactElement {
     setStopping, setStatusLine, setReasoningTail, setLiveText, setRows, setRunning, setInteraction,
     setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
-    setTokens, setContextUsage, setGateBlock, setLastPlan, setFleet, setLiveChildren, setCommitSubjects, setToast,
+    setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setCommitSubjects, setToast,
     setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });
@@ -430,7 +432,7 @@ export function App(): React.ReactElement {
 
   useAgentEvents({
     setRows, setRunning, setStopping, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setTokens, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -654,7 +656,14 @@ export function App(): React.ReactElement {
         tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
         onOpenTask={(t) => { if (t.workspaceRoot && t.workspaceRoot !== activeRoot) switchToWorkspace(t.workspaceRoot, t.parentSessionKey ?? undefined); else { const f = fleet.find((x) => x.id === t.id); if (f) openTask(f); } }}
         onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else setToast('Open that workspace to stop its tasks.'); }} />;
-      case 'plan': return <PlanPanel plan={lastPlan} />;
+      case 'plan': {
+        // §7 — record an approval/changes-requested decision, then re-fetch the
+        // history so the new version appears in the panel.
+        const refreshHistory = () => setTimeout(() => q('q-plan-history', 'plan-history'), 150);
+        return <PlanPanel plan={lastPlan} history={planHistory}
+          onApprove={() => { q('q-plan-decision', 'plan-record-decision', { verdict: 'approved' }); refreshHistory(); setToast('Plan approved — snapshot saved to the version history.'); }}
+          onRequestChanges={(feedback) => { q('q-plan-decision', 'plan-record-decision', { verdict: 'changes-requested', feedback }); refreshHistory(); setDraft(`Plan changes requested: ${feedback}`); setToast('Changes requested — the feedback is queued in the composer to send to the agent.'); }} />;
+      }
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
       case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
         onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
