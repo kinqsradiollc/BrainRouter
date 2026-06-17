@@ -84,6 +84,7 @@ export interface SessionActionsCtx {
 export interface SessionActions {
   refreshSession: () => void;
   refreshSidebar: () => void;
+  refreshGit: () => void;
   resumeSession: (key: string) => void;
   resumeSessionRef: React.MutableRefObject<(key: string) => void>;
   resumeTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
@@ -271,6 +272,17 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     // Keep expanded project folders fresh (host caches make this cheap).
     for (const root of expandedProjectsRef.current) q(`q-wsess:${root}`, 'workspace-sessions', { root });
   }
+  // Git/workspace state is LIVE, not durable — re-read just the git surfaces
+  // (branch, changes, last commit, PR) without the heavier session/list refresh.
+  // Fired when the window regains focus so an external `git checkout` (another
+  // terminal) is reflected instead of showing a stale branch.
+  function refreshGit(): void {
+    q('q-git', 'git-info');
+    q('q-branches', 'git-branches');
+    q('q-files', 'changed-files');
+    q('q-gitlog', 'git-log');
+    q('q-pr', 'git-pr');
+  }
 
   function answerInteraction(response: { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' }): void {
     if (!interaction) return;
@@ -351,7 +363,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   };
 
   return {
-    refreshSession, refreshSidebar, resumeSession, resumeSessionRef, resumeTimerRef,
+    refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
     switchToWorkspace, openProject, addProject, toggleProject,
     openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
