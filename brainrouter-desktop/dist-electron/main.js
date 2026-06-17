@@ -12,6 +12,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-cli/dist/state/workspaceTrust.js';
+// T1 — global dashboard disk reads (no live host needed): running tasks + last
+// review gate per recent workspace.
+import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
+import { getLatestReview } from '@kinqs/brainrouter-cli/dist/state/reviewStore.js';
+import { reviewGate } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
 import { emptyPool, planActivate, applyActivate, setRunning, removeEntry, } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, bumpActivity } from './recents.js';
@@ -267,6 +272,32 @@ app.whenReady().then(() => {
     ipcMain.handle('workspace:untrust', (_e, root) => { if (typeof root === 'string')
         untrustWorkspace(root); return { trusted: false }; });
     ipcMain.handle('workspace:trustedList', () => ({ trusted: listTrustedWorkspaces() }));
+    // T1 — cross-workspace dashboard. The per-workspace host can't see other
+    // workspaces, so main disk-reads each recent root's running tasks + last
+    // review gate (pure file reads; no live host needed). The review gate is the
+    // LAST run's verdict (no per-workspace git diff — that would be too costly to
+    // poll), so it reflects the workspace as of its last review.
+    ipcMain.handle('dashboard:global', () => {
+        const roots = readRecents();
+        const workspaces = roots.map((workspaceRoot) => {
+            let tasks = [];
+            try {
+                tasks = collectRunningTasks(workspaceRoot);
+            }
+            catch { /* unreadable workspace */ }
+            let gate = null;
+            try {
+                const run = getLatestReview(workspaceRoot);
+                if (run) {
+                    const g = reviewGate(run, run.diffHash);
+                    gate = { status: g.status, blocked: g.blocked, reason: g.reason };
+                }
+            }
+            catch { /* no review */ }
+            return { workspaceRoot, tasks: tasks.map((t) => ({ ...t, workspaceRoot })), reviewGate: gate };
+        });
+        return { workspaces };
+    });
     // Wave 1/4 — the renderer reports real activity that main can't see on the
     // agent-event stream (commit / push / create-pr) so the project promotes.
     ipcMain.handle('workspace:activity', (_e, root, reason) => {

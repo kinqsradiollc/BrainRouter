@@ -616,6 +616,17 @@ export function installDevBridge(): void {
     workspaceRecents: async () => ({ current: wsCurrent, recents: wsRecents }),
     onRecentsChanged: (l: (d: { recents: string[]; reason: string; workspaceRoot: string }) => void) => { recentsListeners.add(l); return () => recentsListeners.delete(l); },
     markActivity: async (root: string) => { wsRecents = [root, ...wsRecents.filter((w) => w !== root)]; recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'commit', workspaceRoot: root })); return { ok: true }; },
+    // T1 — cross-workspace dashboard mock: a couple of background workspaces with running tasks + gates.
+    globalDashboard: async () => ({ workspaces: [
+      { workspaceRoot: '/Users/dev/BrainRouter', reviewGate: { status: 'blocked', blocked: true, reason: '1 unresolved high+ finding' }, tasks: [
+        { kind: 'workflow', id: 'wf-1', label: 'verify-desktop-refactor', status: 'running', startedAt: new Date(Date.now() - 42_000).toISOString(), workspaceRoot: '/Users/dev/BrainRouter' },
+        { kind: 'sub-agent', id: 'ag-1', label: 'reviewer · recall.ts', status: 'running', role: 'reviewer', startedAt: new Date(Date.now() - 18_000).toISOString(), workspaceRoot: '/Users/dev/BrainRouter' },
+      ] },
+      { workspaceRoot: '/Users/dev/side-project', reviewGate: { status: 'clean', blocked: false, reason: '' }, tasks: [
+        { kind: 'worker', id: 'wk-9', label: 'bench worker', status: 'running', worktree: true, startedAt: new Date(Date.now() - 5_000).toISOString(), workspaceRoot: '/Users/dev/side-project' },
+      ] },
+      { workspaceRoot: '/Users/dev/TradingAgents', reviewGate: null, tasks: [] },
+    ] }),
     openWorkspace: async (root: string) => {
       // Mirror the real main-process swap. Wave 1 — opening is "opened", NOT
       // activity: ensure membership WITHOUT promoting to the top (only a turn/

@@ -46,4 +46,8 @@ contextBridge.exposeInMainWorld('brainrouter', {
     markActivity(workspaceRoot, reason) {
         return ipcRenderer.invoke('workspace:activity', workspaceRoot, reason);
     },
+    // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
+    globalDashboard() {
+        return ipcRenderer.invoke('dashboard:global');
+    },
 });

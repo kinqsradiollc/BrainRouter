@@ -34,6 +34,8 @@ import { useEditor } from './lib/editor/useEditor.js';
 import { useCi } from './lib/ci/useCi.js';
 import { CIPanel } from './panels/CIPanel.js';
 import { summarizeChecks, ciStatusLabel } from './lib/ci/ciFormat.js';
+import { DashboardPanel } from './panels/DashboardPanel.js';
+import { type DashTab, type DashTask, type WorkspaceDash } from './lib/workspace/dashboard.js';
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
 import { Markdown, MD_COMPONENTS } from './chat/markdown.js';
@@ -291,6 +293,30 @@ export function App(): React.ReactElement {
   const ci = useCi({ onToast: setToast });
   const openUrl = (url: string): void => { if (url) q('q-open-url', 'action:open-external', { url }); };
   const openCiPanel = (): void => { ensurePanel('ci'); ci.refresh(); };
+
+  // T1 — workflow/background dashboard. Workspace scope uses the live fleet +
+  // finished tasks; All scope disk-reads every recent workspace via main.
+  const [dashScope, setDashScope] = useState<'workspace' | 'all'>('workspace');
+  const [dashTab, setDashTab] = useState<DashTab>('running');
+  const [globalBoards, setGlobalBoards] = useState<WorkspaceDash[] | null>(null);
+  const [dashBusy, setDashBusy] = useState(false);
+  const refreshDashboard = (): void => {
+    if (!window.brainrouter.globalDashboard) return;
+    setDashBusy(true);
+    window.brainrouter.globalDashboard()
+      .then((r) => setGlobalBoards((r.workspaces ?? []) as unknown as WorkspaceDash[]))
+      .catch(() => { /* gh/disk unreadable */ })
+      .finally(() => setDashBusy(false));
+  };
+  const openDashboard = (): void => { ensurePanel('dashboard'); refreshDashboard(); };
+  const dashBoards = useMemo<WorkspaceDash[]>(() => {
+    if (dashScope === 'all') return globalBoards ?? [];
+    const tasks: DashTask[] = [
+      ...fleet.map((f) => ({ kind: f.kind, id: f.id, label: f.label, startedAt: f.startedAt, role: f.role, worktree: f.worktree, parentSessionKey: f.parentSessionKey, workspaceRoot: activeRoot, status: 'running' })),
+      ...finishedTasks.map((t) => ({ kind: 'agent', id: t.id, label: t.label, status: /fail/i.test(t.status) ? 'failed' : 'completed', workspaceRoot: activeRoot })),
+    ];
+    return [{ workspaceRoot: activeRoot, tasks, reviewGate }];
+  }, [dashScope, globalBoards, fleet, finishedTasks, activeRoot, reviewGate]);
 
   // T5 — opening a file now lands in the editable Monaco editor (not the
   // read-only viewer). The 'file' panel + read-only viewer remain available.
@@ -1324,6 +1350,10 @@ export function App(): React.ReactElement {
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'tasks': return <TasksPanel fleet={activeSessionTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = activeSessionTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
+      case 'dashboard': return <DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
+        tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
+        onOpenTask={(t) => { if (t.workspaceRoot && t.workspaceRoot !== activeRoot) switchToWorkspace(t.workspaceRoot, t.parentSessionKey ?? undefined); else { const f = fleet.find((x) => x.id === t.id); if (f) openTask(f); } }}
+        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else setToast('Open that workspace to stop its tasks.'); }} />;
       case 'plan': return <PlanPanel plan={lastPlan} />;
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
       case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
@@ -1933,6 +1963,8 @@ export function App(): React.ReactElement {
                       badge: changedFiles.length ? String(changedFiles.length) : '' },
                     { id: 'tasks' as PanelId, title: 'Background tasks', hint: '', icon: 'tasks',
                       badge: activeSessionTasks.length ? String(activeSessionTasks.length) : '', live: activeSessionTasks.length > 0 },
+                    { id: 'dashboard' as PanelId, title: 'Dashboard', hint: '', icon: 'tasks',
+                      badge: fleet.length ? String(fleet.length) : '' },
                     { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt',
                       badge: toolLog.length ? String(toolLog.length) : '' },
                     { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '' },

@@ -1222,3 +1222,34 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
   0%, 30% { background: color-mix(in srgb, var(--accent) 30%, transparent); }
   100% { background: transparent; }
 }
+
+/* T1 — workflow / background dashboard */
+.dash-panel { padding: 6px 8px 14px; }
+.dash-bar { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; }
+.dash-scope { flex: 1 1 auto; }
+.dash-refresh { width: 26px; height: 24px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); }
+.dash-refresh:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.dash-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.dash-tab { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 3px 9px; border-radius: 999px; color: var(--text-dim); border: 1px solid transparent; }
+.dash-tab:hover { background: var(--ov-1); color: var(--text); }
+.dash-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
+.dash-count { font-size: 10px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--ov-2); display: inline-flex; align-items: center; justify-content: center; }
+.dash-ws { margin-bottom: 8px; }
+.dash-ws-head { display: flex; align-items: center; gap: 7px; padding: 5px 4px; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.dash-ws-name { color: var(--text-dim); text-transform: none; letter-spacing: 0; font-weight: 560; }
+.dash-ws-gate { font-size: 10px; padding: 1px 6px; border-radius: 999px; text-transform: none; letter-spacing: 0; }
+.dash-ws-gate.gate-blocked { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+.dash-ws-gate.gate-stale, .dash-ws-gate.gate-needs-review { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.dash-ws-count { margin-left: auto; }
+.dash-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 7px; }
+.dash-row:hover { background: var(--ov-1); }
+.dash-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-faint); }
+.dash-dot.run { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.dash-dot.fail { background: var(--err); } .dash-dot.done { background: var(--ok); }
+.dash-row-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+.dash-kind { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-faint); background: var(--ov-1); padding: 1px 6px; border-radius: 999px; }
+.dash-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
+.dash-role { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); }
+.dash-time { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.dash-stop { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 4px; color: var(--text-faint); }
+.dash-stop:hover { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
