@@ -410,7 +410,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // Preview fetch (q-art-read) merges the resolved content onto the matching
       // record so the detail view's preview renders without a parallel state slice.
       case 'q-art': if (Array.isArray(result)) setArtifacts(result as ArtifactRecord[]); return;
-      case 'q-art-create': case 'q-art-update': {
+      case 'q-art-create': case 'q-art-update': case 'q-art-save': {
         const r = result as { error?: string } | null;
         if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
         return;

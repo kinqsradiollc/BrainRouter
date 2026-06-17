@@ -11,7 +11,7 @@
  * artifactStore over the host endpoints — no parallel state.
  */
 import React, { useEffect, useState } from 'react';
-import type { ArtifactRecord, ArtifactKind, ArtifactStatus } from '@kinqs/brainrouter-types';
+import type { ArtifactRecord, ArtifactKind, ArtifactStatus, AnnotationRecord } from '@kinqs/brainrouter-types';
 import remarkGfm from 'remark-gfm';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 import {
@@ -22,12 +22,18 @@ import {
 const KIND_FILTER: Array<'' | ArtifactKind> = ['', ...ARTIFACT_KIND_OPTIONS];
 const STATUS_FILTER: Array<'' | ArtifactStatus> = ['', ...ARTIFACT_STATUS_OPTIONS];
 
-export function ArtifactsPanel({ artifacts, onCreate, onSetStatus, onPreview }: {
+export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, onPreview, onSave, onAnnotate }: {
   artifacts: ArtifactRecord[];
+  /** All workspace annotations — the detail filters to the selected artifact by targetId. */
+  annotations?: AnnotationRecord[];
   onCreate?: (title: string) => void;
   onSetStatus: (id: string, status: ArtifactStatus) => void;
   /** Resolve the artifact's content (file via the safe workspace read, or inline). */
   onPreview: (a: ArtifactRecord) => void;
+  /** §12 write-workspace — persist edited content (file-backed write or inline update). */
+  onSave?: (id: string, content: string) => void;
+  /** §8 — capture an annotation anchored to this artifact. */
+  onAnnotate?: (a: ArtifactRecord, body: string, block?: string) => void;
 }): React.ReactElement {
   const [kindFilter, setKindFilter] = useState<'' | ArtifactKind>('');
   const [statusFilter, setStatusFilter] = useState<'' | ArtifactStatus>('');
@@ -93,7 +99,8 @@ export function ArtifactsPanel({ artifacts, onCreate, onSetStatus, onPreview }: 
             </button>
           ))}
 
-          {selected ? <ArtifactDetail art={selected} onSetStatus={onSetStatus} onPreview={onPreview} /> : null}
+          {selected ? <ArtifactDetail art={selected} onSetStatus={onSetStatus} onPreview={onPreview} onSave={onSave} onAnnotate={onAnnotate}
+            annotations={(annotations ?? []).filter((n) => n.targetId === selected.id)} /> : null}
         </>
       )}
 
@@ -102,16 +109,30 @@ export function ArtifactsPanel({ artifacts, onCreate, onSetStatus, onPreview }: 
   );
 }
 
-function ArtifactDetail({ art, onSetStatus, onPreview }: {
+function ArtifactDetail({ art, annotations, onSetStatus, onPreview, onSave, onAnnotate }: {
   art: ArtifactRecord;
+  annotations: AnnotationRecord[];
   onSetStatus: (id: string, status: ArtifactStatus) => void;
   onPreview: (a: ArtifactRecord) => void;
+  onSave?: (id: string, content: string) => void;
+  onAnnotate?: (a: ArtifactRecord, body: string, block?: string) => void;
 }): React.ReactElement {
   // Re-resolve the content whenever the selected artifact changes — a file-backed
   // artifact's content lives on disk, fetched through the host's safe read.
   useEffect(() => { onPreview(art); }, [art.id, art.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const content = art.content ?? '';
+  // §12 write-workspace — an Edit toggle swaps the preview for an editable buffer.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(content);
+  // Reset the draft whenever the resolved content changes (artifact switch / re-read).
+  useEffect(() => { setDraft(content); setEditing(false); }, [art.id, content]);
+  const [note, setNote] = useState('');
+  const submitNote = (): void => {
+    if (!onAnnotate || !note.trim()) return;
+    onAnnotate(art, note.trim());
+    setNote('');
+  };
   return (
     <div className="req-detail">
       <div className="req-detail-head">
@@ -134,8 +155,47 @@ function ArtifactDetail({ art, onSetStatus, onPreview }: {
 
       {art.path ? <div className="annot-anchor-line">{art.path}</div> : null}
 
-      <div className="tasks-section"><span>Preview</span></div>
-      <ArtifactPreview art={art} content={content} />
+      <div className="tasks-section">
+        <span>{editing ? 'Edit' : 'Preview'}</span>
+        {onSave && (art.format === 'markdown' || art.format === 'text' || art.format === 'html') ? (
+          editing ? (
+            <span className="art-edit-actions">
+              <button className="wt-btn" onClick={() => { setDraft(content); setEditing(false); }}>Cancel</button>
+              <button className="wt-btn primary" onClick={() => { onSave(art.id, draft); setEditing(false); }}>Save{art.path ? ' to file' : ''}</button>
+            </span>
+          ) : (
+            <button className="wt-btn" title={art.path ? `Edit and write back to ${art.path}` : 'Edit the artifact content'} onClick={() => { setDraft(content); setEditing(true); }}>Edit</button>
+          )
+        ) : null}
+      </div>
+      {editing
+        ? <textarea className="art-edit" value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} />
+        : <ArtifactPreview art={art} content={content} />}
+
+      {onAnnotate ? (
+        <>
+          <div className="tasks-section"><span>Annotations{annotations.length ? ` (${annotations.length})` : ''}</span></div>
+          {annotations.length ? (
+            <ul className="annot-thread">
+              {annotations.map((n) => (
+                <li key={n.id} className="annot-comment">
+                  <div className="annot-comment-meta">
+                    <span className={`req-status ${statusClass(n.status as ArtifactStatus)}`}>{n.status}</span>
+                    {n.severity ? <span className="dim">{n.severity}</span> : null}
+                    <span className="req-id">{n.id}</span>
+                  </div>
+                  <div className="annot-comment-body">{n.body}</div>
+                </li>
+              ))}
+            </ul>
+          ) : <div className="empty">No annotations on this artifact yet.</div>}
+          <div className="sched-add-row">
+            <input className="filter" placeholder="annotate this artifact (markdown/HTML/text)" value={note}
+              onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitNote(); }} />
+            <button className="sched-add-btn" onClick={submitNote} disabled={!note.trim()}>Annotate</button>
+          </div>
+        </>
+      ) : null}
 
       <div className="tasks-section"><span>Links</span></div>
       <div className="req-links">

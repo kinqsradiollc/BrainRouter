@@ -191,7 +191,7 @@ export function installDevBridge(): void {
       createdAt: nowIso(2 * 86400_000), updatedAt: nowIso(6 * 3600_000),
     },
     {
-      id: 'ann_b3c4d5e6', type: 'markdown', artifactId: 'art_9', body: 'The architecture doc still references the old 3-stage pipeline. Update to 4 stages.',
+      id: 'ann_b3c4d5e6', type: 'markdown', targetId: 'art_9', artifactId: 'art_9', body: 'The architecture doc still references the old 3-stage pipeline. Update to 4 stages.',
       workspaceRoot: wsCurrent, anchor: { block: 'Recall pipeline', selectedText: '3-stage pipeline: retrieve → rerank → expand' },
       suggestedText: '4-stage pipeline: retrieve → rerank → judge → expand',
       severity: 'info', status: 'ignored', linkedMemoryIds: ['mem_arch', 'mem_pipeline'],
@@ -451,6 +451,18 @@ export function installDevBridge(): void {
         return { id: r.id, content: `# ${r.title}\n\n_(file: ${r.path})_\n\nThe Core Identity anchor is injected **before** federation context in the CLI briefing, so the persona survives the recall blend.\n\n1. Distill Core Identity from the brain.\n2. Inject the anchor as the first briefing block.\n3. Append federation + recall context after it.\n` };
       }
       return { id: r.id, content: r.content ?? '' };
+    },
+    // §12 WRITE-WORKSPACE — save edited content. Inline artifacts update their
+    // stored content (so the preview reflects the edit); path-backed ones report
+    // ok (the host writes the real file via the safe workspace write).
+    'artifact-save': (a) => {
+      const content = typeof a.content === 'string' ? a.content : null;
+      if (content === null) return { error: 'Artifact content must be a string.' };
+      const r = devArtifacts.find((x) => x.id === a.id);
+      if (!r) return { error: `No artifact "${String(a.id)}".` };
+      if (!r.path) r.content = content;
+      r.updatedAt = new Date().toISOString();
+      return { id: r.id, ok: true, path: r.path };
     },
     // T12 — mock a local review pass over the working diff.
     // Review v2 — shared run + gate so the commit/push gate is demonstrable.

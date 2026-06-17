@@ -731,10 +731,15 @@ export function App(): React.ReactElement {
         // the artifact's content via q-art-read (file via the safe workspace read,
         // or inline), which merges the content back onto the matching record.
         const refresh = () => setTimeout(() => q('q-art', 'artifact-list'), 150);
-        return <ArtifactsPanel artifacts={artifacts}
+        // §8 — annotations targeting an artifact use the artifact's format as the
+        // annotation kind (markdown/html), else the generic 'artifact' target.
+        const annTypeFor = (fmt: string): 'markdown' | 'html' | 'artifact' => fmt === 'markdown' ? 'markdown' : fmt === 'html' ? 'html' : 'artifact';
+        return <ArtifactsPanel artifacts={artifacts} annotations={annotations}
           onCreate={(title) => { q('q-art-create', 'artifact-create', { kind: 'markdown-report', title }); refresh(); }}
           onSetStatus={(id, status) => { q('q-art-update', 'artifact-update', { id, status }); refresh(); }}
-          onPreview={(a) => { q('q-art-read', 'artifact-read', { id: a.id }); }} />;
+          onPreview={(a) => { q('q-art-read', 'artifact-read', { id: a.id }); }}
+          onSave={(id, content) => { q('q-art-save', 'artifact-save', { id, content }); refresh(); setTimeout(() => q('q-art-read', 'artifact-read', { id }), 250); setToast('Artifact saved.'); }}
+          onAnnotate={(a, body) => { q('q-annot-create', 'annotation-create', { type: annTypeFor(a.format), targetId: a.id, artifactId: a.id, body }); setTimeout(() => q('q-annot', 'annotation-list'), 150); setToast('Annotation saved to this artifact.'); }} />;
       }
       default: return null;
     }
