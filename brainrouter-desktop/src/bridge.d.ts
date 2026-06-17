@@ -23,6 +23,8 @@ declare global {
       trustedWorkspaces(): Promise<{ trusted: string[] }>;
       /** Wave 1/4 — report real activity main can't see (commit/push/create-pr). */
       markActivity?(workspaceRoot: string, reason: string): Promise<{ ok: boolean }>;
+      /** T1 — cross-workspace dashboard: running tasks + last review gate per recent root. */
+      globalDashboard?(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }>;
     };
   }
 }

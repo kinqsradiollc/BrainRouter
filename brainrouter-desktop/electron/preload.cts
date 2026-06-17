@@ -45,4 +45,8 @@ contextBridge.exposeInMainWorld('brainrouter', {
   markActivity(workspaceRoot: string, reason: string): Promise<{ ok: boolean }> {
     return ipcRenderer.invoke('workspace:activity', workspaceRoot, reason);
   },
+  // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
+  globalDashboard(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }> {
+    return ipcRenderer.invoke('dashboard:global');
+  },
 });
