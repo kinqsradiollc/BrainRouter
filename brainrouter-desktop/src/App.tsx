@@ -101,7 +101,6 @@ export function App(): React.ReactElement {
   // never overlays the chat) and its toggle yield when the chat would squeeze.
   const workrowRef = useRef<HTMLDivElement>(null);
   const [workW, setWorkW] = useState(0);
-  const [termLines, setTermLines] = useState<string[]>([]);
   const [toolLog, setToolLog] = useState<Array<{ id: number; tool: string; ok: boolean; summary: string }>>([]);
   const [changedFiles, setChangedFiles] = useState<Array<{ status: string; path: string }>>([]);
   const [diffView, setDiffView] = useState<{ path: string; diff: string } | null>(null);
@@ -652,10 +651,6 @@ export function App(): React.ReactElement {
           if (!e.ok) turnFailsRef.current += 1;
           pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, file: fileFromSummary(e.tool, e.summary) });
           setToolLog((t) => [...t.slice(-199), { id: rid(), tool: e.tool, ok: e.ok, summary: e.summary }]);
-          if ((e.tool === 'run_command' || e.tool === 'task_output') && (e.preview || e.summary)) {
-            const text = (e.preview ?? e.summary).split('\n').slice(0, 40);
-            setTermLines((l) => [...l.slice(-400), `$ ${e.tool}${e.ok ? '' : ' ✗'}`, ...text]);
-          }
           break;
         }
         case 'child-tool-start':
@@ -939,11 +934,7 @@ export function App(): React.ReactElement {
         return;
       }
       case 'a-allow-rule': setToast(`Always-allow rule saved${result && typeof result === 'object' && 'rule' in (result as object) ? `: ${(result as { rule: string }).rule}` : ''} — shared with the CLI.`); q('q-snapshot', 'config-snapshot'); return;
-      case 'a-term': {
-        const r = result as { out?: string; code?: number };
-        setTermLines((l) => [...l.slice(-400), ...(r?.out ? r.out.split('\n') : []), r?.code ? `✗ exit ${r.code}` : '']);
-        return;
-      }
+      case 'a-term': return; // term-exec output is rendered by the live TerminalPanel (xterm), not buffered here
       case 'a-git': {
         const r = result as { out?: string; code?: number };
         setGitBusy(false);
@@ -1650,7 +1641,6 @@ export function App(): React.ReactElement {
                           <button key={b} className="menu-item" onClick={() => {
                             setPop('');
                             if (b === branches.current) return;
-                            setTermLines((l) => [...l.slice(-400), `❯ git checkout ${b}`]);
                             q('a-term', 'action:term-exec', { cmd: `git checkout ${JSON.stringify(b).slice(1, -1)}` });
                             setTimeout(() => { q('q-branches', 'git-branches'); q('q-git', 'git-info'); }, 600);
                           }}>
