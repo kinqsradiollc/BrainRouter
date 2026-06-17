@@ -1166,3 +1166,39 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .editor-status-path { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-status-dirty { color: var(--accent); }
 .editor-status-clean { color: var(--text-faint); }
+
+/* T6 — GitHub CI/CD panel */
+.ci-panel { padding: 6px 10px 14px; }
+.ci-bar { display: flex; gap: 8px; padding: 4px 0 8px; }
+.ci-pr { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+.ci-pr-state { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; background: var(--ov-1); color: var(--text-dim); }
+.ci-pr-state.open { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.ci-pr-state.merged { background: color-mix(in srgb, #a371f7 22%, transparent); color: #d2a8ff; }
+.ci-pr-state.closed { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+.ci-pr-title { flex: 1 1 auto; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-pr-branch { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.ci-section { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); margin: 12px 0 4px; }
+.ci-status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 6px 8px; border-radius: 8px; background: var(--surface); }
+.ci-status.ci-passing { color: var(--ok); } .ci-status.ci-failing { color: var(--err); }
+.ci-status.ci-pending { color: var(--warn); } .ci-status.ci-none { color: var(--text-faint); }
+.ci-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-faint); flex: 0 0 auto; }
+.ci-dot.ok { background: var(--ok); } .ci-dot.fail { background: var(--err); }
+.ci-dot.pending { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+.ci-dot.cancel { background: var(--text-faint); } .ci-dot.neutral { background: var(--text-faint); }
+.ci-check { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; }
+.ci-check:hover { background: var(--ov-1); }
+.ci-check-name { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-check-wf { font-size: 11px; color: var(--text-faint); }
+.ci-check-dur { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ci-run { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; overflow: hidden; }
+.ci-run-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; font-size: 12px; text-align: left; }
+.ci-run-head:hover { background: var(--ov-1); }
+.ci-run-title { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-run-meta { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.ci-run-body { padding: 8px 9px; border-top: 1px solid var(--border); background: var(--bg); }
+.ci-run-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ci-jobs { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.ci-job { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+.ci-log { font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text-dim); background: var(--term-bg); border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; }
+.env-row.ci-env-failing span { color: var(--err); } .env-row.ci-env-passing span { color: var(--ok); }
+.env-row.ci-env-pending span { color: var(--warn); }

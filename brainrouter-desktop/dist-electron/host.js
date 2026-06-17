@@ -1303,6 +1303,15 @@ async function main() {
                 const sh = (cmd) => new Promise((resolve) => exec(cmd, { cwd: root, timeout: 8_000 }, () => resolve()));
                 const q = (s) => `'${s.replace(/'/g, "'\\''")}'`;
                 const isWin = process.platform === 'win32', isMac = process.platform === 'darwin';
+                // T6 — open an explicit URL (CI/check/run links). https-only so a malicious
+                // gh payload can't smuggle a file:// or shell-ish scheme; single-quoted.
+                const url = typeof args.url === 'string' ? args.url : '';
+                if (url) {
+                    if (!/^https:\/\/[^\s'"]+$/.test(url))
+                        return { ok: false, error: 'only https URLs are allowed' };
+                    void sh(isMac ? `open ${q(url)}` : isWin ? `start "" ${q(url)}` : `xdg-open ${q(url)}`);
+                    return { ok: true, url };
+                }
                 if (what === 'pr') {
                     void sh('gh pr view --web');
                     return { ok: true, what };
