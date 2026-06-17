@@ -21,7 +21,7 @@ import { usePanels } from './lib/panels/usePanels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
-import { CommandPalette, filterCommands } from './palette.js';
+import { CommandPalette } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
@@ -44,6 +44,8 @@ import { SessionStatus } from './components/SessionStatus.js';
 import { WorkElapsed } from './components/WorkElapsed.js';
 import { HomeView } from './components/HomeView.js';
 import { Composer } from './components/Composer.js';
+import { useComposerDerived } from './lib/composer/useComposerDerived.js';
+import { useSessionSidebar } from './lib/session/useSessionSidebar.js';
 import { TopbarRight } from './components/TopbarRight.js';
 import { EnvironmentPanel } from './components/EnvironmentPanel.js';
 import { TerminalDock } from './components/TerminalDock.js';
@@ -1266,48 +1268,14 @@ export function App(): React.ReactElement {
   );
 
   const statuses = useMemo(() => new Map(changedFiles.map((f) => [f.path, f.status])), [changedFiles]);
-  const sessionTitle = useMemo(() => {
-    const firstUser = rows.find((r) => r.kind === 'user') as { text: string } | undefined;
-    return firstUser ? firstUser.text.slice(0, 48) : 'New session';
-  }, [rows]);
-
-
-  const hasConversation = useMemo(() => rows.some((r) => r.kind === 'user' || r.kind === 'assistant' || r.kind === 'tool-group'), [rows]);
-  // DESK-6w — a card view (task convo / workflow) takes over the chat area, so
-  // the home-mode vertical centering must NOT apply (it would push the card up).
-  const homeMode = !hasConversation && !liveText && !running && !taskView && !workflowView;
-
-  const slashActive = !slashDismissed && !running && draft.startsWith('/') && !/\s/.test(draft);
-  const slashMatches = useMemo(() => (slashActive ? filterCommands(commands, draft) : []), [slashActive, commands, draft]);
-
-  // DESK-4d² — composer control state derived from the shared prefs.
-  const prefsObj = snapshot?.prefs as Record<string, unknown> | undefined;
-  const execMode = String(prefsObj?.executionMode ?? 'planning');
-  const reviewPolicy = String(prefsObj?.reviewPolicy ?? 'request');
-  const modeLabel = execMode === 'planning' ? 'Plan mode' : reviewPolicy === 'proceed' ? 'Auto mode' : 'Accept edits';
-  const effort = String(prefsObj?.effort ?? 'medium');
-  const modelChoices = useMemo(() => {
-    const out = [info.model, snapshot?.fallbackModel].filter((m): m is string => !!m);
-    return [...new Set(out)];
-  }, [info.model, snapshot?.fallbackModel]);
-  // DESK-6m — hide archived (unless toggled), keep pinned first, optionally
-  // alpha-sort, and split out grouped chats into their own sections.
-  const liveSessions = useMemo(() => {
-    let list = sessions.filter((s) => showArchived || !s.archived);
-    if (recentsSort === 'alpha') list = [...list].sort((a, b) => (a.firstUserMessage ?? a.sessionKey).localeCompare(b.firstUserMessage ?? b.sessionKey));
-    return [...list].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)); // pinned first (stable)
-  }, [sessions, showArchived, recentsSort]);
-  const archivedCount = useMemo(() => sessions.filter((s) => s.archived).length, [sessions]);
-  const ungroupedSessions = useMemo(() => liveSessions.filter((s) => !s.group), [liveSessions]);
-  const groupedSessions = useMemo(() => {
-    const m = new Map<string, SessionRow[]>();
-    for (const s of liveSessions) if (s.group) { const arr = m.get(s.group); if (arr) arr.push(s); else m.set(s.group, [s]); }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [liveSessions]);
-  const visibleProjectSessions = recentsOpen ? ungroupedSessions.slice(0, visibleCount) : ungroupedSessions.slice(0, 3);
-  const hiddenProjectSessions = Math.max(0, ungroupedSessions.length - visibleProjectSessions.length);
-  const currentProjectName = workspaces.current?.split('/').pop() ?? info.workspaceRoot?.split('/').pop() ?? 'No workspace';
-  const otherProjects = workspaces.recents.filter((w) => w !== workspaces.current && w !== info.workspaceRoot).slice(0, 6);
+  // T4 — composer/header derived state (sessionTitle, hasConversation, homeMode,
+  // slash matches, mode/effort/model labels) lives in a pure hook now.
+  const { sessionTitle, hasConversation, homeMode, slashActive, slashMatches, execMode, modeLabel, effort, modelChoices } =
+    useComposerDerived({ rows, liveText, running, taskView, workflowView, slashDismissed, draft, commands, snapshot, info });
+  // T4 — sidebar groupings (archived/pinned/grouped split + visible window +
+  // other projects) live in a pure hook now.
+  const { archivedCount, ungroupedSessions, groupedSessions, visibleProjectSessions, hiddenProjectSessions, currentProjectName, otherProjects } =
+    useSessionSidebar({ sessions, showArchived, recentsSort, recentsOpen, visibleCount, workspaces, info });
 
   function runSlash(c: DeskCommand): void {
     setDraft('');
