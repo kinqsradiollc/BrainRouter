@@ -21,13 +21,13 @@ import { usePanels } from './lib/panels/usePanels.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
-import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
+import { CommandPalette, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
 import { fileFromSummary, fmtAge, fmtElapsed, fmt, download } from './lib/format.js';
-import { EFFORT_LEVELS, NON_CHAT_MODEL, VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
+import { VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
 import { useEditor } from './lib/editor/useEditor.js';
@@ -44,8 +44,7 @@ import { WorkflowCard } from './chat/WorkflowCard.js';
 import { SessionStatus } from './components/SessionStatus.js';
 import { WorkElapsed } from './components/WorkElapsed.js';
 import { HomeView } from './components/HomeView.js';
-import { ContextRing } from './components/ContextRing.js';
-import { UsageBar } from './components/UsageBar.js';
+import { Composer } from './components/Composer.js';
 
 installDevBridge();
 
@@ -1641,199 +1640,14 @@ export function App(): React.ReactElement {
                 <span className="dim">{changedFiles.length} files changed — view diff</span>
               </div>
             ) : null}
-            <div className="composer">
-              <div className="box">
-                {slashActive && slashMatches.length ? (
-                  <div className="slash-pop">
-                    <SlashPopup commands={commands} filter={draft} selected={slashSel} onPick={runSlash} onHover={setSlashSel} />
-                  </div>
-                ) : null}
-                <textarea
-                  rows={1}
-                  placeholder={stopping ? 'Stopping…' : running ? 'Working…' : 'Message BrainRouter…  ( / for commands )'}
-                  value={draft}
-                  onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
-                  onKeyDown={(e) => {
-                    if (slashActive && slashMatches.length) {
-                      if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel((s) => Math.min(s + 1, slashMatches.length - 1)); return; }
-                      if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel((s) => Math.max(s - 1, 0)); return; }
-                      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); runSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]); return; }
-                      if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return; }
-                    }
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-                    if (e.key === 'Escape' && running) requestStop();
-                  }}
-                />
-                <button className={`input-send icon-btn${running ? ' stop-red' : ''}${stopping ? ' stopping' : ''}`} title={stopping ? 'Stopping…' : running ? 'Stop' : 'Send'}
-                  onClick={() => running ? requestStop() : submit()}
-                  disabled={(!running && !draft.trim()) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
-                <div className="composer-controls">
-                  <span className="pop-wrap">
-                    {pop === 'mode' ? (
-                      <div className="menu-pop left">
-                        <div className="menu-head"><span>Mode</span><span>⇧⌃M</span></div>
-                        {([['Plan mode', 'planning', 'request', '1'], ['Accept edits', 'fast', 'request', '2'], ['Auto mode', 'fast', 'proceed', '3']] as const).map(([label, em, rp, num]) => (
-                          <button key={label} className="menu-item" onClick={() => {
-                            q('a-pref', 'action:set-pref', { key: 'executionMode', value: em });
-                            q('a-pref', 'action:set-pref', { key: 'reviewPolicy', value: rp });
-                            setPop('');
-                          }}>
-                            <span className="mi-check">{modeLabel === label ? '✓' : ''}</span>{label}
-                            <span className="mi-hint">{num}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <button type="button" className="chip dim" onClick={() => setPop(pop === 'mode' ? '' : 'mode')}>
-                      {modeLabel}<Icon name="chev-down" size={9} />
-                    </button>
-                  </span>
-                  <button type="button" className="ctx-chip" title={info.workspaceRoot}>
-                    <Icon name="folder" size={11} />
-                    <span>{info.workspaceRoot?.split('/').pop() ?? 'workspace'}</span>
-                  </button>
-                  <span className="pop-wrap">
-                    {pop === 'branch' ? (
-                      <div className="menu-pop left" style={{ bottom: 'calc(100% + 8px)' }}>
-                        <div className="menu-head"><span>Branches</span></div>
-                        {branches.branches.slice(0, 12).map((b) => (
-                          <button key={b} className="menu-item" onClick={() => {
-                            setPop('');
-                            if (b === branches.current) return;
-                            q('a-term', 'action:term-exec', { cmd: `git checkout ${JSON.stringify(b).slice(1, -1)}` });
-                            setTimeout(() => { q('q-branches', 'git-branches'); q('q-git', 'git-info'); }, 600);
-                          }}>
-                            <span className="mi-check">{b === branches.current ? '✓' : ''}</span>{b}
-                          </button>
-                        ))}
-                        {branches.branches.length === 0 ? <div className="empty">Not a git repository.</div> : null}
-                      </div>
-                    ) : null}
-                    {branches.current ? (
-                      <button type="button" className="ctx-chip" onClick={() => setPop(pop === 'branch' ? '' : 'branch')}>
-                        <Icon name="branch" size={11} />
-                        <span>{branches.current}</span>
-                        <Icon name="chev-down" size={9} />
-                      </button>
-                    ) : branches.loading ? (
-                      <span className="ctx-chip" style={{ opacity: 0.6 }}>
-                        <Icon name="branch" size={11} /><span>loading…</span>
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="composer-spacer" />
-                  {/* DESK-5q — effort is its OWN control (Codex: Faster → Smarter) */}
-                  <span className="pop-wrap">
-                    {pop === 'effort' ? (
-                      <div className="menu-pop effort-menu">
-                        <div className="menu-head"><span>Effort</span><span>Faster → Smarter</span></div>
-                        {EFFORT_LEVELS.map((lvl) => (
-                          <button key={lvl} className="menu-item" onClick={() => { q('a-pref', 'action:set-pref', { key: 'effort', value: lvl }); setPop(''); }}>
-                            <span className="mi-check">{effort === lvl ? '✓' : ''}</span>{lvl === 'xhigh' ? 'Extra high' : lvl[0].toUpperCase() + lvl.slice(1)}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <button type="button" className="effort-pill" title="Reasoning effort" onClick={() => setPop(pop === 'effort' ? '' : 'effort')}>
-                      {effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1)}
-                    </button>
-                  </span>
-                  {/* model selection is now separate from effort */}
-                  <span className="pop-wrap">
-                    {pop === 'model' ? (
-                      <div className="menu-pop model-menu">
-                        {(() => {
-                          // DESK-5l — only models that can actually chat;
-                          // embedding/audio/rerank picks broke the session.
-                          const chatModels = endpointModels.filter((m) => !NON_CHAT_MODEL.test(m));
-                          const hidden = endpointModels.length - chatModels.length;
-                          const listed = [...new Set([...(chatModels.length ? chatModels : []), ...modelChoices])];
-                          return (
-                            <>
-                              <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>⇧⌃I</span></div>
-                              <div className="model-list">
-                                {modelsLoading && !endpointModels.length ? (
-                                  <div className="empty" style={{ padding: '4px 9px' }}>Loading models…</div>
-                                ) : null}
-                                {!modelsLoading && !endpointModels.length ? (
-                                  <div className="empty" style={{ padding: '4px 9px' }}>Endpoint returned no models — check the connection in Settings.</div>
-                                ) : null}
-                                {listed.map((m, i) => (
-                                  <button key={m} className="menu-item" onClick={() => {
-                                    // Item 10 — scope decides where it's saved: global (config.json) or this chat only.
-                                    window.brainrouter.send({ kind: 'set-model', model: m, persist: modelScope === 'global' });
-                                    setPop('');
-                                  }}>
-                                    <span className="mi-check">{m === info.model ? '✓' : ''}</span>{m}
-                                    <span className="mi-hint">{i < 9 ? i + 1 : ''}</span>
-                                  </button>
-                                ))}
-                              </div>
-                              {hidden > 0 ? (
-                                <div className="menu-head"><span>{hidden} non-chat model{hidden === 1 ? '' : 's'} hidden (embeddings, audio…)</span></div>
-                              ) : null}
-                            </>
-                          );
-                        })()}
-                        <button className="menu-item" onClick={() => { setPop(''); openSettings('general'); }}>
-                          <span className="mi-check" />Custom model…
-                        </button>
-                        <div className="menu-sep" />
-                        <div className="menu-row">
-                          <span>Apply to</span>
-                          <button className="seg-toggle" title="Where a model pick is saved" onClick={() => setModelScope((s) => s === 'global' ? 'session' : 'global')}>
-                            {modelScope === 'global' ? 'All chats' : 'This chat only'}
-                          </button>
-                        </div>
-                        <div className="menu-row">
-                          <span>Fast mode</span>
-                          <button className={`switch${execMode === 'fast' ? ' on' : ''}`} onClick={() => {
-                            q('a-pref', 'action:set-pref', { key: 'executionMode', value: execMode === 'fast' ? 'planning' : 'fast' });
-                          }} />
-                        </div>
-                      </div>
-                    ) : null}
-                    <button type="button" className="model-pill" onClick={() => {
-                      if (pop !== 'model') { setModelsLoading(true); q('q-models', 'list-models'); }
-                      setPop(pop === 'model' ? '' : 'model');
-                    }}>
-                      {info.model ?? ''}{execMode === 'fast' ? ' · Fast' : ''}
-                    </button>
-                  </span>
-                  {/* DESK-5s/5u — click the ring for a full context + usage
-                      breakdown. Hidden on an empty/new chat: with no
-                      conversation, the ring would only reflect the system-prompt
-                      baseline, which reads as misleading "context used". */}
-                  <span className="pop-wrap" style={hasConversation ? undefined : { display: 'none' }}>
-                    {pop === 'ctx' ? (
-                      <div className="menu-pop ctx-pop">
-                        <div className="menu-head"><span>Context window</span></div>
-                        {contextUsage && contextUsage.window > 0 ? (
-                          <UsageBar label="Model window" value={contextUsage.used} total={contextUsage.window}
-                            tone={contextUsage.used / contextUsage.window >= 0.9 ? 'var(--err)' : 'var(--accent)'} />
-                        ) : null}
-                        <UsageBar label="Until auto-compaction" value={contextUsage?.used ?? 0} total={contextUsage?.compactAt ?? 80000}
-                          tone={(contextUsage?.pct ?? 0) >= 0.95 ? 'var(--err)' : (contextUsage?.pct ?? 0) >= 0.75 ? 'var(--warn)' : 'var(--accent)'} />
-                        <div className="ctx-note">Above the auto-compact line, BrainRouter summarizes old history and the context resets — shared with the CLI (<code>cli.autoCompactTokens</code>).</div>
-                        <div className="menu-sep" />
-                        <div className="menu-head"><span>This session</span></div>
-                        <div className="ctx-stats">
-                          <div><b>{tokens ? tokens.promptTokens.toLocaleString() : '—'}</b><span>tokens in</span></div>
-                          <div><b>{tokens ? tokens.completionTokens.toLocaleString() : '—'}</b><span>tokens out</span></div>
-                          <div><b>{tokens?.turns ?? 0}</b><span>turns</span></div>
-                        </div>
-                        <button className="menu-item" onClick={() => { setPop(''); openSettings('observability'); }}>
-                          <span className="mi-check" />Full usage breakdown<span className="mi-hint">→</span>
-                        </button>
-                      </div>
-                    ) : null}
-                    <button type="button" className="ctx-ring-btn" title="Context & usage" onClick={() => { if (pop !== 'ctx') q('q-ctx', 'context-usage'); setPop(pop === 'ctx' ? '' : 'ctx'); }}>
-                      <ContextRing usage={contextUsage} />
-                    </button>
-                  </span>
-                </div>
-              </div>
-            </div>
+            <Composer
+              draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
+              slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
+              setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
+              modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
+              endpointModels={endpointModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
+              modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
+              hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings} />
           </main>
 
           {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next

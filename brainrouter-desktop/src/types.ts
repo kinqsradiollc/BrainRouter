@@ -3,6 +3,9 @@
  * session + fleet rows, and the workflow-detail shape. Extracted from App.tsx
  * so the chat components and the App shell agree on one definition.
  */
+/** Composer / header popover ids (which menu is open). */
+export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
+
 export type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string };
 export type ToolItem = { id: number; tool: string; summary: string; preview?: string; ok: boolean; child?: string; file?: string };
 
