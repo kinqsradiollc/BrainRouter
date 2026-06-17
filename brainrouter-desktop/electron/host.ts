@@ -49,7 +49,10 @@ import { buildUsageBreakdown } from '@kinqs/brainrouter-cli/dist/runtime/usageBr
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import { readGoal, setGoal, clearGoal } from '@kinqs/brainrouter-cli/dist/state/goalStore.js';
-import { readPlan, formatPlan } from '@kinqs/brainrouter-cli/dist/state/taskStore.js';
+import { readPlan, formatPlan, seedPlanFromRequirement } from '@kinqs/brainrouter-cli/dist/state/taskStore.js';
+// REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
+import { listRequirements, getRequirement, createRequirement, updateRequirement, type RequirementPatch } from '@kinqs/brainrouter-cli/dist/state/requirementStore.js';
+import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
 import { listSessions } from '@kinqs/brainrouter-cli/dist/orchestration/orchestrator.js';
 import { readRun } from '@kinqs/brainrouter-cli/dist/state/workflowRun.js';
@@ -703,6 +706,43 @@ async function main(): Promise<void> {
         await git(['worktree', 'remove', '--force', wtPath], root);
         await git(['worktree', 'prune'], root);
         return { ok: !fs.existsSync(wtPath) };
+      },
+      // REQUIREMENT-RECORDS — Requirement Records: per-workspace structured units
+      // of intent (title, status, priority, acceptance criteria, clarifying Q&A,
+      // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
+      // so the desktop panel and the terminal CLI share the same requirements.json.
+      'requirement-list': () => listRequirements(workspaceRoot),
+      'requirement-create': (a) => createRequirement(workspaceRoot, { title: String(a.title ?? ''), sessionKey: activeAgent.sessionKey }),
+      'requirement-update': (a) => {
+        const id = String(a.id ?? '');
+        const patch: RequirementPatch = {};
+        if (a.status !== undefined) {
+          if (!isRequirementStatus(a.status)) return { error: `Unknown requirement status "${String(a.status)}".` };
+          patch.status = a.status;
+        }
+        if (a.priority !== undefined) {
+          if (!isRequirementPriority(a.priority)) return { error: `Unknown requirement priority "${String(a.priority)}".` };
+          patch.priority = a.priority;
+        }
+        if (typeof a.criterion === 'string' && a.criterion.trim()) {
+          const existing = getRequirement(workspaceRoot, id);
+          if (!existing) return { error: `No requirement "${id}".` };
+          patch.acceptanceCriteria = [...existing.acceptanceCriteria, a.criterion.trim()];
+        }
+        const updated = updateRequirement(workspaceRoot, id, patch);
+        return updated ?? { error: `No requirement "${id}".` };
+      },
+      'requirement-seed-plan': (a) => {
+        const id = String(a.id ?? '');
+        const req = getRequirement(workspaceRoot, id);
+        if (!req) return { error: `No requirement "${id}".` };
+        if (req.acceptanceCriteria.length === 0) return { error: 'This requirement has no acceptance criteria to seed a plan from.' };
+        const plan = seedPlanFromRequirement(workspaceRoot, { id: req.id, acceptanceCriteria: req.acceptanceCriteria }, activeAgent.sessionKey);
+        // Move the requirement into work once a plan exists (only from a pre-work state).
+        if (req.status === 'draft' || req.status === 'clarifying' || req.status === 'ready') {
+          updateRequirement(workspaceRoot, id, { status: 'in-progress' });
+        }
+        return { ok: true, items: plan.items };
       },
       // T12 / Review v2 — local AI review of the working tree. Gathers the diff,
       // runs ONE ephemeral review turn in an ISOLATED review: session (filtered

@@ -34,6 +34,7 @@ export interface ViewsRailProps {
   schedules: Array<{ enabled?: boolean }>;
   worktrees: unknown[];
   review: { findings: unknown[] } | null;
+  requirements: unknown[];
   ci: { checks: unknown[] };
 }
 
@@ -41,7 +42,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
   const {
     sideAnim, sideWidth, setSideWidth, setSidePanelOpen, activeSideTab, sideTabs, setActiveSideTab, closeSideTab,
     pop, setPop, ensurePanel, openBottomDock, tabTitle, renderPanelBody, openSideView,
-    lastPlan, changedFiles, activeSessionTasks, fleet, toolLog, schedules, worktrees, review, ci,
+    lastPlan, changedFiles, activeSessionTasks, fleet, toolLog, schedules, worktrees, review, requirements, ci,
   } = p;
   if (!sideAnim.mounted) return null;
   return (
@@ -118,6 +119,8 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               badge: worktrees.length ? String(worktrees.length) : '' },
             { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review',
               badge: review?.findings.length ? String(review.findings.length) : '' },
+            { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks',
+              badge: requirements.length ? String(requirements.length) : '' },
             { id: 'ci' as PanelId, title: 'CI / Checks', hint: '', icon: 'check-circle',
               badge: ci.checks.length ? String(ci.checks.length) : '' },
             { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
