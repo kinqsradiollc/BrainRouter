@@ -43,6 +43,7 @@ import { useSessionSidebar } from './lib/session/useSessionSidebar.js';
 import { useGitState } from './lib/git/useGitState.js';
 import { useSessionState } from './lib/session/useSessionState.js';
 import { useSessionActions } from './lib/session/useSessionActions.js';
+import { gitRefreshDue } from './lib/git/gitFreshness.js';
 import { TopbarRight } from './components/TopbarRight.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ChatThread } from './components/ChatThread.js';
@@ -213,7 +214,7 @@ export function App(): React.ReactElement {
   // — after q / git state / panels / editor / ci / dashboard state are available —
   // so useAgentEvents below can reference refreshSession/refreshSidebar as consts.
   const {
-    refreshSession, refreshSidebar, resumeSession, resumeSessionRef, resumeTimerRef,
+    refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
     switchToWorkspace, openProject, addProject, toggleProject,
     openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
@@ -230,6 +231,25 @@ export function App(): React.ReactElement {
     setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });
+
+  // Git/branch is LIVE environment state, not durable session truth — re-read
+  // it when the window regains focus or the tab becomes visible, so a branch
+  // switched in another terminal shows up instead of a stale one. Debounced
+  // (gitRefreshDue) so the focus + paired visibilitychange collapse to one.
+  const lastGitFocusRef = useRef(0);
+  useEffect(() => {
+    const onWake = (): void => {
+      if (!hostUp) return;
+      const now = Date.now();
+      if (!gitRefreshDue(lastGitFocusRef.current, now, document.visibilityState === 'visible')) return;
+      lastGitFocusRef.current = now;
+      refreshGit();
+    };
+    window.addEventListener('focus', onWake);
+    document.addEventListener('visibilitychange', onWake);
+    return () => { window.removeEventListener('focus', onWake); document.removeEventListener('visibilitychange', onWake); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostUp]);
 
   const dashBoards = useMemo<WorkspaceDash[]>(() => {
     if (dashScope === 'all') return globalBoards ?? [];
