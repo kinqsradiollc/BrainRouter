@@ -111,6 +111,46 @@ export function installDevBridge(): void {
     { path: '/Users/dev/BrainRouter', branch: 'release/0.4.15', detached: false },
     { path: '/Users/dev/BrainRouter/.worktrees/experiment', branch: 'spike-new-recall', detached: false },
   ];
+  // REQUIREMENT-RECORDS — in-memory requirements so the panel renders populated
+  // in the browser preview (varied status/priority/criteria/Q&A/links). Mirrors
+  // the host's requirementStore wrappers; the real store lives in the CLI.
+  type DevReq = {
+    id: string; title: string; description?: string; status: string; priority: string;
+    acceptanceCriteria: string[]; clarifyingQuestions: Array<{ question: string; answer?: string }>;
+    workspaceRoot: string; sessionKey?: string; taskIds: string[]; artifactIds: string[];
+    linkedMemoryIds: string[]; createdAt: string; updatedAt: string;
+  };
+  let reqSeq = 3;
+  const nowIso = (offsetMs = 0) => new Date(Date.now() - offsetMs).toISOString();
+  const devRequirements: DevReq[] = [
+    {
+      id: 'req_a1b2c3d4', title: 'Blend reranker + retriever scores in recall', status: 'in-progress', priority: 'high',
+      description: 'The reranker score currently replaces the retriever order, hard-dropping good candidates. Blend 0.6·rerank + 0.4·rrf instead.',
+      acceptanceCriteria: ['MemBench recovers to ≥ 0.58 across all 6 splits', 'Reranker never hard-drops a top-retriever candidate'],
+      clarifyingQuestions: [{ question: 'Which split regressed first?', answer: 'MemBench, then LoCoMo.' }, { question: 'Keep the LLM judge stage?' }],
+      workspaceRoot: '/Users/dev/BrainRouter', sessionKey: 'dev:fix-recall-blend',
+      taskIds: ['task_1', 'task_2'], artifactIds: ['art_9'], linkedMemoryIds: ['mem_blend'],
+      createdAt: nowIso(3 * 86400_000), updatedAt: nowIso(3600_000),
+    },
+    {
+      id: 'req_e5f6a7b8', title: 'Persona injection in the CLI briefing', status: 'ready', priority: 'medium',
+      description: 'The brain distills a Core Identity but the CLI briefing never injects it.',
+      acceptanceCriteria: ['Core Identity anchor is injected before federation context'],
+      clarifyingQuestions: [],
+      workspaceRoot: '/Users/dev/BrainRouter',
+      taskIds: [], artifactIds: [], linkedMemoryIds: ['mem_persona'],
+      createdAt: nowIso(1 * 86400_000), updatedAt: nowIso(2 * 3600_000),
+    },
+    {
+      id: 'req_c9d0e1f2', title: 'Draft: requirement-records desktop panel', status: 'draft', priority: 'low',
+      acceptanceCriteria: [],
+      clarifyingQuestions: [{ question: 'Mirror an existing panel or invent a new layout?' }],
+      workspaceRoot: '/Users/dev/BrainRouter',
+      taskIds: [], artifactIds: [], linkedMemoryIds: [],
+      createdAt: nowIso(2 * 3600_000), updatedAt: nowIso(2 * 3600_000),
+    },
+  ];
+
   // Review v2 — a shared mock run + gate so the commit/push review gate is exercisable.
   const DEV_DIFF_HASH = 'devhash';
   type DevFinding = { id: string; file: string; line?: number; endLine?: number; severity: string; confidence: number; summary: string; status: string; canApply: boolean; source: string; details?: string; suggestion?: string; codeExcerpt?: string; diffHunk?: string; patch?: string };
@@ -179,6 +219,39 @@ export function installDevBridge(): void {
     'worktree-diff': () => ({ path: '', diff: DEMO_DIFF, files: 1 }),
     'worktree-create': (a) => { const name = String(a.name ?? ''); const p = `/Users/dev/BrainRouter/.worktrees/${name}`; devWorktrees.push({ path: p, branch: name, detached: false }); return { ok: true, path: p }; },
     'worktree-remove': (a) => { const i = devWorktrees.findIndex((w) => w.path === a.path); if (i >= 0) devWorktrees.splice(i, 1); return { ok: i >= 0 }; },
+    // REQUIREMENT-RECORDS — mock the requirementStore wrappers (mutate in-memory).
+    'requirement-list': () => [...devRequirements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    'requirement-create': (a) => {
+      const id = `req_dev${++reqSeq}`;
+      const rec: DevReq = {
+        id, title: String(a.title ?? '').trim() || 'Untitled requirement', status: 'draft', priority: 'medium',
+        acceptanceCriteria: [], clarifyingQuestions: [], workspaceRoot: wsCurrent, sessionKey: activeSession,
+        taskIds: [], artifactIds: [], linkedMemoryIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      devRequirements.unshift(rec); return rec;
+    },
+    'requirement-update': (a) => {
+      const r = devRequirements.find((x) => x.id === a.id);
+      if (!r) return { error: `No requirement "${String(a.id)}".` };
+      if (a.status !== undefined) {
+        if (!['draft', 'clarifying', 'ready', 'in-progress', 'done', 'archived'].includes(String(a.status))) return { error: 'bad status' };
+        r.status = String(a.status);
+      }
+      if (a.priority !== undefined) {
+        if (!['low', 'medium', 'high'].includes(String(a.priority))) return { error: 'bad priority' };
+        r.priority = String(a.priority);
+      }
+      if (typeof a.criterion === 'string' && a.criterion.trim()) r.acceptanceCriteria = [...r.acceptanceCriteria, a.criterion.trim()];
+      r.updatedAt = new Date().toISOString();
+      return r;
+    },
+    'requirement-seed-plan': (a) => {
+      const r = devRequirements.find((x) => x.id === a.id);
+      if (!r) return { error: `No requirement "${String(a.id)}".` };
+      if (r.acceptanceCriteria.length === 0) return { error: 'No acceptance criteria to seed a plan from.' };
+      if (['draft', 'clarifying', 'ready'].includes(r.status)) r.status = 'in-progress';
+      return { ok: true, items: r.acceptanceCriteria.map((c) => ({ step: c, status: 'pending', acceptance: c })) };
+    },
     // T12 — mock a local review pass over the working diff.
     // Review v2 — shared run + gate so the commit/push gate is demonstrable.
     'review-diff': () => devRunReview(),

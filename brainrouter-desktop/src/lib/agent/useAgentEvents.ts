@@ -17,6 +17,7 @@ import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/b
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from '../../types.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
+import type { RequirementRecord } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
 import type { ConfigSnapshot } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
@@ -81,6 +82,7 @@ export interface AgentEventsCtx {
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
   setSearchHits: React.Dispatch<React.SetStateAction<SearchHit[] | null>>;
   setSchedules: React.Dispatch<React.SetStateAction<ScheduleRecordView[]>>;
+  setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -132,7 +134,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
-    setSearchHits, setSchedules, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
@@ -356,6 +358,15 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-schedule': if (Array.isArray(result)) setSchedules(result as ScheduleRecordView[]); return;
+      // REQUIREMENT-RECORDS — the list populates the slice; create/update/seed use
+      // their own ids (q-req-create/q-req-update/q-req-seed) and just trigger a
+      // refresh via q-req, except seed/error which surfaces a toast.
+      case 'q-req': if (Array.isArray(result)) setRequirements(result as RequirementRecord[]); return;
+      case 'q-req-create': case 'q-req-update': case 'q-req-seed': {
+        const r = result as { error?: string } | null;
+        if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
+        return;
+      }
       case 'q-worktrees': {
         const r = result as { raw?: string; current?: string } | null;
         if (r && typeof r.raw === 'string') setWorktrees(parseWorktreeList(r.raw, r.current));

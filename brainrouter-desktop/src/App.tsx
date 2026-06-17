@@ -8,8 +8,9 @@ import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'rea
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
+  RequirementsPanel, TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
+import type { RequirementRecord } from '@kinqs/brainrouter-types';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
@@ -150,6 +151,8 @@ export function App(): React.ReactElement {
   const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
   // T14 — scheduled tasks for the viewed session (cron/once), from the CLI store.
   const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
+  // REQUIREMENT-RECORDS — this workspace's Requirement Records, from the CLI store.
+  const [requirements, setRequirements] = useState<RequirementRecord[]>([]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
@@ -428,7 +431,7 @@ export function App(): React.ReactElement {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
-    setSearchHits, setSchedules, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
@@ -678,6 +681,15 @@ export function App(): React.ReactElement {
           onOpenFile={(f) => openFile(f.file)}
           onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
+      case 'requirements': {
+        const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
+        return <RequirementsPanel requirements={requirements}
+          onCreate={(title) => { q('q-req-create', 'requirement-create', { title }); refresh(); }}
+          onSetStatus={(id, status) => { q('q-req-update', 'requirement-update', { id, status }); refresh(); }}
+          onSetPriority={(id, priority) => { q('q-req-update', 'requirement-update', { id, priority }); refresh(); }}
+          onAddCriterion={(id, text) => { q('q-req-update', 'requirement-update', { id, criterion: text }); refresh(); }}
+          onSeedPlan={(id) => { q('q-req-seed', 'requirement-seed-plan', { id }); refresh(); setToast('Seeded this session\'s plan from the requirement — it shows in Plan on the next turn.'); }} />;
+      }
       default: return null;
     }
   };
@@ -742,7 +754,7 @@ export function App(): React.ReactElement {
             pop={pop} setPop={setPop} ensurePanel={ensurePanel} openBottomDock={openBottomDock} tabTitle={tabTitle}
             renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
             activeSessionTasks={activeSessionTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
-            worktrees={worktrees} review={review} ci={ci} />
+            worktrees={worktrees} review={review} requirements={requirements} ci={ci} />
         </div>
 
         <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}
