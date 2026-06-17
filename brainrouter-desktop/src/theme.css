@@ -63,7 +63,10 @@
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 12.5px; -webkit-font-smoothing: antialiased; }
-button { font-family: var(--font); }
+/* Reset the UA's light default button background so a bare <button> never
+   renders as a light/white card on the dark theme (every styled button sets
+   its own background; this only affects ones that don't). */
+button { font-family: var(--font); background: transparent; }
 button, input, textarea, select, label, a,
 .composer, .composer *, .chat, .chat *, .branchbar,
 .menu-pop, .menu-pop *, .env-pop, .env-pop *, .env-col, .env-col *,
@@ -1190,7 +1193,11 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .term-tab { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; border-radius: 7px; padding: 5px 10px; color: var(--text-dim); font-size: 12px; font-family: var(--mono); cursor: pointer; transition: background .12s, color .12s; }
 .term-tab:hover { background: var(--ov-05); }
 .term-tab.active { background: var(--raised); color: var(--text); }
-.term-tab-x { padding: 0 2px; }
+/* Shared tab-close affordance — one consistent size/radius/hover/focus across
+   terminal, side-panel, and editor tabs (replaces per-tab one-off X styling). */
+.term-tab-x, .editor-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border-radius: 5px; color: var(--text-faint); cursor: pointer; transition: background .12s, color .12s; }
+.term-tab-x:hover, .editor-tab-x:hover { background: var(--ov-10); color: var(--text); }
+.term-tab-x:focus-visible, .editor-tab-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .term-dock-body { flex: 1; min-height: 0; display: flex; padding: 6px 8px 8px; }
 .term-dock-body .xterm-wrap { flex: 1; }
 
@@ -1217,8 +1224,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .editor-tab:hover { background: var(--ov-10); color: var(--text); }
 .editor-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
 .editor-tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
-.editor-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; color: var(--text-faint); }
-.editor-tab-x:hover { background: var(--ov-2); color: var(--text); }
+/* .editor-tab-x styling is shared with .term-tab-x above (consolidated). */
 .editor-dirty-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
 .editor-tab-empty { font-size: 12px; color: var(--text-faint); padding: 4px 8px; }
 .editor-tabs-spacer { flex: 1 1 auto; }
@@ -1258,7 +1264,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .ci-check-wf { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); }
 .ci-check-dur { flex: 0 0 auto; min-width: 46px; text-align: right; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .ci-run { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; overflow: hidden; }
-.ci-run-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; font-size: 12px; text-align: left; }
+.ci-run-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; font-size: 12px; text-align: left; background: transparent; border: 0; color: var(--text); cursor: pointer; }
 .ci-run-head:hover { background: var(--ov-10); }
 /* min-width:0 lets the title ellipsize instead of stretching/centering the row. */
 .ci-run-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
@@ -1298,7 +1304,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .dash-tab { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 3px 9px; border-radius: 999px; color: var(--text-dim); border: 1px solid transparent; }
 .dash-tab:hover { background: var(--ov-10); color: var(--text); }
 .dash-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
-.dash-count { font-size: 10px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--ov-2); display: inline-flex; align-items: center; justify-content: center; }
+.dash-count { font-size: 10px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--ov-20); display: inline-flex; align-items: center; justify-content: center; }
 .dash-ws { margin-bottom: 8px; }
 .dash-ws-head { display: flex; align-items: center; gap: 7px; padding: 5px 4px; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
 .dash-ws-name { color: var(--text-dim); text-transform: none; letter-spacing: 0; font-weight: 560; }
