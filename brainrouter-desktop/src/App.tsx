@@ -5,7 +5,6 @@
  * composer "/" popup, and the categorized Settings modal.
  */
 import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
-import remarkGfm from 'remark-gfm';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
@@ -13,7 +12,7 @@ import {
 } from './panels/index.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { parseWorktreeList, type WorktreeEntry } from './lib/worktree/worktreeParser.js';
-import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/session/sessionPagination.js';
+import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
 import { gitActionTag } from './lib/review/reviewGateUi.js';
 import { activeEntry, setEntry, shouldProceedGate, reviewBadgeFor } from './lib/review/reviewWorkspace.js';
@@ -27,7 +26,7 @@ import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
 import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
-import { VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
+import { FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
 import { useEditor } from './lib/editor/useEditor.js';
@@ -37,16 +36,15 @@ import { DashboardPanel } from './panels/DashboardPanel.js';
 import { type DashTab, type DashTask, type WorkspaceDash } from './lib/workspace/dashboard.js';
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
-import { Markdown, MD_COMPONENTS } from './chat/markdown.js';
 import { MessageRow } from './chat/MessageRow.js';
-import { WorkflowCard } from './chat/WorkflowCard.js';
 import { SessionStatus } from './components/SessionStatus.js';
-import { WorkElapsed } from './components/WorkElapsed.js';
-import { HomeView } from './components/HomeView.js';
 import { Composer } from './components/Composer.js';
 import { useComposerDerived } from './lib/composer/useComposerDerived.js';
 import { useSessionSidebar } from './lib/session/useSessionSidebar.js';
 import { TopbarRight } from './components/TopbarRight.js';
+import { Sidebar } from './components/Sidebar.js';
+import { ChatThread } from './components/ChatThread.js';
+import { ViewsRail } from './components/ViewsRail.js';
 import { EnvironmentPanel } from './components/EnvironmentPanel.js';
 import { TerminalDock } from './components/TerminalDock.js';
 import { InfoAndGateDialogs } from './components/InfoAndGateDialogs.js';
@@ -1375,253 +1373,39 @@ export function App(): React.ReactElement {
 
   return (
     <div className="app">
-      {railAnim.mounted ? (
-        <nav className={`rail${railAnim.closing ? ' closing' : ''}`} style={{ width: railWidth }}>
-          <div className="rail-grip" title="Drag to resize · drag far left to hide"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              const startX = e.clientX;
-              const startW = railWidth;
-              const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-              // DESK-5k — Codex swipe-to-hide: dragging well past the minimum
-              // collapses the sidebar (exit animation plays); width survives
-              // for the next open.
-              const move = (ev: PointerEvent) => {
-                const w = startW + ev.clientX - startX;
-                if (w < 165) { up(); setRailOpen(false); return; }
-                setRailWidth(Math.max(220, Math.min(420, w)));
-              };
-              window.addEventListener('pointermove', move);
-              window.addEventListener('pointerup', up);
-            }} />
-          <div className="rail-top">
-            <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}><Icon name="layout" size={15} /></button>
-            <button className="icon-btn" title="Search commands (⌘K)" onClick={() => setPaletteOpen(true)}><Icon name="search" size={14} /></button>
-          </div>
-          <div className="rail-card">
-            <div className="rail-actions">
-              <button className="rail-action primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><Icon name="plus" size={13} />New chat</button>
-              <button className="rail-action" title="Search chats" onClick={() => ensurePanel('search')}><Icon name="search" size={13} /></button>
-              <button className="rail-action" title="Command palette (⌘K)" onClick={() => setPaletteOpen(true)}><Icon name="command" size={13} /></button>
-              <button className="rail-action" title="Workbench" onClick={() => setSidePanelOpen(true)}><Icon name="panels" size={13} /></button>
-            </div>
-            <div className="projects-head">
-              <span>Projects</span>
-              <button className="icon-btn" title={`Sort chats: ${recentsSort}`} onClick={() => setRecentsSort((s) => (s === 'recent' ? 'alpha' : 'recent'))}><Icon name="sort" size={12} /></button>
-            </div>
-            <div className="projects-scroll">
-              <div className="project-block">
-                <button className="project-row active" title={workspaces.current ?? info.workspaceRoot} onClick={() => setRecentsOpen((o) => !o)}>
-                  <Icon name="folder-open" size={15} />
-                  <span>{currentProjectName}</span>
-                  <span className="project-meta">
-                    {activeReviewBadge ? (
-                      <span className={`review-badge rb-${activeReviewBadge}`} title={`Review: ${activeReviewBadge.replace('-', ' ')}`}>
-                        {activeReviewBadge === 'blocked' ? '⚠' : activeReviewBadge === 'passed' ? '✓' : activeReviewBadge === 'stale' ? '↻' : activeReviewBadge === 'reviewing' ? '…' : '○'}
-                      </span>
-                    ) : null}
-                    {prInfo ? (
-                      <span className={`pr-chip ${prInfo.state.toLowerCase()}`}
-                        title={`#${prInfo.number} · ${prInfo.state.charAt(0)}${prInfo.state.slice(1).toLowerCase()}${prInfo.title ? ` — ${prInfo.title}` : ''}`}>
-                        <Icon name="merge" size={12} />
-                      </span>
-                    ) : null}
-                    <Icon name={recentsOpen ? 'chev-down' : 'chev-right'} size={10} className="project-chev" />
-                  </span>
-                </button>
-                <div className="project-sessions">
-                  {/* DESK-5w/6m — chats (with per-chat ⋮ menu) + their nested
-                      background tasks; pinned first, grouped sections below. */}
-                  {visibleProjectSessions.map((s, i) => renderSessionNode(s, i))}
-                  {!recentsOpen && hiddenProjectSessions > 0 ? (
-                    <button className="show-more" onClick={() => setRecentsOpen(true)}>{`Show ${hiddenProjectSessions} more`}</button>
-                  ) : recentsOpen && showToggle(ungroupedSessions.length, visibleProjectSessions.length) ? (
-                    <button className="show-more" onClick={() => setVisibleCount((c) => toggleVisible(c, ungroupedSessions.length))}>
-                      {moreLabel(ungroupedSessions.length, visibleProjectSessions.length)}
-                    </button>
-                  ) : null}
-                  {/* DESK-6m — grouped chats as their own labeled sections. */}
-                  {groupedSessions.map(([group, items]) => (
-                    <div key={group} className="session-group">
-                      <div className="session-group-head"><Icon name="folder" size={11} /><span>{group}</span><span className="dim">{items.length}</span></div>
-                      {items.map((s, i) => renderSessionNode(s, i))}
-                    </div>
-                  ))}
-                  {archivedCount > 0 ? (
-                    <button className="show-more" onClick={() => setShowArchived((a) => !a)}>
-                      {showArchived ? 'Hide archived' : `Show ${archivedCount} archived`}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              {otherProjects.map((w) => {
-                const open = expandedProjects.includes(w);
-                const list = projSessions[w];
-                return (
-                  <div key={w} className="project-block">
-                    <button className="project-row" title={runningWs.has(w) ? `${w} — running in the background` : w} onClick={() => toggleProject(w)}>
-                      <Icon name={open ? 'folder-open' : 'folder'} size={15} />
-                      <span>{w.split('/').pop()}</span>
-                      <span className="project-meta">
-                        {runningWs.has(w) ? <span className="ws-running-dot" title="Running in the background" /> : null}
-                        <span className="icon-btn project-open" title="Open this project here"
-                          onClick={(ev) => { ev.stopPropagation(); openProject(w); }}>
-                          <Icon name="arrow-right" size={12} />
-                        </span>
-                        <Icon name={open ? 'chev-down' : 'chev-right'} size={10} className="project-chev" />
-                      </span>
-                    </button>
-                    {open ? (
-                      <div className="project-sessions">
-                        {list === undefined ? <div className="proj-empty">Loading…</div>
-                          : list.length === 0 ? <div className="proj-empty">No chats yet</div>
-                          : list.slice(0, 6).map((s) => (
-                            <button key={s.sessionKey} className="project-session" title={`${s.sessionKey} — opens ${w.split('/').pop()}`}
-                              onClick={() => openProject(w, s.sessionKey)}>
-                              <SessionStatus s={s} />
-                              <span className="session-title">{s.firstUserMessage || s.sessionKey}</span>
-                              {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
-                            </button>
-                          ))}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-              <button className="project-row add-project" onClick={addProject}><Icon name="folder-plus" size={15} /><span>Add project</span></button>
-            </div>
-          {/* DESK-5m — plain identity row: Settings lives in the top-right
-              gear and All commands in ⌘K, so no menu and no chevron here. */}
-          <div className="account-row" title={workspaces.current ?? info.workspaceRoot}>
-            <span className="avatar">{(info.username ?? 'br').slice(0, 2)}</span>
-            <span className="account-name">{info.username ?? 'BrainRouter'}</span>
-          </div>
-          </div>
-        </nav>
-      ) : null}
+      <Sidebar railAnim={railAnim} railWidth={railWidth} setRailOpen={setRailOpen} setRailWidth={setRailWidth}
+        setPaletteOpen={setPaletteOpen} ensurePanel={ensurePanel} setSidePanelOpen={setSidePanelOpen}
+        recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
+        currentProjectName={currentProjectName} activeReviewBadge={activeReviewBadge} prInfo={prInfo}
+        recentsOpen={recentsOpen} setRecentsOpen={setRecentsOpen} visibleProjectSessions={visibleProjectSessions}
+        renderSessionNode={renderSessionNode} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
+        setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
+        setShowArchived={setShowArchived} showArchived={showArchived} otherProjects={otherProjects}
+        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWs}
+        openProject={openProject} toggleProject={toggleProject} addProject={addProject} />
 
       <div className="main">
         <div className="workrow" ref={workrowRef}>
-          <main className={`center${homeMode ? ' home-mode' : ''}${railOpen ? '' : ' no-rail'}`}>
-            <header className="chat-head">
-              {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}><Icon name="layout" size={15} /></button> : null}
-              <span className="crumb">
-                <b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b>
-                <span className="crumb-sep">/</span>
-                {taskView ? (
-                  /* DESK-6v — viewing a sub-agent: ONE breadcrumb (no second header
-                     bar). The parent session is clickable = back. */
-                  <>
-                    <button className="crumb-link" onClick={() => setTaskView(null)}>{sessionTitle}</button>
-                    <span className="crumb-sep">/</span>
-                    <span className="crumb-cur">{taskView.role || taskView.kind}</span>
-                    {taskView.status ? <span className={`task-status ${taskView.status}`}>{taskView.status}</span> : null}
-                  </>
-                ) : sessionTitle}
-              </span>
-            </header>
-            <div className="chat" ref={chatRef} onScroll={() => {
-              const el = chatRef.current;
-              if (!el) return;
-              const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-              atBottomRef.current = pinned;
-              setAtBottom(pinned);
-            }}>
-              {workflowView ? (
-                /* DESK-6w — the /workflows-style card for a workflow run. */
-                <WorkflowCard wf={workflowView} onBack={() => setWorkflowView(null)} />
-              ) : taskView ? (
-                /* DESK-6v — a background task's conversation, read-only, in place
-                   of the chat. The header breadcrumb (Repo / Session / Role +
-                   status) now carries the title and back-link, so there's no
-                   second header bar here — that double header was the confusing
-                   part. The prompt is already the first user bubble. */
-                <div className="task-convo">
-                  {taskView.rows.map((r) => renderRow(r, false))}
-                </div>
-              ) : (
-                <>
-                  {homeMode ? (
-                    <HomeView username={info.username} stats={homeStats} tab={statsTab} setTab={setStatsTab}
-                      range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider}
-                      repo={gitInfo?.repo ?? info.workspaceRoot?.split('/').pop()}
-                      recents={sessions}
-                      onResume={(key) => resumeSession(key)} />
-                  ) : null}
-                  {!homeMode && forkParent ? (
-                    <button className="fork-banner" onClick={() => resumeSession(forkParent.key)}
-                      title="Open the original conversation this was forked from">
-                      <Icon name="branch" size={12} />
-                      <span>Forked from <strong>{forkParent.title || 'conversation'}</strong></span>
-                    </button>
-                  ) : null}
-                  {transcriptEls}
-                </>
-              )}
-              {!taskView && !workflowView && liveText ? (
-                <div className="row assistant md live">
-                  <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{liveText}</Markdown>
-                  <span className="caret">▍</span>
-                </div>
-              ) : null}
-              {!taskView && !workflowView && running ? (
-                <div className="row workline">
-                  <span className="spinner sm" />
-                  <WorkElapsed startedAt={turnStart} />
-                  <span>·</span>
-                  <span>{liveText ? 'writing…' : reasoningTail ? 'thinking…' : statusLine || 'working…'}</span>
-                  {reasoningTail && !liveText ? <span className="reasoning"> {reasoningTail.slice(-90)}</span> : null}
-                </div>
-              ) : null}
-              {!taskView && !workflowView && interaction && interaction.type === 'confirm' ? (
-                <div className="approval-card" onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) answerInteraction({ type: 'confirm', approved: true });
-                }}>
-                  <div className="approval-head">
-                    <span className="approval-dot" />
-                    <span className="approval-title">{interaction.title}</span>
-                    <span className="approval-scope">Project (local)</span>
-                  </div>
-                  {interaction.tool ? <div className="approval-sub">{interaction.tool}</div> : null}
-                  {interaction.dangerous ? <div className="approval-warn">This action is flagged as potentially dangerous.</div> : null}
-                  {interaction.detail ? <pre className="approval-detail">{interaction.detail}</pre> : null}
-                  <div className="approval-actions">
-                    <button className="btn-deny" onClick={() => answerInteraction({ type: 'confirm', approved: false })}>Deny</button>
-                    <span className="spacer" />
-                    <button className="btn-always" onClick={() => {
-                      const rule = `${interaction.tool ?? 'run_command'}(*)`;
-                      q('a-allow-rule', 'action:allow-rule', { rule });
-                      answerInteraction({ type: 'confirm', approved: true });
-                    }}>Always allow</button>
-                    <button className="btn-once" autoFocus onClick={() => answerInteraction({ type: 'confirm', approved: true })}>Allow once<kbd>Ctrl+⏎</kbd></button>
-                  </div>
-                </div>
-              ) : null}
-              <div ref={chatEnd} />
-            </div>
-            {hasConversation && !atBottom ? (
-              <button className="jump-latest" onClick={() => {
-                atBottomRef.current = true;
-                setAtBottom(true);
-                chatEnd.current?.scrollIntoView({ behavior: 'smooth' });
-              }}>↓ Latest</button>
-            ) : null}
-            {hasConversation && gitInfo?.branch && (gitInfo.insertions + gitInfo.deletions > 0) ? (
-              <div className="branchbar" onClick={() => ensurePanel('diff')}>
-                <Icon name="diff" size={12} />
-                <span><span className="add-n">+{gitInfo.insertions.toLocaleString()}</span> <span className="del-n">-{gitInfo.deletions.toLocaleString()}</span></span>
-                <span className="dim">{changedFiles.length} files changed — view diff</span>
-              </div>
-            ) : null}
-            <Composer
-              draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
-              slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
-              setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
-              modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
-              endpointModels={endpointModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
-              modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
-              hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings} />
-          </main>
+          <ChatThread
+            homeMode={homeMode} railOpen={railOpen} setRailOpen={setRailOpen} gitInfo={gitInfo} info={info}
+            sessionTitle={sessionTitle} taskView={taskView} setTaskView={setTaskView} chatRef={chatRef}
+            atBottomRef={atBottomRef} setAtBottom={setAtBottom} workflowView={workflowView} setWorkflowView={setWorkflowView}
+            renderRow={renderRow} homeStats={homeStats} statsTab={statsTab} setStatsTab={setStatsTab}
+            statsRange={statsRange} setStatsRange={setStatsRange} snapshot={snapshot} sessions={sessions}
+            resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
+            running={running} turnStart={turnStart} reasoningTail={reasoningTail} statusLine={statusLine}
+            interaction={interaction} answerInteraction={answerInteraction} q={q} chatEnd={chatEnd} atBottom={atBottom}
+            hasConversation={hasConversation} changedFiles={changedFiles} ensurePanel={ensurePanel}
+            composer={
+              <Composer
+                draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
+                slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
+                setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
+                modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
+                endpointModels={endpointModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
+                modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
+                hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings} />
+            } />
 
           {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
               to it; it can never cover content. Yields via envRoom. */}
@@ -1629,98 +1413,12 @@ export function App(): React.ReactElement {
             setTermDockOpen={setTermDockOpen} branches={branches} q={q} commitSubjects={commitSubjects} ci={ci}
             openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} activeSessionTasks={activeSessionTasks} openTask={openTask} />
 
-          {sideAnim.mounted ? (
-            <aside className={`views-rail${sideAnim.closing ? ' closing' : ''}`} style={{ width: sideWidth }}>
-              <div className="col-grip" title="Drag to resize · drag far right to hide"
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  const startX = e.clientX;
-                  const startW = sideWidth;
-                  const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-                  // DESK-5k — swipe-to-hide, mirroring the left rail's grip.
-                  const move = (ev: PointerEvent) => {
-                    const w = startW + (startX - ev.clientX);
-                    if (w < 215) { up(); setSidePanelOpen(false); return; }
-                    setSideWidth(Math.max(280, Math.min(760, w)));
-                  };
-                  window.addEventListener('pointermove', move);
-                  window.addEventListener('pointerup', up);
-                }} />
-              {activeSideTab ? (
-                <>
-                  {/* DESK-5f — tabs, not windows: one view at a time, switchable */}
-                  <div className="side-tabs">
-                    {sideTabs.map((t) => (
-                      <button key={t} className={`term-tab${t === activeSideTab ? ' active' : ''}`} onClick={() => setActiveSideTab(t)}>
-                        <Icon name={PANEL_DEFS.find((d) => d.id === t)?.icon ?? 'file'} size={11} />
-                        <span className="tab-label">{tabTitle(t)}</span>
-                        <span className="icon-btn term-tab-x" onClick={(ev) => { ev.stopPropagation(); closeSideTab(t); }}><Icon name="close" size={9} /></span>
-                      </button>
-                    ))}
-                    <span className="pop-wrap">
-                      {pop === 'splus' ? (
-                        /* right-aligned: opens INTO the panel — a left-aligned
-                           menu runs past the window edge when the panel is
-                           the rightmost column */
-                        <div className="menu-pop down">
-                          {VIEW_MENU.filter((v) => !sideTabs.includes(v.id)).map((v) => (
-                            <button key={v.id} className="menu-item" onClick={() => { setPop(''); ensurePanel(v.id); }}>
-                              <span className="mi-check"><Icon name={v.icon} size={13} /></span>{v.title}
-                            </button>
-                          ))}
-                          <div className="menu-sep" />
-                          <button className="menu-item" onClick={() => { setPop(''); openBottomDock(); }}>
-                            <span className="mi-check"><Icon name="terminal" size={13} /></span>Terminal<span className="mi-hint">⌃`</span>
-                          </button>
-                        </div>
-                      ) : null}
-                      <button className="icon-btn" title="Add view" onClick={() => setPop(pop === 'splus' ? '' : 'splus')}><Icon name="plus" size={12} /></button>
-                    </span>
-                    <span className="composer-spacer" />
-                  </div>
-                  <div className="side-body panel-body" key={activeSideTab}>{renderPanelBody(activeSideTab)}</div>
-                </>
-              ) : (
-                /* DESK-5f — no tab yet: ask the user to choose a view (Codex) */
-                <div className="side-chooser">
-                  {([
-                    { id: 'plan' as PanelId, title: 'Plan', hint: '⌃⇧G', icon: 'review',
-                      badge: lastPlan?.items.length ? `${lastPlan.items.filter((it) => it.status === 'completed').length}/${lastPlan.items.length}` : '' },
-                    { id: 'terminal' as PanelId, title: 'Terminal', hint: '⌃`', icon: 'terminal', badge: '' },
-                    { id: 'files' as PanelId, title: 'Files', hint: '⌘P', icon: 'folder', badge: '' },
-                    { id: 'diff' as PanelId, title: 'Changes', hint: '⇧⌘D', icon: 'diff',
-                      badge: changedFiles.length ? String(changedFiles.length) : '' },
-                    { id: 'tasks' as PanelId, title: 'Background tasks', hint: '', icon: 'tasks',
-                      badge: activeSessionTasks.length ? String(activeSessionTasks.length) : '', live: activeSessionTasks.length > 0 },
-                    { id: 'dashboard' as PanelId, title: 'Dashboard', hint: '', icon: 'tasks',
-                      badge: fleet.length ? String(fleet.length) : '' },
-                    { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt',
-                      badge: toolLog.length ? String(toolLog.length) : '' },
-                    { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '' },
-                    { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock',
-                      badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
-                    { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
-                      badge: worktrees.length ? String(worktrees.length) : '' },
-                    { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review',
-                      badge: review?.findings.length ? String(review.findings.length) : '' },
-                    { id: 'ci' as PanelId, title: 'CI / Checks', hint: '', icon: 'check-circle',
-                      badge: ci.checks.length ? String(ci.checks.length) : '' },
-                    { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
-                  ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>).map((l) => (
-                    <button key={l.id} className="side-launcher" onClick={() => openSideView(l.id)}>
-                      <Icon name={l.icon} size={18} />
-                      <span>{l.title}</span>
-                      <span className="launcher-meta">
-                        {l.live ? <span className="spinner sm" /> : null}
-                        {l.badge ? <span className="launcher-badge">{l.badge}</span> : null}
-                        {l.hint ? <kbd>{l.hint}</kbd> : null}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </aside>
-          ) : null}
+          <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} setSidePanelOpen={setSidePanelOpen}
+            activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab}
+            pop={pop} setPop={setPop} ensurePanel={ensurePanel} openBottomDock={openBottomDock} tabTitle={tabTitle}
+            renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
+            activeSessionTasks={activeSessionTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
+            worktrees={worktrees} review={review} ci={ci} />
         </div>
 
         <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}
