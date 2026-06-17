@@ -1196,7 +1196,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .editor-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .editor-tabs { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); overflow-x: auto; flex: 0 0 auto; }
 .editor-tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
-.editor-tab:hover { background: var(--ov-1); color: var(--text); }
+.editor-tab:hover { background: var(--ov-10); color: var(--text); }
 .editor-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
 .editor-tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .editor-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; color: var(--text-faint); }
@@ -1220,7 +1220,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .ci-panel { padding: 6px 10px 14px; }
 .ci-bar { display: flex; gap: 8px; padding: 4px 0 8px; }
 .ci-pr { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
-.ci-pr-state { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; background: var(--ov-1); color: var(--text-dim); }
+.ci-pr-state { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; background: var(--ov-10); color: var(--text-dim); }
 .ci-pr-state.open { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .ci-pr-state.merged { background: color-mix(in srgb, #a371f7 22%, transparent); color: #d2a8ff; }
 .ci-pr-state.closed { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
@@ -1235,13 +1235,13 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .ci-dot.pending { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
 .ci-dot.cancel { background: var(--text-faint); } .ci-dot.neutral { background: var(--text-faint); }
 .ci-check { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; text-align: left; }
-.ci-check:hover { background: var(--ov-1); }
+.ci-check:hover { background: var(--ov-10); }
 .ci-check-name { flex: 1 1 auto; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ci-check-wf { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); }
 .ci-check-dur { flex: 0 0 auto; min-width: 46px; text-align: right; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .ci-run { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; overflow: hidden; }
 .ci-run-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; font-size: 12px; text-align: left; }
-.ci-run-head:hover { background: var(--ov-1); }
+.ci-run-head:hover { background: var(--ov-10); }
 /* min-width:0 lets the title ellipsize instead of stretching/centering the row. */
 .ci-run-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
 .ci-run-title { max-width: 100%; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1259,9 +1259,9 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .review-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 4px; font-size: 10px; line-height: 1; }
 .review-badge.rb-blocked { background: color-mix(in srgb, var(--err) 20%, transparent); color: var(--err); }
 .review-badge.rb-stale { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
-.review-badge.rb-needs-review { background: var(--ov-1); color: var(--text-dim); }
+.review-badge.rb-needs-review { background: var(--ov-10); color: var(--text-dim); }
 .review-badge.rb-passed { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
-.review-badge.rb-reviewing { background: var(--ov-1); color: var(--accent); }
+.review-badge.rb-reviewing { background: var(--ov-10); color: var(--accent); }
 
 /* T3 — flash the targeted line when "Open diff" jumps to a review finding's hunk. */
 .hunk-line.hl-flash { animation: hunkFlash 1.8s ease-out; }
@@ -1278,7 +1278,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .dash-refresh:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .dash-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
 .dash-tab { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 3px 9px; border-radius: 999px; color: var(--text-dim); border: 1px solid transparent; }
-.dash-tab:hover { background: var(--ov-1); color: var(--text); }
+.dash-tab:hover { background: var(--ov-10); color: var(--text); }
 .dash-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
 .dash-count { font-size: 10px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--ov-2); display: inline-flex; align-items: center; justify-content: center; }
 .dash-ws { margin-bottom: 8px; }
@@ -1289,12 +1289,12 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .dash-ws-gate.gate-stale, .dash-ws-gate.gate-needs-review { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .dash-ws-count { margin-left: auto; }
 .dash-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 7px; }
-.dash-row:hover { background: var(--ov-1); }
+.dash-row:hover { background: var(--ov-10); }
 .dash-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-faint); }
 .dash-dot.run { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .dash-dot.fail { background: var(--err); } .dash-dot.done { background: var(--ok); }
 .dash-row-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
-.dash-kind { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-faint); background: var(--ov-1); padding: 1px 6px; border-radius: 999px; }
+.dash-kind { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-faint); background: var(--ov-10); padding: 1px 6px; border-radius: 999px; }
 .dash-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
 .dash-role { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); }
 .dash-time { flex: 0 0 auto; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
