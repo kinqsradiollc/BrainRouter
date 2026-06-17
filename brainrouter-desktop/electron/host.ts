@@ -22,7 +22,7 @@ import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist
 import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, type TranscriptSummary } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
-import { readWorkspaceEntry, isWorkspaceDirectory } from './fsRead.js';
+import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
 import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime, type ResolvedRuntime } from '@kinqs/brainrouter-cli/dist/state/sessionRuntimeStore.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-cli/dist/state/scheduleStore.js';
@@ -496,6 +496,58 @@ async function main(): Promise<void> {
         prCache = { at: now, pr };
         return { pr };
       },
+      // T6 — GitHub CI/CD via gh. Read-only except action:git-actions-rerun-failed.
+      // execFile (NO shell) + numeric-sanitized run ids + clamped limits. Every
+      // call degrades to an empty/null payload when gh is missing/unauthed/no-PR,
+      // so the panel shows "not connected" instead of erroring. This is GitHub's
+      // real CI truth — the renderer keeps it SEPARATE from the local "tests passed".
+      'git-pr-detail': async () => new Promise((resolve) => {
+        execFile('gh', ['pr', 'view', '--json', 'number,state,title,url,headRefName,baseRefName,author,isDraft,mergeable,statusCheckRollup'],
+          { cwd: workspaceRoot, timeout: 8_000, maxBuffer: 2_000_000 }, (err, stdout) => {
+            if (err) { resolve({ pr: null }); return; }
+            try { resolve({ pr: JSON.parse(stdout) }); } catch { resolve({ pr: null }); }
+          });
+      }),
+      'git-pr-checks': async () => new Promise((resolve) => {
+        // `gh pr checks` exits non-zero when checks are pending/failing but still
+        // prints JSON — capture stdout regardless of the exit code.
+        execFile('gh', ['pr', 'checks', '--json', 'name,state,bucket,link,workflow,startedAt,completedAt'],
+          { cwd: workspaceRoot, timeout: 8_000, maxBuffer: 2_000_000 }, (_err, stdout) => {
+            try { resolve({ checks: JSON.parse(stdout) }); } catch { resolve({ checks: [] }); }
+          });
+      }),
+      'git-actions-runs': async (args) => new Promise((resolve) => {
+        const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50);
+        execFile('gh', ['run', 'list', '--limit', String(limit), '--json', 'databaseId,name,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url'],
+          { cwd: workspaceRoot, timeout: 9_000, maxBuffer: 4_000_000 }, (err, stdout) => {
+            if (err) { resolve({ runs: [] }); return; }
+            try { resolve({ runs: JSON.parse(stdout) }); } catch { resolve({ runs: [] }); }
+          });
+      }),
+      'git-actions-run-detail': async (args) => new Promise((resolve) => {
+        const id = String(args.id ?? '').replace(/[^0-9]/g, '');
+        if (!id) { resolve({ run: null }); return; }
+        execFile('gh', ['run', 'view', id, '--json', 'databaseId,name,displayTitle,status,conclusion,jobs,workflowName,headBranch,url,createdAt'],
+          { cwd: workspaceRoot, timeout: 9_000, maxBuffer: 4_000_000 }, (err, stdout) => {
+            if (err) { resolve({ run: null }); return; }
+            try { resolve({ run: JSON.parse(stdout) }); } catch { resolve({ run: null }); }
+          });
+      }),
+      'git-actions-run-log': async (args) => new Promise((resolve) => {
+        const id = String(args.id ?? '').replace(/[^0-9]/g, '');
+        if (!id) { resolve({ log: '', error: 'no run id' }); return; }
+        const flag = args.failedOnly ? '--log-failed' : '--log';
+        execFile('gh', ['run', 'view', id, flag], { cwd: workspaceRoot, timeout: 15_000, maxBuffer: 8_000_000 }, (err, stdout, stderr) => {
+          resolve({ log: String(stdout ?? '').slice(0, 200_000), error: err ? (String(stderr ?? '').trim() || 'gh run log failed') : undefined });
+        });
+      }),
+      'action:git-actions-rerun-failed': async (args) => new Promise((resolve) => {
+        const id = String(args.id ?? '').replace(/[^0-9]/g, '');
+        if (!id) { resolve({ ok: false, error: 'no run id' }); return; }
+        execFile('gh', ['run', 'rerun', id, '--failed'], { cwd: workspaceRoot, timeout: 10_000, maxBuffer: 200_000 }, (err, _stdout, stderr) => {
+          resolve(err ? { ok: false, error: String(stderr ?? '').trim() || 'rerun failed' } : { ok: true, id });
+        });
+      }),
       'recap': (args) => {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : activeAgent.sessionKey;
         // OOM-safe: recap summarizes recent state — a bounded tail is enough.
@@ -567,6 +619,11 @@ async function main(): Promise<void> {
       // DESK-6w (T9) — directory-aware: a folder path returns a typed listing
       // instead of the old raw EISDIR. Pure logic lives in fsRead.ts (tested).
       'read-file': (args) => readWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
+      // T5 — in-app editor backend. file-read returns content + mtimeMs/size +
+      // binary/truncated flags; file-stat is a cheap mtime probe for stale-write
+      // round-tripping. All escape/symlink/stale guards live in fsRead.ts.
+      'file-read': (args) => readWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
+      'file-stat': (args) => statWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
       // DESK-4j — branch picker (pattern: branch chip with dropdown in the
       // composer context row). Listing is read-only; checkout runs through
       // the same user-command path as the terminal input.
@@ -886,6 +943,15 @@ async function main(): Promise<void> {
           });
         });
       },
+      // T5 — save an editor buffer. A USER edit, so no approval gate (same posture
+      // as action:term-exec). writeWorkspaceEntry enforces escape/symlink/stale
+      // guards and returns {ok}|{conflict}|{error}; the renderer surfaces it.
+      'action:file-save': (args) => writeWorkspaceEntry(
+        workspaceRoot,
+        typeof args.path === 'string' ? args.path : '',
+        typeof args.content === 'string' ? args.content : '',
+        { expectedMtimeMs: typeof args.expectedMtimeMs === 'number' ? args.expectedMtimeMs : undefined },
+      ),
       // DESK-5 — the command bridge. Each case mirrors the REPL command's
       // behavior using the CLI's own store modules; output is plain lines the
       // renderer shows as a command-output block in the chat.
