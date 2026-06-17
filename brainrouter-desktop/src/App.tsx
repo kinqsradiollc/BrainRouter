@@ -36,16 +36,16 @@ import {
   CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels.js';
-import type { ScheduleRecordView } from './scheduleView.js';
-import { parseWorktreeList, type WorktreeEntry } from './worktreeParser.js';
-import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './sessionPagination.js';
-import { mergeOptimistic, dropPending } from './sessionOrder.js';
-import { gitActionTag } from './reviewGateUi.js';
-import { toolGroupLabel } from './toolGroupLabel.js';
+import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
+import { parseWorktreeList, type WorktreeEntry } from './lib/worktree/worktreeParser.js';
+import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/session/sessionPagination.js';
+import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
+import { gitActionTag } from './lib/review/reviewGateUi.js';
+import { toolGroupLabel } from './lib/chat/toolGroupLabel.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './commands.js';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
-import { duplicateTitleKeys } from './sessionDisplay.js';
-import { parseThink } from './thinkParse.js';
+import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
+import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
+import { parseThink } from './lib/chat/thinkParse.js';
 import { CommandPalette, SlashPopup, filterCommands } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
