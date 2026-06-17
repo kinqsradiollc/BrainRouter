@@ -8,9 +8,9 @@ import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'rea
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
+  RequirementsPanel, AnnotationsPanel, TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord } from '@kinqs/brainrouter-types';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
@@ -153,6 +153,8 @@ export function App(): React.ReactElement {
   const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
   // REQUIREMENT-RECORDS — this workspace's Requirement Records, from the CLI store.
   const [requirements, setRequirements] = useState<RequirementRecord[]>([]);
+  // ANNOTATION-RECORDS — this workspace's durable feedback records, from the CLI store.
+  const [annotations, setAnnotations] = useState<AnnotationRecord[]>([]);
   const [chatWidth, setChatWidth] = useState(() => localStorage.getItem('br-chat-w') ?? 'medium');
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
@@ -431,7 +433,7 @@ export function App(): React.ReactElement {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
-    setSearchHits, setSchedules, setRequirements, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
@@ -678,6 +680,18 @@ export function App(): React.ReactElement {
           onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
           onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }}
           onTriage={(f, status) => { if (f.id) { q('q-review-triage', 'review-set-finding-status', { id: f.id, status }); refresh(); } }}
+          onAnnotate={(f) => {
+            // §9 — capture a review finding as a durable annotation: a review-finding
+            // record referencing the finding by id, anchored to its file/lines, with
+            // the finding's severity. Refreshes the annotation slice afterwards.
+            const sev = (['info', 'low', 'medium', 'high'] as const).includes(f.severity as never) ? f.severity : undefined;
+            q('q-annot-create', 'annotation-create', {
+              type: 'review-finding', targetId: f.id, body: f.summary, severity: sev,
+              anchor: { filePath: f.file, startLine: f.line, endLine: f.endLine },
+            });
+            setTimeout(() => q('q-annot', 'annotation-list'), 150);
+            setToast('Finding saved as an annotation — see the Annotations view.');
+          }}
           onOpenFile={(f) => openFile(f.file)}
           onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
@@ -689,6 +703,16 @@ export function App(): React.ReactElement {
           onSetPriority={(id, priority) => { q('q-req-update', 'requirement-update', { id, priority }); refresh(); }}
           onAddCriterion={(id, text) => { q('q-req-update', 'requirement-update', { id, criterion: text }); refresh(); }}
           onSeedPlan={(id) => { q('q-req-seed', 'requirement-seed-plan', { id }); refresh(); setToast('Seeded this session\'s plan from the requirement — it shows in Plan on the next turn.'); }} />;
+      }
+      case 'annotations': {
+        // ANNOTATION-RECORDS — status set re-fetches the list; export round-trips
+        // the markdown back through q-annot-export, which drops it into the
+        // composer draft (the "export feedback to the session" path).
+        const refresh = () => setTimeout(() => q('q-annot', 'annotation-list'), 150);
+        return <AnnotationsPanel annotations={annotations}
+          onSetStatus={(id, status) => { q('q-annot-status', 'annotation-set-status', { id, status }); refresh(); }}
+          onExport={(filter) => { q('q-annot-export', 'annotation-export', filter); }}
+          onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
       }
       default: return null;
     }
@@ -754,7 +778,7 @@ export function App(): React.ReactElement {
             pop={pop} setPop={setPop} ensurePanel={ensurePanel} openBottomDock={openBottomDock} tabTitle={tabTitle}
             renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
             activeSessionTasks={activeSessionTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
-            worktrees={worktrees} review={review} requirements={requirements} ci={ci} />
+            worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} ci={ci} />
         </div>
 
         <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}

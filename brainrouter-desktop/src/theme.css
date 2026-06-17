@@ -548,6 +548,26 @@ input.ctl { min-width: 220px; }
 .req-a.unanswered { color: var(--text-faint); font-style: italic; }
 .req-links { display: flex; gap: 6px; flex-wrap: wrap; }
 .req-link-chip { font-size: 10.5px; font-weight: 560; padding: 2px 8px; border-radius: 999px; background: var(--raised); color: var(--text-dim); }
+/* ANNOTATION-RECORDS — the Annotations panel. Reuses the requirement panel's
+   row/detail/select/chip classes; only the filter bar, target/anchor chips,
+   status-pill colors, and the suggested/quote code blocks are panel-specific. */
+.annot-panel { padding: 4px 2px; }
+.annot-filters { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.annot-filters .req-select .filter { margin: 0; width: auto; min-width: 92px; padding: 5px 8px; }
+.annot-filters .wt-btn { margin-left: auto; }
+.annot-counts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.annot-kind { flex: none; font-size: 10px; font-weight: 600; color: var(--text-dim); font-family: var(--mono); }
+.annot-anchor { flex: none; font-family: var(--mono); font-size: 10px; color: var(--text-faint); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annot-anchor-line { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin: 2px 0 6px; }
+.annot-quote, .annot-suggested { font-family: var(--mono); font-size: 11px; line-height: 1.5; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 8px; margin: 2px 0 6px; white-space: pre-wrap; overflow-x: auto; }
+.annot-quote { color: var(--text-dim); border-left: 2px solid var(--border-strong); }
+.annot-suggested { color: #6cc04a; }
+/* Annotation lifecycle status pills (req-status base provides the chrome). */
+.req-status.st-open { background: var(--accent-soft, rgba(108,192,74,0.18)); color: var(--accent, #6cc04a); }
+.req-status.st-accepted { color: #6cc04a; }
+.req-status.st-rejected { color: #ffa198; }
+.req-status.st-resolved { color: var(--text-dim); }
+.req-status.st-ignored { opacity: 0.6; }
 /* T7 — permission-rule editor; T6 — MCP add-server form */
 .rule-row { display: flex; align-items: center; gap: 8px; }
 .rule-text { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

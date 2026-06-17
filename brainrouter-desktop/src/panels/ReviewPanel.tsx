@@ -43,7 +43,7 @@ function ReviewCodeFrame({ f }: { f: ReviewFindingView }): React.ReactElement | 
 
 export type TriageStatus = 'acknowledged' | 'disputed' | 'out-of-scope';
 
-export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve, onTriage, onOpenFile, onOpenDiff }: {
+export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, onAskFix, onDismiss, onResolve, onTriage, onAnnotate, onOpenFile, onOpenDiff }: {
   review: { findings: ReviewFindingView[]; summary: string; files: number } | null;
   gate: ReviewGateView | null;
   running: boolean;
@@ -54,6 +54,8 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
   onDismiss: (f: ReviewFindingView) => void;
   onResolve: (f: ReviewFindingView) => void;
   onTriage: (f: ReviewFindingView, status: TriageStatus) => void;
+  // §9 — turn a review finding into a durable Annotation Record.
+  onAnnotate: (f: ReviewFindingView) => void;
   onOpenFile: (f: ReviewFindingView) => void;
   onOpenDiff: (f: ReviewFindingView) => void;
 }): React.ReactElement {
@@ -99,6 +101,8 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
                     {!resolved && f.canApply ? <button className="wt-btn primary-ghost" onClick={() => onApply(f)}>Apply suggestion</button> : null}
                     {!resolved ? <button className="wt-btn" onClick={() => onAskFix(f)}>Ask agent to fix</button> : null}
                     {!resolved ? <button className="wt-btn" onClick={() => onDiscuss(f)}>Discuss</button> : null}
+                    {/* §9 — capture this finding as a durable annotation (survives the review run). */}
+                    <button className="wt-btn" onClick={() => onAnnotate(f)} title="Save this finding as a durable annotation">Annotate</button>
                     <button className="wt-btn" onClick={() => onOpenDiff(f)} title="Open this file's diff">Open diff</button>
                     <button className="wt-btn" onClick={() => onOpenFile(f)} title="Open the file">Open file</button>
                     {!resolved ? <button className="wt-btn" onClick={() => onResolve(f)}>Resolve</button> : null}

@@ -17,5 +17,6 @@ export { SchedulePanel } from './SchedulePanel.js';
 export { WorktreesPanel } from './WorktreesPanel.js';
 export { ReviewPanel } from './ReviewPanel.js';
 export { RequirementsPanel } from './RequirementsPanel.js';
+export { AnnotationsPanel } from './AnnotationsPanel.js';
 export { SearchPanel, type SearchHit } from './SearchPanel.js';
 export { PlanPanel } from './PlanPanel.js';
