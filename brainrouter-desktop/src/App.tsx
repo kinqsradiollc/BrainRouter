@@ -5,35 +5,10 @@
  * composer "/" popup, and the categorized Settings modal.
  */
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-// react-markdown's return type clashes with the workspace-hoisted @types/react;
-// the runtime component is a plain function component.
-const Markdown = ReactMarkdown as unknown as React.ComponentType<{ remarkPlugins?: unknown[]; components?: Record<string, unknown>; children: string }>;
-
-/** Fenced code blocks render through the same highlighter as the File view. */
-const MD_COMPONENTS: Record<string, unknown> = {
-  code(props: { inline?: boolean; className?: string; children?: React.ReactNode }) {
-    const match = /language-([\w-]+)/.exec(props.className ?? '');
-    const text = String(props.children ?? '').replace(/\n$/, '');
-    if (props.inline || (!match && !text.includes('\n'))) {
-      return <code className={props.className}>{props.children}</code>;
-    }
-    return (
-      <div className="md-code">
-        <div className="md-code-bar">
-          <span>{match?.[1] ?? 'text'}</span>
-          <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(text)}><Icon name="copy" size={12} /></button>
-        </div>
-        <CodeBlock code={text} language={match?.[1] ?? 'text'} />
-      </div>
-    );
-  },
-};
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
-  CodeBlock, DiffPanel, DiffView, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
+  CodeBlock, DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
@@ -41,7 +16,6 @@ import { parseWorktreeList, type WorktreeEntry } from './lib/worktree/worktreePa
 import { toggleVisible, moreLabel, showToggle, SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic, dropPending } from './lib/session/sessionOrder.js';
 import { gitActionTag } from './lib/review/reviewGateUi.js';
-import { toolGroupLabel } from './lib/chat/toolGroupLabel.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
@@ -51,272 +25,21 @@ import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from './types.js';
-import { fileFromSummary, fmtAge, fmtRel, fmtElapsed, fmtDur, wfStatusClass, fmtTokens, fmt, download } from './lib/format.js';
+import { fileFromSummary, fmtAge, fmtRel, fmtElapsed, fmt, download } from './lib/format.js';
 import { EFFORT_LEVELS, NON_CHAT_MODEL, VIEW_MENU, FOREGROUND_ONLY_KINDS } from './constants.js';
 import { devFlag, devPanels } from './lib/devFlags.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
-import { sendReleaseNotes } from './lib/releaseNotes.js';
+import { Markdown, MD_COMPONENTS } from './chat/markdown.js';
+import { ToolGroup } from './chat/ToolGroup.js';
+import { WorkflowCard } from './chat/WorkflowCard.js';
+import { SessionStatus } from './components/SessionStatus.js';
+import { WorkElapsed } from './components/WorkElapsed.js';
+import { HomeView } from './components/HomeView.js';
+import { ContextRing } from './components/ContextRing.js';
+import { UsageBar } from './components/UsageBar.js';
 
 installDevBridge();
-
-/**
- * DESK-5d — Codex/Claude-style session status icons. All real signal:
- * spinner = a turn is running here right now; amber dot = the transcript
- * ends on a user message (interrupted — waiting on a reply); hollow ring =
- * a normally-completed chat.
- */
-function SessionStatus({ s, working }: { s: SessionRow; working?: boolean }): React.ReactElement {
-  if (working) return <span className="st"><span className="spinner sm" /></span>;
-  if (s.lastRole === 'user') return <span className="st st-dot warn" title="Interrupted — waiting for your reply" />;
-  return <span className="st st-ring" title={s.turnCount ? `${s.turnCount} entries` : undefined} />;
-}
-
-// DESK-5w (#4 lag) — the turn's elapsed-seconds ticker, isolated into its own
-// component with its own 1s interval. Previously a top-level `nowTick` state
-// re-rendered the ENTIRE App every second; now only this tiny node updates.
-function WorkElapsed({ startedAt }: { startedAt: number }): React.ReactElement {
-  const [, force] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => {
-    const t = setInterval(force, 1000);
-    return () => clearInterval(t);
-  }, []);
-  return <span>{Math.max(0, Math.floor((Date.now() - startedAt) / 1000))}s</span>;
-}
-
-// DESK-6w — the /workflows-style card. Header (kind·slug + status + elapsed +
-// totals), then one section per phase: title, a progress-dot strip (one dot per
-// agent, colored by that agent's status), and an Agent | Tokens | Tools | Time table.
-function WorkflowCard({ wf, onBack }: { wf: WorkflowDetail; onBack: () => void }): React.ReactElement {
-  const started = new Date(wf.startedAt).getTime();
-  const live = wf.status === 'running';
-  return (
-    <div className="wf-card">
-      <div className="wf-head">
-        <button className="task-back" onClick={onBack}>← Back</button>
-        <span className="wf-title">{wf.kind ? `${wf.kind} · ` : ''}{wf.slug}</span>
-        <span className={`task-status ${wfStatusClass(wf.status)}`}>{wf.status}</span>
-        <span className="wf-elapsed">{live ? <WorkElapsed startedAt={started} /> : fmtDur(new Date(wf.updatedAt).getTime() - started)}</span>
-      </div>
-      <div className="wf-meta">
-        <span><b>{wf.totalAgents}</b> agent{wf.totalAgents === 1 ? '' : 's'}</span>
-        <span className="dim">·</span>
-        <span><b>{fmtTokens(wf.totalTokens)}</b> tokens</span>
-      </div>
-      {wf.phases.length === 0 && wf.steps.length > 0 ? (
-        <div className="wf-phase">
-          <div className="wf-phase-head"><span className="wf-phase-title">Steps</span></div>
-          {wf.steps.map((st) => (
-            <div key={st.id} className="wf-step"><span className={`wf-dot ${wfStatusClass(st.status)}`} /><span>{st.title}</span><span className="wf-step-status dim">{st.status}</span></div>
-          ))}
-        </div>
-      ) : null}
-      {wf.phases.map((p) => (
-        <div key={p.id} className="wf-phase">
-          <div className="wf-phase-head">
-            <span className="wf-phase-title">{p.title}</span>
-            <span className={`task-status ${wfStatusClass(p.status)}`}>{p.status}</span>
-            <span className="wf-dots">{p.agents.map((a) => <span key={a.id} className={`wf-dot ${wfStatusClass(a.status)}`} title={`${a.label} — ${a.status}`} />)}</span>
-          </div>
-          {p.agents.length > 0 ? (
-            <div className="wf-table">
-              <div className="wf-row wf-row-head"><span>Agent</span><span>Tokens</span><span>Tools</span><span>Time</span></div>
-              {p.agents.map((a) => (
-                <div key={a.id} className="wf-row" title={`${a.role} · ${a.status}`}>
-                  <span className="wf-agent"><span className={`wf-dot ${wfStatusClass(a.status)}`} />{a.label}</span>
-                  <span>{fmtTokens(a.tokens)}</span>
-                  <span>{a.tools}</span>
-                  <span>{fmtDur(a.ms)}</span>
-                </div>
-              ))}
-            </div>
-          ) : <div className="wf-empty dim">No agents in this phase yet.</div>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ToolGroup({ row, live, inlineDiffs, onRequestDiff }: {
-  row: Extract<ChatRow, { kind: 'tool-group' }>;
-  live?: boolean;
-  inlineDiffs: Record<string, string>;
-  onRequestDiff: (file: string) => void;
-}): React.ReactElement {
-  const [open, setOpen] = useState(false);
-  const [openItem, setOpenItem] = useState<number | null>(null);
-  const [diffItem, setDiffItem] = useState<number | null>(null);
-  // Observed: live groups read "Using {tool} *"; finished ones get an
-  // outcome-phrased label ("Used N tools ›").
-  // DESK-6t / item 12 — collapsed label via the pure, tested toolGroupLabel
-  // (live "Using X ✶" · single "tool — summary" · multi "N tools · names…").
-  const label = toolGroupLabel(row.items, !!live);
-  const failed = row.items.some((i) => !i.ok);
-  return (
-    <div className="step">
-      <button className="step-head" onClick={() => setOpen((o) => !o)}>
-        <span className={`step-dot ${failed ? 'fail' : 'ok'}`} />
-        <span className="step-label">{label}</span>
-        <span className="step-chevron">{open ? '⌄' : '›'}</span>
-      </button>
-      {open ? (
-        <div className="step-body">
-          {row.items.map((t) => (
-            <div key={t.id} className="tool-card-mini">
-              <button className="tool-head" onClick={() => t.preview && setOpenItem(openItem === t.id ? null : t.id)}>
-                <span className={`step-dot ${t.ok ? 'ok' : 'fail'}`} />
-                <span className="tool-name">{t.child ? `[${t.child}] ` : ''}{t.tool}</span>
-                <span className="tool-summary">{t.summary}</span>
-                {t.file ? (
-                  <span className="diff-chip" title="Inspect diff" onClick={(ev) => {
-                    ev.stopPropagation();
-                    if (diffItem === t.id) { setDiffItem(null); return; }
-                    setDiffItem(t.id);
-                    if (!inlineDiffs[t.file!]) onRequestDiff(t.file!);
-                  }}>±{diffItem === t.id ? ' ⌄' : ''}</span>
-                ) : null}
-                {t.preview ? <span className="step-chevron">{openItem === t.id ? '⌄' : '›'}</span> : null}
-              </button>
-              {openItem === t.id && t.preview ? <pre className="tool-preview">{t.preview}</pre> : null}
-              {diffItem === t.id && t.file ? (
-                <div className="inline-diff">
-                  {inlineDiffs[t.file] ? <DiffView diff={inlineDiffs[t.file]} /> : <div className="row status"><span className="spinner" /> Loading diff…</div>}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** DESK-4d — the greeting/home view shown on an empty session. */
-function HomeView({ username, stats, tab, setTab, range, setRange, model, provider, repo, recents, onResume }: {
-  username?: string;
-  repo?: string;
-  recents?: Array<{ sessionKey: string; firstUserMessage?: string; modifiedAt?: string }>;
-  onResume?: (key: string) => void;
-  stats: { sessions: number; turns: number; activeDays: number; currentStreak: number; longestStreak: number; model: string; perDay: Record<string, number> } | null;
-  tab: 'overview' | 'models';
-  setTab: (t: 'overview' | 'models') => void;
-  range: 'all' | '30d' | '7d';
-  setRange: (r: 'all' | '30d' | '7d') => void;
-  model?: string;
-  provider?: string;
-}): React.ReactElement {
-  const name = username ? username.charAt(0).toUpperCase() + username.slice(1) : 'there';
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 119;
-  const cells: Array<{ day: string; n: number }> = [];
-  const today = new Date();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    cells.push({ day: key, n: stats?.perDay[key] ?? 0 });
-  }
-  const inRange = cells.filter((c) => c.n > 0);
-  const turnsInRange = cells.reduce((s, c) => s + c.n, 0);
-  const lvl = (n: number) => (n === 0 ? '' : n <= 2 ? ' h1' : n <= 5 ? ' h2' : ' h3');
-  return (
-    <div className="home">
-      <div className="home-greet">
-        <span className="spark">✺</span>
-        <span>{repo ? `What should we build in ${repo}?` : `What's up next, ${name}?`}</span>
-        <span className="whatsnew" onClick={() => sendReleaseNotes()}>What's new</span>
-      </div>
-      <div className="stats-card">
-        <div className="stats-head">
-          <div className="seg">
-            <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>Overview</button>
-            <button className={tab === 'models' ? 'active' : ''} onClick={() => setTab('models')}>Models</button>
-          </div>
-          <div className="seg">
-            {(['all', '30d', '7d'] as const).map((r) => (
-              <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{r === 'all' ? 'All' : r}</button>
-            ))}
-          </div>
-        </div>
-        {tab === 'overview' ? (
-          <>
-            <div className="stat-grid">
-              <div className="stat-card"><div className="stat-label">Sessions</div><div className="stat-value">{stats?.sessions ?? 0}</div></div>
-              <div className="stat-card"><div className="stat-label">Turns</div><div className="stat-value">{range === 'all' ? stats?.turns ?? 0 : turnsInRange}</div></div>
-              <div className="stat-card"><div className="stat-label">Active days</div><div className="stat-value">{range === 'all' ? stats?.activeDays ?? 0 : inRange.length}</div></div>
-              <div className="stat-card"><div className="stat-label">Streak</div><div className="stat-value">{stats?.currentStreak ?? 0}d <span className="stat-sub">· best {stats?.longestStreak ?? 0}d</span></div></div>
-            </div>
-            <div className="heatmap" title="Turns per day">
-              {cells.map((c) => <span key={c.day} className={`heat-cell${lvl(c.n)}`} title={`${c.day}: ${c.n}`} />)}
-            </div>
-          </>
-        ) : (
-          <div className="stat-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <div className="stat-card"><div className="stat-label">Active model</div><div className="stat-value" style={{ fontSize: 14 }}>{model ?? '—'}</div></div>
-            <div className="stat-card"><div className="stat-label">Provider</div><div className="stat-value" style={{ fontSize: 14 }}>{provider ?? '—'}</div></div>
-          </div>
-        )}
-      </div>
-      {recents && recents.length ? (
-        <div className="home-recents">
-          <div className="rail-section" style={{ margin: '0 0 6px' }}>Pick up where you left off</div>
-          {recents.slice(0, 3).map((r) => (
-            <button key={r.sessionKey} className="home-recent" onClick={() => onResume?.(r.sessionKey)}>
-              <span className="session-dot" />
-              <span className="hr-title">{r.firstUserMessage || r.sessionKey}</span>
-              {r.modifiedAt ? <span className="session-age">{fmtAge(r.modifiedAt)}</span> : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * DESK-5q/5r — the composer's context ring: an arc filled by how full the
- * session's context is RELATIVE to the auto-compact threshold — the point
- * where BrainRouter summarizes old history and the context resets. It grows
- * live as a turn accumulates context and drops after a compaction. A small %
- * readout sits beside it so it's legible even at a glance; the tooltip carries
- * the exact tokens, the compact point, and the model window.
- */
-function ContextRing({ usage }: { usage: { used: number; window: number; compactAt: number; limit: number; pct: number } | null }): React.ReactElement {
-  const r = 7, circ = 2 * Math.PI * r;
-  const pct = usage && usage.limit > 0 ? Math.max(0, Math.min(1, usage.pct)) : 0;
-  const tone = pct >= 0.95 ? 'var(--err)' : pct >= 0.75 ? 'var(--warn)' : 'var(--accent)';
-  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
-  const title = usage && usage.used > 0
-    ? `Context ${Math.round(pct * 100)}% — ${usage.used.toLocaleString()} tokens` +
-      `\nAuto-compacts above ~${usage.compactAt.toLocaleString()} (old history is summarized, context resets)` +
-      (usage.window > 0 ? `\nModel window: ${usage.window.toLocaleString()}` : '')
-    : 'Context fill — grows as the chat accumulates, resets when it auto-compacts';
-  return (
-    <span className="ctx-ring" title={title}>
-      <svg width="16" height="16" viewBox="0 0 18 18">
-        <circle cx="9" cy="9" r={r} fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="2.4" />
-        <circle cx="9" cy="9" r={r} fill="none" stroke={tone} strokeWidth="2.4" strokeLinecap="round"
-          strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} transform="rotate(-90 9 9)" />
-      </svg>
-      {usage && usage.used > 0 ? <span className="ctx-pct">{Math.round(pct * 100)}%</span> : null}
-    </span>
-  );
-}
-
-/** DESK-5s — one labeled progress bar for the context/usage popover. */
-function UsageBar({ label, value, total, suffix, tone = 'var(--accent)' }: {
-  label: string; value: number; total: number; suffix?: string; tone?: string;
-}): React.ReactElement {
-  const pct = total > 0 ? Math.max(0, Math.min(1, value / total)) : 0;
-  return (
-    <div className="usage-row">
-      <div className="usage-row-top">
-        <span className="usage-label">{label}</span>
-        <span className="usage-val">{total > 0 ? `${fmtTokens(value)} / ${fmtTokens(total)} (${Math.round(pct * 100)}%)` : (suffix ?? '—')}</span>
-      </div>
-      <div className="usage-track"><span className="usage-fill" style={{ width: `${pct * 100}%`, background: tone }} /></div>
-    </div>
-  );
-}
 
 export function App(): React.ReactElement {
   const [rows, setRows] = useState<ChatRow[]>([]);
