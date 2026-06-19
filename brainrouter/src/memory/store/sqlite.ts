@@ -10,12 +10,11 @@ import { bm25RankToScore, buildFtsQuery, parseJsonObject, parseJsonArray, cognit
 import { SqliteSourceStore } from "./sqlite/sourceStore.js";
 import { SqliteGraphStore } from "./sqlite/graphStore.js";
 import { SqliteConnectionsStore } from "./sqlite/connectionsStore.js";
+import { SqliteUsersStore } from "./sqlite/usersStore.js";
+import { SqliteJobsStore } from "./sqlite/jobsStore.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
-
-const JOB_COLUMNS =
-  "id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, error, created_at, updated_at";
 
 export class SqliteMemoryStore implements IMemoryStore {
   private db: DatabaseSync;
@@ -23,6 +22,8 @@ export class SqliteMemoryStore implements IMemoryStore {
   private readonly sourceStore: SqliteSourceStore;
   private readonly graphStore: SqliteGraphStore;
   private readonly connectionsStore: SqliteConnectionsStore;
+  private readonly usersStore: SqliteUsersStore;
+  private readonly jobsStore: SqliteJobsStore;
 
   // Sensory statements
   private stmtSensoryUpsertMeta!: StatementSync;
@@ -52,6 +53,8 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.sourceStore = new SqliteSourceStore(this.db);
     this.graphStore = new SqliteGraphStore(this.db);
     this.connectionsStore = new SqliteConnectionsStore(this.db);
+    this.usersStore = new SqliteUsersStore(this.db);
+    this.jobsStore = new SqliteJobsStore(this.db);
 
     this.db.exec("PRAGMA busy_timeout = 5000");
 
@@ -2432,121 +2435,29 @@ export class SqliteMemoryStore implements IMemoryStore {
     });
   }
 
-  // ── BRAIN-P1 (0.4.1): memory_jobs queue (BRAIN-DESIGN-T2) ──────────────
+  // ── memory_jobs queue (BRAIN-P1) — ADR-004 Phase 3, delegated to SqliteJobsStore ──
 
   public enqueueMemoryJob(
     input: MemoryJobEnqueueInput,
     options?: { idGenerator?: () => string; now?: string },
   ): MemoryJobRecord {
-    const now = options?.now ?? new Date().toISOString();
-    const id = (options?.idGenerator ?? (() => randomUUID()))();
-    const runAfter = input.runAfter ?? now;
-    const priority = input.priority ?? 50;
-    const maxAttempts = input.maxAttempts ?? 3;
-    this.db
-      .prepare(
-        `INSERT INTO memory_jobs
-           (id, kind, status, priority, attempts, max_attempts, run_after, locked_at,
-            parent_job_id, input_json, output_json, error, created_at, updated_at)
-         VALUES (?, ?, 'pending', ?, 0, ?, ?, NULL, ?, ?, NULL, NULL, ?, ?)`,
-      )
-      .run(
-        id,
-        input.kind,
-        priority,
-        maxAttempts,
-        runAfter,
-        input.parentJobId ?? null,
-        JSON.stringify(input.input ?? {}),
-        now,
-        now,
-      );
-    return this.getMemoryJob(id)!;
+    return this.jobsStore.enqueueMemoryJob(input, options);
   }
 
   public getMemoryJob(id: string): MemoryJobRecord | null {
-    const row = this.db
-      .prepare(`SELECT ${JOB_COLUMNS} FROM memory_jobs WHERE id = ?`)
-      .get(id) as any;
-    return row ? jobRowToRecord(row) : null;
+    return this.jobsStore.getMemoryJob(id);
   }
 
   public listMemoryJobs(filters?: MemoryJobListFilters): MemoryJobRecord[] {
-    const where: string[] = [];
-    const params: (string | number)[] = [];
-    if (filters?.kind) {
-      where.push("kind = ?");
-      params.push(filters.kind);
-    }
-    if (filters?.status) {
-      const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
-      if (statuses.length > 0) {
-        where.push(`status IN (${statuses.map(() => "?").join(",")})`);
-        params.push(...statuses);
-      }
-    }
-    const limit = filters?.limit ?? 100;
-    const rows = this.db
-      .prepare(
-        `SELECT ${JOB_COLUMNS} FROM memory_jobs
-         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-         ORDER BY priority DESC, created_at ASC, id ASC
-         LIMIT ?`,
-      )
-      .all(...params, limit) as any[];
-    return rows.map(jobRowToRecord);
+    return this.jobsStore.listMemoryJobs(filters);
   }
 
   public claimNextMemoryJob(options?: { now?: string }): MemoryJobRecord | null {
-    const now = options?.now ?? new Date().toISOString();
-    // BEGIN IMMEDIATE takes the write lock up front so two federated
-    // brain processes can't both claim the same row. The select-then-
-    // update is one transaction; under WAL a second claimant blocks on
-    // the write lock (busy_timeout) rather than racing.
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const candidate = this.db
-        .prepare(
-          `SELECT id FROM memory_jobs
-           WHERE status = 'pending' AND run_after <= ?
-           ORDER BY priority DESC, run_after ASC, id ASC
-           LIMIT 1`,
-        )
-        .get(now) as { id: string } | undefined;
-      if (!candidate) {
-        this.db.exec("COMMIT");
-        return null;
-      }
-      this.db
-        .prepare(
-          `UPDATE memory_jobs
-           SET status = 'running', locked_at = ?, updated_at = ?
-           WHERE id = ? AND status = 'pending'`,
-        )
-        .run(now, now, candidate.id);
-      this.db.exec("COMMIT");
-      return this.getMemoryJob(candidate.id);
-    } catch (e) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* already rolled back */
-      }
-      throw e;
-    }
+    return this.jobsStore.claimNextMemoryJob(options);
   }
 
   public startMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null {
-    const now = options?.now ?? new Date().toISOString();
-    const result = this.db
-      .prepare(
-        `UPDATE memory_jobs
-         SET status = 'running', locked_at = ?, updated_at = ?
-         WHERE id = ? AND status = 'pending'`,
-      )
-      .run(now, now, id);
-    if (Number(result.changes ?? 0) === 0) return null;
-    return this.getMemoryJob(id);
+    return this.jobsStore.startMemoryJob(id, options);
   }
 
   public completeMemoryJob(
@@ -2554,16 +2465,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     output: unknown,
     options?: { now?: string },
   ): MemoryJobRecord | null {
-    const now = options?.now ?? new Date().toISOString();
-    const result = this.db
-      .prepare(
-        `UPDATE memory_jobs
-         SET status = 'done', output_json = ?, error = NULL, locked_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'running'`,
-      )
-      .run(JSON.stringify(output ?? null), now, id);
-    if (Number(result.changes ?? 0) === 0) return null;
-    return this.getMemoryJob(id);
+    return this.jobsStore.completeMemoryJob(id, output, options);
   }
 
   public failMemoryJob(
@@ -2571,118 +2473,23 @@ export class SqliteMemoryStore implements IMemoryStore {
     error: string,
     options?: { now?: string; backoffMs?: number },
   ): MemoryJobRecord | null {
-    const now = options?.now ?? new Date().toISOString();
-    const job = this.getMemoryJob(id);
-    if (!job || job.status !== "running") return null;
-    const attempts = job.attempts + 1;
-    if (attempts < job.maxAttempts) {
-      const runAfter = new Date(Date.parse(now) + (options?.backoffMs ?? 0)).toISOString();
-      this.db
-        .prepare(
-          `UPDATE memory_jobs
-           SET status = 'pending', attempts = ?, error = ?, run_after = ?, locked_at = NULL, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(attempts, error, runAfter, now, id);
-    } else {
-      this.db
-        .prepare(
-          `UPDATE memory_jobs
-           SET status = 'failed', attempts = ?, error = ?, locked_at = NULL, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(attempts, error, now, id);
-    }
-    return this.getMemoryJob(id);
+    return this.jobsStore.failMemoryJob(id, error, options);
   }
 
   public retryMemoryJob(id: string, options?: { now?: string }): MemoryJobRecord | null {
-    const now = options?.now ?? new Date().toISOString();
-    const result = this.db
-      .prepare(
-        `UPDATE memory_jobs
-         SET status = 'pending', attempts = 0, run_after = ?, locked_at = NULL, error = NULL, updated_at = ?
-         WHERE id = ? AND status IN ('failed', 'cancelled')`,
-      )
-      .run(now, now, id);
-    if (Number(result.changes ?? 0) === 0) {
-      // No-op for pending/running/done — return the current row if it exists.
-      return this.getMemoryJob(id);
-    }
-    return this.getMemoryJob(id);
+    return this.jobsStore.retryMemoryJob(id, options);
   }
 
   public cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): MemoryJobRecord | null {
-    const now = options?.now ?? new Date().toISOString();
-    const result = this.db
-      .prepare(
-        `UPDATE memory_jobs
-         SET status = 'cancelled', error = COALESCE(?, error), locked_at = NULL, updated_at = ?
-         WHERE id = ? AND status IN ('pending', 'running')`,
-      )
-      .run(options?.reason ?? null, now, id);
-    if (Number(result.changes ?? 0) === 0) return this.getMemoryJob(id);
-    return this.getMemoryJob(id);
+    return this.jobsStore.cancelMemoryJob(id, options);
   }
 
   public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): number {
-    const now = options?.now ?? new Date().toISOString();
-    const cutoff = new Date(Date.parse(now) - stuckMs).toISOString();
-    const result = this.db
-      .prepare(
-        `UPDATE memory_jobs
-         SET status = 'cancelled', error = 'swept: lock expired', locked_at = NULL, updated_at = ?
-         WHERE status = 'running' AND locked_at IS NOT NULL AND locked_at < ?`,
-      )
-      .run(now, cutoff);
-    return Number(result.changes ?? 0);
+    return this.jobsStore.sweepStuckMemoryJobs(stuckMs, options);
   }
 
   public getMemoryJobKindAggregates(options?: { now?: string }): MemoryJobKindAggregate[] {
-    const now = options?.now ?? new Date().toISOString();
-    const since24h = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString();
-    const kinds = (
-      this.db.prepare("SELECT DISTINCT kind FROM memory_jobs ORDER BY kind ASC").all() as Array<{
-        kind: string;
-      }>
-    ).map((r) => r.kind);
-
-    return kinds.map((kind) => {
-      const latest = this.db
-        .prepare(
-          `SELECT status, updated_at FROM memory_jobs
-           WHERE kind = ? ORDER BY updated_at DESC, id DESC LIMIT 1`,
-        )
-        .get(kind) as { status: string; updated_at: string } | undefined;
-      const lastCompleted = this.db
-        .prepare(
-          `SELECT updated_at FROM memory_jobs
-           WHERE kind = ? AND status = 'done' ORDER BY updated_at DESC LIMIT 1`,
-        )
-        .get(kind) as { updated_at: string } | undefined;
-      const pending = this.db
-        .prepare("SELECT COUNT(*) AS n FROM memory_jobs WHERE kind = ? AND status = 'pending'")
-        .get(kind) as { n: number };
-      const terminal = this.db
-        .prepare(
-          `SELECT
-             SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
-             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
-           FROM memory_jobs
-           WHERE kind = ? AND updated_at >= ? AND status IN ('done', 'failed')`,
-        )
-        .get(kind, since24h) as { done: number | null; failed: number | null };
-      const done = Number(terminal.done ?? 0);
-      const failed = Number(terminal.failed ?? 0);
-      const total = done + failed;
-      return {
-        kind,
-        lastStatus: (latest?.status ?? "pending") as MemoryJobStatus,
-        lastCompletedAt: lastCompleted?.updated_at ?? null,
-        pendingJobs: Number(pending.n ?? 0),
-        successRate24h: total > 0 ? done / total : null,
-      };
-    });
+    return this.jobsStore.getMemoryJobKindAggregates(options);
   }
 
   public sweepActiveSessions(olderThanMs: number): number {
@@ -3001,144 +2808,50 @@ export class SqliteMemoryStore implements IMemoryStore {
     }
   }
 
+  // ── Users — ADR-004 Phase 3, delegated to SqliteUsersStore ──
+
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {
-    const createdAt = new Date().toISOString();
-    this.db.prepare(`
-      INSERT INTO users (user_id, api_key, password_hash, display_name, email, is_admin, status, created_at)
-      VALUES (?, ?, NULL, ?, '', ?, 'active', ?)
-    `).run(userId, apiKey, displayName, isAdmin ? 1 : 0, createdAt);
-    return {
-      userId,
-      apiKey,
-      passwordHash: null,
-      displayName,
-      email: "",
-      isAdmin,
-      status: "active",
-      createdAt,
-    };
+    return this.usersStore.createUser(userId, apiKey, displayName, isAdmin);
   }
 
   public getUserByApiKey(apiKey: string): UserRecord | null {
-    const row = this.db.prepare(
-      "SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE api_key = ?"
-    ).get(apiKey) as any;
-    if (!row) return null;
-    return {
-      userId: row.user_id,
-      apiKey: row.api_key,
-      passwordHash: row.password_hash ?? null,
-      displayName: row.display_name ?? "",
-      email: row.email ?? "",
-      isAdmin: Boolean(row.is_admin),
-      status: row.status === "disabled" ? "disabled" : "active",
-      createdAt: row.created_at,
-    };
+    return this.usersStore.getUserByApiKey(apiKey);
   }
 
   public getUserByEmail(email: string): UserRecord | null {
-    const row = this.db.prepare(
-      "SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE lower(email) = lower(?)"
-    ).get(email) as any;
-    if (!row) return null;
-    return {
-      userId: row.user_id,
-      apiKey: row.api_key,
-      passwordHash: row.password_hash ?? null,
-      displayName: row.display_name ?? "",
-      email: row.email ?? "",
-      isAdmin: Boolean(row.is_admin),
-      status: row.status === "disabled" ? "disabled" : "active",
-      createdAt: row.created_at,
-    };
+    return this.usersStore.getUserByEmail(email);
   }
 
   public getUserById(userId: string): UserRecord | null {
-    const row = this.db.prepare(
-      "SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE user_id = ?"
-    ).get(userId) as any;
-    if (!row) return null;
-    return {
-      userId: row.user_id,
-      apiKey: row.api_key,
-      passwordHash: row.password_hash ?? null,
-      displayName: row.display_name ?? "",
-      email: row.email ?? "",
-      isAdmin: Boolean(row.is_admin),
-      status: row.status === "disabled" ? "disabled" : "active",
-      createdAt: row.created_at,
-    };
+    return this.usersStore.getUserById(userId);
   }
 
   public updateUserPassword(userId: string, passwordHash: string): void {
-    this.db.prepare("UPDATE users SET password_hash = ? WHERE user_id = ?").run(passwordHash, userId);
+    this.usersStore.updateUserPassword(userId, passwordHash);
   }
 
   public updateUserEmail(userId: string, email: string): void {
-    this.db.prepare("UPDATE users SET email = ? WHERE user_id = ?").run(email, userId);
+    this.usersStore.updateUserEmail(userId, email);
   }
 
   public updateUserDisplayName(userId: string, displayName: string): void {
-    this.db.prepare("UPDATE users SET display_name = ? WHERE user_id = ?").run(displayName, userId);
+    this.usersStore.updateUserDisplayName(userId, displayName);
   }
 
   public updateUserStatus(userId: string, status: "active" | "disabled"): void {
-    this.db.prepare("UPDATE users SET status = ? WHERE user_id = ?").run(status, userId);
+    this.usersStore.updateUserStatus(userId, status);
   }
 
   public updateUserApiKey(userId: string, apiKey: string): void {
-    this.db.prepare("UPDATE users SET api_key = ? WHERE user_id = ?").run(apiKey, userId);
+    this.usersStore.updateUserApiKey(userId, apiKey);
   }
 
   public listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): UserRecord[] {
-    const where: string[] = [];
-    const args: any[] = [];
-    if (pagination?.cursor) {
-      where.push("(created_at < ? OR (created_at = ? AND user_id > ?))");
-      args.push(pagination.cursor.createdAt, pagination.cursor.createdAt, pagination.cursor.userId);
-    }
-    args.push(pagination?.limit ?? 500);
-    const rows = this.db.prepare(
-      `SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at
-       FROM users
-       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-       ORDER BY created_at DESC, user_id ASC
-       LIMIT ?`
-    ).all(...args) as any[];
-    return rows.map((row) => ({
-      userId: row.user_id,
-      apiKey: row.api_key,
-      passwordHash: row.password_hash ?? null,
-      displayName: row.display_name ?? "",
-      email: row.email ?? "",
-      isAdmin: Boolean(row.is_admin),
-      status: row.status === "disabled" ? "disabled" : "active",
-      createdAt: row.created_at,
-    }));
+    return this.usersStore.listUsers(pagination);
   }
 
   public deleteUser(userId: string): void {
-    this.db.exec("BEGIN");
-    try {
-      this.db.prepare("DELETE FROM users WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM sensory_stream WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM cognitive_fts WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM cognitive_records WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM contradictions WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM contextual_focus WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM core_identity WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM scheduler_state WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM graph_nodes WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM graph_edges WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM cognitive_connections WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM memory_evidence WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM memory_operations WHERE user_id = ?").run(userId);
-      this.db.prepare("DELETE FROM memory_file_index WHERE user_id = ?").run(userId);
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    this.usersStore.deleteUser(userId);
   }
 
   public listMemories(
