@@ -103,19 +103,60 @@ Refactor `brainrouter/` toward the ADR-003 shape, in five thrusts:
 - **Phase 4 — Engine → service.** `engine.ts` becomes a facade over
   `CapturePipeline` / `RecallPipeline` / domain ops behind `IMemoryService`;
   routes/tools call the port, not the engine internals.
-- **Phase 5 — De-dup vs core.** Replace the backend's `ModelLLMRunner`, config
-  loader, and telemetry with `@kinqs/brainrouter-core` equivalents.
+- **Phase 5 — De-dup vs core. → DEFERRED (investigated 2026-06-20; see below).**
+  Original intent: replace the backend's `ModelLLMRunner`, config loader, and
+  telemetry with `@kinqs/brainrouter-core` equivalents. A code-level survey found
+  the premise mostly does not hold, so this phase is intentionally deferred
+  rather than forced — see **Phase 5 — investigation outcome**.
 - **Phase 6 — Transport + tools.** Modular MCP tool registry (auto-discovery,
   no inline registration in `index.ts`); split `index.ts` into
   `bootstrap / http-server / mcp-server / transport`; extract a
   `ChatCompletionOrchestrator` out of the chat-completions route.
 
+## Phase 5 — investigation outcome (2026-06-20)
+
+A file-level survey of `brainrouter/src` against `packages/core/src` shows the
+backend does **not** accidentally duplicate core; where they overlap they
+**diverge on purpose**, so a wholesale de-dup is **not behaviour-preserving** and
+is deferred under this ADR's "one green gate per PR / behaviour-preserving" rule.
+
+- **`ModelLLMRunner` / LLM config — intentional divergence, not duplication.**
+  The backend resolves endpoint / API key / model / timeout from
+  `BRAINROUTER_LLM_*` **environment variables** — its 12-factor *server*
+  deployment contract (same family as `BRAINROUTER_JWT_SECRET`). Core's
+  `callOpenAI` takes a structured `LLMConfig` resolved from
+  `~/.config/brainrouter/config.json` + the provider catalog — a *CLI* model.
+  Swapping the runner would change how the MCP server is configured in
+  production. The backend also carries server-only behaviour core lacks
+  (LM-Studio unload-retry, local-endpoint timeout stretching).
+- **Semaphore / timeout — same logic, different config source.** Behaviourally
+  identical except the cap/timeout come from env (backend) vs `config.json`
+  (core); not swappable without adopting the config-file model.
+- **Telemetry / tracing — nothing to de-dup.** The backend hasn't implemented
+  these yet; core's modules are config.json-driven.
+- **No existing coupling.** `brainrouter/package.json` depends only on
+  `@kinqs/brainrouter-types`, not `@kinqs/brainrouter-core`. Adding the
+  heavyweight `core` package to the MCP server to share ~40 LOC of pure helpers
+  (`extractChatCompletionText`, `isExternalTimeoutError`) would bloat the
+  server's dependency tree for negligible gain — the wrong trade.
+
+**Decision.** Defer Phase 5. The "two LLM runners" are not drift to be merged but
+two configuration surfaces (env-server vs file-CLI). A future safe de-dup is
+**gated on two preconditions**, to be designed deliberately rather than
+mechanically: (1) a backend **env→`LLMConfig` adapter** so the server keeps its
+env contract while delegating the HTTP/parse path to a shared runner; and (2) a
+**dependency-free shared-util package** (or additions to
+`@kinqs/brainrouter-types`) to host genuinely-identical pure helpers — so the
+backend never has to depend on the CLI-oriented `core` package. Until then the
+small, stable duplication is the cheaper, safer state.
+
 ## Consequences
 
 - **Shared memory domain** becomes reusable across the CLI, desktop, and the
   backend itself (a CLI that talks to the engine in-process no longer forks
-  logic). De-duplication shrinks the surface and ends the "two LLM runners"
-  drift.
+  logic). (The "two LLM runners" turn out to be two configuration surfaces, not
+  drift — see *Phase 5 — investigation outcome*; their de-dup is gated, not
+  pursued here.)
 - **God-files become reviewable.** A 4k-LOC store split into capability modules
   behind a port is testable and swappable (Postgres/other backends).
 - **Risk** is the SQLite split (Phase 3) — highest LOC, most coupling. It is
