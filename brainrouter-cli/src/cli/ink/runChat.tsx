@@ -838,6 +838,11 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           if (line) controller!.push.memory(level, line);
           tickStatus('Thinking');
         },
+        // §truncation — a persistent provider-truncation notice rendered as a
+        // durable system row (not a transient status line).
+        onNotice: (notice) => {
+          if (notice?.message) controller!.push.memory(notice.level ?? 'info', `✂️ ${notice.message}`);
+        },
       });
 
       parentDone = true;

@@ -14,8 +14,8 @@ contextBridge.exposeInMainWorld('brainrouter', {
         ipcRenderer.on('agent-event', wrapped);
         return () => ipcRenderer.removeListener('agent-event', wrapped);
     },
-    // Activity-based project ordering: main pushes the reordered recents when a
-    // workspace sees real activity (a turn, output, commit/push/PR).
+    // User-controlled project ordering: main pushes updated recents for activity
+    // membership changes and explicit drag/drop reorders.
     onRecentsChanged(listener) {
         const wrapped = (_e, data) => listener(data);
         ipcRenderer.on('recents-changed', wrapped);
@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
     },
     workspaceRecents() {
         return ipcRenderer.invoke('workspace:recents');
+    },
+    workspaceSessions(root, limit) {
+        return ipcRenderer.invoke('workspace:sessions', root, limit);
     },
     openWorkspace(workspaceRoot) {
         return ipcRenderer.invoke('workspace:open', workspaceRoot);
@@ -45,6 +48,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
     },
     markActivity(workspaceRoot, reason) {
         return ipcRenderer.invoke('workspace:activity', workspaceRoot, reason);
+    },
+    reorderWorkspace(dragged, target) {
+        return ipcRenderer.invoke('workspace:reorder', dragged, target);
     },
     // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
     globalDashboard() {

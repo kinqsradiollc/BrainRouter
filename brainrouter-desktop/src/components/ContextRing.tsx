@@ -11,7 +11,7 @@ import React from 'react';
 export function ContextRing({ usage }: { usage: { used: number; window: number; compactAt: number; limit: number; pct: number } | null }): React.ReactElement {
   const r = 7, circ = 2 * Math.PI * r;
   const pct = usage && usage.limit > 0 ? Math.max(0, Math.min(1, usage.pct)) : 0;
-  const tone = pct >= 0.95 ? 'var(--err)' : pct >= 0.75 ? 'var(--warn)' : 'var(--accent)';
+  const tone = pct >= 0.75 ? 'var(--warn)' : 'var(--accent)';
   const title = usage && usage.used > 0
     ? `Context ${Math.round(pct * 100)}% — ${usage.used.toLocaleString()} tokens` +
       `\nAuto-compacts above ~${usage.compactAt.toLocaleString()} (old history is summarized, context resets)` +

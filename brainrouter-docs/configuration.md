@@ -46,6 +46,7 @@ cover.
 | **CLI credentials + transport** | `~/.config/brainrouter/config.json` (`llm.*`, `servers.*`, `activeServer`) | Chat model, endpoint, API key, MCP server profiles, active profile — the CLI's single source of truth since 0.3.7. |
 | **CLI runtime knobs** | `~/.config/brainrouter/config.json` (`cli.*` block) | Tool-loop limits, sandbox, trace log, workspace override, quiet/theme overrides, recall mode, parallel-safe tools, child-drain / shrink ratios, etc. Behaviour env vars were retired in 0.3.9 — the full field list is the `CliKnobs` interface in [`brainrouter-cli/src/config/config.ts`](../brainrouter-cli/src/config/config.ts). The CLI no longer reads any `.env` file. |
 | **MCP client transport** | `~/.config/brainrouter/config.json` (`servers` / `activeServer`) | Stdio vs HTTP MCP transport profile selection. |
+| **Local telemetry (0.4.15)** | `~/.brainrouter/telemetry/events.jsonl` (data); `cli.telemetry.enabled` (toggle) | Privacy-conscious, local-first lifecycle + latency events for background tasks, plan revisions, reviews, uploads, memory capture, and git/workspace refresh. Local JSONL only — **no network**, metadata/counters/latency only (never message or file content). Enabled by default; set `cli.telemetry.enabled` to `false` in `config.json` to turn it off entirely. |
 
 The MCP server ships a template at [`brainrouter/.env.example`](../brainrouter/.env.example) — copy it to `~/.config/brainrouter/server.env` via `brainrouter-mcp init`. The CLI has no `.env` template; use the wizard or `/config` instead.
 
@@ -227,6 +228,35 @@ BRAINROUTER_EXTRACTION_MODEL=qwen2:7b
 When extraction needs to hit a *different* endpoint than chat, the
 extractor inherits `BRAINROUTER_LLM_ENDPOINT` — split by ordering: run
 two processes, or use a routing proxy like LiteLLM.
+
+### Multiple providers & per-sub-agent models (0.4.15)
+
+The CLI config (`~/.config/brainrouter/config.json`) takes a single main `llm`
+plus an optional `providers` map of **named OpenAI-compatible endpoints**, and an
+`agentModels` map that routes each **sub-agent role** to a provider/model. So the
+explorer can run a cheap/fast model while the reviewer runs a strong one; a role
+with no entry inherits the main `llm` exactly as before.
+
+```json
+{
+  "llm": { "provider": "openai", "apiKey": "sk-...", "model": "gpt-5.3", "endpoint": "https://api.openai.com/v1" },
+  "providers": {
+    "groq":  { "provider": "groq", "apiKey": "gsk_...", "model": "llama-3.3-70b", "endpoint": "https://api.groq.com/openai/v1" },
+    "local": { "provider": "lmstudio", "apiKey": "", "model": "qwen2.5-coder-7b", "endpoint": "http://localhost:1234/v1" }
+  },
+  "agentModels": {
+    "default":  { "provider": "groq" },                       // every sub-agent unless overridden
+    "explorer": { "provider": "local" },                      // cheap/local for exploration
+    "reviewer": { "model": "gpt-5.3-codex" }                  // main provider, a stronger model
+  }
+}
+```
+
+Roles: `default · explorer · architect · reviewer · worker · verifier`. An entry
+with only `model` keeps the main provider's endpoint/key; with a `provider` it
+uses that named endpoint (and its default model unless `model` is given). The
+wire format is always OpenAI-compatible. Manage it from `/config` → **LLM
+providers** + **Sub-agent models**, or the Desktop **Connectors** settings.
 
 ---
 
@@ -476,6 +506,7 @@ the load-bearing ones:
 | --- | --- | --- |
 | `mcpTimeoutMs` | `60000` | Per-tool MCP timeout. |
 | `maxToolResultChars` | `8000` | Clamp on tool-result body sent back to the LLM. |
+| `maxOutputTokens` | _(unset)_ | Cap on **completion** tokens per LLM call (`max_tokens` on the wire). Unset sends no cap, so the provider's own default applies — but some endpoints default to a *low* cap that truncates long answers mid-sentence. Set this (e.g. `8192`) to lift that cap. `0` / negative = unset. |
 | `autoCompactTokens` | `80000` | Auto-`/compact` trigger threshold. |
 | `maxToolLoops` | `60` | Hard cap on tool iterations per turn. |
 | `traceLog` | _(unset)_ | Path for OTEL-style JSONL turn traces. |

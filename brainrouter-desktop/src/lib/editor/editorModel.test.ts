@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isDirty, anyDirty, dirtyPaths, tabFromRead, openTab, setContent, markSaved,
-  revertTab, closeTab, nextActivePath, type EditorTab,
+  revertTab, closeTab, reorderTabs, nextActivePath, type EditorTab,
 } from './editorModel.js';
 
 const read = (path: string, content: string, extra = {}): Parameters<typeof tabFromRead>[0] => ({ path, content, mtimeMs: 100, size: content.length, ...extra });
@@ -69,4 +69,24 @@ test('closeTab + nextActivePath pick a sensible neighbour', () => {
   tabs = closeTab(tabs, 'b');
   assert.deepEqual(tabs.map((t) => t.path), ['a', 'c']);
   assert.equal(nextActivePath(closeTab([tabs[0]], 'a'), 'a', 'a'), null, 'last tab closed → none');
+});
+
+test('reorderTabs moves an editor tab before the drop target without mutating', () => {
+  const tabs = openTab(openTab(openTab([], read('a.ts', '')), read('b.ts', '')), read('c.ts', ''));
+  const next = reorderTabs(tabs, 'c.ts', 'a.ts');
+  assert.deepEqual(next.map((t) => t.path), ['c.ts', 'a.ts', 'b.ts']);
+  assert.deepEqual(tabs.map((t) => t.path), ['a.ts', 'b.ts', 'c.ts']);
+});
+
+test('reorderTabs moves a forward-dragged tab before the drop target', () => {
+  const tabs = openTab(openTab(openTab(openTab([], read('a.ts', '')), read('b.ts', '')), read('c.ts', '')), read('d.ts', ''));
+  const next = reorderTabs(tabs, 'b.ts', 'd.ts');
+  assert.deepEqual(next.map((t) => t.path), ['a.ts', 'c.ts', 'b.ts', 'd.ts']);
+});
+
+test('reorderTabs is stable for no-op and unknown paths', () => {
+  const tabs = openTab(openTab([], read('a.ts', '')), read('b.ts', ''));
+  assert.equal(reorderTabs(tabs, 'a.ts', 'a.ts'), tabs);
+  assert.equal(reorderTabs(tabs, 'missing.ts', 'a.ts'), tabs);
+  assert.equal(reorderTabs(tabs, 'a.ts', 'missing.ts'), tabs);
 });

@@ -1,0 +1,18 @@
+{
+  "id": "instruction-reviewer",
+  "displayName": "Instruction-Compliance Reviewer",
+  "whenToUse": "Audit a diff for compliance with AGENT.md / AGENTS.md / CLAUDE.md guideline files. Read-only.",
+  "prompt": "## Role: Instruction-Compliance Reviewer\nAudit the diff ONLY for violations of guideline files (AGENT.md / AGENTS.md / CLAUDE.md) that share a path with each changed file or its parents.\n\nFlag a finding only when you can quote the exact rule being broken. Each finding MUST include a confidence score 0-100. Ignore style and subjective concerns.",
+  "model": null,
+  "effort": null,
+  "defaultAccess": "read",
+  "toolScope": { "local": ["read_file", "grep_search", "glob_files", "list_dir"], "mcp": ["memory_*"] },
+  "disallowedTools": [],
+  "maxIterations": 20,
+  "timeoutMs": 120000,
+  "maxResultChars": 8000,
+  "subagents": [],
+  "delegateName": "delegate_instruction_reviewer",
+  "tier": "reasoning",
+  "outputContract": "reviewer"
+}

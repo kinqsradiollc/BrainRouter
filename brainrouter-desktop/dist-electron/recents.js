@@ -1,13 +1,13 @@
 /**
  * Project (workspace) ordering for the sidebar. The recents list is
- * ACTIVITY-ordered, most-recent-activity first — NOT "most recently opened".
+ * USER-ORDERED and stable.
  *
- * Opening, switching to, or merely viewing a project must NOT move it to the
- * top (that made the list churn every time you glanced at a project). Only real
- * activity in a workspace promotes it. These pure helpers encode that split:
+ * Opening, switching to, viewing, or running activity in a project must NOT move
+ * it to the top. Only an explicit user drag/drop reorder changes position.
  *
- *   - addOpened    → ensure membership, keep position (no promotion)
- *   - bumpActivity → move to the top (a turn ran, output arrived, a commit/push)
+ *   - addOpened        → ensure membership, keep position
+ *   - noteActivity     → ensure membership, keep position
+ *   - reorderWorkspace → explicit drag/drop order change
  *
  * main.ts owns the persisted file; this module is pure + unit-tested.
  */
@@ -16,15 +16,28 @@ export const RECENTS_CAP = 10;
  *  bottom (no activity yet); existing ones keep their place. Capped, but the
  *  just-opened project is never the one dropped. */
 export function addOpened(list, root, cap = RECENTS_CAP) {
-    if (list.includes(root))
-        return list.slice(0, Math.max(cap, list.length));
-    const withNew = [...list, root];
+    const unique = [...new Set(list)];
+    if (unique.includes(root))
+        return unique.slice(0, Math.max(cap, unique.length));
+    const withNew = [...unique, root];
     if (withNew.length <= cap)
         return withNew;
     // Over cap: keep the most-recent (cap-1) activity items + the new one at the bottom.
-    return [...list.slice(0, cap - 1), root];
+    return [...unique.slice(0, cap - 1), root];
 }
-/** Promote `root` to the top after real activity. Dedupes + caps. */
-export function bumpActivity(list, root, cap = RECENTS_CAP) {
-    return [root, ...list.filter((w) => w !== root)].slice(0, cap);
+/** Ensure activity roots are present without moving existing projects. */
+export function noteActivity(list, root, cap = RECENTS_CAP) {
+    return addOpened(list, root, cap);
+}
+/** Move `dragged` before `target` for explicit user-controlled project order. */
+export function reorderWorkspace(list, dragged, target, cap = RECENTS_CAP) {
+    const unique = [...new Set(list)].slice(0, Math.max(cap, list.length));
+    const from = unique.indexOf(dragged);
+    const to = unique.indexOf(target);
+    if (from < 0 || to < 0 || from === to)
+        return unique.slice(0, cap);
+    const next = [...unique];
+    const [item] = next.splice(from, 1);
+    next.splice(from < to ? to - 1 : to, 0, item);
+    return next.slice(0, cap);
 }

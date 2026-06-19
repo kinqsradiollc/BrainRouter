@@ -27,6 +27,38 @@ test('start-turn: streams bridged events between turn-start and turn-complete', 
     assert.equal(done.answer, 'answer to: do it');
     assert.ok(out.every((m) => m.sessionKey === 'sess-test'));
 });
+test('observeTurnEvent: receives the turn tool stream tagged with the turn sessionKey (verification scoping)', async () => {
+    const { send } = collect();
+    const seen = [];
+    const agent = {
+        sessionKey: 'sess-A',
+        runTurn: async (_p, cb) => {
+            cb.onToolStart('run_command', { command: 'npm test' }, 'c1');
+            cb.onToolEnd('run_command', { success: true, summary: '12 passed' }, 'c1');
+            return 'done';
+        },
+    };
+    const core = createHostCore({
+        agent,
+        send,
+        observeTurnEvent: (sessionKey, event) => {
+            if (event.kind === 'tool-start')
+                seen.push({ sessionKey, kind: event.kind, tool: event.tool, command: event.args?.command, callId: event.callId });
+            else if (event.kind === 'tool-end')
+                seen.push({ sessionKey, kind: event.kind, tool: event.tool, callId: event.callId, ok: event.ok });
+        },
+    });
+    await core.handle({ kind: 'start-turn', prompt: 'run the tests' });
+    const start = seen.find((s) => s.kind === 'tool-start');
+    const end = seen.find((s) => s.kind === 'tool-end');
+    assert.ok(start, 'observer saw tool-start');
+    assert.equal(start?.sessionKey, 'sess-A', 'tagged with the turn session key (survives a later switch)');
+    assert.equal(start?.tool, 'run_command');
+    assert.equal(start?.command, 'npm test');
+    assert.equal(start?.callId, 'c1');
+    assert.equal(end?.callId, 'c1');
+    assert.equal(end?.ok, true);
+});
 test('start-turn: a throwing turn emits turn-error and unlocks the next turn', async () => {
     const { out, send } = collect();
     let calls = 0;
@@ -124,6 +156,35 @@ test('DESK-5v concurrent sessions: a mid-turn switch spawns a second agent and n
     assert.deepEqual(completes.map((m) => m.sessionKey).sort(), ['sess:A', 'sess:B'], 'both sessions completed, each tagged with its own key');
     assert.ok(out.some((m) => m.sessionKey === 'sess:A' && m.event.kind === 'assistant-delta'), "A's stream stayed tagged A");
     assert.ok(out.some((m) => m.sessionKey === 'sess:B' && m.event.kind === 'assistant-delta'), "B's stream stayed tagged B");
+});
+test('session-changed carries the AUTHORITATIVE running flag so the renderer can clear a stale "working…"', async () => {
+    const { out, send } = collect();
+    let releaseA;
+    const gateA = new Promise((r) => { releaseA = r; });
+    const agentA = {
+        sessionKey: 'sess:A',
+        runTurn: async (_p, cb) => { cb.onAssistantDelta('A'); await gateA; return 'done-A'; },
+        resetSessionCounters: () => { }, loadHistory: () => 1, getModel: () => 'm',
+    };
+    const agentB = {
+        sessionKey: 'sess:spawn', runTurn: async () => 'done-B',
+        resetSessionCounters: () => { }, loadHistory: () => 1, getModel: () => 'm', clearHistory: () => { },
+    };
+    const core = createHostCore({
+        agent: agentA, send, spawnAgent: () => agentB,
+        transcriptExists: (k) => k === 'sess:A' || k === 'sess:B',
+    });
+    const runningOf = (key) => {
+        const scs = out.filter((m) => m.event.kind === 'session-changed' && m.event.sessionKey === key);
+        return scs.length ? scs[scs.length - 1].event.running : undefined;
+    };
+    const turnA = core.handle({ kind: 'start-turn', prompt: 'long A' }); // A is now running
+    await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' }); // switch to B (idle)
+    assert.equal(runningOf('sess:B'), false, 'switching to an idle session reports running:false');
+    await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' }); // back to A, still mid-turn
+    assert.equal(runningOf('sess:A'), true, 'refocusing a still-running session reports running:true (authoritative)');
+    releaseA();
+    await turnA;
 });
 test('interaction-response resolves the broker; stale ids are ignored politely', async () => {
     const { out, send } = collect();
@@ -223,6 +284,36 @@ test('DESK-6t resume-session: switches + emits count, but LAZY-loads history on 
     await core.handle({ kind: 'resume-session', sessionKey: 'missing' });
     assert.ok(out.some((m) => m.event.kind === 'turn-error' && m.event.message.includes('missing')));
 });
+test('new-session after lazy resume does not load the previous transcript on first turn', async () => {
+    const { send } = collect();
+    let transcriptLoads = 0;
+    let historyLoads = 0;
+    let cleared = 0;
+    const agent = {
+        ...fakeAgent(),
+        sessionKey: 'root:old',
+        clearHistory: () => { cleared++; },
+        resetSessionCounters: () => { },
+        loadHistory: (entries) => { historyLoads++; return entries.length; },
+        getModel: () => 'm',
+    };
+    const core = createHostCore({
+        agent,
+        send,
+        loadTranscript: (key) => {
+            transcriptLoads++;
+            return key === 'root:big-session' ? [{ role: 'user', content: 'large previous transcript' }] : [];
+        },
+    });
+    await core.handle({ kind: 'resume-session', sessionKey: 'root:big-session' });
+    assert.equal(transcriptLoads, 1, 'resume may check existence in the no-transcriptExists fallback');
+    assert.equal(historyLoads, 0, 'lazy resume has not loaded the previous transcript into the agent');
+    await core.handle({ kind: 'new-session', label: 'fresh' });
+    assert.equal(cleared, 1, 'fresh chat cleared the reused agent history');
+    await core.handle({ kind: 'start-turn', prompt: 'brand new prompt' });
+    assert.equal(historyLoads, 0, 'fresh chat did not ingest the lazily-resumed transcript');
+    assert.equal(agent.sessionKey, 'root:fresh');
+});
 test('set-model: switches + persists; persist failure degrades gracefully', async () => {
     const { out, send } = collect();
     let model = 'old';
@@ -297,14 +388,17 @@ test('set-model persist:true saves the GLOBAL default (not per-session)', async 
     const { send } = collect();
     const global = [];
     const session = [];
+    const cleared = [];
     const core = createHostCore({
         agent: modelAgent(), send,
         persistModel: (m) => global.push(m),
         setSessionModel: (k, m) => session.push([k, m]),
+        clearSessionModel: (k) => cleared.push(k),
     });
     await core.handle({ kind: 'set-model', model: 'claude-opus-4-8', persist: true });
     assert.deepEqual(global, ['claude-opus-4-8'], 'wrote global config');
     assert.deepEqual(session, [], 'did NOT write a per-session override');
+    assert.deepEqual(cleared, ['sess-test'], 'cleared stale per-session model override for the active chat');
 });
 test('a spawned/focused session restores its stored per-session model', async () => {
     const { out, send } = collect();

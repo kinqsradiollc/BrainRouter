@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
+import { isStaleWorkspaceEvent, isBlockedDuringPendingWorkspaceSwitch, nextActiveWorkspace, workspaceChanged, tagQueryId, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from './workspaceEvents.js';
 
 const A = '/ws/alpha', B = '/ws/beta';
 const ev = (workspaceRoot: string | undefined, kind: string) => ({ workspaceRoot, event: { kind } });
@@ -23,6 +23,18 @@ test('isStaleWorkspaceEvent: untagged events always pass (legacy/no regression)'
 
 test('isStaleWorkspaceEvent: before any active workspace is set, nothing is dropped', () => {
   assert.equal(isStaleWorkspaceEvent(ev(A, 'tool-end'), null), false);
+});
+
+test('pending workspace switch: non-session events are blocked until the target host announces itself', () => {
+  assert.equal(isBlockedDuringPendingWorkspaceSwitch(ev(A, 'tool-end'), B), true);
+  assert.equal(isBlockedDuringPendingWorkspaceSwitch(ev(undefined, 'query-result'), B), true);
+});
+
+test('pending workspace switch: only the target workspace session-changed is allowed through', () => {
+  assert.equal(isBlockedDuringPendingWorkspaceSwitch(ev(A, 'session-changed'), B), true);
+  assert.equal(isBlockedDuringPendingWorkspaceSwitch(ev(B, 'session-changed'), B), false);
+  assert.equal(isBlockedDuringPendingWorkspaceSwitch(ev(undefined, 'session-changed'), B), true, 'untagged session changes cannot complete a cross-workspace switch');
+  assert.equal(isBlockedDuringPendingWorkspaceSwitch(ev(A, 'session-changed'), null), false);
 });
 
 test('nextActiveWorkspace: session-changed with a workspaceRoot switches the active workspace', () => {

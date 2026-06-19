@@ -4,7 +4,7 @@
  * edge to resize). Every CLI slash command surfaces here: ⌘K palette, the
  * composer "/" popup, and the categorized Settings modal.
  */
-import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
@@ -23,7 +23,7 @@ import { CommandPalette } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
-import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow } from './types.js';
+import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
 import { FOREGROUND_ONLY_KINDS } from './constants.js';
@@ -41,11 +41,16 @@ import { MessageRow } from './chat/MessageRow.js';
 import { SessionStatus } from './components/SessionStatus.js';
 import { Composer } from './components/Composer.js';
 import { useComposerDerived } from './lib/composer/useComposerDerived.js';
+import { buildPromptWithAttachments, readyAttachments } from './lib/attachments/attachmentPrompt.js';
 import { useSessionSidebar } from './lib/session/useSessionSidebar.js';
+import { reorderProjectRoots, withCachedProjectSessions } from './lib/session/projectSessionsView.js';
 import { useGitState } from './lib/git/useGitState.js';
 import { useSessionState } from './lib/session/useSessionState.js';
+import { saveExpandedProjects, withExpanded } from './lib/session/expandedProjectsStore.js';
+import { sessionRowsCacheKey } from './lib/session/sessionCache.js';
+import { workspaceRunCounts, runningWorkspaceSet } from './lib/workspace/runningIndicators.js';
 import { useSessionActions } from './lib/session/useSessionActions.js';
-import { gitRefreshDue } from './lib/git/gitFreshness.js';
+import { GIT_VISIBLE_POLL_MS, gitPollRefreshDue, gitRefreshDue } from './lib/git/gitFreshness.js';
 import { TopbarRight } from './components/TopbarRight.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ChatThread } from './components/ChatThread.js';
@@ -59,7 +64,6 @@ import { ExportAndMenuDialogs } from './components/ExportAndMenuDialogs.js';
 installDevBridge();
 
 export function App(): React.ReactElement {
-  const [rows, setRows] = useState<ChatRow[]>([]);
   const [draft, setDraft] = useState('');
   // T4 — session/workspace STATE container. Every symbol is destructured back so
   // existing references (render JSX, useAgentEvents ctx, action hooks) are unchanged.
@@ -70,25 +74,41 @@ export function App(): React.ReactElement {
     liveChildren, setLiveChildren, renamingKey, setRenamingKey, renameDraft, setRenameDraft,
     showArchived, setShowArchived, sessionGroups, setSessionGroups,
     finishedTasks, setFinishedTasks, taskView, setTaskView, workflowView, setWorkflowView,
-    sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, turnFailsRef,
+    sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, planFeedbackRef, goalContPendingRef, turnFailsRef,
     workspaces, setWorkspaces, expandedProjects, setExpandedProjects, expandedProjectsRef, projSessions, setProjSessions,
-    activeWsRef, workspaceGenRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
+    activeWsRef, workspaceGenRef, pendingWorkspaceRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
     setSessionRunning,
   } = useSessionState();
+
+  const cachedSessionRowsRef = useRef<Record<string, ChatRow[]>>({});
+  const [rows, setRowsState] = useState<ChatRow[]>([]);
+  const setRows = useCallback((val: ChatRow[] | ((prev: ChatRow[]) => ChatRow[])) => {
+    setRowsState((prev) => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      if (sessionKeyRef.current) {
+        cachedSessionRowsRef.current[sessionRowsCacheKey(activeWsRef.current, sessionKeyRef.current)] = next;
+      }
+      return next;
+    });
+  }, [activeWsRef, sessionKeyRef]);
   const [statusLine, setStatusLine] = useState('');
   const [reasoningTail, setReasoningTail] = useState('');
   const [liveText, setLiveText] = useState('');
   const [fleet, setFleet] = useState<FleetRow[]>([]);
+  // §3 — recently-finished DURABLE tasks (completed/failed) for THIS workspace,
+  // so the Background panel shows verification/review/revision outcomes, not just
+  // what's running. Sourced from the durable `tasks-list` query (status: all).
+  const [recentTasks, setRecentTasks] = useState<FleetRow[]>([]);
   const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string; username?: string }>({});
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [railOpen, setRailOpen] = useState(true);
-  // DESK-5i — the left sidebar is drag-resizable too (persisted).
-  const [railWidth, setRailWidth] = useState(() => {
-    const v = Number(localStorage.getItem('br-rail-w'));
-    return v >= 220 && v <= 420 ? v : 268;
+  const [railOpen, setRailOpen] = useState(() => {
+    const saved = localStorage.getItem('br-rail-open');
+    return saved !== null ? saved === '1' : true;
   });
+  // DESK-5i — the left sidebar starts at its minimum size (220) on launch.
+  const [railWidth, setRailWidth] = useState(220);
 
   // DESK-5f — ONE tabbed side panel (Codex model): views are tabs you switch
   // between, never extra window columns. Empty tab list = the view chooser.
@@ -147,6 +167,9 @@ export function App(): React.ReactElement {
   const [grepHits, setGrepHits] = useState<import('./panels/index.js').GrepHit[] | null>(null);
   const [branches, setBranches] = useState<{ current: string | null; branches: string[]; loading?: boolean }>({ current: null, branches: [] });
   const [endpointModels, setEndpointModels] = useState<string[]>([]);
+  // §endpoint-driven-models — per-named-provider /models lists for the sub-agent
+  // model pickers (keyed by provider name; fetched via list-models { provider }).
+  const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   // Item 10 — where a model pick is saved: 'global' = config.json (shared with
   // the CLI, every chat), 'session' = this chat only (sessionRuntimeStore).
@@ -163,14 +186,37 @@ export function App(): React.ReactElement {
   const [chatSize, setChatSize] = useState(() => localStorage.getItem('br-chat-fs') ?? 'medium');
   const [accent, setAccent] = useState(() => localStorage.getItem('br-accent') ?? '');
   const [prInfo, setPrInfo] = useState<{ number: number; state: string; title?: string } | null>(null);
-  const [recentsOpen, setRecentsOpen] = useState(true);
+  const [recentsOpenByRoot, setRecentsOpenByRoot] = useState<Record<string, boolean>>({});
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesTruncated, setFilesTruncated] = useState(false);
+  const [filesError, setFilesError] = useState('');
+  const [attachmentUploads, setAttachmentUploads] = useState<AttachmentUpload[]>([]);
+  const activeSidebarRoot = workspaces.current ?? info.workspaceRoot ?? '';
+  const recentsOpen = activeSidebarRoot ? (recentsOpenByRoot[activeSidebarRoot] ?? true) : true;
+  const setRecentsOpen = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((value) => {
+    const root = activeWsRef.current ?? activeSidebarRoot;
+    if (!root) return;
+    const currentOpen = recentsOpenByRoot[root] ?? true;
+    const nextOpen = typeof value === 'function' ? value(currentOpen) : value;
+    setRecentsOpenByRoot((prev) => {
+      if ((prev[root] ?? true) === nextOpen) return prev;
+      return { ...prev, [root]: nextOpen };
+    });
+    setExpandedProjects((prev) => {
+      const next = nextOpen ? withExpanded(prev, root) : prev.filter((r) => r !== root);
+      expandedProjectsRef.current = next;
+      return next;
+    });
+  }, [activeSidebarRoot, activeWsRef, expandedProjectsRef, recentsOpenByRoot, setExpandedProjects]);
   // Item 9 — how many of the current project's chats are shown (grows a page at
   // a time via the show-more button). Collapsed view always shows the base few.
   const [visibleCount, setVisibleCount] = useState(SESSION_BASE);
   const commands = useMemo(() => buildCommandList(catalog), [catalog]);
 
-  const q = (id: string, name: string, args?: Record<string, unknown>) =>
+  const q = (id: string, name: string, args?: Record<string, unknown>) => {
+    if (name === 'list-files') { setFilesLoading(true); setFilesError(''); }
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
+  };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
   // is destructured back so existing references (render JSX, useAgentEvents ctx)
@@ -188,16 +234,17 @@ export function App(): React.ReactElement {
   // T4 — panel/dock state + handlers live in usePanels (q injected so ensurePanel
   // can refresh worktrees/review on open).
   const {
-    sideTabs, activeSideTab, sidePanelOpen, sideWidth, termDockOpen, termDockHeight, termTabs, activeTerm,
-    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, closeSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, termDockOpen, termDockHeight, termTabs, activeTerm,
+    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
+    ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
   // T5 — in-app code editor. Self-contained (own host round-trips); on a save it
   // refreshes git status + changed files and re-checks the review gate (the
   // working tree just changed). Reads/writes go through the host, never the fs.
   const editor = useEditor({
-    onSaved: () => { q('q-git', 'git-info'); q('q-files', 'changed-files'); q('q-review-gate', 'review-gate'); },
+    workspaceRoot: workspaces.current ?? info.workspaceRoot,
+    onSaved: () => { q('q-git', 'git-info'); q('q-files', 'changed-files'); q('q-list', 'list-files', { refresh: true }); q('q-review-gate', 'review-gate'); },
     onToast: setToast,
   });
   // T5 — warn before a reload/close drops unsaved editor changes.
@@ -208,7 +255,7 @@ export function App(): React.ReactElement {
   }, [editor.anyDirty]);
 
   // T6 — GitHub CI/CD (real `gh` status, kept separate from local tool success).
-  const ci = useCi({ onToast: setToast });
+  const ci = useCi({ workspaceRoot: workspaces.current ?? info.workspaceRoot, onToast: setToast });
 
   // T1 — workflow/background dashboard. Workspace scope uses the live fleet +
   // finished tasks; All scope disk-reads every recent workspace via main.
@@ -216,6 +263,7 @@ export function App(): React.ReactElement {
   const [dashTab, setDashTab] = useState<DashTab>('running');
   const [globalBoards, setGlobalBoards] = useState<WorkspaceDash[] | null>(null);
   const [dashBusy, setDashBusy] = useState(false);
+  const pendingDashboardTaskRef = useRef<DashTask | null>(null);
 
   // T4 — session/workspace/panel ACTION functions (no command-catalog deps) live
   // in useSessionActions. Every symbol is destructured back so existing references
@@ -230,13 +278,14 @@ export function App(): React.ReactElement {
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
   } = useSessionActions({
-    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions,
-    runningSessionsRef, sessionKeyRef, pendingResumeRef, workspaceGenRef, expandedProjectsRef,
-    liveBuf, chatRef, atBottomRef,
+    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
+    runningSessionsRef, sessionKeyRef, activeWsRef, pendingWorkspaceRef, pendingResumeRef, pendingSessionsRef, sessionsRef,
+    workspaceGenRef, expandedProjectsRef,
+    liveBuf, chatRef, atBottomRef, errorsBySession, cachedSessionRowsRef,
     setStopping, setStatusLine, setReasoningTail, setLiveText, setRows, setRunning, setInteraction,
-    setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
+    setSessions, setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
-    setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setCommitSubjects, setToast,
+    setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setRecentTasks, setFinishedTasks, setCommitSubjects, setToast,
     setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });
@@ -246,6 +295,7 @@ export function App(): React.ReactElement {
   // switched in another terminal shows up instead of a stale one. Debounced
   // (gitRefreshDue) so the focus + paired visibilitychange collapse to one.
   const lastGitFocusRef = useRef(0);
+  const lastGitPollRef = useRef(0);
   useEffect(() => {
     const onWake = (): void => {
       if (!hostUp) return;
@@ -260,14 +310,19 @@ export function App(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostUp]);
 
-  const dashBoards = useMemo<WorkspaceDash[]>(() => {
-    if (dashScope === 'all') return globalBoards ?? [];
-    const tasks: DashTask[] = [
-      ...fleet.map((f) => ({ kind: f.kind, id: f.id, label: f.label, startedAt: f.startedAt, role: f.role, worktree: f.worktree, parentSessionKey: f.parentSessionKey, workspaceRoot: activeRoot, status: 'running' })),
-      ...finishedTasks.map((t) => ({ kind: 'agent', id: t.id, label: t.label, status: /fail/i.test(t.status) ? 'failed' : 'completed', workspaceRoot: activeRoot })),
-    ];
-    return [{ workspaceRoot: activeRoot, tasks, reviewGate }];
-  }, [dashScope, globalBoards, fleet, finishedTasks, activeRoot, reviewGate]);
+  useEffect(() => {
+    if (!hostUp) return;
+    const onPoll = (): void => {
+      const now = Date.now();
+      if (!gitPollRefreshDue(lastGitPollRef.current, now, document.visibilityState === 'visible')) return;
+      lastGitPollRef.current = now;
+      refreshGit();
+    };
+    onPoll();
+    const timer = window.setInterval(onPoll, GIT_VISIBLE_POLL_MS);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostUp]);
 
   const pendingCmdRef = useRef('');
   function runBridge(cmd: string, argText = ''): void {
@@ -300,9 +355,27 @@ export function App(): React.ReactElement {
   // VIEWED chat is idle: another chat may be running work whose tasks should
   // appear/clear in the sidebar (and reflect the boot-time stale reconcile).
   useEffect(() => {
-    const t = setInterval(() => q('q-fleet', 'fleet'), 3000);
-    q('q-fleet', 'fleet');
+    const tick = (): void => { q('q-fleet', 'fleet'); q('q-tasks-recent', 'tasks-list', { scope: 'workspace', status: 'all' }); };
+    const t = setInterval(tick, 3000);
+    tick();
     return () => clearInterval(t);
+  }, []);
+  // Fix 4 / §3 — keep the CROSS-workspace running indicators fresh (durable-merged
+  // global dashboard) so a workspace with a background task shows a running dot +
+  // count even when it isn't the active one, and survives host reload / refresh.
+  // Light: small per-workspace JSON reads; does not toggle the dashboard's busy
+  // state. Skipped when the bridge has no globalDashboard (browser dev mock).
+  useEffect(() => {
+    if (!window.brainrouter.globalDashboard) return;
+    let alive = true;
+    const tick = (): void => {
+      window.brainrouter.globalDashboard?.()
+        .then((r) => { if (alive) setGlobalBoards((r.workspaces ?? []) as unknown as WorkspaceDash[]); })
+        .catch(() => { /* disk/gh unreadable */ });
+    };
+    tick();
+    const t = setInterval(tick, 5000);
+    return () => { alive = false; clearInterval(t); };
   }, []);
 
   // T14 — keep the Schedules panel fresh (cheap store read) so nextRun/lastRun
@@ -313,12 +386,17 @@ export function App(): React.ReactElement {
     return () => clearInterval(t);
   }, []);
 
-  // Wave 1 — live project reorder: main pushes the reordered recents the moment
-  // a workspace sees REAL activity (turn/output/commit). Merely opening/viewing
-  // a project does NOT fire this, so the list stays stable while you browse.
+  // Wave 1 — main pushes project membership/state updates and explicit manual
+  // reorders. Opening/viewing/activity does not promote projects, so the list
+  // stays stable while you browse.
   useEffect(() => {
     const off = window.brainrouter.onRecentsChanged?.((data) => {
       setWorkspaces((w) => ({ ...w, recents: data.recents }));
+      setProjSessions((prev) => {
+        const state = prev[data.workspaceRoot];
+        if (!state) return prev;
+        return { ...prev, [data.workspaceRoot]: { ...state, loadedAt: 0 } };
+      });
     });
     return () => off?.();
   }, []);
@@ -328,10 +406,11 @@ export function App(): React.ReactElement {
   useEffect(() => {
     if (!taskView) return;
     const { kind, id, parentSessionKey } = taskView;
+    q('q-task-transcript', 'task-transcript', { kind, id, parentSessionKey: parentSessionKey ?? '' });
     const t = setInterval(() => q('q-task-transcript', 'task-transcript', { kind, id, parentSessionKey: parentSessionKey ?? '' }), 2500);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskView?.id, taskView?.kind]);
+  }, [taskView?.id, taskView?.kind, taskView?.parentSessionKey]);
 
   // DESK-6w — while a workflow card is open, refresh its phases/agent stats live.
   useEffect(() => {
@@ -344,6 +423,12 @@ export function App(): React.ReactElement {
 
   // DESK-6w — keep the auto-scroll suppressor in sync with any card view.
   useEffect(() => { cardOpenRef.current = !!(taskView || workflowView); }, [taskView, workflowView]);
+
+  // Close any open task/workflow CARD the moment the active session changes —
+  // a catch-all so navigating between sessions always drops back to the chat
+  // (matching sub-agents), no matter which navigation path fired. Opening a card
+  // doesn't change viewKey, so a freshly-opened card is never cleared by this.
+  useEffect(() => { setTaskView(null); setWorkflowView(null); }, [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     document.documentElement.style.setProperty('--chat-w', chatWidth === 'narrow' ? '720px' : chatWidth === 'wide' ? '980px' : '840px');
@@ -366,6 +451,16 @@ export function App(): React.ReactElement {
     localStorage.setItem('br-rail-w', String(railWidth));
   }, [railWidth]);
 
+  useEffect(() => {
+    localStorage.setItem('br-rail-open', railOpen ? '1' : '0');
+  }, [railOpen]);
+
+  // Fix 4 — persist sidebar workspace expansion so it survives refresh / host
+  // reload / workspace switch (the collapse-on-switch bug). User-controlled.
+  useEffect(() => {
+    saveExpandedProjects(expandedProjects);
+  }, [expandedProjects]);
+
   // DESK-5h — track the workrow's real width (window size AND panel state both
   // change it); drives the Environment column's show/yield logic.
   useEffect(() => {
@@ -385,6 +480,7 @@ export function App(): React.ReactElement {
       if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); togglePanel('diff'); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); togglePanel('files'); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); togglePanel('plan'); }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'e') { e.preventDefault(); setSideFullScreen((v) => !v); setSidePanelOpen(true); }
       if (mod && !e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); togglePanel('files'); }
       if (e.ctrlKey && e.key === '`') { e.preventDefault(); setTermDockOpen((o) => !o); }
       if (mod && !e.shiftKey && /^[1-9]$/.test(e.key)) {
@@ -431,40 +527,68 @@ export function App(): React.ReactElement {
   // Panels are user-controlled; columns shrink in place instead.
 
   useAgentEvents({
-    setRows, setRunning, setStopping, setStatusLine, setReasoningTail, setLiveText, setToolLog,
+    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
     setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
-    setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
+    setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
+    setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
-    pendingResumeRef, errorsBySession, lastPromptRef, workspaceGenRef, pendingSessionsRef, sessionsRef,
-    atBottomRef, cardOpenRef, chatEnd, chatRef, pendingGitRef, pendingCmdRef,
+    pendingWorkspaceRef, pendingResumeRef, errorsBySession, lastPromptRef, planFeedbackRef, goalContPendingRef, workspaceGenRef, pendingSessionsRef, sessionsRef,
+    atBottomRef, cardOpenRef, chatEnd, chatRef, pendingGitRef, pendingCmdRef, cachedSessionRowsRef,
     q, refreshSession, refreshSidebar, runGit, setSessionRunning, info, gitInfo, homeStats, branches,
   });
 
   function submit(): void {
-    const prompt = draft.trim();
-    if (!prompt || running || stopping) return;
+    const typedPrompt = draft.trim();
+    const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
+    const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
+    const attached = readyAttachments(attachmentUploads);
+    if (running || stopping) return;
+    if (!typedPrompt && attached.length === 0) return;
+    if (pendingAttachments.length > 0) {
+      setToast(pendingAttachments.length === 1 ? `Still attaching ${pendingAttachments[0].name}…` : `Still attaching ${pendingAttachments.length} files…`);
+      return;
+    }
+    if (failedAttachments.length > 0) {
+      setToast(failedAttachments.length === 1 ? `Remove failed attachment ${failedAttachments[0].name} before sending.` : 'Remove failed attachments before sending.');
+      return;
+    }
+    const prompt = buildPromptWithAttachments(typedPrompt, attached);
+    const displayPrompt = typedPrompt || (attached.length === 1 ? `Use attached file: ${attached[0].name}` : `Use ${attached.length} attached files`);
     // T8 — a slash command is NEVER sent to the LLM. Route it through the
     // command registry: bridge runs against the CLI stores, known commands run
     // their wire (panel/settings/native/cli fallback), and an UNKNOWN slash
     // surfaces a command-output card instead of becoming a chat prompt.
-    const slash = resolveSlashInput(prompt, commands);
+    const slash = resolveSlashInput(typedPrompt, commands);
     if (slash.kind !== 'not-slash') {
+      if (attached.length > 0) {
+        setToast('Attachments are sent with chat messages, not slash commands.');
+        return;
+      }
       setDraft('');
       if (slash.kind === 'bridge') runBridge(slash.cmd, slash.args);
       else if (slash.kind === 'command') runCommand(slash.command, cmdCtx);
-      else setRows((r) => [...r, { id: rid(), kind: 'cmd-out', cmd: prompt,
-        lines: [`Unknown command \`${slash.base}\` — type \`/\` to browse commands, or run it in the terminal CLI.`], ts: Date.now() }]);
+      else {
+        const nowTs = Date.now();
+        const stableCmdId = `${sessionKeyRef.current ?? 'global'}-cmd-out-${nowTs}-${typedPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
+        setRows((r) => [...r, { id: stableCmdId, kind: 'cmd-out', cmd: typedPrompt,
+          lines: [`Unknown command \`${slash.base}\` — type \`/\` to browse commands, or run it in the terminal CLI.`], ts: nowTs }]);
+      }
       return;
     }
-    lastPromptRef.current = prompt;
-    setRows((r) => [...r, { id: rid(), kind: 'user', text: prompt, ts: Date.now() }]);
+    lastPromptRef.current = typedPrompt;
+    // §goal-autonomy — a real user message preempts any queued goal continuation.
+    goalContPendingRef.current = null;
+    const nowTs = Date.now();
+    const stableId = `${sessionKeyRef.current ?? 'global'}-user-${nowTs}-${displayPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
+    setRows((r) => [...r, { id: stableId, kind: 'user', text: displayPrompt, ts: nowTs }]);
     setDraft('');
+    if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
     setRunning(true);
     // DESK-5v — mark THIS session running so its spinner survives a switch away.
     setSessionRunning(sessionKeyRef.current ?? info.sessionKey ?? '', true);
@@ -475,16 +599,60 @@ export function App(): React.ReactElement {
     // refreshSession() shortly after reconciles it with the host-backed row.
     const sk = sessionKeyRef.current ?? info.sessionKey;
     if (sk) {
-      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: prompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user' };
+      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: displayPrompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user' };
       // Wave 2 — track it as pending so subsequent list-sessions refreshes MERGE
       // it (instead of replacing it away) until the host transcript confirms it.
       if (!pendingSessionsRef.current.some((s) => s.sessionKey === sk)) pendingSessionsRef.current = [optimistic, ...pendingSessionsRef.current];
       setSessions((prev) => mergeOptimistic(prev.filter((s) => s.sessionKey !== sk), [optimistic]));
       sessionsRef.current = mergeOptimistic(sessionsRef.current.filter((s) => s.sessionKey !== sk), [optimistic]);
+      setProjSessions((prev) => {
+        const root = activeWsRef.current ?? info.workspaceRoot ?? workspaces.current;
+        if (!root) return prev;
+        const rows = mergeOptimistic((prev[root]?.rows ?? []).filter((s) => s.sessionKey !== sk), [optimistic]);
+        return withCachedProjectSessions(prev, root, rows);
+      });
       setTimeout(() => refreshSession(), 400);
     }
     window.brainrouter.send({ kind: 'start-turn', prompt });
   }
+
+  // §5 — attach dropped/picked files: read each as base64 in the renderer and
+  // ingest into a durable attachment record (the host preserves the original,
+  // extracts text/metadata, links to memory) as a visible 'attachment' task.
+  const attachFiles = (files: File[]): void => {
+    const batch = files.slice(0, 8); // bound a stray multi-select
+    const uploads = batch.map((file) => ({
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name,
+      size: file.size,
+      status: 'reading' as const,
+    }));
+    if (uploads.length) setAttachmentUploads((prev) => [...prev, ...uploads]);
+    batch.forEach((file, index) => {
+      const upload = uploads[index];
+      const reader = new FileReader();
+      reader.onload = () => {
+        const out = reader.result;
+        if (typeof out !== 'string') {
+          setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'failed', detail: 'Could not read this file.' } : u));
+          setToast(`✗ Could not read ${file.name}`);
+          return;
+        }
+        const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
+        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'attaching' } : u));
+        q(`q-attach:${upload.id}`, 'attachment-ingest', { name: file.name, dataBase64: base64 });
+      };
+      reader.onerror = () => {
+        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'failed', detail: 'Could not read this file.' } : u));
+        setToast(`✗ Could not read ${file.name}`);
+      };
+      reader.readAsDataURL(file);
+    });
+    if (batch.length) {
+      setToast(batch.length === 1 ? `Attaching ${batch[0].name}…` : `Attaching ${batch.length} files…`);
+      ensurePanel('tasks');
+    }
+  };
 
   // DESK-5n — the Running list the panels show: live in-turn children (from
   // child-* events) unioned with the disk-backed fleet (detached /bg workers,
@@ -497,29 +665,55 @@ export function App(): React.ReactElement {
     for (const f of fleet) byId.set(f.id, f); // disk entry wins on collision
     return [...byId.values()];
   }, [liveChildren, fleet, viewKey]);
-  // DESK-5w — disk-backed tasks grouped by the chat that owns them, for nesting
-  // each task UNDER its session in the sidebar (#2).
-  const tasksBySession = useMemo(() => {
-    const m = new Map<string, FleetRow[]>();
-    for (const f of fleet) {
-      const k = f.parentSessionKey ?? '';
-      const arr = m.get(k); if (arr) arr.push(f); else m.set(k, [f]);
+  // Background work is workspace-scoped UI, not chat-list content. Chat rows stay
+  // pure conversations; task/workflow transcripts open from the Background panel.
+  const backgroundTasks = runningTasks;
+  const dashBoards = useMemo<WorkspaceDash[]>(() => {
+    if (dashScope === 'all') return globalBoards ?? [];
+    const tasks: DashTask[] = [];
+    const seen = new Set<string>();
+    const add = (task: DashTask): void => {
+      if (!task.id) return;
+      const key = `${task.kind}:${task.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      tasks.push({ ...task, workspaceRoot: activeRoot });
+    };
+    for (const f of backgroundTasks) add({ ...f, workspaceRoot: activeRoot, status: f.status ?? 'running' });
+    for (const f of recentTasks) add({ ...f, workspaceRoot: activeRoot });
+    for (const t of finishedTasks) add({ kind: 'agent', id: t.id, label: t.label, status: /fail|stale|interrupt/i.test(t.status) ? 'failed' : 'completed', workspaceRoot: activeRoot });
+    const activeDisk = globalBoards?.find((b) => b.workspaceRoot === activeRoot);
+    for (const t of activeDisk?.tasks ?? []) add({ ...t, workspaceRoot: activeRoot });
+    return [{ workspaceRoot: activeRoot, tasks, reviewGate }];
+  }, [dashScope, globalBoards, backgroundTasks, recentTasks, finishedTasks, activeRoot, reviewGate]);
+  const openDashboardTask = useCallback((t: DashTask): void => {
+    if (t.workspaceRoot && t.workspaceRoot !== activeRoot) {
+      pendingDashboardTaskRef.current = t;
+      switchToWorkspace(t.workspaceRoot);
+      return;
     }
-    return m;
-  }, [fleet]);
-  // DESK-5w — only the VIEWED chat's tasks, for the Background-tasks panel + env
-  // card (#5: switching main session must not show another session's tasks).
-  const activeSessionTasks = useMemo<FleetRow[]>(
-    () => runningTasks.filter((t) => (t.parentSessionKey ?? '') === (viewKey ?? '')),
-    [runningTasks, viewKey],
+    openTask(t as FleetRow);
+  }, [activeRoot, openTask, switchToWorkspace]);
+  useEffect(() => {
+    const pending = pendingDashboardTaskRef.current;
+    if (!pending || !hostUp) return;
+    if (pending.workspaceRoot && pending.workspaceRoot !== activeRoot) return;
+    pendingDashboardTaskRef.current = null;
+    const row = backgroundTasks.find((t) => t.id === pending.id) ?? (pending as FleetRow);
+    openTask(row);
+  }, [activeRoot, backgroundTasks, hostUp, openTask]);
+  // Fix 4 / §3 — cross-workspace running indicators. globalBoards (durable +
+  // live, polled below) gives the active-task count per NON-active workspace;
+  // the active workspace prefers its live fleet. Drives the sidebar dot + count
+  // so a background task in workspace A stays visible while viewing workspace B.
+  const workspaceRunCount = useMemo<Map<string, number>>(
+    () => workspaceRunCounts(globalBoards, activeRoot, runningTasks.length),
+    [globalBoards, activeRoot, runningTasks],
   );
-  // Tasks to nest under a given session row: the viewed session shows live +
-  // disk; others show their disk-backed tasks.
-  // DESK-6w (#5) — ONLY the active/viewed chat expands its background tasks in
-  // the sidebar; switching chats must not surface other sessions' tasks. Inactive
-  // sessions get a count chip instead (see the session row), so the info isn't lost.
-  const tasksForSession = (key: string): FleetRow[] => (key === viewKey ? activeSessionTasks : []);
-  const bgTaskCount = (key: string): number => (key === viewKey ? activeSessionTasks.length : (tasksBySession.get(key)?.length ?? 0));
+  const runningWorkspaces = useMemo<Set<string>>(
+    () => runningWorkspaceSet(runningWs, workspaceRunCount),
+    [runningWs, workspaceRunCount],
+  );
   // DESK-6u — if the chat on screen was forked, resolve its parent so we can show
   // a "Forked from conversation" link back to the original.
   const forkParent = useMemo(() => {
@@ -530,8 +724,8 @@ export function App(): React.ReactElement {
   // so identical-looking rows stay distinguishable.
   const dupeTitleKeys = useMemo(() => duplicateTitleKeys(sessions), [sessions]);
 
-  // DESK-6m — one chat row (with its ⋮ menu trigger + pinned/completed state +
-  // inline rename) plus its nested background tasks. Reused for grouped sections.
+  // DESK-6m — one chat row with its ⋮ menu trigger + pinned/completed state +
+  // inline rename. Background tasks are not rendered as chats.
   const renderSessionNode = (s: SessionRow, i: number): React.ReactElement => (
     <React.Fragment key={s.sessionKey}>
       <div className={`session-wrap${s.sessionKey === viewKey ? ' active' : ''}${s.status === 'completed' ? ' completed' : ''}${sessionMenu?.key === s.sessionKey ? ' menu-open' : ''}`}>
@@ -553,22 +747,11 @@ export function App(): React.ReactElement {
             </span>
             {s.status === 'completed' ? <span className="session-done" title="Completed"><Icon name="check-circle" size={11} /></span> : null}
             {!s.group && i < 9 ? <span className="session-cmd">⌘{i + 1}</span> : null}
-            {s.sessionKey !== viewKey && bgTaskCount(s.sessionKey) > 0
-              ? <span className="session-bg" title={`${bgTaskCount(s.sessionKey)} background task(s) — open this chat to view`}>{bgTaskCount(s.sessionKey)}</span> : null}
             {s.modifiedAt && !dupeTitleKeys.has(s.sessionKey) ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
           </button>
         )}
         <button className="session-menu-btn icon-btn" aria-label="Chat options" onClick={(e) => openSessionMenu(e, s.sessionKey)}><Icon name="dots" size={13} /></button>
       </div>
-      {tasksForSession(s.sessionKey).map((f) => (
-        <button key={f.id} className={`project-session task nested${taskView?.id === f.id ? ' active' : ''}`}
-          title={`${f.kind} · ${f.id}${f.role ? ' · ' + f.role : ''} — click to view its conversation`}
-          onClick={() => openTask(f)}>
-          <span className={`st st-task ${f.kind}`}>{f.worktree ? <Icon name="merge" size={11} /> : <span className="task-dot" />}</span>
-          <span className="session-title">{f.label}</span>
-          <span className="st"><span className="spinner sm" /></span>
-        </button>
-      ))}
     </React.Fragment>
   );
 
@@ -602,10 +785,27 @@ export function App(): React.ReactElement {
   // slash matches, mode/effort/model labels) lives in a pure hook now.
   const { sessionTitle, hasConversation, homeMode, slashActive, slashMatches, execMode, modeLabel, effort, modelChoices } =
     useComposerDerived({ rows, liveText, running, taskView, workflowView, slashDismissed, draft, commands, snapshot, info });
+  const setPreference = useCallback((key: string, value: unknown) => {
+    if (key === 'executionMode' || key === 'reviewPolicy' || key === 'effort') {
+      q('a-mode', 'action:set-session-mode', { [key]: value });
+      return;
+    }
+    q('a-pref', 'action:set-pref', { key, value });
+  }, [q]);
   // T4 — sidebar groupings (archived/pinned/grouped split + visible window +
   // other projects) live in a pure hook now.
-  const { archivedCount, ungroupedSessions, groupedSessions, visibleProjectSessions, hiddenProjectSessions, currentProjectName, otherProjects } =
+  const { archivedCount, ungroupedSessions, groupedSessions, visibleProjectSessions, hiddenProjectSessions, projectRoots } =
     useSessionSidebar({ sessions, showArchived, recentsSort, recentsOpen, visibleCount, workspaces, info });
+
+  const reorderProject = useCallback((dragged: string, target: string): void => {
+    if (!dragged || !target || dragged === target) return;
+    const optimistic = reorderProjectRoots(projectRoots, dragged, target);
+    setWorkspaces((prev) => ({ ...prev, recents: optimistic }));
+    const persisted = window.brainrouter.reorderWorkspace?.(dragged, target);
+    void persisted
+      ?.then((result) => setWorkspaces((prev) => ({ ...prev, recents: result.recents })))
+      .catch(() => setToast('Could not reorder projects.'));
+  }, [projectRoots, setWorkspaces]);
 
   function runSlash(c: DeskCommand): void {
     setDraft('');
@@ -630,14 +830,26 @@ export function App(): React.ReactElement {
           <div className="kv"><span>Tokens</span><b>{tokens ? `${tokens.promptTokens.toLocaleString()} in / ${tokens.completionTokens.toLocaleString()} out` : '—'}</b></div>
           <div className="kv"><span>Config</span><b>~/.config/brainrouter</b></div>
         </>);
-      case 'files': return <FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits} onGrep={(gq) => q('q-grep', 'search-content', { q: gq })} />;
+      case 'files': return <FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
+        onGrep={(gq) => q('q-grep', 'search-content', { q: gq })}
+        onRefresh={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}
+        loading={filesLoading} truncated={filesTruncated} error={filesError} />;
       case 'file': return <FileViewerPanel view={fileView} />;
       case 'editor': return (
         <Suspense fallback={<div className="row status"><span className="spinner" /> Loading editor…</div>}>
           <EditorPanel
             tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving}
             onSelect={editor.select} onChange={editor.change} onSave={editor.save} onSaveAll={editor.saveAll}
-            onRevert={editor.revert} onClose={closeEditorTab} />
+            onRevert={editor.revert} onClose={closeEditorTab} onReorder={editor.reorder}
+            onAnnotateSelection={(path, body, anchor) => {
+              q('q-annot-create', 'annotation-create', {
+                type: 'file',
+                body,
+                anchor: { filePath: path, startLine: anchor.startLine, endLine: anchor.endLine, selectedText: anchor.selectedText },
+              });
+              setTimeout(() => q('q-annot', 'annotation-list'), 150);
+              setToast('Selected code saved as an annotation.');
+            }} />
         </Suspense>
       );
       case 'ci': return <CIPanel ci={ci} onOpenExternal={openUrl} />;
@@ -651,18 +863,37 @@ export function App(): React.ReactElement {
           findingsByFile={reviewFindingsByFile} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
-      case 'tasks': return <TasksPanel fleet={activeSessionTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = activeSessionTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
+      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
       case 'dashboard': return <DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
         tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
-        onOpenTask={(t) => { if (t.workspaceRoot && t.workspaceRoot !== activeRoot) switchToWorkspace(t.workspaceRoot, t.parentSessionKey ?? undefined); else { const f = fleet.find((x) => x.id === t.id); if (f) openTask(f); } }}
-        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else setToast('Open that workspace to stop its tasks.'); }} />;
+        onOpenTask={openDashboardTask}
+        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }} />;
       case 'plan': {
         // §7 — record an approval/changes-requested decision, then re-fetch the
         // history so the new version appears in the panel.
         const refreshHistory = () => setTimeout(() => q('q-plan-history', 'plan-history'), 150);
         return <PlanPanel plan={lastPlan} history={planHistory}
           onApprove={() => { q('q-plan-decision', 'plan-record-decision', { verdict: 'approved' }); refreshHistory(); setToast('Plan approved — snapshot saved to the version history.'); }}
-          onRequestChanges={(feedback) => { q('q-plan-decision', 'plan-record-decision', { verdict: 'changes-requested', feedback }); refreshHistory(); setDraft(`Plan changes requested: ${feedback}`); setToast('Changes requested — the feedback is queued in the composer to send to the agent.'); }} />;
+          onRequestChanges={(feedback) => {
+            // §1 — launch a REAL background plan-revision task (the host returns
+            // it; q-plan-decision surfaces success/error). Stash the feedback so
+            // it can be restored to the composer if the task fails to start.
+            planFeedbackRef.current = feedback;
+            q('q-plan-decision', 'plan-record-decision', { verdict: 'changes-requested', feedback });
+            refreshHistory();
+            ensurePanel('tasks');
+            setToast('Requesting changes — starting a background revision task…');
+          }}
+          onAnnotateStep={(item, index, body) => {
+            q('q-annot-create', 'annotation-create', {
+              type: 'plan',
+              targetId: `plan-step:${index + 1}`,
+              body,
+              anchor: { block: `Step ${index + 1}`, selectedText: item.step },
+            });
+            setTimeout(() => q('q-annot', 'annotation-list'), 150);
+            setToast('Plan step saved as an annotation.');
+          }} />;
       }
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
       case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
@@ -739,6 +970,8 @@ export function App(): React.ReactElement {
           onSetStatus={(id, status) => { q('q-art-update', 'artifact-update', { id, status }); refresh(); }}
           onPreview={(a) => { q('q-art-read', 'artifact-read', { id: a.id }); }}
           onSave={(id, content) => { q('q-art-save', 'artifact-save', { id, content }); refresh(); setTimeout(() => q('q-art-read', 'artifact-read', { id }), 250); setToast('Artifact saved.'); }}
+          onRevert={(id, version) => { q('q-art-revert', 'artifact-revert', { id, version }); refresh(); setTimeout(() => q('q-art-read', 'artifact-read', { id }), 250); setToast(`Reverted to v${version}.`); }}
+          onSendToChat={(text) => { setDraft(text); setToast('Artifact sent to the composer — press Enter to continue.'); }}
           onAnnotate={(a, body) => { q('q-annot-create', 'annotation-create', { type: annTypeFor(a.format), targetId: a.id, artifactId: a.id, body }); setTimeout(() => q('q-annot', 'annotation-list'), 150); setToast('Annotation saved to this artifact.'); }} />;
       }
       default: return null;
@@ -751,7 +984,7 @@ export function App(): React.ReactElement {
   // Env column may ONLY appear when the chat keeps its full natural content
   // width (760px content + padding ≈ 820): opening Environment must never
   // visibly shrink the conversation. No room → column AND toggle yield.
-  const envRoom = workW === 0 || workW - (sidePanelOpen ? sideWidth : 0) - 316 >= 820;
+  const envRoom = !sideFullScreen && (workW === 0 || workW - (sidePanelOpen ? sideWidth : 0) - 316 >= 820);
   const envVisible = envOpen && !homeMode && envRoom;
   const railAnim = useClosable(railOpen);
   const sideAnim = useClosable(sidePanelOpen);
@@ -763,13 +996,13 @@ export function App(): React.ReactElement {
       <Sidebar railAnim={railAnim} railWidth={railWidth} setRailOpen={setRailOpen} setRailWidth={setRailWidth}
         setPaletteOpen={setPaletteOpen} ensurePanel={ensurePanel} setSidePanelOpen={setSidePanelOpen}
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
-        currentProjectName={currentProjectName} activeReviewBadge={activeReviewBadge} prInfo={prInfo}
+        projectRoots={projectRoots} activeReviewBadge={activeReviewBadge} prInfo={prInfo}
         recentsOpen={recentsOpen} setRecentsOpen={setRecentsOpen} visibleProjectSessions={visibleProjectSessions}
         renderSessionNode={renderSessionNode} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
         setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
-        setShowArchived={setShowArchived} showArchived={showArchived} otherProjects={otherProjects}
-        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWs}
-        openProject={openProject} toggleProject={toggleProject} addProject={addProject} />
+        setShowArchived={setShowArchived} showArchived={showArchived}
+        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} workspaceRunCount={workspaceRunCount}
+        openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject} />
 
       <div className="main">
         <div className="workrow" ref={workrowRef}>
@@ -791,21 +1024,27 @@ export function App(): React.ReactElement {
                 modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
                 endpointModels={endpointModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
                 modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
-                hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings} />
+                hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
+                onAttach={attachFiles}
+                attachments={attachmentUploads}
+                canSubmit={readyAttachments(attachmentUploads).length > 0}
+                onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))} />
             } />
 
           {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
               to it; it can never cover content. Yields via envRoom. */}
           <EnvironmentPanel envAnim={envAnim} openSettings={openSettings} gitInfo={gitInfo} ensurePanel={ensurePanel}
             setTermDockOpen={setTermDockOpen} branches={branches} q={q} commitSubjects={commitSubjects} ci={ci}
-            openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} activeSessionTasks={activeSessionTasks} openTask={openTask} />
+            openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} backgroundTasks={backgroundTasks} openTask={openTask} />
 
-          <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} setSidePanelOpen={setSidePanelOpen}
-            activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab}
-            pop={pop} setPop={setPop} ensurePanel={ensurePanel} openBottomDock={openBottomDock} tabTitle={tabTitle}
+          <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}
+            setSidePanelOpen={setSidePanelOpen}
+            activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
+            tabTitle={tabTitle}
             renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
-            activeSessionTasks={activeSessionTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
-            worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci} />
+            backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
+            worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
+            envRoom={envRoom} />
         </div>
 
         <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}
@@ -823,7 +1062,9 @@ export function App(): React.ReactElement {
             in the real Electron shell. */}
         <TopbarRight homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
           termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen}
-          setSidePanelOpen={setSidePanelOpen} pop={pop} setPop={setPop} openSettings={openSettings} />
+          setSidePanelOpen={setSidePanelOpen} sideFullScreen={sideFullScreen} setSideFullScreen={setSideFullScreen}
+          sideTabs={sideTabs} activeSideTab={activeSideTab} ensurePanel={ensurePanel} openBottomDock={openBottomDock}
+          pop={pop} setPop={setPop} openSettings={openSettings} />
       </div>
 
       {pop && pop !== 'export' ? <div className="picker-backdrop" onClick={() => setPop('')} /> : null}
@@ -841,7 +1082,9 @@ export function App(): React.ReactElement {
         tokens={tokens}
         commands={commands}
         catalog={catalog}
-        onPref={(key, value) => q('a-pref', 'action:set-pref', { key, value })}
+        onPref={setPreference}
+        endpointModels={endpointModels}
+        providerModels={providerModels}
         onModelSave={(model) => window.brainrouter.send({ kind: 'set-model', model, persist: true })}
         onAction={(id, name, args) => {
           if (name === 'new-session') { window.brainrouter.send({ kind: 'new-session' }); setSettings((st) => ({ ...st, open: false })); return; }

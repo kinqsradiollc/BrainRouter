@@ -10,12 +10,21 @@
  */
 import { useRef } from 'react';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import type { ChatRow, SessionRow, FleetRow, WorkflowDetail } from '../../types.js';
+import type { ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
 import type { SettingsSection } from '../commands/commands.js';
 import type { WorkspaceDash } from '../workspace/dashboard.js';
 import type { EditorApi } from '../editor/useEditor.js';
 import type { CiApi } from '../ci/useCi.js';
 import { rid } from '../rid.js';
+import {
+  PROJECT_SESSION_STALE_MS,
+  loadingProjectSessions,
+  normalizeProjectSessionsResult,
+  projectSessionsNeedRefresh,
+  type ProjectSessionsByRoot,
+} from './projectSessionsView.js';
+import { withExpanded } from './expandedProjectsStore.js';
+import { sessionRowsCacheKey } from './sessionCache.js';
 
 export interface SessionActionsCtx {
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
@@ -27,26 +36,34 @@ export interface SessionActionsCtx {
   renameDraft: string;
   workspaces: { current: string | null; recents: string[] };
   info: { sessionKey?: string; model?: string; workspaceRoot?: string; username?: string };
-  projSessions: Record<string, SessionRow[]>;
+  projSessions: ProjectSessionsByRoot;
+  recentsOpenByRoot: Record<string, boolean>;
   runningSessionsRef: React.MutableRefObject<Set<string>>;
   sessionKeyRef: React.MutableRefObject<string | undefined>;
+  activeWsRef: React.MutableRefObject<string | null>;
+  pendingWorkspaceRef: React.MutableRefObject<string | null>;
   pendingResumeRef: React.MutableRefObject<string | null>;
+  pendingSessionsRef: React.MutableRefObject<SessionRow[]>;
+  sessionsRef: React.MutableRefObject<SessionRow[]>;
   workspaceGenRef: React.MutableRefObject<number>;
   expandedProjectsRef: React.MutableRefObject<string[]>;
   liveBuf: React.MutableRefObject<string>;
   chatRef: React.RefObject<HTMLDivElement>;
   atBottomRef: React.MutableRefObject<boolean>;
+  errorsBySession: React.MutableRefObject<Record<string, Array<{ id: number; text: string; detail?: string; ts: number }>>>;
+  cachedSessionRowsRef: React.MutableRefObject<Record<string, ChatRow[]>>;
   // setters
   setStopping: React.Dispatch<React.SetStateAction<boolean>>;
   setStatusLine: React.Dispatch<React.SetStateAction<string>>;
   setReasoningTail: React.Dispatch<React.SetStateAction<string>>;
   setLiveText: React.Dispatch<React.SetStateAction<string>>;
   setRows: React.Dispatch<React.SetStateAction<ChatRow[]>>;
+  setSessions: React.Dispatch<React.SetStateAction<SessionRow[]>>;
   setRunning: React.Dispatch<React.SetStateAction<boolean>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setSearchHits: React.Dispatch<React.SetStateAction<import('../../panels/index.js').SearchHit[] | null>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
-  setTaskView: React.Dispatch<React.SetStateAction<{ id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null>>;
+  setTaskView: React.Dispatch<React.SetStateAction<TaskViewState | null>>;
   setWorkflowView: React.Dispatch<React.SetStateAction<WorkflowDetail | null>>;
   setWorkspaces: React.Dispatch<React.SetStateAction<{ current: string | null; recents: string[] }>>;
   setExpandedProjects: React.Dispatch<React.SetStateAction<string[]>>;
@@ -66,9 +83,11 @@ export interface SessionActionsCtx {
   setPlanHistory: React.Dispatch<React.SetStateAction<import('../plan/planReviewView.js').PlanDecisionView[]>>;
   setFleet: React.Dispatch<React.SetStateAction<FleetRow[]>>;
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
+  setRecentTasks: React.Dispatch<React.SetStateAction<FleetRow[]>>;
+  setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setCommitSubjects: React.Dispatch<React.SetStateAction<string[]>>;
   setToast: React.Dispatch<React.SetStateAction<string>>;
-  setProjSessions: React.Dispatch<React.SetStateAction<Record<string, SessionRow[]>>>;
+  setProjSessions: React.Dispatch<React.SetStateAction<ProjectSessionsByRoot>>;
   setSettings: React.Dispatch<React.SetStateAction<{ open: boolean; section: SettingsSection }>>;
   setSessionMenu: React.Dispatch<React.SetStateAction<{ key: string; x: number; y: number } | null>>;
   setRenamingKey: React.Dispatch<React.SetStateAction<string | null>>;
@@ -122,13 +141,14 @@ export interface SessionActions {
 
 export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const {
-    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions,
-    runningSessionsRef, sessionKeyRef, pendingResumeRef, workspaceGenRef, expandedProjectsRef,
-    liveBuf, chatRef, atBottomRef,
+    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
+    runningSessionsRef, sessionKeyRef, activeWsRef, pendingWorkspaceRef, pendingResumeRef, pendingSessionsRef, sessionsRef,
+    workspaceGenRef, expandedProjectsRef,
+    liveBuf, chatRef, atBottomRef, errorsBySession, cachedSessionRowsRef,
     setStopping, setStatusLine, setReasoningTail, setLiveText, setRows, setRunning, setInteraction,
-    setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
+    setSessions, setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
-    setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setCommitSubjects, setToast,
+    setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setRecentTasks, setFinishedTasks, setCommitSubjects, setToast,
     setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   } = ctx;
@@ -151,8 +171,26 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   };
   const openDashboard = (): void => { ensurePanel('dashboard'); refreshDashboard(); };
 
-  // T5 — opening a file now lands in the editable Monaco editor (not the
-  // read-only viewer). The 'file' panel + read-only viewer remain available.
+  function requestProjectSessions(root: string, limit = 80): void {
+    const now = Date.now();
+    setProjSessions((prev) => ({ ...prev, [root]: loadingProjectSessions(prev[root], now) }));
+    if (window.brainrouter.workspaceSessions) {
+      void window.brainrouter.workspaceSessions(root, limit)
+        .then((result) => setProjSessions((prev) => ({ ...prev, [root]: normalizeProjectSessionsResult(result, Date.now()) })))
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setProjSessions((prev) => ({
+            ...prev,
+            [root]: { rows: prev[root]?.rows ?? [], loading: false, error: message, loadedAt: Date.now() },
+          }));
+        });
+      return;
+    }
+    q(`q-wsess:${root}`, 'workspace-sessions', { root, limit });
+  }
+
+  // T5 — opening a file now lands in the editable Monaco editor. The legacy
+  // read-only viewer only remains for compatibility with old/internal state.
   function openFile(path: string): void {
     ensurePanel('editor');
     editor.open(path);
@@ -179,16 +217,54 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
       if (resumeKey) window.brainrouter.send({ kind: 'resume-session', sessionKey: resumeKey });
       return;
     }
+    const previousActiveWs = activeWsRef.current;
     pendingResumeRef.current = resumeKey ?? null;
+    pendingWorkspaceRef.current = root;
+    if (current) {
+      const leavingOpen = recentsOpenByRoot[current] ?? true;
+      const nextExpanded = leavingOpen
+        ? withExpanded(expandedProjectsRef.current, current)
+        : expandedProjectsRef.current.filter((r) => r !== current);
+      expandedProjectsRef.current = nextExpanded;
+      setExpandedProjects((prev) => leavingOpen ? withExpanded(prev, current) : prev.filter((r) => r !== current));
+    }
     // Stability fix — bump the workspace generation the moment a switch STARTS,
     // so any old-workspace query results still in flight are dropped instead of
     // repainting the now-cleared surfaces with the previous project's data.
     workspaceGenRef.current++;
+    if (resumeTimerRef.current) {
+      clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = null;
+    }
     setToast(`Opening ${root.split('/').pop()}…`);
+    setWorkspaces((prev) => ({
+      current: root,
+      recents: prev.recents.includes(root) ? prev.recents : [...prev.recents, root],
+    }));
     // Clear workspace-scoped surfaces; the new host's boot session-changed
     // refreshes everything against the new root.
     setHostUp(false);
+    const cachedSessions = projSessions[root]?.rows ?? [];
+    sessionKeyRef.current = undefined;
+    sessionsRef.current = cachedSessions;
+    pendingSessionsRef.current = [];
+    errorsBySession.current = {};
+    setViewKey('');
+    setSessions(cachedSessions);
     setRows([]);
+    setSearchHits(null);
+    setTaskView(null);
+    setWorkflowView(null);
+    setRunning(false);
+    setStopping(false);
+    setInteraction(null);
+    setSessionMenu(null);
+    setRenamingKey(null);
+    setRenameDraft('');
+    setStatusLine('');
+    setReasoningTail('');
+    setLiveText('');
+    liveBuf.current = '';
     setGitInfo(null);
     setPrInfo(null);
     // Stability fix — show a LOADING branch chip during the switch instead of
@@ -209,13 +285,27 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     setPlanHistory([]); // §7 — don't carry the old session's plan version history across a switch
     setFleet([]);
     setLiveChildren({});
+    setRecentTasks([]);
+    setFinishedTasks([]);
     setCommitSubjects([]);
     // Terminal tabs belong to the retiring host's shells — close the dock so
     // reopening spawns fresh shells in the new workspace.
     resetTermDock();
     void window.brainrouter.openWorkspace(root).then((r) => {
-      if (!r.opened) { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; }
-    }).catch(() => { setToast('✗ Could not open that folder.'); pendingResumeRef.current = null; });
+      if (!r.opened) {
+        setToast('✗ Could not open that folder.');
+        pendingResumeRef.current = null;
+        pendingWorkspaceRef.current = null;
+        activeWsRef.current = previousActiveWs;
+        setWorkspaces((prev) => ({ ...prev, current: current ?? previousActiveWs ?? prev.current }));
+      }
+    }).catch(() => {
+      setToast('✗ Could not open that folder.');
+      pendingResumeRef.current = null;
+      pendingWorkspaceRef.current = null;
+      activeWsRef.current = previousActiveWs;
+      setWorkspaces((prev) => ({ ...prev, current: current ?? previousActiveWs ?? prev.current }));
+    });
   }
 
   /** Trust gate in front of every project switch (Codex-style: ask first).
@@ -230,24 +320,27 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   /** Add project = pick folder → trust dialog right away → open in place.
    *  T1 — optimistically insert the folder into the sidebar's project list the
    *  moment it's picked, so it appears instantly (the real recents reconcile on
-   *  open). De-duped against the existing recents. */
+   *  open). De-duped against the existing recents without moving existing rows. */
   function addProject(): void {
     void window.brainrouter.addWorkspace().then((res) => {
       if (!res?.workspaceRoot) return;
       const root = res.workspaceRoot;
-      setWorkspaces((prev) => prev.recents.includes(root) ? prev : { ...prev, recents: [root, ...prev.recents] });
+      setWorkspaces((prev) => prev.recents.includes(root) ? prev : { ...prev, recents: [...prev.recents, root] });
       openProject(root);
     }).catch(() => {});
   }
 
   /** Expand/collapse a project folder; first expand lazy-loads its chats. */
   function toggleProject(root: string): void {
+    const willOpen = !expandedProjectsRef.current.includes(root);
     setExpandedProjects((prev) => {
       const next = prev.includes(root) ? prev.filter((r) => r !== root) : [...prev, root];
       expandedProjectsRef.current = next;
       return next;
     });
-    if (!projSessions[root]) q(`q-wsess:${root}`, 'workspace-sessions', { root });
+    if (willOpen && projectSessionsNeedRefresh(projSessions[root])) {
+      requestProjectSessions(root, 80);
+    }
   }
 
   // DESK-6t — FAST, session-scoped refresh: the sidebar chat list, active-session
@@ -281,8 +374,12 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — cheap store read; refresh after a turn
     q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — cheap store read; refresh after a turn
     q('q-art', 'artifact-list'); // ARTIFACT-RECORDS — cheap store read; refresh after a turn
-    // Keep expanded project folders fresh (host caches make this cheap).
-    for (const root of expandedProjectsRef.current) q(`q-wsess:${root}`, 'workspace-sessions', { root });
+    // Keep expanded project folders fresh (main-process cache keeps this cheap).
+    const now = Date.now();
+    for (const root of expandedProjectsRef.current) {
+      if (!projectSessionsNeedRefresh(projSessions[root], now, PROJECT_SESSION_STALE_MS)) continue;
+      requestProjectSessions(root, 80);
+    }
   }
   // Git/workspace state is LIVE, not durable — re-read just the git surfaces
   // (branch, changes, last commit, PR) without the heavier session/list refresh.
@@ -326,7 +423,13 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     if (!key || key === sessionKeyRef.current) return;
     setTaskView(null); setWorkflowView(null);
     sessionKeyRef.current = key; setViewKey(key);
-    setRows([{ id: rid(), kind: 'loading', ts: Date.now() }]);
+    const cacheRoot = activeWsRef.current ?? workspaces.current ?? info.workspaceRoot ?? '';
+    const cached = cachedSessionRowsRef.current[sessionRowsCacheKey(cacheRoot, key)];
+    if (cached) {
+      setRows(cached);
+    } else {
+      setRows([{ id: rid(), kind: 'loading', ts: Date.now() }]);
+    }
     setSearchHits(null); setStatusLine(''); setReasoningTail(''); setLiveText(''); liveBuf.current = '';
     setRunning(runningSessionsRef.current.has(key));
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
@@ -336,8 +439,25 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
 
   const openTask = (f: FleetRow): void => {
     if (f.kind === 'workflow') { openWorkflow(f.id); return; }
-    setTaskView({ id: f.id, kind: f.kind, role: f.role, status: 'running', parentSessionKey: f.parentSessionKey, rows: [{ id: rid(), kind: 'loading', ts: Date.now() }] });
-    q('q-task-transcript', 'task-transcript', { kind: f.kind, id: f.id, parentSessionKey: f.parentSessionKey ?? '' });
+    // DURABLE tasks (plan-revision / review / verification / attachment) read
+    // their transcript via kind 'task' — the task agent ran under its own
+    // internal session key, carried in the transcript ref.
+    const durable = f.durable === true || ['plan-revision', 'review', 'verification', 'attachment'].includes(f.kind);
+    const transcriptKind = durable ? 'task' : f.kind;
+    const parentKey = durable
+      ? (f.transcript?.parentSessionKey ?? f.parentSessionKey ?? '')
+      : (f.parentSessionKey ?? '');
+    setTaskView({
+      id: f.id,
+      kind: transcriptKind,
+      role: f.role ?? f.kind,
+      title: f.label || f.role || f.kind,
+      sourceKind: f.kind,
+      status: f.status ?? 'running',
+      parentSessionKey: parentKey,
+      rows: [{ id: rid(), kind: 'loading', ts: Date.now() }],
+    });
+    q('q-task-transcript', 'task-transcript', { kind: transcriptKind, id: f.id, parentSessionKey: parentKey });
     viewToTop();
   };
   const openWorkflow = (slug: string): void => {

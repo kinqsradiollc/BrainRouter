@@ -77,7 +77,7 @@ export function createHostCore(input) {
     // DESK-5q (retained for the single-agent path) — a switch requested while the
     // ONLY agent is busy is queued here and applied once its turn unwinds.
     let pendingSwitch = null;
-    async function startTurn(prompt) {
+    async function startTurn(prompt, hidden) {
         const rt = pool.get(activeKey);
         if (!rt) {
             emit({ kind: 'turn-error', message: 'No active session to run in.' });
@@ -101,11 +101,20 @@ export function createHostCore(input) {
         // it runs, but every event it emits stays tagged with ITS key so the
         // renderer routes it to the right chat (and never the one now on screen).
         const sk = rt.agent.sessionKey;
-        const turnEmit = (event) => stamp(sk, event);
+        const turnEmit = (event) => {
+            // Verification scoping — let the host see this turn's tool stream (tagged
+            // with the turn's own sessionKey) to track build/test/lint as durable
+            // tasks; never let an observer error break the turn.
+            try {
+                input.observeTurnEvent?.(sk, event);
+            }
+            catch { /* advisory */ }
+            stamp(sk, event);
+        };
         const turnCallbacks = createCallbackBridge(turnEmit);
         turnEmit({ kind: 'turn-start', prompt });
         try {
-            const answer = await rt.agent.runTurn(prompt, turnCallbacks);
+            const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden });
             turnEmit({ kind: 'turn-complete', answer });
             const u = rt.agent.sessionUsage;
             if (u)
@@ -158,7 +167,10 @@ export function createHostCore(input) {
             // existence check — the renderer fetches the real rows via the bounded
             // transcript query. Avoids a full read just to refocus.
             const count = input.transcriptExists ? (input.transcriptExists(targetKey) ? 1 : 0) : (input.loadTranscript?.(targetKey)?.length ?? 1);
-            stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: count, model: existing.agent.getModel?.() ?? '' });
+            // Authoritative running state — the renderer reconciles its own per-session
+            // flag against this so a resumed chat never shows a stale "working…" spinner
+            // (a dropped turn-complete used to leave the flag stuck forever).
+            stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: count, model: existing.agent.getModel?.() ?? '', running: existing.running });
             return;
         }
         const rt = acquireRuntime();
@@ -172,6 +184,11 @@ export function createHostCore(input) {
         }
         rt.agent.sessionKey = targetKey;
         rt.agent.resetSessionCounters?.();
+        // A runtime can be reused after viewing a lazily-resumed session whose
+        // transcript has not been loaded yet. That pending history belongs to the
+        // old session; clear it before retargeting so a fresh chat cannot ingest the
+        // previous transcript on its first turn.
+        rt.pendingHistoryKey = undefined;
         // Item 10 — restore this session's per-session model override (if any) so a
         // resumed/backgrounded chat keeps the model it was set to, independent of the
         // global default and of whatever the previous agent in this slot was using.
@@ -181,7 +198,9 @@ export function createHostCore(input) {
         const loaded = init(rt);
         pool.set(targetKey, rt);
         setActive(targetKey);
-        stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: loaded, model: rt.agent.getModel?.() ?? '' });
+        // A freshly-acquired runtime is never mid-turn → running:false reconciles
+        // away any stale renderer flag for this key.
+        stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: loaded, model: rt.agent.getModel?.() ?? '', running: rt.running });
     }
     function applyResume(sessionKey) {
         // An already-pooled (running) session refocuses without touching history.
@@ -222,7 +241,7 @@ export function createHostCore(input) {
         const cmd = message;
         switch (cmd.kind) {
             case 'start-turn':
-                await startTurn(cmd.prompt);
+                await startTurn(cmd.prompt, cmd.hidden);
                 return;
             case 'interrupt': {
                 // DESK-2 — cooperative stop of the VIEWED session's turn: flag its agent
@@ -278,6 +297,10 @@ export function createHostCore(input) {
                         emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
                         return;
                     }
+                    try {
+                        input.clearSessionModel?.(activeKey);
+                    }
+                    catch { /* global model still persisted */ }
                 }
                 else {
                     try {

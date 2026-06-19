@@ -103,7 +103,7 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
     config.llm = {
       provider: draft.provider.id,
       apiKey: draft.apiKey ?? '',
-      model: draft.model ?? draft.provider.defaultModel,
+      model: draft.model ?? '',
       endpoint: draft.customEndpoint ?? draft.provider.endpoint,
     };
   }

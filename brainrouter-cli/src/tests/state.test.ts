@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCliStateDir, getCliStateFile } from '../state/cliState.js';
+import { getStateDir, getStateFile } from '../state/cliState.js';
 import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../state/sessionStore.js';
 import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../state/taskStore.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../state/workflowArtifacts.js';
@@ -13,7 +13,7 @@ import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
 test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
   withTempWorkspace((workspace) => {
-    const stateDir = getCliStateDir(workspace);
+    const stateDir = getStateDir(workspace);
     const home = process.env.BRAINROUTER_HOME!;
     // CLI state lives at <home>/workspaces/<encoded>/cli — NOT in the workspace.
     assert.equal(stateDir.startsWith(path.join(fs.realpathSync(home), 'workspaces')), true);
@@ -21,8 +21,8 @@ test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
     assert.equal(fs.existsSync(stateDir), true);
     // The workspace itself stays clean of personal CLI state.
     assert.equal(fs.existsSync(path.join(fs.realpathSync(workspace), '.brainrouter', 'cli')), false);
-    assert.equal(getCliStateFile(workspace, 'tasks.json'), path.join(stateDir, 'tasks.json'));
-    assert.throws(() => getCliStateFile(workspace, '../tasks.json'), /Invalid CLI state file name/);
+    assert.equal(getStateFile(workspace, 'tasks.json'), path.join(stateDir, 'tasks.json'));
+    assert.throws(() => getStateFile(workspace, '../tasks.json'), /Invalid CLI state file name/);
   });
 });
 
@@ -115,6 +115,18 @@ test('listTranscripts surfaces persisted sessions newest first with previews', (
     const one = list.find((t) => t.sessionKey === 'session:one')!;
     assert.equal(one.turnCount, 2);
     assert.match(one.firstUserMessage ?? '', /Zod/);
+  });
+});
+
+test('listTranscripts limit returns the newest page without changing ordering', () => {
+  withTempWorkspace((workspace) => {
+    appendTranscriptEntry(workspace, 'session:a', { role: 'user', content: 'first session' });
+    appendTranscriptEntry(workspace, 'session:b', { role: 'user', content: 'second session' });
+    appendTranscriptEntry(workspace, 'session:c', { role: 'user', content: 'third session' });
+    const all = listTranscripts(workspace);
+    const limited = listTranscripts(workspace, { limit: 1 });
+    assert.equal(limited.length, 1);
+    assert.equal(limited[0].sessionKey, all[0].sessionKey);
   });
 });
 
@@ -265,7 +277,7 @@ test('preferencesStore: legacy autoApproveShell=true back-fills executionMode=fa
     // fields are entirely absent (not just `undefined` in the in-memory
     // default).
     fs.writeFileSync(
-      getCliStateFile(workspace, 'preferences.json'),
+      getStateFile(workspace, 'preferences.json'),
       JSON.stringify({ autoApproveShell: true }),
       'utf8',
     );
@@ -273,7 +285,7 @@ test('preferencesStore: legacy autoApproveShell=true back-fills executionMode=fa
     assert.equal(prefs.executionMode, 'fast');
     assert.equal(prefs.reviewPolicy, 'proceed');
     // Legacy field is untouched on disk — other readers still see it.
-    const raw = JSON.parse(fs.readFileSync(getCliStateFile(workspace, 'preferences.json'), 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(getStateFile(workspace, 'preferences.json'), 'utf8'));
     assert.equal(raw.autoApproveShell, true);
   });
 });
@@ -281,7 +293,7 @@ test('preferencesStore: legacy autoApproveShell=true back-fills executionMode=fa
 test('preferencesStore: legacy autoApproveShell=false reads back as defaults', () => {
   withTempWorkspace((workspace) => {
     fs.writeFileSync(
-      getCliStateFile(workspace, 'preferences.json'),
+      getStateFile(workspace, 'preferences.json'),
       JSON.stringify({ autoApproveShell: false }),
       'utf8',
     );
@@ -296,7 +308,7 @@ test('preferencesStore: explicit new fields override the legacy migration', () =
     // User had /yolo on (autoApproveShell:true) then toggled /mode planning
     // explicitly. The new field must win — migration must not clobber it.
     fs.writeFileSync(
-      getCliStateFile(workspace, 'preferences.json'),
+      getStateFile(workspace, 'preferences.json'),
       JSON.stringify({ autoApproveShell: true, executionMode: 'planning' }),
       'utf8',
     );
@@ -443,9 +455,9 @@ test('sessionStore: transcripts land in sessions/<key>/transcript.jsonl', async 
 });
 
 test('sessionStore: legacy transcripts/<encoded>.jsonl remains discoverable', async () => {
-  const { getCliStateDir, encodeSessionKey } = await import('../state/cliState.js');
+  const { getStateDir, encodeSessionKey } = await import('../state/cliState.js');
   withTempWorkspace((workspace) => {
-    const stateDir = getCliStateDir(workspace);
+    const stateDir = getStateDir(workspace);
     const legacyDir = path.join(stateDir, 'transcripts');
     fs.mkdirSync(legacyDir, { recursive: true });
     const legacyKey = 'legacy-session:abc';
@@ -469,7 +481,7 @@ test('sessionStore: legacy transcripts/<encoded>.jsonl remains discoverable', as
 });
 
 test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (preserves workflows/)', async () => {
-  const { getCliStateDir } = await import('../state/cliState.js');
+  const { getStateDir } = await import('../state/cliState.js');
   withTempWorkspace((workspace) => {
     const legacy = path.join(workspace, '.brainrouter');
     fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
@@ -478,7 +490,7 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (prese
     fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
     fs.writeFileSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md'), '# Committable spec');
 
-    getCliStateDir(workspace); // triggers migration
+    getStateDir(workspace); // triggers migration
 
     // Legacy cli/ and hooks/ archived; workflows/ kept in workspace.
     assert.equal(fs.existsSync(path.join(legacy, 'cli')), false);
@@ -502,7 +514,7 @@ test('cliState: BRAINROUTER_HOME pins the user-global state root', async () => {
 });
 
 test('cliState: legacy <workspace>/.brainrouter/ migrates to the user home on first use', async () => {
-  const { getCliStateDir } = await import('../state/cliState.js');
+  const { getStateDir } = await import('../state/cliState.js');
   withTempWorkspace((workspace) => {
     // Plant legacy files inside the workspace as if they came from an older build.
     const legacyDir = path.join(workspace, '.brainrouter', 'cli');
@@ -510,14 +522,14 @@ test('cliState: legacy <workspace>/.brainrouter/ migrates to the user home on fi
     fs.writeFileSync(path.join(legacyDir, 'tasks.json'), JSON.stringify({ items: [{ step: 'legacy', status: 'pending' }] }));
     fs.writeFileSync(path.join(legacyDir, 'goal.json'), JSON.stringify({ text: 'old goal', setAt: '2026-01-01T00:00:00Z' }));
 
-    const newDir = getCliStateDir(workspace);
+    const newDir = getStateDir(workspace);
     // Migrated files now exist in the user-home location.
     assert.equal(fs.existsSync(path.join(newDir, 'tasks.json')), true);
     assert.equal(fs.existsSync(path.join(newDir, 'goal.json')), true);
     // Migration marker is dropped.
     assert.equal(fs.existsSync(path.join(path.dirname(newDir), '.migrated-from-workspace')), true);
     // Second call is a no-op (idempotent — files already present, marker stays).
-    getCliStateDir(workspace);
+    getStateDir(workspace);
   });
 });
 

@@ -12,7 +12,7 @@ export function installDevBridge(): void {
   if (typeof window === 'undefined' || (window as { brainrouter?: unknown }).brainrouter) return;
 
   const listeners = new Set<(msg: AgentEventMessage) => void>();
-  // Wave 1 — recents-changed listeners (activity-based project reorder).
+  // Wave 1 — recents-changed listeners (membership/state + explicit reorder).
   const recentsListeners = new Set<(d: { recents: string[]; reason: string; workspaceRoot: string }) => void>();
   let termBuf = '';
   let seq = 0;
@@ -49,6 +49,8 @@ export function installDevBridge(): void {
     effort: 'medium', personality: 'standard', tier: null, theme: 'dark', quiet: false,
     memoriesEnabled: true, personaAnchorEnabled: true, experimental: false, rawScrollback: false, editorMode: 'emacs',
   } as Record<string, unknown>;
+  const sessionModes: Record<string, Record<string, unknown>> = {};
+  const effectivePrefs = () => ({ ...prefs, ...(sessionModes[activeSession] ?? {}) });
 
   // DESK-5l — stateful model, mirroring the real host (agent.getModel):
   // session-info must reflect a switch, or refreshes revert the UI.
@@ -257,10 +259,12 @@ export function installDevBridge(): void {
   // actually grow the version history in the browser preview (append order;
   // oldest-first, exactly as the host's planHistoryStore returns it).
   type DevPlanItem = { step: string; status: string; acceptance?: string };
-  type DevPlanDecision = { id: string; verdict: 'approved' | 'changes-requested'; feedback?: string; planSnapshot: DevPlanItem[]; explanation?: string; createdAt: string; linkedMemoryIds: string[] };
+  type DevPlanDecision = { id: string; verdict: 'approved' | 'changes-requested' | 'revised'; actor?: 'user' | 'auto'; feedback?: string; planSnapshot: DevPlanItem[]; explanation?: string; createdAt: string; linkedMemoryIds: string[] };
   const devPlanState: { items: DevPlanItem[]; explanation?: string } = { items: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix' };
   const devPlanDecisions: DevPlanDecision[] = [
-    { id: 'pdec_seed', verdict: 'changes-requested', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
+    { id: 'pdec_seed', verdict: 'changes-requested', actor: 'user', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
+    // auto-approved while running in auto mode (no approval prompt) — shows "approved · auto" in history
+    { id: 'pdec_auto', verdict: 'approved', actor: 'auto', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-18T00:00:00.000Z', linkedMemoryIds: [] },
   ];
   let devPlanSeq = 1;
   const DEV_DIFF_HASH = 'devhash';
@@ -297,6 +301,7 @@ export function installDevBridge(): void {
   };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
+  const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000 };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
@@ -311,6 +316,45 @@ export function installDevBridge(): void {
     if (!f) return { path: p, kind: 'file', content: '', error: 'ENOENT: no such file (dev bridge)' };
     if (/\.(png|jpg|jpeg|gif|webp|ico|pdf|zip)$/i.test(p)) return { path: p, kind: 'file', content: '', binary: true, size: f.content.length, mtimeMs: f.mtimeMs };
     return { path: p, kind: 'file', content: f.content, size: f.content.length, mtimeMs: f.mtimeMs };
+  };
+
+  type DevAttachment = {
+    id: string; name: string; kind: string; mimeType: string; byteSize: number;
+    extractedText?: string; workspaceRoot: string; sessionKey: string; createdAt: string;
+  };
+  let devAttachmentSeq = 1;
+  const devAttachments = new Map<string, DevAttachment>();
+  const attachmentKind = (name: string): string => {
+    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'image';
+    if (/\.pdf$/i.test(name)) return 'pdf';
+    return 'text';
+  };
+  const attachmentMime = (name: string, kind: string): string => {
+    if (kind === 'pdf') return 'application/pdf';
+    if (kind === 'image') return name.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/*';
+    return 'text/plain';
+  };
+  const decodePreview = (dataBase64: string, kind: string): string | undefined => {
+    if (kind !== 'text') return undefined;
+    try {
+      const decoded = atob(dataBase64.slice(0, 16_384));
+      if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(decoded)) return undefined;
+      return decoded.slice(0, 3_000);
+    } catch {
+      return undefined;
+    }
+  };
+  const attachmentContext = (a: DevAttachment): string => {
+    const lines = [
+      `### Attachment: ${a.name}`,
+      `- id: ${a.id}`,
+      `- kind: ${a.kind}`,
+      `- mime: ${a.mimeType}`,
+      `- bytes: ${a.byteSize}`,
+    ];
+    if (!a.extractedText) return lines.join('\n');
+    const text = a.extractedText.replace(/```/g, "'''").trim();
+    return `${lines.join('\n')}\n\n\`\`\`text\n${text}\n\`\`\``;
   };
 
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
@@ -523,10 +567,49 @@ export function installDevBridge(): void {
     // DESK-5w — each task tagged with the chat that owns it, so the sidebar can
     // nest it under its session and the env card scopes to the viewed chat.
     'fleet': () => [
+      // §1/§2 — durable background tasks (plan revision + review) show their
+      // status/phase/elapsed in the Background panel and are clickable to open
+      // the task transcript.
+      { kind: 'plan-revision', id: 'btask_a1', label: 'Revise plan — requested changes', durable: true, status: 'running', phase: 'writing-plan', startedAt: new Date(Date.now() - 22_000).toISOString(), parentSessionKey: 'dev:fix-recall-blend', transcript: { kind: 'task', id: 'btask_a1', parentSessionKey: 'internal:plan-revision:btask_a1' } },
+      { kind: 'review', id: 'btask_b2', label: 'Review working changes', durable: true, status: 'running', phase: 'analyzing', startedAt: new Date(Date.now() - 6_000).toISOString(), parentSessionKey: 'dev:fix-recall-blend', transcript: { kind: 'task', id: 'btask_b2', parentSessionKey: 'review:btask_b2' } },
+      // verification — a build/test/typecheck the current turn kicked off; runs in
+      // THIS workspace and keeps going (+ stays visible) even if you switch away.
+      { kind: 'verification', id: 'btask_v3', label: 'Verify — npm test', durable: true, status: 'running', phase: 'running', startedAt: new Date(Date.now() - 11_000).toISOString(), parentSessionKey: 'dev:fix-recall-blend', transcript: { kind: 'task', id: 'btask_v3', parentSessionKey: 'internal:verify:btask_v3' } },
       { kind: 'agent', id: 'agent-3f2a', label: 'explorer·3f2a — survey recall pipeline', role: 'explorer', startedAt: new Date(Date.now() - 95_000).toISOString(), worktree: false, parentSessionKey: 'dev:fix-recall-blend' },
       { kind: 'worker', id: 'wkr-91', label: 'wkr-91 · vitest suite', role: 'worker', startedAt: new Date(Date.now() - 14 * 60_000).toISOString(), worktree: true, parentSessionKey: 'dev:fix-recall-blend' },
       { kind: 'workflow', id: 'wf-build', label: 'build · Implement (2/4)', startedAt: new Date(Date.now() - 31 * 60_000).toISOString(), parentSessionKey: 'dev:grid-tui' },
     ],
+    // §3 — durable task list (scoped). Mirrors the host's tasks-list shape.
+    'tasks-list': () => [
+      { id: 'btask_a1', kind: 'plan-revision', status: 'running', title: 'Revise plan — requested changes', phase: 'writing-plan', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 22_000).toISOString(), startedAt: new Date(Date.now() - 22_000).toISOString(), updatedAt: new Date().toISOString(), progress: [], linkedMemoryIds: [] },
+      // recently-finished verification runs — completed + failed, for the panel's "Recently finished" section
+      { id: 'btask_v7', kind: 'verification', status: 'completed', title: 'Verify — npm run typecheck', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 5 * 60_000).toISOString(), startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), completedAt: new Date(Date.now() - 4 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 4 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v7', parentSessionKey: 'internal:verify:btask_v7' } },
+      { id: 'btask_v8', kind: 'verification', status: 'failed', title: 'Verify — npm test', error: '2 tests failed', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 9 * 60_000).toISOString(), startedAt: new Date(Date.now() - 9 * 60_000).toISOString(), completedAt: new Date(Date.now() - 8 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 8 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v8', parentSessionKey: 'internal:verify:btask_v8' } },
+    ],
+    'attachment-ingest': (a) => {
+      const name = String(a.name || a.path || 'file').split('/').pop() || 'file';
+      const kind = attachmentKind(name);
+      const dataBase64 = typeof a.dataBase64 === 'string' ? a.dataBase64 : '';
+      const rec: DevAttachment = {
+        id: `att_dev${devAttachmentSeq++}`,
+        name,
+        kind,
+        mimeType: attachmentMime(name, kind),
+        byteSize: dataBase64 ? Math.floor((dataBase64.length * 3) / 4) : 0,
+        extractedText: decodePreview(dataBase64, kind),
+        workspaceRoot: wsCurrent,
+        sessionKey: activeSession,
+        createdAt: new Date().toISOString(),
+      };
+      devAttachments.set(rec.id, rec);
+      return { ok: true, attachment: rec, contextMarkdown: attachmentContext(rec) };
+    },
+    'attachment-list': () => [...devAttachments.values()].filter((a) => a.workspaceRoot === wsCurrent && a.sessionKey === activeSession),
+    'attachment-read': (a) => devAttachments.get(String(a.id ?? '')) ?? null,
+    'attachment-context': (a) => {
+      const rec = devAttachments.get(String(a.id ?? ''));
+      return rec ? { id: rec.id, name: rec.name, markdown: attachmentContext(rec) } : null;
+    },
     // DESK-6w — a workflow run's phase/agent breakdown for the /workflows card.
     'workflow-detail': (a) => {
       const slug = String(a.slug ?? 'build');
@@ -553,6 +636,18 @@ export function installDevBridge(): void {
     'task-transcript': (a) => {
       const id = String(a.id ?? '');
       const kind = String(a.kind ?? 'agent');
+      if (kind === 'task') {
+        // durable task (verification / plan-revision / review) — show its result.
+        const failed = id === 'btask_v8';
+        return {
+          id, kind, role: 'verification', status: failed ? 'failed' : (id.startsWith('btask_v') ? 'completed' : 'running'),
+          goal: 'Verify — npm test',
+          rows: [
+            { kind: 'user', text: '$ npm test' },
+            { kind: 'assistant', text: failed ? '✗ failed\n\n# tests 1387\n# pass 1385\n# fail 2' : '✓ passed\n\n# tests 1387\n# pass 1387\n# fail 0' },
+          ],
+        };
+      }
       if (kind === 'worker') {
         return {
           id, kind, role: 'worker', status: 'running', goal: 'Run the vitest suite and report failures.',
@@ -629,7 +724,11 @@ export function installDevBridge(): void {
       return { ok: true, decision };
     },
     'git-branches': () => ({ current: 'release/0.4.15', branches: ['release/0.4.15', 'main', 'feat/desk-4j-reference-patterns', 'release/0.4.14'] }),
-    'list-models': () => ({ current: resolvedModel(activeSession), models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
+    // Dev-only mock of an endpoint's GET /models. Echoes `provider` so the
+    // settings' per-provider model pickers can be exercised in the preview.
+    'list-models': (a) => a?.provider
+      ? ({ current: '', provider: String(a.provider), models: [`${a.provider}-fast`, `${a.provider}-pro`, `${a.provider}-reasoning`] })
+      : ({ current: resolvedModel(activeSession), models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
     'term-open': () => { termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },
     'term-write': (a) => {
       const d = String(a.data ?? '');
@@ -696,15 +795,40 @@ export function installDevBridge(): void {
       all: ['/help', '/status', '/model', '/mcp', '/theme', '/vim', '/spawn', '/bg', '/workers', '/ps'],
     }),
     'config-snapshot': () => ({
-      model: 'claude-opus-4-8', provider: 'anthropic', fallbackModel: null,
-      workspaceRoot: '/Users/dev/BrainRouter', sandbox: 'off', prefs: { ...prefs },
+      model: 'claude-opus-4-8', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1', fallbackModel: null,
+      // Mock of config/providers.json — the main-provider picker source.
+      providerCatalog: [
+        { id: 'openai', label: 'OpenAI', endpoint: 'https://api.openai.com/v1', local: false },
+        { id: 'openai-compatible', label: 'OpenAI-compatible (custom)', endpoint: '', local: false },
+        { id: 'opencode', label: 'opencode (Zen gateway)', endpoint: 'https://opencode.ai/zen/v1', local: false },
+        { id: 'lmstudio', label: 'LM Studio (local)', endpoint: 'http://localhost:1234/v1', local: true },
+        { id: 'ollama', label: 'Ollama (local)', endpoint: 'http://localhost:11434/v1', local: true },
+      ],
+      workspaceRoot: '/Users/dev/BrainRouter', sandbox: 'off', prefs: effectivePrefs(),
+      cliKnobs: { ...devCliKnobs },
+      workspacePrefs: { ...prefs },
+      sessionMode: { ...(sessionModes[activeSession] ?? {}) },
+      modeScope: 'session',
       permissionRules: { allow: [...devRules.allow], deny: [...devRules.deny] },
       hooks: [
         { id: 'h1', event: 'pre-tool', command: './hooks/guard-prod.sh', enabled: true, match: 'run_command' },
         { id: 'h2', event: 'user-prompt-submit', command: './hooks/inject-ticket.sh', enabled: false },
       ],
       servers: devServers.map((s) => ({ ...s })),
+      // §multi-provider — named providers + per-sub-agent-role routing.
+      providers: [
+        { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true },
+        { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false },
+      ],
+      agentModels: [
+        { role: 'explorer', provider: 'groq', model: null },
+        { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
+      ],
     }),
+    'action:set-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
+    'action:remove-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
+    'action:set-default-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
+    'action:set-agent-model': (a) => ({ ok: true, role: String(a.role ?? '') }),
     'usage-breakdown': () => [
       'parent      48,213 in · 1,904 out · cache hit 92%',
       'explorer·3f2a   12,408 in · 822 out',
@@ -725,6 +849,19 @@ export function installDevBridge(): void {
     'action:clear': () => ({ ok: true }),
     'action:compact': () => ({ summary: 'Early exploration compacted; kept the blend fix decision and the sweep numbers.', estimatedTokens: 412, durationMs: 1830, replacedMessages: 14 }),
     'action:set-pref': (a) => { prefs[String(a.key)] = a.value; return { ...prefs }; },
+    'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
+    'action:set-session-mode': (a) => {
+      const next = { ...(sessionModes[activeSession] ?? {}) };
+      for (const key of ['executionMode', 'reviewPolicy', 'effort']) {
+        if (key in a) {
+          if (a[key] == null || a[key] === '') delete next[key];
+          else next[key] = a[key];
+        }
+      }
+      if (Object.keys(next).length === 0) delete sessionModes[activeSession];
+      else sessionModes[activeSession] = next;
+      return { ok: true, sessionKey: activeSession, sessionMode: { ...(sessionModes[activeSession] ?? {}) }, activeMode: effectivePrefs() };
+    },
     'action:set-hook': () => ({ ok: true }),
     'action:set-access': (a) => ({ ok: true, mode: a.mode }),
     'action:reconnect-mcp': () => ({ ok: true }),
@@ -799,8 +936,8 @@ export function installDevBridge(): void {
           const ts = activeSession;
           if (runningSessions.has(ts)) return; // one turn per chat (other chats run in parallel)
           runningSessions.add(ts);
-          // Wave 1 — a user message is ACTIVITY: promote this workspace to the top.
-          wsRecents = [wsCurrent, ...wsRecents.filter((w) => w !== wsCurrent)];
+          // Wave 1 — a user message is activity, but project order is stable.
+          if (!wsRecents.includes(wsCurrent)) wsRecents = [...wsRecents, wsCurrent];
           recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'user-message', workspaceRoot: wsCurrent }));
           emit({ kind: 'turn-start', prompt: command.prompt }, 0, ts);
           // DESK-5u — a prompt containing "fail"/"error"/"402" surfaces a real
@@ -914,8 +1051,28 @@ export function installDevBridge(): void {
     },
     addWorkspace: async () => ({ opened: false, workspaceRoot: '/Users/dev/new-project' }),
     workspaceRecents: async () => ({ current: wsCurrent, recents: wsRecents }),
+    workspaceSessions: async (root: string, limit = 80) => {
+      const rows = mergeMeta(root).slice(0, Math.max(1, Math.min(120, Number(limit) || 80)));
+      return { rows: rows as Array<Record<string, unknown>>, truncated: rows.length >= limit };
+    },
     onRecentsChanged: (l: (d: { recents: string[]; reason: string; workspaceRoot: string }) => void) => { recentsListeners.add(l); return () => recentsListeners.delete(l); },
-    markActivity: async (root: string) => { wsRecents = [root, ...wsRecents.filter((w) => w !== root)]; recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'commit', workspaceRoot: root })); return { ok: true }; },
+    markActivity: async (root: string) => {
+      if (!wsRecents.includes(root)) wsRecents = [...wsRecents, root].slice(0, 10);
+      recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'commit', workspaceRoot: root }));
+      return { ok: true };
+    },
+    reorderWorkspace: async (dragged: string, target: string) => {
+      const from = wsRecents.indexOf(dragged);
+      const to = wsRecents.indexOf(target);
+      if (from >= 0 && to >= 0 && from !== to) {
+        const next = [...wsRecents];
+        const [item] = next.splice(from, 1);
+        next.splice(from < to ? to - 1 : to, 0, item);
+        wsRecents = next;
+        recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'manual-reorder', workspaceRoot: dragged }));
+      }
+      return { recents: wsRecents };
+    },
     // T1 — cross-workspace dashboard mock: a couple of background workspaces with running tasks + gates.
     globalDashboard: async () => ({ workspaces: [
       { workspaceRoot: '/Users/dev/BrainRouter', reviewGate: { status: 'blocked', blocked: true, reason: '1 unresolved high+ finding' }, tasks: [
@@ -924,13 +1081,15 @@ export function installDevBridge(): void {
       ] },
       { workspaceRoot: '/Users/dev/side-project', reviewGate: { status: 'clean', blocked: false, reason: '' }, tasks: [
         { kind: 'worker', id: 'wk-9', label: 'bench worker', status: 'running', worktree: true, startedAt: new Date(Date.now() - 5_000).toISOString(), workspaceRoot: '/Users/dev/side-project' },
+        // a verification (typecheck) still running in this NON-active workspace —
+        // its indicator + count must stay visible while another workspace is active.
+        { kind: 'verification', id: 'btask_v9', label: 'Verify — npm run typecheck', status: 'running', durable: true, startedAt: new Date(Date.now() - 9_000).toISOString(), workspaceRoot: '/Users/dev/side-project', transcript: { kind: 'task', id: 'btask_v9', parentSessionKey: 'internal:verify:btask_v9' } },
       ] },
       { workspaceRoot: '/Users/dev/TradingAgents', reviewGate: null, tasks: [] },
     ] }),
     openWorkspace: async (root: string) => {
-      // Mirror the real main-process swap. Wave 1 — opening is "opened", NOT
-      // activity: ensure membership WITHOUT promoting to the top (only a turn/
-      // output/commit reorders). New roots land at the bottom.
+      // Mirror the real main-process swap. Opening is membership only; explicit
+      // drag/drop is what changes project order.
       wsCurrent = root;
       if (!wsRecents.includes(root)) wsRecents = [...wsRecents, root].slice(0, 10);
       if (!SESSIONS_BY_ROOT[root]) SESSIONS_BY_ROOT[root] = [];

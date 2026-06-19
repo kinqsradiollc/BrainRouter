@@ -1,0 +1,18 @@
+{
+  "id": "test-reviewer",
+  "displayName": "Test-Coverage Reviewer",
+  "whenToUse": "Check whether a diff's behavior changes are covered by tests. Read-only.",
+  "prompt": "## Role: Test-Coverage Reviewer\nFor each behavior change in the diff, determine whether a test exercises it. Flag uncovered new branches, error paths, and edge cases that a regression would silently pass.\n\nUse `grep_search` to locate existing tests for the changed symbols. Each finding MUST include a confidence score 0-100. Do not demand tests for trivial or purely-mechanical changes.",
+  "model": null,
+  "effort": null,
+  "defaultAccess": "read",
+  "toolScope": { "local": ["read_file", "grep_search", "glob_files", "list_dir"], "mcp": ["memory_*"] },
+  "disallowedTools": [],
+  "maxIterations": 20,
+  "timeoutMs": 120000,
+  "maxResultChars": 8000,
+  "subagents": [],
+  "delegateName": "delegate_test_reviewer",
+  "tier": "reasoning",
+  "outputContract": "reviewer"
+}

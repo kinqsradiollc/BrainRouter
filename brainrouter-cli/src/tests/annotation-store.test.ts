@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { isAnnotationRecord, isAnnotationComment, hashAnchorText, isAnchorStale } from '@kinqs/brainrouter-types';
-import { getCliStateFile } from '../state/cliState.js';
+import { getStateFile } from '../state/cliState.js';
 import {
   createAnnotation,
   getAnnotation,
@@ -201,7 +201,7 @@ test('annotationStore: state persists across a fresh read (simulated restart)', 
     const rec = createAnnotation(workspace, { type: 'markdown', body: 'Durable', severity: 'medium' });
     setStatus(workspace, rec.id, 'accepted');
 
-    const file = getCliStateFile(workspace, 'annotations.json');
+    const file = getStateFile(workspace, 'annotations.json');
     assert.equal(fs.existsSync(file), true);
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.ok(onDisk[rec.id]);

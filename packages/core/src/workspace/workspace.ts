@@ -1,0 +1,90 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { getCliKnobs } from '../config/config.js';
+
+export interface WorkspaceInfo {
+  launchCwd: string;
+  workspaceRoot: string;
+  reason: string;
+}
+
+/**
+ * Files recognized as a workspace agent-instruction file, in precedence order
+ * (first found wins). `AGENT.md` / `AGENTS.md` are the cross-tool standard;
+ * `CLAUDE.md` is Claude Code's. Shared by workspace-root detection (below) and
+ * instruction loading (`prompt/systemPrompt.loadWorkspaceInstructionSummary`).
+ */
+export const INSTRUCTION_FILES = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'] as const;
+
+const ROOT_MARKERS = [...INSTRUCTION_FILES, '.git'];
+
+export function findWorkspaceRoot(startDir = process.cwd()): WorkspaceInfo {
+  const launchCwd = fs.realpathSync(startDir);
+  // `--workspace` CLI flag (relayed via `setCliKnobOverride`) wins over
+  // marker-based discovery. The historical BRAINROUTER_WORKSPACE env var
+  // was retired in 0.3.9 in favour of `cli.workspaceOverride` /
+  // `setCliKnobOverride`.
+  const overrideRoot = getCliKnobs().workspaceOverride;
+  if (overrideRoot) {
+    return {
+      launchCwd,
+      workspaceRoot: fs.realpathSync(path.resolve(overrideRoot)),
+      reason: '--workspace flag',
+    };
+  }
+
+  const markerRoot = findNearestMarkerRoot(launchCwd);
+  if (markerRoot) {
+    const monorepoRoot = maybePromoteBrainRouterPackage(markerRoot);
+    return {
+      launchCwd,
+      workspaceRoot: monorepoRoot.root,
+      reason: monorepoRoot.reason,
+    };
+  }
+
+  return {
+    launchCwd,
+    workspaceRoot: launchCwd,
+    reason: 'cwd',
+  };
+}
+
+export function applyWorkspaceRoot(workspaceRoot: string): void {
+  process.chdir(workspaceRoot);
+}
+
+function findNearestMarkerRoot(startDir: string): string | undefined {
+  let current = startDir;
+  while (true) {
+    if (ROOT_MARKERS.some(marker => fs.existsSync(path.join(current, marker)))) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+function maybePromoteBrainRouterPackage(root: string): { root: string; reason: string } {
+  const parent = path.dirname(root);
+  const packageJsonPath = path.join(parent, 'package.json');
+  if (
+    path.basename(root) === 'brainrouter-cli' &&
+    INSTRUCTION_FILES.some(f => fs.existsSync(path.join(parent, f))) &&
+    fs.existsSync(packageJsonPath)
+  ) {
+    try {
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      const workspaces = Array.isArray(packageJson.workspaces) ? packageJson.workspaces : [];
+      if (workspaces.includes('brainrouter-cli') || workspaces.includes('brainrouter-cli/*')) {
+        return { root: fs.realpathSync(parent), reason: 'parent monorepo workspace' };
+      }
+    } catch {
+      // Keep the original marker root if package.json is unreadable.
+    }
+  }
+
+  return { root, reason: 'nearest workspace marker' };
+}

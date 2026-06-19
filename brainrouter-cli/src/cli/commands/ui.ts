@@ -13,6 +13,7 @@ import { callMcpTool, hasMcpTool } from '../../runtime/mcpUtils.js';
 import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '../../state/preferencesStore.js';
 import { getSessionMode, resolveActiveMode, setSessionMode } from '../../state/sessionModeStore.js';
+import { setSessionRuntime } from '../../state/sessionRuntimeStore.js';
 import { readPlan } from '../../state/taskStore.js';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher
@@ -283,9 +284,12 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       // memory. No-arg opens the picker (0.3.7).
       if (newModel) {
         agent.setModel(newModel);
-        if (!sessionOnly && config.llm) {
+        if (sessionOnly) {
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: newModel });
+        } else if (config.llm) {
           config.llm.model = newModel;
           saveConfig(config);
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: '' });
         }
         const scope = sessionOnly ? chalk.gray(' (this session only — not saved)') : '';
         console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}${scope}\n`));
@@ -330,15 +334,19 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         ));
       }
       agent.setModel(result.model);
-      if (config.llm) {
+      if (sessionOnly) {
+        setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: result.model });
+      } else if (config.llm) {
         config.llm.model = result.model;
         saveConfig(config);
+        setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: '' });
       }
       const sourceTag =
         result.source === 'live' ? `live · ${result.liveCount} models` :
         result.source === 'fallback' ? `offline · static catalog (${result.liveError ?? 'unknown'})` :
         'static catalog';
       console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(result.model)}`));
+      if (sessionOnly) console.log(chalk.gray('  Scope: this session only — not saved to config.json.'));
       console.log(chalk.gray(`  Source: ${sourceTag}\n`));
       return true;
     }

@@ -32,6 +32,7 @@ const PATHS: Record<string, React.ReactNode> = {
   'chev-right': <path d="m6 3.5 4.5 4.5L6 12.5" />,
   'chev-up': <path d="m3.5 10 4.5-4.5L12.5 10" />,
   plus: <path d="M8 3v10M3 8h10" />,
+  refresh: <path d="M13 5.5A5.5 5.5 0 0 0 3.8 3.3L2.5 4.6M3 10.5a5.5 5.5 0 0 0 9.2 2.2l1.3-1.3M2.5 1.8v2.8h2.8M13.5 14.2v-2.8h-2.8" />,
   command: <path d="M5.5 5.5h5v5h-5v-5Zm0 0H4a1.7 1.7 0 1 1 1.5-1.5v1.5Zm5 0H12a1.7 1.7 0 1 0-1.5-1.5v1.5Zm-5 5H4a1.7 1.7 0 1 0 1.5 1.5v-1.5Zm5 0H12a1.7 1.7 0 1 1-1.5 1.5v-1.5Z" />,
   sort: <path d="M5 3v10m0 0L2.5 10.5M5 13l2.5-2.5M11 13V3m0 0L8.5 5.5M11 3l2.5 2.5" />,
   export: <path d="M8 10V2m0 0L4.5 5.5M8 2l3.5 3.5M3 9v4a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9" />,

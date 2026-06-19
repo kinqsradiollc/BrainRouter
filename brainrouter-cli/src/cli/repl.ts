@@ -26,6 +26,7 @@ import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 import { tryHandleRequirementCommand } from './commands/requirement.js';
 import { tryHandleAnnotationCommand } from './commands/annotation.js';
 import { tryHandleArtifactCommand } from './commands/artifact.js';
+import { tryHandleAttachmentCommand } from './commands/attachment.js';
 import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/customCommands.js';
 
 /**
@@ -35,213 +36,10 @@ import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../run
  * The Ink chat REPL (cli/ink/runChat.tsx) consumes this same list for its
  * inline slash palette so both surfaces stay in lockstep as new commands land.
  */
-export const SLASH_COMMANDS = [
-  '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
-  '/doctor', '/policy', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
-  '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
-  '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/annotation', '/artifact',
-  '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain', '/blackboard',
-  '/init', '/login', '/sessions', '/export-chat', '/find', '/recap', '/chapters', '/resume', '/rewind', '/model', '/mcp',
-  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
-  '/continue', '/auto-review', '/auto-chain', '/vim', '/statusline', '/quiet', '/release-notes',
-  '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
-  '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
-  '/tokens', '/usage', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
-  // workflow & ergonomics commands
-  '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
-  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugins',
-  '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
-] as const;
-
-/**
- * Help categories. Data-driven so /help can render an index on small
- * terminals and a focused page on `/help <category>`. The prior
- * implementation was 95 lines of console.log calls that blew past the
- * scrollback on anything under ~50 rows.
- */
-interface HelpEntry { cmd: string; desc: string; }
-interface HelpCategory { key: string; title: string; entries: HelpEntry[]; }
-
-export const HELP_CATEGORIES: HelpCategory[] = [
-  {
-    key: 'session',
-    title: 'Session & State',
-    entries: [
-      { cmd: '/help [category]', desc: 'List commands; `/help <category>` for a focused page' },
-      { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
-      { cmd: '/workspace', desc: 'Active workspace and session identity' },
-      { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
-      { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
-      { cmd: '/policy [name]', desc: 'Show or apply a policy profile (readonly / workspace / trusted)' },
-      { cmd: '/config [key] [value]', desc: 'Settings panel; `/config theme dark` to set; `/config raw` for JSON dump' },
-      { cmd: '/login', desc: 'In-REPL MCP profile editor (transport → fields → probe → save)' },
-      { cmd: '/clear', desc: 'Clear chat history for the active session' },
-      { cmd: '/compact', desc: 'LLM-driven compaction of the active session' },
-      { cmd: '/new [label]', desc: 'Start a new chat with a fresh session key' },
-      { cmd: '/fork [label]', desc: 'Fork this chat into a new session, keep prior context' },
-      { cmd: '/rename <label>', desc: 'Rename the current session' },
-      { cmd: '/resume <id>', desc: 'Resume a previous session by sessionKey' },
-      { cmd: '/rewind [n] [--files]', desc: 'Timeline of the last 20 turns; /rewind <n> forks a session truncated to that turn; --files also restores workspace files to that turn (preview + confirm)' },
-      { cmd: '/sessions', desc: 'List persisted sessions for this workspace' },
-      { cmd: '/export-chat [md|json] [path]', desc: 'Export this session transcript to a file' },
-      { cmd: '/find <query>', desc: 'Search this session transcript (case-insensitive, highlighted matches)' },
-      { cmd: '/recap', desc: 'Instant summary of this session — last prompt/answer, files touched, open plan/goal' },
-      { cmd: '/chapters', desc: 'Table of contents from the agent\'s mark_chapter markers' },
-      { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
-      { cmd: '/init', desc: 'Re-run the onboarding wizard (Theme → Provider → API key → Model → MCP → AGENT.md)' },
-      { cmd: '! <command>', desc: 'Shell escape — run a shell command from the composer (sandboxed when cli.sandbox=on)' },
-      { cmd: '# <note>', desc: 'Quick memory capture — save a note to the brain without an LLM turn' },
-      { cmd: '/exit  /quit', desc: 'Close MCP connection and exit' },
-    ],
-  },
-  {
-    key: 'memory',
-    title: 'Memory & Recall',
-    entries: [
-      { cmd: '/memory <query>', desc: 'Search long-term memory (memory_search)' },
-      { cmd: '/recall <query>', desc: 'Explicit cognitive recall (no LLM turn)' },
-      { cmd: '/briefing', desc: 'Show what was recalled before the most recent turn' },
-      { cmd: '/refresh-memory', desc: 'Clear the pinned memory anchor; next turn re-pins a fresh briefing' },
-      { cmd: '/scenes', desc: 'List active focus scenes' },
-      { cmd: '/working', desc: 'Show the working-memory canvas' },
-      { cmd: '/working reset confirm', desc: 'Clear the canvas' },
-      { cmd: '/forget <recordId>', desc: 'Archive a memory record by ID' },
-      { cmd: '/memories', desc: 'Manage memory pipeline + consolidate to filesystem' },
-      { cmd: '/brain [agents]', desc: 'Brain-agent health: per-agent status, 24h success rate, pending jobs' },
-      { cmd: '/blackboard [review|list|restore|commit|reject|reconcile]', desc: 'Review staged memory candidates; restore wrongly rejected/duplicate ones' },
-      { cmd: '/brain run <agentId>', desc: 'Manually enqueue a brain-agent run' },
-      { cmd: '/brain retry <jobId>', desc: 'Re-arm a failed/cancelled brain job' },
-      { cmd: '/handover', desc: 'Generate continuation note for next session' },
-      { cmd: '/explain <query>', desc: 'Why recall returned what it did' },
-      { cmd: '/failed [area]', desc: 'Past failed attempts for a problem area' },
-      { cmd: '/verify <id> [status]', desc: 'Re-verify a memory record' },
-      { cmd: '/audit', desc: 'Recent memory audit log' },
-      { cmd: '/export [path]', desc: 'Dump memory + evidence + ops to JSON' },
-      { cmd: '/import <path>', desc: 'Import a BrainRouter memory envelope' },
-      { cmd: '/persona', desc: 'Show active Core Identity; subcommands: refresh, on, off, <name>' },
-      { cmd: '/skill-hints <skill> <hints>', desc: 'Register extraction hints' },
-      { cmd: '/diagnostics', desc: 'Scrubbed runtime + DB stats bundle' },
-    ],
-  },
-  {
-    key: 'workflow',
-    title: 'Workflows & Skills',
-    entries: [
-      { cmd: '/spec <title>', desc: 'Produce spec.md (spec-driven-skill)' },
-      { cmd: '/feature-dev <feat>', desc: 'Multi-agent feature dev with spec + tasks' },
-      { cmd: '/grill-me [--force] <task>', desc: 'Clarify 2–5 questions before implementing (CLARIFY mode)' },
-      { cmd: '/review [scope] [--fix]', desc: 'Multi-agent code review → review.md; --fix applies + verifies surviving fixes' },
-      { cmd: '/simplify [scope] [--dry-run]', desc: 'Behavior-preserving code-simplification pass; --dry-run proposes only' },
-      { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
-      { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
-      { cmd: '/requirement create <title> | list | show <id> | ask <id> <q> | answer <id> <i> <a> | clarify <id> | seed-plan <id> | update <id> --status/--priority/--criteria', desc: 'Structured requirement records anchored to a session (status, priority, acceptance criteria, clarifying Q&A)' },
-      { cmd: '/annotation add <kind> <id> <body> | list | show <id> | status <id> <s> | export', desc: 'Durable feedback records (alias /annot): anchor to plans/reqs/files/diffs/findings, suggest code, export to markdown' },
-      { cmd: '/artifact create <kind> <title> | list | show <id> | update <id> --status <s>', desc: 'Durable workflow artifacts (alias /art): design notes, prototypes, reports, review exports — linked to requirement/session/memory' },
-      { cmd: '/workflows [slug]', desc: 'List durable workflows with live run progress; <slug> drills into the step timeline' },
-      { cmd: '/workflow switch <slug>', desc: 'Refocus on an existing workflow (migrates any session goal into the target)' },
-      { cmd: '/workflow pause', desc: 'Pause the current workflow\'s goal' },
-      { cmd: '/workflow resume <slug>', desc: 'Switch to <slug> AND resume its goal in one shot' },
-      { cmd: '/skill <name> [input]', desc: 'Run any catalogued skill' },
-      { cmd: '/skills', desc: 'List installed BrainRouter skills' },
-      { cmd: '/reload-skills', desc: 'Force a re-scan of the skill directories' },
-      { cmd: '/plan  /plan clear', desc: 'Show the durable CLI task plan; clear it (drops stale items)' },
-      { cmd: '/tools', desc: 'List local + MCP tools available to the agent' },
-      { cmd: '/goal [text|clear|complete|pause|resume|budget <n>]', desc: 'Sticky goal' },
-      { cmd: '/continue', desc: 'Resume after a loop-limit abort' },
-      { cmd: '/loop <interval> <prompt>  /loop stop', desc: 'Repeat a prompt on cadence' },
-      { cmd: '/schedule cron "<expr>" <cmd>  ·  /schedule in 5m <cmd>', desc: 'Schedule a recurring (cron) or one-shot command' },
-      { cmd: '/commit', desc: 'Generate message, stage, and git commit' },
-      { cmd: '/diff', desc: 'Show git changes (stream-paginated)' },
-    ],
-  },
-  {
-    key: 'orchestration',
-    title: 'Multi-Agent Orchestration',
-    entries: [
-      { cmd: '/roles', desc: 'List available agent roles' },
-      { cmd: '/agents [--json]', desc: 'List local child-agent sessions in this CLI.' },
-      { cmd: '/agents tree', desc: 'Spawn hierarchy (parent → children) with role + status glyphs.' },
-      { cmd: '/agents why <id>', desc: 'Why a child exists: role, task, spawner, usage.' },
-      { cmd: '/agents transcript <id> [--tools] [--errors]', desc: "A child's transcript, optionally filtered to tool calls / errors." },
-      { cmd: '/agents replay <id>', desc: "Numbered, read-only step-through of a child's run." },
-      { cmd: '/agents --remote [--watch] [--usage] [--include-stale] [--json]', desc: 'List federated peer CLIs / hosts attached to the same brain (0.4.0 Stage 2).' },
-      { cmd: '/workers [list|info <id>|close <id>]', desc: 'Persistent worker threads in this CLI.' },
-      { cmd: '/pack [list|enable <n>|disable <n>|info <n>]', desc: 'Agent-definition packs (bundled custom agents).' },
-      { cmd: '/dm <sessionKey> <message>', desc: 'Send text to one federated peer; recipient sees a banner above their next prompt (0.4.0 Stage 3).' },
-      { cmd: '/broadcast [<clientKind>:*] <message>', desc: 'Send text to every active peer under your userId, or narrow to one clientKind.' },
-      { cmd: '/inbox [--peek] [--all]', desc: 'Read this session’s inbox on demand; marks messages delivered unless --peek (0.4.0 Stage 3).' },
-      { cmd: '/handoff <target|<kind>:next-idle> [note]', desc: 'Hand your current goal + context to another session (0.4.1 Stage 4).' },
-      { cmd: '/handoff list | accept [fromPrefix]', desc: 'List / adopt an inbound goal handoff.' },
-      { cmd: '/agent <id> [--full]', desc: 'Detail + recent transcript of a child' },
-      { cmd: '/spawn <role> <prompt>', desc: 'Spawn a child agent' },
-      { cmd: '/build <task>', desc: 'Run the build loop: plan → implement → verify → review' },
-      { cmd: '/wait <id> [ms]', desc: 'Wait for a child to finish' },
-      { cmd: '/kill <agent-id>', desc: 'Stop a running child' },
-      { cmd: '/auto-review [on|off]', desc: 'Auto-run reviewer after every worker (alias for /auto-chain review|off)' },
-      { cmd: '/review-auto [--threshold N] [--scope <glob>]', desc: 'Confidence-scored review fan-out: reviewer roster, deduped findings above threshold' },
-      { cmd: '/auto-chain [review|verify|both|off]', desc: 'Auto-chain review/verify follow-ups after every worker' },
-      { cmd: '/delegation-policy [auto|ask-before-spawn|ask-before-write-child|no-children]', desc: 'Gate whether/when the agent may spawn child agents' },
-      { cmd: '/bg <prompt>', desc: 'Run a prompt in a detached background worker (manage via /workers, /ps)' },
-      { cmd: '/ps', desc: 'List all background tasks (loop + workflows + workers + child agents)' },
-      { cmd: '/fg <id>', desc: 'Bring a background worker/child agent to the foreground (snapshot of status + transcript)' },
-      { cmd: '/stop [id]', desc: 'Stop a specific worker/child by id, or (no id) stop the loop + mark stale children' },
-      { cmd: '/queue [remove <n>|clear]', desc: 'View / manage messages you typed while a turn was running (they run next, in order)' },
-    ],
-  },
-  {
-    key: 'guard',
-    title: 'Guardrails & Permissions',
-    entries: [
-      { cmd: '/permissions [read|write|shell]', desc: 'View or set agent access mode' },
-      { cmd: '/mode [planning|fast]', desc: 'Session execution stance (planning asks, fast skips per-call y/N for safe commands)' },
-      { cmd: '/review-policy [request|proceed]', desc: 'How the agent treats multi-file approval gates' },
-      { cmd: '/yolo [on|off]', desc: 'Alias for `/mode fast` + `/review-policy proceed`' },
-      { cmd: '/sandbox [status|add-read|add-write|remove|clear]', desc: 'Sandbox grants' },
-      { cmd: '/hooks [list|add|remove|enable|disable]', desc: 'Lifecycle shell hooks' },
-      { cmd: '/hookify [list|create|enable|disable|remove]', desc: 'Markdown rule guards' },
-      { cmd: '/logout', desc: 'Clear API keys from the active profile' },
-    ],
-  },
-  {
-    key: 'obs',
-    title: 'Observability',
-    entries: [
-      { cmd: '/tokens', desc: 'Session token usage + memory-savings estimate' },
-      { cmd: '/usage', desc: 'Per-actor token breakdown — parent vs each child agent, cache hit, offload savings' },
-      { cmd: '/context [all|current]', desc: 'Context-window fill (used/max/%) + token breakdown: per-skill + per-briefing + per-tool calls' },
-      { cmd: '/watch', desc: 'Tail trace log (BRAINROUTER_TRACE_LOG required)' },
-      { cmd: '/trace save <desc>  /trace search <q>', desc: 'Debug-trace store' },
-      { cmd: '/transcript [main|sessionKey]', desc: 'Recent persisted transcript' },
-      { cmd: '/rollout', desc: 'Print the transcript file path' },
-      { cmd: '/debug-config', desc: 'Show config layers, env, preferences' },
-    ],
-  },
-  {
-    key: 'ui',
-    title: 'UI & Ergonomics',
-    entries: [
-      { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
-      { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
-      { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,phase,goal,plan)' },
-      { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
-      { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (alias: max)' },
-      { cmd: '/tier [name]', desc: "Show or pin the model tier on the provider's tier ladder" },
-      { cmd: '/model [name] [--session]', desc: 'Switch model; --session = this session only (not saved). cli.fallbackModel auto-swaps on model-not-found.' },
-      { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
-      { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },
-      { cmd: '/vim', desc: 'Toggle vi-mode for the composer' },
-      { cmd: '/keymap [json]', desc: 'Show built-in bindings and set overrides' },
-      { cmd: '/copy', desc: 'Copy last assistant response to clipboard' },
-      { cmd: '/mention [partial]', desc: 'Suggest files for @ mentions' },
-      { cmd: '/mcp [list|reconnect|tools]', desc: 'MCP profiles, identity tags, online/offline status, reconnect, tool namespaces' },
-      { cmd: '/ide', desc: 'Show detected IDE host' },
-      { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
-      { cmd: '/feedback [message]', desc: 'Append feedback entry' },
-      { cmd: '/experimental [on|off]', desc: 'Toggle experimental features' },
-      { cmd: '/release-notes [version|list]', desc: 'Show changelog for current (or specified) CLI version' },
-    ],
-  },
-];
+// §ADR-003 — the command catalog moved to core; imported here for the REPL's
+// own help renderer AND re-exported so existing CLI importers keep working.
+import { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory } from '@kinqs/brainrouter-core/dist/command/catalog.js';
+export { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory };
 
 export function renderHelp(category?: string): void {
   // Match by key OR by leading char of title (allowing /help m → memory).
@@ -338,6 +136,7 @@ export async function handleSlashCommand(
   if (await tryHandleRequirementCommand(cmdCtx)) return;
   if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleArtifactCommand(cmdCtx)) return;
+  if (await tryHandleAttachmentCommand(cmdCtx)) return;
   if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;

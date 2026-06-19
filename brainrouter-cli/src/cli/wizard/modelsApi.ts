@@ -1,6 +1,11 @@
 import { runPicker, type PickerRow } from '../ink/runPicker.js';
 import type { Theme } from '../theme.js';
 import type { ProviderEntry } from './providers.js';
+import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
+import {
+  inferModelReasoningCapabilities,
+  registerModelReasoningCapabilities,
+} from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 
 /**
  * Fetch the live model list from an OpenAI-compatible `/v1/models`
@@ -19,9 +24,9 @@ import type { ProviderEntry } from './providers.js';
  *   http://localhost:1234/v1/chat/completions     → /v1/models
  *   https://openrouter.ai/api/v1/chat/completions → /api/v1/models
  *
- * 5-second timeout — if the call hangs or fails, the wizard falls
- * back to the provider's curated static catalog so users on a slow
- * link / behind a captive portal aren't blocked.
+ * 5-second timeout — if the call hangs or fails, the picker falls back to any
+ * configured/saved model and the "Other model" text path. Built-in providers do
+ * not ship static model defaults.
  */
 export async function fetchOpenAiCompatibleModels(
   provider: ProviderEntry,
@@ -36,11 +41,14 @@ export async function fetchOpenAiCompatibleModels(
   // through doesn't hurt — they ignore it.
   if (apiKey.trim().length > 0) {
     headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+  } else if (provider.defaultApiKey) {
+    // Public/anonymous tier (opencode "public") — list free models with no key.
+    headers['Authorization'] = `Bearer ${provider.defaultApiKey}`;
   } else if (provider.local) {
-    // Some local servers reject requests with NO Authorization header
-    // even though they don't validate the value. A literal "local"
-    // bearer is the convention for LM Studio / Ollama config snippets.
-    headers['Authorization'] = 'Bearer local';
+    // Some local servers reject requests with NO Authorization header even
+    // though they don't validate the value ("required but ignored"). Send the
+    // shared throwaway bearer so chat + model-list paths agree on one literal.
+    headers['Authorization'] = `Bearer ${LOCAL_PLACEHOLDER_KEY}`;
   }
 
   const controller = new AbortController();
@@ -57,9 +65,13 @@ export async function fetchOpenAiCompatibleModels(
     }
     const data = await res.json() as any;
     const list = Array.isArray(data?.data) ? data.data : [];
-    const ids = list
-      .map((m: any) => (typeof m?.id === 'string' ? m.id : null))
-      .filter((s: string | null): s is string => !!s);
+    const ids: string[] = [];
+    for (const row of list) {
+      const id = typeof row?.id === 'string' ? row.id : '';
+      if (!id) continue;
+      ids.push(id);
+      registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
+    }
     if (ids.length === 0) {
       return { ok: false, error: 'endpoint returned an empty model list' };
     }
@@ -95,8 +107,8 @@ function dedupeAndSort(ids: string[]): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Open the model picker — live `/v1/models` fetch with the provider's
- * static catalog as the offline fallback. Returns the selected model id,
+ * Open the model picker — live `/v1/models` fetch with configured/current
+ * models as the offline fallback. Returns the selected model id,
  * or `undefined` when the user cancels.
  *
  * Used by both the onboarding wizard's Model step
@@ -138,11 +150,11 @@ export interface SelectModelResult {
 
 export async function selectModel(opts: SelectModelOptions): Promise<SelectModelResult | undefined> {
   const { provider, apiKey, endpointOverride, currentModel, theme } = opts;
-  let modelsList: string[] = provider.models;
+  let modelsList: string[] = provider.models ?? [];
   let source: SelectModelResult['source'] = 'static';
   let liveCount = 0;
   let liveError: string | undefined;
-  let subtitleHint = `Pick the chat model for ${provider.label}.`;
+  let subtitleHint = `Pick the chat model for ${provider.label}. Use "Other" to type any supported model.`;
 
   // Live fetch is gated on either having a key (cloud) or running local.
   // Skipping the fetch entirely when neither is true avoids a guaranteed
@@ -151,10 +163,7 @@ export async function selectModel(opts: SelectModelOptions): Promise<SelectModel
     const fetched = await fetchOpenAiCompatibleModels(provider, apiKey, endpointOverride);
     if (fetched.ok) {
       const live = fetched.models;
-      // Default model floats to the top so "(default)" stays in the
-      // natural-first position the user expects. Then the currently-
-      // active model floats next (cursor lands here below).
-      const reordered = floatToTop(live, [provider.defaultModel]);
+      const reordered = floatToTop(live, [currentModel, provider.defaultModel]);
       modelsList = reordered;
       source = 'live';
       liveCount = live.length;
@@ -162,17 +171,19 @@ export async function selectModel(opts: SelectModelOptions): Promise<SelectModel
     } else {
       source = 'fallback';
       liveError = fetched.error;
-      subtitleHint = `Pick a model. (Live list unavailable — ${fetched.error}. Showing curated short-list.) Use "Other" to type any name.`;
+      subtitleHint = modelsList.length > 0
+        ? `Pick a model. (Live list unavailable — ${fetched.error}. Showing configured fallback list.) Use "Other" to type any name.`
+        : `Live model list unavailable — ${fetched.error}. Type the model id with "Other model".`;
     }
   }
 
-  const finalList = modelsList.length > 0 ? modelsList : [provider.defaultModel];
+  const finalList = modelsList.length > 0 ? modelsList : (currentModel ? [currentModel] : []);
   const rows: PickerRow[] = finalList.map((m) => ({
     id: m,
     label: m,
     value:
       m === currentModel ? 'current' :
-      m === provider.defaultModel ? 'default' : '',
+      (provider.defaultModel && m === provider.defaultModel) ? 'default' : '',
   }));
 
   // Cursor priority: currently-active model > provider default > top.
@@ -182,7 +193,7 @@ export async function selectModel(opts: SelectModelOptions): Promise<SelectModel
     if (idx >= 0) initialCursor = idx;
   }
   if (initialCursor === 0 && !currentModel) {
-    const idx = finalList.indexOf(provider.defaultModel);
+    const idx = provider.defaultModel ? finalList.indexOf(provider.defaultModel) : -1;
     if (idx >= 0) initialCursor = idx;
   }
 
@@ -199,14 +210,16 @@ export async function selectModel(opts: SelectModelOptions): Promise<SelectModel
     eraseOnClose: opts.eraseOnClose ?? false,
   });
   if (result.kind === 'cancelled') return undefined;
-  const model = (result.kind === 'other' ? result.text.trim() : result.id) || provider.defaultModel;
+  const model = result.kind === 'other' ? result.text.trim() : result.id;
+  if (!model) return undefined;
   return { model, source, liveCount, liveError };
 }
 
-function floatToTop(list: string[], priority: string[]): string[] {
+function floatToTop(list: string[], priority: Array<string | undefined>): string[] {
   const seen = new Set<string>();
   const front: string[] = [];
   for (const p of priority) {
+    if (!p) continue;
     if (list.includes(p) && !seen.has(p)) {
       front.push(p);
       seen.add(p);

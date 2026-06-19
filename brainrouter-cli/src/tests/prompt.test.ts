@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildChatCompletionPayload, LOCAL_TOOLS } from '../agent/agent.js';
+import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '../agent/agent.js';
+import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { buildSystemPrompt } from '../prompt/systemPrompt.js';
 import { buildRolePrompt, listRoles, resolveRole } from '../orchestration/roles.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
+import { setCliKnobOverride, _resetCliKnobsCache } from '../config/config.js';
 
 test('buildChatCompletionPayload exposes local and MCP tools to the LLM', () => {
   const payload = buildChatCompletionPayload(
@@ -38,6 +40,124 @@ test('buildChatCompletionPayload exposes local and MCP tools to the LLM', () => 
   const memoryTool = payload.tools?.find(tool => tool.function.name === 'memory_recall');
   assert.deepEqual(memoryTool?.function.parameters.required, ['query']);
   assert.equal(payload.tools?.some(tool => tool.function.name === 'update_plan'), true);
+});
+
+test('buildChatCompletionPayload omits max_tokens by default and forwards cli.maxOutputTokens when set', () => {
+  const cfg = { provider: 'openai', apiKey: '', model: 'test-model' } as const;
+  const msgs = [{ role: 'user', content: 'hi' }];
+
+  // Default: no cap on the wire so the provider's own default applies.
+  _resetCliKnobsCache();
+  const bare = buildChatCompletionPayload(cfg, msgs, []) as { max_tokens?: number };
+  assert.equal(bare.max_tokens, undefined);
+
+  // Cut-off fix — the knob lifts a too-low provider default.
+  setCliKnobOverride({ maxOutputTokens: 8192 });
+  const capped = buildChatCompletionPayload(cfg, msgs, []) as { max_tokens?: number };
+  assert.equal(capped.max_tokens, 8192);
+
+  // A zero / non-positive value is treated as "unset" (no cap forwarded).
+  setCliKnobOverride({ maxOutputTokens: 0 });
+  const zeroed = buildChatCompletionPayload(cfg, msgs, []) as { max_tokens?: number };
+  assert.equal(zeroed.max_tokens, undefined);
+
+  _resetCliKnobsCache();
+});
+
+test('resolveWireEffort is provider-aware (reasoning_effort value per provider/model)', () => {
+  const cfg = (provider: string, model: string) => ({ provider, apiKey: 'k', model });
+  // OpenAI: reasoning models get the field; xhigh downgrades to high; medium/non-reasoning omit.
+  assert.equal(resolveWireEffort(cfg('openai', 'gpt-5'), 'low'), 'low');
+  assert.equal(resolveWireEffort(cfg('openai', 'gpt-5'), 'xhigh'), 'high');
+  assert.equal(resolveWireEffort(cfg('openai', 'gpt-5'), 'medium'), null);
+  assert.equal(resolveWireEffort(cfg('openai', 'gpt-4o'), 'high'), null); // not a reasoning model
+  // DeepSeek v4: xhigh → 'max', low → 'high'; the always-on reasoner rejects the field.
+  assert.equal(resolveWireEffort(cfg('deepseek', 'deepseek-v4-pro'), 'xhigh'), 'max');
+  assert.equal(resolveWireEffort(cfg('deepseek', 'deepseek-v4-pro'), 'low'), 'high');
+  assert.equal(resolveWireEffort(cfg('deepseek', 'deepseek-reasoner'), 'high'), null);
+  // LM Studio: graded effort for reasoning models (low/medium/high; no xhigh tier,
+  // so xhigh caps at high). Lenient 'any' gate — it accepts-and-ignores the field,
+  // so even a non-reasoning model gets it (the server drops it).
+  assert.equal(resolveWireEffort(cfg('lmstudio', 'gpt-oss-20b'), 'high'), 'high');
+  assert.equal(resolveWireEffort(cfg('lmstudio', 'gpt-oss-20b'), 'xhigh'), 'high');
+  assert.equal(resolveWireEffort(cfg('lmstudio', 'qwen2.5-coder'), 'high'), 'high');
+  // Ollama: caps at high (no xhigh).
+  assert.equal(resolveWireEffort(cfg('ollama', 'qwen3-30b'), 'xhigh'), 'high');
+  // opencode: keeps xhigh natively.
+  assert.equal(resolveWireEffort(cfg('opencode', 'gpt-5.1-codex'), 'xhigh'), 'xhigh');
+});
+
+test('resolveWireEffort: non-OpenAI providers send effort for UNLISTED reasoning models (lenient gate); OpenAI gates strictly', () => {
+  // A reasoning model whose NAME isn't in our allowlist (glm, minimax, a custom
+  // finetune): on EVERY OpenAI-compatible provider except OpenAI the field is
+  // still sent (the server ignores it if N/A), so effort isn't restricted to the
+  // names we happen to enumerate.
+  for (const provider of ['openai-compatible', 'lmstudio', 'ollama', 'opencode', 'deepseek']) {
+    assert.equal(resolveWireEffort({ provider, apiKey: 'k', model: 'glm-4.6' } as any, 'high'), 'high', provider);
+    assert.equal(resolveWireEffort({ provider, apiKey: 'k', model: 'minimax-m2' } as any, 'high'), 'high', provider);
+  }
+  // OpenAI is strict — it ERRORS on a non-reasoning model, so an unlisted name is omitted.
+  assert.equal(resolveWireEffort({ provider: 'openai', apiKey: 'k', model: 'glm-4.6' } as any, 'high'), null);
+  // Known rejecters stay excluded EVERYWHERE, even under the lenient gate.
+  assert.equal(resolveWireEffort({ provider: 'lmstudio', apiKey: '', model: 'deepseek-reasoner' } as any, 'high'), null);
+  assert.equal(resolveWireEffort({ provider: 'ollama', apiKey: '', model: 'gpt-5-chat-latest' } as any, 'high'), null);
+});
+
+test('resolveWireEffort: strict providers can use live reasoning metadata for unlisted models', () => {
+  _resetModelReasoningCapabilities();
+  const cfg = { provider: 'openai', apiKey: 'k', model: 'future-reasoner-2026' } as any;
+  assert.equal(resolveWireEffort(cfg, 'high'), null);
+
+  registerModelReasoningCapabilities('future-reasoner-2026', { reasoning: true, effort: true });
+  assert.equal(resolveWireEffort(cfg, 'high'), 'high');
+
+  _resetModelReasoningCapabilities();
+});
+
+test('resolveWireEffort is ENDPOINT-aware: a cloud endpoint overrides a mismatched provider id (DeepSeek reached via openai)', () => {
+  // DeepSeek is reached as provider:'openai' + the DeepSeek base URL (it's a
+  // hidden, pickerVisible:false provider). The CLOUD endpoint resolves to the
+  // deepseek definition, so DeepSeek's own map applies — xhigh→max, low→high —
+  // instead of silently inheriting OpenAI's xhigh→high.
+  const ds = (model: string, effort: any, endpoint = 'https://api.deepseek.com/v1') =>
+    resolveWireEffort({ provider: 'openai', apiKey: 'k', model, endpoint } as any, effort);
+  assert.equal(ds('deepseek-v4-pro', 'xhigh'), 'max');
+  assert.equal(ds('deepseek-v4-pro', 'low'), 'high');
+  // The canonical no-/v1 base URL (DeepSeek docs say both forms work) resolves identically.
+  assert.equal(ds('deepseek-v4-pro', 'xhigh', 'https://api.deepseek.com'), 'max');
+  // A LOCAL endpoint is NOT used to infer the provider (localhost:1234 could be
+  // LM Studio / vLLM / llama.cpp) — the explicit provider:'openai' wins, so a
+  // reasoning model still gets 'param' behavior rather than LM Studio's 'ignored'.
+  assert.equal(
+    resolveWireEffort(
+      { provider: 'openai', apiKey: '', model: 'openai/gpt-oss-20b', endpoint: 'http://localhost:1234/v1' } as any,
+      'high',
+    ),
+    'high',
+  );
+});
+
+test('resolveWireEffort: non-reasoning chat variants reject the field (OpenAI errors on *-chat)', () => {
+  // gpt-5-chat-latest / gpt-5.1-chat match /^gpt-5/ but are NON-reasoning chat
+  // models — OpenAI returns an invalid-parameter error if sent reasoning_effort,
+  // so the field must be OMITTED for them.
+  for (const model of ['gpt-5-chat-latest', 'gpt-5.1-chat', 'gpt-5-chat']) {
+    assert.equal(resolveWireEffort({ provider: 'openai', apiKey: 'k', model } as any, 'high'), null, model);
+  }
+});
+
+test('resolveWireEffort: xhigh-capable OpenAI models keep xhigh; others keep the high cap', () => {
+  const x = (model: string) => resolveWireEffort({ provider: 'openai', apiKey: 'k', model } as any, 'xhigh');
+  // Models that introduced / accept xhigh pass it through (no silent downgrade).
+  assert.equal(x('gpt-5.1-codex-max'), 'xhigh');
+  assert.equal(x('gpt-5.2'), 'xhigh');
+  assert.equal(x('gpt-5.2-codex'), 'xhigh');
+  assert.equal(x('gpt-5.5'), 'xhigh');
+  // Models WITHOUT xhigh keep the conservative high cap (sending xhigh would error).
+  assert.equal(x('gpt-5'), 'high');
+  assert.equal(x('gpt-5.1'), 'high');
+  assert.equal(x('gpt-5.1-codex'), 'high'); // only codex-MAX added xhigh, not plain codex
+  assert.equal(x('o3'), 'high');
 });
 
 test('buildSystemPrompt includes workspace, session, and raw MCP tool names', () => {

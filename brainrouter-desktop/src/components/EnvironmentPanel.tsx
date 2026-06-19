@@ -1,7 +1,7 @@
 /**
  * T4 — the Environment column (right of the chat): a quick-glance card of
  * git changes, branch, last commit, GitHub CI status, last-turn tool-call
- * health, and this chat's running background tasks. Extracted verbatim from
+ * health, and this workspace's running background tasks. Extracted verbatim from
  * App.tsx; the App owns all state and passes it through. The card is a layout
  * column (never an overlay) gated by `envAnim` (useClosable).
  */
@@ -28,12 +28,12 @@ export interface EnvironmentPanelProps {
   ci: CiApi;
   openCiPanel: () => void;
   lastTurnFails: number | null;
-  activeSessionTasks: FleetRow[];
+  backgroundTasks: FleetRow[];
   openTask: (f: FleetRow) => void;
 }
 
 export function EnvironmentPanel(p: EnvironmentPanelProps): React.ReactElement | null {
-  const { envAnim, openSettings, gitInfo, ensurePanel, setTermDockOpen, branches, q, commitSubjects, ci, openCiPanel, lastTurnFails, activeSessionTasks, openTask } = p;
+  const { envAnim, openSettings, gitInfo, ensurePanel, setTermDockOpen, branches, q, commitSubjects, ci, openCiPanel, lastTurnFails, backgroundTasks, openTask } = p;
   if (!envAnim.mounted) return null;
   return (
     <aside className={`env-col${envAnim.closing ? ' closing' : ''}`}>
@@ -78,19 +78,19 @@ export function EnvironmentPanel(p: EnvironmentPanelProps): React.ReactElement |
           <div className="env-row inert checks-bad"><Icon name="warn" size={14} /><span>{lastTurnFails} tool call{lastTurnFails === 1 ? '' : 's'} failed last turn</span></div>
         )}
         <div className="env-sep" />
-        <div className="env-label">Background tasks{activeSessionTasks.length ? ` · ${activeSessionTasks.length}` : ''}</div>
-        {activeSessionTasks.length === 0 ? (
-          <div className="env-row inert muted"><Icon name="tasks" size={14} /><span>Nothing running in this chat</span></div>
-        ) : activeSessionTasks.slice(0, 4).map((f) => (
+        <div className="env-label">Background tasks{backgroundTasks.length ? ` · ${backgroundTasks.length}` : ''}</div>
+        {backgroundTasks.length === 0 ? (
+          <div className="env-row inert muted"><Icon name="tasks" size={14} /><span>Nothing running in this workspace</span></div>
+        ) : backgroundTasks.slice(0, 4).map((f) => (
           <button key={f.id} className="env-row" title={`${f.kind} · ${f.id} — open its conversation`} onClick={() => openTask(f)}>
             <span className="st-branch"><Icon name="merge" size={13} /></span>
             <span>{f.label}{f.worktree ? ' ⎇' : ''}</span>
             {fmtElapsed(f.startedAt) ? <b>{fmtElapsed(f.startedAt)}</b> : <span className="st"><span className="spinner sm" /></span>}
           </button>
         ))}
-        {activeSessionTasks.length > 4 ? (
+        {backgroundTasks.length > 4 ? (
           <button className="env-row muted" onClick={() => ensurePanel('tasks')}>
-            <span className="st-branch"><Icon name="tasks" size={13} /></span><span>and {activeSessionTasks.length - 4} more…</span>
+            <span className="st-branch"><Icon name="tasks" size={13} /></span><span>and {backgroundTasks.length - 4} more…</span>
           </button>
         ) : null}
       </div>

@@ -629,6 +629,14 @@ tall ones. `/help <category>` drills in.
 | `/working` | Inspect the working-memory canvas. |
 | `/memories <command>` | Filesystem consolidation (`/memories consolidate`, `/memories list`, etc.). |
 
+### Attachments (0.4.15)
+
+| Command | Purpose |
+| --- | --- |
+| `/attach <path>` | Attach a file (PDF, image/screenshot, text, code, or generic blob) to this session. The original is preserved; text/metadata is extracted where practical; the record links to the session (+ `--requirement <id>`) and is captured to BrainRouter memory so it's recallable as context. Alias `/upload`. |
+| `/attach list` | List this session's attachments. |
+| `/attach show <id>` | Show an attachment's metadata + extracted text. |
+
 ### Workflow
 
 | Command | Purpose |

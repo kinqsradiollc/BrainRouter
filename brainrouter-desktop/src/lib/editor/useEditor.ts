@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   openTab, setContent, markSaved, revertTab, closeTab, nextActivePath,
-  isDirty, anyDirty, dirtyPaths, findTab, type EditorTab, type FileReadResult,
+  reorderTabs, isDirty, anyDirty, dirtyPaths, findTab, type EditorTab, type FileReadResult,
 } from './editorModel.js';
 
 interface SaveResult { ok?: boolean; mtimeMs?: number; conflict?: boolean; error?: string }
@@ -25,9 +25,10 @@ export interface EditorApi {
   saveAll: () => void;
   revert: (path: string) => void;
   close: (path: string) => void;
+  reorder: (draggedPath: string, targetPath: string) => void;
 }
 
-export function useEditor(opts?: { onSaved?: (path: string) => void; onToast?: (msg: string) => void }): EditorApi {
+export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (path: string) => void; onToast?: (msg: string) => void }): EditorApi {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [conflictPaths, setConflictPaths] = useState<string[]>([]);
@@ -35,10 +36,13 @@ export function useEditor(opts?: { onSaved?: (path: string) => void; onToast?: (
 
   const tabsRef = useRef(tabs); tabsRef.current = tabs;
   const optsRef = useRef(opts); optsRef.current = opts;
+  const workspaceRootRef = useRef(opts?.workspaceRoot); workspaceRootRef.current = opts?.workspaceRoot;
   const pendingSave = useRef<Record<string, string>>({});
 
   useEffect(() => {
     const off = window.brainrouter.onEvent((msg) => {
+      const resultRoot = (msg as { workspaceRoot?: string }).workspaceRoot;
+      if (resultRoot && workspaceRootRef.current && resultRoot !== workspaceRootRef.current) return;
       const e = msg.event as { kind: string; id?: string; ok?: boolean; result?: unknown };
       if (e.kind !== 'query-result' || !e.id || !e.id.startsWith('ed:')) return;
       const parts = e.id.split(':');
@@ -96,6 +100,9 @@ export function useEditor(opts?: { onSaved?: (path: string) => void; onToast?: (
     setTabs((ts) => closeTab(ts, path));
     setConflictPaths((c) => c.filter((p) => p !== path));
   };
+  const reorder = (draggedPath: string, targetPath: string): void => {
+    setTabs((ts) => reorderTabs(ts, draggedPath, targetPath));
+  };
 
-  return { tabs, activePath, conflictPaths, saving, anyDirty: anyDirty(tabs), open, select, change, save, saveAll, revert, close };
+  return { tabs, activePath, conflictPaths, saving, anyDirty: anyDirty(tabs), open, select, change, save, saveAll, revert, close, reorder };
 }

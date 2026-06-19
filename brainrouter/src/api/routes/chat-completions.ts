@@ -274,6 +274,89 @@ function sseLine(data: unknown): string {
 // is logically complete.
 const STREAM_IDLE_TIMEOUT_MS = 30_000;
 
+export class StreamingReasoningRewriter {
+  private reasoningChannel: "separate" | "inline" | null = null;
+  private inReasoningBlock = false;
+
+  public processFrame(frameJson: any): any {
+    if (!frameJson?.choices?.[0]) return frameJson;
+    const choice = frameJson.choices[0];
+    const delta = choice.delta;
+    if (!delta) return frameJson;
+
+    // 1. Separate reasoning_content / reasoning field
+    const rawReasoning = (typeof delta.reasoning_content === "string" ? delta.reasoning_content : undefined)
+      ?? (typeof delta.reasoning === "string" ? delta.reasoning : undefined);
+
+    if (rawReasoning !== undefined && rawReasoning.length > 0) {
+      let contentAddition = "";
+      if (!this.reasoningChannel) {
+        this.reasoningChannel = "separate";
+        this.inReasoningBlock = true;
+        contentAddition += "<details>\n<summary>Work Section (Reasoning)</summary>\n\n";
+      }
+      contentAddition += rawReasoning;
+
+      delta.content = (delta.content ?? "") + contentAddition;
+      delete delta.reasoning_content;
+      delete delta.reasoning;
+      return frameJson;
+    }
+
+    // 2. Transition from reasoning to content
+    if (this.reasoningChannel === "separate" && this.inReasoningBlock && typeof delta.content === "string" && delta.content.length > 0) {
+      this.inReasoningBlock = false;
+      delta.content = "\n</details>\n\n" + delta.content;
+      return frameJson;
+    }
+
+    // 3. Inline tags in content
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      let text = delta.content;
+      const openTag = text.match(/<(think|thinking|thought|reasoning)>/i);
+      if (openTag) {
+        text = text.replace(openTag[0], "<details>\n<summary>Work Section (Reasoning)</summary>\n\n");
+        this.inReasoningBlock = true;
+        this.reasoningChannel = "inline";
+      }
+      const closeTag = text.match(/<\/(think|thinking|thought|reasoning)>/i);
+      if (closeTag) {
+        text = text.replace(closeTag[0], "\n</details>\n\n");
+        this.inReasoningBlock = false;
+      }
+      delta.content = text;
+    }
+
+    return frameJson;
+  }
+
+  public getFinalClose(): string | null {
+    if (this.inReasoningBlock) {
+      this.inReasoningBlock = false;
+      return "\n</details>\n\n";
+    }
+    return null;
+  }
+}
+
+export function parseAndFormatThink(content: string): string {
+  if (!content) return content;
+
+  // Tag replacements: <think>, <thinking>, <thought>, <reasoning>
+  const openTag = content.match(/<(think|thinking|thought|reasoning)>/i);
+  const closeTag = content.match(/<\/(think|thinking|thought|reasoning)>/i);
+
+  if (openTag && closeTag) {
+    return content
+      .replace(openTag[0], "<details>\n<summary>Work Section (Reasoning)</summary>\n\n")
+      .replace(closeTag[0], "\n</details>\n\n");
+  } else if (openTag) {
+    return content.replace(openTag[0], "<details>\n<summary>Work Section (Reasoning)</summary>\n\n") + "\n</details>\n\n";
+  }
+
+  return content;
+}
+
 async function streamUpstream(
   upstreamRes: globalThis.Response,
   clientRes: Response,
@@ -294,6 +377,7 @@ async function streamUpstream(
   let clientClosed = false;
   let upstreamDone = false;
   let idleTimer: NodeJS.Timeout | undefined;
+  const rewriter = new StreamingReasoningRewriter();
 
   const armIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
@@ -324,34 +408,74 @@ async function streamUpstream(
       armIdleTimer();
       const chunk = decoder.decode(value, { stream: true });
       buffer += chunk;
-      // Forward bytes as-is so client SSE parsing works.
-      clientRes.write(chunk);
-      // Sniff assistant content for capture, and detect [DONE].
+
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         const t = line.trim();
-        if (!t.startsWith("data:")) continue;
+        if (!t) {
+          clientRes.write("\n");
+          continue;
+        }
+        if (!t.startsWith("data:")) {
+          clientRes.write(line + "\n");
+          continue;
+        }
         const payload = t.slice(5).trim();
-        if (!payload) continue;
+        if (!payload) {
+          clientRes.write("data:\n\n");
+          continue;
+        }
         if (payload === "[DONE]") {
           upstreamDone = true;
-          // Explicitly stop reading after [DONE] — some upstreams keep the
-          // chunked connection open well past the logical end of the response,
-          // which is exactly the case that made the browser appear to "keep
-          // requesting" forever.
+          const finalClose = rewriter.getFinalClose();
+          if (finalClose) {
+            const closeChunk = {
+              choices: [{
+                delta: { content: finalClose }
+              }]
+            };
+            clientRes.write(`data: ${JSON.stringify(closeChunk)}\n\n`);
+            onAssistantText(finalClose);
+          }
+          clientRes.write("data: [DONE]\n\n");
           try { void reader.cancel("done-sentinel"); } catch { /* noop */ }
           break;
         }
         try {
-          const obj = JSON.parse(payload);
+          let obj = JSON.parse(payload);
+          obj = rewriter.processFrame(obj);
+
           const delta = obj?.choices?.[0]?.delta?.content;
-          if (typeof delta === "string") onAssistantText(delta);
+          if (typeof delta === "string") {
+            onAssistantText(delta);
+          }
+
+          clientRes.write(`data: ${JSON.stringify(obj)}\n\n`);
         } catch {
-          // ignore malformed delta lines
+          clientRes.write(line + "\n");
         }
       }
       if (upstreamDone) break;
+    }
+
+    // Process remaining buffer if it contains any last frame
+    if (buffer.trim()) {
+      const t = buffer.trim();
+      if (t.startsWith("data:")) {
+        const payload = t.slice(5).trim();
+        if (payload && payload !== "[DONE]") {
+          try {
+            let obj = JSON.parse(payload);
+            obj = rewriter.processFrame(obj);
+            const delta = obj?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string") onAssistantText(delta);
+            clientRes.write(`data: ${JSON.stringify(obj)}\n\n`);
+          } catch {
+            clientRes.write(buffer + "\n");
+          }
+        }
+      }
     }
   } catch (err: any) {
     if (!clientClosed) clientRes.write(sseLine({ error: { message: err?.message || "stream error" } }));
@@ -457,6 +581,20 @@ chatCompletionsRouter.post("/chat/completions", async (req: AuthedRequest, res: 
   }
 
   const json = (await upstream.json()) as any;
+  const choice = json?.choices?.[0];
+  if (choice?.message) {
+    const msg = choice.message;
+    const reasoning = msg.reasoning_content ?? msg.reasoning;
+    if (reasoning && typeof reasoning === "string" && reasoning.length > 0) {
+      const originalContent = msg.content ?? "";
+      msg.content = `<details>\n<summary>Work Section (Reasoning)</summary>\n\n${reasoning.trim()}\n</details>\n\n${originalContent.trim()}`;
+      delete msg.reasoning_content;
+      delete msg.reasoning;
+    } else if (typeof msg.content === "string") {
+      msg.content = parseAndFormatThink(msg.content);
+    }
+  }
+
   const assistantText = json?.choices?.[0]?.message?.content ?? "";
   void captureTurn(userId, sessionKey, lastUserText, String(assistantText), activeSkill, captureMode);
   res.json(json);

@@ -8,7 +8,9 @@
  * (render JSX, useAgentEvents ctx, action hooks) keep compiling unchanged.
  */
 import { useRef, useState } from 'react';
-import type { ChatRow, SessionRow, FleetRow, WorkflowDetail } from '../../types.js';
+import type { ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
+import type { ProjectSessionsByRoot } from './projectSessionsView.js';
+import { loadExpandedProjects } from './expandedProjectsStore.js';
 
 export interface SessionState {
   viewKey: string;
@@ -36,8 +38,8 @@ export interface SessionState {
   setSessionGroups: React.Dispatch<React.SetStateAction<string[]>>;
   finishedTasks: Array<{ id: string; label: string; status: string }>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
-  taskView: { id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null;
-  setTaskView: React.Dispatch<React.SetStateAction<{ id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null>>;
+  taskView: TaskViewState | null;
+  setTaskView: React.Dispatch<React.SetStateAction<TaskViewState | null>>;
   workflowView: WorkflowDetail | null;
   setWorkflowView: React.Dispatch<React.SetStateAction<WorkflowDetail | null>>;
   sessionMenu: { key: string; x: number; y: number } | null;
@@ -46,16 +48,23 @@ export interface SessionState {
   cardOpenRef: React.MutableRefObject<boolean>;
   errorsBySession: React.MutableRefObject<Record<string, Array<{ id: number; text: string; detail?: string; ts: number }>>>;
   lastPromptRef: React.MutableRefObject<string>;
+  /** §1 — feedback from the last "Request changes" click, kept so it can be
+   * restored to the composer draft if the revision task fails to start. */
+  planFeedbackRef: React.MutableRefObject<string>;
+  /** §goal-autonomy — the queued goal-continuation prompt (cancelable). Cleared
+   * when the user sends a message so a fast interjection preempts the loop. */
+  goalContPendingRef: React.MutableRefObject<string | null>;
   turnFailsRef: React.MutableRefObject<number>;
   workspaces: { current: string | null; recents: string[] };
   setWorkspaces: React.Dispatch<React.SetStateAction<{ current: string | null; recents: string[] }>>;
   expandedProjects: string[];
   setExpandedProjects: React.Dispatch<React.SetStateAction<string[]>>;
   expandedProjectsRef: React.MutableRefObject<string[]>;
-  projSessions: Record<string, SessionRow[]>;
-  setProjSessions: React.Dispatch<React.SetStateAction<Record<string, SessionRow[]>>>;
+  projSessions: ProjectSessionsByRoot;
+  setProjSessions: React.Dispatch<React.SetStateAction<ProjectSessionsByRoot>>;
   activeWsRef: React.MutableRefObject<string | null>;
   workspaceGenRef: React.MutableRefObject<number>;
+  pendingWorkspaceRef: React.MutableRefObject<string | null>;
   pendingResumeRef: React.MutableRefObject<string | null>;
   trustAsk: { root: string; resume?: string } | null;
   setTrustAsk: React.Dispatch<React.SetStateAction<{ root: string; resume?: string } | null>>;
@@ -109,6 +118,8 @@ export function useSessionState(): SessionState {
   // flickers out while the transcript flush races the refresh.
   const pendingSessionsRef = useRef<SessionRow[]>([]);
   const lastPromptRef = useRef('');
+  const planFeedbackRef = useRef('');
+  const goalContPendingRef = useRef<string | null>(null);
   // T2/T3 — the workspace the on-screen surfaces belong to, set authoritatively
   // by session-changed. Events tagged with a DIFFERENT workspace are dropped so
   // one project's stream can never paint into another's surfaces.
@@ -117,6 +128,9 @@ export function useSessionState(): SessionState {
   // late async query results from the previous project are dropped, never
   // painting workspace A's data into workspace B's surfaces.
   const workspaceGenRef = useRef(0);
+  // Workspace switch in progress. While set, only the target workspace's
+  // authoritative session-changed event is allowed to repaint app surfaces.
+  const pendingWorkspaceRef = useRef<string | null>(null);
   // DESK-5u — current viewed session key, kept in a ref so the (mount-once)
   // event handler can read it without going stale.
   const sessionKeyRef = useRef<string | undefined>(undefined);
@@ -131,7 +145,7 @@ export function useSessionState(): SessionState {
   const [finishedTasks, setFinishedTasks] = useState<Array<{ id: string; label: string; status: string }>>([]);
   // DESK-5w — the background task whose conversation is open (read-only),
   // shown in place of the chat. null = normal chat view.
-  const [taskView, setTaskView] = useState<{ id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null>(null);
+  const [taskView, setTaskView] = useState<TaskViewState | null>(null);
   // DESK-6w — a workflow run's breakdown (Claude /workflows-style card), shown
   // in place of the chat when you click a workflow background task.
   const [workflowView, setWorkflowView] = useState<WorkflowDetail | null>(null);
@@ -141,9 +155,11 @@ export function useSessionState(): SessionState {
   const [trustAsk, setTrustAsk] = useState<{ root: string; resume?: string } | null>(null);
   // DESK-5d — per-project chat histories + expansion (lazy-fetched), the
   // current branch's PR chip, and the chat to resume after a host swap.
-  const [projSessions, setProjSessions] = useState<Record<string, SessionRow[]>>({});
-  const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
-  const expandedProjectsRef = useRef<string[]>([]);
+  const [projSessions, setProjSessions] = useState<ProjectSessionsByRoot>({});
+  // Fix 4 — expansion is PERSISTED per workspace path so a refresh / host reload
+  // / workspace switch doesn't collapse the projects the user had open.
+  const [expandedProjects, setExpandedProjects] = useState<string[]>(() => loadExpandedProjects());
+  const expandedProjectsRef = useRef<string[]>(loadExpandedProjects());
   const pendingResumeRef = useRef<string | null>(null);
 
   return {
@@ -153,9 +169,9 @@ export function useSessionState(): SessionState {
     liveChildren, setLiveChildren, renamingKey, setRenamingKey, renameDraft, setRenameDraft,
     showArchived, setShowArchived, sessionGroups, setSessionGroups,
     finishedTasks, setFinishedTasks, taskView, setTaskView, workflowView, setWorkflowView,
-    sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, turnFailsRef,
+    sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, planFeedbackRef, goalContPendingRef, turnFailsRef,
     workspaces, setWorkspaces, expandedProjects, setExpandedProjects, expandedProjectsRef, projSessions, setProjSessions,
-    activeWsRef, workspaceGenRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
+    activeWsRef, workspaceGenRef, pendingWorkspaceRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
     setSessionRunning,
   };
 }

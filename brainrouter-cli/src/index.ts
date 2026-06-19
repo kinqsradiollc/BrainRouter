@@ -90,7 +90,7 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk } from './config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, type LLMConfig } from './config/config.js';
 import { redactText } from './state/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
@@ -109,9 +109,13 @@ import { VERSION } from './version.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from './config/config.js';
 import { Agent } from './agent/agent.js';
+import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
+import { resolveSessionLlmConfig } from './state/sessionRuntimeStore.js';
+
+const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
 
 // The CLI deliberately does NOT load any `.env` file. Source of truth for
 // runtime config is `~/.config/brainrouter/config.json` (LLM creds, MCP
@@ -225,11 +229,7 @@ program
       config.servers[id] = cloned;
     }
 
-    const llm = config.llm || {
-      provider: 'openai',
-      model: 'gpt-4o-mini',
-      apiKey: ''
-    };
+    const llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
 
     if (options.model) {
       llm.model = options.model;
@@ -265,6 +265,7 @@ program
     const agent = new Agent(mcpClient, llm, {
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
+      prompter: cliPrompter,
     });
     // CC-P2.1 — `--continue` / `--resume <key>`: load a persisted session's
     // transcript into this launch before the REPL starts. Errors print and
@@ -279,6 +280,7 @@ program
       if (pick.ok) {
         const entries = loadTranscript(workspace.workspaceRoot, pick.sessionKey);
         agent.sessionKey = pick.sessionKey;
+        if (!options.model) agent.setLLMConfig(resolveSessionLlmConfig(llm, workspace.workspaceRoot, pick.sessionKey));
         agent.resetSessionCounters();
         const loaded = agent.loadHistory(entries);
         console.log(chalk.green(`Resumed session ${pick.sessionKey} (${loaded} prior messages).`));
@@ -428,8 +430,9 @@ program
       targetServers[id] = cloned;
     }
 
-    const llm = config.llm ?? { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
+    let llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
     if (options.model) llm.model = options.model;
+    else if (options.session) llm = resolveSessionLlmConfig(llm, workspace.workspaceRoot, options.session);
 
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
@@ -458,6 +461,7 @@ program
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
       sessionKey: options.session,
+      prompter: cliPrompter,
     });
 
     // CLI-7 — output format: text (default) | json (single line) | jsonl (per-event stream).

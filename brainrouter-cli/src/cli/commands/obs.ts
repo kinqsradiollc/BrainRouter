@@ -15,7 +15,7 @@ import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../r
 import { contextWindowFor } from '../../runtime/contextWindow.js';
 import { readPreferences } from '../../state/preferencesStore.js';
 import { readTranscriptEntries } from '../../state/sessionStore.js';
-import { getCliStateFile } from '../../state/cliState.js';
+import { getStateFile } from '../../state/cliState.js';
 import { getCliKnobs } from '../../config/config.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
@@ -303,7 +303,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       if ((args[0] ?? '').toLowerCase() === 'prefix') {
         const { diffPrefixComponents } = await import('../../runtime/contextRegions.js');
         const curr = agent.getPrefixComponents();
-        const snapFile = getCliStateFile(agent.workspaceRoot, 'prefix-snapshot.json');
+        const snapFile = getStateFile(agent.workspaceRoot, 'prefix-snapshot.json');
         let prev: ReturnType<typeof agent.getPrefixComponents> | null = null;
         try { if (fs.existsSync(snapFile)) prev = JSON.parse(fs.readFileSync(snapFile, 'utf8')); } catch { /* first run */ }
         const drift = diffPrefixComponents(prev, curr);
@@ -366,10 +366,10 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // README's storage contract), NOT inside the workspace — writing
       // feedback.jsonl into the project tree risks accidental commits and
       // breaks the "workflows are the only thing written inside the project"
-      // guarantee. Route through getCliStateFile() so the path becomes
+      // guarantee. Route through getStateFile() so the path becomes
       // ~/.brainrouter/workspaces/<encoded>/cli/feedback.jsonl.
       const msg = args.join(' ').trim();
-      const file = getCliStateFile(agent.workspaceRoot, 'feedback.jsonl');
+      const file = getStateFile(agent.workspaceRoot, 'feedback.jsonl');
       const entry = {
         ts: new Date().toISOString(),
         sessionKey: agent.sessionKey,

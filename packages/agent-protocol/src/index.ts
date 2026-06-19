@@ -24,6 +24,55 @@ export interface EventEnvelope {
   sessionKey: string;
 }
 
+export type RecordLifecycleAction =
+  | 'created'
+  | 'updated'
+  | 'status-changed'
+  | 'comment-added'
+  | 'linked-memory'
+  | 'exported'
+  | 'saved'
+  | 'reverted';
+
+export interface ProvenanceRef {
+  sourceEventId?: string;
+  linkedMemoryIds?: string[];
+  actor?: string;
+  reason?: string;
+  detail?: Record<string, unknown>;
+}
+
+/** What happened to a background task (gap 1/2/3). */
+export type TaskEventAction = 'created' | 'progress' | 'updated' | 'completed' | 'failed' | 'canceled';
+
+/**
+ * Compact, wire-stable view of a durable background task (plan revision,
+ * review, verification, attachment, workflow, agent). Structurally a subset of
+ * the CLI/types `BackgroundTaskRecord` so the host can pass a record straight
+ * through; the protocol stays a leaf (no dependency on the types package).
+ */
+export interface BackgroundTaskEventView {
+  id: string;
+  kind: string;
+  status: string;
+  title: string;
+  workspaceRoot: string;
+  sessionKey: string;
+  requirementId?: string;
+  planId?: string;
+  artifactId?: string;
+  attachmentId?: string;
+  /** How to open the task's transcript/conversation/workflow. */
+  transcript?: { kind: string; id: string; parentSessionKey?: string };
+  /** Current phase name, when running. */
+  phase?: string;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export type AgentEvent =
   | { kind: 'turn-start'; prompt: string }
   | { kind: 'status'; text: string }
@@ -39,12 +88,21 @@ export type AgentEvent =
   | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>; explanation?: string }
   | { kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
   | { kind: 'memory'; level: 'info' | 'warn'; text: string }
+  | { kind: 'requirement-event'; action: RecordLifecycleAction; requirementId: string; title?: string; status?: string; provenance?: ProvenanceRef }
+  | { kind: 'artifact-event'; action: RecordLifecycleAction; artifactId: string; title?: string; status?: string; format?: string; path?: string; version?: number; provenance?: ProvenanceRef }
+  | { kind: 'annotation-event'; action: RecordLifecycleAction; annotationId: string; targetKind: string; targetId?: string; status?: string; provenance?: ProvenanceRef }
+  | { kind: 'provenance'; subjectKind: 'requirement' | 'artifact' | 'annotation' | 'plan' | 'memory' | 'tool' | 'session'; subjectId?: string; provenance: ProvenanceRef }
+  | { kind: 'task-event'; action: TaskEventAction; task: BackgroundTaskEventView; provenance?: ProvenanceRef }
   | { kind: 'approval-decision'; tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }
   | { kind: 'interaction-request'; request: InteractionRequest }
   | { kind: 'turn-complete'; answer: string }
   | { kind: 'turn-error'; message: string }
   | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number }
-  | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string }
+  | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string; running?: boolean }
+  // A PERSISTENT, turn-scoped notice the agent wants on the record (not a
+  // transient status line) — e.g. the provider truncated the reply at its token
+  // cap. Rendered as a durable status row, mirroring the CLI.
+  | { kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { kind: 'query-result'; id: string; ok: boolean; result?: unknown; error?: string };
 
 export type AgentEventMessage = EventEnvelope & { event: AgentEvent };
@@ -52,9 +110,27 @@ export type AgentEventMessage = EventEnvelope & { event: AgentEvent };
 const EVENT_KINDS = new Set<string>([
   'turn-start', 'status', 'assistant-turn-start', 'assistant-delta', 'assistant-turn-end',
   'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
-  'child-complete', 'plan-update', 'compaction', 'memory', 'approval-decision',
+  'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
+  'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'session-changed', 'query-result',
+  'notice',
 ]);
+
+/** Structural guard for a {@link BackgroundTaskEventView}. Pure. */
+export function isBackgroundTaskEventView(value: unknown): value is BackgroundTaskEventView {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === 'string' &&
+    typeof v.kind === 'string' &&
+    typeof v.status === 'string' &&
+    typeof v.title === 'string' &&
+    typeof v.workspaceRoot === 'string' &&
+    typeof v.sessionKey === 'string' &&
+    typeof v.createdAt === 'string' &&
+    typeof v.updatedAt === 'string'
+  );
+}
 
 /** Structural guard for a wire-decoded event message. Pure. */
 export function isAgentEventMessage(value: unknown): value is AgentEventMessage {
@@ -70,7 +146,7 @@ export function isAgentEventMessage(value: unknown): value is AgentEventMessage 
 // ---------------------------------------------------------------------------
 
 export type AgentCommand =
-  | { kind: 'start-turn'; prompt: string }
+  | { kind: 'start-turn'; prompt: string; hidden?: boolean }
   | { kind: 'interrupt' }
   | { kind: 'interaction-response'; id: string; response: InteractionResponse }
   | { kind: 'query'; id: string; name: string; args?: Record<string, unknown> }
@@ -192,6 +268,7 @@ export class InteractionBroker {
  */
 export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
+  onNotice: (notice: { level: 'info' | 'warn'; message: string }) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, callId?: string) => void;
   onToolEnd: (tool: string, result: { success: boolean; summary: string; preview?: string }, callId?: string) => void;
   onAssistantTurnStart: () => void;
@@ -201,6 +278,10 @@ export interface BridgedCallbacks {
   onPlanUpdate: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>, explanation?: string) => void;
   onCompactionEvent: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
   onMemoryEvent: (event: { kind?: string; level?: 'info' | 'warn'; text?: string; reason?: string }) => void;
+  onRequirementEvent: (event: { action: RecordLifecycleAction; requirementId: string; title?: string; status?: string; provenance?: ProvenanceRef }) => void;
+  onArtifactEvent: (event: { action: RecordLifecycleAction; artifactId: string; title?: string; status?: string; format?: string; path?: string; version?: number; provenance?: ProvenanceRef }) => void;
+  onAnnotationEvent: (event: { action: RecordLifecycleAction; annotationId: string; targetKind: string; targetId?: string; status?: string; provenance?: ProvenanceRef }) => void;
+  onProvenanceEvent: (event: { subjectKind: 'requirement' | 'artifact' | 'annotation' | 'plan' | 'memory' | 'tool' | 'session'; subjectId?: string; provenance: ProvenanceRef }) => void;
   onApproval: (event: { tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }) => void;
   onChildToolStart: (event: { childId: string; role: string; tool: string; args: Record<string, unknown> }) => void;
   onChildToolEnd: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
@@ -214,6 +295,7 @@ export type EmitEvent = (event: AgentEvent) => void;
 export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
   return {
     onStatusUpdate: (text) => emit({ kind: 'status', text }),
+    onNotice: (notice) => emit({ kind: 'notice', level: notice.level, message: notice.message }),
     onToolStart: (tool, args, callId) => emit({ kind: 'tool-start', tool, args: args ?? {}, callId }),
     onToolEnd: (tool, result, callId) =>
       emit({ kind: 'tool-end', tool, ok: result.success, summary: result.summary, preview: result.preview, callId }),
@@ -225,6 +307,10 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
     onCompactionEvent: (event) => emit({ kind: 'compaction', ...event }),
     onMemoryEvent: (event) =>
       emit({ kind: 'memory', level: event.level ?? 'info', text: event.text ?? event.reason ?? String(event.kind ?? '') }),
+    onRequirementEvent: (event) => emit({ kind: 'requirement-event', ...event }),
+    onArtifactEvent: (event) => emit({ kind: 'artifact-event', ...event }),
+    onAnnotationEvent: (event) => emit({ kind: 'annotation-event', ...event }),
+    onProvenanceEvent: (event) => emit({ kind: 'provenance', ...event }),
     onApproval: (event) => emit({ kind: 'approval-decision', ...event }),
     onChildToolStart: (event) => emit({ kind: 'child-tool-start', ...event }),
     onChildToolEnd: (event) => emit({ kind: 'child-tool-end', ...event }),

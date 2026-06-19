@@ -960,8 +960,11 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
         console.log(chalk.bold(`\n${full ? 'Full' : 'Recent'} transcript (${entries.length} entries):`));
         for (const e of entries) {
           const text = formatTranscriptContent(e.content ?? e.tool_calls ?? '');
-          const roleColor = e.role === 'user' ? chalk.yellow : e.role === 'assistant' ? chalk.green : e.role === 'tool' ? chalk.magenta : chalk.cyan;
-          console.log(`  ${chalk.gray(e.timestamp)} ${roleColor(e.role)} ${chalk.gray(text)}`);
+          // A role:'user' entry WITH a name is an injected system/guard message,
+          // not a user turn — label it `guard` so the dump isn't misleading.
+          const role = e.role === 'user' && e.name ? e.name : e.role;
+          const roleColor = role === 'user' ? chalk.yellow : role === 'assistant' ? chalk.green : role === 'tool' ? chalk.magenta : chalk.cyan;
+          console.log(`  ${chalk.gray(e.timestamp)} ${roleColor(role)} ${chalk.gray(text)}`);
         }
         if (!full && entries.length === 10) {
           console.log(chalk.gray(`\n  (use /agent ${id} --full to see all entries)`));

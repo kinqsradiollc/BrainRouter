@@ -12,13 +12,13 @@ import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 import { WorkflowCard } from '../chat/WorkflowCard.js';
 import { HomeView } from './HomeView.js';
 import { WorkElapsed } from './WorkElapsed.js';
-import type { ChatRow, WorkflowDetail, SessionRow } from '../types.js';
+import type { ChatRow, TaskViewState, WorkflowDetail, SessionRow } from '../types.js';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { ConfigSnapshot } from '../settings.js';
 import type { PanelId } from '../panels/Panel.js';
 
 type GitInfo = { repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null;
-type TaskView = { id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null;
+type TaskView = TaskViewState | null;
 type HomeStats = { sessions: number; turns: number; activeDays: number; currentStreak: number; longestStreak: number; model: string; perDay: Record<string, number> } | null;
 type InteractionResponse = { type: 'confirm'; approved: boolean } | { type: 'choice'; labels: string[] } | { type: 'dismissed' };
 
@@ -70,6 +70,7 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
     snapshot, sessions, resumeSession, forkParent, transcriptEls, liveText, running, turnStart, reasoningTail,
     statusLine, interaction, answerInteraction, q, chatEnd, atBottom, hasConversation, changedFiles, ensurePanel, composer,
   } = p;
+  const taskTitle = taskView?.title || taskView?.goal || taskView?.role || taskView?.kind;
   return (
     <main className={`center${homeMode ? ' home-mode' : ''}${railOpen ? '' : ' no-rail'}`}>
       <header className="chat-head">
@@ -78,12 +79,15 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
           <b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b>
           <span className="crumb-sep">/</span>
           {taskView ? (
-            /* DESK-6v — viewing a sub-agent: ONE breadcrumb (no second header
-               bar). The parent session is clickable = back. */
+            /* Background task viewer: keep it visually separate from the
+               parent chat so review/re-run work does not look like a nested
+               session under the visible conversation title. */
             <>
-              <button className="crumb-link" onClick={() => setTaskView(null)}>{sessionTitle}</button>
+              <button className="crumb-link task-back-link" onClick={() => setTaskView(null)}>Chat</button>
               <span className="crumb-sep">/</span>
-              <span className="crumb-cur">{taskView.role || taskView.kind}</span>
+              <span className="crumb-muted">Background task</span>
+              <span className="crumb-sep">/</span>
+              <span className="crumb-cur">{taskTitle}</span>
               {taskView.status ? <span className={`task-status ${taskView.status}`}>{taskView.status}</span> : null}
             </>
           ) : sessionTitle}

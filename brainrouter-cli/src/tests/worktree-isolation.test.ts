@@ -9,7 +9,7 @@ import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, a
 import { finalizeBuildLoop, finalizeFanOutBuild, verifyLooksGreen, reviewHasBlocker } from '../orchestration/buildLoop.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
 import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
-import { getCliStateDir, getBrainrouterHome } from '../state/cliState.js';
+import { getStateDir, getBrainrouterHome } from '../state/cliState.js';
 import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 
 function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -403,7 +403,7 @@ test('BUILD-LOOP P2 (review) prepareSharedWorktree resets a reused dirty worktre
       assert.equal(fs.readFileSync(path.join(second.workspaceRoot, 'src', 'index.ts'), 'utf8'), 'export const x = 1;\n', 'reset to clean HEAD');
       assert.equal(fs.existsSync(path.join(second.workspaceRoot, 'untracked.tmp')), false, 'untracked leftovers cleaned');
       // The leftover edits were preserved to a recovery patch (no silent loss).
-      const patchDir = path.join(getCliStateDir(workspace), 'worktree-patches');
+      const patchDir = path.join(getStateDir(workspace), 'worktree-patches');
       const leftovers = fs.existsSync(patchDir) ? fs.readdirSync(patchDir).filter((f) => f.startsWith('leftover-')) : [];
       assert.ok(leftovers.length >= 1, 'leftover edits preserved as a recovery patch');
     } finally {
@@ -485,7 +485,7 @@ test('BUILD-LOOP P2 finalizeBuildLoop preserves a patch on red verify (no merge)
 
 test('CODEX-WORKTREE-MERGEBACK (A3) pruneWorktreePatches removes patches past the retention window', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
-    const dir = path.join(getCliStateDir(workspace), 'worktree-patches');
+    const dir = path.join(getStateDir(workspace), 'worktree-patches');
     fs.mkdirSync(dir, { recursive: true });
     const fresh = path.join(dir, 'agent-fresh.patch');
     const old = path.join(dir, 'agent-old.patch');
@@ -518,7 +518,7 @@ async function makeHeldSlice(workspace: string, sliceId: string, file: string, c
   const wt = prepareSharedWorktree(workspace, sliceId)!;
   fs.mkdirSync(path.dirname(path.join(wt.workspaceRoot, file)), { recursive: true });
   fs.writeFileSync(path.join(wt.workspaceRoot, file), content, 'utf8');
-  const patchFile = path.join(getCliStateDir(workspace), 'worktree-patches', `${sliceId}.patch`);
+  const patchFile = path.join(getStateDir(workspace), 'worktree-patches', `${sliceId}.patch`);
   const cleanup = removeChildWorktree(wt.isolation, { applyBack: false, patchFile });
   return { id: sliceId, patchPath: cleanup.patchPath };
 }

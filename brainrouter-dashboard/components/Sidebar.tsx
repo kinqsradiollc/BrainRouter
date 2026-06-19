@@ -455,15 +455,15 @@ MEMORY ENGINE
                         zIndex: 2,
                         position: "relative",
                         background: "transparent",
-                        borderLeft: isCollapsed ? "none" : (isActive ? "2px solid var(--accent)" : "2px solid transparent"),
+                        borderLeft: isCollapsed ? "none" : "2px solid transparent",
                         borderRight: isCollapsed && isActive ? "2px solid var(--accent)" : "none",
-                        paddingLeft: isCollapsed ? "0" : (isActive ? "13px" : "15px"),
+                        paddingLeft: isCollapsed ? "0" : "15px",
                         height: "36px",
                         borderRadius: isActive ? "0 8px 8px 0" : "8px",
                         color: isActive ? "var(--text)" : "var(--text-secondary)",
                         fontSize: "13.5px",
                         fontWeight: isActive ? 500 : 400,
-                        transition: "color .16s var(--ease), background .16s var(--ease)",
+                        transition: "color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease)",
                       }}
                     >
                       <span style={{ color: isActive ? "var(--accent)" : "var(--text-muted)", display: "inline-flex", alignItems: "center", justifyContent: "center", width: isCollapsed ? "100%" : "auto", flexShrink: 0 }}>

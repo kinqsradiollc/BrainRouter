@@ -93,6 +93,16 @@ export function closeTab(tabs: EditorTab[], path: string): EditorTab[] {
   return tabs.filter((t) => t.path !== path);
 }
 
+export function reorderTabs(tabs: EditorTab[], draggedPath: string, targetPath: string): EditorTab[] {
+  const from = tabs.findIndex((t) => t.path === draggedPath);
+  const to = tabs.findIndex((t) => t.path === targetPath);
+  if (from < 0 || to < 0 || from === to) return tabs;
+  const next = [...tabs];
+  const [tab] = next.splice(from, 1);
+  next.splice(from < to ? to - 1 : to, 0, tab);
+  return next;
+}
+
 /** Pick the active path after closing `closed`, given the prior active path. */
 export function nextActivePath(tabs: EditorTab[], closed: string, prevActive: string | null): string | null {
   const remaining = tabs.filter((t) => t.path !== closed);
