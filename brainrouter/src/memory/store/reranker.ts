@@ -1,6 +1,6 @@
 import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
-import { fetchWithExternalRetry } from "../retry.js";
-import { resolveLLMTimeoutMs } from "../llm-response.js";
+import { fetchWithExternalRetry } from "../util/retry.js";
+import { resolveLLMTimeoutMs } from "../llm/llm-response.js";
 
 export interface RankedResult {
   index: number;

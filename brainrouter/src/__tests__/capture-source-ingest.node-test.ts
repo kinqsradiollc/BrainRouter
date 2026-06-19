@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
-import { redactSensitiveMemoryText } from "../memory/redaction.js";
+import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 import { contentHash } from "../memory/pipeline/apply-dedup.js";
 
 // extractEveryNTurns set absurdly high so cognitive extraction never fires —

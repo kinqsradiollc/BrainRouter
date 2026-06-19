@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapWithConcurrency, readEmbedConcurrency } from "../memory/concurrency.js";
+import { mapWithConcurrency, readEmbedConcurrency } from "../memory/util/concurrency.js";
 
 describe("mapWithConcurrency", () => {
   it("processes all items, preserving input order", async () => {

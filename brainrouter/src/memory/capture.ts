@@ -13,7 +13,7 @@ import { runAsJob, recordInlineJob } from "./scheduler/runner.js";
 import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "./pipeline/apply-dedup.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
-import { redactSensitiveMemoryText } from "./redaction.js";
+import { redactSensitiveMemoryText } from "./util/redaction.js";
 import { ingestSource, type SourceIngestStore } from "./source/ingest.js";
 import { attributeRecordToChunks, readProvenanceConfig, type AttributableChunk } from "./source/attribution.js";
 import crypto from "node:crypto";

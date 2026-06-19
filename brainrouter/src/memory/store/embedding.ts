@@ -1,7 +1,7 @@
 import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
-import { fetchWithExternalRetry } from "../retry.js";
-import { acquireLLMSlot } from "../llm-semaphore.js";
-import { resolveLLMTimeoutMs } from "../llm-response.js";
+import { fetchWithExternalRetry } from "../util/retry.js";
+import { acquireLLMSlot } from "../llm/llm-semaphore.js";
+import { resolveLLMTimeoutMs } from "../llm/llm-response.js";
 
 export class EmbeddingService {
   private readonly endpoint: string;

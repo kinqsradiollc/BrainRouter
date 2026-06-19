@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "../memory/llm-response.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "../memory/llm/llm-response.js";
 
 describe("LLM response helpers", () => {
   afterEach(() => {

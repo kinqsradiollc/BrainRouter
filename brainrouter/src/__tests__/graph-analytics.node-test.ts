@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pageRank, articulationPoints, shortestPath, namespaceOverview, type GraphEdgeLite } from "../memory/graph-analytics.js";
+import { pageRank, articulationPoints, shortestPath, namespaceOverview, type GraphEdgeLite } from "../memory/graph/graph-analytics.js";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
 

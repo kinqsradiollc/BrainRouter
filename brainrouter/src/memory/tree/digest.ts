@@ -9,7 +9,7 @@
  */
 
 import type { IMemoryStore, LLMRunner } from "@kinqs/brainrouter-types";
-import { redactSensitiveMemoryText } from "../redaction.js";
+import { redactSensitiveMemoryText } from "../util/redaction.js";
 
 const TREE_DIGEST_SYSTEM =
   "You are a memory summarizer. Given several child memory-note summaries, write ONE concise parent summary that captures their shared themes and the most important specifics. Output only the summary prose — no preamble, no bullet headers, no markdown headings. Keep it under 120 words.";

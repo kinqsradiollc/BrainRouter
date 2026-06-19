@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
-import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost, extractIntraFileCallEdges, extractImportSpecifiers, resolveRelativeImport } from "../memory/code-retrieval.js";
+import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost, extractIntraFileCallEdges, extractImportSpecifiers, resolveRelativeImport } from "../memory/recall/code-retrieval.js";
 import type { SourceChunk } from "@kinqs/brainrouter-types";
 
 function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {

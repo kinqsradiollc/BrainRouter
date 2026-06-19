@@ -5,7 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { isForeignAbsolutePath, resolveRegistryConfig } from "../../resolver.js";
 import { appendWorkingStep, compressStepLog, readWorkingSteps, type WorkingStep } from "./step-log.js";
 import { buildAnnotatedCanvas, readWorkingCanvas, writeWorkingCanvas } from "./canvas.js";
-import { redactSensitiveMemoryText } from "../redaction.js";
+import { redactSensitiveMemoryText } from "../util/redaction.js";
 
 export type TokenPressureLevel = "none" | "mild" | "aggressive";
 

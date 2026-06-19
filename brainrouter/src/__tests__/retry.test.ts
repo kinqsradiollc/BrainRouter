@@ -4,7 +4,7 @@ import {
   fetchWithExternalRetry,
   isTransientConnectionBody,
   retryExternalCall,
-} from "../memory/retry.js";
+} from "../memory/util/retry.js";
 
 describe("external API retry helpers", () => {
   it("retries retryable HTTP errors and returns the successful response", async () => {
