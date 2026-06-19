@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactSensitiveMemoryText } from "../memory/redaction.js";
+import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 
 describe("memory redaction", () => {
   it("redacts tokens and env-style secrets before capture", () => {

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
-import { redactSensitiveMemoryText } from "../memory/redaction.js";
+import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 import { contentHash } from "../memory/pipeline/apply-dedup.js";
 
 /**

@@ -1,7 +1,7 @@
 import type { BlackboardItem, BlackboardItemInput, BlackboardStatus } from "@kinqs/brainrouter-types";
 import type { MemoryEngine } from "../engine.js";
 import { reconcileBlackboard } from "./reconcile.js";
-import { redactSensitiveMemoryText } from "../redaction.js";
+import { redactSensitiveMemoryText } from "../util/redaction.js";
 
 /**
  * REFAC-ENGINE-SPLIT (0.4.6) — the blackboard-domain engine operations, extracted

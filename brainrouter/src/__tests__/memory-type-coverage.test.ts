@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COGNITIVE_MEMORY_TYPES } from "@kinqs/brainrouter-types";
-import { TYPE_CONFIGS } from "../memory/memory-type-config.js";
+import { TYPE_CONFIGS } from "../memory/config/memory-type-config.js";
 
 // Drift guard: the canonical type list (used by the dashboard /memories
 // filter and any other type-enumerating UI) must stay in lockstep with the

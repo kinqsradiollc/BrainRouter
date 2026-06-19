@@ -1,7 +1,7 @@
 import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/cognitive-extraction.js";
-import { getMemoryTypeConfig } from "../memory-type-config.js";
+import { getMemoryTypeConfig } from "../config/memory-type-config.js";
 import type { SensoryRecord, CognitiveRecord, LLMRunner, MemorySourceKind, MemoryType, MemoryVerificationStatus } from "@kinqs/brainrouter-types";
-import { isExternalTimeoutError } from "../llm-response.js";
+import { isExternalTimeoutError } from "../llm/llm-response.js";
 import crypto from "node:crypto";
 
 const ALLOWED_MEMORY_TYPES = new Set<MemoryType>([

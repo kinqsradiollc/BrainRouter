@@ -6,11 +6,11 @@ import { rerankerMaxDocChars } from "./store/reranker.js";
 import type { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { expandRecallWithGraph } from "./pipeline/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "./pipeline/skill-prewarm.js";
-import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./memory-type-config.js";
+import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "./config/memory-type-config.js";
 import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
-import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "./recall-refs.js";
-import { isExternalTimeoutError } from "./llm-response.js";
+import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "./util/recall-refs.js";
+import { isExternalTimeoutError } from "./llm/llm-response.js";
 import {
   effectivePriorityScore,
   churnAdjustedHalfLife,

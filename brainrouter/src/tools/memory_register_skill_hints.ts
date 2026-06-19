@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { memoryEngine } from '../memory/engine.js';
-import { loadSkillHints } from '../memory/skill-hints-loader.js';
+import { loadSkillHints } from '../memory/skills/skill-hints-loader.js';
 
 export const memoryRegisterSkillHintsToolSchema = {
   name: 'memory_register_skill_hints',

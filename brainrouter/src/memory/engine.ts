@@ -1,5 +1,5 @@
 import { SqliteMemoryStore } from "./store/sqlite.js";
-import type { StalenessThresholds } from "./lessonHygiene.js";
+import type { StalenessThresholds } from "./lessons/lessonHygiene.js";
 // REFAC-ENGINE-SPLIT (0.4.6) — lesson-domain ops live in lessons/lessonOps.ts;
 // the engine methods below are thin wrappers delegating to them.
 import * as lessonOps from "./lessons/lessonOps.js";
@@ -21,17 +21,17 @@ import { readTreePolicy, treeAutobuildEnabled, parentDomain, topicKeyForScene, S
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
 import { RelevanceJudgeService } from "./store/relevance-judge.js";
-import { scanSkillsForHints } from "./skill-hints-loader.js";
+import { scanSkillsForHints } from "./skills/skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/contextual-focus-builder.js";
-import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance-plan.js";
+import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance/governance-plan.js";
 import { renderRecordMarkdown, renderTreeNodeMarkdown, vaultHash } from "./vault/render.js";
 import { distillCoreIdentity } from "./pipeline/identity-distiller.js";
 import { spikeSkill as spikeSkillActivation, decayPotential } from "./pipeline/skill-prewarm.js";
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
-import { fetchWithExternalRetry } from "./retry.js";
-import { acquireLLMSlot } from "./llm-semaphore.js";
-import { extractChatCompletionText, resolveLLMTimeoutMs } from "./llm-response.js";
+import { fetchWithExternalRetry } from "./util/retry.js";
+import { acquireLLMSlot } from "./llm/llm-semaphore.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs } from "./llm/llm-response.js";
 import "dotenv/config";
 import path from "node:path";
 import os from "node:os";
@@ -40,13 +40,13 @@ import { randomBytes } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeNodeInput, MemoryTreeKind, RelatedChunkHit, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
-import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks, extractImportSpecifiers, resolveRelativeImport } from "./code-retrieval.js";
-import { buildSkillExtractionPrompt, parseSkillResponse } from "./skill-extract.js";
-import { buildReflectPrompt, parseReflectResponse } from "./reflect.js";
-import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "./graph-analytics.js";
+import { extractChunkQueryTerms, languageScopeFor, rankRelatedChunks, extractImportSpecifiers, resolveRelativeImport } from "./recall/code-retrieval.js";
+import { buildSkillExtractionPrompt, parseSkillResponse } from "./skills/skill-extract.js";
+import { buildReflectPrompt, parseReflectResponse } from "./util/reflect.js";
+import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "./graph/graph-analytics.js";
 import { hashPassword } from "../api/auth/crypto.js";
-import { getMemoryTypeConfig } from "./memory-type-config.js";
-import { redactSensitiveMemoryText } from "./redaction.js";
+import { getMemoryTypeConfig } from "./config/memory-type-config.js";
+import { redactSensitiveMemoryText } from "./util/redaction.js";
 
 // Configure default path
 const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");

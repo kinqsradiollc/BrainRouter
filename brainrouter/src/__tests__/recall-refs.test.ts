@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "../memory/recall-refs.js";
+import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "../memory/util/recall-refs.js";
 
 /**
  * MEM-17 (0.4.4) — recall expansion refs. A recalled record exposes its precise
