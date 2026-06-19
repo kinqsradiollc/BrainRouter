@@ -8,6 +8,8 @@ import { expandImportRecord, readImportChunkChars } from "../pipeline/chunk-impo
 import { mapWithConcurrency, readEmbedConcurrency } from "../util/concurrency.js";
 import { bm25RankToScore, buildFtsQuery, parseJsonObject, parseJsonArray, cognitiveRowToRecord, evidenceRowToRecord, activeSessionRowToRecord, inboxRowToRecord, jobRowToRecord, operationRowToRecord } from "./sqlite/converters.js";
 import { SqliteSourceStore } from "./sqlite/sourceStore.js";
+import { SqliteGraphStore } from "./sqlite/graphStore.js";
+import { SqliteConnectionsStore } from "./sqlite/connectionsStore.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
@@ -19,6 +21,8 @@ export class SqliteMemoryStore implements IMemoryStore {
   private db: DatabaseSync;
   // ADR-004 Phase 3 — extracted capability sub-stores (composed over `this.db`).
   private readonly sourceStore: SqliteSourceStore;
+  private readonly graphStore: SqliteGraphStore;
+  private readonly connectionsStore: SqliteConnectionsStore;
 
   // Sensory statements
   private stmtSensoryUpsertMeta!: StatementSync;
@@ -46,6 +50,8 @@ export class SqliteMemoryStore implements IMemoryStore {
       throw new Error(`${DB_VERSION_ERROR}\n${e}`);
     }
     this.sourceStore = new SqliteSourceStore(this.db);
+    this.graphStore = new SqliteGraphStore(this.db);
+    this.connectionsStore = new SqliteConnectionsStore(this.db);
 
     this.db.exec("PRAGMA busy_timeout = 5000");
 
@@ -2860,165 +2866,27 @@ export class SqliteMemoryStore implements IMemoryStore {
   // ============================
 
   public getAllGraphNodes(userId: string): GraphNode[] {
-    const stmt = this.db.prepare("SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ?");
-    const rows = stmt.all(userId) as any[];
-    return rows.map(r => ({
-      id: r.id, userId: r.user_id, entity: r.entity,
-      entityType: r.entity_type, skillTag: r.skill_tag,
-      confidence: r.confidence, sourceRecordId: r.source_record_id,
-      createdTime: r.created_time
-    }));
+    return this.graphStore.getAllGraphNodes(userId);
   }
 
-  /** DASH-1 — all of a user's graph edges (for whole-graph analytics). */
   public getAllGraphEdges(userId: string): GraphEdge[] {
-    const rows = this.db.prepare(
-      "SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time FROM graph_edges WHERE user_id = ?",
-    ).all(userId) as any[];
-    return rows.map(r => ({
-      id: r.id, userId: r.user_id, fromNodeId: r.from_node_id, toNodeId: r.to_node_id,
-      relation: r.relation, skillTag: r.skill_tag, confidence: r.confidence,
-      sourceRecordId: r.source_record_id, createdTime: r.created_time,
-    }));
+    return this.graphStore.getAllGraphEdges(userId);
   }
 
   public upsertGraphNode(node: GraphNode) {
-    const stmt = this.db.prepare(`
-      INSERT INTO graph_nodes (id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        entity_type=excluded.entity_type,
-        skill_tag=excluded.skill_tag,
-        confidence=excluded.confidence,
-        source_record_id=excluded.source_record_id
-    `);
-    stmt.run(
-      node.id, node.userId, node.entity, node.entityType, node.skillTag || "",
-      node.confidence, node.sourceRecordId, node.createdTime
-    );
+    this.graphStore.upsertGraphNode(node);
   }
 
   public upsertGraphEdge(edge: GraphEdge) {
-    const stmt = this.db.prepare(`
-      INSERT INTO graph_edges (id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(user_id, from_node_id, to_node_id, relation) DO UPDATE SET
-        skill_tag=excluded.skill_tag,
-        confidence=excluded.confidence,
-        source_record_id=excluded.source_record_id,
-        created_time=excluded.created_time
-    `);
-    stmt.run(
-      edge.id, edge.userId, edge.fromNodeId, edge.toNodeId, edge.relation,
-      edge.skillTag || "", edge.confidence, edge.sourceRecordId, edge.createdTime
-    );
+    this.graphStore.upsertGraphEdge(edge);
   }
 
   public getGraphNodeByEntity(userId: string, entity: string): GraphNode | null {
-    const stmt = this.db.prepare(
-      "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ? AND LOWER(entity) = LOWER(?)"
-    );
-    const row = stmt.get(userId, entity) as any;
-    if (!row) return null;
-    return {
-      id: row.id,
-      userId: row.user_id,
-      entity: row.entity,
-      entityType: row.entity_type,
-      skillTag: row.skill_tag,
-      confidence: row.confidence,
-      sourceRecordId: row.source_record_id,
-      createdTime: row.created_time
-    };
+    return this.graphStore.getGraphNodeByEntity(userId, entity);
   }
 
   public getGraphNeighbors(userId: string, entityId: string, skillTag?: string, maxHops = 2): { nodes: GraphNode[]; edges: GraphEdge[] } {
-    const visitedNodes = new Map<string, GraphNode>();
-    const visitedEdges = new Map<string, GraphEdge>();
-    
-    const stmtNodeById = this.db.prepare(
-      "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = ? AND id = ?"
-    );
-    const startRow = stmtNodeById.get(userId, entityId) as any;
-    if (!startRow) return { nodes: [], edges: [] };
-    
-    const startNode: GraphNode = {
-      id: startRow.id,
-      userId: startRow.user_id,
-      entity: startRow.entity,
-      entityType: startRow.entity_type,
-      skillTag: startRow.skill_tag,
-      confidence: startRow.confidence,
-      sourceRecordId: startRow.source_record_id,
-      createdTime: startRow.created_time
-    };
-    visitedNodes.set(startNode.id, startNode);
-
-    let queue = [startNode.id];
-    let currentHop = 0;
-
-    while (queue.length > 0 && currentHop < maxHops) {
-      const nextQueue: string[] = [];
-      
-      for (const nodeId of queue) {
-        const queryParams: any[] = [userId, nodeId, nodeId];
-        
-        let edgeSql = `
-          SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time
-          FROM graph_edges
-          WHERE user_id = ? AND (from_node_id = ? OR to_node_id = ?)
-        `;
-        if (skillTag) {
-          edgeSql += " AND (skill_tag = ? OR skill_tag = '')";
-          queryParams.push(skillTag);
-        }
-        
-        const stmtEdges = this.db.prepare(edgeSql);
-        const edgeRows = stmtEdges.all(...queryParams) as any[];
-        
-        for (const row of edgeRows) {
-          const edge: GraphEdge = {
-            id: row.id,
-            userId: row.user_id,
-            fromNodeId: row.from_node_id,
-            toNodeId: row.to_node_id,
-            relation: row.relation,
-            skillTag: row.skill_tag,
-            confidence: row.confidence,
-            sourceRecordId: row.source_record_id,
-            createdTime: row.created_time
-          };
-          visitedEdges.set(edge.id, edge);
-          
-          const neighborId = edge.fromNodeId === nodeId ? edge.toNodeId : edge.fromNodeId;
-          if (!visitedNodes.has(neighborId)) {
-            const neighborRow = stmtNodeById.get(userId, neighborId) as any;
-            if (neighborRow) {
-              const neighborNode: GraphNode = {
-                id: neighborRow.id,
-                userId: neighborRow.user_id,
-                entity: neighborRow.entity,
-                entityType: neighborRow.entity_type,
-                skillTag: neighborRow.skill_tag,
-                confidence: neighborRow.confidence,
-                sourceRecordId: neighborRow.source_record_id,
-                createdTime: neighborRow.created_time
-              };
-              visitedNodes.set(neighborId, neighborNode);
-              nextQueue.push(neighborId);
-            }
-          }
-        }
-      }
-      
-      queue = nextQueue;
-      currentHop++;
-    }
-
-    return {
-      nodes: Array.from(visitedNodes.values()),
-      edges: Array.from(visitedEdges.values())
-    };
+    return this.graphStore.getGraphNeighbors(userId, entityId, skillTag, maxHops);
   }
 
   // ============================
@@ -3383,74 +3251,26 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   public upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): void {
-    const stmt = this.db.prepare(`
-      INSERT INTO cognitive_connections (user_id, source_id, target_id, weight, last_activated_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(user_id, source_id, target_id) DO UPDATE SET
-        weight = excluded.weight,
-        last_activated_at = datetime('now')
-    `);
-    stmt.run(userId, sourceId, targetId, weight);
+    this.connectionsStore.upsertConnection(userId, sourceId, targetId, weight);
   }
 
   public getConnectionsForSource(userId: string, sourceId: string): Array<{ targetId: string; weight: number }> {
-    const rows = this.db.prepare(`
-      SELECT target_id, weight FROM cognitive_connections
-      WHERE user_id = ? AND source_id = ? AND weight >= 0.1
-    `).all(userId, sourceId) as any[];
-    return rows.map(r => ({ targetId: r.target_id, weight: r.weight }));
+    return this.connectionsStore.getConnectionsForSource(userId, sourceId);
   }
 
   public strengthenConnectionsBatch(userId: string, pairs: Array<{ source: string; target: string }>, delta: number): void {
-    if (pairs.length === 0) return;
-    this.db.exec("BEGIN");
-    try {
-      const stmt = this.db.prepare(`
-        INSERT INTO cognitive_connections (user_id, source_id, target_id, weight, last_activated_at)
-        VALUES (?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(user_id, source_id, target_id) DO UPDATE SET
-          weight = MIN(1.0, weight + ?),
-          last_activated_at = datetime('now')
-      `);
-      for (const pair of pairs) {
-        stmt.run(userId, pair.source, pair.target, delta, delta);
-        stmt.run(userId, pair.target, pair.source, delta, delta);
-      }
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    this.connectionsStore.strengthenConnectionsBatch(userId, pairs, delta);
   }
 
   public decayConnections(userId: string, decayFactor: number): void {
-    const stmt = this.db.prepare(`
-      UPDATE cognitive_connections
-      SET weight = MAX(0.0, weight * ?)
-      WHERE user_id = ?
-    `);
-    stmt.run(decayFactor, userId);
+    this.connectionsStore.decayConnections(userId, decayFactor);
   }
 
   public pruneConnections(userId: string, threshold: number): void {
-    const stmt = this.db.prepare(`
-      DELETE FROM cognitive_connections
-      WHERE user_id = ? AND weight < ?
-    `);
-    stmt.run(userId, threshold);
+    this.connectionsStore.pruneConnections(userId, threshold);
   }
 
   public getAllConnections(userId: string): Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }> {
-    const rows = this.db.prepare(`
-      SELECT source_id, target_id, weight, last_activated_at
-      FROM cognitive_connections
-      WHERE user_id = ?
-    `).all(userId) as any[];
-    return rows.map(r => ({
-      sourceId: r.source_id,
-      targetId: r.target_id,
-      weight: r.weight,
-      lastActivatedAt: r.last_activated_at ?? "",
-    }));
+    return this.connectionsStore.getAllConnections(userId);
   }
 }
