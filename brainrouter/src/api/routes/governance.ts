@@ -2,6 +2,7 @@ import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
+import { sendError } from "../../contracts/http.js";
 
 export const governanceRouter = Router();
 governanceRouter.use(requireAnyAuth);
@@ -16,7 +17,7 @@ governanceRouter.post("/import", async (req: AuthedRequest, res) => {
   try {
     res.json(await memoryEngine.importMemories(req.userId!, req.body));
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid import payload" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid import payload");
   }
 });
 
@@ -33,7 +34,7 @@ governanceRouter.get("/audit", (req: AuthedRequest, res) => {
     }));
     res.json({ operations: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid pagination parameters" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid pagination parameters");
   }
 });
 
@@ -41,7 +42,7 @@ governanceRouter.get("/governance/diagnostics", (req: AuthedRequest, res) => {
   try {
     res.json(memoryEngine.getDiagnostics(scopeOps(req, req.query.userId)));
   } catch (error) {
-    res.status(errorStatus(error, 400)).json({ error: error instanceof Error ? error.message : "Invalid diagnostics parameters" });
+    sendError(res, errorStatus(error, 400), error instanceof Error ? error.message : "Invalid diagnostics parameters");
   }
 });
 
@@ -66,7 +67,7 @@ governanceRouter.get("/operations", (req: AuthedRequest, res) => {
     }));
     res.json({ operations: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(errorStatus(error, 400)).json({ error: error instanceof Error ? error.message : "Invalid parameters" });
+    sendError(res, errorStatus(error, 400), error instanceof Error ? error.message : "Invalid parameters");
   }
 });
 
@@ -80,7 +81,7 @@ governanceRouter.post("/recall/explain", async (req: AuthedRequest, res) => {
       userId?: string;
     };
     if (!query || typeof query !== "string" || query.trim().length === 0) {
-      res.status(400).json({ error: "query is required" });
+      sendError(res, 400, "query is required");
       return;
     }
     const result = await memoryEngine.explainRecall({
@@ -91,6 +92,6 @@ governanceRouter.post("/recall/explain", async (req: AuthedRequest, res) => {
     });
     res.json(result);
   } catch (error) {
-    res.status(errorStatus(error, 500)).json({ error: error instanceof Error ? error.message : "Explain recall failed" });
+    sendError(res, errorStatus(error, 500), error instanceof Error ? error.message : "Explain recall failed");
   }
 });

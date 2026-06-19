@@ -13,6 +13,7 @@ import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { buildBrainAgentStatuses } from "../../memory/agents/status.js";
+import { sendError } from "../../contracts/http.js";
 
 export const brainRouter = Router();
 brainRouter.use(requireAnyAuth);
@@ -21,7 +22,7 @@ brainRouter.get("/agents", (_req, res) => {
   try {
     res.json({ agents: buildBrainAgentStatuses(memoryEngine.store) });
   } catch (err: any) {
-    res.status(500).json({ error: `brain agents failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain agents failed: ${err?.message ?? err}`);
   }
 });
 
@@ -32,7 +33,7 @@ brainRouter.get("/jobs", (req, res) => {
     const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
     res.json({ jobs: memoryEngine.store.listMemoryJobs({ kind, limit }) });
   } catch (err: any) {
-    res.status(500).json({ error: `brain jobs failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain jobs failed: ${err?.message ?? err}`);
   }
 });
 
@@ -47,7 +48,7 @@ brainRouter.get("/sources", (req: AuthedRequest, res) => {
     const documents = typeof store.getSourceDocuments === "function" ? store.getSourceDocuments(req.userId!, limit) : [];
     res.json({ documents });
   } catch (err: any) {
-    res.status(500).json({ error: `brain sources failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain sources failed: ${err?.message ?? err}`);
   }
 });
 
@@ -61,13 +62,13 @@ brainRouter.get("/sources/:id/chunks", (req: AuthedRequest, res) => {
     // IDOR otherwise — the chunk query isn't user-scoped on its own).
     const doc = typeof store.getSourceDocument === "function" ? store.getSourceDocument(String(req.params.id)) : null;
     if (!doc || doc.userId !== req.userId) {
-      res.status(404).json({ error: "source document not found" });
+      sendError(res, 404, "source document not found");
       return;
     }
     const chunks = typeof store.getSourceChunksByDocument === "function" ? store.getSourceChunksByDocument(String(req.params.id)) : [];
     res.json({ chunks });
   } catch (err: any) {
-    res.status(500).json({ error: `brain source chunks failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain source chunks failed: ${err?.message ?? err}`);
   }
 });
 
@@ -79,7 +80,7 @@ brainRouter.get("/blackboard", (req: AuthedRequest, res) => {
     const items = typeof store.getBlackboardItems === "function" ? store.getBlackboardItems(req.userId!, status) : [];
     res.json({ items });
   } catch (err: any) {
-    res.status(500).json({ error: `brain blackboard failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain blackboard failed: ${err?.message ?? err}`);
   }
 });
 
@@ -91,7 +92,7 @@ brainRouter.get("/tree", (req: AuthedRequest, res) => {
     const roots = typeof store.getTreeRoots === "function" ? store.getTreeRoots(req.userId!, kind) : [];
     res.json({ roots });
   } catch (err: any) {
-    res.status(500).json({ error: `brain tree failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain tree failed: ${err?.message ?? err}`);
   }
 });
 
@@ -104,13 +105,13 @@ brainRouter.get("/tree/:id/children", (req: AuthedRequest, res) => {
     // Ownership gate: only the node's owner may drill its children.
     const node = typeof store.getTreeNode === "function" ? store.getTreeNode(String(req.params.id)) : null;
     if (!node || node.userId !== req.userId) {
-      res.status(404).json({ error: "tree node not found" });
+      sendError(res, 404, "tree node not found");
       return;
     }
     const children = typeof store.getTreeChildren === "function" ? store.getTreeChildren(String(req.params.id)) : [];
     res.json({ children });
   } catch (err: any) {
-    res.status(500).json({ error: `brain tree children failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain tree children failed: ${err?.message ?? err}`);
   }
 });
 
@@ -121,6 +122,6 @@ brainRouter.get("/vault", (req: AuthedRequest, res) => {
     const exports = typeof store.getVaultExports === "function" ? store.getVaultExports(req.userId!) : [];
     res.json({ exports });
   } catch (err: any) {
-    res.status(500).json({ error: `brain vault failed: ${err?.message ?? err}` });
+    sendError(res, 500, `brain vault failed: ${err?.message ?? err}`);
   }
 });

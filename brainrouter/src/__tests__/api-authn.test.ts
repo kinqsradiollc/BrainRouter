@@ -18,9 +18,22 @@ vi.mock("../memory/engine.js", () => ({
   },
 }));
 
-import { jwtSecretBootError, JWT_SECRET } from "../api/middleware/auth.js";
+import { jwtSecretBootError, JWT_SECRET, bearerFrom } from "../api/middleware/auth.js";
+import type { AuthedRequest } from "../api/middleware/auth.js";
 import { authRouter } from "../api/routes/auth.js";
 import { signJwt } from "../api/auth/crypto.js";
+
+describe("API-AUTHN — bearerFrom (shared header extraction)", () => {
+  const mk = (authorization?: string) => ({ headers: { authorization } }) as unknown as AuthedRequest;
+  it("extracts the trimmed token from a Bearer header", () => {
+    expect(bearerFrom(mk("Bearer  tok123 "))).toBe("tok123");
+  });
+  it("returns empty for a missing or non-bearer header", () => {
+    expect(bearerFrom(mk(undefined))).toBe("");
+    expect(bearerFrom(mk("Basic abc"))).toBe("");
+    expect(bearerFrom(mk(""))).toBe("");
+  });
+});
 
 describe("API-AUTHN — jwtSecretBootError (fail closed in production)", () => {
   it("errors only when production AND using the fallback secret", () => {

@@ -10,6 +10,7 @@ import {
 } from "../../integrations/generic-mcp.js";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
+import { sendError } from "../../contracts/http.js";
 
 export const hooksRouter = Router();
 hooksRouter.use(requireAnyAuth);
@@ -72,7 +73,7 @@ hooksRouter.post("/register", async (req: AuthedRequest, res) => {
     res.status(201).json({ registered: hook, captureResult });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid hook registration body";
-    res.status(errorStatus(error, 400)).json({ error: message });
+    sendError(res, errorStatus(error, 400), message);
   }
 });
 
@@ -87,6 +88,6 @@ hooksRouter.get("/status", (req: AuthedRequest, res) => {
     res.json({ hooks });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid hook status parameters";
-    res.status(errorStatus(error, 400)).json({ error: message });
+    sendError(res, errorStatus(error, 400), message);
   }
 });

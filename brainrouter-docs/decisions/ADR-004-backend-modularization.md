@@ -81,11 +81,19 @@ Refactor `brainrouter/` toward the ADR-003 shape, in five thrusts:
 
 ## Migration order (leaf-first, numbered phases)
 
-- **Phase 1 — Contracts + API cleanups.** Create `brainrouter/src/contracts/`;
-  lift the inline Zod tool/route schemas + shared DTOs into it (tools/routes
-  import from there); standardize the API error envelope (`{ error, code,
-  details? }`) via a shared helper, and collapse the three auth functions into a
-  single middleware factory. No new package; de-risks the seam in-repo.
+- **Phase 1 — Contracts + API cleanups.** Create `brainrouter/src/contracts/`
+  and make it the single source of truth for the **HTTP error envelope**
+  (`{ error, code, details? }`): `codeForStatus` / `statusForError` move here, the
+  terminal `errorHandler` consumes them, and a shared `sendError` helper replaces
+  the ~60 hand-rolled `res.status(n).json({ error })` route guards so every error
+  response carries a machine `code`. De-duplicate the auth middleware (shared
+  `bearerFrom` + API-key attach) while **keeping the three guards distinct** —
+  `requireAnyAuth` intentionally trusts a valid JWT without the DB/disabled
+  re-check `requireJwt` enforces, so a single mega-factory would either change
+  that security behaviour or add obscuring branches. No new package; de-risks the
+  seam in-repo. *(Lifting the inline Zod request/tool schemas is deferred: the
+  route validators don't duplicate tool schemas, so they migrate with the modular
+  tool registry in Phase 6 rather than as low-value relocation here.)*
 - **Phase 2 — Memory domain reorg.** Move `memory/*` into domain folders with
   shims (capture/recall/store/graph/lessons/blackboard/tree/working/source/…).
   No logic change.

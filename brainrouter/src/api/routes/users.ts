@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireJwt, requireAdmin, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
+import { sendError } from "../../contracts/http.js";
 
 export const usersRouter = Router();
 usersRouter.use(requireJwt, requireAdmin);
@@ -27,14 +28,14 @@ usersRouter.get("/", (req, res) => {
     }));
     res.json({ users: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid pagination parameters" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid pagination parameters");
   }
 });
 
 usersRouter.post("/", (req: AuthedRequest, res) => {
   const userId = String(req.body?.userId ?? "").trim();
   if (!userId) {
-    res.status(400).json({ error: "userId is required" });
+    sendError(res, 400, "userId is required");
     return;
   }
   const displayName = String(req.body?.displayName ?? "").trim();
@@ -44,7 +45,7 @@ usersRouter.post("/", (req: AuthedRequest, res) => {
     const user = memoryEngine.createUser(userId, apiKey, displayName, isAdmin);
     res.status(201).json({ user });
   } catch (error: any) {
-    res.status(400).json({ error: error?.message ?? "Failed to create user" });
+    sendError(res, 400, error?.message ?? "Failed to create user");
   }
 });
 
@@ -52,11 +53,11 @@ usersRouter.put("/:id/status", (req: AuthedRequest, res) => {
   const userId = String(req.params.id);
   const status = req.body?.status === "disabled" ? "disabled" : req.body?.status === "active" ? "active" : null;
   if (!status) {
-    res.status(400).json({ error: "status must be active or disabled" });
+    sendError(res, 400, "status must be active or disabled");
     return;
   }
   if (userId === req.userId && status === "disabled") {
-    res.status(400).json({ error: "Cannot disable the current admin user" });
+    sendError(res, 400, "Cannot disable the current admin user");
     return;
   }
   memoryEngine.updateUserStatus(userId, status);
@@ -67,7 +68,7 @@ usersRouter.post("/:id/reset-key", (req, res) => {
   const userId = String(req.params.id);
   const user = memoryEngine.getUserById(userId);
   if (!user) {
-    res.status(404).json({ error: "User not found" });
+    sendError(res, 404, "User not found");
     return;
   }
   const apiKey = `br_${randomBytes(24).toString("hex")}`;
@@ -78,7 +79,7 @@ usersRouter.post("/:id/reset-key", (req, res) => {
 usersRouter.delete("/:id", (req: AuthedRequest, res) => {
   const userId = String(req.params.id);
   if (userId === req.userId) {
-    res.status(400).json({ error: "Cannot delete the current admin user" });
+    sendError(res, 400, "Cannot delete the current admin user");
     return;
   }
   memoryEngine.deleteUser(userId);
