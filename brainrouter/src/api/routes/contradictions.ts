@@ -4,6 +4,7 @@ import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
 import { validate } from "../middleware/validate.js";
 import { z } from "zod";
+import { sendError } from "../../contracts/http.js";
 
 export const contradictionsRouter = Router();
 contradictionsRouter.use(requireAnyAuth);
@@ -21,7 +22,7 @@ contradictionsRouter.get("/", (req: AuthedRequest, res) => {
     }));
     res.json({ contradictions: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid pagination parameters" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid pagination parameters");
   }
 });
 

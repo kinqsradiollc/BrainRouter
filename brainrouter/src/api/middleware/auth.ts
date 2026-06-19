@@ -2,8 +2,29 @@ import type { Request, Response, NextFunction } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { randomBytes } from "node:crypto";
 import { verifyJwt } from "../auth/crypto.js";
+import { sendError } from "../../contracts/http.js";
 
 export type AuthedRequest = Request & { userId?: string; isAdmin?: boolean; email?: string };
+
+/**
+ * Extract the bearer credential from the `Authorization` header (the one piece
+ * every auth guard below shares). Returns `""` when absent or non-bearer. Pure
+ * (no engine, no I/O) so it is unit-testable in isolation.
+ */
+export function bearerFrom(req: AuthedRequest): string {
+  const header = req.headers.authorization;
+  return header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+/** Look the API-key user up and attach identity to the request. */
+function attachApiKeyUser(req: AuthedRequest, key: string): boolean {
+  const user = memoryEngine.getUserByApiKey(key);
+  if (!user) return false;
+  req.userId = user.userId;
+  req.isAdmin = user.isAdmin;
+  req.email = user.email;
+  return true;
+}
 
 const configuredJwtSecret = process.env.BRAINROUTER_JWT_SECRET?.trim();
 const generatedJwtSecret = randomBytes(32).toString("hex");
@@ -27,60 +48,59 @@ if (USING_FALLBACK_JWT_SECRET) {
   console.error("[BrainRouter] WARNING: BRAINROUTER_JWT_SECRET not set. Using random secret — sessions will not survive restarts.");
 }
 
+// AUTH-GUARDS — three guards with intentionally divergent security semantics,
+// not one factory: `requireAuth` is API-key-only, `requireJwt` re-checks the
+// user in the DB + the disabled flag, and `requireAnyAuth` deliberately TRUSTS a
+// valid JWT payload without that re-check (its API-key branch reuses
+// `attachApiKeyUser`). They share `bearerFrom` + the `{ error, code }` envelope.
+
 export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const header = req.headers.authorization;
-  const key = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const key = bearerFrom(req);
   if (!key) {
-    res.status(401).json({ error: "API key required" });
+    sendError(res, 401, "API key required");
     return;
   }
-  const user = memoryEngine.getUserByApiKey(key);
-  if (!user) {
-    res.status(403).json({ error: "Invalid API key" });
+  if (!attachApiKeyUser(req, key)) {
+    sendError(res, 403, "Invalid API key");
     return;
   }
-  req.userId = user.userId;
-  req.isAdmin = user.isAdmin;
-  req.email = user.email;
   next();
 }
 
 export function requireJwt(req: AuthedRequest, res: Response, next: NextFunction) {
-  const header = req.headers.authorization;
-  const token = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const token = bearerFrom(req);
   if (!token) {
-    res.status(401).json({ error: "JWT required" });
+    sendError(res, 401, "JWT required");
     return;
   }
   const payload = verifyJwt(token, JWT_SECRET);
   if (!payload) {
-    res.status(401).json({ error: "Invalid or expired token" });
+    sendError(res, 401, "Invalid or expired token");
     return;
   }
   req.userId = typeof payload.userId === "string" ? payload.userId : undefined;
   req.isAdmin = Boolean(payload.isAdmin);
   req.email = typeof payload.email === "string" ? payload.email : undefined;
   if (!req.userId) {
-    res.status(401).json({ error: "Invalid or expired token" });
+    sendError(res, 401, "Invalid or expired token");
     return;
   }
   const user = memoryEngine.getUserById(req.userId);
   if (!user) {
-    res.status(401).json({ error: "Invalid or expired token" });
+    sendError(res, 401, "Invalid or expired token");
     return;
   }
   if (user.status === "disabled") {
-    res.status(403).json({ error: "Account disabled" });
+    sendError(res, 403, "Account disabled");
     return;
   }
   next();
 }
 
 export function requireAnyAuth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const header = req.headers.authorization;
-  const bearer = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const bearer = bearerFrom(req);
   if (!bearer) {
-    res.status(401).json({ error: "Authentication required" });
+    sendError(res, 401, "Authentication required");
     return;
   }
 
@@ -94,20 +114,16 @@ export function requireAnyAuth(req: AuthedRequest, res: Response, next: NextFunc
     }
   }
 
-  const user = memoryEngine.getUserByApiKey(bearer);
-  if (!user) {
-    res.status(401).json({ error: "Authentication required" });
+  if (!attachApiKeyUser(req, bearer)) {
+    sendError(res, 401, "Authentication required");
     return;
   }
-  req.userId = user.userId;
-  req.isAdmin = user.isAdmin;
-  req.email = user.email;
   next();
 }
 
 export function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction) {
   if (!req.isAdmin) {
-    res.status(403).json({ error: "Admin access required" });
+    sendError(res, 403, "Admin access required");
     return;
   }
   next();

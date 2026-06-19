@@ -14,20 +14,12 @@
  */
 
 import type { Request, Response, NextFunction } from "express";
+import { codeForStatus, statusForError } from "../../contracts/http.js";
 
-/** Map an HTTP status to a stable machine code for the envelope. */
-export function codeForStatus(status: number): string {
-  switch (status) {
-    case 400: return "bad_request";
-    case 401: return "unauthorized";
-    case 403: return "forbidden";
-    case 404: return "not_found";
-    case 409: return "conflict";
-    case 413: return "payload_too_large";
-    case 429: return "rate_limited";
-    default: return status >= 500 ? "internal_error" : "error";
-  }
-}
+// The status→code map and status resolver are the wire contract — they live in
+// `contracts/http.js` so routes, middleware, and the terminal handler agree on
+// one envelope. Re-exported here for the established import path.
+export { codeForStatus, statusForError };
 
 interface ErrorLike {
   name?: unknown;
@@ -37,16 +29,6 @@ interface ErrorLike {
   code?: unknown;
   issues?: unknown;
   stack?: unknown;
-}
-
-/** Resolve the HTTP status an error should map to. */
-export function statusForError(err: unknown): number {
-  const e = (err ?? {}) as ErrorLike;
-  if (e.name === "ZodError") return 400;
-  if (e.name === "ScopeError") return 403;
-  const raw = typeof e.status === "number" ? e.status : typeof e.statusCode === "number" ? e.statusCode : undefined;
-  if (typeof raw === "number" && raw >= 400 && raw <= 599) return raw;
-  return 500;
 }
 
 export interface ErrorHandlerOptions {

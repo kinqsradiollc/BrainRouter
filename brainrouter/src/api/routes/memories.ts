@@ -3,6 +3,7 @@ import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
 import { z } from "zod";
+import { sendError } from "../../contracts/http.js";
 
 export const memoriesRouter = Router();
 memoriesRouter.use(requireAnyAuth);
@@ -28,14 +29,14 @@ memoriesRouter.get("/", (req: AuthedRequest, res) => {
     }));
     res.json({ memories: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid pagination parameters" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid pagination parameters");
   }
 });
 
 memoriesRouter.get("/:recordId", (req: AuthedRequest, res) => {
   const result = memoryEngine.getMemoryById(req.userId!, String(req.params.recordId));
   if (!result) {
-    res.status(404).json({ error: "Memory not found" });
+    sendError(res, 404, "Memory not found");
     return;
   }
   res.json(result);
@@ -51,17 +52,17 @@ memoriesRouter.patch("/:recordId", (req: AuthedRequest, res) => {
       note: z.string().optional(),
     }).parse(req.body ?? {});
     if (body.content && body.content.length > 10000) {
-      res.status(400).json({ error: "Content too long" });
+      sendError(res, 400, "Content too long");
       return;
     }
     const result = memoryEngine.updateMemory(req.userId!, String(req.params.recordId), body);
     if (!result) {
-      res.status(404).json({ error: "Memory not found" });
+      sendError(res, 404, "Memory not found");
       return;
     }
     res.json(result);
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid request body" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid request body");
   }
 });
 
@@ -76,7 +77,7 @@ memoriesRouter.post("/:recordId/evidence", (req: AuthedRequest, res) => {
     const evidence = memoryEngine.addEvidence(req.userId!, String(req.params.recordId), body);
     res.status(201).json({ evidence });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid request body" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid request body");
   }
 });
 
