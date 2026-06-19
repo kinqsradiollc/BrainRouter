@@ -4,9 +4,10 @@
  * App passes its `q` IPC helper so ensurePanel can refresh worktrees/review on
  * open; everything else is self-contained panel state.
  */
-import { useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
+import { clampSideRailWidth, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
 
 export interface TermTab { id: number; kind: 'shell' | PanelId }
 
@@ -15,6 +16,7 @@ export interface PanelsApi {
   activeSideTab: PanelId | null;
   sidePanelOpen: boolean;
   sideWidth: number;
+  sideFullScreen: boolean;
   termDockOpen: boolean;
   termDockHeight: number;
   termTabs: TermTab[];
@@ -23,12 +25,14 @@ export interface PanelsApi {
   setActiveSideTab: Dispatch<SetStateAction<PanelId | null>>;
   setSidePanelOpen: Dispatch<SetStateAction<boolean>>;
   setSideWidth: Dispatch<SetStateAction<number>>;
+  setSideFullScreen: Dispatch<SetStateAction<boolean>>;
   setTermDockOpen: Dispatch<SetStateAction<boolean>>;
   setTermDockHeight: Dispatch<SetStateAction<number>>;
   setTermTabs: Dispatch<SetStateAction<TermTab[]>>;
   setActiveTerm: Dispatch<SetStateAction<number>>;
   ensurePanel: (id: PanelId) => void;
   closeSideTab: (id: PanelId) => void;
+  reorderSideTab: (dragged: PanelId, target: PanelId) => void;
   togglePanel: (id: PanelId) => void;
   openSideView: (id: PanelId) => void;
   openBottomDock: () => void;
@@ -40,15 +44,65 @@ export interface PanelsApi {
 }
 
 export function usePanels(q: (id: string, name: string, args?: Record<string, unknown>) => void): PanelsApi {
-  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => devPanels());
-  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => devPanels()[0] ?? null);
-  const [sidePanelOpen, setSidePanelOpen] = useState(() => devFlag('side') || devPanels().length > 0);
-  const [sideWidth, setSideWidth] = useState(330);
-  const [termDockOpen, setTermDockOpen] = useState(() => devFlag('terminal'));
-  const [termDockHeight, setTermDockHeight] = useState(210);
+  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => {
+    const saved = localStorage.getItem('br-side-tabs');
+    if (saved !== null) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed as PanelId[];
+      } catch (e) {
+        // ignore
+      }
+    }
+    return devPanels();
+  });
+  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => {
+    const saved = localStorage.getItem('br-active-side-tab');
+    if (saved !== null && saved !== 'null') return saved as PanelId;
+    return devPanels()[0] ?? null;
+  });
+  const [sidePanelOpen, setSidePanelOpen] = useState(() => {
+    const saved = localStorage.getItem('br-side-open');
+    if (saved !== null) return saved === '1';
+    return devFlag('side') || devPanels().length > 0;
+  });
+  // On launch, it starts at its minimum size (SIDE_RAIL_MIN).
+  const [sideWidth, setSideWidth] = useState(SIDE_RAIL_MIN);
+  const [sideFullScreen, setSideFullScreen] = useState(() => localStorage.getItem('br-side-fullscreen') === '1');
+  const [termDockOpen, setTermDockOpen] = useState(() => {
+    const saved = localStorage.getItem('br-dock-open');
+    if (saved !== null) return saved === '1';
+    return devFlag('terminal');
+  });
+  // On launch, it starts at its minimum height (140).
+  const [termDockHeight, setTermDockHeight] = useState(140);
   const [termTabs, setTermTabs] = useState<TermTab[]>([{ id: 1, kind: 'shell' }]);
   const [activeTerm, setActiveTerm] = useState(1);
   const termSeq = useRef(1);
+
+  useEffect(() => {
+    localStorage.setItem('br-side-w', String(clampSideRailWidth(sideWidth)));
+  }, [sideWidth]);
+
+  useEffect(() => {
+    localStorage.setItem('br-side-fullscreen', sideFullScreen ? '1' : '0');
+  }, [sideFullScreen]);
+
+  useEffect(() => {
+    localStorage.setItem('br-side-open', sidePanelOpen ? '1' : '0');
+  }, [sidePanelOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('br-side-tabs', JSON.stringify(sideTabs));
+  }, [sideTabs]);
+
+  useEffect(() => {
+    localStorage.setItem('br-active-side-tab', activeSideTab ? String(activeSideTab) : 'null');
+  }, [activeSideTab]);
+
+  useEffect(() => {
+    localStorage.setItem('br-dock-open', termDockOpen ? '1' : '0');
+  }, [termDockOpen]);
 
   /** Open the bottom dock, re-seeding the default Terminal tab if all were closed. */
   function openBottomDock(): void {
@@ -84,6 +138,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   /** Show a view as the side panel's active tab (terminal lives in the dock). */
   function ensurePanel(id: PanelId): void {
     if (id === 'terminal') { openBottomDock(); return; }
+    if (id === 'files') { q('q-list', 'list-files'); q('q-files', 'changed-files'); }
     if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
     if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
     if (id === 'requirements') q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — list on open
@@ -103,6 +158,9 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
       if (next.length === 0) setSidePanelOpen(false);
       return next;
     });
+  }
+  function reorderSideTab(dragged: PanelId, target: PanelId): void {
+    setSideTabs((tabs) => reorderByValue(tabs, dragged, target));
   }
   function togglePanel(id: PanelId): void {
     if (id === 'terminal') { setTermDockOpen((o) => !o); return; }
@@ -132,8 +190,8 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   }
 
   return {
-    sideTabs, activeSideTab, sidePanelOpen, sideWidth, termDockOpen, termDockHeight, termTabs, activeTerm,
-    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, closeSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, termDockOpen, termDockHeight, termTabs, activeTerm,
+    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
+    ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   };
 }

@@ -1,10 +1,9 @@
 /**
  * DESK-4c — the Settings modal, modeled on modern coding-agent desktop
  * settings: left category nav + search, right scrollable sections with
- * toggle/select/input rows. Every value is the SAME store the CLI reads —
- * preferences via `action:set-pref`, model via `set-model --persist`, hooks
- * via `action:set-hook`, MCP via the live pool. Change it here, the CLI
- * sees it on next launch (and vice versa).
+ * toggle/select/input rows. Values reuse the CLI stores: global preferences
+ * still go through `action:set-pref`, while mode/review/effort are session
+ * scoped through the same session-mode layer the CLI resolves.
  */
 import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
@@ -13,21 +12,49 @@ import { Icon } from './icons.js';
 export interface ConfigSnapshot {
   model?: string;
   provider?: string;
+  endpoint?: string | null;
   fallbackModel?: string | null;
   workspaceRoot?: string;
   sandbox?: 'on' | 'off';
   prefs?: Record<string, unknown>;
+  workspacePrefs?: Record<string, unknown>;
+  sessionMode?: Record<string, unknown>;
+  modeScope?: 'session' | 'workspace';
+  cli?: Record<string, unknown>;
   permissionRules?: { allow: string[]; deny: string[] };
   hooks?: Array<{ id: string; event: string; command: string; enabled: boolean; match?: string }>;
-  servers?: Array<{ id: string; online: boolean; detail?: string }>;
+  servers?: Array<{ id: string; online: boolean; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
+  // §multi-provider — named OpenAI-compatible providers (keys masked) + per-role routing.
+  providers?: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean }>;
+  defaultProviderName?: string | null;
+  agentModels?: Array<{ role: string; provider: string | null; model: string | null }>;
+  // Known-provider catalog (the CLI wizard's list) so the main provider is PICKED.
+  providerCatalog?: Array<{ id: string; label: string; endpoint: string; local: boolean }>;
+  // §settings-completeness — the raw cli.* config block (current knob values).
+  cliKnobs?: Record<string, unknown>;
 }
+
+/** Sub-agent roles that can be routed to their own provider/model. */
+const SUBAGENT_ROLES = ['default', 'explorer', 'architect', 'reviewer', 'worker', 'verifier'] as const;
+type SubagentRole = (typeof SUBAGENT_ROLES)[number];
+
+const SUBAGENT_ROLE_LABELS: Record<SubagentRole, string> = {
+  default: 'Fallback for sub-agents',
+  explorer: 'explorer',
+  architect: 'architect',
+  reviewer: 'reviewer',
+  worker: 'worker',
+  verifier: 'verifier',
+};
 
 const NAV: Array<{ section: SettingsSection; icon: string; title: string; group: 'Settings' | 'Desktop app' }> = [
   { section: 'general', icon: 'gear', title: 'General', group: 'Settings' },
+  { section: 'models', icon: 'spark', title: 'Models', group: 'Settings' },
   { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
+  { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
   { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },
   { section: 'commands', icon: 'command', title: 'Commands', group: 'Desktop app' },
@@ -49,11 +76,130 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
   return <button className={`switch${on ? ' on' : ''}`} role="switch" aria-checked={on} onClick={() => onChange(!on)} />;
 }
 
-function Select({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }): React.ReactElement {
+/** A typed value control for one cli knob: boolean → toggle, number → number
+ *  input, object/array → per-key JSON, everything else → text. */
+function KnobValue({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }): React.ReactElement {
+  if (typeof value === 'boolean') return <Toggle on={value} onChange={onChange} />;
+  if (typeof value === 'number') {
+    return <input className="ctl" type="number" style={{ width: 150 }} value={Number.isFinite(value) ? String(value) : ''}
+      onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))} />;
+  }
+  if (value !== null && typeof value === 'object') {
+    return <input className="ctl cli-knob-json" defaultValue={JSON.stringify(value)} spellCheck={false}
+      onBlur={(e) => { try { onChange(JSON.parse(e.target.value)); } catch { /* leave prior value */ } }} />;
+  }
+  return <input className="ctl" style={{ minWidth: 200 }} value={value == null ? '' : String(value)} onChange={(e) => onChange(e.target.value)} />;
+}
+
+/** §control-consistency — a PROPER editor for the raw `cli.*` config block: each
+ *  knob is a typed row (toggle / number / text) with add + remove, instead of a
+ *  hand-edited JSON blob. Saves the whole block via the existing set-cli-json. */
+function CliConfigEditor({ cli, onSave }: { cli: Record<string, unknown>; onSave: (next: Record<string, unknown>) => void }): React.ReactElement {
+  const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...cli }));
+  React.useEffect(() => setDraft({ ...cli }), [cli]);
+  const [newKey, setNewKey] = useState('');
+  const keys = Object.keys(draft).sort();
+  const dirty = JSON.stringify(draft) !== JSON.stringify(cli);
+  const setVal = (k: string, v: unknown): void => setDraft((d) => ({ ...d, [k]: v }));
+  const remove = (k: string): void => setDraft((d) => { const n = { ...d }; delete n[k]; return n; });
+  const addKey = (): void => { const k = newKey.trim(); if (!k || k in draft) return; setDraft((d) => ({ ...d, [k]: '' })); setNewKey(''); };
   return (
-    <select className="ctl" value={value} onChange={(e) => onChange(e.target.value)}>
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
+    <div className="cli-knobs">
+      {keys.length === 0 ? <div className="set-desc cli-knob-empty">No custom <code>cli</code> knobs set — add one below or use the dedicated controls in <b>Advanced</b>.</div> : null}
+      {keys.map((k) => (
+        <div key={k} className="cli-knob-row">
+          <code className="cli-knob-key" title={k}>{k}</code>
+          <div className="cli-knob-val"><KnobValue value={draft[k]} onChange={(v) => setVal(k, v)} /></div>
+          <button className="icon-btn cli-knob-x" title={`Remove ${k}`} onClick={() => remove(k)}><Icon name="x" size={13} /></button>
+        </div>
+      ))}
+      <div className="cli-knob-add">
+        <input className="ctl" placeholder="add a knob key, e.g. maxToolLoops" value={newKey}
+          onChange={(e) => setNewKey(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addKey(); }} />
+        <button className="btn" onClick={addKey} disabled={!newKey.trim()}>Add knob</button>
+      </div>
+      <div className="set-actions">
+        <button className="btn" disabled={!dirty} onClick={() => setDraft({ ...cli })}>Reset</button>
+        <button className="btn primary" disabled={!dirty} onClick={() => onSave(draft)}>Save changes</button>
+      </div>
+    </div>
+  );
+}
+
+/** §settings-completeness — a number knob that commits on blur/Enter. Empty =
+ * clears the knob (reverts to the default). */
+function KnobNumber({ value, onSave, placeholder }: { value: unknown; onSave: (v: number | null) => void; placeholder?: string }): React.ReactElement {
+  const cur = typeof value === 'number' ? String(value) : '';
+  const [v, setV] = useState(cur);
+  React.useEffect(() => setV(cur), [cur]);
+  const commit = (): void => { const t = v.trim(); if (t === '') { onSave(null); return; } const n = Number(t); if (Number.isFinite(n)) onSave(n); };
+  return <input className="ctl" type="number" style={{ width: 140 }} value={v} placeholder={placeholder ?? 'default'}
+    onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />;
+}
+
+type ChoiceOption = { value: string; label: string; detail?: string; disabled?: boolean };
+
+function ChoiceControl({ value, options, onChange, placeholder = 'Select' }: {
+  value: string;
+  options: ChoiceOption[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
+  return (
+    <div className="choice" onBlur={() => window.setTimeout(() => setOpen(false), 120)}>
+      <button type="button" className={`ctl choice-btn${open ? ' open' : ''}`} onClick={() => setOpen((v) => !v)}>
+        <span className={selected ? '' : 'choice-placeholder'}>{selected?.label ?? placeholder}</span>
+        <Icon name="chev-down" size={14} />
+      </button>
+      {open ? (
+        <div className="choice-menu">
+          {options.map((o) => (
+            <button key={o.value} type="button" className={`choice-option${o.value === value ? ' selected' : ''}`} disabled={o.disabled}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { if (!o.disabled) { onChange(o.value); setOpen(false); } }}>
+              <span>{o.label}</span>
+              {o.detail ? <span className="choice-detail">{o.detail}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Select({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }): React.ReactElement {
+  return <ChoiceControl value={value} options={options.map((o) => ({ value: o, label: o }))} onChange={onChange} />;
+}
+
+function ComboInput({ value, options, onChange, placeholder, disabled, style }: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  style?: React.CSSProperties;
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const q = value.trim().toLowerCase();
+  const filtered = (q ? options.filter((o) => o.toLowerCase().includes(q)) : options).slice(0, 80);
+  return (
+    <div className="combo" style={style} onBlur={() => window.setTimeout(() => setOpen(false), 120)}>
+      <input className="ctl combo-input" disabled={disabled} value={value} placeholder={placeholder}
+        onFocus={() => setOpen(true)} onChange={(e) => { onChange(e.target.value); setOpen(true); }} />
+      {open && !disabled && filtered.length > 0 ? (
+        <div className="choice-menu combo-menu">
+          {filtered.map((o) => (
+            <button key={o} type="button" className={`choice-option${o === value ? ' selected' : ''}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { onChange(o); setOpen(false); }}>
+              <span>{o}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -68,6 +214,11 @@ export function SettingsDialog(props: {
   commands: DeskCommand[];
   catalog: CommandsCatalog | null;
   onPref: (key: string, value: unknown) => void;
+  /** §endpoint-driven-models — the ACTIVE endpoint's GET /models list, and one
+   * per named provider (keyed by name). Drives every model picker so we never
+   * hand-write a model list. */
+  endpointModels: string[];
+  providerModels: Record<string, string[]>;
   onModelSave: (model: string) => void;
   onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
   onRunCommand: (c: DeskCommand) => void;
@@ -83,13 +234,17 @@ export function SettingsDialog(props: {
   onAccent: (a: string) => void;
 }): React.ReactElement | null {
   const { snapshot, section } = props;
-  const [modelDraft, setModelDraft] = useState<string | null>(null);
-  const [llmDraft, setLlmDraft] = useState<{ provider?: string; endpoint?: string; apiKey?: string }>({});
   const [search, setSearch] = useState('');
+  const [zoomed, setZoomed] = useState(false);
   // T7 — permission-rule editor draft; T6 — MCP add-server draft.
   const [ruleKind, setRuleKind] = useState<'allow' | 'deny'>('deny');
   const [ruleDraft, setRuleDraft] = useState('');
-  const [mcp, setMcp] = useState<{ id: string; type: 'stdio' | 'http'; command: string; url: string }>({ id: '', type: 'stdio', command: '', url: '' });
+  const [mcp, setMcp] = useState<{ id: string; type: 'stdio' | 'http'; command: string; url: string; apiKey: string; headers: string; env: string }>({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
+  // §multi-provider — add-provider draft + per-role model drafts.
+  const [provDraft, setProvDraft] = useState<{ name: string; provider: string; endpoint: string; apiKey: string; model: string }>({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
+  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [roleDraft, setRoleDraft] = useState<Record<string, { provider: string; model: string }>>({});
+  const refreshSnapshot = (): void => props.onAction('q-snapshot', 'config-snapshot');
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
@@ -101,6 +256,22 @@ export function SettingsDialog(props: {
     return props.commands.filter((c) => `${c.base} ${c.desc} ${c.category}`.toLowerCase().includes(q));
   }, [props.commands, search]);
 
+  // §endpoint-driven-models — every OpenAI-compatible endpoint exposes GET
+  // /models, so when a model-picker section opens we (re)load the active
+  // endpoint's models AND each named provider's, and the pickers below render
+  // them as in-app suggestions. No model name is ever hand-written.
+  const providerNames = (snapshot?.providers ?? []).map((p) => p.name).join(',');
+  React.useEffect(() => {
+    if (!props.open || section !== 'models') return;
+    props.onAction('q-models', 'list-models');
+    for (const name of providerNames ? providerNames.split(',') : []) props.onAction('q-models', 'list-models', { provider: name });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.open, section, providerNames]);
+  // The /models list backing a role's picker: the active endpoint for
+  // main/inherit, else the named provider's own list.
+  const modelsForProvider = (provider: string): string[] =>
+    (!provider || provider === '(main)' || provider === 'inherit') ? props.endpointModels : (props.providerModels[provider] ?? []);
+
   if (!props.open) return null;
 
   const body = (() => {
@@ -108,11 +279,7 @@ export function SettingsDialog(props: {
       case 'general': return (
         <>
           <div className="set-h">General</div>
-          <Row title="Model" desc={<>Saved to <code>~/.config/brainrouter/config.json</code> — shared with the CLI. Current provider: <code>{snapshot?.provider ?? '—'}</code></>}>
-            <input className="ctl" value={modelDraft ?? snapshot?.model ?? ''} onChange={(e) => setModelDraft(e.target.value)} placeholder="e.g. claude-opus-4-8" />
-            <button className="btn primary" disabled={!(modelDraft ?? '').trim() || modelDraft === snapshot?.model}
-              onClick={() => { props.onModelSave((modelDraft ?? '').trim()); setModelDraft(null); }}>Save</button>
-          </Row>
+          <div className="set-desc" style={{ marginBottom: 6 }}>Model &amp; providers moved to their own <b>Models</b> section.</div>
           <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. Forwarded to provider reasoning slots when the model supports it. (/effort)">
             <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh']} onChange={(v) => props.onPref('effort', v)} />
           </Row>
@@ -133,8 +300,125 @@ export function SettingsDialog(props: {
           <Row title="Clear history" desc="Drops the in-memory history for this session. (/clear)">
             <button className="btn danger" onClick={() => props.onAction('a-clear', 'action:clear')}>Clear</button>
           </Row>
+          <div className="set-h2">Advanced CLI config</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Every <code>cli</code> knob from <code>~/.config/brainrouter/config.json</code> — for settings without a dedicated control above.</div>
+          <CliConfigEditor
+            cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
+            onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
+          />
         </>
       );
+      case 'models': {
+        const providerCatalog = snapshot?.providerCatalog ?? [];
+        const savedProviders = snapshot?.providers ?? [];
+        const defaultProvider = snapshot?.defaultProviderName ?? '';
+        const currentDefault = defaultProvider
+          ? savedProviders.find((p) => p.name === defaultProvider)
+          : null;
+        return (
+          <>
+            <div className="set-h">Models</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Configure providers once, then pick which saved provider is the default. Endpoint and key fields live only inside Providers.</div>
+
+            <div className="set-h2">Default model &amp; provider</div>
+            <Row title="Provider" desc={currentDefault ? `${currentDefault.provider} · ${currentDefault.model}` : snapshot?.model ? `Current default is ${snapshot.model}. Save it as a Provider below to manage it here.` : 'Add a provider below, then select it here.'}>
+              <ChoiceControl value={defaultProvider} placeholder={savedProviders.length ? 'Select provider' : 'No providers yet'}
+                options={savedProviders.map((p) => ({ value: p.name, label: p.name, detail: `${p.provider} · ${p.model}` }))}
+                onChange={(name) => { props.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); }} />
+            </Row>
+
+            <div className="set-h2">Providers</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Your named OpenAI-compatible providers. <b>Use as default</b> makes one the default above (the main model picks straight from it — no re-entering the endpoint or key); any provider can also be routed to a sub-agent role below. Keys are write-only — never echoed back.</div>
+            {(snapshot?.providers ?? []).length === 0 ? <div className="empty">None yet — add one below, then “Use as default” or route a sub-agent to it.</div> : null}
+            {(snapshot?.providers ?? []).map((p) => (
+              <Row key={p.name} title={p.name} desc={<>{p.provider} · {p.model}{p.endpoint ? ` · ${p.endpoint.replace(/^https?:\/\//, '')}` : ''}{p.hasKey ? ' · key set' : ' · no key'}</>}>
+                <button className="btn" title="Make this the default — the main model picks from it"
+                  onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Use as default</button>
+                <button className="btn" title="Edit this provider" onClick={() => {
+                  setEditingProvider(p.name);
+                  setProvDraft({ name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', apiKey: '', model: p.model });
+                }}>Edit</button>
+                <button className="btn" title="Remove this provider" onClick={() => { props.onAction('a-rmprov', 'action:remove-provider', { name: p.name }); refreshSnapshot(); }}>Remove</button>
+              </Row>
+            ))}
+            <div className="mcp-add">
+              <div className="mcp-add-row">
+                <input className="ctl" placeholder="name (e.g. groq)" disabled={!!editingProvider} value={provDraft.name} onChange={(e) => setProvDraft((d) => ({ ...d, name: e.target.value }))} />
+                <ChoiceControl value={providerCatalog.some((c) => c.id === provDraft.provider) ? provDraft.provider : '__custom__'}
+                  options={[...providerCatalog.map((c) => ({ value: c.id, label: c.label, detail: c.local ? 'local' : undefined })), { value: '__custom__', label: 'Custom...' }]}
+                  onChange={(id) => {
+                    if (id === '__custom__') setProvDraft((d) => ({ ...d, provider: '', endpoint: '' }));
+                    else setProvDraft((d) => ({ ...d, provider: id, endpoint: providerCatalog.find((c) => c.id === id)?.endpoint ?? d.endpoint }));
+                  }} />
+              </div>
+              {providerCatalog.some((c) => c.id === provDraft.provider) ? null : (
+                <input className="ctl" placeholder="provider id (openai, groq, …)" value={provDraft.provider} onChange={(e) => setProvDraft((d) => ({ ...d, provider: e.target.value }))} />
+              )}
+              <input className="ctl" placeholder="endpoint, e.g. https://api.groq.com/openai/v1"
+                value={provDraft.endpoint || providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint || ''}
+                onChange={(e) => setProvDraft((d) => ({ ...d, endpoint: e.target.value }))} />
+              <div className="mcp-add-row">
+                <input className="ctl" placeholder="default model" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                <input className="ctl" type="password" placeholder="API key" value={provDraft.apiKey} onChange={(e) => setProvDraft((d) => ({ ...d, apiKey: e.target.value }))} />
+              </div>
+              <div className="set-actions">
+                {editingProvider ? <button className="btn" onClick={() => { setEditingProvider(null); setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' }); }}>Cancel</button> : null}
+                <button className="btn primary" disabled={!provDraft.name.trim() || !provDraft.model.trim()}
+                onClick={() => {
+                  const catalogEndpoint = providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint ?? '';
+                  props.onAction('a-setprov', 'action:set-provider', { name: (editingProvider ?? provDraft.name).trim(), provider: provDraft.provider.trim(), endpoint: (provDraft.endpoint || catalogEndpoint).trim(), model: provDraft.model.trim(), apiKey: provDraft.apiKey.trim() });
+                  setEditingProvider(null);
+                  setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
+                  refreshSnapshot();
+                }}>{editingProvider ? 'Save provider' : 'Add provider'}</button>
+              </div>
+            </div>
+
+            <div className="set-h2">Sub-agent models</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Optional routing for spawned agents. Leave roles unset to follow the main default provider. The fallback row only applies to sub-agents without a role-specific override.</div>
+            {SUBAGENT_ROLES.map((role) => {
+              const cur = snapshot?.agentModels?.find((a) => a.role === role);
+              const fallback = role === 'default' ? null : snapshot?.agentModels?.find((a) => a.role === 'default');
+              const curSel = !cur ? 'inherit' : (cur.provider ?? '(main)');
+              const d = roleDraft[role] ?? { provider: curSel, model: cur?.model ?? '' };
+              const providerOptions: ChoiceOption[] = [
+                { value: 'inherit', label: role === 'default' ? 'follow main default' : 'inherit' },
+                { value: '(main)', label: 'main provider', detail: snapshot?.model },
+                ...(snapshot?.providers ?? []).map((p) => ({ value: p.name, label: p.name, detail: p.model })),
+              ];
+              const setD = (patch: Partial<{ provider: string; model: string }>): void => setRoleDraft((r) => ({ ...r, [role]: { ...d, ...patch } }));
+              const roleModels = modelsForProvider(d.provider);
+              const curText = cur ? `${cur.provider ?? '(main)'} · ${cur.model ?? 'provider default'}` : '';
+              const isRedundantFallback = role === 'default' && !!cur && (
+                (cur.provider === defaultProvider && (!cur.model || cur.model === currentDefault?.model)) ||
+                (!cur.provider && (!cur.model || cur.model === snapshot?.model))
+              );
+              const desc = cur
+                ? (role === 'default'
+                    ? (isRedundantFallback ? `same as main default; clear it so sub-agents follow future default changes` : `fallback currently overrides unconfigured sub-agents: ${curText}`)
+                    : `currently: ${curText}`)
+                : (role === 'default'
+                    ? 'unset; unconfigured sub-agents follow the main default provider'
+                    : (fallback ? `inherits fallback: ${fallback.provider ?? '(main)'} · ${fallback.model ?? 'provider default'}` : 'inherits the main default provider'));
+              return (
+                <Row key={role} title={SUBAGENT_ROLE_LABELS[role]} desc={desc}>
+                  <ChoiceControl value={d.provider} options={providerOptions} onChange={(v) => setD({ provider: v, model: '' })} />
+                  <ComboInput style={{ width: 150 }} disabled={d.provider === 'inherit'}
+                    placeholder={d.provider === 'inherit' ? '—' : (roleModels.length ? 'model (blank = default)' : '/models…')}
+                    options={roleModels} value={d.model} onChange={(model) => setD({ model })} />
+                  <button className="btn" onClick={() => {
+                    const provider = d.provider === 'inherit' || d.provider === '(main)' ? '' : d.provider;
+                    const model = d.provider === 'inherit' ? '' : d.model.trim();
+                    props.onAction('a-setrole', 'action:set-agent-model', { role, provider, model });
+                    setRoleDraft((r) => { const n = { ...r }; delete n[role]; return n; });
+                    refreshSnapshot();
+                  }}>{d.provider === 'inherit' ? 'Clear' : 'Save'}</button>
+                </Row>
+              );
+            })}
+          </>
+        );
+      }
       case 'permissions': return (
         <>
           <div className="set-h">Permissions</div>
@@ -163,17 +447,19 @@ export function SettingsDialog(props: {
           <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Shared with the CLI.</div>
           {(snapshot?.permissionRules?.deny ?? []).map((r) => (
             <div key={`d${r}`} className="rule-row"><span className="rule-kind deny">deny</span><span className="rule-text">{r}</span>
-              <button className="rule-x" title="Remove rule" onClick={() => props.onAction('a-rule', 'action:rule-edit', { op: 'remove', kind: 'deny', rule: r })}>✕</button></div>
+              <button className="tab-close-btn rule-x" aria-label={`Remove deny rule ${r}`} title="Remove rule" onClick={() => props.onAction('a-rule', 'action:rule-edit', { op: 'remove', kind: 'deny', rule: r })}>
+                <Icon name="close" size={11} />
+              </button></div>
           ))}
           {(snapshot?.permissionRules?.allow ?? []).map((r) => (
             <div key={`a${r}`} className="rule-row"><span className="rule-kind allow">allow</span><span className="rule-text">{r}</span>
-              <button className="rule-x" title="Remove rule" onClick={() => props.onAction('a-rule', 'action:rule-edit', { op: 'remove', kind: 'allow', rule: r })}>✕</button></div>
+              <button className="tab-close-btn rule-x" aria-label={`Remove allow rule ${r}`} title="Remove rule" onClick={() => props.onAction('a-rule', 'action:rule-edit', { op: 'remove', kind: 'allow', rule: r })}>
+                <Icon name="close" size={11} />
+              </button></div>
           ))}
           {!(snapshot?.permissionRules?.allow?.length || snapshot?.permissionRules?.deny?.length) ? <div className="empty">No rules configured.</div> : null}
           <div className="rule-add">
-            <select className="ctl" value={ruleKind} onChange={(e) => setRuleKind(e.target.value as 'allow' | 'deny')}>
-              <option value="deny">deny</option><option value="allow">allow</option>
-            </select>
+            <ChoiceControl value={ruleKind} options={[{ value: 'deny', label: 'deny' }, { value: 'allow', label: 'allow' }]} onChange={(v) => setRuleKind(v as 'allow' | 'deny')} />
             <input className="ctl" placeholder="glob rule, e.g. rm -rf *" value={ruleDraft} onChange={(e) => setRuleDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && ruleDraft.trim()) { props.onAction('a-rule', 'action:rule-edit', { op: 'add', kind: ruleKind, rule: ruleDraft.trim() }); setRuleDraft(''); } }} />
             <button className="btn" disabled={!ruleDraft.trim()} onClick={() => { props.onAction('a-rule', 'action:rule-edit', { op: 'add', kind: ruleKind, rule: ruleDraft.trim() }); setRuleDraft(''); }}>Add rule</button>
@@ -209,54 +495,123 @@ export function SettingsDialog(props: {
       );
       case 'connectors': return (
         <>
-          <div className="set-h">Provider</div>
-          <div className="set-desc" style={{ marginBottom: 6 }}>The LLM endpoint both heads use — OpenAI-compatible wire format. Saved to <code>~/.config/brainrouter/config.json</code>; your key is write-only here and never echoed back.</div>
-          <Row title="Provider id" desc="Catalog label for tier-ladder lookups (openai, lmstudio, ollama, deepseek, …).">
-            <input className="ctl" value={llmDraft.provider ?? snapshot?.provider ?? ''} placeholder="openai"
-              onChange={(e) => setLlmDraft((d) => ({ ...d, provider: e.target.value }))} />
-          </Row>
-          <Row title="Endpoint" desc="OpenAI-compatible base URL. Empty = the provider's default.">
-            <input className="ctl" value={llmDraft.endpoint ?? ''} placeholder="https://api.openai.com/v1"
-              onChange={(e) => setLlmDraft((d) => ({ ...d, endpoint: e.target.value }))} />
-          </Row>
-          <Row title="API key" desc="Stored in config.json. Leave blank to keep the current key.">
-            <input className="ctl" type="password" value={llmDraft.apiKey ?? ''} placeholder="•••••••• (unchanged)"
-              onChange={(e) => setLlmDraft((d) => ({ ...d, apiKey: e.target.value }))} />
-          </Row>
-          <Row title="">
-            <button className="btn primary" disabled={!Object.values(llmDraft).some((v) => (v ?? '').trim())}
-              onClick={() => { props.onAction('a-llm', 'action:set-llm', llmDraft as Record<string, unknown>); setLlmDraft({}); }}>Save provider</button>
-          </Row>
-          <div className="set-h2">Connectors (MCP)</div>
+          <div className="set-h">Connectors (MCP)</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Server profiles from config.json — the same pool the CLI connects. Sign in once, both heads use it.</div>
           {(snapshot?.servers ?? []).length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
-          {(snapshot?.servers ?? []).map((s) => (
-            <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{s.detail ? ` — ${s.detail}` : ''}</>}>
-              <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
-              <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
-            </Row>
-          ))}
+          {(snapshot?.servers ?? []).map((s) => {
+            const meta = [
+              s.type ?? 'unknown',
+              s.type === 'http' ? (s.url ?? '') : (s.command ?? ''),
+              s.hasKey ? 'key set' : '',
+              s.headerCount ? `${s.headerCount} headers` : '',
+              s.envCount ? `${s.envCount} env` : '',
+              s.detail ?? '',
+            ].filter(Boolean).join(' · ');
+            return (
+              <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{meta ? ` — ${meta}` : ''}</>}>
+                <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
+                <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
+              </Row>
+            );
+          })}
           <div className="mcp-add">
             <div className="mcp-add-row">
               <input className="ctl" placeholder="server id" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
-              <select className="ctl" value={mcp.type} onChange={(e) => setMcp((m) => ({ ...m, type: e.target.value as 'stdio' | 'http' }))}>
-                <option value="stdio">stdio</option><option value="http">http</option>
-              </select>
+              <ChoiceControl value={mcp.type} options={[{ value: 'stdio', label: 'stdio' }, { value: 'http', label: 'http' }]} onChange={(v) => setMcp((m) => ({ ...m, type: v as 'stdio' | 'http' }))} />
             </div>
             {mcp.type === 'stdio'
-              ? <input className="ctl" placeholder="command + args, e.g. npx -y @modelcontextprotocol/server-filesystem ." value={mcp.command} onChange={(e) => setMcp((m) => ({ ...m, command: e.target.value }))} />
-              : <input className="ctl" placeholder="https://mcp.example.com/sse" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />}
+              ? <>
+                  <input className="ctl" placeholder="command + args, e.g. npx -y @modelcontextprotocol/server-filesystem ." value={mcp.command} onChange={(e) => setMcp((m) => ({ ...m, command: e.target.value }))} />
+                  <textarea className="ctl" rows={2} placeholder="environment (optional) — one KEY=value per line" value={mcp.env} onChange={(e) => setMcp((m) => ({ ...m, env: e.target.value }))} />
+                </>
+              : <>
+                  <input className="ctl" placeholder="https://mcp.example.com/mcp (or /sse)" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />
+                  <input className="ctl" type="password" placeholder="API key / Bearer token (optional)" value={mcp.apiKey} onChange={(e) => setMcp((m) => ({ ...m, apiKey: e.target.value }))} />
+                  <textarea className="ctl" rows={2} placeholder="extra headers (optional) — one Header-Name=value per line" value={mcp.headers} onChange={(e) => setMcp((m) => ({ ...m, headers: e.target.value }))} />
+                </>}
             <button className="btn primary" disabled={!mcp.id.trim() || !(mcp.type === 'stdio' ? mcp.command.trim() : mcp.url.trim())}
               onClick={() => {
                 const parts = mcp.command.trim().split(/\s+/);
                 props.onAction('a-addmcp', 'action:add-mcp', mcp.type === 'http'
-                  ? { id: mcp.id.trim(), type: 'http', url: mcp.url.trim() }
-                  : { id: mcp.id.trim(), type: 'stdio', command: parts[0] ?? '', args: parts.slice(1).join(' ') });
-                setMcp({ id: '', type: 'stdio', command: '', url: '' });
+                  ? { id: mcp.id.trim(), type: 'http', url: mcp.url.trim(), apiKey: mcp.apiKey.trim(), headers: mcp.headers.trim() }
+                  : { id: mcp.id.trim(), type: 'stdio', command: parts[0] ?? '', args: parts.slice(1).join(' '), env: mcp.env.trim() });
+                setMcp({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
               }}>Add server</button>
           </div>
         </>
       );
+      case 'advanced': {
+        // §settings-completeness — the load-bearing cli.* knobs, individually
+        // editable (per-knob writer), instead of only via config.json. Shared
+        // with the CLI; empty/clear reverts to the default.
+        const knobs = snapshot?.cliKnobs ?? {};
+        const setKnob = (key: string, value: unknown): void => { props.onAction('a-knob', 'action:set-cli-knob', { key, value }); setTimeout(refreshSnapshot, 80); };
+        const kb = (key: string): boolean => Boolean(knobs[key]);
+        const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
+        const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
+        return (
+          <>
+            <div className="set-h">Advanced</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Everything else under <code>cli.*</code> in <code>~/.config/brainrouter/config.json</code> — shared with the CLI (<code>/config</code>). Leave a number blank to use its default.</div>
+
+            <div className="set-h2">Model &amp; limits</div>
+            <Row title="Max output tokens" desc="Cap on completion tokens per call (cli.maxOutputTokens). Blank = the provider default; raise it (e.g. 8192) if replies get cut off mid-sentence.">
+              <KnobNumber value={knobs.maxOutputTokens} onSave={(v) => setKnob('maxOutputTokens', v)} placeholder="provider default" />
+            </Row>
+            <Row title="Auto-compact threshold" desc="Summarize + reset context above this many prompt tokens (cli.autoCompactTokens).">
+              <KnobNumber value={knobs.autoCompactTokens} onSave={(v) => setKnob('autoCompactTokens', v)} placeholder="80000" />
+            </Row>
+            <Row title="Max tool loops" desc="Hard cap on tool iterations per turn (cli.maxToolLoops).">
+              <KnobNumber value={knobs.maxToolLoops} onSave={(v) => setKnob('maxToolLoops', v)} placeholder="60" />
+            </Row>
+            <Row title="LLM timeout (ms)" desc="Per-request timeout before retry/reconnect (cli.llmTimeoutMs).">
+              <KnobNumber value={knobs.llmTimeoutMs} onSave={(v) => setKnob('llmTimeoutMs', v)} placeholder="120000" />
+            </Row>
+            <Row title="Max concurrent LLM calls" desc="Parallel in-flight requests across the agent + children (cli.llmMaxConcurrent).">
+              <KnobNumber value={knobs.llmMaxConcurrent} onSave={(v) => setKnob('llmMaxConcurrent', v)} placeholder="4" />
+            </Row>
+            <Row title="Context compaction" desc="Auto-summarize old history when the window fills (cli.contextCompaction).">
+              <Toggle on={knobs.contextCompaction !== false} onChange={(v) => setKnob('contextCompaction', v)} />
+            </Row>
+
+            <div className="set-h2">Memory &amp; agents</div>
+            <Row title="Recall mode" desc="When BrainRouter memory recall fires (cli.recallMode).">
+              <Select value={ks('recallMode', 'gated')} options={['always', 'gated', 'off']} onChange={(v) => setKnob('recallMode', v)} />
+            </Row>
+            <Row title="Next-action planner" desc="Plan the next step before acting (cli.nextActionPlanner).">
+              <Toggle on={ks('nextActionPlanner', 'on') !== 'off'} onChange={(v) => setKnob('nextActionPlanner', v ? 'on' : 'off')} />
+            </Row>
+            <Row title="Max concurrent children" desc="Parallel sub-agents (cli.maxConcurrentChildren).">
+              <KnobNumber value={knobs.maxConcurrentChildren} onSave={(v) => setKnob('maxConcurrentChildren', v)} placeholder="8" />
+            </Row>
+            <Row title="Max spawn depth" desc="How deep sub-agents may spawn sub-agents (cli.maxSpawnDepth).">
+              <KnobNumber value={knobs.maxSpawnDepth} onSave={(v) => setKnob('maxSpawnDepth', v)} placeholder="3" />
+            </Row>
+            <Row title="Build loop" desc="Auto build/verify after edits (cli.buildLoop).">
+              <Select value={ks('buildLoop', 'escalate')} options={['off', 'escalate', 'always']} onChange={(v) => setKnob('buildLoop', v)} />
+            </Row>
+
+            <div className="set-h2">Safety</div>
+            <Row title="Sandbox" desc="Isolate run_command (cli.sandbox). off = no isolation.">
+              <Select value={ks('sandbox', 'off')} options={['off', 'on']} onChange={(v) => setKnob('sandbox', v)} />
+            </Row>
+            <Row title="External-dir writes" desc="Writing outside the workspace (cli.externalDirWrites).">
+              <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
+            </Row>
+
+            <div className="set-h2">Telemetry &amp; notifications</div>
+            <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
+              <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
+            </Row>
+            <Row title="Notify bell" desc="Ring the terminal bell on an idle background completion (cli.notifyBell).">
+              <Toggle on={kb('notifyBell')} onChange={(v) => setKnob('notifyBell', v)} />
+            </Row>
+            <Row title="Update check" desc="Check for new BrainRouter versions on launch (cli.updateCheck).">
+              <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
+            </Row>
+          </>
+        );
+      }
       case 'observability': return (
         <>
           <div className="set-h">Usage</div>
@@ -347,7 +702,7 @@ export function SettingsDialog(props: {
 
   return (
     <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
-      <div className="settings-modal settings-wrap">
+      <div className={`settings-modal settings-wrap${zoomed ? ' zoomed' : ''}`}>
         <nav className="settings-nav">
           <input className="settings-search" placeholder="Search commands…" value={search}
             onChange={(e) => { setSearch(e.target.value); if (e.target.value.trim()) props.setSection('commands'); }} />
@@ -363,7 +718,15 @@ export function SettingsDialog(props: {
           ))}
         </nav>
         <div className="settings-content">{body}</div>
-        <button className="icon-btn settings-close" onClick={props.onClose}><Icon name="close" size={13} /></button>
+        <span className="settings-actions panel-chrome-actions">
+          <button className={`icon-btn${zoomed ? ' active' : ''}`} title={zoomed ? 'Restore settings' : 'Enlarge settings'}
+            aria-label={zoomed ? 'Restore settings' : 'Enlarge settings'} onClick={() => setZoomed((v) => !v)}>
+            <Icon name="expand" size={13} />
+          </button>
+          <button className="icon-btn settings-close" title="Close settings" aria-label="Close settings" onClick={props.onClose}>
+            <Icon name="close" size={13} />
+          </button>
+        </span>
       </div>
     </div>
   );

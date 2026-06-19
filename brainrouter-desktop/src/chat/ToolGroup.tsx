@@ -16,8 +16,8 @@ export function ToolGroup({ row, live, inlineDiffs, onRequestDiff }: {
   onRequestDiff: (file: string) => void;
 }): React.ReactElement {
   const [open, setOpen] = useState(false);
-  const [openItem, setOpenItem] = useState<number | null>(null);
-  const [diffItem, setDiffItem] = useState<number | null>(null);
+  const [openItem, setOpenItem] = useState<number | string | null>(null);
+  const [diffItem, setDiffItem] = useState<number | string | null>(null);
   // Observed: live groups read "Using {tool} *"; finished ones get an
   // outcome-phrased label ("Used N tools ›").
   // DESK-6t / item 12 — collapsed label via the pure, tested toolGroupLabel

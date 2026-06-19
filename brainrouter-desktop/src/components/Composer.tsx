@@ -10,8 +10,9 @@ import { UsageBar } from './UsageBar.js';
 import { ContextRing } from './ContextRing.js';
 import { EFFORT_LEVELS, NON_CHAT_MODEL } from '../constants.js';
 import { modelCapabilities, capabilityBadges } from '../lib/models/modelCapabilities.js';
-import type { PopId } from '../types.js';
+import type { AttachmentUpload, PopId } from '../types.js';
 import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
+import { recognizedCommandToken } from '../lib/composer/slashHighlight.js';
 
 export interface ComposerProps {
   draft: string;
@@ -45,6 +46,18 @@ export interface ComposerProps {
   contextUsage: { used: number; window: number; compactAt: number; limit: number; pct: number } | null;
   tokens: { promptTokens: number; completionTokens: number; turns: number } | null;
   openSettings: (section: SettingsSection) => void;
+  /** §5 — attach files (picker or drag/drop) to the session. */
+  onAttach?: (files: File[]) => void;
+  attachments?: AttachmentUpload[];
+  onClearAttachment?: (id: string) => void;
+  canSubmit?: boolean;
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 export function Composer(p: ComposerProps): React.ReactElement {
@@ -52,35 +65,107 @@ export function Composer(p: ComposerProps): React.ReactElement {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
     slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, execMode, effort,
     info, branches, endpointModels, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
-    hasConversation, contextUsage, tokens, openSettings,
+    hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
   } = p;
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const mirrorRef = React.useRef<HTMLDivElement | null>(null);
+  const [dragOver, setDragOver] = React.useState(false);
+  const handleFiles = (list: FileList | null): void => {
+    if (!list || !onAttach) return;
+    const files = Array.from(list);
+    if (files.length) onAttach(files);
+  };
+  const syncMirrorScroll = React.useCallback(() => {
+    if (textareaRef.current && mirrorRef.current) {
+      mirrorRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
+  }, []);
+  React.useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const styles = window.getComputedStyle(el);
+    const maxHeight = Number.parseFloat(styles.maxHeight) || 180;
+    const minHeight = Number.parseFloat(styles.minHeight) || 34;
+    const nextHeight = Math.min(Math.max(el.scrollHeight, minHeight), maxHeight);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight + 1 ? 'auto' : 'hidden';
+    syncMirrorScroll();
+  }, [draft, attachments.length, syncMirrorScroll]);
+  // §slash-highlight — when the draft is a recognized command, the textarea text
+  // goes transparent and this mirror paints it instead, with the "/command"
+  // token in accent blue so the user sees they're in that command's mode.
+  const cmdToken = recognizedCommandToken(draft, slashActive, slashMatches, commands);
   return (
     <div className="composer">
-      <div className="box">
+      <div
+        className={`box${dragOver ? ' drag-over' : ''}`}
+        onDragOver={onAttach ? (e) => { e.preventDefault(); if (!dragOver) setDragOver(true); } : undefined}
+        onDragLeave={onAttach ? () => setDragOver(false) : undefined}
+        onDrop={onAttach ? (e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); } : undefined}
+      >
         {slashActive && slashMatches.length ? (
           <div className="slash-pop">
             <SlashPopup commands={commands} filter={draft} selected={slashSel} onPick={onRunSlash} onHover={setSlashSel} />
           </div>
         ) : null}
-        <textarea
-          rows={1}
-          placeholder={stopping ? 'Stopping…' : running ? 'Working…' : 'Message BrainRouter…  ( / for commands )'}
-          value={draft}
-          onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
-          onKeyDown={(e) => {
-            if (slashActive && slashMatches.length) {
-              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel((s) => Math.min(s + 1, slashMatches.length - 1)); return; }
-              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel((s) => Math.max(s - 1, 0)); return; }
-              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); onRunSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]); return; }
-              if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return; }
-            }
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-            if (e.key === 'Escape' && running) requestStop();
-          }}
-        />
+        {attachments.length ? (
+          <div className="attachment-strip" aria-label="Attached files">
+            {attachments.map((file) => (
+              <div key={file.id} className={`attachment-chip ${file.status}`} title={`${file.name} · ${formatBytes(file.size)}${file.detail ? ` · ${file.detail}` : ''}`}>
+                <Icon name="file" size={13} />
+                <span className="attachment-name">{file.name}</span>
+                <span className="attachment-meta">{file.status === 'attached' ? 'ready' : file.status === 'failed' ? 'needs retry' : file.status}</span>
+                <span className="attachment-size">{formatBytes(file.size)}</span>
+                {onClearAttachment && (file.status === 'attached' || file.status === 'failed') ? (
+                  <button type="button" className="attachment-clear" aria-label={`Remove ${file.name}`} onClick={() => onClearAttachment(file.id)}>
+                    <Icon name="close" size={11} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="input-wrap">
+          {cmdToken ? (
+            <div ref={mirrorRef} className="input-mirror" aria-hidden="true">
+              <span className="cmd-token">{cmdToken}</span>{draft.slice(cmdToken.length)}{'​'}
+            </div>
+          ) : null}
+          <textarea
+            ref={textareaRef}
+            className={cmdToken ? 'cmd-mode' : undefined}
+            rows={1}
+            placeholder={stopping ? 'Stopping…' : running ? 'Working…' : 'Message BrainRouter…  ( / for commands )'}
+            value={draft}
+            onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
+            onScroll={syncMirrorScroll}
+            onKeyDown={(e) => {
+              if (slashActive && slashMatches.length) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel((s) => Math.min(s + 1, slashMatches.length - 1)); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel((s) => Math.max(s - 1, 0)); return; }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); onRunSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return; }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+              if (e.key === 'Escape' && running) requestStop();
+            }}
+          />
+        </div>
+        {onAttach ? (
+          <>
+            <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
+              onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+            <button type="button" className="input-attach icon-btn" title="Attach a file (PDF, image, text, code)"
+              aria-label="Attach a file" onClick={() => fileInputRef.current?.click()}>
+              <Icon name="file" size={14} />
+            </button>
+          </>
+        ) : null}
         <button className={`input-send icon-btn${running ? ' stop-red' : ''}${stopping ? ' stopping' : ''}`} title={stopping ? 'Stopping…' : running ? 'Stop' : 'Send'}
           onClick={() => running ? requestStop() : submit()}
-          disabled={(!running && !draft.trim()) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
+          disabled={(!running && !draft.trim() && !canSubmit) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
         <div className="composer-controls">
           <span className="pop-wrap">
             {pop === 'mode' ? (
@@ -88,8 +173,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                 <div className="menu-head"><span>Mode</span><span>⇧⌃M</span></div>
                 {([['Plan mode', 'planning', 'request', '1'], ['Accept edits', 'fast', 'request', '2'], ['Auto mode', 'fast', 'proceed', '3']] as const).map(([label, em, rp, num]) => (
                   <button key={label} className="menu-item" onClick={() => {
-                    q('a-pref', 'action:set-pref', { key: 'executionMode', value: em });
-                    q('a-pref', 'action:set-pref', { key: 'reviewPolicy', value: rp });
+                    q('a-mode', 'action:set-session-mode', { executionMode: em, reviewPolicy: rp });
                     setPop('');
                   }}>
                     <span className="mi-check">{modeLabel === label ? '✓' : ''}</span>{label}
@@ -142,7 +226,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
               <div className="menu-pop effort-menu">
                 <div className="menu-head"><span>Effort</span><span>Faster → Smarter</span></div>
                 {EFFORT_LEVELS.map((lvl) => (
-                  <button key={lvl} className="menu-item" onClick={() => { q('a-pref', 'action:set-pref', { key: 'effort', value: lvl }); setPop(''); }}>
+                  <button key={lvl} className="menu-item" onClick={() => { q('a-mode', 'action:set-session-mode', { effort: lvl }); setPop(''); }}>
                     <span className="mi-check">{effort === lvl ? '✓' : ''}</span>{lvl === 'xhigh' ? 'Extra high' : lvl[0].toUpperCase() + lvl.slice(1)}
                   </button>
                 ))}
@@ -199,7 +283,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                     </>
                   );
                 })()}
-                <button className="menu-item" onClick={() => { setPop(''); openSettings('general'); }}>
+                <button className="menu-item" onClick={() => { setPop(''); openSettings('models'); }}>
                   <span className="mi-check" />Custom model…
                 </button>
                 <div className="menu-sep" />
@@ -212,7 +296,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                 <div className="menu-row">
                   <span>Fast mode</span>
                   <button className={`switch${execMode === 'fast' ? ' on' : ''}`} onClick={() => {
-                    q('a-pref', 'action:set-pref', { key: 'executionMode', value: execMode === 'fast' ? 'planning' : 'fast' });
+                    q('a-mode', 'action:set-session-mode', { executionMode: execMode === 'fast' ? 'planning' : 'fast' });
                   }} />
                 </div>
               </div>
@@ -227,14 +311,14 @@ export function Composer(p: ComposerProps): React.ReactElement {
           {/* DESK-5s/5u — click the ring for a full context + usage breakdown. */}
           <span className="pop-wrap" style={hasConversation ? undefined : { display: 'none' }}>
             {pop === 'ctx' ? (
-              <div className="menu-pop ctx-pop">
+              <div className="menu-pop ctx-pop composer-ctx-pop">
                 <div className="menu-head"><span>Context window</span></div>
                 {contextUsage && contextUsage.window > 0 ? (
                   <UsageBar label="Model window" value={contextUsage.used} total={contextUsage.window}
-                    tone={contextUsage.used / contextUsage.window >= 0.9 ? 'var(--err)' : 'var(--accent)'} />
+                    tone={contextUsage.used / contextUsage.window >= 0.9 ? 'var(--warn)' : 'var(--accent)'} />
                 ) : null}
                 <UsageBar label="Until auto-compaction" value={contextUsage?.used ?? 0} total={contextUsage?.compactAt ?? 80000}
-                  tone={(contextUsage?.pct ?? 0) >= 0.95 ? 'var(--err)' : (contextUsage?.pct ?? 0) >= 0.75 ? 'var(--warn)' : 'var(--accent)'} />
+                  tone={(contextUsage?.pct ?? 0) >= 0.75 ? 'var(--warn)' : 'var(--accent)'} />
                 <div className="ctx-note">Above the auto-compact line, BrainRouter summarizes old history and the context resets — shared with the CLI (<code>cli.autoCompactTokens</code>).</div>
                 <div className="menu-sep" />
                 <div className="menu-head"><span>This session</span></div>

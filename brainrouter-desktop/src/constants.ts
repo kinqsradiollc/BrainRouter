@@ -3,7 +3,7 @@
  * the non-chat model filter, the side-panel view catalog, the valid panel-id
  * set, and the foreground-only event-kind set.
  */
-import { PANEL_DEFS, type PanelId } from './panels/index.js';
+import { MANUAL_PANEL_DEFS, PANEL_DEFS, type PanelId } from './panels/index.js';
 
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
 
@@ -20,17 +20,7 @@ export const NON_CHAT_MODEL = /embed|whisper|tts|rerank|moderation|audio|clip/i;
  * One view = one tab; both surfaces switch tabs instead of opening windows.
  */
 export const VIEW_MENU: Array<{ id: PanelId; title: string; icon: string }> = [
-  { id: 'plan', title: 'Plan', icon: 'review' },
-  { id: 'files', title: 'Files', icon: 'folder' },
-  { id: 'diff', title: 'Changes', icon: 'diff' },
-  { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
-  { id: 'tools', title: 'Tool calls', icon: 'bolt' },
-  { id: 'search', title: 'Search session', icon: 'search' },
-  { id: 'schedule', title: 'Schedules', icon: 'clock' },
-  { id: 'requirements', title: 'Requirements', icon: 'tasks' },
-  { id: 'annotations', title: 'Annotations', icon: 'review' },
-  { id: 'artifacts', title: 'Artifacts', icon: 'file' },
-  { id: 'context', title: 'Context', icon: 'layout-right' },
+  ...MANUAL_PANEL_DEFS.filter((p) => p.id !== 'terminal').map((p) => ({ id: p.id, title: p.title, icon: p.icon })),
 ];
 
 export const VALID_PANEL_IDS = new Set<PanelId>(PANEL_DEFS.map((p) => p.id));
@@ -44,5 +34,5 @@ export const VALID_PANEL_IDS = new Set<PanelId>(PANEL_DEFS.map((p) => p.id));
 export const FOREGROUND_ONLY_KINDS = new Set<string>([
   'status', 'reasoning-delta', 'assistant-turn-start', 'assistant-delta',
   'assistant-turn-end', 'tool-end', 'child-tool-start', 'child-tool-end',
-  'child-complete', 'plan-update', 'compaction', 'memory', 'tokens-updated',
+  'child-complete', 'plan-update', 'compaction', 'memory', 'tokens-updated', 'notice',
 ]);

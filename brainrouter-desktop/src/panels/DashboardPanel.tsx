@@ -8,10 +8,20 @@
 import React from 'react';
 import { Icon } from '../icons.js';
 import { fmtElapsed } from '../lib/format.js';
-import { DASH_TABS, filterTasks, countByTab, allTasks, type DashTab, type DashTask, type WorkspaceDash } from '../lib/workspace/dashboard.js';
+import {
+  DASH_TABS,
+  countByTab,
+  allTasks,
+  visibleDashboardBoards,
+  taskLifecycle,
+  taskStatusLabel,
+  type DashTab,
+  type DashTask,
+  type WorkspaceDash,
+} from '../lib/workspace/dashboard.js';
 import { GATE_LABEL } from './reviewShared.js';
 
-const TAB_LABEL: Record<DashTab, string> = { running: 'Running', finished: 'Finished', failed: 'Failed', workflows: 'Workflows', agents: 'Agents', bash: 'Bash' };
+const TAB_LABEL: Record<DashTab, string> = { running: 'Running', finished: 'Finished', failed: 'Failed/Stale', workflows: 'Workflows', agents: 'Agents', bash: 'Bash' };
 
 export function DashboardPanel({ scope, setScope, tab, setTab, boards, busy, onRefresh, onOpenTask, onStopTask }: {
   scope: 'workspace' | 'all';
@@ -26,7 +36,7 @@ export function DashboardPanel({ scope, setScope, tab, setTab, boards, busy, onR
   onStopTask?: (t: DashTask) => void;
 }): React.ReactElement {
   const counts = countByTab(allTasks(boards));
-  const shown = boards.map((b) => ({ ...b, tasks: filterTasks(b.tasks, tab) })).filter((b) => scope === 'all' ? true : b.tasks.length || true);
+  const shown = visibleDashboardBoards(boards, tab, scope);
   const totalShown = shown.reduce((n, b) => n + b.tasks.length, 0);
   return (
     <div className="scroll dash-panel">
@@ -59,17 +69,21 @@ export function DashboardPanel({ scope, setScope, tab, setTab, boards, busy, onR
               </div>
             ) : null}
             {b.tasks.map((t) => {
-              const running = !/complete|done|finished|success|fail|error|cancel/i.test(t.status ?? '');
+              const lifecycle = taskLifecycle(t);
+              const status = taskStatusLabel(t);
+              const phase = t.phase && t.phase !== t.status ? t.phase.replace(/[-_]+/g, ' ') : '';
               return (
                 <div key={`${b.workspaceRoot}:${t.id}`} className="dash-row">
-                  <span className={`dash-dot ${running ? 'run' : /fail|error|cancel/i.test(t.status ?? '') ? 'fail' : 'done'}`} />
+                  <span className={`dash-dot ${lifecycle === 'running' ? 'run' : lifecycle === 'failed' ? 'fail' : 'done'}`} />
                   <button className="dash-row-main" onClick={() => onOpenTask(t)} title="Open this task's conversation">
                     <span className="dash-kind">{t.worktree ? <Icon name="merge" size={10} /> : null}{t.kind}</span>
                     <span className="dash-label">{t.label}</span>
                     {t.role ? <span className="dash-role">{t.role}</span> : null}
                   </button>
+                  <span className={`dash-status ${lifecycle}`}>{status}</span>
+                  {phase ? <span className="dash-phase">{phase}</span> : null}
                   {t.startedAt ? <span className="dash-time">{fmtElapsed(t.startedAt)}</span> : null}
-                  {running && onStopTask ? <button className="dash-stop" title="Stop / cancel" onClick={() => onStopTask(t)}><Icon name="close" size={11} /></button> : null}
+                  {lifecycle === 'running' && onStopTask ? <button className="dash-stop" title="Stop / cancel" onClick={() => onStopTask(t)}><Icon name="close" size={11} /></button> : null}
                 </div>
               );
             })}

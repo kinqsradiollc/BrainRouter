@@ -17,64 +17,88 @@ import path from 'node:path';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
-import { Agent } from '@kinqs/brainrouter-cli/dist/agent/agent.js';
-import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-cli/dist/config/config.js';
-import { McpClientPool } from '@kinqs/brainrouter-cli/dist/runtime/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession } from '@kinqs/brainrouter-cli/dist/state/sessionStore.js';
-import { resolveWorkspaceGit } from '@kinqs/brainrouter-cli/dist/config/workspaceGit.js';
-import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
-import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-cli/dist/state/sessionMetaStore.js';
-import { getSessionRuntime, setSessionRuntime, resolveSessionRuntime } from '@kinqs/brainrouter-cli/dist/state/sessionRuntimeStore.js';
-import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-cli/dist/state/scheduleStore.js';
-import { parseCron, nextCronFire } from '@kinqs/brainrouter-cli/dist/runtime/cronParser.js';
-import { applyRuleEdit } from '@kinqs/brainrouter-cli/dist/config/permissionRules.js';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-cli/dist/orchestration/reviewFindings.js';
-import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
-import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-cli/dist/state/reviewStore.js';
-import { getCliStateDir } from '@kinqs/brainrouter-cli/dist/state/cliState.js';
-import { buildRecap } from '@kinqs/brainrouter-cli/dist/state/sessionRecap.js';
-import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
-import { contextWindowFor } from '@kinqs/brainrouter-cli/dist/runtime/contextWindow.js';
+import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+// 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
+import { setProvider, removeProvider, setAgentModel } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
+import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
+import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
+import { WorkspaceFileListCache } from './workspaceFileListCache.js';
+import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
+import { getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+import { getSessionMode, setSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
+import { applyRuleEdit } from '@kinqs/brainrouter-core/dist/config/permissionRules.js';
+import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/dist/review/reviewFindings.js';
+import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
+import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
+import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
+import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
-import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-cli/dist/cli/repl.js';
-import { validateCatalogParity } from '@kinqs/brainrouter-cli/dist/runtime/catalogParity.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-cli/dist/state/preferencesStore.js';
-import { readHooks, setHookEnabled } from '@kinqs/brainrouter-cli/dist/state/hooksStore.js';
-import { searchTranscript } from '@kinqs/brainrouter-cli/dist/state/transcriptSearch.js';
-import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName } from '@kinqs/brainrouter-cli/dist/state/transcriptExport.js';
-import { listChapters } from '@kinqs/brainrouter-cli/dist/state/chapterMarks.js';
-import { buildUsageBreakdown } from '@kinqs/brainrouter-cli/dist/runtime/usageBreakdown.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/dist/command/catalog.js';
+import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
+import { searchTranscript } from '@kinqs/brainrouter-core/dist/session/transcriptSearch.js';
+import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName } from '@kinqs/brainrouter-core/dist/session/transcriptExport.js';
+import { listChapters } from '@kinqs/brainrouter-core/dist/session/chapterMarks.js';
+import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
-import { readGoal, setGoal, clearGoal } from '@kinqs/brainrouter-cli/dist/state/goalStore.js';
-import { readPlan, formatPlan, seedPlanFromRequirement } from '@kinqs/brainrouter-cli/dist/state/taskStore.js';
+import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+// §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
+import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
+import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
+import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
+import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
+import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+// DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
+// runs as visible, file-backed tasks (shared with the CLI store) so progress +
+// transcript survive workspace/session switches and host reload.
+import { createBackgroundTask, updateBackgroundTask, appendTaskProgress, listBackgroundTasks, getBackgroundTask, linkBackgroundTaskMemory, currentPhase, reconcileBackgroundTasks, } from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
+import { collectDurableRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { pidAlive } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+// ATTACHMENTS (0.4.15 workflow gaps) — ingest files (drag/drop + picker) into
+// durable attachment records, shared with the CLI `/attach` store.
+import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/dist/attachment/ingest.js';
+import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/dist/attachment/attachmentStore.js';
+// TELEMETRY (0.4.15 workflow gaps) — local-first task/review/upload lifecycle.
+import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
 // §7 PLAN REVIEW — durable plan approval + version history (per-session decision
 // log that snapshots the plan). Shared with the CLI's /plan approve·request-changes·
 // history; the desktop panel reads/records through these thin wrappers — no
 // parallel store. A best-effort memory note is captured + linked, mirroring the CLI.
-import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/brainrouter-cli/dist/state/planHistoryStore.js';
-import { emitAgentEvent } from '@kinqs/brainrouter-cli/dist/orchestration/memoryEvents.js';
+import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
-import { listRequirements, getRequirement, createRequirement, updateRequirement } from '@kinqs/brainrouter-cli/dist/state/requirementStore.js';
+import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
 // the CLI store; the desktop panel only reads/mutates through these endpoints.
-import { listAnnotations, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment } from '@kinqs/brainrouter-cli/dist/state/annotationStore.js';
-import { annotationsToMarkdown } from '@kinqs/brainrouter-cli/dist/state/annotationExport.js';
+import { listAnnotations, getAnnotation, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment, linkAnnotation } from '@kinqs/brainrouter-core/dist/annotation/annotationStore.js';
+import { annotationsToMarkdown } from '@kinqs/brainrouter-core/dist/annotation/annotationExport.js';
 import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, isAnchorStale } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
 // desktop panel only reads/mutates/previews through these endpoints.
-import { listArtifacts, createArtifact, updateArtifact, getArtifact } from '@kinqs/brainrouter-cli/dist/state/artifactStore.js';
+import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifact, revertArtifact } from '@kinqs/brainrouter-core/dist/artifact/artifactStore.js';
 import { isArtifactKind, isArtifactStatus, isArtifactFormat } from '@kinqs/brainrouter-types';
-import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-cli/dist/state/workerStore.js';
-import { listSessions } from '@kinqs/brainrouter-cli/dist/orchestration/orchestrator.js';
-import { readRun } from '@kinqs/brainrouter-cli/dist/state/workflowRun.js';
-import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundReconcile.js';
-import { childSessionKey } from '@kinqs/brainrouter-cli/dist/runtime/mcpUtils.js';
+import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
+import { listSessions } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
+import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+import { childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
 const TERM_BUF_CAP = 400_000;
 /**
  * DESK-5c — live model list, same endpoint contract as the CLI wizard's
@@ -91,13 +115,21 @@ async function fetchEndpointModels(endpoint, apiKey) {
     const timer = setTimeout(() => controller.abort(), 5_000);
     try {
         const res = await fetch(modelsUrl, {
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim() || 'local'}` },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim() || LOCAL_PLACEHOLDER_KEY}` },
             signal: controller.signal,
         });
         if (!res.ok)
             return [];
         const body = await res.json();
-        return [...new Set((body.data ?? []).map((m) => m.id).filter((x) => !!x))].sort();
+        const ids = [];
+        for (const row of body.data ?? []) {
+            const id = typeof row.id === 'string' ? row.id : '';
+            if (!id)
+                continue;
+            ids.push(id);
+            registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
+        }
+        return [...new Set(ids)].sort();
     }
     catch {
         return [];
@@ -316,7 +348,8 @@ function workerEventsToRows(entries) {
             groupTs = ts ?? groupTs;
             group.push({ tool: String(e.tool ?? 'tool'), summary: typeof e.summary === 'string' ? e.summary : '', ok: e.ok !== false });
         }
-        else if ((role === 'assistant' || role === 'user') && content.trim()) {
+        else if ((role === 'assistant' || (role === 'user' && !e.name)) && content.trim()) {
+            // role:'user' WITH a name is an injected system/guard message — hide it.
             flush();
             rows.push({ kind: role === 'user' ? 'user' : 'assistant', text: content.slice(0, 40_000), ts });
         }
@@ -337,10 +370,10 @@ function git(args, cwd, opts) {
 }
 /** Sidebar row payload: transcript summary + the status the icons render. */
 function sessionRows(root, limit) {
-    return listTranscripts(root).slice(0, limit).map((s) => {
+    return listTranscripts(root, { limit }).map((s) => {
         const file = s.sessionDir
             ? path.join(s.sessionDir, s.fileName)
-            : path.join(getCliStateDir(root), 'transcripts', s.fileName);
+            : path.join(getStateDir(root), 'transcripts', s.fileName);
         return { ...s, lastRole: lastTranscriptRole(file) };
     });
 }
@@ -349,10 +382,27 @@ async function main() {
     // DESK-6w (T4) — resolve how this workspace relates to its owning git repo
     // once (repo name, owning git root, subdir-vs-root). Workspace-scoped status/
     // diff run in workspaceRoot with a `-- .` pathspec: that limits results to the
-    // workspace subtree (so a monorepo subfolder or a nested clone like openSrc/*
+    // workspace subtree (so a monorepo subfolder or a nested clone inside the repo
     // never pulls in unrelated parent changes) AND keeps paths workspace-relative
     // for the renderer. `workspaceGitScope` is for repo-root ops (worktrees) later.
     const wsGit = resolveWorkspaceGit(workspaceRoot);
+    const fileListCache = new WorkspaceFileListCache();
+    const listWorkspaceFilesCached = async (args) => {
+        const refresh = args.refresh === true || args.force === true;
+        const cached = refresh ? null : fileListCache.get(workspaceRoot);
+        if (cached)
+            return cached;
+        const generatedAt = Date.now();
+        const tracked = await git(['ls-files'], workspaceRoot);
+        const untracked = await git(['ls-files', '--others', '--exclude-standard'], workspaceRoot);
+        const all = [...new Set((tracked + '\n' + untracked).split('\n').filter(Boolean))].sort();
+        const result = all.length > 0
+            ? { files: all.slice(0, 3000), truncated: all.length > 3000, source: 'git', generatedAt }
+            : { ...listWorkspaceFiles(workspaceRoot, { limit: 3000 }), generatedAt };
+        if (result.error)
+            return result;
+        return fileListCache.set(workspaceRoot, result);
+    };
     // DESK-5w — clear phantom "running" background tasks left by a previous,
     // now-dead host BEFORE anything queries the fleet (the renderer polls it on
     // boot). In-process actors don't survive a restart; their on-disk state does.
@@ -361,6 +411,11 @@ async function main() {
         if (r.sessions + r.workers + r.runs > 0) {
             console.error(`[brainrouter-desktop host] reconciled stale tasks on boot: ${r.sessions} agents, ${r.workers} workers, ${r.runs} workflows`);
         }
+        // Durable plan-revision/review/attachment tasks run in-process too — a
+        // restart orphans any left running, so flip them to failed on boot.
+        const orphaned = reconcileBackgroundTasks(workspaceRoot, pidAlive);
+        if (orphaned > 0)
+            console.error(`[brainrouter-desktop host] reconciled ${orphaned} orphaned durable task(s) on boot`);
     }
     catch { /* best-effort */ }
     // utilityProcess gives us process.parentPort; plain `node host.js` (dev
@@ -373,7 +428,7 @@ async function main() {
     // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
     // semantics as the CLI's non-strict mode).
     const config = loadConfig();
-    const llm = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
+    let llm = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
     const mcpClient = new McpClientPool();
     try {
         await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
@@ -398,19 +453,23 @@ async function main() {
     // onActiveAgentChange; every read-only query below reports THIS agent so the
     // ring/tokens/recap/transcript track the chat on screen, not a background one.
     let activeAgent = agent;
+    const loadGlobalLlm = () => {
+        const fresh = loadConfig();
+        llm = fresh.llm ?? llm;
+        return llm;
+    };
+    const llmForSession = (sessionKey) => resolveSessionLlmConfig(loadGlobalLlm(), workspaceRoot, sessionKey);
+    const syncActiveSessionLlm = (base = loadGlobalLlm()) => {
+        const next = resolveSessionLlmConfig(base, workspaceRoot, activeAgent.sessionKey);
+        activeAgent.setLLMConfig(next);
+        return next;
+    };
     // DESK-5v — an independent agent for a SECOND, concurrent session: shares the
     // one MCP pool / llm / broker but keeps its own history, counters and key, so
     // two chats can run turns at the same time.
     // Item 10 — the global runtime is the config.json LLM; a session can override
     // provider/model/endpoint (sessionRuntimeStore). spawnAgent resolves THIS
     // session's runtime so concurrent chats can run different models/providers.
-    const globalRuntime = {
-        provider: llm.provider, model: llm.model, endpoint: llm.endpoint, mcpProfiles: [],
-    };
-    const llmForSession = (sessionKey) => {
-        const resolved = resolveSessionRuntime(globalRuntime, undefined, getSessionRuntime(workspaceRoot, sessionKey));
-        return { ...llm, provider: resolved.provider, model: resolved.model, endpoint: resolved.endpoint };
-    };
     const spawnAgent = (sessionKey) => {
         const a = new Agent(mcpClient, llmForSession(sessionKey), {
             workspaceRoot,
@@ -426,23 +485,262 @@ async function main() {
     //  - read access mode (look-only: no file writes, no shell, no mutating tools).
     // Its review: sessionKey is filtered from the picker. Even if the model ignores
     // the "don't call tools" instruction, it fails closed instead of prompting.
-    const spawnReviewer = () => {
+    const spawnReviewer = (sessionKey) => {
         const a = new Agent(mcpClient, llmForSession('review'), {
             workspaceRoot,
             launchCwd: workspaceRoot,
             interactionPort: { confirm: async () => false, choice: async () => null },
         });
-        a.sessionKey = `review:${Date.now().toString(36)}`;
+        // A STABLE per-task `review:<id>` key (filtered from the picker by
+        // isInternalSessionKey) so the reviewer's turn transcript is durably
+        // findable as the task's conversation; falls back to a timestamp key.
+        a.sessionKey = sessionKey ?? `review:${Date.now().toString(36)}`;
         try {
             a.setAccessMode?.('read');
         }
         catch { /* older agent */ }
         return a;
     };
+    // A WRITE-capable background agent for a plan revision: its own internal
+    // session key (filtered from the picker) so its turn transcript is the task's
+    // conversation, but its `update_plan` is intercepted (onPlanUpdate) and the
+    // host writes the result into the USER's session plan. Non-prompting.
+    const spawnTaskAgent = (sessionKey, access) => {
+        const a = new Agent(mcpClient, llmForSession(sessionKey), {
+            workspaceRoot,
+            launchCwd: workspaceRoot,
+            interactionPort: { confirm: async () => false, choice: async () => null },
+        });
+        a.sessionKey = sessionKey;
+        try {
+            a.setAccessMode?.(access);
+        }
+        catch { /* older agent */ }
+        return a;
+    };
+    const activeMemorySessionKey = () => activeAgent?.sessionKey ?? agent.sessionKey;
+    const lifecycleActionFor = (change) => {
+        const c = change.toLowerCase();
+        if (c === 'created')
+            return 'created';
+        if (c.includes('status'))
+            return 'status-changed';
+        if (c.includes('comment'))
+            return 'comment-added';
+        if (c.includes('saved'))
+            return 'saved';
+        if (c.includes('export'))
+            return 'exported';
+        return 'updated';
+    };
+    const emitRecordEvent = (event) => {
+        send({ seq: ++portSeq, ts: Date.now(), sessionKey: activeMemorySessionKey(), event });
+    };
+    // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — task lifecycle events ride
+    // the same wire on the TASK's OWN sessionKey so they surface against the right
+    // chat, and the renderer's global active-task state (sidebar dots, Tasks panel)
+    // stays correct across workspace/session switches.
+    const taskEventView = (t) => ({
+        id: t.id, kind: t.kind, status: t.status, title: t.title,
+        workspaceRoot, sessionKey: t.sessionKey,
+        requirementId: t.requirementId, planId: t.planId, artifactId: t.artifactId, attachmentId: t.attachmentId,
+        transcript: t.transcript, phase: currentPhase(t), error: t.error,
+        createdAt: t.createdAt, startedAt: t.startedAt, updatedAt: t.updatedAt, completedAt: t.completedAt,
+    });
+    const emitTaskEvent = (action, t) => {
+        send({ seq: ++portSeq, ts: Date.now(), sessionKey: t.sessionKey, event: { kind: 'task-event', action, task: taskEventView(t) } });
+    };
+    /** Append a progress phase + emit the live update in one step. */
+    const taskProgress = (id, phase, note) => {
+        const t = appendTaskProgress(workspaceRoot, id, { phase, note });
+        if (t)
+            emitTaskEvent('progress', t);
+    };
+    // VERIFICATION SCOPING (workflow-gaps follow-up) — surface the build/test/
+    // typecheck/lint commands a MAIN turn runs as durable `verification` tasks,
+    // keyed by THIS host's workspaceRoot + the turn's sessionKey + the task id.
+    // Because the work runs inside the turn (which the host pool keeps alive on a
+    // workspace switch), the verification keeps running in the edited workspace and
+    // the task stays visible for that workspace even while another is active —
+    // clicking it reopens the command + output. We match a run_command's
+    // tool-start→tool-end by callId. Best-effort throughout.
+    const verifyTitle = (command) => {
+        const head = command.replace(/\s+/g, ' ').trim();
+        return `Verify — ${head.length > 64 ? `${head.slice(0, 63)}…` : head}`;
+    };
+    const verifyTasksByCall = new Map();
+    // §goal-autonomy — consecutive prose-only "strikes" per session (anti-spin),
+    // mirroring the CLI Ink loop's goalNoToolStrikes counter.
+    const goalStrikes = new Map();
+    const observeVerificationEvent = (sessionKey, event) => {
+        if (event.kind === 'tool-start') {
+            if (event.tool !== 'run_command' || !event.callId)
+                return;
+            const command = typeof event.args?.command === 'string' ? event.args.command : '';
+            if (!command || classifyForVerification('run_command', command) !== 'verified')
+                return;
+            const task = createBackgroundTask(workspaceRoot, { kind: 'verification', title: verifyTitle(command), sessionKey, status: 'running' });
+            const verifyKey = `internal:verify:${task.id}`;
+            const withTranscript = updateBackgroundTask(workspaceRoot, task.id, { transcript: { kind: 'task', id: task.id, parentSessionKey: verifyKey } }) ?? task;
+            verifyTasksByCall.set(event.callId, { taskId: task.id, verifyKey, command });
+            try {
+                appendTranscriptEntry(workspaceRoot, verifyKey, { role: 'user', content: `$ ${command}` });
+            }
+            catch { /* advisory */ }
+            taskProgress(task.id, 'running', command.slice(0, 80));
+            emitTaskEvent('created', withTranscript);
+            recordTelemetry({ name: TELEMETRY_EVENTS.task_started, workspaceRoot, sessionKey, taskKind: 'verification' });
+        }
+        else if (event.kind === 'tool-end') {
+            if (!event.callId)
+                return;
+            const entry = verifyTasksByCall.get(event.callId);
+            if (!entry)
+                return;
+            verifyTasksByCall.delete(event.callId);
+            const ok = event.ok;
+            const output = String(event.preview || event.summary || '').slice(0, 8_000);
+            try {
+                appendTranscriptEntry(workspaceRoot, entry.verifyKey, { role: 'assistant', content: `${ok ? '✓ passed' : '✗ failed'}\n\n${output}` });
+            }
+            catch { /* advisory */ }
+            const done = updateBackgroundTask(workspaceRoot, entry.taskId, {
+                status: ok ? 'completed' : 'failed',
+                error: ok ? undefined : (event.summary || 'Verification failed.'),
+                result: { ok, command: entry.command, summary: event.summary },
+            });
+            if (done)
+                emitTaskEvent(ok ? 'completed' : 'failed', done);
+            recordTelemetry({ name: ok ? TELEMETRY_EVENTS.task_completed : TELEMETRY_EVENTS.task_failed, workspaceRoot, sessionKey, taskKind: 'verification', ok });
+        }
+    };
+    const captureRequirementNote = async (record, change) => {
+        let memoryId;
+        try {
+            memoryId = (await emitAgentEvent({ mcpClient, sessionKey: activeMemorySessionKey() }, {
+                kind: 'agent_output',
+                summary: `Requirement ${record.id}: ${record.title} [${record.status}] (${change})`,
+                payload: {
+                    requirementId: record.id,
+                    title: record.title,
+                    status: record.status,
+                    priority: record.priority,
+                    acceptanceCriteria: record.acceptanceCriteria,
+                    change,
+                },
+            })) ?? undefined;
+            if (memoryId)
+                linkRequirement(workspaceRoot, record.id, { memoryId });
+        }
+        catch { /* advisory — never break the desktop action */ }
+        const provenance = { linkedMemoryIds: memoryId ? [memoryId] : [], actor: 'desktop', reason: change };
+        emitRecordEvent({
+            kind: 'requirement-event',
+            action: lifecycleActionFor(change),
+            requirementId: record.id,
+            title: record.title,
+            status: record.status,
+            provenance,
+        });
+        emitRecordEvent({ kind: 'provenance', subjectKind: 'requirement', subjectId: record.id, provenance });
+    };
+    const captureAnnotationNote = async (record, change) => {
+        let memoryId;
+        try {
+            const where = record.anchor?.filePath
+                ? ` @ ${record.anchor.filePath}${record.anchor.startLine !== undefined ? `:${record.anchor.startLine}${record.anchor.endLine && record.anchor.endLine !== record.anchor.startLine ? `-${record.anchor.endLine}` : ''}` : ''}`
+                : '';
+            memoryId = (await emitAgentEvent({ mcpClient, sessionKey: activeMemorySessionKey() }, {
+                kind: 'agent_output',
+                summary: `Annotation ${record.id} on ${record.type}${record.targetId ? ` ${record.targetId}` : ''}${where} [${record.status}] (${change})`,
+                payload: {
+                    annotationId: record.id,
+                    targetKind: record.type,
+                    targetId: record.targetId ?? null,
+                    status: record.status,
+                    severity: record.severity ?? null,
+                    body: record.body,
+                    suggestedText: record.suggestedText ?? null,
+                    anchor: record.anchor ?? null,
+                    change,
+                },
+            })) ?? undefined;
+            if (memoryId)
+                linkAnnotation(workspaceRoot, record.id, { memoryId });
+        }
+        catch { /* advisory — never break the desktop action */ }
+        const provenance = { linkedMemoryIds: memoryId ? [memoryId] : [], actor: 'desktop', reason: change };
+        emitRecordEvent({
+            kind: 'annotation-event',
+            action: lifecycleActionFor(change),
+            annotationId: record.id,
+            targetKind: record.type,
+            targetId: record.targetId,
+            status: record.status,
+            provenance,
+        });
+        emitRecordEvent({ kind: 'provenance', subjectKind: 'annotation', subjectId: record.id, provenance });
+    };
+    const captureAnnotationExportNote = async (records) => {
+        if (records.length === 0)
+            return;
+        try {
+            const memoryId = await emitAgentEvent({ mcpClient, sessionKey: activeMemorySessionKey() }, {
+                kind: 'agent_output',
+                summary: `Annotation export — ${records.length} annotation(s) returned to session`,
+                payload: {
+                    exported: records.length,
+                    annotationIds: records.map((r) => r.id),
+                    markdown: annotationsToMarkdown(records),
+                },
+            });
+            if (memoryId) {
+                for (const record of records)
+                    linkAnnotation(workspaceRoot, record.id, { memoryId });
+            }
+        }
+        catch { /* advisory — never break the desktop action */ }
+    };
+    const captureArtifactNote = async (record, change) => {
+        let memoryId;
+        try {
+            memoryId = (await emitAgentEvent({ mcpClient, sessionKey: activeMemorySessionKey() }, {
+                kind: 'agent_output',
+                summary: `Artifact ${record.id}: ${record.title} [${record.status}] ${record.kind} (${change})`,
+                payload: {
+                    artifactId: record.id,
+                    title: record.title,
+                    kind: record.kind,
+                    status: record.status,
+                    format: record.format,
+                    path: record.path,
+                    requirementId: record.requirementId,
+                    taskId: record.taskId,
+                    change,
+                },
+            })) ?? undefined;
+            if (memoryId)
+                linkArtifact(workspaceRoot, record.id, { memoryId });
+        }
+        catch { /* advisory — never break the desktop action */ }
+        const provenance = { linkedMemoryIds: memoryId ? [memoryId] : [], actor: 'desktop', reason: change };
+        emitRecordEvent({
+            kind: 'artifact-event',
+            action: lifecycleActionFor(change),
+            artifactId: record.id,
+            title: record.title,
+            status: record.status,
+            format: record.format,
+            path: record.path,
+            provenance,
+        });
+        emitRecordEvent({ kind: 'provenance', subjectKind: 'artifact', subjectId: record.id, provenance });
+    };
     // DESK-5c — terminal session registry + endpoint-models cache.
     const terms = new Map();
     let termSeq = 0;
-    let modelsCache = null;
+    // Per-endpoint /models cache ('' = the active llm; otherwise a named provider).
+    const modelsCacheByKey = new Map();
     // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
     let prCache = null;
     // Short-lived dedup cache for the FULL agent-continuation read (loadHistory).
@@ -478,7 +776,13 @@ async function main() {
     };
     // Map the model's free-form severities onto the v2 scale.
     const SEV_MAP = { security: 'critical', critical: 'critical', bug: 'high', high: 'high', perf: 'medium', medium: 'medium', style: 'low', nit: 'low', low: 'low', info: 'info' };
-    const runReview = async () => {
+    // Instrumented so the review runs as a VISIBLE background task: `onPhase`
+    // streams diff-collection → analysis → findings → verification → completion to
+    // the durable task; `reviewerKey` makes the reviewer's turn transcript durably
+    // findable as the task's conversation.
+    const runReview = async (ctx) => {
+        const phase = ctx?.onPhase ?? (() => { });
+        phase('collecting-diff');
         const { diff, files } = await collectWorkingDiff();
         const base = {
             id: `rev_${Date.now().toString(36)}`, workspaceRoot, repoRoot: wsGit.gitRoot ?? workspaceRoot,
@@ -486,13 +790,18 @@ async function main() {
             status: 'completed', summary: '', findings: [],
         };
         if (files.length === 0) {
+            phase('completed', 'no working-tree changes');
             const r = { ...base, summary: 'No working-tree changes to review.' };
             saveReview(workspaceRoot, r);
             return { ...r, files: 0 };
         }
+        phase('analyzing', `${files.length} file(s)`);
         const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\nDiff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
         // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
-        const reviewer = spawnReviewer();
+        // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
+        // findings) does NOT pollute the task's CURATED transcript — runReviewTask
+        // writes clean, human-readable progress entries to the task key instead.
+        const reviewer = spawnReviewer(ctx?.reviewerKey ? `${ctx.reviewerKey}:raw` : undefined);
         const noop = () => { };
         const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop };
         let answer = '';
@@ -500,10 +809,12 @@ async function main() {
             answer = await reviewer.runTurn(prompt, cb);
         }
         catch (err) {
+            phase('failed', err instanceof Error ? err.message : String(err));
             const r = { ...base, status: 'failed', summary: `Review failed: ${err instanceof Error ? err.message : String(err)}` };
             saveReview(workspaceRoot, r);
             return { ...r, files: files.length };
         }
+        phase('findings', 'parsing reviewer output');
         const findings = parseReviewFindings(answer).map((f, i) => ({
             id: `f${i}_${Date.now().toString(36)}`, file: f.file, line: f.line ?? undefined, endLine: f.endLine ?? undefined,
             severity: SEV_MAP[String(f.severity ?? '').toLowerCase()] ?? 'medium',
@@ -517,7 +828,80 @@ async function main() {
         const summary = findings.length === 0 ? '' : (visible.slice(0, 400) || `${findings.length} finding(s) across ${files.length} file(s).`);
         const run = { ...base, summary, findings };
         saveReview(workspaceRoot, run);
+        phase('completed', `${findings.length} finding(s) across ${files.length} file(s)`);
         return { ...run, files: files.length };
+    };
+    // §2 (workflow gaps) — Review/Re-run review as a VISIBLE durable task. Creates
+    // the task, streams phase progress, persists the reviewer transcript (via the
+    // stable reviewer key), writes findings + memory provenance + telemetry, and
+    // returns the run so the renderer's review panel still paints as before.
+    const runReviewTask = async (sessionKey) => {
+        const task = createBackgroundTask(workspaceRoot, { kind: 'review', title: 'Review working changes', sessionKey, status: 'running' });
+        const reviewerKey = `review:${task.id}`;
+        const withTranscript = updateBackgroundTask(workspaceRoot, task.id, { transcript: { kind: 'task', id: task.id, parentSessionKey: reviewerKey } }) ?? task;
+        emitTaskEvent('created', withTranscript);
+        recordTelemetry({ name: TELEMETRY_EVENTS.review_started, workspaceRoot, sessionKey, taskKind: 'review' });
+        // §review-visibility — SEED the curated task transcript synchronously so
+        // clicking the running task immediately shows the agent at work (not a blank
+        // pane while the long review turn computes), then mirror each phase as a
+        // readable line. The reviewer's raw turn writes to `${reviewerKey}:raw`.
+        const seedReviewTranscript = (role, content) => {
+            try {
+                appendTranscriptEntry(workspaceRoot, reviewerKey, { role, content });
+            }
+            catch { /* advisory */ }
+        };
+        const REVIEW_PHASE_LABELS = {
+            'collecting-diff': '📂 Collecting the working-tree diff…',
+            analyzing: '🔍 Analyzing the changed files for bugs, security, and performance issues…',
+            findings: '📝 Parsing the review findings…',
+        };
+        seedReviewTranscript('user', 'Review the uncommitted working-tree changes for bugs, security issues, and performance problems.');
+        const startedAt = Date.now();
+        let run;
+        try {
+            run = await runReview({ reviewerKey, onPhase: (p, n) => {
+                    taskProgress(task.id, p, n);
+                    const label = REVIEW_PHASE_LABELS[p];
+                    if (label)
+                        seedReviewTranscript('assistant', n ? `${label} (${n})` : label);
+                } });
+            seedReviewTranscript('assistant', run.findings.length === 0
+                ? `✅ Review complete — no issues found across ${run.files} file(s).`
+                : `✅ Review complete — ${run.findings.length} finding(s) across ${run.files} file(s). See the Review panel for details.`);
+        }
+        catch (err) {
+            seedReviewTranscript('assistant', `❌ Review failed: ${err instanceof Error ? err.message : String(err)}`);
+            const failed = updateBackgroundTask(workspaceRoot, task.id, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+            if (failed)
+                emitTaskEvent('failed', failed);
+            recordTelemetry({ name: TELEMETRY_EVENTS.review_completed, workspaceRoot, sessionKey, ok: false, durationMs: Date.now() - startedAt, error: err instanceof Error ? err.message : String(err) });
+            throw err;
+        }
+        // Memory provenance for the review run + its findings (best-effort).
+        try {
+            const memoryId = await emitAgentEvent({ mcpClient, sessionKey }, {
+                kind: 'agent_output',
+                summary: `Review ${run.id} — ${run.findings.length} finding(s) across ${run.files} file(s) [${run.status}]`,
+                payload: {
+                    reviewId: run.id, status: run.status, files: run.files,
+                    findings: run.findings.map((f) => ({ id: f.id, file: f.file, line: f.line, severity: f.severity, summary: f.summary })),
+                },
+            });
+            if (memoryId)
+                linkBackgroundTaskMemory(workspaceRoot, task.id, memoryId);
+        }
+        catch { /* advisory — never break the review */ }
+        const ok = run.status !== 'failed';
+        const done = updateBackgroundTask(workspaceRoot, task.id, {
+            status: ok ? 'completed' : 'failed',
+            error: ok ? undefined : (run.summary || 'Review failed.'),
+            result: { reviewId: run.id, findings: run.findings.length, files: run.files, status: run.status },
+        });
+        if (done)
+            emitTaskEvent(ok ? 'completed' : 'failed', done);
+        recordTelemetry({ name: TELEMETRY_EVENTS.review_completed, workspaceRoot, sessionKey, ok, durationMs: Date.now() - startedAt, props: { findings: run.findings.length, files: run.files } });
+        return { ...run, taskId: task.id };
     };
     const reviewSnapshot = async () => {
         const { diff, files } = await collectWorkingDiff();
@@ -532,11 +916,82 @@ async function main() {
         }
         return { run, gate: reviewGate(run, diffHash), diffHash, files: files.length };
     };
+    const runPlanRevisionTask = (sessionKey, decision, feedback) => {
+        const planBefore = readPlan(workspaceRoot, sessionKey);
+        const task = createBackgroundTask(workspaceRoot, {
+            kind: 'plan-revision', title: 'Revise plan — requested changes', sessionKey,
+            requirementId: planBefore.requirementId, planId: decision.id, status: 'running',
+        });
+        const reviserKey = `internal:plan-revision:${task.id}`;
+        const created = updateBackgroundTask(workspaceRoot, task.id, { transcript: { kind: 'task', id: task.id, parentSessionKey: reviserKey } }) ?? task;
+        emitTaskEvent('created', created);
+        recordTelemetry({ name: TELEMETRY_EVENTS.plan_revision_started, workspaceRoot, sessionKey, taskKind: 'plan-revision' });
+        void (async () => {
+            const startedAt = Date.now();
+            try {
+                taskProgress(task.id, 'analyzing-feedback');
+                const reviser = spawnTaskAgent(reviserKey, 'write');
+                let revised = null;
+                const cb = {
+                    onStatusUpdate: (text) => { if (text)
+                        taskProgress(task.id, 'working', text.slice(0, 80)); },
+                    onToolStart: () => { }, onToolEnd: () => { }, onAssistantDelta: () => { },
+                    onAssistantTurnStart: () => { }, onAssistantTurnEnd: () => { }, onReasoningDelta: () => { }, onUsageUpdate: () => { },
+                    onPlanUpdate: (items, explanation) => { revised = { items, explanation }; },
+                };
+                const prompt = `The implementation plan below was NOT approved.\n\nRequested changes:\n${feedback}\n\nCurrent plan:\n${formatPlan(planBefore)}\n\nRevise the plan to fully address the requested changes, then call \`update_plan\` with the corrected, ordered plan (each item { step, status }, at most one in_progress). Do not implement anything — only produce the revised plan.`;
+                await reviser.runTurn(prompt, cb);
+                taskProgress(task.id, 'writing-plan');
+                const result = revised;
+                if (result && Array.isArray(result.items) && result.items.length > 0) {
+                    const next = updatePlan(workspaceRoot, { plan: result.items, explanation: result.explanation, requirementId: planBefore.requirementId }, sessionKey);
+                    // Version history: snapshot the revised plan as a `revised` decision.
+                    const revDecision = recordPlanDecision(workspaceRoot, sessionKey, { verdict: 'revised', planSnapshot: next.items, explanation: next.explanation, requirementId: next.requirementId });
+                    // Repaint the USER's Plan panel with the revised plan (the feedback
+                    // returns to the same active session).
+                    send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: { kind: 'plan-update', items: next.items.map((i) => ({ step: i.step, status: i.status, acceptance: i.acceptance })), explanation: next.explanation } });
+                    let memoryId;
+                    try {
+                        memoryId = (await emitAgentEvent({ mcpClient, sessionKey }, {
+                            kind: 'agent_output',
+                            summary: `Plan revised (${revDecision.id}) addressing requested changes — ${next.items.length} item(s)`,
+                            payload: { planDecisionId: revDecision.id, sourceDecisionId: decision.id, verdict: 'revised', itemCount: next.items.length, feedback },
+                        })) ?? undefined;
+                        if (memoryId) {
+                            linkPlanDecision(workspaceRoot, sessionKey, revDecision.id, memoryId);
+                            linkBackgroundTaskMemory(workspaceRoot, task.id, memoryId);
+                        }
+                    }
+                    catch { /* advisory */ }
+                    const done = updateBackgroundTask(workspaceRoot, task.id, { status: 'completed', result: { items: next.items.length, revisedDecisionId: revDecision.id } });
+                    if (done)
+                        emitTaskEvent('completed', done);
+                    recordTelemetry({ name: TELEMETRY_EVENTS.plan_revision_completed, workspaceRoot, sessionKey, ok: true, durationMs: Date.now() - startedAt, props: { items: next.items.length } });
+                }
+                else {
+                    const failed = updateBackgroundTask(workspaceRoot, task.id, { status: 'failed', error: 'The revision produced no updated plan. Request changes again with more specific feedback.' });
+                    if (failed)
+                        emitTaskEvent('failed', failed);
+                    recordTelemetry({ name: TELEMETRY_EVENTS.plan_revision_completed, workspaceRoot, sessionKey, ok: false, durationMs: Date.now() - startedAt });
+                }
+            }
+            catch (err) {
+                const failed = updateBackgroundTask(workspaceRoot, task.id, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+                if (failed)
+                    emitTaskEvent('failed', failed);
+                recordTelemetry({ name: TELEMETRY_EVENTS.plan_revision_completed, workspaceRoot, sessionKey, ok: false, durationMs: Date.now() - startedAt, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return created;
+    };
     const core = createHostCore({
         agent,
         spawnAgent,
         onActiveAgentChange: (a) => { activeAgent = a; },
         send: send,
+        // Verification scoping — observe each turn's tool stream to track its
+        // build/test/lint commands as durable `verification` background tasks.
+        observeTurnEvent: observeVerificationEvent,
         broker,
         loadTranscript: (key) => readTranscriptCached(key), // FULL — agent continuation only
         transcriptExists: (key) => transcriptExists(workspaceRoot, key), // OOM-safe cheap resume count
@@ -546,11 +1001,14 @@ async function main() {
             const fresh = loadConfig();
             fresh.llm = { ...(fresh.llm ?? llm), model };
             saveConfig(fresh);
+            llm = fresh.llm;
+            modelsCacheByKey.delete('');
         },
         // Item 10 — per-session model: read on (re)spawn so a chat keeps its model;
         // written when set-model arrives with persist:false ("this chat only").
         getSessionModel: (sessionKey) => getSessionRuntime(workspaceRoot, sessionKey).model || undefined,
         setSessionModel: (sessionKey, model) => { setSessionRuntime(workspaceRoot, sessionKey, { model }); },
+        clearSessionModel: (sessionKey) => { setSessionRuntime(workspaceRoot, sessionKey, { model: '' }); },
         queries: {
             // Read-only surfaces — same pure modules the TUI commands use.
             // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -575,13 +1033,16 @@ async function main() {
             // guards SWITCHING into the workspace.
             'workspace-sessions': (args) => {
                 const root = typeof args.root === 'string' ? args.root : '';
+                const rawLimit = typeof args.limit === 'number' ? args.limit : Number(args.limit ?? 80);
+                const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(120, Math.floor(rawLimit))) : 80;
                 if (!root || !fs.existsSync(root))
-                    return [];
+                    return { rows: [], error: 'Workspace is not available.' };
                 try {
-                    return sessionRows(root, 20);
+                    const rows = sessionRows(root, limit);
+                    return { rows, truncated: rows.length >= limit };
                 }
-                catch {
-                    return [];
+                catch (err) {
+                    return { rows: [], error: err instanceof Error ? err.message : String(err) };
                 }
             },
             // DESK-5d — current branch's PR, for the project-row status chip.
@@ -699,14 +1160,14 @@ async function main() {
                 // OOM-safe: recap summarizes recent state — a bounded tail is enough.
                 return buildRecap({ entries: readTranscriptTail(workspaceRoot, key, 2000), sessionKey: key });
             },
-            // DESK-5w — running background tasks, each TAGGED with the chat session
-            // that owns it (parentSessionKey), so the renderer can nest a task under
-            // its session and never leak one session's tasks into another's view.
+            // DESK-5w — running background tasks for the active workspace. Rows keep
+            // parentSessionKey for transcript lookup, but the renderer shows them in
+            // Background tasks rather than as chat-list children.
             'fleet': () => {
                 const tasks = collectRunningTasks(workspaceRoot);
                 const sessions = listSessions(workspaceRoot);
                 const workers = listWorkers(workspaceRoot);
-                return tasks.map((t) => {
+                const live = tasks.map((t) => {
                     let parentSessionKey = null;
                     if (t.kind === 'agent')
                         parentSessionKey = sessions.find((s) => s.id === t.id)?.parentSessionKey ?? null;
@@ -714,16 +1175,112 @@ async function main() {
                         parentSessionKey = workers.find((w) => w.id === t.id)?.parentSessionKey ?? null;
                     return { ...t, parentSessionKey };
                 });
+                // Merge the DURABLE active tasks (plan revisions, reviews, attachment
+                // jobs) — they're file-backed so they survive switches/reload and aren't
+                // in the live in-process fleet. parentSessionKey = the launching session.
+                const durable = collectDurableRunningTasks(workspaceRoot).map((t) => ({
+                    kind: t.kind, id: t.id, label: t.title, startedAt: t.startedAt ?? t.createdAt,
+                    parentSessionKey: t.sessionKey, durable: true, status: t.status,
+                    phase: currentPhase(t), transcript: t.transcript,
+                    requirementId: t.requirementId, planId: t.planId,
+                }));
+                return [...durable, ...live];
+            },
+            // §3 — the DURABLE task list (survives switches/reload). Scope: a session
+            // (default), the whole workspace, or everything; `status` filters active
+            // vs all. Each row carries elapsed-time inputs + the transcript ref so the
+            // panel can show status/elapsed/workspace/session/requirement/plan + open it.
+            'tasks-list': (a) => {
+                const scope = typeof a.scope === 'string' ? a.scope : 'session';
+                const status = a.status === 'all' ? 'all' : 'active';
+                const sessionKey = scope === 'session' ? (typeof a.sessionKey === 'string' ? a.sessionKey : activeAgent.sessionKey) : undefined;
+                const rows = listBackgroundTasks(workspaceRoot, { sessionKey, status });
+                return rows.map((t) => ({ ...t, phase: currentPhase(t), workspaceRoot }));
+            },
+            'task-detail': (a) => {
+                const t = getBackgroundTask(workspaceRoot, typeof a.id === 'string' ? a.id : '');
+                return t ? { ...t, phase: currentPhase(t) } : null;
+            },
+            // §5 — ATTACHMENTS. Ingest a dropped/picked file (a path, or base64 bytes
+            // from the renderer) into a durable attachment record as a visible task:
+            // preserve the original, extract text/metadata, capture to memory. Returns
+            // the record; a failure returns { ok:false, error } so the UI can surface it.
+            // An attachment is CONTENT, not a process — it gets a durable AttachmentRecord
+            // (its own id/lifecycle, id-linked to the session + memory), NOT a background
+            // task. Ingestion is a fast synchronous extract, exactly like the CLI's
+            // /attach. (It used to be wrapped in a kind:'attachment' BackgroundTask, which
+            // made every upload show up as a transient job in the Background-tasks panel.)
+            'attachment-ingest': async (a) => {
+                const sessionKey = activeAgent.sessionKey;
+                const name = typeof a.name === 'string' ? a.name : '';
+                const startedAt = Date.now();
+                try {
+                    let source;
+                    if (typeof a.path === 'string' && a.path)
+                        source = { kind: 'path', path: a.path };
+                    else if (typeof a.dataBase64 === 'string')
+                        source = { kind: 'bytes', name: name || 'file', data: Buffer.from(a.dataBase64, 'base64') };
+                    else
+                        throw new Error('attachment-ingest needs a path or dataBase64.');
+                    const record = await ingestAttachment({
+                        workspaceRoot, sessionKey,
+                        requirementId: typeof a.requirementId === 'string' ? a.requirementId : undefined,
+                        source,
+                    });
+                    try {
+                        const memoryId = (await emitAgentEvent({ mcpClient, sessionKey }, {
+                            kind: 'agent_output',
+                            summary: `Attachment ${record.id}: ${record.name} [${record.kind}] ${record.mimeType}`,
+                            payload: { attachmentId: record.id, name: record.name, kind: record.kind, mimeType: record.mimeType, byteSize: record.byteSize, pageCount: record.pageCount, context: attachmentContextMarkdown(record, { maxChars: 4_000 }) },
+                        })) ?? undefined;
+                        if (memoryId)
+                            linkAttachmentMemory(workspaceRoot, record.id, memoryId);
+                    }
+                    catch { /* advisory */ }
+                    recordTelemetry({ name: TELEMETRY_EVENTS.attachment_ingested, workspaceRoot, sessionKey, ok: true, durationMs: Date.now() - startedAt, props: { kind: record.kind, bytes: record.byteSize } });
+                    return { ok: true, attachment: record, contextMarkdown: attachmentContextMarkdown(record, { maxChars: 3_000 }) };
+                }
+                catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    recordTelemetry({ name: TELEMETRY_EVENTS.attachment_ingested, workspaceRoot, sessionKey, ok: false, durationMs: Date.now() - startedAt, error: msg });
+                    return { ok: false, error: msg };
+                }
+            },
+            'attachment-list': (a) => {
+                const sessionKey = a.scope === 'workspace' ? undefined : (typeof a.sessionKey === 'string' ? a.sessionKey : activeAgent.sessionKey);
+                return listAttachments(workspaceRoot, { sessionKey });
+            },
+            'attachment-read': (a) => {
+                const rec = getAttachment(workspaceRoot, typeof a.id === 'string' ? a.id : '');
+                if (!rec)
+                    return null;
+                // For images, hand back a (size-capped) data URI so the panel can preview
+                // without a second file-protocol round-trip; text/pdf use extractedText.
+                let dataUri;
+                if (rec.kind === 'image' && rec.byteSize < 5_000_000) {
+                    try {
+                        dataUri = `data:${rec.mimeType};base64,${fs.readFileSync(rec.storedPath).toString('base64')}`;
+                    }
+                    catch { /* unreadable blob */ }
+                }
+                return { ...rec, dataUri };
+            },
+            'attachment-context': (a) => {
+                const rec = getAttachment(workspaceRoot, typeof a.id === 'string' ? a.id : '');
+                return rec ? { id: rec.id, name: rec.name, markdown: attachmentContextMarkdown(rec) } : null;
             },
             // DESK-5l — live model, not the boot-time snapshot: session-info runs on
             // every sidebar refresh, and returning stale llm.model used to stomp the
             // UI back to the old model right after a switch.
-            'session-info': () => ({ sessionKey: activeAgent.sessionKey, model: activeAgent.getModel?.() ?? llm.model, workspaceRoot, username: os.userInfo().username }),
+            'session-info': () => {
+                const current = syncActiveSessionLlm();
+                return { sessionKey: activeAgent.sessionKey, model: activeAgent.getModel?.() ?? current.model, workspaceRoot, username: os.userInfo().username };
+            },
             // DESK-4d — the home/greeting view: real numbers from the workspace's
             // persisted transcripts (sessions, messages, active days, streaks, and
             // a per-day activity map for the heatmap).
             'home-stats': () => {
-                const transcripts = listTranscripts(workspaceRoot).slice(0, 200);
+                const transcripts = listTranscripts(workspaceRoot, { limit: 200 });
                 let turns = 0;
                 const perDay = new Map();
                 for (const t of transcripts) {
@@ -764,12 +1321,7 @@ async function main() {
                 };
             },
             // DESK-4c — workspace browsing panels. (DESK-6t — async git, non-blocking.)
-            'list-files': async () => {
-                const tracked = await git(['ls-files'], workspaceRoot);
-                const untracked = await git(['ls-files', '--others', '--exclude-standard'], workspaceRoot);
-                const all = (tracked + '\n' + untracked).split('\n').filter(Boolean).sort();
-                return { files: all.slice(0, 3000), truncated: all.length > 3000 };
-            },
+            'list-files': async (args) => listWorkspaceFilesCached(args),
             // DESK-6w (T9) — directory-aware: a folder path returns a typed listing
             // instead of the old raw EISDIR. Pure logic lives in fsRead.ts (tested).
             'read-file': (args) => readWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
@@ -871,30 +1423,43 @@ async function main() {
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.
             'requirement-list': () => listRequirements(workspaceRoot),
-            'requirement-create': (a) => createRequirement(workspaceRoot, { title: String(a.title ?? ''), sessionKey: activeAgent.sessionKey }),
-            'requirement-update': (a) => {
+            'requirement-create': async (a) => {
+                const created = createRequirement(workspaceRoot, { title: String(a.title ?? ''), sessionKey: activeAgent.sessionKey });
+                await captureRequirementNote(created, 'created');
+                return getRequirement(workspaceRoot, created.id) ?? created;
+            },
+            'requirement-update': async (a) => {
                 const id = String(a.id ?? '');
                 const patch = {};
+                let change = '';
                 if (a.status !== undefined) {
                     if (!isRequirementStatus(a.status))
                         return { error: `Unknown requirement status "${String(a.status)}".` };
                     patch.status = a.status;
+                    change = `status → ${a.status}`;
                 }
                 if (a.priority !== undefined) {
                     if (!isRequirementPriority(a.priority))
                         return { error: `Unknown requirement priority "${String(a.priority)}".` };
                     patch.priority = a.priority;
+                    if (!change)
+                        change = `priority → ${a.priority}`;
                 }
                 if (typeof a.criterion === 'string' && a.criterion.trim()) {
                     const existing = getRequirement(workspaceRoot, id);
                     if (!existing)
                         return { error: `No requirement "${id}".` };
                     patch.acceptanceCriteria = [...existing.acceptanceCriteria, a.criterion.trim()];
+                    change = change ? `${change}; criterion added` : 'criterion added';
                 }
                 const updated = updateRequirement(workspaceRoot, id, patch);
-                return updated ?? { error: `No requirement "${id}".` };
+                if (!updated)
+                    return { error: `No requirement "${id}".` };
+                if (change)
+                    await captureRequirementNote(updated, change);
+                return getRequirement(workspaceRoot, updated.id) ?? updated;
             },
-            'requirement-seed-plan': (a) => {
+            'requirement-seed-plan': async (a) => {
                 const id = String(a.id ?? '');
                 const req = getRequirement(workspaceRoot, id);
                 if (!req)
@@ -906,6 +1471,7 @@ async function main() {
                 if (req.status === 'draft' || req.status === 'clarifying' || req.status === 'ready') {
                     updateRequirement(workspaceRoot, id, { status: 'in-progress' });
                 }
+                await captureRequirementNote(getRequirement(workspaceRoot, id) ?? req, 'plan seeded');
                 return { ok: true, items: plan.items };
             },
             // ANNOTATION-RECORDS (0.4.15) — durable feedback records anchored to a
@@ -918,7 +1484,7 @@ async function main() {
             // annotations whose quoted code has since changed (re-hash the current lines
             // and compare against the recorded fingerprint). Read failure → not stale.
             'annotation-list': (a) => listAnnotations(workspaceRoot, annotationFilterFromArgs(a)).map((rec) => annotateStale(workspaceRoot, rec)),
-            'annotation-create': (a) => {
+            'annotation-create': async (a) => {
                 const type = a.type;
                 if (!isAnnotationTargetKind(type))
                     return { error: `Unknown annotation target kind "${String(type)}".` };
@@ -950,21 +1516,27 @@ async function main() {
                 if (anchor)
                     input.anchor = anchor;
                 try {
-                    return createAnnotation(workspaceRoot, input);
+                    const created = createAnnotation(workspaceRoot, input);
+                    await captureAnnotationNote(created, 'created');
+                    return getAnnotation(workspaceRoot, created.id) ?? created;
                 }
                 catch (err) {
                     return { error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            'annotation-set-status': (a) => {
+            'annotation-set-status': async (a) => {
                 const id = String(a.id ?? '');
                 if (!isAnnotationStatus(a.status))
                     return { error: `Unknown annotation status "${String(a.status)}".` };
                 const updated = setAnnotationStatus(workspaceRoot, id, a.status);
-                return updated ?? { error: `No annotation "${id}".` };
+                if (!updated)
+                    return { error: `No annotation "${id}".` };
+                await captureAnnotationNote(updated, `status → ${updated.status}`);
+                const linked = getAnnotation(workspaceRoot, updated.id);
+                return linked ? annotateStale(workspaceRoot, linked) : annotateStale(workspaceRoot, updated);
             },
             // §6 COMMENT THREADS — append a comment to an annotation's discussion.
-            'annotation-add-comment': (a) => {
+            'annotation-add-comment': async (a) => {
                 const id = String(a.id ?? '');
                 const body = typeof a.body === 'string' ? a.body.trim() : '';
                 if (!body)
@@ -972,7 +1544,11 @@ async function main() {
                 const author = typeof a.author === 'string' && a.author.trim() ? a.author.trim() : undefined;
                 try {
                     const updated = addAnnotationComment(workspaceRoot, id, body, author);
-                    return updated ? annotateStale(workspaceRoot, updated) : { error: `No annotation "${id}".` };
+                    if (!updated)
+                        return { error: `No annotation "${id}".` };
+                    await captureAnnotationNote(updated, `comment: ${body.replace(/\s+/g, ' ').slice(0, 80)}`);
+                    const linked = getAnnotation(workspaceRoot, updated.id);
+                    return annotateStale(workspaceRoot, linked ?? updated);
                 }
                 catch (err) {
                     return { error: err instanceof Error ? err.message : String(err) };
@@ -981,7 +1557,11 @@ async function main() {
             // Render the (optionally filtered) annotations as agent-readable markdown
             // for the renderer to drop into the chat composer — the "export feedback
             // to the session" path. Pure render; the composer draft is set renderer-side.
-            'annotation-export': (a) => ({ markdown: annotationsToMarkdown(listAnnotations(workspaceRoot, annotationFilterFromArgs(a))) }),
+            'annotation-export': async (a) => {
+                const records = listAnnotations(workspaceRoot, annotationFilterFromArgs(a));
+                await captureAnnotationExportNote(records);
+                return { markdown: annotationsToMarkdown(records) };
+            },
             // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records: a workflow output a
             // chat produces or reviews (design note / sketch / HTML prototype / markdown
             // report / verification summary / review export), with links back to the
@@ -990,7 +1570,7 @@ async function main() {
             // terminal CLI share the same artifacts.json. Enum inputs are guard-validated
             // here so a bad kind/status/format is rejected, not silently written.
             'artifact-list': (a) => listArtifacts(workspaceRoot, artifactFilterFromArgs(a)),
-            'artifact-create': (a) => {
+            'artifact-create': async (a) => {
                 if (!isArtifactKind(a.kind))
                     return { error: `Unknown artifact kind "${String(a.kind)}".` };
                 const title = String(a.title ?? '').trim();
@@ -1016,27 +1596,36 @@ async function main() {
                 if (typeof a.taskId === 'string' && a.taskId)
                     input.taskId = a.taskId;
                 try {
-                    return createArtifact(workspaceRoot, input);
+                    const created = createArtifact(workspaceRoot, input);
+                    await captureArtifactNote(created, 'created');
+                    return getArtifact(workspaceRoot, created.id) ?? created;
                 }
                 catch (err) {
                     return { error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            'artifact-update': (a) => {
+            'artifact-update': async (a) => {
                 const id = String(a.id ?? '');
                 const patch = {};
+                let change = '';
                 if (a.status !== undefined) {
                     if (!isArtifactStatus(a.status))
                         return { error: `Unknown artifact status "${String(a.status)}".` };
                     patch.status = a.status;
+                    change = `status → ${a.status}`;
                 }
                 if (a.summary !== undefined) {
                     if (typeof a.summary !== 'string')
                         return { error: 'Artifact summary must be a string.' };
                     patch.summary = a.summary;
+                    change = change ? `${change}; summary updated` : 'summary updated';
                 }
                 const updated = updateArtifact(workspaceRoot, id, patch);
-                return updated ?? { error: `No artifact "${id}".` };
+                if (!updated)
+                    return { error: `No artifact "${id}".` };
+                if (change)
+                    await captureArtifactNote(updated, change);
+                return getArtifact(workspaceRoot, updated.id) ?? updated;
             },
             // Resolve an artifact's content for the Preview area: a file-backed record
             // (`path`) is read through the SAME safe workspace file-read helper the
@@ -1062,7 +1651,7 @@ async function main() {
             // file-backed artifact (`path`) is written through the SAME safe workspace
             // write the editor uses (writeWorkspaceEntry — escape/symlink guards); an
             // inline artifact updates its stored `content`. Either way bumps updatedAt.
-            'artifact-save': (a) => {
+            'artifact-save': async (a) => {
                 const id = String(a.id ?? '');
                 const content = typeof a.content === 'string' ? a.content : null;
                 if (content === null)
@@ -1074,11 +1663,35 @@ async function main() {
                     const res = writeWorkspaceEntry(workspaceRoot, rec.path, content);
                     if (!res.ok)
                         return { id, error: res.error ?? 'write failed', conflict: res.conflict };
-                    updateArtifact(workspaceRoot, id, {}); // bump updatedAt so the preview re-resolves
+                    fileListCache.invalidate(workspaceRoot);
+                    const updated = updateArtifact(workspaceRoot, id, {}); // bump updatedAt so the preview re-resolves
+                    await captureArtifactNote(updated ?? rec, 'saved to workspace');
                     return { id, ok: true, path: rec.path };
                 }
-                const updated = updateArtifact(workspaceRoot, id, { content });
-                return updated ? { id, ok: true } : { error: `No artifact "${id}".` };
+                const updated = updateArtifact(workspaceRoot, id, { content }, { editedBy: 'user', note: 'edited in desktop' });
+                if (!updated)
+                    return { error: `No artifact "${id}".` };
+                await captureArtifactNote(updated, 'content saved');
+                return { id, ok: true };
+            },
+            // §AV-1 — restore a prior version's content as a NEW version (append-only).
+            // For a file-backed artifact whose content lives on disk, also writes the
+            // restored content back through the same safe workspace write.
+            'artifact-revert': async (a) => {
+                const id = String(a.id ?? '');
+                const v = Number(a.version);
+                if (!Number.isInteger(v))
+                    return { error: 'version must be an integer.' };
+                const updated = revertArtifact(workspaceRoot, id, v, { editedBy: 'user' });
+                if (!updated)
+                    return { error: `No artifact "${id}" or version v${v}.` };
+                if (updated.path && typeof updated.content === 'string') {
+                    const res = writeWorkspaceEntry(workspaceRoot, updated.path, updated.content);
+                    if (res.ok)
+                        fileListCache.invalidate(workspaceRoot);
+                }
+                await captureArtifactNote(updated, `reverted to v${v}`);
+                return getArtifact(workspaceRoot, updated.id) ?? updated;
             },
             // T12 / Review v2 — local AI review of the working tree. Gathers the diff,
             // runs ONE ephemeral review turn in an ISOLATED review: session (filtered
@@ -1086,8 +1699,8 @@ async function main() {
             // structured findings into a ReviewRun keyed by the diff hash, and persists
             // it (reviewStore, shared with the CLI). Returns the run (+ files count for
             // the panel). Real LLM required; the parser/model/gate are unit-tested.
-            'review-diff': async () => runReview(),
-            'review-rerun': async () => runReview(),
+            'review-diff': async () => runReviewTask(activeAgent.sessionKey),
+            'review-rerun': async () => runReviewTask(activeAgent.sessionKey),
             // Lightweight: the gate + current run for the diff on disk right now. Marks
             // a prior run stale if the working diff changed since it ran.
             'review-current': async () => reviewSnapshot(),
@@ -1110,7 +1723,7 @@ async function main() {
                 const f = run?.findings.find((x) => x.id === String(a.id ?? ''));
                 if (!f?.patch)
                     return { ok: false, error: 'This finding has no applicable patch — use "Ask agent to fix" instead.' };
-                const tmp = path.join(getCliStateDir(workspaceRoot), `review-${Date.now().toString(36)}.patch`);
+                const tmp = path.join(getStateDir(workspaceRoot), `review-${Date.now().toString(36)}.patch`);
                 try {
                     fs.writeFileSync(tmp, f.patch.endsWith('\n') ? f.patch : f.patch + '\n');
                     const check = await git(['apply', '--check', tmp], wsGit.gitRoot ?? workspaceRoot);
@@ -1137,16 +1750,16 @@ async function main() {
                 const f = run?.findings.find((x) => x.id === String(a.id ?? ''));
                 if (!f)
                     return { ok: false, error: 'finding not found' };
-                const fixer = new Agent(mcpClient, llmForSession('review'), {
-                    workspaceRoot,
-                    launchCwd: workspaceRoot,
-                    interactionPort: { confirm: async () => false, choice: async () => null },
+                const sessionKey = activeAgent.sessionKey;
+                const task = createBackgroundTask(workspaceRoot, {
+                    kind: 'review',
+                    title: `Fix review finding — ${f.file}`,
+                    sessionKey,
+                    status: 'running',
                 });
-                fixer.sessionKey = `fix:${Date.now().toString(36)}`;
-                try {
-                    fixer.setAccessMode?.('write');
-                }
-                catch { /* older agent */ }
+                const fixerKey = `fix:${task.id}`;
+                const created = updateBackgroundTask(workspaceRoot, task.id, { transcript: { kind: 'task', id: task.id, parentSessionKey: fixerKey } }) ?? task;
+                emitTaskEvent('created', created);
                 const prompt = [
                     'Fix EXACTLY this one code-review finding and nothing else. Make the minimal edit; do not touch unrelated code; do not commit.',
                     `File: ${f.file}${f.line ? ` (around line ${f.line}${f.endLine && f.endLine !== f.line ? `-${f.endLine}` : ''})` : ''}`,
@@ -1157,15 +1770,34 @@ async function main() {
                     f.diffHunk ? `Relevant hunk:\n${f.diffHunk}` : '',
                 ].filter(Boolean).join('\n');
                 try {
-                    await fixer.runTurn(prompt, () => { });
+                    taskProgress(task.id, 'fixing-finding', f.file);
+                    const fixer = spawnTaskAgent(fixerKey, 'write');
+                    const noop = () => { };
+                    const cb = {
+                        onStatusUpdate: (text) => { if (text)
+                            taskProgress(task.id, 'working', text.slice(0, 80)); },
+                        onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop,
+                        onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop,
+                    };
+                    await fixer.runTurn(prompt, cb);
+                    taskProgress(task.id, 'rerunning-review', 'checking the updated diff');
+                    updateReviewFinding(workspaceRoot, f.id, 'fixed', isoNow());
+                    // Re-run the review over the new working diff so the gate + findings refresh.
+                    const rerun = await runReview();
+                    const done = updateBackgroundTask(workspaceRoot, task.id, {
+                        status: 'completed',
+                        result: { findingId: f.id, files: rerun.files, findings: rerun.findings.length },
+                    });
+                    if (done)
+                        emitTaskEvent('completed', done);
+                    return { ok: true, findingId: f.id, files: rerun.files, run: rerun };
                 }
                 catch (err) {
+                    const failed = updateBackgroundTask(workspaceRoot, task.id, { status: 'failed', error: `Fix agent failed: ${err instanceof Error ? err.message : err}` });
+                    if (failed)
+                        emitTaskEvent('failed', failed);
                     return { ok: false, error: `Fix agent failed: ${err instanceof Error ? err.message : err}` };
                 }
-                updateReviewFinding(workspaceRoot, f.id, 'fixed', isoNow());
-                // Re-run the review over the new working diff so the gate + findings refresh.
-                const rerun = await runReview();
-                return { ok: true, findingId: f.id, files: rerun.files, run: rerun };
             },
             // DESK-4c — every CLI slash command, straight from the CLI's catalog.
             'commands-catalog': () => {
@@ -1205,17 +1837,57 @@ async function main() {
             // come from the stores the CLI itself reads/writes.
             'config-snapshot': () => {
                 const fresh = loadConfig();
+                llm = fresh.llm ?? llm;
+                syncActiveSessionLlm(llm);
                 const cli = fresh.cli;
+                const mcpStatuses = new Map(mcpClient.getStatuses().map((s) => [s.serverId, s]));
+                const providerEntries = Object.entries(fresh.providers ?? {});
+                const defaultProviderName = providerEntries.find(([, p]) => p.provider === fresh.llm?.provider &&
+                    p.model === fresh.llm?.model &&
+                    (p.endpoint ?? null) === (fresh.llm?.endpoint ?? null) &&
+                    p.apiKey === fresh.llm?.apiKey)?.[0] ?? null;
+                const workspacePrefs = readPreferences(workspaceRoot);
+                const activeMode = resolveActiveMode(workspaceRoot, activeAgent.sessionKey);
                 return {
                     model: fresh.llm?.model ?? llm.model,
                     provider: fresh.llm?.provider ?? llm.provider,
+                    endpoint: fresh.llm?.endpoint ?? null,
                     fallbackModel: cli?.fallbackModel ?? null,
                     workspaceRoot,
                     sandbox: cli?.sandbox ?? 'off',
-                    prefs: readPreferences(workspaceRoot),
+                    prefs: mergeSessionModePrefs(workspacePrefs, activeMode),
+                    workspacePrefs,
+                    sessionMode: getSessionMode(workspaceRoot, activeAgent.sessionKey),
+                    modeScope: 'session',
+                    cli: fresh.cli ?? {},
                     permissionRules: { allow: cli?.permissions?.allow ?? [], deny: cli?.permissions?.deny ?? [] },
                     hooks: readHooks(workspaceRoot),
-                    servers: mcpClient.getStatuses().map((s) => ({ id: s.serverId, online: s.status === 'connected', detail: s.identity !== 'unknown' ? s.identity : undefined })),
+                    servers: Object.entries(fresh.servers ?? {}).map(([id, cfg]) => {
+                        const s = mcpStatuses.get(id);
+                        return {
+                            id,
+                            online: s?.status === 'connected',
+                            detail: s && s.identity !== 'unknown' ? s.identity : undefined,
+                            type: cfg.type,
+                            url: cfg.type === 'http' ? cfg.url ?? null : null,
+                            command: cfg.type === 'stdio' ? [cfg.command, ...(cfg.args ?? [])].filter(Boolean).join(' ') : null,
+                            hasKey: !!cfg.apiKey,
+                            envCount: Object.keys(cfg.env ?? {}).length,
+                            headerCount: Object.keys(cfg.headers ?? {}).length,
+                        };
+                    }),
+                    // §multi-provider — named providers (API KEYS MASKED, never sent to the
+                    // renderer) + the per-sub-agent-role model routing.
+                    providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey })),
+                    defaultProviderName,
+                    agentModels: Object.entries(fresh.agentModels ?? {}).map(([role, a]) => ({ role, provider: a.provider ?? null, model: a.model ?? null })),
+                    // The known-provider catalog (same list the CLI wizard picks from) so the
+                    // main provider is CHOSEN, not hand-typed — picking one prefills its
+                    // OpenAI-compatible endpoint. Sourced from config/providers.json.
+                    providerCatalog: PROVIDER_CATALOG.map((p) => ({ id: p.id, label: p.label, endpoint: p.endpoint, local: p.local })),
+                    // §settings-completeness — the raw cli.* block so the Advanced section can
+                    // show current knob values (no key here; values are config, not secrets).
+                    cliKnobs: (cli ?? {}),
                 };
             },
             'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined }),
@@ -1256,6 +1928,52 @@ async function main() {
                 const p = readPlan(workspaceRoot, activeAgent.sessionKey);
                 return { items: p.items, explanation: p.explanation };
             },
+            // §goal-autonomy — the desktop's goal loop driver. The renderer calls this
+            // after each turn completes; it applies the SAME decision the CLI Ink loop
+            // uses (`decideGoalContinuation`) for the active session + ticks the
+            // iteration / transitions the goal, and returns the next move:
+            //  - { action: 'continue', followUp } → the renderer fires a HIDDEN turn
+            //  - { action: 'usage_limited' | 'halt' | 'complete' | 'blocked', notice } → a status line
+            //  - { action: 'none' } → no goal / nothing to do
+            'goal-continuation': () => {
+                const sk = activeAgent.sessionKey;
+                const goal = readGoal(workspaceRoot, sk);
+                if (!goal)
+                    return { action: 'none' };
+                const lastTurnToolCalls = activeAgent.lastTurnToolCalls ?? 0;
+                const lastGoalTransition = activeAgent.lastGoalTransition;
+                // Terminal states the model itself reached this turn.
+                if (lastGoalTransition === 'complete' || goal.status === 'complete') {
+                    goalStrikes.delete(sk);
+                    return { action: 'complete', notice: `🎯 Goal achieved — ${goal.blockedReason ?? 'evidence on record.'}` };
+                }
+                if (lastGoalTransition === 'blocked' || goal.status === 'blocked') {
+                    goalStrikes.delete(sk);
+                    return { action: 'blocked', notice: `🚧 Goal blocked: ${goal.blockedReason ?? '(no reason)'} — resolve it, then /goal resume.` };
+                }
+                if (goal.status !== 'active')
+                    return { action: 'none' };
+                let strikes = goalStrikes.get(sk) ?? 0;
+                if (lastTurnToolCalls > 0)
+                    strikes = 0;
+                const decision = decideGoalContinuation(goal, { lastTurnToolCalls, lastGoalTransition, noToolStrikes: strikes });
+                if (decision.kind === 'continue') {
+                    tickGoalIteration(workspaceRoot, sk);
+                    strikes = decision.corrective ? strikes + 1 : 0;
+                    goalStrikes.set(sk, strikes);
+                    const base = buildGoalContinuationPrompt(goal, '', '');
+                    const followUp = decision.corrective ? `${base}\n\n${goalCorrectiveNotice()}` : base;
+                    return { action: 'continue', followUp, iteration: decision.nextIteration, cap: formatBudget(goal.budget.maxIterations), corrective: decision.corrective };
+                }
+                if (decision.kind === 'usage-limited') {
+                    usageLimitGoal(workspaceRoot, sk, decision.reason);
+                    return { action: 'usage_limited', notice: `⏸ Goal hit its budget: ${decision.reason} Raise it with /goal budget <n>, then /goal resume.` };
+                }
+                if (decision.kind === 'halt-prose') {
+                    return { action: 'halt', notice: '⏸ Goal paused: two prose-only turns in a row — send a message to nudge it, or /goal clear.' };
+                }
+                return { action: 'none' };
+            },
             // §7 PLAN REVIEW — this session's plan decision log (oldest-first append
             // order; the renderer reverses + diffs for display). Doubles as the plan's
             // version history since each decision snapshots the plan at that moment.
@@ -1286,6 +2004,18 @@ async function main() {
                         linkPlanDecision(workspaceRoot, activeAgent.sessionKey, decision.id, memoryId);
                 }
                 catch { /* advisory — never break the action */ }
+                // §1 — requesting changes launches a real, visible background revision
+                // task. The decision is already saved, so a task-launch failure still
+                // returns ok (the renderer keeps the feedback draft + surfaces the error).
+                if (verdict === 'changes-requested') {
+                    try {
+                        const task = runPlanRevisionTask(activeAgent.sessionKey, decision, feedback);
+                        return { ok: true, decision, task: taskEventView(task) };
+                    }
+                    catch (err) {
+                        return { ok: true, decision, taskError: err instanceof Error ? err.message : String(err) };
+                    }
+                }
                 return { ok: true, decision };
             },
             'search-transcript': (args) => {
@@ -1312,8 +2042,8 @@ async function main() {
             },
             // DESK-5w — the conversation of a background task (a delegated child agent
             // OR a worker), reconstructed like a normal chat. The renderer opens this
-            // read-only when you click a task nested under its session, so you can see
-            // exactly what a subagent is doing and what it has said/done so far.
+            // read-only from the Background tasks panel, so you can see exactly what a
+            // subagent is doing and what it has said/done so far.
             'task-transcript': (args) => {
                 const kind = typeof args.kind === 'string' ? args.kind : 'agent';
                 const id = typeof args.id === 'string' ? args.id : '';
@@ -1322,6 +2052,17 @@ async function main() {
                     const meta = readWorkerMeta(workspaceRoot, id);
                     const raw = readWorkerTranscript(workspaceRoot, id, 400);
                     return { id, kind, role: meta?.role, goal: meta?.goal, status: meta?.status, rows: workerEventsToRows(raw) };
+                }
+                // §1/§2/§3 — a DURABLE task (plan revision / review / verification). The
+                // task agent ran under its own internal session key (carried in the
+                // task's transcript ref as parentSessionKey); reconstruct that turn's
+                // transcript exactly like a chat so the user sees what the task did.
+                if (kind === 'task') {
+                    const taskRec = getBackgroundTask(workspaceRoot, id);
+                    const taskKey = parent || taskRec?.transcript?.parentSessionKey || '';
+                    const entries = (taskKey ? readTranscriptTail(workspaceRoot, taskKey, 1200) : []);
+                    const rows = reconstructTranscriptRows(entries).slice(-400);
+                    return { id, kind, role: taskRec?.kind, goal: taskRec?.title, status: taskRec?.status, rows };
                 }
                 // Child agent: its history lives at childSessionKey(parent, id); an
                 // isolated-worktree child persists under its own childWorkspaceRoot.
@@ -1419,6 +2160,7 @@ async function main() {
                     return { out: '', code: 0 };
                 return new Promise((resolve) => {
                     exec(cmd, { cwd: workspaceRoot, timeout: 20_000, maxBuffer: 1_000_000 }, (err, stdout, stderr) => {
+                        fileListCache.invalidate(workspaceRoot);
                         resolve({
                             out: `${stdout ?? ''}${stderr ? `\n${stderr}` : ''}`.trim().slice(0, 20_000),
                             code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0,
@@ -1429,7 +2171,12 @@ async function main() {
             // T5 — save an editor buffer. A USER edit, so no approval gate (same posture
             // as action:term-exec). writeWorkspaceEntry enforces escape/symlink/stale
             // guards and returns {ok}|{conflict}|{error}; the renderer surfaces it.
-            'action:file-save': (args) => writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : '', { expectedMtimeMs: typeof args.expectedMtimeMs === 'number' ? args.expectedMtimeMs : undefined }),
+            'action:file-save': (args) => {
+                const result = writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : '', { expectedMtimeMs: typeof args.expectedMtimeMs === 'number' ? args.expectedMtimeMs : undefined });
+                if (result.ok)
+                    fileListCache.invalidate(workspaceRoot);
+                return result;
+            },
             // DESK-5 — the command bridge. Each case mirrors the REPL command's
             // behavior using the CLI's own store modules; output is plain lines the
             // renderer shows as a command-output block in the chat.
@@ -1438,16 +2185,33 @@ async function main() {
                 const rest = typeof args.args === 'string' ? args.args.trim() : '';
                 switch (cmd) {
                     case 'goal': {
+                        const sk = activeAgent.sessionKey;
                         if (rest === 'clear') {
-                            clearGoal(workspaceRoot, activeAgent.sessionKey);
+                            clearGoal(workspaceRoot, sk);
+                            goalStrikes.delete(sk);
                             return { lines: ['Goal cleared.'] };
                         }
-                        if (rest) {
-                            const g = setGoal(workspaceRoot, rest, activeAgent.sessionKey);
-                            return { lines: [`Goal set: ${g.text}`, `status: ${g.status}`] };
+                        if (rest === 'pause') {
+                            const g = pauseGoal(workspaceRoot, sk);
+                            return { lines: g ? ['Goal paused — /goal resume to continue.'] : ['No active goal to pause.'] };
                         }
-                        const g = readGoal(workspaceRoot, activeAgent.sessionKey);
-                        return { lines: g ? [`Goal: ${g.text}`, `status: ${g.status} · set ${g.setAt}`] : ['No active goal.', 'Usage: /goal <text> · /goal clear'] };
+                        if (rest === 'resume') {
+                            const g = resumeGoal(workspaceRoot, sk);
+                            if (!g)
+                                return { lines: ['No goal to resume.'] };
+                            goalStrikes.delete(sk);
+                            // §goal-autonomy — resuming kicks off a turn; the loop takes over.
+                            return { lines: [`Goal resumed: ${g.text}`, `status: ${g.status}`], startTurn: buildGoalKickoffPrompt(g, 'resume') };
+                        }
+                        if (rest && rest !== 'show') {
+                            // Set a NEW goal and KICK OFF the autonomy loop (the renderer fires
+                            // the returned startTurn; the goal-continuation query keeps it going).
+                            const g = setGoal(workspaceRoot, rest, sk, { force: true });
+                            goalStrikes.delete(sk);
+                            return { lines: [`Goal set: ${g.text}`, `status: ${g.status} — working on it…`], startTurn: buildGoalKickoffPrompt(g, 'start') };
+                        }
+                        const g = readGoal(workspaceRoot, sk);
+                        return { lines: g ? [`Goal: ${g.text}`, `status: ${g.status} · iteration ${g.budget.iterationsUsed}/${formatBudget(g.budget.maxIterations)}`] : ['No active goal.', 'Usage: /goal <text> · /goal pause · /goal resume · /goal clear'] };
                     }
                     case 'plan': {
                         const text = formatPlan(readPlan(workspaceRoot, activeAgent.sessionKey));
@@ -1533,26 +2297,149 @@ async function main() {
                 if (typeof args.model === 'string' && args.model.trim())
                     llmCfg.model = args.model.trim();
                 if (typeof args.endpoint === 'string')
-                    llmCfg.endpoint = args.endpoint.trim() || undefined;
+                    llmCfg.endpoint = args.endpoint.trim() || PROVIDER_CATALOG.find((p) => p.id === llmCfg.provider)?.endpoint || undefined;
                 if (typeof args.apiKey === 'string' && args.apiKey.trim())
                     llmCfg.apiKey = args.apiKey.trim();
                 saveConfig(fresh);
+                llm = { ...llmCfg };
+                syncActiveSessionLlm(llm);
+                modelsCacheByKey.delete('');
                 return { ok: true, provider: llmCfg.provider, model: llmCfg.model, endpoint: llmCfg.endpoint ?? null };
+            },
+            // Advanced settings editor: full `cli` block, shared with the terminal CLI.
+            // This intentionally does NOT touch llm/providers/servers so write-only
+            // secrets from those sections are not exposed through the JSON textarea.
+            'action:set-cli-json': (args) => {
+                const raw = typeof args.json === 'string' ? args.json : '{}';
+                let parsed;
+                try {
+                    parsed = JSON.parse(raw);
+                }
+                catch (err) {
+                    throw new Error(`Invalid CLI JSON: ${err?.message ?? err}`);
+                }
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+                    throw new Error('CLI config must be a JSON object.');
+                const fresh = loadConfig();
+                fresh.cli = parsed;
+                saveConfig(fresh);
+                return { ok: true };
+            },
+            // §settings-completeness — set ONE cli.* knob (vs set-cli-json's whole-block
+            // replace). `value: null` deletes the key (reverts to the default). Shared
+            // with the CLI's config.json.
+            'action:set-cli-knob': (args) => {
+                const key = typeof args.key === 'string' ? args.key : '';
+                if (!key)
+                    return { ok: false, error: 'No knob key.' };
+                const fresh = loadConfig();
+                const cli = (fresh.cli = fresh.cli ?? {});
+                if (args.value === null)
+                    delete cli[key];
+                else
+                    cli[key] = args.value;
+                saveConfig(fresh);
+                return { ok: true, key };
+            },
+            // §multi-provider — add/update a NAMED OpenAI-compatible provider. A blank
+            // apiKey on an UPDATE keeps the existing key (so the renderer never has to
+            // echo it back). Returns the masked provider list.
+            'action:set-provider': (args) => {
+                const name = typeof args.name === 'string' ? args.name.trim() : '';
+                if (!/^[a-zA-Z0-9._-]+$/.test(name))
+                    return { ok: false, error: 'Provider name must be letters, digits, . _ - only.' };
+                const fresh = loadConfig();
+                const existing = fresh.providers?.[name];
+                const providerId = typeof args.provider === 'string' && args.provider.trim() ? args.provider.trim() : (existing?.provider ?? 'openai');
+                const llmCfg = {
+                    provider: providerId,
+                    apiKey: typeof args.apiKey === 'string' && args.apiKey.trim() ? args.apiKey.trim() : (existing?.apiKey ?? ''),
+                    model: typeof args.model === 'string' && args.model.trim() ? args.model.trim() : (existing?.model ?? ''),
+                    endpoint: typeof args.endpoint === 'string' ? (args.endpoint.trim() || PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint || undefined) : (existing?.endpoint ?? PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint),
+                };
+                if (!llmCfg.model)
+                    return { ok: false, error: 'A model is required.' };
+                saveConfig(setProvider(fresh, name, llmCfg));
+                return { ok: true, name };
+            },
+            'action:remove-provider': (args) => {
+                const name = typeof args.name === 'string' ? args.name.trim() : '';
+                if (!name)
+                    return { ok: false, error: 'No provider name.' };
+                saveConfig(removeProvider(loadConfig(), name));
+                return { ok: true, name };
+            },
+            // §provider-unify — promote a configured provider to be the DEFAULT (the
+            // main model picks straight from it): copy its endpoint + KEY (resolved
+            // host-side, never echoed to the renderer) + model into `config.llm`.
+            'action:set-default-provider': (args) => {
+                const name = typeof args.name === 'string' ? args.name.trim() : '';
+                let fresh = loadConfig();
+                const p = fresh.providers?.[name];
+                if (!p)
+                    return { ok: false, error: `Unknown provider "${name}".` };
+                fresh.llm = { provider: p.provider, apiKey: p.apiKey, model: p.model, endpoint: p.endpoint };
+                const fallback = fresh.agentModels?.default;
+                const fallbackDuplicatesMain = !!fallback &&
+                    ((fallback.provider === name && (!fallback.model || fallback.model === p.model)) ||
+                        (!fallback.provider && (!fallback.model || fallback.model === p.model)));
+                if (fallbackDuplicatesMain)
+                    fresh = setAgentModel(fresh, 'default', {});
+                saveConfig(fresh);
+                llm = fresh.llm ?? llm;
+                syncActiveSessionLlm(llm);
+                modelsCacheByKey.delete('');
+                return { ok: true, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null };
+            },
+            // §multi-provider — route a sub-agent ROLE to a provider/model. Blank
+            // provider+model CLEARS the role (inherits the main model).
+            'action:set-agent-model': (args) => {
+                const role = typeof args.role === 'string' ? args.role.trim() : '';
+                if (!role)
+                    return { ok: false, error: 'No role.' };
+                const provider = typeof args.provider === 'string' ? args.provider.trim() : '';
+                const model = typeof args.model === 'string' ? args.model.trim() : '';
+                const fresh = loadConfig();
+                const defaultProviderName = Object.entries(fresh.providers ?? {}).find(([, p]) => p.provider === fresh.llm?.provider &&
+                    p.model === fresh.llm?.model &&
+                    (p.endpoint ?? null) === (fresh.llm?.endpoint ?? null) &&
+                    p.apiKey === fresh.llm?.apiKey)?.[0];
+                const providerCfg = provider ? fresh.providers?.[provider] : undefined;
+                const duplicatesMain = (!provider && (!model || model === fresh.llm?.model)) ||
+                    (!!provider && provider === defaultProviderName && (!model || model === providerCfg?.model));
+                saveConfig(setAgentModel(fresh, role, duplicatesMain ? {} : { provider, model }));
+                return { ok: true, role, cleared: duplicatesMain };
             },
             // DESK-5c/5l — live model list from the configured endpoint (cached 60s).
             // Empty results are NOT cached: a transient endpoint hiccup used to pin
             // an empty list for a minute, leaving the picker with nothing to switch
             // to. Failures fall back to the last good list when there is one.
-            'list-models': async () => {
+            // Every OpenAI-compatible endpoint exposes GET /models — so the model
+            // pickers are ALWAYS endpoint-driven, never a hand-written list. With no
+            // arg this lists the active llm's models; `{ provider }` lists a named
+            // provider's (the key is resolved HERE so it never leaves the host).
+            'list-models': async (a) => {
                 const fresh = loadConfig();
-                const l = fresh.llm ?? llm;
+                llm = fresh.llm ?? llm;
+                const provName = typeof a?.provider === 'string' && a.provider ? a.provider : undefined;
+                const prov = provName ? (fresh.providers ?? {})[provName] : undefined;
+                // A named provider that isn't configured yet → nothing to list.
+                if (provName && !prov)
+                    return { models: [], current: '', provider: provName };
+                const activeLlm = prov ? undefined : syncActiveSessionLlm(llm);
+                const l = prov ?? activeLlm ?? llm;
+                const cacheKey = provName ?? '';
                 const now = Date.now();
-                if (modelsCache && now - modelsCache.at < 60_000)
-                    return { models: modelsCache.models, current: activeAgent.getModel?.() ?? l.model };
-                const models = await fetchEndpointModels(l.endpoint, l.apiKey ?? '');
+                const cached = modelsCacheByKey.get(cacheKey);
+                const current = prov ? (prov.model ?? '') : (activeAgent.getModel?.() ?? l.model);
+                if (cached && now - cached.at < 60_000)
+                    return { models: cached.models, current, provider: provName };
+                // Public/anonymous tier (opencode "public") — list free models with no key.
+                const fallbackKey = PROVIDER_CATALOG.find((p) => p.id === (l.provider ?? '').toLowerCase())?.defaultApiKey ?? '';
+                const models = await fetchEndpointModels(l.endpoint, (l.apiKey && l.apiKey.trim()) ? l.apiKey : fallbackKey);
                 if (models.length)
-                    modelsCache = { models, at: now };
-                return { models: models.length ? models : (modelsCache?.models ?? []), current: activeAgent.getModel?.() ?? l.model };
+                    modelsCacheByKey.set(cacheKey, { models, at: now });
+                return { models: models.length ? models : (cached?.models ?? []), current, provider: provName };
             },
             // DESK-5c — real terminal sessions (offset-poll streaming).
             'term-open': () => {
@@ -1607,10 +2494,18 @@ async function main() {
             'action:compact': async () => activeAgent.compactHistory(),
             'action:set-pref': (args) => {
                 const key = typeof args.key === 'string' ? args.key : '';
-                const SETTABLE = new Set(['executionMode', 'reviewPolicy', 'delegationPolicy', 'autoChain', 'effort', 'personality', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
+                const SETTABLE = new Set(['delegationPolicy', 'autoChain', 'personality', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
                 if (!SETTABLE.has(key))
                     throw new Error(`Preference "${key}" is not settable from the desktop.`);
                 return writePreferences(workspaceRoot, { [key]: args.value });
+            },
+            'action:set-session-mode': (args) => {
+                const parsed = desktopSessionModePatchFromArgs(args);
+                if (parsed.error)
+                    throw new Error(parsed.error);
+                const sessionMode = setSessionMode(workspaceRoot, activeAgent.sessionKey, parsed.patch);
+                const activeMode = resolveActiveMode(workspaceRoot, activeAgent.sessionKey);
+                return { ok: true, sessionKey: activeAgent.sessionKey, sessionMode, activeMode };
             },
             'action:set-hook': (args) => {
                 const id = typeof args.id === 'string' ? args.id : '';
@@ -1635,10 +2530,29 @@ async function main() {
                 const type = args.type === 'http' ? 'http' : 'stdio';
                 if (!/^[A-Za-z0-9._-]+$/.test(id))
                     return { ok: false, error: 'Server id must be letters, digits, dash, underscore or dot.' };
+                // Optional auth/headers/env (a "KEY=value\nKEY2=value2" string → record).
+                const kvPairs = (raw) => {
+                    const out = {};
+                    if (raw && typeof raw === 'object')
+                        return raw;
+                    if (typeof raw === 'string')
+                        for (const line of raw.split('\n')) {
+                            const i = line.indexOf('=');
+                            if (i > 0)
+                                out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+                        }
+                    return out;
+                };
+                const apiKey = String(args.apiKey ?? '').trim();
+                const headers = kvPairs(args.headers);
+                const env = kvPairs(args.env);
                 const cfg = type === 'http'
-                    ? { type: 'http', url: String(args.url ?? '').trim() }
-                    : { type: 'stdio', command: String(args.command ?? '').trim(), args: typeof args.args === 'string' ? args.args.trim().split(/\s+/).filter(Boolean) : [] };
-                if (type === 'http' ? !cfg.url : !cfg.command)
+                    ? { type: 'http', url: String(args.url ?? '').trim(),
+                        ...(apiKey ? { apiKey } : {}), ...(Object.keys(headers).length ? { headers } : {}) }
+                    : { type: 'stdio', command: String(args.command ?? '').trim(), args: typeof args.args === 'string' ? args.args.trim().split(/\s+/).filter(Boolean) : [],
+                        ...(Object.keys(env).length ? { env } : {}) };
+                const required = cfg.type === 'http' ? cfg.url : cfg.command;
+                if (!required)
                     return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
                 const fresh = loadConfig();
                 fresh.servers = fresh.servers ?? {};

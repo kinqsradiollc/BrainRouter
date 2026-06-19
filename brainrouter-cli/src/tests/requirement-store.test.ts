@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { isRequirementRecord } from '@kinqs/brainrouter-types';
-import { getCliStateFile } from '../state/cliState.js';
+import { getStateFile } from '../state/cliState.js';
 import {
   createRequirement,
   getRequirement,
@@ -215,7 +215,7 @@ test('requirementStore: state persists across a fresh read (simulated restart)',
     updateRequirement(workspace, rec.id, { acceptanceCriteria: ['c1'] });
 
     // Confirm it landed on disk at requirements.json, then read it cold.
-    const file = getCliStateFile(workspace, 'requirements.json');
+    const file = getStateFile(workspace, 'requirements.json');
     assert.equal(fs.existsSync(file), true);
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.ok(onDisk[rec.id]);

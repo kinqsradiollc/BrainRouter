@@ -13,8 +13,8 @@ contextBridge.exposeInMainWorld('brainrouter', {
     ipcRenderer.on('agent-event', wrapped);
     return () => ipcRenderer.removeListener('agent-event', wrapped);
   },
-  // Activity-based project ordering: main pushes the reordered recents when a
-  // workspace sees real activity (a turn, output, commit/push/PR).
+  // User-controlled project ordering: main pushes updated recents for activity
+  // membership changes and explicit drag/drop reorders.
   onRecentsChanged(listener: (data: { recents: string[]; reason: string; workspaceRoot: string }) => void): () => void {
     const wrapped = (_e: unknown, data: { recents: string[]; reason: string; workspaceRoot: string }) => listener(data);
     ipcRenderer.on('recents-changed', wrapped);
@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
   },
   workspaceRecents(): Promise<{ current: string | null; recents: string[] }> {
     return ipcRenderer.invoke('workspace:recents');
+  },
+  workspaceSessions(root: string, limit?: number): Promise<{ rows: Array<Record<string, unknown>>; truncated?: boolean; error?: string }> {
+    return ipcRenderer.invoke('workspace:sessions', root, limit);
   },
   openWorkspace(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
     return ipcRenderer.invoke('workspace:open', workspaceRoot);
@@ -44,6 +47,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
   },
   markActivity(workspaceRoot: string, reason: string): Promise<{ ok: boolean }> {
     return ipcRenderer.invoke('workspace:activity', workspaceRoot, reason);
+  },
+  reorderWorkspace(dragged: string, target: string): Promise<{ recents: string[] }> {
+    return ipcRenderer.invoke('workspace:reorder', dragged, target);
   },
   // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
   globalDashboard(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }> {

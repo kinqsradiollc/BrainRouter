@@ -5,7 +5,7 @@
  */
 export { CodeBlock, langForPath } from './code.js';
 export { DiffView, parseUnifiedDiff, type DiffLine, type DiffHunk, type DiffFile } from './diff.js';
-export { Panel, PanelPicker, PANEL_DEFS, type PanelId } from './Panel.js';
+export { Panel, PanelPicker, MANUAL_PANEL_DEFS, PANEL_DEFS, type PanelId } from './Panel.js';
 export { GATE_LABEL, type ReviewFindingView, type ReviewGateView } from './reviewShared.js';
 export { FilesPanel, buildFileTree, type GrepHit } from './FilesPanel.js';
 export { FileViewerPanel } from './FileViewerPanel.js';

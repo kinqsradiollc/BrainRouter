@@ -4,9 +4,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { collectRunningTasks, formatBackgroundTasks, groupTasksByKind, summarizeTasks, type BackgroundTask } from '../runtime/backgroundTasks.js';
+import { collectDashboardTasks, collectRunningTasks, formatBackgroundTasks, groupTasksByKind, summarizeTasks, type BackgroundTask } from '../runtime/backgroundTasks.js';
 import { createSession, updateSession } from '../orchestration/orchestrator.js';
 import { createWorker } from '../state/workerStore.js';
+import { createBackgroundTask, updateBackgroundTask } from '../state/backgroundTaskStore.js';
 
 const TASKS: BackgroundTask[] = [
   { kind: 'agent', id: 'agent-1', label: 'reviewer (agent-1)' },
@@ -93,6 +94,27 @@ test('collectRunningTasks carries the agent role + worktree flag for the sidebar
     assert.equal(byId.get(wt.id)?.worktree, true, 'isolated child → worktree:true');
     assert.equal(byId.get(plain.id)?.role, 'explorer');
     assert.equal(byId.get(plain.id)?.worktree, false, 'non-isolated child → worktree:false');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('collectDashboardTasks includes recent failed durable tasks and stale child agents', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'br-dashboard-tasks-'));
+  try {
+    const stale = createSession(dir, { role: 'reviewer', prompt: 'review diff', parentSessionKey: 'parent' });
+    updateSession(dir, stale.id, { status: 'stale', error: 'Host exited' });
+    const running = createSession(dir, { role: 'explorer', prompt: 'map', parentSessionKey: 'parent' });
+    updateSession(dir, running.id, { status: 'running' });
+    const review = createBackgroundTask(dir, { kind: 'review', title: 'Review working changes', sessionKey: 'parent', status: 'running' });
+    updateBackgroundTask(dir, review.id, { status: 'failed', error: 'Review failed' });
+
+    const rows = collectDashboardTasks(dir);
+    const byKey = new Map(rows.map((t) => [`${t.kind}:${t.id}`, t]));
+    assert.equal(byKey.get(`agent:${stale.id}`)?.status, 'stale');
+    assert.equal(byKey.get(`agent:${running.id}`)?.status, 'running');
+    assert.equal(byKey.get(`review:${review.id}`)?.status, 'failed');
+    assert.ok(!collectRunningTasks(dir).some((t) => t.id === stale.id), 'stale agents are dashboard-visible but not running');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

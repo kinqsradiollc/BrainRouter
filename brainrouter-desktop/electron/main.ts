@@ -11,20 +11,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-cli/dist/state/workspaceTrust.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
+import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
 // review gate per recent workspace.
-import { collectRunningTasks } from '@kinqs/brainrouter-cli/dist/runtime/backgroundTasks.js';
-import { getLatestReview } from '@kinqs/brainrouter-cli/dist/state/reviewStore.js';
-import { reviewGate } from '@kinqs/brainrouter-cli/dist/orchestration/reviewModel.js';
+import { collectDashboardTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { pidAlive, reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+import { reconcileBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
+import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
+import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
+import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
 import {
   emptyPool, planActivate, applyActivate, setRunning, removeEntry,
   type HostPoolState,
 } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
-import { addOpened, bumpActivity, type ActivityReason } from './recents.js';
+import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from './recents.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function reconcileWorkspaceBackground(workspaceRoot: string): void {
+  try { reconcileStaleBackgroundTasks(workspaceRoot, pidAlive); } catch { /* best-effort */ }
+  try { reconcileBackgroundTasks(workspaceRoot, pidAlive); } catch { /* best-effort */ }
+}
 
 /**
  * Stability items 3 + 4 — a window keeps a POOL of agent hosts keyed by
@@ -43,25 +54,84 @@ interface WinPool {
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
 
 const recentsPath = (): string => path.join(app.getPath('userData'), 'recent-workspaces.json');
+type WorkspaceSessionRow = TranscriptSummary & { lastRole?: string };
+type WorkspaceSessionsResult = { rows: WorkspaceSessionRow[]; truncated?: boolean; error?: string };
+const WORKSPACE_SESSIONS_CACHE_MS = 30_000;
+const workspaceSessionsCache = new Map<string, { at: number; limit: number; rows: WorkspaceSessionRow[] }>();
+
 function readRecents(): string[] {
   try { return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8')) as string[]; } catch { return []; }
 }
 function writeRecents(next: string[]): void {
   try { fs.mkdirSync(path.dirname(recentsPath()), { recursive: true }); fs.writeFileSync(recentsPath(), JSON.stringify(next, null, 2)); } catch { /* best-effort */ }
 }
-/** Membership without promotion — opening/switching/viewing a project must NOT
- *  move it to the top (only real activity does). */
+
+function transcriptPathForSummary(root: string, s: TranscriptSummary): string {
+  return s.sessionDir
+    ? path.join(s.sessionDir, s.fileName)
+    : path.join(getStateDir(root), 'transcripts', s.fileName);
+}
+
+function lastTranscriptRole(filePath: string): 'user' | 'assistant' | undefined {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 16_384);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    const lines = buf.toString('utf-8').split('\n').filter((l) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const e = JSON.parse(lines[i]) as { role?: string; name?: string };
+        if (e.role === 'assistant') return 'assistant';
+        if (e.role === 'user' && !e.name) return 'user';
+      } catch { /* the tail window may start mid-line */ }
+    }
+  } catch { /* unreadable */ }
+  return undefined;
+}
+
+function readWorkspaceSessions(root: string, limit: number): WorkspaceSessionsResult {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(120, Math.floor(limit))) : 80;
+  if (!root || !fs.existsSync(root)) return { rows: [], error: 'Workspace is not available.' };
+  const now = Date.now();
+  const cached = workspaceSessionsCache.get(root);
+  if (cached && now - cached.at < WORKSPACE_SESSIONS_CACHE_MS && cached.limit >= safeLimit) {
+    return { rows: cached.rows.slice(0, safeLimit), truncated: cached.rows.length >= safeLimit };
+  }
+  try {
+    const summaries = listTranscripts(root, { limit: safeLimit });
+    const rows = summaries.map((s) => ({ ...s, lastRole: lastTranscriptRole(transcriptPathForSummary(root, s)) }));
+    workspaceSessionsCache.set(root, { at: now, limit: safeLimit, rows });
+    return { rows, truncated: rows.length >= safeLimit };
+  } catch (err) {
+    return { rows: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Membership without promotion — opening/switching/viewing a project must not
+ *  move it. Manual drag/drop is the only ordering operation. */
 function markWorkspaceOpened(workspaceRoot: string): void {
   writeRecents(addOpened(readRecents(), workspaceRoot));
 }
-/** Promote a workspace after REAL activity (a turn, output, commit/push/PR).
- *  Notifies open windows so the sidebar reorders live. */
+/** Record real activity without changing user-controlled project order. */
 function markWorkspaceActivity(workspaceRoot: string, reason: ActivityReason): void {
-  const next = bumpActivity(readRecents(), workspaceRoot);
+  workspaceSessionsCache.delete(workspaceRoot);
+  const next = noteActivity(readRecents(), workspaceRoot);
   writeRecents(next);
   for (const wp of wins.values()) {
     if (!wp.win.isDestroyed()) wp.win.webContents.send('recents-changed', { recents: next, reason, workspaceRoot });
   }
+}
+
+function markWorkspaceReordered(dragged: string, target: string): string[] {
+  const next = reorderWorkspace(readRecents(), dragged, target);
+  writeRecents(next);
+  for (const wp of wins.values()) {
+    if (!wp.win.isDestroyed()) wp.win.webContents.send('recents-changed', { recents: next, reason: 'manual-reorder', workspaceRoot: dragged });
+  }
+  return next;
 }
 
 /** Fork an agent host for a workspace, pool it, and pipe its events into the
@@ -91,12 +161,12 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
     wp.win.webContents.send('agent-event', tagged);
   });
   host.on('exit', (code) => {
-    const wasActive = wp.pool.activeRoot === workspaceRoot;
     wp.hosts.delete(workspaceRoot);
     wp.pool = removeEntry(wp.pool, workspaceRoot);
     if (wp.retiring.delete(workspaceRoot)) return; // intentional reap/shutdown — not an error
-    if (!wp.win.isDestroyed() && wasActive) wp.win.webContents.send('agent-event', {
-      seq: -1, ts: Date.now(), sessionKey: 'host', workspaceRoot,
+    reconcileWorkspaceBackground(workspaceRoot);
+    if (!wp.win.isDestroyed()) wp.win.webContents.send('agent-event', {
+      seq: -1, ts: Date.now(), sessionKey: wp.lastSession.get(workspaceRoot) ?? 'host', workspaceRoot,
       event: { kind: 'turn-error', message: `Agent host exited (code ${code ?? 'unknown'}).` },
     });
   });
@@ -141,9 +211,11 @@ function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
     if (host && last) { try { host.postMessage({ kind: 'resume-session', sessionKey: last }); } catch { /* gone */ } }
   }
   wp.win.setTitle(`BrainRouter — ${path.basename(workspaceRoot)}`);
-  // Activating/switching is "opened", NOT activity — it must not promote the
-  // project to the top. Only real work (turn/output/commit) does that.
+  // Activating/switching is membership only; it must not change the user's
+  // project order.
   markWorkspaceOpened(workspaceRoot);
+  // §6 — workspace-refresh telemetry (local-first, best-effort, never throws).
+  try { recordTelemetry({ name: TELEMETRY_EVENTS.workspace_refresh, workspaceRoot, props: { mode: plan.mode } }); } catch { /* advisory */ }
 }
 
 function openWorkspaceWindow(workspaceRoot: string): void {
@@ -229,6 +301,10 @@ app.whenReady().then(() => {
     const wp = wins.get(event.sender.id);
     return { current: wp?.pool.activeRoot ?? null, recents: readRecents() };
   });
+  ipcMain.handle('workspace:sessions', (_event, root: unknown, rawLimit: unknown) => {
+    const limit = typeof rawLimit === 'number' ? rawLimit : Number(rawLimit ?? 80);
+    return readWorkspaceSessions(typeof root === 'string' ? root : '', limit);
+  });
   ipcMain.handle('workspace:open', (event, workspaceRoot: unknown) => {
     if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot)) return { opened: false };
     // T1 — main ENFORCES trust (defense-in-depth): even if the renderer gate is
@@ -254,8 +330,10 @@ app.whenReady().then(() => {
   ipcMain.handle('dashboard:global', () => {
     const roots = readRecents();
     const workspaces = roots.map((workspaceRoot) => {
-      let tasks: Array<{ kind: string; id: string; label: string; startedAt?: string; role?: string; worktree?: boolean }> = [];
-      try { tasks = collectRunningTasks(workspaceRoot) as typeof tasks; } catch { /* unreadable workspace */ }
+      let tasks: ReturnType<typeof collectDashboardTasks> = [];
+      // §3/fix 4 — include active work AND recent terminal/stale outcomes so
+      // Dashboard is a real workspace operations view, not only a running list.
+      try { reconcileWorkspaceBackground(workspaceRoot); tasks = collectDashboardTasks(workspaceRoot); } catch { /* unreadable workspace */ }
       let gate: { status: string; blocked: boolean; reason: string } | null = null;
       try {
         const run = getLatestReview(workspaceRoot);
@@ -266,10 +344,15 @@ app.whenReady().then(() => {
     return { workspaces };
   });
   // Wave 1/4 — the renderer reports real activity that main can't see on the
-  // agent-event stream (commit / push / create-pr) so the project promotes.
+  // agent-event stream (commit / push / create-pr). Activity refreshes project
+  // state and membership; explicit drag/drop is the only order change.
   ipcMain.handle('workspace:activity', (_e, root: unknown, reason: unknown) => {
     if (typeof root === 'string' && typeof reason === 'string') markWorkspaceActivity(root, reason as ActivityReason);
     return { ok: true };
+  });
+  ipcMain.handle('workspace:reorder', (_e, dragged: unknown, target: unknown) => {
+    if (typeof dragged !== 'string' || typeof target !== 'string') return { recents: readRecents() };
+    return { recents: markWorkspaceReordered(dragged, target) };
   });
 
   app.on('activate', () => {

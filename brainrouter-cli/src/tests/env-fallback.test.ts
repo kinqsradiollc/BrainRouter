@@ -46,6 +46,16 @@ test('backfillApiKeyFromEnv: Gemini endpoint → GEMINI_API_KEY', () => {
   assert.equal(out, 'AIzaXXXXXXXXXXXXXXXXX');
 });
 
+test('backfillApiKeyFromEnv: opencode endpoint → OPENCODE_API_KEY (now derived from the provider module)', () => {
+  // The endpoint→env map is derived from BUILTIN_PROVIDERS, so opencode (added
+  // as a code module) is covered without a hand-maintained table entry.
+  const out = withEnv({
+    OPENCODE_API_KEY: 'oc-1234567890123456',
+    OPENAI_API_KEY:   'sk-cccccccccccccccc',
+  }, () => backfillApiKeyFromEnv('https://opencode.ai/zen/v1'));
+  assert.equal(out, 'oc-1234567890123456');
+});
+
 test('backfillApiKeyFromEnv: LM Studio endpoint → LMSTUDIO_API_KEY', () => {
   const out = withEnv({
     LMSTUDIO_API_KEY: 'lm-studio-local',

@@ -21,7 +21,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onDismissE
   liveLast: boolean;
   inlineDiffs: Record<string, string>;
   onRequestDiff: (file: string) => void;
-  onDismissError: (id: number) => void;
+  onDismissError: (id: number | string) => void;
   onFork: (ts: number) => void;
 }): React.ReactElement | null {
   switch (r.kind) {
@@ -60,7 +60,9 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onDismissE
     case 'error': return (
       <div className="row">
         <div className="error-card">
-          <button className="icon-btn err-x" onClick={() => onDismissError(r.id)}>✕</button>
+          <button className="icon-btn tab-close-btn err-x" aria-label="Dismiss error" title="Dismiss error" onClick={() => onDismissError(r.id)}>
+            <Icon name="close" size={11} />
+          </button>
           <span className="error-icon"><Icon name="warn" size={15} /></span>
           <div className="error-title">{r.text}</div>
           <div className="error-advice">Try sending your message again — your draft was kept. If it keeps happening, check the host log.</div>

@@ -5,6 +5,7 @@ import {
   readPlanHistory,
   linkPlanDecision,
   diffSnapshots,
+  planStepSignature,
 } from '../state/planHistoryStore.js';
 import type { PlanItem } from '../state/taskStore.js';
 import { withTempWorkspace } from './_helpers.js';
@@ -64,4 +65,34 @@ test('diffSnapshots: added / removed / status-changed by step', () => {
   assert.deepEqual(diff.changed, [{ step: 'a', from: 'pending', to: 'completed' }]);
   // identical snapshots → empty diff
   assert.deepEqual(diffSnapshots(before, before), { added: [], removed: [], changed: [] });
+});
+
+test('planHistory: actor defaults to user; auto recorded explicitly', () => {
+  withTempWorkspace((ws) => {
+    const sk = 'sess:actor';
+    const d1 = recordPlanDecision(ws, sk, { verdict: 'approved', planSnapshot: plan([['a', 'pending']]) });
+    assert.equal(d1.actor, 'user', 'no actor passed → user');
+    const d2 = recordPlanDecision(ws, sk, { verdict: 'approved', actor: 'auto', planSnapshot: plan([['b', 'pending']]) });
+    assert.equal(d2.actor, 'auto');
+    const hist = readPlanHistory(ws, sk);
+    assert.deepEqual(hist.map((d) => d.actor), ['user', 'auto']);
+  });
+});
+
+test('planStepSignature: order- and status-insensitive; sensitive to step set', () => {
+  // same steps, different order + different statuses → SAME signature (no new version)
+  assert.equal(
+    planStepSignature(plan([['build', 'in_progress'], ['design', 'completed']])),
+    planStepSignature(plan([['design', 'pending'], ['build', 'pending']])),
+  );
+  // adding a step → different signature (a new version)
+  assert.notEqual(
+    planStepSignature(plan([['design', 'pending']])),
+    planStepSignature(plan([['design', 'pending'], ['build', 'pending']])),
+  );
+  // rewording a step → different signature
+  assert.notEqual(
+    planStepSignature(plan([['design the api', 'pending']])),
+    planStepSignature(plan([['design the schema', 'pending']])),
+  );
 });

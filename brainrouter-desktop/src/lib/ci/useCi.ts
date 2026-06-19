@@ -35,7 +35,7 @@ export interface CiApi {
   toggleWatch: (id: number) => void;
 }
 
-export function useCi(opts?: { onToast?: (msg: string) => void }): CiApi {
+export function useCi(opts?: { workspaceRoot?: string | null; onToast?: (msg: string) => void }): CiApi {
   const [pr, setPr] = useState<PrDetail | null>(null);
   const [checks, setChecks] = useState<CheckRow[]>([]);
   const [runs, setRuns] = useState<RunRow[]>([]);
@@ -46,10 +46,13 @@ export function useCi(opts?: { onToast?: (msg: string) => void }): CiApi {
   const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
   const [watching, setWatching] = useState<number | null>(null);
   const optsRef = useRef(opts); optsRef.current = opts;
+  const workspaceRootRef = useRef(opts?.workspaceRoot); workspaceRootRef.current = opts?.workspaceRoot;
   const pending = useRef(0);
 
   useEffect(() => {
     const off = window.brainrouter.onEvent((msg) => {
+      const resultRoot = (msg as { workspaceRoot?: string }).workspaceRoot;
+      if (resultRoot && workspaceRootRef.current && resultRoot !== workspaceRootRef.current) return;
       const e = msg.event as { kind: string; id?: string; result?: unknown };
       if (e.kind !== 'query-result' || !e.id || !e.id.startsWith('ci:')) return;
       const op = e.id.split(':')[1];

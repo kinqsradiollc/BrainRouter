@@ -7,7 +7,7 @@ import path from 'node:path';
 const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tail-home-')));
 process.env.BRAINROUTER_HOME = HOME;
 
-const { appendTranscriptEntry, readTranscriptTail, transcriptExists } =
+const { appendTranscriptEntry, readTranscriptEntries, readTranscriptTail, transcriptExists } =
   await import('../state/sessionStore.js');
 
 const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tail-ws-')));
@@ -29,6 +29,13 @@ test('readTranscriptTail returns ONLY the last maxEntries (bounded), newest last
     !tail.some((e) => typeof e.content === 'string' && e.content.startsWith('msg 0 ')),
     'the OLDEST entry is not in the tail — proves it read the end, not the whole file',
   );
+});
+
+test('readTranscriptEntries uses the bounded tail reader for UI-sized limits', () => {
+  const entries = readTranscriptEntries(ws, KEY, 3);
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries.map((e) => e.role), ['user', 'assistant', 'tool']);
+  assert.match(entries[0].content as string, /^msg 4998 /);
 });
 
 test('readTranscriptTail caps per-entry content so a giant tool result cannot bloat the payload', () => {

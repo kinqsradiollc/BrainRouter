@@ -45,6 +45,22 @@ export function nextActiveWorkspace(
 }
 
 /**
+ * While a workspace switch is in progress, suppress every event except the
+ * `session-changed` from the target workspace. This keeps stale turn/query
+ * events from the old host from repainting cleared surfaces while the target
+ * host boots, but still allows the target host's authoritative session signal
+ * to complete the switch.
+ */
+export function isBlockedDuringPendingWorkspaceSwitch(
+  msg: WorkspaceTaggedMessage,
+  pendingWorkspace: string | null,
+): boolean {
+  if (!pendingWorkspace) return false;
+  if (msg.event?.kind !== 'session-changed') return true;
+  return msg.workspaceRoot !== pendingWorkspace;
+}
+
+/**
  * Did a session-changed land us in a DIFFERENT workspace than before? Drives the
  * refresh tier: a workspace change needs the FULL workspace/git refresh (branches,
  * git-info, changed-files, PR, log) so branch state doesn't vanish; a same-

@@ -255,8 +255,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         if (decisions.length === 0) { console.log(chalk.yellow('\nNo plan decisions yet. Use /plan approve or /plan request-changes.\n')); return true; }
         console.log(chalk.bold('\nPlan history') + chalk.gray(` (${decisions.length})`));
         decisions.forEach((d, i) => {
-          const verdict = d.verdict === 'approved' ? chalk.green('approved') : chalk.yellow('changes-requested');
-          console.log(`  ${chalk.cyan(d.id)} ${verdict} · ${d.planSnapshot.length} item${d.planSnapshot.length === 1 ? '' : 's'} · ${d.createdAt}`);
+          const verdict = d.verdict === 'approved' ? chalk.green('approved')
+            : d.verdict === 'revised' ? chalk.cyan('revised')
+            : chalk.yellow('changes-requested');
+          const actor = d.actor === 'auto' ? chalk.gray(' (auto)') : '';
+          console.log(`  ${chalk.cyan(d.id)} ${verdict}${actor} · ${d.planSnapshot.length} item${d.planSnapshot.length === 1 ? '' : 's'} · ${d.createdAt}`);
           if (d.feedback) console.log(chalk.gray(`      “${d.feedback}”`));
           if (i > 0) {
             const diff = diffSnapshots(decisions[i - 1].planSnapshot, d.planSnapshot);

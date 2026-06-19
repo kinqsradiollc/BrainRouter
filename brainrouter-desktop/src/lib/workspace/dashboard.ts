@@ -8,28 +8,56 @@ export interface DashTask {
   id: string;
   label: string;
   status?: string;
+  phase?: string;
+  durable?: boolean;
   workspaceRoot?: string;
   startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  error?: string;
   role?: string;
   worktree?: boolean;
   parentSessionKey?: string | null;
+  transcript?: { kind: string; id: string; parentSessionKey?: string };
+  requirementId?: string;
+  planId?: string;
 }
 
 export type DashTab = 'running' | 'finished' | 'failed' | 'workflows' | 'agents' | 'bash';
 export const DASH_TABS: DashTab[] = ['running', 'finished', 'failed', 'workflows', 'agents', 'bash'];
 
-const FAIL = /fail|error|cancel/i;
-const DONE = /complete|done|finished|success|ok\b/i;
+const FAIL = /fail|error|cancel|canceled|stale|interrupt|orphan|timeout/i;
+const DONE = /complete|done|finished|success|ok\b|closed/i;
+
+export type DashLifecycle = 'running' | 'finished' | 'failed';
+
+/** Normalize task lifecycle in one place so dashboard tabs, status dots, and
+ *  sidebar active counts do not disagree. Missing status remains "running"
+ *  for legacy live rows, while stale/interrupted work is an attention item. */
+export function taskLifecycle(t: Pick<DashTask, 'status' | 'phase' | 'error'>): DashLifecycle {
+  const text = `${t.status ?? ''} ${t.phase ?? ''} ${t.error ? 'error' : ''}`.trim().toLowerCase();
+  if (FAIL.test(text)) return 'failed';
+  if (DONE.test(text)) return 'finished';
+  return 'running';
+}
+
+export function isActiveTask(t: Pick<DashTask, 'status' | 'phase' | 'error'>): boolean {
+  return taskLifecycle(t) === 'running';
+}
+
+export function taskStatusLabel(t: Pick<DashTask, 'status' | 'phase'>): string {
+  return (t.status || t.phase || 'running').replace(/[-_]+/g, ' ');
+}
 
 /** Does a task belong under a given tab? Lifecycle tabs key off status; the rest
  *  key off kind so a finished workflow still appears under "Workflows". */
 export function taskMatchesTab(t: DashTask, tab: DashTab): boolean {
   const k = (t.kind || '').toLowerCase();
-  const s = (t.status || '').toLowerCase();
+  const life = taskLifecycle(t);
   switch (tab) {
-    case 'running': return !DONE.test(s) && !FAIL.test(s);
-    case 'finished': return DONE.test(s);
-    case 'failed': return FAIL.test(s);
+    case 'running': return life === 'running';
+    case 'finished': return life === 'finished';
+    case 'failed': return life === 'failed';
     case 'workflows': return k.includes('workflow');
     case 'agents': return /agent|sub|verifier|child|worker/.test(k);
     case 'bash': return /bash|command|shell|run_command|exec/.test(k);
@@ -51,6 +79,16 @@ export interface WorkspaceDash {
   workspaceRoot: string;
   tasks: DashTask[];
   reviewGate?: { status: string; blocked: boolean; reason: string } | null;
+}
+
+export function visibleDashboardBoards(
+  boards: WorkspaceDash[],
+  tab: DashTab,
+  scope: 'workspace' | 'all',
+): WorkspaceDash[] {
+  const filtered = boards.map((b) => ({ ...b, tasks: filterTasks(b.tasks, tab) }));
+  if (scope === 'workspace') return filtered;
+  return filtered.filter((b) => b.tasks.length > 0 || (b.reviewGate && b.reviewGate.status !== 'clean'));
 }
 
 /**

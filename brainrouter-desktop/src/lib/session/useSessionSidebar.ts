@@ -2,11 +2,12 @@
  * T4 — sidebar session groupings. Pure derived state (memoised) from the
  * sessions list + workspace info: hide archived (unless toggled), pinned
  * first, optional alpha sort, split grouped chats into their own sections,
- * and compute the visible/hidden window + the other-projects list. Extracted
+ * and compute the visible/hidden window + the fixed project-root list. Extracted
  * verbatim from App.tsx.
  */
 import { useMemo } from 'react';
 import type { SessionRow } from '../../types.js';
+import { sidebarProjectRoots } from './projectSessionsView.js';
 
 export interface SessionSidebarInput {
   sessions: SessionRow[];
@@ -24,8 +25,7 @@ export interface SessionSidebar {
   groupedSessions: Array<[string, SessionRow[]]>;
   visibleProjectSessions: SessionRow[];
   hiddenProjectSessions: number;
-  currentProjectName: string;
-  otherProjects: string[];
+  projectRoots: string[];
 }
 
 export function useSessionSidebar(i: SessionSidebarInput): SessionSidebar {
@@ -47,8 +47,8 @@ export function useSessionSidebar(i: SessionSidebarInput): SessionSidebar {
   }, [liveSessions]);
   const visibleProjectSessions = recentsOpen ? ungroupedSessions.slice(0, visibleCount) : ungroupedSessions.slice(0, 3);
   const hiddenProjectSessions = Math.max(0, ungroupedSessions.length - visibleProjectSessions.length);
-  const currentProjectName = workspaces.current?.split('/').pop() ?? info.workspaceRoot?.split('/').pop() ?? 'No workspace';
-  const otherProjects = workspaces.recents.filter((w) => w !== workspaces.current && w !== info.workspaceRoot).slice(0, 6);
+  const activeRoot = workspaces.current ?? info.workspaceRoot ?? null;
+  const projectRoots = useMemo(() => sidebarProjectRoots(activeRoot, workspaces.recents), [activeRoot, workspaces.recents]);
 
-  return { archivedCount, ungroupedSessions, groupedSessions, visibleProjectSessions, hiddenProjectSessions, currentProjectName, otherProjects };
+  return { archivedCount, ungroupedSessions, groupedSessions, visibleProjectSessions, hiddenProjectSessions, projectRoots };
 }

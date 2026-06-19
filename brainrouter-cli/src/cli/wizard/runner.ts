@@ -300,7 +300,7 @@ async function runModelStep(state: WizardState, theme: Theme): Promise<WizardSta
     eraseOnClose: true,
   });
   if (!result) return reduceWizard(state, { kind: 'abort' });
-  return reduceWizard(state, { kind: 'advance', patch: { model: result.model || provider.defaultModel } });
+  return reduceWizard(state, { kind: 'advance', patch: { model: result.model } });
 }
 
 // --- MCP ---------------------------------------------------------------
@@ -459,7 +459,7 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
     config.llm = {
       provider: draft.provider.id,
       apiKey: draft.apiKey ?? '',
-      model: draft.model ?? draft.provider.defaultModel,
+      model: draft.model ?? '',
       endpoint: draft.customEndpoint ?? draft.provider.endpoint,
     };
   }

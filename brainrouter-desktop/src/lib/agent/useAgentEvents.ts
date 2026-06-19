@@ -11,10 +11,10 @@
  * on mount (empty deps + the intentional eslint-disable), and handleQueryResult
  * is a hoisted function declaration so the effect can call it before it appears.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import type { PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, WorkflowDetail } from '../../types.js';
+import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
@@ -23,8 +23,11 @@ import type { CommandsCatalog } from '../commands/commands.js';
 import type { ConfigSnapshot } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
 import { mergeOptimistic, dropPending } from '../session/sessionOrder.js';
+import { normalizeProjectSessionsResult, withCachedProjectSessions, type ProjectSessionsByRoot } from '../session/projectSessionsView.js';
+import { shouldApplyTaskTranscript, shouldApplyWorkflowDetail } from '../session/taskTranscriptRouting.js';
+import { sessionRowsCacheKey } from '../session/sessionCache.js';
 import { setEntry, shouldProceedGate } from '../review/reviewWorkspace.js';
-import { isStaleWorkspaceEvent, nextActiveWorkspace, workspaceChanged, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from '../workspace/workspaceEvents.js';
+import { isStaleWorkspaceEvent, isBlockedDuringPendingWorkspaceSwitch, nextActiveWorkspace, workspaceChanged, parseQueryId, isStaleQueryResult, nextRunningWorkspaces } from '../workspace/workspaceEvents.js';
 import { fileFromSummary, fmt, download } from '../format.js';
 import { FOREGROUND_ONLY_KINDS } from '../../constants.js';
 import { rid } from '../rid.js';
@@ -38,11 +41,17 @@ type HomeStatsState = {
 type BranchesState = { current: string | null; branches: string[]; loading?: boolean };
 type ReviewView = { findings: ReviewFindingView[]; summary: string; files: number };
 type GateView = { status: string; blocked: boolean; reason: string };
+const WORKSPACE_SCOPED_REVIEW_QUERY_IDS = new Set(['q-review-diff', 'q-review-current', 'q-review-gate', 'q-review-fix']);
+
+function isWorkspaceScopedReviewQuery(id: string): boolean {
+  return WORKSPACE_SCOPED_REVIEW_QUERY_IDS.has(id);
+}
 
 export interface AgentEventsCtx {
   setRows: React.Dispatch<React.SetStateAction<ChatRow[]>>;
   setRunning: React.Dispatch<React.SetStateAction<boolean>>;
   setStopping: React.Dispatch<React.SetStateAction<boolean>>;
+  setTurnStart: React.Dispatch<React.SetStateAction<number>>;
   setStatusLine: React.Dispatch<React.SetStateAction<string>>;
   setReasoningTail: React.Dispatch<React.SetStateAction<string>>;
   setLiveText: React.Dispatch<React.SetStateAction<string>>;
@@ -55,7 +64,7 @@ export interface AgentEventsCtx {
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
-  setTaskView: React.Dispatch<React.SetStateAction<{ id: string; kind: string; role?: string; goal?: string; status?: string; parentSessionKey?: string | null; rows: ChatRow[] } | null>>;
+  setTaskView: React.Dispatch<React.SetStateAction<TaskViewState | null>>;
   setWorkflowView: React.Dispatch<React.SetStateAction<WorkflowDetail | null>>;
   setInfo: React.Dispatch<React.SetStateAction<InfoState>>;
   setWorkspaces: React.Dispatch<React.SetStateAction<{ current: string | null; recents: string[] }>>;
@@ -63,11 +72,12 @@ export interface AgentEventsCtx {
   setHostUp: React.Dispatch<React.SetStateAction<boolean>>;
   setLastTurnFails: React.Dispatch<React.SetStateAction<number | null>>;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
-  setProjSessions: React.Dispatch<React.SetStateAction<Record<string, SessionRow[]>>>;
+  setProjSessions: React.Dispatch<React.SetStateAction<ProjectSessionsByRoot>>;
   setSessions: React.Dispatch<React.SetStateAction<SessionRow[]>>;
   setPrInfo: React.Dispatch<React.SetStateAction<{ number: number; state: string; title?: string } | null>>;
   setContextUsage: React.Dispatch<React.SetStateAction<{ used: number; window: number; compactAt: number; limit: number; pct: number } | null>>;
   setFleet: React.Dispatch<React.SetStateAction<FleetRow[]>>;
+  setRecentTasks: React.Dispatch<React.SetStateAction<FleetRow[]>>;
   setChangedFiles: React.Dispatch<React.SetStateAction<Array<{ status: string; path: string }>>>;
   setDiffView: React.Dispatch<React.SetStateAction<{ path: string; diff: string } | null>>;
   setInlineDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
@@ -79,6 +89,7 @@ export interface AgentEventsCtx {
   setBranches: React.Dispatch<React.SetStateAction<BranchesState>>;
   setModelsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setEndpointModels: React.Dispatch<React.SetStateAction<string[]>>;
+  setProviderModels: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
   setCatalog: React.Dispatch<React.SetStateAction<CommandsCatalog | null>>;
   setSnapshot: React.Dispatch<React.SetStateAction<ConfigSnapshot | null>>;
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
@@ -98,6 +109,10 @@ export interface AgentEventsCtx {
   setGitBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setInfoDialog: React.Dispatch<React.SetStateAction<{ title: string; body: string } | null>>;
   setToast: React.Dispatch<React.SetStateAction<string>>;
+  setFilesLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setFilesTruncated: React.Dispatch<React.SetStateAction<boolean>>;
+  setFilesError: React.Dispatch<React.SetStateAction<string>>;
+  setAttachmentUploads: React.Dispatch<React.SetStateAction<AttachmentUpload[]>>;
   setAtBottom: React.Dispatch<React.SetStateAction<boolean>>;
 
   liveBuf: React.MutableRefObject<string>;
@@ -106,9 +121,12 @@ export interface AgentEventsCtx {
   sessionKeyRef: React.MutableRefObject<string | undefined>;
   turnFailsRef: React.MutableRefObject<number>;
   runningSessionsRef: React.MutableRefObject<Set<string>>;
+  pendingWorkspaceRef: React.MutableRefObject<string | null>;
   pendingResumeRef: React.MutableRefObject<string | null>;
   errorsBySession: React.MutableRefObject<Record<string, Array<{ id: number; text: string; detail?: string; ts: number }>>>;
   lastPromptRef: React.MutableRefObject<string>;
+  planFeedbackRef: React.MutableRefObject<string>;
+  goalContPendingRef: React.MutableRefObject<string | null>;
   workspaceGenRef: React.MutableRefObject<number>;
   pendingSessionsRef: React.MutableRefObject<SessionRow[]>;
   sessionsRef: React.MutableRefObject<SessionRow[]>;
@@ -118,6 +136,7 @@ export interface AgentEventsCtx {
   chatRef: React.RefObject<HTMLDivElement>;
   pendingGitRef: React.MutableRefObject<{ kind: 'commit' | 'push'; msg?: string; root: string } | null>;
   pendingCmdRef: React.MutableRefObject<string>;
+  cachedSessionRowsRef: React.MutableRefObject<Record<string, ChatRow[]>>;
 
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
   refreshSession: () => void;
@@ -130,22 +149,47 @@ export interface AgentEventsCtx {
   branches: BranchesState;
 }
 
+export function getStableRowId(sessionKey: string, r: { id?: string | number; kind: string; text?: string; ts?: number; cmd?: string; items?: any[] }, index?: number): string {
+  if (typeof r.id === 'string' && r.id.startsWith(sessionKey + '-')) {
+    return r.id;
+  }
+  const ts = r.ts ?? 0;
+  let contentPart = '';
+  if (r.text) {
+    contentPart = r.text.slice(0, 32);
+  } else if (r.cmd) {
+    contentPart = r.cmd.slice(0, 32);
+  } else if (r.items && r.items.length) {
+    contentPart = r.items.map((it: any) => it.tool).join(',');
+  }
+  contentPart = contentPart.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32);
+  const indexSuffix = index !== undefined ? `-${index}` : '';
+  return `${sessionKey || 'global'}-${r.kind}-${ts}-${contentPart}${indexSuffix}`;
+}
+
 export function useAgentEvents(ctx: AgentEventsCtx): void {
   const {
-    setRows, setRunning, setStopping, setStatusLine, setReasoningTail, setLiveText, setToolLog,
+    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
     setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
-    setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setChangedFiles,
+    setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setCatalog, setSnapshot, setUsageLines,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
+    setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
     liveBuf, liveFlushPending, activeWsRef, sessionKeyRef, turnFailsRef, runningSessionsRef,
-    pendingResumeRef, errorsBySession, lastPromptRef, workspaceGenRef, pendingSessionsRef, sessionsRef,
-    atBottomRef, cardOpenRef, chatEnd, chatRef, pendingGitRef, pendingCmdRef,
+    pendingWorkspaceRef, pendingResumeRef, errorsBySession, lastPromptRef, workspaceGenRef, pendingSessionsRef, sessionsRef,
+    atBottomRef, cardOpenRef, chatEnd, chatRef, pendingGitRef, pendingCmdRef, cachedSessionRowsRef,
     q, refreshSession, refreshSidebar, runGit, setSessionRunning, info, gitInfo, homeStats, branches,
   } = ctx;
+
+  // §live-render fix — true once THIS turn has streamed/flushed an assistant row,
+  // so turn-complete only appends `answer` when nothing was shown live. A
+  // non-streaming endpoint produces no deltas; without this its answer was
+  // dropped from the live view and only appeared after a session reload.
+  const streamedThisTurnRef = useRef(false);
 
   useEffect(() => {
     const push = (row: ChatRow) => setRows((r) => [...r, row]);
@@ -173,6 +217,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // a background project's turn events are exactly what that drop discards,
       // and they're what powers the sidebar's "running elsewhere" dot.
       setRunningWs((s) => nextRunningWorkspaces(s, msg.event?.kind, wsMsg.workspaceRoot));
+      const pendingWorkspace = pendingWorkspaceRef.current;
+      if (pendingWorkspace && msg.event?.kind === 'query-result') {
+        const queryEvent = msg.event as { id?: string; ok?: boolean; result?: unknown; error?: string };
+        const id = typeof queryEvent.id === 'string' ? parseQueryId(queryEvent.id).base : '';
+        if (wsMsg.workspaceRoot && isWorkspaceScopedReviewQuery(id)) {
+          handleQueryResult(queryEvent.id!, queryEvent.ok ? queryEvent.result : undefined, queryEvent.ok ? undefined : queryEvent.error, wsMsg.workspaceRoot);
+        }
+        return;
+      }
+      if (isBlockedDuringPendingWorkspaceSwitch(wsMsg, pendingWorkspace)) return;
       if (isStaleWorkspaceEvent(wsMsg, prevWs)) return;
       activeWsRef.current = nextActiveWorkspace(wsMsg, prevWs);
       setHostUp(true);
@@ -180,13 +234,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // DESK-5v — route by session: a turn you started can keep running after
       // you switch chats; its events stay tagged with ITS key. Drop the purely
       // visual ones when they're not for the chat on screen.
-      const isForeground = msg.sessionKey === sessionKeyRef.current;
+      const currentSessionKey = sessionKeyRef.current || info.sessionKey || '';
+      const owningSessionKey = msg.sessionKey || currentSessionKey;
+      const isForeground = !currentSessionKey || !owningSessionKey || owningSessionKey === currentSessionKey;
       if (!isForeground && FOREGROUND_ONLY_KINDS.has(e.kind)) return;
       switch (e.kind) {
         case 'status': setStatusLine(e.text); break;
         case 'reasoning-delta': setReasoningTail((t) => (t + e.text).slice(-200)); break;
         case 'assistant-turn-start': liveBuf.current = ''; liveFlushPending.current = false; setLiveText(''); break;
         case 'assistant-delta':
+          streamedThisTurnRef.current = true;
           liveBuf.current += e.text;
           if (!liveFlushPending.current) {
             liveFlushPending.current = true;
@@ -198,6 +255,10 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           if (!e.ok) turnFailsRef.current += 1;
           pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, file: fileFromSummary(e.tool, e.summary) });
           setToolLog((t) => [...t.slice(-199), { id: rid(), tool: e.tool, ok: e.ok, summary: e.summary }]);
+          // §AV-3 — near-live artifacts: when the agent authors/updates an artifact
+          // in-band (artifact_write), refresh the list immediately so the Artifacts
+          // panel reflects it mid-turn instead of waiting for a manual reload.
+          if (e.ok && e.tool === 'artifact_write') q('q-art', 'artifact-list');
           break;
         }
         case 'child-tool-start':
@@ -211,7 +272,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           break;
         case 'child-complete':
           push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '✓' : '✗'} agent ${e.childId} (${e.role}) ${e.status}`, ts: Date.now() });
-          setFinishedTasks((f) => [...f.slice(-30), { id: `${e.childId}-${Date.now()}`, label: `${e.role}·${e.childId.slice(-4)}`, status: e.status === 'completed' ? 'Agent · Completed' : 'Agent · Failed' }]);
+          setFinishedTasks((f) => [...f.slice(-30), { id: e.childId, label: `${e.role}·${e.childId.slice(-4)}`, status: e.status === 'completed' ? 'Agent · Completed' : 'Agent · Failed' }]);
           setLiveChildren((m) => { const n = { ...m }; delete n[e.childId]; return n; });
           break;
         case 'plan-update':
@@ -220,19 +281,64 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           break;
         case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}`, ts: Date.now() }); q('q-ctx', 'context-usage'); break;
         case 'memory': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.text}`, ts: Date.now() }); break;
+        // §truncation — a persistent provider-truncation notice ("raise cli.maxOutputTokens").
+        case 'notice': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.message}`, ts: Date.now() }); break;
+        case 'requirement-event':
+          q('q-req', 'requirement-list');
+          break;
+        case 'annotation-event':
+          q('q-annot', 'annotation-list');
+          break;
+        case 'artifact-event':
+          q('q-art', 'artifact-list');
+          break;
+        case 'provenance':
+          break;
+        case 'task-event': {
+          // DURABLE BACKGROUND TASKS — a plan-revision/review/attachment task
+          // changed state. Refresh the fleet so the Background panel + sidebar
+          // indicators update instantly (don't wait for the 3s poll). Failures
+          // stay out of the chat transcript; the task panel owns background work.
+          q('q-fleet', 'fleet');
+          // A terminal task event also refreshes the recently-finished list so a
+          // just-completed/failed verification appears without waiting for the poll.
+          if (e.action === 'completed' || e.action === 'failed' || e.action === 'canceled') {
+            q('q-tasks-recent', 'tasks-list', { scope: 'workspace', status: 'all' });
+          }
+          if (e.action === 'failed' && e.task?.error) {
+            setToast(`${e.task.title}: ${e.task.error}`);
+          }
+          break;
+        }
         case 'tokens-updated': setTokens({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, turns: e.turns }); q('q-ctx', 'context-usage'); break;
         case 'interaction-request': setInteraction(e.request); setPicked([]); break;
         case 'session-changed':
           // DESK-5u — session-changed is the authoritative "current session"
           // signal; track it directly (info.sessionKey can be clobbered by a
           // q-info refresh, which would mis-bucket per-session errors).
+          pendingWorkspaceRef.current = null;
           sessionKeyRef.current = e.sessionKey;
           setViewKey(e.sessionKey);
           setTaskView(null); setWorkflowView(null); // DESK-5w/6w — leaving closes any open task/workflow view
           // DESK-5v — the composer reflects whether the chat we just landed on
           // is itself running (it may be — a background turn you started here
           // earlier). Clear the transient per-turn surfaces either way.
-          setRunning(runningSessionsRef.current.has(e.sessionKey));
+          // Reconcile the per-session running flag against the host's
+          // AUTHORITATIVE state (Runtime.running, carried on session-changed). A
+          // dropped turn-complete (workspace stale-drop / host exit for a
+          // non-foreground session) used to leave runningSessionsRef stuck → a
+          // resumed chat showed "working…" forever with a bogus 600s+ elapsed.
+          // When the host reports running, trust it: clear or set the ref.
+          const hostRunning = typeof e.running === 'boolean'
+            ? e.running
+            : runningSessionsRef.current.has(e.sessionKey);
+          if (typeof e.running === 'boolean') setSessionRunning(e.sessionKey, e.running);
+          setRunning(hostRunning);
+          // Reset the elapsed clock — turnStart is only written by submit(), so a
+          // resumed/backgrounded turn (or a stale flag) showed minutes from an
+          // unrelated turn. If it really is running we don't know the original
+          // start, so count from now (honest-ish); if not, the spinner is hidden.
+          setTurnStart(hostRunning ? Date.now() : 0);
           setStopping(false); // DESK-6 — a switch clears any pending stop indicator
           setStatusLine(''); setReasoningTail(''); setLiveText(''); liveBuf.current = '';
           // Session-scoped surfaces must NOT carry over from the chat we just left:
@@ -240,9 +346,11 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // from THIS session's data — a new chat → empty, not the old chat's 100%).
           setContextUsage(null); setLastPlan(null); setPlanHistory([]);
           if (e.loadedMessages > 0) {
-            // Observed: a centered spinner while the transcript loads, then
-            // the full history renders scrolled to the bottom.
-            setRows([{ id: rid(), kind: 'loading', ts: Date.now() }]);
+            // Only show spinner if not cached
+            const cacheRoot = wsMsg.workspaceRoot ?? activeWsRef.current ?? info.workspaceRoot ?? '';
+            if (!cachedSessionRowsRef.current || !cachedSessionRowsRef.current[sessionRowsCacheKey(cacheRoot, e.sessionKey)]) {
+              setRows([{ id: rid(), kind: 'loading', ts: Date.now() }]);
+            }
             setSearchHits(null);
             q('q-transcript', 'transcript', { sessionKey: e.sessionKey });
           } else if (e.loadedMessages === 0) {
@@ -274,28 +382,41 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           break;
         // DESK-5v — turn lifecycle is tracked PER SESSION so a background turn
         // keeps its spinner and lands its result/error in the right chat.
-        case 'turn-start': setSessionRunning(msg.sessionKey, true); if (isForeground) setRunning(true); break;
+        case 'turn-start': if (owningSessionKey) setSessionRunning(owningSessionKey, true); if (isForeground) { setRunning(true); setTurnStart(Date.now()); streamedThisTurnRef.current = false; } break;
         case 'turn-complete': {
-          setSessionRunning(msg.sessionKey, false);
+          if (owningSessionKey) setSessionRunning(owningSessionKey, false);
           if (!isForeground) { refreshSidebar(); break; } // background turn: its answer is on disk, re-read on switch-back
           flushAssistant();
-          setRows((r) => (r.some((x) => x.kind === 'assistant') ? r : [...r, { id: rid(), kind: 'assistant', text: e.answer, ts: Date.now() }]));
+          // Render the final answer UNLESS this turn already streamed/flushed one.
+          // (The old guard checked "does any assistant row exist?" — true after any
+          // earlier turn — so a non-streaming endpoint's answer was dropped from the
+          // live view until a session reload.)
+          if (!streamedThisTurnRef.current && (e.answer ?? '').trim()) {
+            push({ id: rid(), kind: 'assistant', text: e.answer, ts: Date.now() });
+          }
+          streamedThisTurnRef.current = false;
           setRunning(false); setStopping(false); setStatusLine(''); setReasoningTail('');
           setLastTurnFails(turnFailsRef.current);
           setLiveChildren({}); // turn ended — refreshSidebar reseeds any detached workers
           refreshSidebar();
+          // §goal-autonomy — ask the host whether an active goal should continue.
+          // Returns { action:'none' } (a no-op) when there's no goal, so this is
+          // safe on every turn. A 'continue' result fires the next hidden turn.
+          q('q-goalcont', 'goal-continuation');
           break;
         }
         case 'turn-error': {
-          setSessionRunning(msg.sessionKey, false);
+          if (owningSessionKey) setSessionRunning(owningSessionKey, false);
           // DESK-5u/5v — record the error under the SESSION IT BELONGS TO (not
           // the one on screen) so it survives a switch-away-and-back, and a
           // background failure shows up when you return to that chat.
           const errId = rid();
           const errText = 'Something went wrong';
-          const errSession = msg.sessionKey;
-          const bucket = errorsBySession.current[errSession] ?? [];
-          errorsBySession.current[errSession] = [...bucket.slice(-19), { id: errId, text: errText, detail: e.message, ts: Date.now() }];
+          const errSession = owningSessionKey;
+          if (errSession) {
+            const bucket = errorsBySession.current[errSession] ?? [];
+            errorsBySession.current[errSession] = [...bucket.slice(-19), { id: errId, text: errText, detail: e.message, ts: Date.now() }];
+          }
           if (!isForeground) { refreshSidebar(); break; } // surfaces on switch-back via q-transcript re-injection
           flushAssistant();
           push({ id: errId, kind: 'error', text: errText, detail: e.message, ts: Date.now() });
@@ -305,7 +426,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           setDraft((d) => d || lastPromptRef.current);
           break;
         }
-        case 'query-result': handleQueryResult(e.id, e.ok ? e.result : undefined, e.ok ? undefined : (e as { error?: string }).error); break;
+        case 'query-result': handleQueryResult(e.id, e.ok ? e.result : undefined, e.ok ? undefined : (e as { error?: string }).error, wsMsg.workspaceRoot); break;
         default: break;
       }
       // Sticky-bottom: never yank the view while the user is reading scrollback.
@@ -318,16 +439,59 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function handleQueryResult(rawId: string, result: unknown, error?: string): void {
+  function handleQueryResult(rawId: string, result: unknown, error?: string, resultWorkspaceRoot?: string): void {
     // Stability fix — drop results from an older workspace generation (they were
     // in flight when the user switched projects); then route by the base id.
-    if (isStaleQueryResult(rawId, workspaceGenRef.current)) return;
     const id = parseQueryId(rawId).base;
-    if (error) { setToast(`✗ ${error}`); return; }
+    const workspaceScopedLateResult = !!resultWorkspaceRoot && isWorkspaceScopedReviewQuery(id);
+    if (!workspaceScopedLateResult && isStaleQueryResult(rawId, workspaceGenRef.current)) return;
     // DESK-5d — per-project chat lists route by the root encoded in the id.
     if (id.startsWith('q-wsess:')) {
       const root = id.slice('q-wsess:'.length);
-      if (Array.isArray(result)) setProjSessions((p) => ({ ...p, [root]: result as SessionRow[] }));
+      if (error) {
+        setProjSessions((p) => ({
+          ...p,
+          [root]: { rows: p[root]?.rows ?? [], loading: false, error, loadedAt: Date.now() },
+        }));
+        return;
+      }
+      setProjSessions((p) => ({ ...p, [root]: normalizeProjectSessionsResult(result) }));
+      return;
+    }
+    if (error) {
+      if (id === 'q-list') {
+        setFilesLoading(false);
+        setFilesTruncated(false);
+        setFilesError(error);
+      }
+      if (id.startsWith('q-attach:')) {
+        const uploadId = id.slice('q-attach:'.length);
+        setAttachmentUploads((prev) => prev.map((u) => u.id === uploadId ? { ...u, status: 'failed', detail: error } : u));
+      }
+      setToast(`✗ ${error}`);
+      return;
+    }
+    if (id === 'q-attach' || id.startsWith('q-attach:')) {
+      const uploadId = id.startsWith('q-attach:') ? id.slice('q-attach:'.length) : '';
+      const r = result as { ok?: boolean; attachment?: { name: string; id: string; kind: string }; contextMarkdown?: string; error?: string } | null;
+      if (r?.ok && r.attachment) {
+        if (uploadId) {
+          setAttachmentUploads((prev) => prev.map((u) => u.id === uploadId ? {
+            ...u,
+            status: 'attached',
+            attachmentId: r.attachment!.id,
+            kind: r.attachment!.kind,
+            detail: r.attachment!.kind,
+            contextMarkdown: r.contextMarkdown,
+          } : u));
+        }
+        setToast(`✓ Attached ${r.attachment.name}`);
+        q('q-fleet', 'fleet');
+      } else {
+        const detail = r?.error ?? 'Attachment failed.';
+        if (uploadId) setAttachmentUploads((prev) => prev.map((u) => u.id === uploadId ? { ...u, status: 'failed', detail } : u));
+        setToast(`✗ Attach failed: ${detail}`);
+      }
       return;
     }
     switch (id) {
@@ -338,6 +502,8 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         pendingSessionsRef.current = dropPending(pendingSessionsRef.current, hostRows.map((r) => r.sessionKey));
         const merged = mergeOptimistic(hostRows, pendingSessionsRef.current);
         setSessions(merged); sessionsRef.current = merged;
+        const root = resultWorkspaceRoot ?? activeWsRef.current ?? info.workspaceRoot;
+        setProjSessions((prev) => withCachedProjectSessions(prev, root, merged));
       } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
       case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
@@ -353,11 +519,41 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // Approve / request-changes round-trips: surface an error, else refresh the
       // history so the new decision appears (the App layer re-fetches q-plan-history).
       case 'q-plan-decision': {
-        const r = result as { error?: string } | null;
-        if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
+        const r = result as { error?: string; taskError?: string; task?: { id: string; title?: string } } | null;
+        if (r && typeof r === 'object') {
+          if (typeof r.error === 'string') setToast(`✗ ${r.error}`);
+          else if (typeof r.taskError === 'string') {
+            // §1 — the revision task couldn't start: surface the error and
+            // restore the feedback draft so the user doesn't lose it.
+            setToast(`✗ Could not start the revision task: ${r.taskError}`);
+            if (planFeedbackRef.current) setDraft(planFeedbackRef.current);
+          } else if (r.task) {
+            setToast('Revision task started — see Background tasks.');
+            q('q-fleet', 'fleet');
+            planFeedbackRef.current = '';
+          }
+        }
         return;
       }
       case 'q-fleet': if (Array.isArray(result)) setFleet(result as FleetRow[]); return;
+      case 'q-tasks-recent': {
+        // §3 — durable tasks (all statuses). Keep the TERMINAL ones (completed/
+        // failed/canceled) as a FleetRow-shaped "recently finished" list; the
+        // running ones already arrive via q-fleet. Clicking reopens the result.
+        if (!Array.isArray(result)) return;
+        const rows = (result as Array<Record<string, unknown>>)
+          .filter((t) => t.status === 'completed' || t.status === 'failed' || t.status === 'canceled')
+          .slice(0, 25)
+          .map((t) => ({
+            kind: String(t.kind ?? 'agent'), id: String(t.id ?? ''), label: String(t.title ?? t.id ?? ''),
+            startedAt: typeof t.startedAt === 'string' ? t.startedAt : (typeof t.createdAt === 'string' ? t.createdAt : undefined),
+            status: String(t.status ?? ''), durable: true,
+            parentSessionKey: typeof t.sessionKey === 'string' ? t.sessionKey : null,
+            transcript: t.transcript as FleetRow['transcript'],
+          })) as FleetRow[];
+        setRecentTasks(rows);
+        return;
+      }
       case 'q-info': if (result && typeof result === 'object') setInfo(result as typeof info); return;
       case 'q-files': if (Array.isArray(result)) setChangedFiles(result as Array<{ status: string; path: string }>); return;
       case 'q-diff': if (result && typeof result === 'object') setDiffView(result as { path: string; diff: string }); return;
@@ -366,7 +562,27 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         if (r?.path) setInlineDiffs((d) => ({ ...d, [r.path!]: r.diff ?? '' }));
         return;
       }
-      case 'q-list': if (result && typeof result === 'object') setAllFiles((result as { files: string[] }).files ?? []); return;
+      case 'q-list': {
+        setFilesLoading(false);
+        if (result && typeof result === 'object') {
+          const r = result as { files?: string[]; truncated?: boolean };
+          if (typeof (r as { error?: unknown }).error === 'string') {
+            setAllFiles([]);
+            setFilesTruncated(false);
+            setFilesError((r as { error: string }).error);
+            setToast(`✗ ${(r as { error: string }).error}`);
+            return;
+          }
+          setAllFiles(Array.isArray(r.files) ? r.files : []);
+          setFilesTruncated(!!r.truncated);
+          setFilesError('');
+        } else {
+          setAllFiles([]);
+          setFilesTruncated(false);
+          setFilesError('');
+        }
+        return;
+      }
       case 'q-read': if (result && typeof result === 'object') setFileView(result as { path: string; content: string }); return;
       case 'q-git': if (result && typeof result === 'object') setGitInfo(result as typeof gitInfo); return;
       case 'q-gitlog': if (result && typeof result === 'object') setCommitSubjects(((result as { subjects?: string[] }).subjects ?? [])); return;
@@ -374,7 +590,14 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-branches': if (result && typeof result === 'object') setBranches(result as typeof branches); return;
       case 'q-models': {
         setModelsLoading(false);
-        if (result && typeof result === 'object') setEndpointModels(((result as { models?: string[] }).models ?? []));
+        if (result && typeof result === 'object') {
+          const r = result as { models?: string[]; provider?: string };
+          // A named-provider result feeds the per-provider map (sub-agent model
+          // pickers); the active endpoint feeds the main list. Both come from the
+          // endpoint's /models — never a hand-written list.
+          if (r.provider) setProviderModels((prev) => ({ ...prev, [r.provider!]: r.models ?? [] }));
+          else setEndpointModels(r.models ?? []);
+        }
         return;
       }
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
@@ -435,17 +658,20 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-review-diff': {
         // T2 — write under the workspace that's active at result time (stale-gen
         // results are already dropped upstream), so reviews never cross workspaces.
-        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        const root = resultWorkspaceRoot ?? activeWsRef.current ?? info.workspaceRoot ?? '';
         setReviewRunningByWs((m) => ({ ...m, [root]: false }));
         const r = result as { findings?: ReviewFindingView[]; summary?: string; files?: number } | null;
         setReviewByWs((m) => setEntry(m, root, r ? { findings: r.findings ?? [], summary: r.summary ?? '', files: r.files ?? 0 } : { findings: [], summary: 'Review failed.', files: 0 }));
-        q('q-review-current', 'review-current'); // refresh the gate + finding statuses
-        // If a commit/push was waiting on a freshly-run review, re-check the gate.
-        if (pendingGitRef.current) q('q-review-gate', 'review-gate');
+        const activeRootNow = activeWsRef.current ?? info.workspaceRoot ?? '';
+        if (root === activeRootNow && !pendingWorkspaceRef.current) {
+          q('q-review-current', 'review-current'); // refresh the gate + finding statuses
+          // If a commit/push was waiting on a freshly-run review, re-check the gate.
+          if (pendingGitRef.current) q('q-review-gate', 'review-gate');
+        }
         return;
       }
       case 'q-review-current': {
-        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        const root = resultWorkspaceRoot ?? activeWsRef.current ?? info.workspaceRoot ?? '';
         const r = result as { run?: { findings?: ReviewFindingView[]; summary?: string } | null; gate?: { status: string; blocked: boolean; reason: string }; files?: number } | null;
         setReviewGateByWs((m) => setEntry(m, root, r?.gate ?? null));
         if (r?.run) setReviewByWs((m) => setEntry(m, root, { findings: r.run!.findings ?? [], summary: r.run!.summary ?? '', files: r.files ?? 0 }));
@@ -454,7 +680,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-review-gate': {
         const r = result as { gate?: { blocked?: boolean; reason?: string; status?: string } } | null;
         const gate = r?.gate ?? { blocked: true, reason: 'Review status unavailable.', status: 'needs-review' };
-        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        const root = resultWorkspaceRoot ?? activeWsRef.current ?? info.workspaceRoot ?? '';
         setReviewGateByWs((m) => setEntry(m, root, { status: gate.status ?? 'needs-review', blocked: !!gate.blocked, reason: gate.reason ?? '' }));
         const pending = pendingGitRef.current;
         if (!pending) return;
@@ -464,20 +690,24 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           pendingGitRef.current = null;
           // §7 + T2 stale-guard: a CLEAN gate from workspace A must NOT clear a
           // commit/push the user started in workspace B (after switching mid-flight).
-          if (shouldProceedGate(pending.root, root)) runGit(pending.kind, pending.msg, { reviewed: true });
+          const activeRootNow = activeWsRef.current ?? info.workspaceRoot ?? '';
+          if (shouldProceedGate(pending.root, root) && root === activeRootNow && !pendingWorkspaceRef.current) runGit(pending.kind, pending.msg, { reviewed: true });
           else setToast('Workspace changed before the review cleared — commit cancelled, run it again.');
         }
         return;
       }
       case 'q-review-fix': {
         // T3 — the scoped fix agent finished; it returns the re-run review.
-        const root = activeWsRef.current ?? info.workspaceRoot ?? '';
+        const root = resultWorkspaceRoot ?? activeWsRef.current ?? info.workspaceRoot ?? '';
         setReviewRunningByWs((m) => ({ ...m, [root]: false }));
         const r = result as { ok?: boolean; error?: string; run?: { findings?: ReviewFindingView[]; summary?: string }; files?: number } | null;
         if (r?.ok && r.run) {
           setReviewByWs((m) => setEntry(m, root, { findings: r.run!.findings ?? [], summary: r.run!.summary ?? '', files: r.files ?? 0 }));
-          setToast('Finding fixed — review re-run over the new changes.');
-          q('q-review-current', 'review-current'); q('q-files', 'changed-files'); q('q-git', 'git-info');
+          const activeRootNow = activeWsRef.current ?? info.workspaceRoot ?? '';
+          if (root === activeRootNow && !pendingWorkspaceRef.current) {
+            setToast('Finding fixed — review re-run over the new changes.');
+            q('q-review-current', 'review-current'); q('q-files', 'changed-files'); q('q-git', 'git-info');
+          }
         } else {
           setToast(`Fix failed: ${r?.error ?? 'unknown error'}`);
         }
@@ -492,24 +722,27 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('../../panels/index.js').GrepHit[]); return;
       case 'q-transcript': {
         const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
-        const mapped: ChatRow[] = (data?.rows ?? []).map((r) => {
+        if (data?.sessionKey && data.sessionKey !== sessionKeyRef.current) return;
+        const mapped: ChatRow[] = (data?.rows ?? []).map((r, index) => {
           // DESK-6t — use the persisted per-message timestamp so resumed history
           // shows the REAL relative time, not "just now".
           const ts = r.ts ?? Date.now();
-          if (r.kind === 'user') return { id: rid(), kind: 'user' as const, text: r.text ?? '', ts };
-          if (r.kind === 'assistant') return { id: rid(), kind: 'assistant' as const, text: r.text ?? '', ts };
+          const stableId = getStableRowId(data.sessionKey ?? '', r, index);
+          if (r.kind === 'user') return { id: stableId, kind: 'user' as const, text: r.text ?? '', ts };
+          if (r.kind === 'assistant') return { id: stableId, kind: 'assistant' as const, text: r.text ?? '', ts };
           // DESK-5p — reconstructed tool calls render as the live tool-group card.
           if (r.kind === 'tool-group') return {
-            id: rid(), kind: 'tool-group' as const, ts,
-            items: (r.items ?? []).map((it) => ({ id: rid(), tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })),
+            id: stableId, kind: 'tool-group' as const, ts,
+            items: (r.items ?? []).map((it, itemIndex) => ({ id: `${stableId}-item-${itemIndex}`, tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })),
           };
-          return { id: rid(), kind: 'status' as const, text: `Used ${r.tools ?? 0} tool${(r.tools ?? 0) === 1 ? '' : 's'}`, ts };
+          return { id: stableId, kind: 'status' as const, text: `Used ${r.tools ?? 0} tool${(r.tools ?? 0) === 1 ? '' : 's'}`, ts };
         });
         // DESK-5u — re-inject any cached errors for this session so a failure
         // you saw earlier is still there after switching away and back.
         const cachedErrors = errorsBySession.current[data?.sessionKey ?? ''] ?? [];
+        const resumeStatusId = `${data.sessionKey}-resume-status`;
         setRows([
-          { id: rid(), kind: 'status', text: `Resumed ${data?.sessionKey ?? 'session'} — ${mapped.length} entries.`, ts: Date.now() },
+          { id: resumeStatusId, kind: 'status', text: `Resumed ${data?.sessionKey ?? 'session'} — ${mapped.length} entries.`, ts: Date.now() },
           ...mapped,
           ...cachedErrors.map((er) => ({ id: er.id, kind: 'error' as const, text: er.text, detail: er.detail, ts: er.ts })),
         ]);
@@ -531,21 +764,39 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           if (r.kind === 'tool-group') return { id: i, kind: 'tool-group' as const, ts, items: (r.items ?? []).map((it, j) => ({ id: j, tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })) };
           return { id: i, kind: 'status' as const, text: r.text ?? '', ts };
         });
+        // §review-visibility — a RUNNING task whose transcript is still empty
+        // (the agent hasn't flushed its first line yet) must NOT erase the
+        // spinner to a blank pane. Keep a stable loading row so the user sees the
+        // agent is working until real content lands.
+        const isTaskRunning = data?.status === 'running' || data?.status === undefined;
+        const finalRows: ChatRow[] = mapped.length ? mapped : (isTaskRunning ? [{ id: 'task-working', kind: 'loading' as const, ts: 0 }] : mapped);
         // DESK-6v — and skip the state update entirely when nothing changed, so a
         // stable transcript doesn't re-render (and flash) every poll.
         const sig = (rows: ChatRow[], status?: string): string => `${status ?? ''}|` + rows.map((r) => r.kind === 'tool-group'
-          ? `tg:${(r.items ?? []).map((it) => it.tool + it.summary + (it.ok ? '1' : '0')).join(',')}`
-          : `${r.kind}:${(r as { text?: string }).text ?? ''}`).join('§');
+          ? `tg:${r.ts}:${(r.items ?? []).map((it) => `${it.tool}:${it.summary}:${it.preview ?? ''}:${it.file ?? ''}:${it.ok ? '1' : '0'}`).join(',')}`
+          : `${r.kind}:${r.ts}:${(r as { text?: string }).text ?? ''}`).join('§');
         setTaskView((prev) => {
-          if (prev && sig(prev.rows, prev.status) === sig(mapped, data.status)) return prev;
-          return { id: data.id, kind: data.kind, role: data.role, goal: data.goal, status: data.status, parentSessionKey: prev?.parentSessionKey, rows: mapped };
+          if (!shouldApplyTaskTranscript(prev, data)) return prev;
+          if (prev && sig(prev.rows, prev.status) === sig(finalRows, data.status)) return prev;
+          return {
+            id: data.id,
+            kind: data.kind,
+            role: data.role ?? prev?.role,
+            title: prev?.title ?? data.goal,
+            sourceKind: prev?.sourceKind,
+            goal: data.goal,
+            status: data.status,
+            parentSessionKey: prev?.parentSessionKey,
+            rows: finalRows,
+          };
         });
         return;
       }
       // DESK-6w — workflow run breakdown for the /workflows-style card.
       case 'q-workflow-detail': {
-        if (result && typeof result === 'object') setWorkflowView(result as WorkflowDetail);
-        else setWorkflowView((prev) => prev ? { ...prev, status: 'gone' } : prev);
+        if (result && typeof result === 'object') {
+          setWorkflowView((prev) => shouldApplyWorkflowDetail(prev, result as { slug?: string }) ? result as WorkflowDetail : prev);
+        }
         return;
       }
       // DESK-6m — per-chat ⋮ menu action results: refresh the sidebar list.
@@ -564,9 +815,37 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-session-groups': if (result && typeof result === 'object' && Array.isArray((result as { groups?: unknown }).groups)) setSessionGroups((result as { groups: string[] }).groups); return;
       case 'q-open-external': return; // fire-and-forget
       case 'q-cmd': {
-        const lines = result && typeof result === 'object' && Array.isArray((result as { lines?: unknown }).lines)
-          ? (result as { lines: string[] }).lines : [fmt(result)];
-        setRows((r) => [...r, { id: rid(), kind: 'cmd-out', cmd: pendingCmdRef.current, lines, ts: Date.now() }]);
+        const r = result as { lines?: string[]; startTurn?: string } | null;
+        const lines = r && Array.isArray(r.lines) ? r.lines : [fmt(result)];
+        setRows((rows) => [...rows, { id: rid(), kind: 'cmd-out', cmd: pendingCmdRef.current, lines, ts: Date.now() }]);
+        // §goal-autonomy — a bridge command (e.g. /goal <text> or /goal resume)
+        // can ask us to KICK OFF a turn. The prompt is hidden (machine-generated)
+        // so it never renders as a message the user typed. The goal-continuation
+        // loop (turn-complete → q-goalcont) takes over from there.
+        if (r && typeof r.startTurn === 'string' && r.startTurn.trim()) {
+          goalContPendingRef.current = null; // a fresh kickoff cancels any stale pending continuation
+          window.brainrouter.send({ kind: 'start-turn', prompt: r.startTurn, hidden: true });
+        }
+        return;
+      }
+      case 'q-goalcont': {
+        // §goal-autonomy — the host decided the goal's next move after a turn.
+        const r = result as { action?: string; followUp?: string; iteration?: number; cap?: string; notice?: string } | null;
+        if (!r || !r.action || r.action === 'none') return;
+        if (r.action === 'continue' && typeof r.followUp === 'string') {
+          const followUp = r.followUp;
+          goalContPendingRef.current = followUp;
+          setRows((rows) => [...rows, { id: rid(), kind: 'status', text: `🎯 Goal — continuing (iteration ${r.iteration ?? '?'}/${r.cap ?? '∞'})… send a message to steer, or /goal pause.`, ts: Date.now() }]);
+          // Brief delay so a fast user message can preempt the auto-continuation.
+          setTimeout(() => {
+            if (goalContPendingRef.current !== followUp) return;          // canceled by user input
+            if (runningSessionsRef.current.has(sessionKeyRef.current ?? '')) return; // a turn already running
+            goalContPendingRef.current = null;
+            window.brainrouter.send({ kind: 'start-turn', prompt: followUp, hidden: true });
+          }, 600);
+        } else if (r.notice) {
+          setRows((rows) => [...rows, { id: rid(), kind: 'status', text: r.notice!, ts: Date.now() }]);
+        }
         return;
       }
       case 'a-allow-rule': setToast(`Always-allow rule saved${result && typeof result === 'object' && 'rule' in (result as object) ? `: ${(result as { rule: string }).rule}` : ''} — shared with the CLI.`); q('q-snapshot', 'config-snapshot'); return;
@@ -596,6 +875,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       }
       case 'a-clear': setRows([]); if (sessionKeyRef.current) delete errorsBySession.current[sessionKeyRef.current]; setToast('History cleared.'); return;
       case 'a-compact': setInfoDialog({ title: 'Compaction', body: result ? fmt(result) : 'Nothing to compact yet.' }); return;
+      case 'a-mode': q('q-snapshot', 'config-snapshot'); setToast('Mode saved for this session.'); return;
       case 'a-pref': q('q-snapshot', 'config-snapshot'); setToast('Saved — shared with the CLI.'); return;
       case 'a-hook': q('q-snapshot', 'config-snapshot'); setToast('Hook updated.'); return;
       case 'a-access': setToast('Access mode set for this session.'); return;

@@ -4,10 +4,10 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getLatestReview, saveReview, updateReviewFinding, clearReview } from '../state/reviewStore.js';
-import { isInternalSessionKey } from '../state/sessionStore.js';
+import { appendTranscriptEntry, isInternalSessionKey, listTranscripts } from '../state/sessionStore.js';
 import type { ReviewRun } from '../orchestration/reviewModel.js';
 
-/** A real temp home AND a real temp workspace dir (getCliStateFile resolves the
+/** A real temp home AND a real temp workspace dir (getStateFile resolves the
  *  workspace path on disk, so it must exist). */
 function withTemp(fn: (ws: string) => void): void {
   const prev = process.env.BRAINROUTER_HOME;
@@ -48,10 +48,28 @@ test('clearReview removes the run', () => {
   withTemp((ws) => { saveReview(ws, mkRun(ws)); clearReview(ws); assert.equal(getLatestReview(ws), null); });
 });
 
-test('isInternalSessionKey hides reviewer/internal sessions only', () => {
+test('isInternalSessionKey hides task/internal sessions only', () => {
   assert.equal(isInternalSessionKey('review:abc'), true);
   assert.equal(isInternalSessionKey('wshash:review:123'), true);
   assert.equal(isInternalSessionKey('internal:x'), true);
+  assert.equal(isInternalSessionKey('wshash:internal:plan-revision:123'), true);
+  assert.equal(isInternalSessionKey('fix:123'), true);
+  assert.equal(isInternalSessionKey('wshash:fix:123'), true);
+  assert.equal(isInternalSessionKey('wshash:parent:child:agent-123'), true);
   assert.equal(isInternalSessionKey('my-feature'), false);
   assert.equal(isInternalSessionKey('wshash:fix-the-bug'), false);
+});
+
+test('listTranscripts hides background task transcripts from the chat picker', () => {
+  withTemp((ws) => {
+    appendTranscriptEntry(ws, 'chat-1', { role: 'user', content: 'normal chat' });
+    appendTranscriptEntry(ws, 'wshash:fix-the-bug', { role: 'user', content: 'normal fix chat' });
+    appendTranscriptEntry(ws, 'review:abc', { role: 'user', content: 'review task' });
+    appendTranscriptEntry(ws, 'internal:plan-revision:abc', { role: 'user', content: 'plan task' });
+    appendTranscriptEntry(ws, 'fix:abc', { role: 'user', content: 'fix task' });
+    appendTranscriptEntry(ws, 'chat-1:child:agent-abc', { role: 'user', content: 'child task' });
+
+    const keys = listTranscripts(ws).map((s) => s.sessionKey).sort();
+    assert.deepEqual(keys, ['chat-1', 'wshash:fix-the-bug']);
+  });
 });

@@ -12,6 +12,8 @@
 
 /** Minimum gap between focus-triggered git refreshes (ms). */
 export const GIT_FOCUS_MIN_GAP_MS = 1500;
+/** Polling fallback for branch changes made while the desktop stays visible. */
+export const GIT_VISIBLE_POLL_MS = 5000;
 
 /**
  * True when a focus/visibility-triggered git refresh is due: the tab must be
@@ -22,4 +24,10 @@ export function gitRefreshDue(lastTs: number, now: number, visible: boolean, min
   if (!visible) return false;
   if (lastTs <= 0) return true;
   return now - lastTs >= minGapMs;
+}
+
+export function gitPollRefreshDue(lastTs: number, now: number, visible: boolean, intervalMs: number = GIT_VISIBLE_POLL_MS): boolean {
+  if (!visible) return false;
+  if (lastTs <= 0) return true;
+  return now - lastTs >= intervalMs;
 }

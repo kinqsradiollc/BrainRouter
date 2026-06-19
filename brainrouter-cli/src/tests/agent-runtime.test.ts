@@ -2,11 +2,50 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Agent, buildChatCompletionPayload } from '../agent/agent.js';
+import { Agent, buildChatCompletionPayload, sanitizeToolCallsForHistory } from '../agent/agent.js';
+
+test('sanitizeToolCallsForHistory: malformed/object args become valid JSON-object strings (run_workflow 400 fix)', () => {
+  const orig = [
+    { id: 'c1', type: 'function', function: { name: 'run_workflow', arguments: '{"name":"x", bad json' } }, // malformed
+    { id: 'c2', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } },           // valid string
+    { id: 'c3', type: 'function', function: { name: 'foo', arguments: { a: 1 } } },                           // object, not string
+    { id: 'c4', type: 'function', function: { name: 'bar', arguments: '[1,2,3]' } },                          // valid JSON but not an object
+  ];
+  const out = sanitizeToolCallsForHistory(orig);
+  // every history arg must be a parseable JSON OBJECT string
+  for (const c of out) { const v = JSON.parse(c.function.arguments); assert.equal(v !== null && typeof v === 'object' && !Array.isArray(v), true, c.function.name); }
+  assert.equal(out[0].function.arguments, '{}');            // malformed → {}
+  assert.deepEqual(JSON.parse(out[1].function.arguments), { path: 'a.ts' }); // valid preserved
+  assert.deepEqual(JSON.parse(out[2].function.arguments), { a: 1 });         // object → stringified
+  assert.equal(out[3].function.arguments, '{}');            // array → {}
+  // originals are NOT mutated (execution still sees the raw malformed args)
+  assert.equal(orig[0].function.arguments, '{"name":"x", bad json');
+});
 import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../state/goalStore.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
+import { listArtifacts } from '../state/artifactStore.js';
+
+test('artifact_write tool: creates then grows an artifact by id (versioned, editedBy agent) — §AV-4', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    const created = await agent.executeLocalTool('artifact_write', { kind: 'design-note', title: 'Schema plan', format: 'markdown', content: '# v1' });
+    const id = /art_[0-9a-f]{8}/.exec(created)?.[0];
+    assert.ok(id, `expected an artifact id in: ${created}`);
+    assert.match(created, /v1/);
+    // grow it by id → v2
+    const updated = await agent.executeLocalTool('artifact_write', { id, content: '# v1\n## more' });
+    assert.match(updated, /v2/);
+    const a = listArtifacts(workspace).find((x) => x.id === id)!;
+    assert.equal(a.content, '# v1\n## more');
+    assert.equal(a.versions!.length, 2);
+    assert.equal(a.versions!.every((v) => v.editedBy === 'agent'), true);
+    assert.equal(a.sessionKey, 'session:test');
+    // updating a missing id throws
+    await assert.rejects(() => agent.executeLocalTool('artifact_write', { id: 'art_00000000', content: 'x' }));
+  });
+});
 
 test('resolveRecallMode: cli.recallMode > default (9b)', async () => {
   const { resolveRecallMode } = await import('../agent/agent.js');
@@ -309,6 +348,36 @@ test('runTurn: repeat-loop guard short-circuits identical (tool, args) calls aft
       const guarded = toolCallEvents.filter((e) => !e.ok && /repeat guard/.test(e.summary)).length;
       assert.equal(successes, 3, `expected 3 successful list_dir calls, got ${successes}`);
       assert.equal(guarded >= 1, true, `expected at least 1 repeat-guard trip, got ${guarded}`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: a finish_reason:"length" final answer fires onNotice (cut-off → raise cli.maxOutputTokens)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    const makeStub = (finishReason: string) => (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'BrainRouter isn’t a layer to' }, finish_reason: finishReason }],
+      usage: { prompt_tokens: 30, completion_tokens: 8 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    try {
+      // length ⇒ a notice fires telling the user to raise the output cap.
+      globalThis.fetch = makeStub('length');
+      const truncated = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test' }, { workspaceRoot: workspace, launchCwd: workspace, silent: true });
+      const notices: Array<{ level: string; message: string }> = [];
+      await truncated.runTurn('explain', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {}, onNotice: (n) => notices.push(n) });
+      assert.equal(notices.length, 1, `expected one truncation notice, got ${notices.length}`);
+      assert.match(notices[0].message, /maxOutputTokens/);
+      assert.equal(notices[0].level, 'warn');
+
+      // stop ⇒ a normal completion never nags.
+      globalThis.fetch = makeStub('stop');
+      const normal = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test' }, { workspaceRoot: workspace, launchCwd: workspace, silent: true });
+      const noNotices: Array<unknown> = [];
+      await normal.runTurn('explain', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {}, onNotice: (n) => noNotices.push(n) });
+      assert.equal(noNotices.length, 0, 'a clean finish_reason:stop must not fire a truncation notice');
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -819,6 +888,43 @@ test('buildChatCompletionPayload: forwards reasoning_effort for reasoning models
     { effort: 'high' },
   );
   assert.equal((qwen as any).reasoning_effort, 'high');
+});
+
+test('buildChatCompletionPayload: LM Studio gets BOTH effort wire shapes; flat-only providers get just reasoning_effort', () => {
+  // provider:'lmstudio' → effortField:'both' → flat `reasoning_effort` AND nested
+  // `reasoning: { effort }` (LM Studio documents the nested form; flat is
+  // unconfirmed, so both maximise version compatibility).
+  const lm = buildChatCompletionPayload(
+    { provider: 'lmstudio', apiKey: '', model: 'openai/gpt-oss-20b', endpoint: 'http://localhost:1234/v1' },
+    [{ role: 'user', content: 'think hard' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((lm as any).reasoning_effort, 'high');
+  assert.deepEqual((lm as any).reasoning, { effort: 'high' });
+
+  // A flat-only provider (OpenAI) gets the flat field and NO nested object —
+  // OpenAI chat-completions rejects unknown fields like a nested `reasoning`.
+  const oa = buildChatCompletionPayload(
+    { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },
+    [{ role: 'user', content: 'plan' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((oa as any).reasoning_effort, 'high');
+  assert.equal((oa as any).reasoning, undefined);
+
+  // Non-reasoning model on LM Studio still gets BOTH shapes under the lenient
+  // 'any' gate — LM Studio accepts-and-ignores the field for a model that can't
+  // use it, so we don't withhold it (effort works for unlisted reasoning models).
+  const lmNon = buildChatCompletionPayload(
+    { provider: 'lmstudio', apiKey: '', model: 'qwen2.5-coder', endpoint: 'http://localhost:1234/v1' },
+    [{ role: 'user', content: 'hi' }],
+    [],
+    { effort: 'high' },
+  );
+  assert.equal((lmNon as any).reasoning_effort, 'high');
+  assert.deepEqual((lmNon as any).reasoning, { effort: 'high' });
 });
 
 test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {

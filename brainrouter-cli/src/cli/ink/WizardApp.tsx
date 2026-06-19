@@ -247,7 +247,6 @@ function ProviderStep({ accent, onPick, onAbort }: { accent: string; onPick: (p:
             envKey: 'BRAINROUTER_LLM_API_KEY',
             local: /localhost|127\.0\.0\.1|::1|0\.0\.0\.0/.test(url),
             models: [],
-            defaultModel: 'gpt-4o-mini',
           };
           onPick(custom, url);
           return;
@@ -297,8 +296,8 @@ function ModelStep({ accent, provider, apiKey, customEndpoint, onPick, onAbort }
   onAbort: () => void;
 }) {
   const [loading, setLoading] = useState(true);
-  const [modelsList, setModelsList] = useState<string[]>(provider.models);
-  const [subtitleHint, setSubtitleHint] = useState<string>(`Pick the chat model for ${provider.label}.`);
+  const [modelsList, setModelsList] = useState<string[]>(provider.models ?? []);
+  const [subtitleHint, setSubtitleHint] = useState<string>(`Pick the chat model for ${provider.label}. Use "Other" to type any supported model.`);
 
   useEffect(() => {
     let cancelled = false;
@@ -306,13 +305,15 @@ function ModelStep({ accent, provider, apiKey, customEndpoint, onPick, onAbort }
       const res = await fetchOpenAiCompatibleModels(provider, apiKey, customEndpoint);
       if (cancelled) return;
       if (res.ok) {
-        const withDefault = res.models.includes(provider.defaultModel)
+        const withDefault = provider.defaultModel && res.models.includes(provider.defaultModel)
           ? [provider.defaultModel, ...res.models.filter((m) => m !== provider.defaultModel)]
           : res.models;
         setModelsList(withDefault);
         setSubtitleHint(`Pick a model — ${res.models.length} returned by ${provider.label}'s /v1/models endpoint. Use "Other" to type any name.`);
       } else {
-        setSubtitleHint(`Pick a model. (Live list unavailable — ${res.error}. Showing curated short-list.) Use "Other" to type any name.`);
+        setSubtitleHint((provider.models ?? []).length > 0
+          ? `Pick a model. (Live list unavailable — ${res.error}. Showing configured fallback list.) Use "Other" to type any name.`
+          : `Live model list unavailable — ${res.error}. Type the model id with "Other model".`);
       }
       setLoading(false);
     })();
@@ -329,12 +330,12 @@ function ModelStep({ accent, provider, apiKey, customEndpoint, onPick, onAbort }
       </Frame>
     );
   }
-  const rows: PickerRow[] = (modelsList.length > 0 ? modelsList : [provider.defaultModel]).map((m) => ({
+  const rows: PickerRow[] = modelsList.map((m) => ({
     id: m,
     label: m,
-    value: m === provider.defaultModel ? 'default' : '',
+    value: provider.defaultModel && m === provider.defaultModel ? 'default' : '',
   }));
-  const initialCursor = Math.max(0, modelsList.indexOf(provider.defaultModel));
+  const initialCursor = Math.max(0, provider.defaultModel ? modelsList.indexOf(provider.defaultModel) : 0);
   return (
     <Picker
       title='Model'
@@ -349,7 +350,7 @@ function ModelStep({ accent, provider, apiKey, customEndpoint, onPick, onAbort }
       onResolve={(r) => {
         if (r.kind === 'cancelled') return onAbort();
         const model = r.kind === 'other' ? r.text.trim() : r.id;
-        onPick(model || provider.defaultModel);
+        if (model) onPick(model);
       }}
     />
   );

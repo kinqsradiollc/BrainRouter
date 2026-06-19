@@ -131,7 +131,8 @@ export function useGitState(ctx: GitStateCtx): GitState {
     const tag = state === 'bypassed' ? ' (review bypassed)' : state === 'reviewed' ? ' (reviewed)' : '';
     setToast(kind === 'commit' ? `Committing${tag}…` : kind === 'push' ? `Pushing${tag}…` : 'Pulling…');
     q('a-git', 'action:term-exec', { cmd });
-    // Wave 1 (D) — commit/push are real ACTIVITY → promote this project.
+    // Wave 1 (D) — commit/push are real activity; main updates membership/state
+    // without changing the user's project order.
     if (kind !== 'pull') { const r = workspaces.current ?? info.workspaceRoot; if (r) void window.brainrouter.markActivity?.(r, kind); }
   }
 

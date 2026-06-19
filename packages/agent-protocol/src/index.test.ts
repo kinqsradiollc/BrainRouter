@@ -5,9 +5,11 @@ import {
   createEnvelopeWriter,
   isAgentCommand,
   isAgentEventMessage,
+  isBackgroundTaskEventView,
   InteractionBroker,
   type AgentEvent,
   type AgentEventMessage,
+  type BackgroundTaskEventView,
 } from './index.js';
 
 // --- callback bridge ---------------------------------------------------------
@@ -30,18 +32,28 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   cb.onPlanUpdate([{ step: 'fix', status: 'in_progress' }], 'because');
   cb.onCompactionEvent({ droppedMessages: 10, keptMessages: 4, summary: 'compacted' });
   cb.onMemoryEvent({ level: 'warn', text: 'capture blocked' });
+  cb.onRequirementEvent({ action: 'created', requirementId: 'req_1', title: 'Need it', status: 'ready', provenance: { linkedMemoryIds: ['mem_1'] } });
+  cb.onArtifactEvent({ action: 'saved', artifactId: 'art_1', title: 'Report', status: 'final', format: 'markdown' });
+  cb.onAnnotationEvent({ action: 'comment-added', annotationId: 'ann_1', targetKind: 'file', targetId: 'src/a.ts', status: 'open' });
+  cb.onProvenanceEvent({ subjectKind: 'annotation', subjectId: 'ann_1', provenance: { sourceEventId: 'evt_1', actor: 'agent' } });
   cb.onApproval({ tool: 'run_command', action: 'shell', decision: 'ask', reason: 'planning mode' });
 
   assert.deepEqual(events.map((e) => e.kind), [
     'status', 'assistant-turn-start', 'assistant-delta', 'assistant-delta', 'assistant-turn-end',
     'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
-    'child-complete', 'plan-update', 'compaction', 'memory', 'approval-decision',
+    'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
+    'artifact-event', 'annotation-event', 'provenance', 'approval-decision',
   ]);
   assert.deepEqual(events[6], { kind: 'tool-start', tool: 'read_file', args: { path: 'a.ts' }, callId: 'c1' });
   assert.deepEqual(events[7], { kind: 'tool-end', tool: 'read_file', ok: true, summary: '42 lines', preview: 'line1', callId: 'c1' });
   const plan = events[11] as Extract<AgentEvent, { kind: 'plan-update' }>;
   assert.equal(plan.items[0].status, 'in_progress');
   assert.equal(plan.explanation, 'because');
+  const requirement = events[14] as Extract<AgentEvent, { kind: 'requirement-event' }>;
+  assert.equal(requirement.requirementId, 'req_1');
+  assert.deepEqual(requirement.provenance?.linkedMemoryIds, ['mem_1']);
+  const annotation = events[16] as Extract<AgentEvent, { kind: 'annotation-event' }>;
+  assert.equal(annotation.targetKind, 'file');
 });
 
 test('createCallbackBridge: memory event falls back kind→text and defaults level', () => {
@@ -73,11 +85,37 @@ test('guards: accept valid, reject malformed', () => {
   assert.equal(isAgentCommand('start-turn'), false);
 
   assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'status', text: 'x' } }), true);
+  assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'annotation-event', action: 'created', annotationId: 'ann', targetKind: 'file' } }), true);
   assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'bogus' } }), false);
   assert.equal(isAgentEventMessage({ event: { kind: 'status' } }), false);
+  // task-event rides the same envelope and is a recognised kind.
+  assert.equal(
+    isAgentEventMessage({
+      seq: 1,
+      ts: 2,
+      sessionKey: 's',
+      event: {
+        kind: 'task-event',
+        action: 'created',
+        task: { id: 't1', kind: 'review', status: 'queued', title: 'Review', workspaceRoot: '/w', sessionKey: 's', createdAt: 'a', updatedAt: 'b' },
+      },
+    }),
+    true,
+  );
 });
 
 // --- interaction broker -----------------------------------------------------------
+
+test('isBackgroundTaskEventView: accepts a full view, rejects partial', () => {
+  const view: BackgroundTaskEventView = {
+    id: 'btask_1', kind: 'plan-revision', status: 'running', title: 'Revise plan',
+    workspaceRoot: '/w', sessionKey: 's', planId: 'pdec_1', phase: 'revising',
+    transcript: { kind: 'task', id: 'btask_1' }, createdAt: 'a', updatedAt: 'b',
+  };
+  assert.equal(isBackgroundTaskEventView(view), true);
+  assert.equal(isBackgroundTaskEventView({ id: 'x', kind: 'review' }), false);
+  assert.equal(isBackgroundTaskEventView(null), false);
+});
 
 test('InteractionBroker: request/resolve round-trip with unique ids', async () => {
   const broker = new InteractionBroker();

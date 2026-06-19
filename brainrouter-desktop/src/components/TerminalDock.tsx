@@ -31,9 +31,10 @@ export interface TerminalDockProps {
 
 export function TerminalDock(p: TerminalDockProps): React.ReactElement | null {
   const { dockAnim, termDockHeight, resizeTerminal, termTabs, activeTerm, setActiveTerm, closeBottomTab, pop, setPop, addBottomTab, setTermDockOpen, tabTitle, gitInfo, renderPanelBody } = p;
+  const [dockZoomed, setDockZoomed] = React.useState(false);
   if (!dockAnim.mounted) return null;
   return (
-    <div className={`term-dock${dockAnim.closing ? ' closing' : ''}`} style={{ height: termDockHeight }}>
+    <div className={`term-dock${dockAnim.closing ? ' closing' : ''}${dockZoomed ? ' zoomed' : ''}`} style={dockZoomed ? undefined : { height: termDockHeight }}>
       <div className="term-dock-grip" title="Drag to resize terminal height"
         onPointerDown={(ev) => resizeTerminal(termDockHeight, ev.clientY, ev)} />
       <div className="term-tabs">
@@ -48,27 +49,34 @@ export function TerminalDock(p: TerminalDockProps): React.ReactElement | null {
             <button key={t.id} className={`term-tab${t.id === activeTerm ? ' active' : ''}`} onClick={() => setActiveTerm(t.id)}>
               <Icon name={icon} size={11} />
               <span className="tab-label">{label}</span>
-              <span className="icon-btn term-tab-x" onClick={(ev) => { ev.stopPropagation(); closeBottomTab(t.id); }}><Icon name="close" size={9} /></span>
+              <span className="tab-close-btn term-tab-x" role="button" aria-label={`Close ${label}`} title={`Close ${label}`}
+                onClick={(ev) => { ev.stopPropagation(); closeBottomTab(t.id); }}><Icon name="close" size={10} /></span>
             </button>
           );
         })}
-        <span className="pop-wrap">
-          {pop === 'bplus' ? (
-            /* drops UP over the chat — the dock is short and sits at the
-               window edge, so a drop-down would run off-screen */
-            <div className="menu-pop left">
-              <button className="menu-item" onClick={() => { setPop(''); addBottomTab('shell'); }}>
-                <span className="mi-check"><Icon name="terminal" size={13} /></span>New terminal<span className="mi-hint">⌃`</span>
-              </button>
-              <div className="menu-sep" />
-              {VIEW_MENU.map((v) => (
-                <button key={v.id} className="menu-item" onClick={() => { setPop(''); addBottomTab(v.id); }}>
-                  <span className="mi-check"><Icon name={v.icon} size={13} /></span>{v.title}
+        <span className="panel-chrome-actions dock-tab-actions">
+          <span className="pop-wrap">
+            {pop === 'bplus' ? (
+              /* drops UP over the chat — the dock is short and sits at the
+                 window edge, so a drop-down would run off-screen */
+              <div className="menu-pop left">
+                <button className="menu-item" onClick={() => { setPop(''); addBottomTab('shell'); }}>
+                  <span className="mi-check"><Icon name="terminal" size={13} /></span>New terminal<span className="mi-hint">⌃`</span>
                 </button>
-              ))}
-            </div>
-          ) : null}
-          <button className="icon-btn" title="Add tab" onClick={() => setPop(pop === 'bplus' ? '' : 'bplus')}><Icon name="plus" size={12} /></button>
+                <div className="menu-sep" />
+                {VIEW_MENU.map((v) => (
+                  <button key={v.id} className="menu-item" onClick={() => { setPop(''); addBottomTab(v.id); }}>
+                    <span className="mi-check"><Icon name={v.icon} size={13} /></span>{v.title}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <button className="icon-btn" title="Add tab" onClick={() => setPop(pop === 'bplus' ? '' : 'bplus')}><Icon name="plus" size={12} /></button>
+          </span>
+          <button className={`icon-btn${dockZoomed ? ' active' : ''}`} title={dockZoomed ? 'Restore bottom panel' : 'Enlarge bottom panel'}
+            aria-label={dockZoomed ? 'Restore bottom panel' : 'Enlarge bottom panel'} onClick={() => setDockZoomed((v) => !v)}>
+            <Icon name="expand" size={12} />
+          </button>
         </span>
         <span className="composer-spacer" />
         <button className="icon-btn" title="Hide panel (⌃`)" onClick={() => setTermDockOpen(false)}><Icon name="close" size={12} /></button>

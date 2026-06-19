@@ -1,6 +1,9 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, saveConfig, setCliKnobOverride, type ServerConfig } from '../../config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, type ServerConfig, type LLMConfig } from '../../config/config.js';
+import {
+  listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
+} from '../../config/agentModels.js';
 import {
   readPreferences,
   writePreferences,
@@ -10,8 +13,9 @@ import {
   type ExecutionMode,
   type ReviewPolicy,
 } from '../../state/preferencesStore.js';
+import { setSessionRuntime } from '../../state/sessionRuntimeStore.js';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
-import { PROVIDER_CATALOG, findProvider, maskApiKey, validateApiKey } from '../wizard/providers.js';
+import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '../wizard/providers.js';
 import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on
@@ -125,13 +129,18 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
   return [
     {
       key: 'llm',
-      label: 'LLM provider',
+      label: 'Default provider',
       current: () => {
+        const name = findDefaultProviderName(ctx);
+        if (name) {
+          const p = config.providers?.[name];
+          return `${name} · ${p?.model ?? '(model unset)'}`;
+        }
         const llm = config.llm;
         if (!llm) return '(not configured)';
-        return `${llm.model} · ${shortenEndpoint(llm.endpoint)} · ${maskApiKey(llm.apiKey)}`;
+        return `${llm.model} · not saved as a Provider`;
       },
-      edit: editLlm,
+      edit: editDefaultProvider,
     },
     {
       key: 'mcp',
@@ -147,6 +156,25 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
         return `${head} + ${tail}`;
       },
       edit: editMcp,
+    },
+    {
+      key: 'providers',
+      label: 'Providers',
+      current: () => {
+        const names = listProviderNames(config);
+        return names.length === 0 ? '(none configured)' : names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')}, +${names.length - 3}`;
+      },
+      edit: editProviders,
+    },
+    {
+      key: 'agent-models',
+      label: 'Sub-agent models',
+      current: () => {
+        const roles = SUBAGENT_ROLES.filter((r) => config.agentModels?.[r]);
+        if (roles.length === 0) return '(all inherit the main model)';
+        return roles.map((r) => `${r}→${describeAgentModel(config, r)}`).slice(0, 2).join(' · ') + (roles.length > 2 ? ` +${roles.length - 2}` : '');
+      },
+      edit: editAgentModels,
     },
     { key: 'theme',         label: 'Theme',            current: () => prefs().theme,                 edit: editTheme },
     { key: 'statusline',    label: 'Statusline',       current: () => prefs().statusline,            edit: editStatusline },
@@ -166,6 +194,67 @@ function shortenEndpoint(url?: string): string {
   return url.replace(/^https?:\/\//, '').replace(/\/v1.*$/, '').replace(/\/api\/v1.*$/, '');
 }
 
+function findDefaultProviderName(ctx: CommandContext): string | undefined {
+  const llm = ctx.config.llm;
+  if (!llm) return undefined;
+  return Object.entries(ctx.config.providers ?? {}).find(([, p]) =>
+    p.provider === llm.provider &&
+    p.model === llm.model &&
+    (p.endpoint ?? '') === (llm.endpoint ?? '') &&
+    p.apiKey === llm.apiKey
+  )?.[0];
+}
+
+function setDefaultProvider(ctx: CommandContext, name: string): boolean {
+  const provider = ctx.config.providers?.[name];
+  if (!provider) return false;
+  ctx.config.llm = { ...provider };
+  const fallback = ctx.config.agentModels?.default;
+  const fallbackDuplicatesMain =
+    !!fallback &&
+    (
+      (fallback.provider === name && (!fallback.model || fallback.model === provider.model)) ||
+      (!fallback.provider && (!fallback.model || fallback.model === provider.model))
+    );
+  if (fallbackDuplicatesMain) ctx.config = setAgentModel(ctx.config, 'default', {});
+  saveConfig(ctx.config);
+  ctx.agent.setLLMConfig(provider);
+  return true;
+}
+
+function subagentRoleLabel(role: string): string {
+  return role === 'default' ? 'Fallback for sub-agents' : role;
+}
+
+function setAgentModelNormalized(ctx: CommandContext, role: string, provider: string | undefined, model: string): boolean {
+  const defaultProvider = findDefaultProviderName(ctx);
+  const providerCfg = provider ? ctx.config.providers?.[provider] : undefined;
+  const duplicatesMain =
+    (!provider && (!model || model === ctx.config.llm?.model)) ||
+    (!!provider && provider === defaultProvider && (!model || model === providerCfg?.model));
+  ctx.config = setAgentModel(ctx.config, role, duplicatesMain ? {} : { provider, model });
+  saveConfig(ctx.config);
+  return duplicatesMain;
+}
+
+function parseKeyValueLines(raw: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const line of raw.split(/\n|;/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    if (key) out[key] = value;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function formatKeyValueLines(values?: Record<string, string>): string {
+  return values ? Object.entries(values).map(([k, v]) => `${k}=${v}`).join('; ') : '';
+}
+
 // --- Per-row editors ---------------------------------------------------
 
 function themeFor(ctx: CommandContext): Theme {
@@ -173,11 +262,17 @@ function themeFor(ctx: CommandContext): Theme {
   return buildTheme(mode === 'mono' ? 'mono' : mode === 'light' ? 'light' : 'dark');
 }
 
-// Exported so `/login` can re-enter the LLM editor as a follow-on step
-// after the MCP transport block. Same flow as the `/config` panel's
-// "LLM" row — provider picker → API key prompt → model picker → save.
-export async function editLlm(ctx: CommandContext): Promise<boolean> {
-  const theme = themeFor(ctx);
+/**
+ * Shared provider→key→endpoint→model gather flow. Used by the main LLM editor,
+ * the named-provider editor, and the per-sub-agent-role model picker. `current`
+ * pre-fills the key/endpoint/model. Returns the gathered LLMConfig (+ a label
+ * and a model-source tail for the success line), or null if the user backed out.
+ */
+async function gatherLlmConfig(
+  ctx: CommandContext,
+  theme: Theme,
+  current?: LLMConfig,
+): Promise<{ llm: LLMConfig; label: string; sourceTail: string } | null> {
   const provResult = await pickFromList({
     theme,
     title: 'LLM provider',
@@ -190,10 +285,10 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
     })),
     initialCursor: 0,
   });
-  if (provResult.kind !== 'pick') return false;
+  if (provResult.kind !== 'pick') return null;
   const provider = PROVIDER_CATALOG.find((p) => p.id === provResult.id);
-  if (!provider) return false;
-  const envValue = process.env[provider.envKey] ?? ctx.config.llm?.apiKey ?? '';
+  if (!provider) return null;
+  const envValue = process.env[provider.envKey] ?? current?.apiKey ?? '';
   const keyResult = await promptText({
     theme,
     title: 'API key',
@@ -208,20 +303,20 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
       return v.kind === 'reject' ? v.reason : undefined;
     },
   });
-  if (keyResult.kind !== 'accept') return false;
+  if (keyResult.kind !== 'accept') return null;
 
   // OpenAI doubles as the OpenAI-compatible custom-endpoint flow. Prompt
   // to confirm or replace the base URL; local providers keep their
   // fixed loopback endpoints.
   let endpoint = provider.endpoint;
   if (provider.id === 'openai') {
-    const current = ctx.config.llm?.endpoint ?? provider.endpoint;
+    const cur = current?.endpoint ?? provider.endpoint;
     const urlResult = await promptText({
       theme,
       title: 'API base URL',
       subtitle: 'Press ENTER for OpenAI direct, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, vLLM, …).',
       badge: 'OpenAI base URL',
-      prefilled: current,
+      prefilled: cur,
       placeholder: provider.endpoint,
       validate: (raw) => {
         const v = raw.trim();
@@ -230,44 +325,192 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
         return undefined;
       },
     });
-    if (urlResult.kind !== 'accept') return false;
+    if (urlResult.kind !== 'accept') return null;
     endpoint = urlResult.text.trim();
   }
 
   // Live /v1/models picker — same one the in-REPL /model command uses.
-  // Falls back to the provider's curated short-list when the endpoint
-  // can't be reached; "Other model" is always offered for manual entry.
   const modelResult = await selectModel({
     theme,
     provider,
     apiKey: keyResult.text,
     endpointOverride: endpoint !== provider.endpoint ? endpoint : undefined,
-    currentModel: ctx.config.llm?.model,
+    currentModel: current?.model,
     title: 'Model',
     badge: provider.label,
     eraseOnClose: true,
   });
-  if (!modelResult) return false;
-  const model = modelResult.model || provider.defaultModel;
-
-  ctx.config.llm = {
-    provider: provider.id,
-    apiKey: keyResult.text,
-    model,
-    endpoint,
-  };
-  saveConfig(ctx.config);
-  // setLLMConfig (not just setModel) so the live agent picks up the new
-  // apiKey + endpoint immediately. Pre-fix: only setModel was called and
-  // the running agent kept using the stale apiKey/endpoint until restart.
-  ctx.agent.setLLMConfig(ctx.config.llm);
+  if (!modelResult) return null;
+  const model = modelResult.model;
   const endpointTail = endpoint !== provider.endpoint ? ` · ${shortenEndpoint(endpoint)}` : '';
-  const sourceTail = modelResult.source === 'live'
+  const sourceTail = (modelResult.source === 'live'
     ? ` (from live /v1/models · ${modelResult.liveCount} returned)`
     : modelResult.source === 'fallback'
       ? ` (live list unavailable — picked from curated short-list)`
-      : '';
-  console.log(chalk.green(`\n  ✓ LLM saved: ${provider.label} · ${model}${endpointTail} · ${maskApiKey(keyResult.text)}${sourceTail}`));
+      : '') + endpointTail;
+  return { llm: { provider: provider.id, apiKey: keyResult.text, model, endpoint }, label: provider.label, sourceTail };
+}
+
+async function editDefaultProvider(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
+  const names = listProviderNames(ctx.config);
+  if (names.length === 0) {
+    console.log(chalk.yellow('\n  No Providers are configured yet. Open /config → Providers and add one first.\n'));
+    return false;
+  }
+  const current = findDefaultProviderName(ctx);
+  const picked = await pickFromList({
+    theme,
+    title: 'Default provider',
+    subtitle: 'Pick from saved Providers. Endpoint and API key are managed in the Providers row.',
+    rows: names.map((name) => {
+      const p = ctx.config.providers![name];
+      return {
+        id: name,
+        label: name,
+        value: `${p.model} · ${shortenEndpoint(p.endpoint)}`,
+        description: name === current ? 'current default' : undefined,
+      };
+    }),
+    initialCursor: current ? Math.max(0, names.indexOf(current)) : 0,
+  });
+  if (picked.kind !== 'pick') return false;
+  if (!setDefaultProvider(ctx, picked.id)) return false;
+  console.log(chalk.green(`\n  ✓ Default provider → "${picked.id}" · ${ctx.config.llm?.model ?? ''}\n`));
+  return true;
+}
+
+// Exported so `/login` can re-enter the LLM editor as a follow-on step
+// after the MCP transport block. Same flow as the `/config` panel's
+// Legacy first-run LLM flow; /config now defaults through saved Providers.
+export async function editLlm(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
+  const gathered = await gatherLlmConfig(ctx, theme, ctx.config.llm);
+  if (!gathered) return false;
+  ctx.config.llm = gathered.llm;
+  saveConfig(ctx.config);
+  // setLLMConfig (not just setModel) so the live agent picks up the new
+  // apiKey + endpoint immediately.
+  ctx.agent.setLLMConfig(ctx.config.llm);
+  console.log(chalk.green(`\n  ✓ LLM saved: ${gathered.label} · ${gathered.llm.model} · ${maskApiKey(gathered.llm.apiKey)}${gathered.sourceTail}`));
+  return true;
+}
+
+/**
+ * `/config` → "LLM providers" row. Manage the NAMED OpenAI-compatible providers
+ * (beyond the main `llm`) that sub-agents can be routed to. List → add / edit /
+ * remove. Each is gathered with the same provider→key→endpoint→model flow.
+ */
+async function editProviders(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
+  const names = listProviderNames(ctx.config);
+  const rows = [
+    ...names.map((n) => {
+      const p = ctx.config.providers![n];
+      return { id: n, label: n, value: `${p.model} · ${shortenEndpoint(p.endpoint)}`, description: 'Edit or remove' };
+    }),
+    { id: '__add', label: '+ Add a provider', value: '', description: 'A named OpenAI-compatible endpoint for the main agent or sub-agents' },
+  ];
+  const picked = await pickFromList({ theme, title: 'LLM providers', subtitle: 'Named OpenAI-compatible endpoints the main agent and sub-agents can use.', rows, initialCursor: 0 });
+  if (picked.kind !== 'pick') return false;
+
+  if (picked.id === '__add') {
+    const nameResult = await promptText({ theme, title: 'Provider name', subtitle: 'A short id, e.g. "groq", "fast", "local".', badge: 'name', placeholder: 'groq',
+      validate: (raw) => (/^[a-zA-Z0-9._-]+$/.test(raw.trim()) ? undefined : 'letters, digits, . _ - only') });
+    if (nameResult.kind !== 'accept') return false;
+    const name = nameResult.text.trim();
+    const gathered = await gatherLlmConfig(ctx, theme);
+    if (!gathered) return false;
+    ctx.config = setProvider(ctx.config, name, gathered.llm);
+    saveConfig(ctx.config);
+    console.log(chalk.green(`\n  ✓ Provider "${name}" saved: ${gathered.label} · ${gathered.llm.model}${gathered.sourceTail}`));
+    return true;
+  }
+
+  // Existing provider → edit or remove.
+  const action = await pickFromList({ theme, title: `Provider "${picked.id}"`, subtitle: '', rows: [
+    { id: 'default', label: 'Use as default', value: 'main model/provider', description: 'Copy this provider into config.llm without re-entering endpoint/key' },
+    { id: 'edit', label: 'Edit', value: 're-enter key / endpoint / model', description: '' },
+    { id: 'remove', label: 'Remove', value: 'also clears any sub-agent pointing at it', description: '' },
+  ], initialCursor: 0 });
+  if (action.kind !== 'pick') return false;
+  if (action.id === 'default') {
+    if (!setDefaultProvider(ctx, picked.id)) return false;
+    console.log(chalk.green(`\n  ✓ Default provider → "${picked.id}" · ${ctx.config.llm?.model ?? ''}\n`));
+    return true;
+  }
+  if (action.id === 'remove') {
+    ctx.config = removeProvider(ctx.config, picked.id);
+    saveConfig(ctx.config);
+    console.log(chalk.green(`\n  ✓ Provider "${picked.id}" removed.`));
+    return true;
+  }
+  const gathered = await gatherLlmConfig(ctx, theme, ctx.config.providers?.[picked.id]);
+  if (!gathered) return false;
+  ctx.config = setProvider(ctx.config, picked.id, gathered.llm);
+  saveConfig(ctx.config);
+  console.log(chalk.green(`\n  ✓ Provider "${picked.id}" updated: ${gathered.label} · ${gathered.llm.model}${gathered.sourceTail}`));
+  return true;
+}
+
+/**
+ * `/config` → "Sub-agent models" row. Assign a provider/model to each sub-agent
+ * role. The role named `default` is shown as "Fallback for sub-agents"; it is
+ * not the main default provider. Pick a role → pick a provider (a named one,
+ * the main LLM, or "inherit") → enter a model (blank = provider default).
+ */
+async function editAgentModels(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
+  const roleRow = await pickFromList({
+    theme,
+    title: 'Sub-agent models',
+    subtitle: 'Optional routing for spawned agents. Fallback applies only to roles without their own override.',
+    rows: SUBAGENT_ROLES.map((r) => ({
+      id: r,
+      label: subagentRoleLabel(r),
+      value: describeAgentModel(ctx.config, r),
+      description: r === 'default' ? 'Optional fallback, not the main default provider' : '',
+    })),
+    initialCursor: 0,
+  });
+  if (roleRow.kind !== 'pick') return false;
+  const role = roleRow.id;
+  const roleLabel = subagentRoleLabel(role);
+
+  const providerNames = listProviderNames(ctx.config);
+  const provRow = await pickFromList({
+    theme,
+    title: `${roleLabel} → provider`,
+    subtitle: role === 'default' ? 'Leave clear to let unconfigured sub-agents follow the main default provider.' : 'Where this role\'s model runs.',
+    rows: [
+      { id: '__inherit', label: role === 'default' ? 'Clear / follow Default provider' : 'Inherit (clear)', value: 'use the main default provider', description: 'Remove this override' },
+      { id: '__main', label: 'Main provider', value: `${ctx.config.llm?.model ?? '—'} (config.llm)`, description: 'Same endpoint as the main agent, optionally a different model' },
+      ...providerNames.map((n) => ({ id: n, label: n, value: `${ctx.config.providers![n].model}`, description: 'A named provider' })),
+    ],
+    initialCursor: 0,
+  });
+  if (provRow.kind !== 'pick') return false;
+
+  if (provRow.id === '__inherit') {
+    ctx.config = setAgentModel(ctx.config, role, {});
+    saveConfig(ctx.config);
+    console.log(chalk.green(`\n  ✓ ${roleLabel} now follows the main default provider.`));
+    return true;
+  }
+
+  const providerId = provRow.id === '__main' ? undefined : provRow.id;
+  const defaultModel = providerId ? ctx.config.providers?.[providerId]?.model : ctx.config.llm?.model;
+  const modelResult = await promptText({
+    theme,
+    title: `${roleLabel} → model`,
+    subtitle: `Model id for this role. Blank = ${providerId ? `the provider's default (${defaultModel ?? '?'})` : 'the main model'}.`,
+    badge: providerId ?? 'main',
+    prefilled: ctx.config.agentModels?.[role]?.model ?? '',
+    placeholder: defaultModel ?? 'model id',
+  });
+  if (modelResult.kind !== 'accept') return false;
+  const cleared = setAgentModelNormalized(ctx, role, providerId, modelResult.text.trim());
+  console.log(chalk.green(`\n  ✓ ${roleLabel} → ${cleared ? 'follows the main default provider' : describeAgentModel(ctx.config, role)}`));
   return true;
 }
 
@@ -410,7 +653,15 @@ async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<string 
     });
     if (cmdRes.kind !== 'accept') return undefined;
     const parts = cmdRes.text.trim().split(/\s+/);
-    server = { type: 'stdio', command: parts[0], args: parts.slice(1), identity };
+    const envRes = await promptText({
+      theme,
+      title: 'Environment variables',
+      subtitle: 'Optional. KEY=value pairs separated by semicolons; useful for connector tokens, project ids, or feature flags.',
+      badge: 'MCP env',
+      placeholder: 'GITHUB_TOKEN=...; PROJECT_ID=...',
+    });
+    if (envRes.kind !== 'accept') return undefined;
+    server = { type: 'stdio', command: parts[0], args: parts.slice(1), identity, env: parseKeyValueLines(envRes.text) };
   } else {
     const isLocal = transportRes.id === 'local-http';
     const urlRes = await promptText({
@@ -448,10 +699,19 @@ async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<string 
       if (keyRes.kind !== 'accept') return undefined;
       apiKey = keyRes.text.trim();
     }
+    const headersRes = await promptText({
+      theme,
+      title: 'HTTP headers',
+      subtitle: 'Optional. Header-Name=value pairs separated by semicolons; Authorization is filled from the API key unless set here.',
+      badge: 'MCP headers',
+      placeholder: 'X-Workspace=...; X-Project=...',
+    });
+    if (headersRes.kind !== 'accept') return undefined;
     server = {
       type: 'http',
       url: urlRes.text.trim(),
       apiKey: apiKey || undefined,
+      headers: parseKeyValueLines(headersRes.text),
       identity,
     };
   }
@@ -470,8 +730,8 @@ async function editExistingMcpProfile(ctx: CommandContext, theme: Theme, id: str
     const server = ctx.config.servers[id];
     if (!server) return; // got removed mid-loop
     const summary = server.type === 'http'
-      ? `http · ${server.url ?? ''}${server.apiKey ? ` · key ${maskApiKey(server.apiKey)}` : ''}`
-      : `stdio · ${server.command ?? ''} ${(server.args ?? []).join(' ')}`;
+      ? `http · ${server.url ?? ''}${server.apiKey ? ` · key ${maskApiKey(server.apiKey)}` : ''}${server.headers ? ` · ${Object.keys(server.headers).length} headers` : ''}`
+      : `stdio · ${server.command ?? ''} ${(server.args ?? []).join(' ')}${server.env ? ` · ${Object.keys(server.env).length} env` : ''}`;
     const result = await pickFromList({
       theme,
       title: `MCP profile · ${id}`,
@@ -480,6 +740,9 @@ async function editExistingMcpProfile(ctx: CommandContext, theme: Theme, id: str
         ...(server.type === 'http'
           ? [{ id: 'url',     label: 'Edit URL',     value: server.url ?? '',  description: 'Change the HTTP endpoint' } as PickerRow]
           : [{ id: 'command', label: 'Edit command', value: `${server.command ?? ''} ${(server.args ?? []).join(' ')}`.trim(), description: 'Change the stdio command + args' } as PickerRow]),
+        ...(server.type === 'http'
+          ? [{ id: 'headers', label: 'Edit headers', value: server.headers ? `${Object.keys(server.headers).length} set` : '(none)', description: 'Custom HTTP headers / connector variables' } as PickerRow]
+          : [{ id: 'env', label: 'Edit environment', value: server.env ? `${Object.keys(server.env).length} set` : '(none)', description: 'Environment variables for the stdio process' } as PickerRow]),
         { id: 'apikey',  label: 'Update API key', value: server.apiKey ? maskApiKey(server.apiKey) : '(none)', description: 'Bearer token / Authorization header' },
         { id: 'probe',   label: 'Probe connection', value: '', description: 'Test reachability (5s timeout)' },
         { id: 'remove',  label: 'Remove this profile', value: '', description: 'Drops it from config and disconnects from the pool' },
@@ -519,6 +782,38 @@ async function editExistingMcpProfile(ctx: CommandContext, theme: Theme, id: str
         saveConfig(ctx.config);
         await tryReconnectInPool(ctx, id);
         console.log(chalk.green(`  ✓ Command updated.\n`));
+      }
+      continue;
+    }
+    if (result.id === 'headers' && server.type === 'http') {
+      const r = await promptText({
+        theme, title: 'HTTP headers', badge: 'MCP headers',
+        prefilled: formatKeyValueLines(server.headers),
+        placeholder: 'X-Workspace=...; X-Project=...',
+        subtitle: 'Optional. Header-Name=value pairs separated by semicolons. Blank clears custom headers.',
+      });
+      if (r.kind === 'accept') {
+        const headers = parseKeyValueLines(r.text);
+        ctx.config.servers[id] = { ...server, headers };
+        saveConfig(ctx.config);
+        await tryReconnectInPool(ctx, id);
+        console.log(chalk.green(`  ✓ Headers updated.\n`));
+      }
+      continue;
+    }
+    if (result.id === 'env' && server.type === 'stdio') {
+      const r = await promptText({
+        theme, title: 'Environment variables', badge: 'MCP env',
+        prefilled: formatKeyValueLines(server.env),
+        placeholder: 'GITHUB_TOKEN=...; PROJECT_ID=...',
+        subtitle: 'Optional. KEY=value pairs separated by semicolons. Blank clears custom environment variables.',
+      });
+      if (r.kind === 'accept') {
+        const env = parseKeyValueLines(r.text);
+        ctx.config.servers[id] = { ...server, env };
+        saveConfig(ctx.config);
+        await tryReconnectInPool(ctx, id);
+        console.log(chalk.green(`  ✓ Environment updated.\n`));
       }
       continue;
     }
@@ -963,111 +1258,22 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
       if (ctx.config.llm) {
         ctx.config.llm.model = value.trim();
         saveConfig(ctx.config);
+        setSessionRuntime(ctx.agent.workspaceRoot, ctx.agent.sessionKey, { model: '' });
       }
       return { ok: true, message: `model → ${value.trim()}` };
     },
   },
   provider: {
     get: (ctx) => {
-      const llm = ctx.config.llm;
-      if (!llm) return '(unset)';
-      // Read the stored provider id directly. Earlier this reverse-looked
-      // up the catalog by endpoint, which returned the wrong id when a
-      // user edited the OpenAI base URL ("custom") or when an old wizard
-      // run mis-saved provider="openai" alongside a local endpoint.
-      if (llm.provider && findProvider(llm.provider)) return llm.provider;
-      const match = PROVIDER_CATALOG.find((p) => p.endpoint === llm.endpoint);
-      return match?.id ?? llm.provider ?? 'custom';
+      return findDefaultProviderName(ctx) ?? '(not saved as a Provider)';
     },
-    // Async so we can re-prompt for the API key when the provider
-    // changes. Pre-0.3.7 this setter silently reused the OLD provider's
-    // apiKey, which left users with (e.g.) OpenAI keys pointed at the
-    // DeepSeek endpoint — 401 on every turn with no clear message.
     set: async (ctx, value) => {
-      const provider = findProvider(value.trim().toLowerCase());
-      if (!provider) return { ok: false, reason: `unknown provider id "${value}" — open /config (bare) and pick interactively` };
-      // Prefer the stored provider id; fall back to endpoint matching for
-      // configs written before the hardcoded-"openai" bug fix.
-      const previousProviderId = ctx.config.llm?.provider
-        || (ctx.config.llm?.endpoint
-          ? PROVIDER_CATALOG.find((p) => p.endpoint === ctx.config.llm!.endpoint)?.id
-          : undefined);
-      const sameProvider = previousProviderId === provider.id;
-
-      // Reusing the existing key is correct when the provider isn't
-      // actually changing (idempotent set). Re-prompt on any real
-      // provider change — pre-fill from the new provider's envKey or
-      // (last resort) the previously-stored key if the user wants to
-      // paste a same-vendor variant.
-      let apiKey = ctx.config.llm?.apiKey ?? '';
-      if (!sameProvider) {
-        const theme = themeFor(ctx);
-        const envValue = process.env[provider.envKey] ?? '';
-        const keyResult = await promptText({
-          theme,
-          title: `API key for ${provider.label}`,
-          subtitle: envValue
-            ? `${provider.envKey} is set — press ENTER to accept, type to override.`
-            : provider.local
-              ? `${provider.label} is local — blank key OK.`
-              : `${provider.label} requires an API key. Paste it now or press Esc to cancel.`,
-          badge: provider.label,
-          prefilled: envValue,
-          placeholder: provider.local ? '(blank OK)' : 'paste API key',
-          validate: (raw) => {
-            const v = validateApiKey(raw, provider);
-            return v.kind === 'reject' ? v.reason : undefined;
-          },
-        });
-        if (keyResult.kind !== 'accept') {
-          return { ok: false, reason: 'cancelled — provider unchanged' };
-        }
-        apiKey = keyResult.text;
+      const name = value.trim();
+      if (!setDefaultProvider(ctx, name)) {
+        const known = listProviderNames(ctx.config);
+        return { ok: false, reason: known.length ? `unknown Provider "${name}" — choose one of: ${known.join(', ')}` : 'no Providers configured — open /config and add one under Providers first' };
       }
-
-      // OpenAI doubles as the OpenAI-compatible base-URL flow. Prompt
-      // to confirm or replace the endpoint; local providers keep their
-      // fixed loopback URLs.
-      let endpoint = provider.endpoint;
-      if (provider.id === 'openai') {
-        const theme = themeFor(ctx);
-        const current = ctx.config.llm?.endpoint ?? provider.endpoint;
-        const urlResult = await promptText({
-          theme,
-          title: 'API base URL',
-          subtitle: 'Press ENTER for OpenAI direct, or paste any OpenAI-compatible /v1 base URL (DeepSeek, OpenRouter, Together, Groq, vLLM, …).',
-          badge: 'OpenAI base URL',
-          prefilled: current,
-          placeholder: provider.endpoint,
-          validate: (raw) => {
-            const v = raw.trim();
-            if (!v) return 'base URL cannot be empty';
-            try { new URL(v); } catch { return 'must be a valid URL'; }
-            return undefined;
-          },
-        });
-        if (urlResult.kind !== 'accept') {
-          return { ok: false, reason: 'cancelled — provider unchanged' };
-        }
-        endpoint = urlResult.text.trim();
-      }
-
-      ctx.config.llm = {
-        provider: provider.id,
-        apiKey,
-        model: provider.defaultModel,
-        endpoint,
-      };
-      saveConfig(ctx.config);
-      // Same fix as the apiKey path: propagate the FULL llm config to
-      // the live agent so endpoint + apiKey changes take effect without
-      // a CLI restart.
-      ctx.agent.setLLMConfig(ctx.config.llm);
-      const endpointTail = endpoint !== provider.endpoint ? ` · endpoint ${endpoint}` : '';
-      const tail = sameProvider
-        ? `(provider unchanged — reused existing key + reset model to default${endpointTail})`
-        : `(model defaulted to ${provider.defaultModel} · key ${maskApiKey(apiKey)}${endpointTail})`;
-      return { ok: true, message: `provider → ${provider.label} ${tail}` };
+      return { ok: true, message: `default provider → ${name} · ${ctx.config.llm?.model ?? ''}` };
     },
   },
 };

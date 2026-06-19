@@ -10,12 +10,14 @@
  */
 import type { PlanItem } from '../../types.js';
 
-export type PlanVerdict = 'approved' | 'changes-requested';
+export type PlanVerdict = 'approved' | 'changes-requested' | 'revised';
 
 /** A durable plan decision as the host returns it (mirrors PlanDecision). */
 export interface PlanDecisionView {
   id: string;
   verdict: PlanVerdict;
+  /** `auto` = recorded automatically under auto mode (no approval prompt). */
+  actor?: 'user' | 'auto';
   feedback?: string;
   planSnapshot: PlanItem[];
   explanation?: string;
@@ -81,12 +83,14 @@ export type PlanApprovalState =
   | { kind: 'none' }                                   // no plan / never reviewed
   | { kind: 'approved'; decisionId: string }           // current plan == last-approved snapshot
   | { kind: 'changes-requested'; feedback?: string }   // last decision asked for changes
+  | { kind: 'revised'; decisionId: string }            // a revision task rewrote the plan — re-review
   | { kind: 'changed-since-approval'; decisionId: string }; // approved, but the plan moved on
 
 /**
  * Derive the current plan's approval state from the decision history:
  * - no plan or no decisions → none
  * - last decision was changes-requested → changes-requested (+ feedback)
+ * - last decision was revised → revised (a revision task rewrote the plan; re-review)
  * - last decision was approved AND the live plan still matches its snapshot → approved
  * - last decision was approved but the live plan has since changed → changed-since-approval
  * "matches" is a structural step+status comparison (an empty diff both ways).
@@ -99,6 +103,7 @@ export function planApprovalState(
   const last = latestDecision(decisions);
   if (!last) return { kind: 'none' };
   if (last.verdict === 'changes-requested') return { kind: 'changes-requested', feedback: last.feedback };
+  if (last.verdict === 'revised') return { kind: 'revised', decisionId: last.id };
   // approved
   const matches = isEmptyDiff(diffPlanSnapshots(last.planSnapshot, plan.items));
   return matches
@@ -111,6 +116,7 @@ export function approvalLabel(state: PlanApprovalState): string {
   switch (state.kind) {
     case 'approved': return 'Plan approved';
     case 'changes-requested': return 'Changes requested';
+    case 'revised': return 'Plan revised — review again';
     case 'changed-since-approval': return 'Changed since approval';
     case 'none': return 'Not reviewed';
   }

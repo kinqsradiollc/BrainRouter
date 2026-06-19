@@ -7,7 +7,7 @@ import path from 'node:path';
 const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rt-home-')));
 process.env.BRAINROUTER_HOME = HOME;
 
-const { getSessionRuntime, setSessionRuntime, clearSessionRuntime, resolveSessionRuntime } =
+const { getSessionRuntime, setSessionRuntime, clearSessionRuntime, resolveSessionRuntime, resolveSessionLlmConfig } =
   await import('../state/sessionRuntimeStore.js');
 
 const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rt-ws-')));
@@ -61,4 +61,19 @@ test('resolveSessionRuntime: falls all the way back to global when nothing overr
 test('resolveSessionRuntime: mcpProfiles layer independently', () => {
   const r = resolveSessionRuntime({ ...GLOBAL, mcpProfiles: ['base'] }, { mcpProfiles: ['ws'] }, { mcpProfiles: ['sess'] });
   assert.deepEqual(r.mcpProfiles, ['sess']);
+});
+
+test('resolveSessionLlmConfig: desktop and CLI resolve the same per-session model over config.json', () => {
+  setSessionRuntime(ws, 'sess:llm', { model: 'qwen3-coder', endpoint: 'http://localhost:1234/v1' });
+  const resolved = resolveSessionLlmConfig(
+    { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini', endpoint: 'https://api.openai.com/v1' },
+    ws,
+    'sess:llm',
+  );
+  assert.deepEqual(resolved, {
+    provider: 'openai',
+    apiKey: 'sk-test',
+    model: 'qwen3-coder',
+    endpoint: 'http://localhost:1234/v1',
+  });
 });

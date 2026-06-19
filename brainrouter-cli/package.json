@@ -27,6 +27,7 @@
     "prepublishOnly": "npm run sync-changelog"
   },
   "dependencies": {
+    "@kinqs/brainrouter-core": "^0.4.14",
     "@kinqs/brainrouter-sdk": "^0.4.14",
     "@kinqs/brainrouter-types": "^0.4.14",
     "@modelcontextprotocol/sdk": "^1.11.0",

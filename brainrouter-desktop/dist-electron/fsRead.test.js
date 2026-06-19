@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
+import { enableLiteralAsarWorkspacePaths, readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry, } from './fsRead.js';
 const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fsr-')));
 test('reads a normal file', () => {
     const ws = tmp();
@@ -30,6 +30,43 @@ test('reading the workspace root (".") lists entries', () => {
     fs.writeFileSync(path.join(ws, 'a.txt'), '');
     const r = readWorkspaceEntry(ws, '.');
     assert.equal(r.kind, 'directory');
+});
+test('listWorkspaceFiles walks non-git workspaces with bounds and ignored dependency dirs', () => {
+    const ws = tmp();
+    fs.mkdirSync(path.join(ws, 'src'));
+    fs.mkdirSync(path.join(ws, 'node_modules'));
+    fs.mkdirSync(path.join(ws, '.git'));
+    fs.writeFileSync(path.join(ws, 'src', 'a.ts'), '');
+    fs.writeFileSync(path.join(ws, 'README.md'), '');
+    fs.writeFileSync(path.join(ws, 'node_modules', 'pkg.js'), '');
+    fs.writeFileSync(path.join(ws, '.git', 'config'), '');
+    const r = listWorkspaceFiles(ws, { limit: 10 });
+    assert.equal(r.error, undefined);
+    assert.deepEqual(r.files.sort(), ['README.md', 'src/a.ts']);
+    assert.equal(r.truncated, false);
+});
+test('workspace file reads keep .asar paths literal and do not descend into archive-looking directories', () => {
+    const ws = tmp();
+    enableLiteralAsarWorkspacePaths();
+    assert.equal(process.noAsar, true);
+    fs.writeFileSync(path.join(ws, 'bad-fixture.asar'), 'not an archive');
+    fs.mkdirSync(path.join(ws, 'packed.asar'));
+    fs.writeFileSync(path.join(ws, 'packed.asar', 'inner.txt'), 'hidden');
+    const listed = listWorkspaceFiles(ws, { limit: 10 });
+    assert.equal(listed.error, undefined);
+    assert.ok(listed.files.includes('bad-fixture.asar'));
+    assert.ok(!listed.files.includes('packed.asar/inner.txt'));
+    const stat = statWorkspaceEntry(ws, 'bad-fixture.asar');
+    assert.equal(stat.exists, true);
+    assert.equal(stat.kind, 'file');
+});
+test('listWorkspaceFiles reports truncation at the requested limit', () => {
+    const ws = tmp();
+    for (let i = 0; i < 4; i++)
+        fs.writeFileSync(path.join(ws, `f${i}.txt`), '');
+    const r = listWorkspaceFiles(ws, { limit: 2 });
+    assert.equal(r.files.length, 2);
+    assert.equal(r.truncated, true);
 });
 test('a path escaping the workspace is rejected', () => {
     const r = readWorkspaceEntry(tmp(), '../../etc/passwd');

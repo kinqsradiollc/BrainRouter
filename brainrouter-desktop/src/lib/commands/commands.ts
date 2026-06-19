@@ -11,8 +11,8 @@
 import type { PanelId } from '../../panels/index.js';
 
 export type SettingsSection =
-  | 'general' | 'permissions' | 'memory' | 'hooks' | 'connectors'
-  | 'observability' | 'appearance' | 'commands';
+  | 'general' | 'models' | 'permissions' | 'memory' | 'hooks' | 'connectors'
+  | 'advanced' | 'observability' | 'appearance' | 'commands';
 
 export interface CmdCtx {
   send(command: unknown): void;
@@ -92,7 +92,7 @@ export const WIRED: Record<string, Wire> = {
   '/briefing': { kind: 'bridge', cmd: 'briefing' },
 
   // -- settings deep links --
-  '/model': { kind: 'settings', section: 'general' },
+  '/model': { kind: 'settings', section: 'models' },
   '/tier': { kind: 'settings', section: 'general' },
   '/effort': { kind: 'settings', section: 'general' },
   '/personality': { kind: 'settings', section: 'general' },

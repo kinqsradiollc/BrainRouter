@@ -129,10 +129,10 @@ test('goalStore: lifecycle helpers — pause, resume, complete, blocked, budget,
 });
 
 test('goalStore: legacy { text, setAt } gets normalized with active status and default budget', async () => {
-  const { getCliStateFile } = await import('../state/cliState.js');
+  const { getStateFile } = await import('../state/cliState.js');
   withTempWorkspace((workspace) => {
     fs.writeFileSync(
-      getCliStateFile(workspace, 'goal.json'),
+      getStateFile(workspace, 'goal.json'),
       JSON.stringify({ text: 'legacy goal', setAt: '2026-01-01T00:00:00Z' }),
     );
     const g = readGoal(workspace)!;
@@ -370,10 +370,10 @@ test('goalStore: editGoal unified update changes text/status/budget/tokens in on
 });
 
 test('goalStore: legacy workspace-level goal only falls back for no-session reads; first session-scoped setGoal archives it', async () => {
-  const { getCliStateDir, getCliStateFile, getSessionStateDir } = await import('../state/cliState.js');
+  const { getStateDir, getStateFile, getSessionStateDir } = await import('../state/cliState.js');
   withTempWorkspace((workspace) => {
     // Old layout — write directly to the workspace-level file.
-    fs.writeFileSync(getCliStateFile(workspace, 'goal.json'), JSON.stringify({ text: 'legacy goal', setAt: '2026-01-01T00:00:00Z' }));
+    fs.writeFileSync(getStateFile(workspace, 'goal.json'), JSON.stringify({ text: 'legacy goal', setAt: '2026-01-01T00:00:00Z' }));
     const sessionKey = 'brainrouter-cli:project:main';
     // Without sessionKey, legacy is still readable (back-compat for very old installs).
     assert.equal(readGoal(workspace)?.text, 'legacy goal');
@@ -385,9 +385,9 @@ test('goalStore: legacy workspace-level goal only falls back for no-session read
     // Session bucket holds the new goal.
     assert.equal(fs.existsSync(path.join(getSessionStateDir(workspace, sessionKey), 'goal.json')), true);
     // Legacy file is gone (archived, not left where another session would re-pick it up).
-    assert.equal(fs.existsSync(getCliStateFile(workspace, 'goal.json')), false);
+    assert.equal(fs.existsSync(getStateFile(workspace, 'goal.json')), false);
     // Archived into the per-user cli state dir, NOT into the project workspace tree.
-    const archiveDir = path.join(getCliStateDir(workspace), '.brainrouter.migrated');
+    const archiveDir = path.join(getStateDir(workspace), '.brainrouter.migrated');
     const migrated = fs.readdirSync(archiveDir);
     assert.equal(migrated.length, 1);
     assert.match(migrated[0]!, /^legacy-goal-.*\.json$/);
@@ -648,4 +648,49 @@ test('9d-bugfix: clearSessionWorkflow unbinds the session without touching the w
     clearSessionWorkflow(workspace, sk);
     assert.equal(getCurrentWorkflow(workspace, sk), undefined);
   });
+});
+
+test('decideGoalContinuation: stop / continue / corrective / halt / usage-limited', async () => {
+  const { decideGoalContinuation } = await import('../state/goalStore.js');
+  const base = {
+    text: 'do x', setAt: 'a', startedAt: 'a', updatedAt: 'a', status: 'active' as const,
+    budget: { maxIterations: 10, iterationsUsed: 2 },
+  };
+  // made tool calls → continue (not corrective)
+  assert.deepEqual(
+    decideGoalContinuation(base, { lastTurnToolCalls: 3, lastGoalTransition: undefined, noToolStrikes: 0 }),
+    { kind: 'continue', corrective: false, nextIteration: 3 },
+  );
+  // prose-only, first strike → corrective continue
+  assert.deepEqual(
+    decideGoalContinuation(base, { lastTurnToolCalls: 0, lastGoalTransition: undefined, noToolStrikes: 0 }),
+    { kind: 'continue', corrective: true, nextIteration: 3 },
+  );
+  // prose-only, second strike → halt
+  assert.deepEqual(
+    decideGoalContinuation(base, { lastTurnToolCalls: 0, lastGoalTransition: undefined, noToolStrikes: 1 }),
+    { kind: 'halt-prose' },
+  );
+  // goal_complete/blocked fired this turn → stop
+  assert.deepEqual(
+    decideGoalContinuation(base, { lastTurnToolCalls: 1, lastGoalTransition: 'complete', noToolStrikes: 0 }),
+    { kind: 'stop' },
+  );
+  // not active → stop
+  assert.deepEqual(
+    decideGoalContinuation({ ...base, status: 'paused' }, { lastTurnToolCalls: 1, lastGoalTransition: undefined, noToolStrikes: 0 }),
+    { kind: 'stop' },
+  );
+  // iteration budget exhausted → usage-limited
+  assert.equal(
+    decideGoalContinuation({ ...base, budget: { maxIterations: 3, iterationsUsed: 2 } }, { lastTurnToolCalls: 1, lastGoalTransition: undefined, noToolStrikes: 0 }).kind,
+    'usage-limited',
+  );
+  // token budget exhausted → usage-limited
+  assert.equal(
+    decideGoalContinuation({ ...base, budget: { maxIterations: 100, iterationsUsed: 1, maxTokens: 1000, tokensUsed: 1000 } }, { lastTurnToolCalls: 1, lastGoalTransition: undefined, noToolStrikes: 0 }).kind,
+    'usage-limited',
+  );
+  // no goal → stop
+  assert.deepEqual(decideGoalContinuation(null, { lastTurnToolCalls: 1, lastGoalTransition: undefined, noToolStrikes: 0 }), { kind: 'stop' });
 });

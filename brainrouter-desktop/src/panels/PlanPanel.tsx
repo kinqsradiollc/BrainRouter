@@ -15,11 +15,12 @@ import {
 } from '../lib/plan/planReviewView.js';
 import type { PlanItem } from '../types.js';
 
-export function PlanPanel({ plan, history, onApprove, onRequestChanges }: {
+export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnotateStep }: {
   plan: { items: PlanItem[]; explanation?: string } | null;
   history?: PlanDecisionView[];
   onApprove?: () => void;
   onRequestChanges?: (feedback: string) => void;
+  onAnnotateStep?: (item: PlanItem, index: number, body: string) => void;
 }): React.ReactElement {
   const [feedback, setFeedback] = useState('');
   const [showHistory, setShowHistory] = useState(false);
@@ -42,6 +43,12 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges }: {
     onRequestChanges(feedback.trim());
     setFeedback('');
   };
+  const annotateStep = (item: PlanItem, index: number): void => {
+    if (!onAnnotateStep) return;
+    const body = window.prompt('Annotation for this plan step');
+    if (!body?.trim()) return;
+    onAnnotateStep(item, index, body.trim());
+  };
 
   return (
     <div className="scroll">
@@ -58,6 +65,11 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges }: {
         <div key={i} className={`plan-item ${it.status}`}>
           <span className="plan-mark">{it.status === 'completed' ? '✓' : it.status === 'in_progress' ? '◐' : '○'}</span>
           <span className="plan-step">{it.step}{it.acceptance ? <span className="plan-acceptance">✓ {it.acceptance}</span> : null}</span>
+          {onAnnotateStep ? (
+            <button className="plan-annotate-btn" title="Annotate this plan step" onClick={() => annotateStep(it, i)}>
+              <Icon name="bubble" size={12} />
+            </button>
+          ) : null}
         </div>
       ))}
 
@@ -82,17 +94,19 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges }: {
           {rows.map((d) => (
             <div key={d.id} className="plan-decision">
               <div className="plan-decision-head">
-                <span className={`plan-verdict v-${d.verdict}`}>{d.verdict === 'approved' ? 'approved' : 'changes requested'}</span>
+                <span className={`plan-verdict v-${d.verdict}`}>{d.verdict === 'approved' ? 'approved' : d.verdict === 'revised' ? 'revised' : 'changes requested'}{d.actor === 'auto' ? ' · auto' : ''}</span>
                 <span className="plan-decision-meta">{d.planSnapshot.length} item{d.planSnapshot.length === 1 ? '' : 's'} · {fmtTime(d.createdAt)}</span>
                 <span className="req-id">{d.id}</span>
               </div>
               {d.feedback ? <div className="plan-decision-fb">“{d.feedback}”</div> : null}
               {d.diffFromPrev && !isEmptyDiff(d.diffFromPrev) ? (
                 <div className="plan-decision-diff">
-                  {d.diffFromPrev.added.length ? <span className="diff-add">+{d.diffFromPrev.added.length}</span> : null}
-                  {d.diffFromPrev.removed.length ? <span className="diff-del">−{d.diffFromPrev.removed.length}</span> : null}
-                  {d.diffFromPrev.changed.length ? <span className="diff-mod">~{d.diffFromPrev.changed.length} status</span> : null}
-                  <span className="dim"> vs previous</span>
+                  <div className="plan-diff-label">vs previous</div>
+                  {d.diffFromPrev.added.map((step) => <div key={`a-${step}`} className="plan-diff-line diff-add">+ {step}</div>)}
+                  {d.diffFromPrev.removed.map((step) => <div key={`r-${step}`} className="plan-diff-line diff-del">− {step}</div>)}
+                  {d.diffFromPrev.changed.map((c) => (
+                    <div key={`c-${c.step}`} className="plan-diff-line diff-mod">~ {c.step} <span>{c.from} → {c.to}</span></div>
+                  ))}
                 </div>
               ) : null}
             </div>

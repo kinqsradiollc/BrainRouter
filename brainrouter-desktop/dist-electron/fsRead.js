@@ -1,11 +1,80 @@
 import fs from 'node:fs';
 import path from 'node:path';
 const MAX_BYTES = 200_000;
+const DEFAULT_FILE_LIST_LIMIT = 3000;
+const FILE_LIST_IGNORED_DIRS = new Set([
+    '.git',
+    '.hg',
+    '.svn',
+    '.next',
+    '.turbo',
+    'coverage',
+    'dist',
+    'node_modules',
+    'out',
+]);
+export function enableLiteralAsarWorkspacePaths() {
+    process.noAsar = true;
+}
+enableLiteralAsarWorkspacePaths();
+function isAsarPathName(name) {
+    return name.toLowerCase().endsWith('.asar');
+}
 function insideWorkspace(workspaceRoot, relPath) {
     const root = path.resolve(workspaceRoot);
     const resolved = path.resolve(root, relPath);
     const ok = resolved === root || resolved.startsWith(root + path.sep);
     return { ok, resolved };
+}
+/** Bounded workspace file list for non-git projects or repos where git returns
+ * no files. Avoids heavyweight dependency/index folders and never follows
+ * symlinked directories. */
+export function listWorkspaceFiles(workspaceRoot, opts) {
+    const limit = Math.max(1, Math.min(10_000, Math.floor(opts?.limit ?? DEFAULT_FILE_LIST_LIMIT)));
+    const maxDepth = Math.max(1, Math.min(12, Math.floor(opts?.maxDepth ?? 8)));
+    const root = path.resolve(workspaceRoot);
+    const files = [];
+    let truncated = false;
+    const queue = [{ abs: root, rel: '', depth: 0 }];
+    try {
+        while (queue.length && files.length < limit) {
+            const current = queue.shift();
+            let entries;
+            try {
+                entries = fs.readdirSync(current.abs, { withFileTypes: true });
+            }
+            catch {
+                continue;
+            }
+            entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+            for (const entry of entries) {
+                if (entry.name === '.DS_Store')
+                    continue;
+                const rel = current.rel ? `${current.rel}/${entry.name}` : entry.name;
+                if (entry.isDirectory()) {
+                    if (current.depth >= maxDepth || FILE_LIST_IGNORED_DIRS.has(entry.name.toLowerCase()) || isAsarPathName(entry.name))
+                        continue;
+                    queue.push({ abs: path.join(current.abs, entry.name), rel, depth: current.depth + 1 });
+                    continue;
+                }
+                if (entry.isSymbolicLink())
+                    continue;
+                if (!entry.isFile())
+                    continue;
+                files.push(rel);
+                if (files.length >= limit) {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+        if (queue.length > 0)
+            truncated = true;
+        return { files, truncated, source: 'filesystem' };
+    }
+    catch (err) {
+        return { files: [], truncated: false, source: 'filesystem', error: err instanceof Error ? err.message : String(err) };
+    }
 }
 /** Read a workspace-relative path. Directories return a typed listing (never EISDIR). */
 export function readWorkspaceEntry(workspaceRoot, relPath) {

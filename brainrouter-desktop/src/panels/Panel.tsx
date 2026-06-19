@@ -32,6 +32,14 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'ci', title: 'CI / Checks', icon: 'check-circle' },
 ];
 
+const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([
+  // The read-only file viewer is legacy/internal; the Monaco editor owns file
+  // viewing and editing in user-facing menus.
+  'file',
+]);
+
+export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((d) => !HIDDEN_MANUAL_PANEL_IDS.has(d.id));
+
 export function Panel({ title, onClose, children, actions }: {
   title: string;
   onClose: () => void;
@@ -62,7 +70,7 @@ export function PanelPicker({ open, onToggle }: {
         <>
           <div className="picker-backdrop" onClick={() => setMenu(false)} />
           <div className="picker-menu">
-            {PANEL_DEFS.map((d) => (
+            {MANUAL_PANEL_DEFS.map((d) => (
               <button key={d.id} className="picker-item" onClick={() => onToggle(d.id)}>
                 <span className="picker-check">{open.includes(d.id) ? '✓' : ''}</span>
                 <span className="picker-icon"><Icon name={d.icon} size={14} /></span>{d.title}
