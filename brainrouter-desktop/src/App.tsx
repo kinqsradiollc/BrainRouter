@@ -245,6 +245,15 @@ export function App(): React.ReactElement {
     q('q-track-members', 'track-members');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.workspaceRoot]);
+
+  // A4 — Chat is a READ-ONLY conversational stance: the agent can read, search,
+  // and reason, but cannot write files or run shell. Entering Chat pins the
+  // active agent to 'read' access; Code/Track restore the default 'shell'. Re-
+  // asserted on every mode switch so a fresh/swapped agent inherits the stance.
+  useEffect(() => {
+    q('a-access', 'action:set-access', { mode: mode === 'chat' ? 'read' : 'shell' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, info.sessionKey]);
   const trackOps = {
     create: (input: { title: string; type: WorkItemType; status: string }) => q('q-track-create', 'track-create', input),
     transition: (idOrKey: string, toStatus: string) => q('q-track-transition', 'track-transition', { idOrKey, toStatus }),
@@ -1080,6 +1089,12 @@ export function App(): React.ReactElement {
             interaction={interaction} answerInteraction={answerInteraction} q={q} chatEnd={chatEnd} atBottom={atBottom}
             hasConversation={hasConversation} changedFiles={changedFiles} ensurePanel={ensurePanel}
             composer={
+              <>
+              {mode === 'chat' ? (
+                <div className="chat-readonly" title="Chat keeps the agent read-only — it can read, search and explain, but won't edit files or run commands. Switch to Code to make changes.">
+                  <Icon name="eye" size={12} /> Read-only — Chat explores &amp; explains; switch to <button className="chat-readonly-link" onClick={() => setMode('code')}>Code</button> to make changes
+                </div>
+              ) : null}
               <Composer
                 draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
                 slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
@@ -1092,6 +1107,7 @@ export function App(): React.ReactElement {
                 attachments={attachmentUploads}
                 canSubmit={readyAttachments(attachmentUploads).length > 0}
                 onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))} />
+              </>
             } />
 
           {/* Chat mode is a FOCUSED conversation — the code workbench (Environment
