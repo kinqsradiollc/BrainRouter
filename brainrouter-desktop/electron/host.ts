@@ -86,8 +86,8 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, type CreateWorkItemInput } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import type { WorkItemType } from '@kinqs/brainrouter-types';
+import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, type CreateWorkItemInput, type UpdateWorkItemPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import type { WorkItemType, SprintState, CodeLink } from '@kinqs/brainrouter-types';
 import { isRequirementStatus, isRequirementPriority, type RequirementRecord } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1408,6 +1408,37 @@ async function main(): Promise<void> {
       'track-transition': (a) => {
         transitionWorkItem(workspaceRoot, String(a.idOrKey ?? ''), String(a.toStatus ?? ''), 'user');
         return listWorkItems(workspaceRoot);
+      },
+      // General field patch (assignee/priority/labels/sprint/epic/parent/title/desc).
+      'track-update-item': (a) => {
+        const patch = (a.patch && typeof a.patch === 'object' ? a.patch : {}) as UpdateWorkItemPatch;
+        updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), patch, 'user');
+        return listWorkItems(workspaceRoot);
+      },
+      'track-comment': (a) => {
+        addComment(workspaceRoot, String(a.idOrKey ?? ''), 'user', String(a.body ?? ''));
+        return listWorkItems(workspaceRoot);
+      },
+      'track-link': (a) => {
+        linkWorkItem(workspaceRoot, String(a.idOrKey ?? ''), {
+          codeLinks: Array.isArray(a.codeLinks) ? (a.codeLinks as CodeLink[]) : undefined,
+          linkedMemoryIds: Array.isArray(a.linkedMemoryIds) ? (a.linkedMemoryIds as string[]) : undefined,
+          links: typeof a.blocks === 'string' ? [{ type: 'blocks', targetId: a.blocks }] : undefined,
+        });
+        return listWorkItems(workspaceRoot);
+      },
+      'track-assign-sprint': (a) => {
+        updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), { sprintId: a.sprintId ? String(a.sprintId) : undefined }, 'user');
+        return listWorkItems(workspaceRoot);
+      },
+      'track-sprints': () => { ensureProject(workspaceRoot); return listSprints(workspaceRoot); },
+      'track-create-sprint': (a) => {
+        createSprint(workspaceRoot, { name: String(a.name ?? 'Sprint'), goal: a.goal ? String(a.goal) : undefined });
+        return listSprints(workspaceRoot);
+      },
+      'track-sprint-state': (a) => {
+        setSprintState(workspaceRoot, String(a.id ?? ''), String(a.state ?? 'future') as SprintState);
+        return listSprints(workspaceRoot);
       },
       // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
       // so the desktop panel and the terminal CLI share the same requirements.json.

@@ -15,7 +15,7 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
-import type { TrackProject, WorkItem } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, Sprint } from '@kinqs/brainrouter-types';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
@@ -68,8 +68,8 @@ export interface AgentEventsCtx {
   // Session efficiency counters (cache reuse rides on `tokens`; compaction + memory
   // recall are counted here from their events). Reset on session-changed.
   setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
-  // Track mode data (project + work items), fed by the host `track-*` queries.
-  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[] }>>;
+  // Track mode data (project + work items + sprints), fed by the host `track-*` queries.
+  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[] }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -550,7 +550,11 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // TRACK mode — project + work items. Create/transition return the updated list.
       case 'q-track-project': setTrack((t) => ({ ...t, project: (result as TrackProject | null) ?? null })); return;
       case 'q-track-items': case 'q-track-create': case 'q-track-transition':
+      case 'q-track-update-item': case 'q-track-comment': case 'q-track-link': case 'q-track-assign-sprint':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, items: result as WorkItem[] }));
+        return;
+      case 'q-track-sprints': case 'q-track-create-sprint': case 'q-track-sprint-state':
+        if (Array.isArray(result)) setTrack((t) => ({ ...t, sprints: result as Sprint[] }));
         return;
       case 'q-turn-changeset': {
         // End-of-turn changeset → append a card right after the final answer.
