@@ -14,7 +14,7 @@
 import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
+import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
@@ -60,7 +60,13 @@ export interface AgentEventsCtx {
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
   setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
-  setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number } | null>>;
+  setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>>;
+  // LIVE per-call usage for the in-flight turn (cleared at turn-start/end) so the
+  // Context panel's token total ticks up during the turn, not only at turn-end.
+  setLiveTurn: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number } | null>>;
+  // Session efficiency counters (cache reuse rides on `tokens`; compaction + memory
+  // recall are counted here from their events). Reset on session-changed.
+  setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -170,7 +176,7 @@ export function getStableRowId(sessionKey: string, r: { id?: string | number; ki
 export function useAgentEvents(ctx: AgentEventsCtx): void {
   const {
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -190,6 +196,10 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
   // non-streaming endpoint produces no deltas; without this its answer was
   // dropped from the live view and only appeared after a session reload.
   const streamedThisTurnRef = useRef(false);
+  // Files the agent edited/wrote THIS turn (path → status), reset at turn-start.
+  // At turn-end we ask the host for their numstat and render a Codex-style
+  // "Edited N files +X −Y" changeset card in the transcript.
+  const turnEditsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const push = (row: ChatRow) => setRows((r) => [...r, row]);
@@ -253,7 +263,9 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         case 'assistant-turn-end': flushAssistant(); break;
         case 'tool-end': {
           if (!e.ok) turnFailsRef.current += 1;
-          pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, file: fileFromSummary(e.tool, e.summary) });
+          const editedFile = fileFromSummary(e.tool, e.summary);
+          if (e.ok && editedFile) turnEditsRef.current.set(editedFile, /write|create/i.test(e.tool) ? 'A' : 'M');
+          pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, file: editedFile });
           setToolLog((t) => [...t.slice(-199), { id: rid(), tool: e.tool, ok: e.ok, summary: e.summary }]);
           // §AV-3 — near-live artifacts: when the agent authors/updates an artifact
           // in-band (artifact_write), refresh the list immediately so the Artifacts
@@ -265,11 +277,14 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // DESK-5n — first sign of a live child: register it as running.
           setLiveChildren((m) => ({ ...m, [e.childId]: { childId: e.childId, role: e.role, tool: e.tool, startedAt: m[e.childId]?.startedAt ?? Date.now() } }));
           break;
-        case 'child-tool-end':
+        case 'child-tool-end': {
+          const childEdit = fileFromSummary(e.tool, e.summary);
+          if (e.ok && childEdit) turnEditsRef.current.set(childEdit, /write|create/i.test(e.tool) ? 'A' : 'M');
           pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, child: `${e.role}·${e.childId.slice(-4)}` });
           // Keep the live entry fresh (covers children whose first seen event is an end).
           setLiveChildren((m) => ({ ...m, [e.childId]: { childId: e.childId, role: e.role, tool: e.tool, startedAt: m[e.childId]?.startedAt ?? Date.now() } }));
           break;
+        }
         case 'child-complete':
           push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '✓' : '✗'} agent ${e.childId} (${e.role}) ${e.status}`, ts: Date.now() });
           setFinishedTasks((f) => [...f.slice(-30), { id: e.childId, label: `${e.role}·${e.childId.slice(-4)}`, status: e.status === 'completed' ? 'Agent · Completed' : 'Agent · Failed' }]);
@@ -277,10 +292,20 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           break;
         case 'plan-update':
           setLastPlan({ items: e.items, explanation: e.explanation });
-          push({ id: rid(), kind: 'status', text: 'Updated the plan', ts: Date.now() });
+          push({ id: rid(), kind: 'status', text: 'Updated the plan', action: 'plan', ts: Date.now() });
           break;
-        case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}`, ts: Date.now() }); q('q-ctx', 'context-usage'); break;
-        case 'memory': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.text}`, ts: Date.now() }); break;
+        case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}`, ts: Date.now() }); setEfficiency((s) => ({ ...s, compactions: s.compactions + 1, droppedMessages: s.droppedMessages + (e.droppedMessages || 0) })); q('q-ctx', 'context-usage'); break;
+        case 'memory':
+          // A briefing carries the recalled records — render a collapsible row
+          // that shows the user exactly what memory was injected, not a label.
+          if ((e as { op?: string }).op === 'briefing') {
+            const briefRecords = (e as { records?: import('../../types.js').BriefingRecord[] }).records ?? [];
+            push({ id: rid(), kind: 'briefing', sources: (e as { sources?: string[] }).sources ?? [], records: briefRecords, ts: Date.now() });
+            if (briefRecords.length) setEfficiency((s) => ({ ...s, memoriesRecalled: s.memoriesRecalled + briefRecords.length }));
+          } else {
+            push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.text}`, ts: Date.now() });
+          }
+          break;
         // §truncation — a persistent provider-truncation notice ("raise cli.maxOutputTokens").
         case 'notice': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.message}`, ts: Date.now() }); break;
         case 'requirement-event':
@@ -310,7 +335,11 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           }
           break;
         }
-        case 'tokens-updated': setTokens({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, turns: e.turns }); q('q-ctx', 'context-usage'); break;
+        case 'tokens-updated': setTokens({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, turns: e.turns, cachedTokens: e.cachedTokens }); setLiveTurn(null); q('q-ctx', 'context-usage'); break;
+        // LIVE — per-call cumulative usage for THIS turn (set, don't add: the agent
+        // sends the turn's running total). The session base (`tokens`) absorbs it at
+        // turn-end, where setLiveTurn(null) above keeps the two from double-counting.
+        case 'usage-live': if (isForeground) { setLiveTurn({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, calls: e.calls, cachedTokens: e.cachedTokens }); q('q-ctx', 'context-usage'); } break;
         case 'interaction-request': setInteraction(e.request); setPicked([]); break;
         case 'session-changed':
           // DESK-5u — session-changed is the authoritative "current session"
@@ -345,6 +374,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // reset the context meter + plan now (the refresh below repopulates them
           // from THIS session's data — a new chat → empty, not the old chat's 100%).
           setContextUsage(null); setLastPlan(null); setPlanHistory([]);
+          setEfficiency({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 }); // efficiency is per-session
           if (e.loadedMessages > 0) {
             // Only show spinner if not cached
             const cacheRoot = wsMsg.workspaceRoot ?? activeWsRef.current ?? info.workspaceRoot ?? '';
@@ -382,7 +412,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           break;
         // DESK-5v — turn lifecycle is tracked PER SESSION so a background turn
         // keeps its spinner and lands its result/error in the right chat.
-        case 'turn-start': if (owningSessionKey) setSessionRunning(owningSessionKey, true); if (isForeground) { setRunning(true); setTurnStart(Date.now()); streamedThisTurnRef.current = false; } break;
+        case 'turn-start': if (owningSessionKey) setSessionRunning(owningSessionKey, true); if (isForeground) { setRunning(true); setTurnStart(Date.now()); setLiveTurn(null); streamedThisTurnRef.current = false; turnEditsRef.current = new Map(); } break;
         case 'turn-complete': {
           if (owningSessionKey) setSessionRunning(owningSessionKey, false);
           if (!isForeground) { refreshSidebar(); break; } // background turn: its answer is on disk, re-read on switch-back
@@ -399,6 +429,13 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           setLastTurnFails(turnFailsRef.current);
           setLiveChildren({}); // turn ended — refreshSidebar reseeds any detached workers
           refreshSidebar();
+          // End-of-turn changeset — if the agent edited files this turn, ask the
+          // host for their numstat; the result handler appends a Codex-style
+          // "Edited N files +X −Y" card right after the final answer.
+          if (turnEditsRef.current.size > 0) {
+            q('q-turn-changeset', 'turn-changeset', { paths: [...turnEditsRef.current.keys()] });
+            turnEditsRef.current = new Map();
+          }
           // §goal-autonomy — ask the host whether an active goal should continue.
           // Returns { action:'none' } (a no-op) when there's no goal, so this is
           // safe on every turn. A 'continue' result fires the next hidden turn.
@@ -421,7 +458,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           flushAssistant();
           push({ id: errId, kind: 'error', text: errText, detail: e.message, ts: Date.now() });
           setRunning(false); setStopping(false); setStatusLine(''); setReasoningTail('');
-          setLiveChildren({});
+          setLiveChildren({}); setLiveTurn(null); // a failed turn never gets tokens-updated; clear live
           // Observed: the app preserves your message on failure.
           setDraft((d) => d || lastPromptRef.current);
           break;
@@ -507,6 +544,14 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
       case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
+      case 'q-turn-changeset': {
+        // End-of-turn changeset → append a card right after the final answer.
+        const r = result as { files?: ChangesetFile[]; insertions?: number; deletions?: number } | null;
+        if (r && Array.isArray(r.files) && r.files.length) {
+          setRows((rows) => [...rows, { id: rid(), kind: 'changeset', files: r.files!, insertions: r.insertions ?? 0, deletions: r.deletions ?? 0, ts: Date.now() }]);
+        }
+        return;
+      }
       case 'q-plan': {
         // This session's durable plan (empty for a new chat). Null/empty → clear
         // the panel rather than leave the previous session's plan showing.

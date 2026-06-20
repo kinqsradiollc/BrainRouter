@@ -709,6 +709,14 @@ export function installDevBridge(): void {
     }),
     'git-log': () => ({ subjects: ['feat(desktop): DESK-4l — interactive views rail, tabbed bottom terminal', 'feat(desktop): DESK-4k — modern skin', 'feat(desktop): DESK-5c — file tree, real terminal'] }),
     'context-usage': () => ({ used: devCtxUsed, window: 256_000, compactAt: 80_000, limit: 80_000, pct: Math.min(1, devCtxUsed / 80_000) }),
+    // End-of-turn changeset — echo the turn's edited paths with plausible per-file
+    // +/- so the transcript's "Edited N files" card is exercisable in preview.
+    'turn-changeset': (a) => {
+      const paths = Array.isArray((a as { paths?: unknown }).paths) ? ((a as { paths: unknown[] }).paths).filter((p): p is string => typeof p === 'string') : [];
+      const adds = [37, 172, 22, 61, 14, 8]; const dels = [4, 0, 0, 5, 2, 0];
+      const files = paths.map((p, i) => ({ path: p, status: /new|hooks|use[A-Z]/.test(p) ? 'A' : 'M', added: adds[i % adds.length], removed: dels[i % dels.length] }));
+      return { files, insertions: files.reduce((s, f) => s + f.added, 0), deletions: files.reduce((s, f) => s + f.removed, 0) };
+    },
     'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],
@@ -940,6 +948,16 @@ export function installDevBridge(): void {
           if (!wsRecents.includes(wsCurrent)) wsRecents = [...wsRecents, wsCurrent];
           recentsListeners.forEach((l) => l({ recents: wsRecents, reason: 'user-message', workspaceRoot: wsCurrent }));
           emit({ kind: 'turn-start', prompt: command.prompt }, 0, ts);
+          // Memory recalled BEFORE the model runs — renders the briefing row and
+          // feeds the Context panel's "Memory recall" savings counter.
+          emit({ kind: 'memory', op: 'briefing', sources: ['memory_keyword', 'memory_vector', 'memory_graph'], records: [
+            { id: 'mem_core_identity_v3', type: 'identity', priority: 5, source: 'memory_graph', score: 0.98, content: 'Core identity: BrainRouter engineer; OpenAI-compatible only.' },
+            { id: 'mem_recall_blend', type: 'project', priority: 4, source: 'memory_vector', score: 0.91, content: 'Recall blends reranker + RRF (0.6/0.4); never hard-drop candidates.' },
+            { id: 'mem_reranker_cpu', type: 'project', priority: 3, source: 'memory_vector', score: 0.84, content: 'CPU reranker ≈1.3s/doc — keep the char budget ~9k.' },
+            { id: 'mem_no_vendor_refs', type: 'feedback', priority: 4, source: 'memory_keyword', score: 0.79, content: 'No vendor/planning refs in committed code or docs.' },
+            { id: 'mem_membench_split', type: 'reference', priority: 2, source: 'memory_graph', score: 0.72, content: 'MemBench + LoCoMo are the recall-accuracy splits.' },
+            { id: 'mem_session_scope', type: 'project', priority: 3, source: 'memory_keyword', score: 0.68, content: 'Artifacts/annotations are session-scoped on capture.' },
+          ] } as unknown as AgentEvent, 80, ts);
           // DESK-5u — a prompt containing "fail"/"error"/"402" surfaces a real
           // turn-error card, so the per-session error-persistence path is testable.
           if (/\b(fail|error|402)\b/i.test(command.prompt)) {
@@ -972,6 +990,16 @@ export function installDevBridge(): void {
           emit({ kind: 'tool-end', tool: 'read_file', ok: true, summary: 'src/agent/agent.ts (220 lines)', preview: 'export class Agent {\n  // …\n}' }, 900, ts);
           emit({ kind: 'tool-end', tool: 'run_command', ok: true, summary: 'npm test', preview: '# tests 1387\n# pass 1387\n# fail 0' }, 1400, ts);
           emit({ kind: 'tool-end', tool: 'edit_file', ok: true, summary: 'Edited src/agent/agent.ts +3 -0', preview: 'applied 1 hunk' }, 1600, ts);
+          emit({ kind: 'tool-end', tool: 'edit_file', ok: true, summary: 'Edited src/memory/recall.ts +37 -4', preview: 'applied 2 hunks' }, 1650, ts);
+          emit({ kind: 'tool-end', tool: 'write_file', ok: true, summary: 'wrote src/memory/blend.ts', preview: 'new file' }, 1700, ts);
+          emit({ kind: 'tool-end', tool: 'edit_file', ok: true, summary: 'Edited src/memory/store/reranker.ts +22 -0', preview: 'applied 1 hunk' }, 1750, ts);
+          // LIVE token ramp — the agent emits onUsageUpdate after every LLM call;
+          // we mirror that here (cumulative turn usage) so the Context panel's
+          // token counter visibly climbs during the turn, not only at turn-end.
+          emit({ kind: 'usage-live', promptTokens: 8_100, completionTokens: 0, calls: 1, cachedTokens: 5_900 }, 250, ts);
+          emit({ kind: 'usage-live', promptTokens: 17_400, completionTokens: 140, calls: 2, cachedTokens: 13_600 }, 750, ts);
+          emit({ kind: 'usage-live', promptTokens: 29_800, completionTokens: 520, calls: 3, cachedTokens: 24_100 }, 1300, ts);
+          emit({ kind: 'usage-live', promptTokens: 41_200, completionTokens: 1_180, calls: 4, cachedTokens: 34_700 }, 1950, ts);
           if (wantsApproval) {
             emit({ kind: 'interaction-request', request: { id: 'ir_demo', type: 'confirm', title: 'Run shell command?', detail: 'git push origin release/0.4.15', dangerous: true, tool: 'run_command' } }, 1800, ts);
           }
@@ -993,7 +1021,7 @@ export function installDevBridge(): void {
           emit({ kind: 'assistant-turn-end' }, end, ts);
           emit({ kind: 'turn-complete', answer }, end + 80, ts);
           setTimeout(() => runningSessions.delete(ts), end + 90);
-          emit({ kind: 'tokens-updated', promptTokens: 48_213, completionTokens: 1_904, calls: 6, turns: 3 }, end + 120, ts);
+          emit({ kind: 'tokens-updated', promptTokens: 48_213, completionTokens: 1_904, calls: 6, turns: 3, cachedTokens: 39_700 }, end + 120, ts);
           return;
         }
         case 'interaction-response':

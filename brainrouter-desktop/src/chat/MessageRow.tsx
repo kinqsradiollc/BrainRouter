@@ -15,12 +15,16 @@ import { fmtRel } from '../lib/format.js';
 import { parseThink } from '../lib/chat/thinkParse.js';
 import { Markdown, MD_COMPONENTS } from './markdown.js';
 import { ToolGroup } from './ToolGroup.js';
+import { ChangesetCard } from './ChangesetCard.js';
 
-export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onDismissError, onFork }: {
+export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onDismissError, onFork }: {
   r: ChatRow;
   liveLast: boolean;
   inlineDiffs: Record<string, string>;
   onRequestDiff: (file: string) => void;
+  onOpenFile: (file: string) => void;
+  onOpenDiff: (file: string) => void;
+  onOpenPlan: () => void;
   onDismissError: (id: number | string) => void;
   onFork: (ts: number) => void;
 }): React.ReactElement | null {
@@ -56,7 +60,8 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onDismissE
       </div>
       );
     }
-    case 'tool-group': return <div className="row"><ToolGroup row={r} live={liveLast} inlineDiffs={inlineDiffs} onRequestDiff={onRequestDiff} /></div>;
+    case 'tool-group': return <div className="row"><ToolGroup row={r} live={liveLast} inlineDiffs={inlineDiffs} onRequestDiff={onRequestDiff} onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} /></div>;
+    case 'changeset': return <div className="row"><ChangesetCard files={r.files} insertions={r.insertions} deletions={r.deletions} onOpenDiff={onOpenDiff} /></div>;
     case 'error': return (
       <div className="row">
         <div className="error-card">
@@ -79,7 +84,46 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onDismissE
         </div>
       </div>
     );
-    case 'status': return <div className="row status">{r.text}</div>;
+    case 'briefing': {
+      // The memory that was injected into the model BEFORE this turn. Collapsed
+      // by default; expand to see every recalled record (type · priority · id ·
+      // content) so the user knows exactly what context the model was given.
+      const recs = r.records ?? [];
+      const n = recs.length;
+      return (
+        <div className="row">
+          <details className="briefing-block">
+            <summary>
+              <span className="briefing-title">Memory briefing</span>
+              <span className="briefing-count">{n} {n === 1 ? 'memory' : 'memories'}</span>
+              {r.sources.length ? <span className="briefing-sources" title={r.sources.join(', ')}>{r.sources.map((s) => s.replace(/^memory_/, '')).join(' · ')}</span> : null}
+            </summary>
+            <div className="briefing-body">
+              {n === 0 ? (
+                <div className="briefing-empty">No memories were recalled for this turn.</div>
+              ) : recs.map((rec, i) => (
+                <div className="briefing-rec" key={rec.id || i}>
+                  <div className="briefing-rec-head">
+                    {rec.type ? <span className="briefing-type">{rec.type}</span> : null}
+                    {rec.source ? <span className="briefing-source-chip">{rec.source.replace(/^memory_/, '')}</span> : null}
+                    {typeof rec.score === 'number' ? <span className="briefing-score">score {rec.score.toFixed(2)}</span> : null}
+                    {typeof rec.priority === 'number' ? <span className="briefing-prio">priority {rec.priority}</span> : null}
+                  </div>
+                  {rec.content ? <div className="briefing-rec-body">{rec.content}</div> : <div className="briefing-empty">(no content)</div>}
+                  <div className="briefing-rec-foot">
+                    <code className="briefing-id" title={rec.id}>{rec.id}</code>
+                    <button className="icon-btn briefing-copy" title="Copy record id" onClick={() => void navigator.clipboard.writeText(rec.id)}><Icon name="copy" size={10} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      );
+    }
+    case 'status': return r.action === 'plan'
+      ? <div className="row status"><button className="plan-link" title="Open the plan" onClick={() => onOpenPlan()}><Icon name="plan" size={12} /> {r.text} ›</button></div>
+      : <div className="row status">{r.text}</div>;
     default: return null;
   }
 }

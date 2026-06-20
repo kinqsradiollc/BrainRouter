@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspens
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
@@ -23,7 +23,7 @@ import { CommandPalette } from './palette.js';
 import { SettingsDialog, type ConfigSnapshot } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
-import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow } from './types.js';
+import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, PopId } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
 import { FOREGROUND_ONLY_KINDS } from './constants.js';
@@ -32,11 +32,13 @@ import { rid } from './lib/rid.js';
 import { useAgentEvents } from './lib/agent/useAgentEvents.js';
 import { useEditor } from './lib/editor/useEditor.js';
 import { useCi } from './lib/ci/useCi.js';
-import { CIPanel } from './panels/CIPanel.js';
-import { DashboardPanel } from './panels/DashboardPanel.js';
 import { type DashTab, type DashTask, type WorkspaceDash } from './lib/workspace/dashboard.js';
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
+// CI + Dashboard are optional panels rarely opened on load — lazy so they stay
+// out of the initial bundle / first paint.
+const CIPanel = lazy(() => import('./panels/CIPanel.js').then((m) => ({ default: m.CIPanel })));
+const DashboardPanel = lazy(() => import('./panels/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
 import { MessageRow } from './chat/MessageRow.js';
 import { SessionStatus } from './components/SessionStatus.js';
 import { Composer } from './components/Composer.js';
@@ -117,7 +119,14 @@ export function App(): React.ReactElement {
   const workrowRef = useRef<HTMLDivElement>(null);
   const [workW, setWorkW] = useState(0);
   const [toolLog, setToolLog] = useState<Array<{ id: number; tool: string; ok: boolean; summary: string }>>([]);
-  const [tokens, setTokens] = useState<{ promptTokens: number; completionTokens: number; turns: number } | null>(null);
+  const [tokens, setTokens] = useState<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>(null);
+  // LIVE — the in-flight turn's running usage (from usage-live), cleared at
+  // turn-start/end. Added to the session base (`tokens`) so the Context panel's
+  // token counter climbs during a turn instead of jumping only at turn-end.
+  const [liveTurn, setLiveTurn] = useState<{ promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number } | null>(null);
+  // Session efficiency — what the runtime SAVED: prompt-cache reuse (in `tokens`),
+  // history compaction, and memory recall. Reset when the session changes.
+  const [efficiency, setEfficiency] = useState<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -142,7 +151,7 @@ export function App(): React.ReactElement {
   const [statsTab, setStatsTab] = useState<'overview' | 'models'>('overview');
   const [statsRange, setStatsRange] = useState<'all' | '30d' | '7d'>('all');
   // DESK-4m — popovers (one open at a time) across composer, top bar, and menus.
-  const [pop, setPop] = useState<'' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor'>('');
+  const [pop, setPop] = useState<PopId>('');
   // DESK-5q/5r — context fill for the composer ring (vs the auto-compact limit).
   const [contextUsage, setContextUsage] = useState<{ used: number; window: number; compactAt: number; limit: number; pct: number } | null>(null);
   // DESK-5e — the Environment card is PINNED, not a transient popover: it
@@ -351,6 +360,24 @@ export function App(): React.ReactElement {
     return () => { clearInterval(fp); };
   }, [running]);
 
+  // §7 — keep the plan version history LIVE. A new plan VERSION under auto/YOLO
+  // mode records an `actor:'auto'` approval in core (agent.maybeAutoApprovePlan)
+  // with NO prompt; without this the "approved · auto" entry only appears after
+  // the user clicks Approve. Re-fetch the history whenever the plan's step
+  // STRUCTURE changes (a new version → a decision was just recorded), so the
+  // auto-approval shows up on its own. Keyed on the step signature so a plain
+  // status tick (same steps) doesn't spam the host.
+  const planSigRef = useRef('');
+  useEffect(() => {
+    const sig = (lastPlan?.items ?? []).map((it) => it.step).join('');
+    if (sig && sig !== planSigRef.current) {
+      planSigRef.current = sig;
+      // small delay so core has flushed recordPlanDecision before we read.
+      const t = setTimeout(() => q('q-plan-history', 'plan-history'), 200);
+      return () => clearTimeout(t);
+    }
+  }, [lastPlan]);
+
   // DESK-5w — keep the per-session background-task list fresh even when the
   // VIEWED chat is idle: another chat may be running work whose tasks should
   // appear/clear in the sidebar (and reflect the boot-time stale reconcile).
@@ -528,7 +555,7 @@ export function App(): React.ReactElement {
 
   useAgentEvents({
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -765,6 +792,9 @@ export function App(): React.ReactElement {
       liveLast={liveLast}
       inlineDiffs={inlineDiffs}
       onRequestDiff={(f) => q('q-inline-diff', 'file-diff', { path: f })}
+      onOpenFile={(f) => openFile(f)}
+      onOpenDiff={(f) => { setDiffTarget({ path: f, line: 1 }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f }); }}
+      onOpenPlan={() => ensurePanel('plan')}
       onDismissError={(id) => {
         setRows((rs) => rs.filter((x) => x.id !== id));
         for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== id);
@@ -817,19 +847,13 @@ export function App(): React.ReactElement {
   const renderPanelBody = (id: PanelId): React.ReactElement | null => {
     switch (id) {
       case 'context': return (
-        <>
-          <div className="kv"><span>Host</span><b><span className={`dot ${hostUp ? 'on' : 'off'}`} />{hostUp ? 'online' : 'starting…'}</b></div>
-          <div className="kv"><span>Model</span><b>{info.model ?? '—'}</b></div>
-          <div className="kv"><span>Workspace</span><b title={info.workspaceRoot}>{info.workspaceRoot?.split('/').pop() ?? '—'}</b></div>
-          {/* Stability fix (T4) — when the workspace is a SUBDIR of a larger repo
-              (monorepo / nested clone), show the owning git repo + the repo-
-              relative path so it's clear what git operations are scoped to. */}
-          {gitInfo?.isSubdir && gitInfo.gitRoot ? (
-            <div className="kv"><span>Git repo</span><b title={gitInfo.gitRoot}>{gitInfo.repo}<span style={{ opacity: 0.55 }}>{` / ${gitInfo.repoRelativePath}`}</span></b></div>
-          ) : null}
-          <div className="kv"><span>Tokens</span><b>{tokens ? `${tokens.promptTokens.toLocaleString()} in / ${tokens.completionTokens.toLocaleString()} out` : '—'}</b></div>
-          <div className="kv"><span>Config</span><b>~/.config/brainrouter</b></div>
-        </>);
+        <ContextPanel
+          hostUp={hostUp} running={running}
+          model={info.model} workspaceRoot={info.workspaceRoot} sessionKey={info.sessionKey}
+          gitInfo={gitInfo} branch={branches.current}
+          tokens={tokens} liveTurn={liveTurn} contextUsage={contextUsage} efficiency={efficiency}
+          bgCount={runningTasks.length} configDir="~/.config/brainrouter"
+        />);
       case 'files': return <FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
         onGrep={(gq) => q('q-grep', 'search-content', { q: gq })}
         onRefresh={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}
@@ -852,7 +876,7 @@ export function App(): React.ReactElement {
             }} />
         </Suspense>
       );
-      case 'ci': return <CIPanel ci={ci} onOpenExternal={openUrl} />;
+      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} /></Suspense>;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}
@@ -864,10 +888,10 @@ export function App(): React.ReactElement {
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
-      case 'dashboard': return <DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
+      case 'dashboard': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
         tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
         onOpenTask={openDashboardTask}
-        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }} />;
+        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }} /></Suspense>;
       case 'plan': {
         // §7 — record an approval/changes-requested decision, then re-fetch the
         // history so the new version appears in the panel.
@@ -1034,7 +1058,7 @@ export function App(): React.ReactElement {
           {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
               to it; it can never cover content. Yields via envRoom. */}
           <EnvironmentPanel envAnim={envAnim} openSettings={openSettings} gitInfo={gitInfo} ensurePanel={ensurePanel}
-            setTermDockOpen={setTermDockOpen} branches={branches} q={q} commitSubjects={commitSubjects} ci={ci}
+            setTermDockOpen={setTermDockOpen} branches={branches} pop={pop} setPop={setPop} q={q} commitSubjects={commitSubjects} ci={ci}
             openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} backgroundTasks={backgroundTasks} openTask={openTask} />
 
           <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}

@@ -49,7 +49,7 @@ export interface AgentLike {
   setModel?(model: string): void;
   getModel?(): string;
   /** DESK-4 — cumulative session token usage (mirrors the CLI's /tokens). */
-  sessionUsage?: { promptTokens: number; completionTokens: number; calls: number; turns: number };
+  sessionUsage?: { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number };
 }
 
 /** Named read-only queries the renderer can issue (sessions list, recap, …). */
@@ -221,7 +221,7 @@ export function createHostCore(input: {
       const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden });
       turnEmit({ kind: 'turn-complete', answer });
       const u = rt.agent.sessionUsage;
-      if (u) turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns });
+      if (u) turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns, cachedTokens: u.cachedTokens });
     } catch (err) {
       turnEmit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
     } finally {

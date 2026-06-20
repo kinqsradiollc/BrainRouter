@@ -38,6 +38,10 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnota
 
   const state = planApprovalState(plan, decisions);
   const rows = planHistoryRows(decisions);
+  // A finished plan (every step completed) needs no approval — show a complete
+  // banner and drop the Approve / Request-changes controls (the version history
+  // stays available below).
+  const allDone = plan.items.every((it) => it.status === 'completed');
   const submitChanges = (): void => {
     if (!feedback.trim() || !onRequestChanges) return;
     onRequestChanges(feedback.trim());
@@ -53,10 +57,10 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnota
   return (
     <div className="scroll">
       {onApprove ? (
-        <div className={`plan-review-banner pr-${state.kind}`}>
-          <span className="plan-review-state">{approvalLabel(state)}</span>
-          {state.kind === 'changes-requested' && state.feedback ? <span className="plan-review-fb">“{state.feedback}”</span> : null}
-          {state.kind === 'changed-since-approval' ? <span className="plan-review-fb dim">the plan changed since it was approved — re-approve to confirm</span> : null}
+        <div className={`plan-review-banner pr-${allDone ? 'complete' : state.kind}`}>
+          <span className="plan-review-state">{allDone ? '✓ Plan complete' : approvalLabel(state)}</span>
+          {!allDone && state.kind === 'changes-requested' && state.feedback ? <span className="plan-review-fb">“{state.feedback}”</span> : null}
+          {!allDone && state.kind === 'changed-since-approval' ? <span className="plan-review-fb dim">the plan changed since it was approved — re-approve to confirm</span> : null}
         </div>
       ) : null}
 
@@ -75,12 +79,18 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnota
 
       {onApprove ? (
         <div className="plan-review-controls">
-          <Button variant="primary" onClick={onApprove} title="Record an approval — snapshots the plan as a version">Approve plan</Button>
-          <div className="sched-add-row">
-            <input className="filter" placeholder="request changes (feedback returns to the session)" value={feedback}
-              onChange={(e) => setFeedback(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitChanges(); }} />
-            <button className="sched-add-btn" onClick={submitChanges} disabled={!feedback.trim()}>Request changes</button>
-          </div>
+          {allDone ? (
+            <div className="plan-complete-note">All steps are done — nothing to approve.</div>
+          ) : (
+            <>
+              <input className="filter plan-feedback-input" placeholder="Optional note for “Request changes”…" value={feedback}
+                onChange={(e) => setFeedback(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitChanges(); }} />
+              <div className="plan-review-actions">
+                <Button variant="primary" onClick={onApprove} title="Record an approval — snapshots the plan as a version">Approve plan</Button>
+                <Button variant="default" onClick={submitChanges} disabled={!feedback.trim()} title="Send feedback and start a background revision task">Request changes</Button>
+              </div>
+            </>
+          )}
           {rows.length ? (
             <button className="plan-history-toggle" onClick={() => setShowHistory((v) => !v)}>
               {showHistory ? '▾' : '▸'} Version history ({rows.length})
