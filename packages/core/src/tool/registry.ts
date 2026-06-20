@@ -46,6 +46,11 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'goal_complete', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'goal_blocked', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'ask_user_choice', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // Track mode — the project board is workspace STATE (track.json), like the plan,
+  // so both are read-tier / read_only (no repo mutation, no approval). The agent
+  // can manage the board in any mode (the code-aware differentiator).
+  { name: 'track_query', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'track_update', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // Orchestration surface (added dynamically as specs, but access-gated here).
   // NB: child-spawn action kind is resolved per-call from the requested child
   // `access` (REVIEW-FIX); `child_write` is the name-only default they share.
