@@ -1086,6 +1086,9 @@ export function App(): React.ReactElement {
                 onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))} />
             } />
 
+          {/* Chat mode is a FOCUSED conversation — the code workbench (Environment
+              column, side panels, terminal) appears only in Code mode. */}
+          {mode === 'code' ? (<>
           {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
               to it; it can never cover content. Yields via envRoom. */}
           <EnvironmentPanel envAnim={envAnim} openSettings={openSettings} gitInfo={gitInfo} ensurePanel={ensurePanel}
@@ -1100,12 +1103,15 @@ export function App(): React.ReactElement {
             backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
             worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
             envRoom={envRoom} />
+          </>) : null}
         </div>
 
+        {mode === 'code' ? (
         <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}
           termTabs={termTabs} activeTerm={activeTerm} setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab}
           pop={pop} setPop={setPop} addBottomTab={addBottomTab} setTermDockOpen={setTermDockOpen}
           tabTitle={tabTitle} gitInfo={gitInfo} renderPanelBody={renderPanelBody} />
+        ) : null}
         </>)}
 
         {/* DESK-5h — window control cluster, pinned top-right of the content
