@@ -21,8 +21,18 @@ import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
+import {
+  ensureProject as trackEnsureProject,
+  getProject as trackGetProject,
+  listWorkItems as trackListWorkItems,
+  getWorkItem as trackGetWorkItem,
+  createWorkItem as trackCreateWorkItem,
+  transitionWorkItem as trackTransitionWorkItem,
+  addComment as trackAddComment,
+  linkWorkItem as trackLinkWorkItem,
+} from '../track/trackStore.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
-import { isArtifactKind, isArtifactFormat, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
+import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -3381,6 +3391,61 @@ export class Agent {
         // plan history when this establishes a new plan version.
         this.maybeAutoApprovePlan(state);
         return formatPlan(state);
+      }
+      case 'track_query': {
+        const action = String(args.action ?? 'list');
+        if (action === 'board') {
+          const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
+          const items = trackListWorkItems(this.workspaceRoot);
+          const columns = project.workflowStates.map((s) => ({
+            state: s.name, id: s.id,
+            items: items.filter((w) => w.status === s.id).map((w) => ({ key: w.key, type: w.type, title: w.title, priority: w.priority, assignee: w.assignee })),
+          }));
+          return JSON.stringify({ project: { key: project.key, name: project.name }, columns }, null, 2);
+        }
+        if (action === 'get') {
+          const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
+          return item ? JSON.stringify(item, null, 2) : `No work item "${args.key}".`;
+        }
+        const items = trackListWorkItems(this.workspaceRoot, {
+          status: typeof args.status === 'string' ? args.status : undefined,
+          type: isWorkItemType(args.type) ? args.type : undefined,
+          assignee: typeof args.assignee === 'string' ? args.assignee : undefined,
+          text: typeof args.text === 'string' ? args.text : undefined,
+        });
+        return JSON.stringify(items.map((w) => ({ key: w.key, type: w.type, status: w.status, statusCategory: w.statusCategory, priority: w.priority, title: w.title, assignee: w.assignee })), null, 2);
+      }
+      case 'track_update': {
+        const action = String(args.action ?? '');
+        if (action === 'create') {
+          const item = trackCreateWorkItem(this.workspaceRoot, {
+            title: String(args.title ?? 'Untitled'),
+            type: isWorkItemType(args.type) ? args.type : 'task',
+            status: typeof args.status === 'string' ? args.status : undefined,
+            priority: isWorkItemPriority(args.priority) ? args.priority : undefined,
+            sessionKey: this.sessionKey, actor: 'agent',
+          });
+          return `Created ${item.key} [${item.status}]: ${item.title}`;
+        }
+        if (action === 'transition') {
+          try {
+            const item = trackTransitionWorkItem(this.workspaceRoot, String(args.key ?? ''), String(args.toStatus ?? ''), 'agent');
+            return item ? `${item.key} → ${item.status}` : `No work item "${args.key}".`;
+          } catch (e) { return (e as Error).message; }
+        }
+        if (action === 'comment') {
+          const item = trackAddComment(this.workspaceRoot, String(args.key ?? ''), 'agent', String(args.body ?? ''));
+          return item ? `Commented on ${item.key}.` : `No work item "${args.key}".`;
+        }
+        if (action === 'link') {
+          const item = trackLinkWorkItem(this.workspaceRoot, String(args.key ?? ''), {
+            codeLinks: Array.isArray(args.codeLinks) ? (args.codeLinks as Array<{ kind: 'branch' | 'commit' | 'pull-request' | 'file'; ref: string }>) : undefined,
+            linkedMemoryIds: Array.isArray(args.linkedMemoryIds) ? (args.linkedMemoryIds as string[]) : undefined,
+            links: typeof args.blocks === 'string' ? [{ type: 'blocks', targetId: args.blocks }] : undefined,
+          });
+          return item ? `Linked ${item.key}.` : `No work item "${args.key}".`;
+        }
+        return `Unknown track_update action "${action}". Use create · transition · comment · link.`;
       }
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING

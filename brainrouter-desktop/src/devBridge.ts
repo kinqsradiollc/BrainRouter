@@ -261,6 +261,35 @@ export function installDevBridge(): void {
   type DevPlanItem = { step: string; status: string; acceptance?: string };
   type DevPlanDecision = { id: string; verdict: 'approved' | 'changes-requested' | 'revised'; actor?: 'user' | 'auto'; feedback?: string; planSnapshot: DevPlanItem[]; explanation?: string; createdAt: string; linkedMemoryIds: string[] };
   const devPlanState: { items: DevPlanItem[]; explanation?: string } = { items: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix' };
+  // TRACK mode mock: a project + work items the board/list renders from.
+  const trackCat = (s: string): string => (s === 'done' ? 'done' : s === 'todo' ? 'todo' : 'in-progress');
+  const mkItem = (key: string, type: string, title: string, status: string, priority: string, assignee?: string, labels: string[] = []) => ({
+    id: `wi_${key}`, key, type, title, status, statusCategory: trackCat(status), priority,
+    assignee, watchers: [], labels, components: [], links: [], comments: [], attachmentIds: [],
+    activity: [{ at: '2026-06-21T00:00:00.000Z', actor: 'user', field: 'created' }],
+    workspaceRoot: wsCurrent, linkedMemoryIds: [], codeLinks: [], taskIds: [], artifactIds: [], reviewFindingIds: [],
+    createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
+  });
+  const devTrack: { project: Record<string, unknown>; items: Record<string, unknown>[] } = {
+    project: {
+      id: 'proj_dev', workspaceRoot: wsCurrent, name: 'BrainRouter', key: 'BR', keyCounter: 8,
+      workflowStates: [
+        { id: 'todo', name: 'To Do', category: 'todo' }, { id: 'in-progress', name: 'In Progress', category: 'in-progress' },
+        { id: 'in-review', name: 'In Review', category: 'in-progress' }, { id: 'done', name: 'Done', category: 'done' },
+      ],
+      issueTypes: [], components: ['cli', 'desktop', 'memory'], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
+    },
+    items: [
+      mkItem('BR-1', 'epic', 'Unified workspace — Chat · Track · Code', 'in-progress', 'high', 'anhdang', ['track']),
+      mkItem('BR-2', 'story', 'Track data model + durable store', 'done', 'high', 'anhdang', ['track']),
+      mkItem('BR-3', 'story', 'Left-sidebar mode switcher', 'in-progress', 'high', 'anhdang', ['desktop']),
+      mkItem('BR-4', 'task', 'Track board view (columns + cards)', 'in-review', 'medium', 'anhdang', ['desktop']),
+      mkItem('BR-5', 'bug', 'Reranker timeout under a slow local server', 'done', 'highest', 'bob', ['memory']),
+      mkItem('BR-6', 'task', 'Agent tools for the tracker', 'todo', 'medium'),
+      mkItem('BR-7', 'task', '/track CLI commands', 'todo', 'low'),
+    ],
+  };
+  let devTrackN = 8;
   const devPlanDecisions: DevPlanDecision[] = [
     { id: 'pdec_seed', verdict: 'changes-requested', actor: 'user', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
     // auto-approved while running in auto mode (no approval prompt) — shows "approved · auto" in history
@@ -718,6 +747,19 @@ export function installDevBridge(): void {
       return { files, insertions: files.reduce((s, f) => s + f.added, 0), deletions: files.reduce((s, f) => s + f.removed, 0) };
     },
     'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
+    // TRACK mode — the mock board persists create/transition so the preview is interactive.
+    'track-project': () => devTrack.project,
+    'track-items': () => [...devTrack.items],
+    'track-create': (a) => {
+      const status = String(a.status ?? 'todo');
+      devTrack.items.unshift(mkItem(`BR-${devTrackN++}`, String(a.type ?? 'task'), String(a.title ?? 'Untitled'), status, 'medium'));
+      return [...devTrack.items];
+    },
+    'track-transition': (a) => {
+      const it = devTrack.items.find((w) => w.key === a.idOrKey || w.id === a.idOrKey);
+      if (it) { it.status = String(a.toStatus); it.statusCategory = trackCat(String(a.toStatus)); }
+      return [...devTrack.items];
+    },
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],
     'plan-record-decision': (a) => {

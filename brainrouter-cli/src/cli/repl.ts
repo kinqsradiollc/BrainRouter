@@ -24,6 +24,7 @@ import { tryHandleLoginCommand } from './commands/login.js';
 import { tryHandleScheduleCommand } from './commands/schedule.js';
 import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
 import { tryHandleRequirementCommand } from './commands/requirement.js';
+import { tryHandleTrackCommand } from './commands/track.js';
 import { tryHandleAnnotationCommand } from './commands/annotation.js';
 import { tryHandleArtifactCommand } from './commands/artifact.js';
 import { tryHandleAttachmentCommand } from './commands/attachment.js';
@@ -134,6 +135,7 @@ export async function handleSlashCommand(
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;
   if (await tryHandleRequirementCommand(cmdCtx)) return;
+  if (await tryHandleTrackCommand(cmdCtx)) return;
   if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleArtifactCommand(cmdCtx)) return;
   if (await tryHandleAttachmentCommand(cmdCtx)) return;

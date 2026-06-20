@@ -371,6 +371,43 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'track_query',
+    description: 'Read the workspace project board (Track mode — one project per workspace). action: "list" (all work items, optionally filtered), "get" (one by key), or "board" (items grouped into their status columns). Read-only. Use it to see what work exists before creating or transitioning items.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'get', 'board'], description: 'list · get · board' },
+        key: { type: 'string', description: 'Work-item key (e.g. "BR-12") for action="get".' },
+        status: { type: 'string', description: 'Filter by workflow-state id (list).' },
+        type: { type: 'string', enum: ['epic', 'story', 'task', 'bug', 'sub-task'], description: 'Filter by type (list).' },
+        assignee: { type: 'string', description: 'Filter by assignee (list).' },
+        text: { type: 'string', description: 'Substring filter over key + title (list).' }
+      },
+      required: ['action']
+    }
+  },
+  {
+    name: 'track_update',
+    description: 'Create or change a work item on the project board (Track mode). action: "create" (needs `title`; optional `type`/`status`/`priority`), "transition" (needs `key` + `toStatus`), "comment" (needs `key` + `body`), or "link" (needs `key`; attach `codeLinks` / `linkedMemoryIds` / a `blocks` dependency). Writes workspace state (track.json) — no approval needed. Link items to the branches/commits/PRs you produce so the board stays connected to the code.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['create', 'transition', 'comment', 'link'], description: 'create · transition · comment · link' },
+        key: { type: 'string', description: 'Work-item key (transition/comment/link).' },
+        title: { type: 'string', description: 'Title (create).' },
+        type: { type: 'string', enum: ['epic', 'story', 'task', 'bug', 'sub-task'], description: 'Item type (create).' },
+        status: { type: 'string', description: 'Initial workflow-state id (create).' },
+        toStatus: { type: 'string', description: 'Target workflow-state id (transition).' },
+        priority: { type: 'string', enum: ['lowest', 'low', 'medium', 'high', 'highest'], description: 'Priority (create).' },
+        body: { type: 'string', description: 'Comment body (comment).' },
+        codeLinks: { type: 'array', description: 'Code links to attach (link): [{ kind: "branch"|"commit"|"pull-request"|"file", ref }].', items: { type: 'object' } },
+        linkedMemoryIds: { type: 'array', description: 'Memory record ids to link (link).', items: { type: 'string' } },
+        blocks: { type: 'string', description: 'Key of a work item this one blocks (link).' }
+      },
+      required: ['action']
+    }
+  },
+  {
     name: 'workflow_progress',
     description: 'Report progress on the active durable workflow run (PARITY-W1) so `/workflows` shows live status and progress survives a restart. Call with status="running" when you START a numbered step and status="done" (or "failed"/"skipped") when you finish it. `step` is a short id matching the step you are on (e.g. "triage", "review", "implement", "verify", "apply"). Safe no-op when no workflow is active — only the multi-agent commands (/review, /simplify, /feature-dev, /spec, /implement-plan) bind one.',
     inputSchema: {

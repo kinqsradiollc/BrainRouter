@@ -10,7 +10,8 @@ import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType } from '@kinqs/brainrouter-types';
+import { TrackView } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
@@ -127,6 +128,12 @@ export function App(): React.ReactElement {
   // Session efficiency — what the runtime SAVED: prompt-cache reuse (in `tokens`),
   // history compaction, and memory recall. Reset when the session changes.
   const [efficiency, setEfficiency] = useState<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 });
+  // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
+  // swaps the whole main surface). Code is the default agentic-coding view.
+  const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
+  // Track mode data (the per-workspace project + its work items), fed by the
+  // host `track-*` queries. Mutations re-fetch the item list.
+  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[] }>({ project: null, items: [] });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -226,6 +233,17 @@ export function App(): React.ReactElement {
     if (name === 'list-files') { setFilesLoading(true); setFilesError(''); }
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
   };
+
+  // Track mode — fetch the project + work items on entering Track or switching
+  // workspace; mutations return the updated list (handled in useAgentEvents).
+  useEffect(() => {
+    if (mode !== 'track') return;
+    q('q-track-project', 'track-project');
+    q('q-track-items', 'track-items');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, info.workspaceRoot]);
+  const trackCreate = (input: { title: string; type: WorkItemType; status: string }): void => q('q-track-create', 'track-create', input);
+  const trackTransition = (idOrKey: string, toStatus: string): void => q('q-track-transition', 'track-transition', { idOrKey, toStatus });
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
   // is destructured back so existing references (render JSX, useAgentEvents ctx)
@@ -555,7 +573,7 @@ export function App(): React.ReactElement {
 
   useAgentEvents({
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -1026,9 +1044,13 @@ export function App(): React.ReactElement {
         setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} workspaceRunCount={workspaceRunCount}
-        openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject} />
+        openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
+        mode={mode} setMode={setMode} />
 
       <div className="main">
+        {mode === 'track' ? (
+          <TrackView project={track.project} items={track.items} onCreate={trackCreate} onTransition={trackTransition} />
+        ) : (<>
         <div className="workrow" ref={workrowRef}>
           <ChatThread
             homeMode={homeMode} railOpen={railOpen} setRailOpen={setRailOpen} gitInfo={gitInfo} info={info}
@@ -1075,6 +1097,7 @@ export function App(): React.ReactElement {
           termTabs={termTabs} activeTerm={activeTerm} setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab}
           pop={pop} setPop={setPop} addBottomTab={addBottomTab} setTermDockOpen={setTermDockOpen}
           tabTitle={tabTitle} gitInfo={gitInfo} renderPanelBody={renderPanelBody} />
+        </>)}
 
         {/* DESK-5h — window control cluster, pinned top-right of the content
             area (absolute — visual position is unaffected by DOM order).
