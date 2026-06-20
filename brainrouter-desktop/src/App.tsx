@@ -252,7 +252,9 @@ export function App(): React.ReactElement {
   // active agent to 'read' access; Code/Track restore the default 'shell'. Re-
   // asserted on every mode switch so a fresh/swapped agent inherits the stance.
   useEffect(() => {
-    q('a-access', 'action:set-access', { mode: mode === 'chat' ? 'read' : 'shell' });
+    // Distinct id from the manual settings selector ('a-access') so the
+    // automatic, mode-driven switch stays SILENT — no per-switch toast.
+    q('a-mode-access', 'action:set-access', { mode: mode === 'chat' ? 'read' : 'shell' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.sessionKey]);
   const trackOps = {
