@@ -86,6 +86,8 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, type CreateWorkItemInput } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import type { WorkItemType } from '@kinqs/brainrouter-types';
 import { isRequirementStatus, isRequirementPriority, type RequirementRecord } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1386,6 +1388,27 @@ async function main(): Promise<void> {
       },
       // REQUIREMENT-RECORDS — Requirement Records: per-workspace structured units
       // of intent (title, status, priority, acceptance criteria, clarifying Q&A,
+      // TRACK mode — the per-workspace project board. Thin wrappers over the
+      // shared trackStore (track.json), so the Track surface, the CLI, and the
+      // agent tools all read/write one project per workspace. Mutations return
+      // the refreshed item list so the renderer repaints in one round-trip.
+      'track-project': () => getProject(workspaceRoot) ?? ensureProject(workspaceRoot),
+      'track-items': () => listWorkItems(workspaceRoot),
+      'track-create': (a) => {
+        const input: CreateWorkItemInput = {
+          title: String(a.title ?? 'Untitled'),
+          type: (typeof a.type === 'string' ? a.type : 'task') as WorkItemType,
+          status: typeof a.status === 'string' ? a.status : undefined,
+          sessionKey: activeAgent.sessionKey,
+          actor: 'user',
+        };
+        createWorkItem(workspaceRoot, input);
+        return listWorkItems(workspaceRoot);
+      },
+      'track-transition': (a) => {
+        transitionWorkItem(workspaceRoot, String(a.idOrKey ?? ''), String(a.toStatus ?? ''), 'user');
+        return listWorkItems(workspaceRoot);
+      },
       // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
       // so the desktop panel and the terminal CLI share the same requirements.json.
       'requirement-list': () => listRequirements(workspaceRoot),

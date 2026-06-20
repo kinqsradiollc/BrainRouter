@@ -59,6 +59,9 @@ export interface SidebarProps {
   toggleProject: (root: string) => void;
   reorderProject: (dragged: string, target: string) => void;
   addProject: () => void;
+  /** Workspace mode — Chat · Track · Code (the left-sidebar switcher). */
+  mode: 'chat' | 'track' | 'code';
+  setMode: Dispatch<SetStateAction<'chat' | 'track' | 'code'>>;
 }
 
 export function Sidebar(p: SidebarProps): React.ReactElement | null {
@@ -128,6 +131,15 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
         <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}><Icon name="layout" size={15} /></button>
       </div>
       <div className="rail-card">
+        {/* Workspace mode switcher — Chat · Track · Code over the same workspace. */}
+        <div className="mode-switch" role="tablist" aria-label="Workspace mode">
+          {([['chat', 'bubble', 'Chat'], ['track', 'tasks', 'Track'], ['code', 'code', 'Code']] as const).map(([m, icon, label]) => (
+            <button key={m} role="tab" aria-selected={p.mode === m} className={`mode-seg${p.mode === m ? ' active' : ''}`}
+              onClick={() => p.setMode(m)} title={`${label} mode`}>
+              <Icon name={icon} size={13} /><span>{label}</span>
+            </button>
+          ))}
+        </div>
         <div className="rail-actions">
           <button className="rail-action primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><Icon name="plus" size={13} />New chat</button>
         </div>

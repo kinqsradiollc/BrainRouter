@@ -15,6 +15,7 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
+import type { TrackProject, WorkItem } from '@kinqs/brainrouter-types';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
@@ -67,6 +68,8 @@ export interface AgentEventsCtx {
   // Session efficiency counters (cache reuse rides on `tokens`; compaction + memory
   // recall are counted here from their events). Reset on session-changed.
   setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
+  // Track mode data (project + work items), fed by the host `track-*` queries.
+  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[] }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -176,7 +179,7 @@ export function getStableRowId(sessionKey: string, r: { id?: string | number; ki
 export function useAgentEvents(ctx: AgentEventsCtx): void {
   const {
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -544,6 +547,11 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
       case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
+      // TRACK mode — project + work items. Create/transition return the updated list.
+      case 'q-track-project': setTrack((t) => ({ ...t, project: (result as TrackProject | null) ?? null })); return;
+      case 'q-track-items': case 'q-track-create': case 'q-track-transition':
+        if (Array.isArray(result)) setTrack((t) => ({ ...t, items: result as WorkItem[] }));
+        return;
       case 'q-turn-changeset': {
         // End-of-turn changeset → append a card right after the final answer.
         const r = result as { files?: ChangesetFile[]; insertions?: number; deletions?: number } | null;
