@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import type { Config } from '../config/config.js';
-import type { Goal } from '../state/goalStore.js';
-import { formatBudget } from '../state/goalStore.js';
-import { getCurrentWorkflow, getLastUsedWorkflow } from '../state/workflowArtifacts.js';
-import { readGoal } from '../state/goalStore.js';
+import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
+import type { Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { getCurrentWorkflow, getLastUsedWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { BOX, type Theme } from './theme.js';
-import { VERSION } from '../version.js';
+import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 
 /**
  * Compose the boxed startup banner. Replaces the prior three-line text dump

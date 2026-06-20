@@ -17,14 +17,14 @@
 
 import chalk from 'chalk';
 import { parseInterval } from '../../runtime/loopRunner.js';
-import { parseCron, nextCronFire } from '../../runtime/cronParser.js';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
 import {
   addSchedule,
   loadSchedules,
   removeSchedule,
   setScheduleEnabled,
   type ScheduleRecord,
-} from '../../state/scheduleStore.js';
+} from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
 import type { CommandContext } from './_context.js';
 
 export async function tryHandleScheduleCommand(ctx: CommandContext): Promise<boolean> {

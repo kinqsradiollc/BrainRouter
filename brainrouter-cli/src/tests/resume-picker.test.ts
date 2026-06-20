@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pickResumeSession } from '../state/resumePicker.js';
-import type { TranscriptSummary } from '../state/sessionStore.js';
+import type { TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 const T = (sessionKey: string, modifiedAt: string): TranscriptSummary =>
   ({ sessionKey, modifiedAt, turnCount: 3, firstUserMessage: 'x' } as TranscriptSummary);

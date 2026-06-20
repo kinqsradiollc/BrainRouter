@@ -3,21 +3,21 @@ import path from 'node:path';
 import os from 'node:os';
 import chalk from 'chalk';
 import { NoTTYError } from '../cliPrompt.js';
-import { writePreferences } from '../../state/preferencesStore.js';
+import { writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
 import {
   loadOrInitConfig,
   saveConfig,
   type Config,
-} from '../../config/config.js';
+} from '@kinqs/brainrouter-core/dist/config/config.js';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
-import { McpClientWrapper } from '../../runtime/mcpClient.js';
+import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
 import {
   PROVIDER_CATALOG,
   type ProviderEntry,
   detectProviderFromEnv,
   validateApiKey,
   maskApiKey,
-} from './providers.js';
+} from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import {
   initWizardState,
   reduceWizard,

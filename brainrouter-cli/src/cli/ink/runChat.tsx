@@ -3,30 +3,30 @@ import readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
-import type { Agent } from '../../agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
-import type { Config } from '../../config/config.js';
-import { getCliKnobs, setCliKnobOverride } from '../../config/config.js';
-import type { WorkspaceInfo } from '../../config/workspace.js';
+import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/dist/config/config.js';
+import type { WorkspaceInfo } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
 import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
-import { resolveTierLadder, currentTier } from '../../runtime/tierLadder.js';
-import { readPreferences } from '../../state/preferencesStore.js';
-import { resolveSandboxConfig, runShell } from '../../runtime/exec/sandbox.js';
+import { resolveTierLadder, currentTier } from '@kinqs/brainrouter-core/dist/provider/tierLadder.js';
+import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/dist/exec/sandbox.js';
 import { parseBangCommand, parseNoteCommand } from '../../runtime/exec/bangCommand.js';
-import { runHooks } from '../../state/hooksStore.js';
-import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { childrenSettled, buildChildResumePrompt, shouldResumeOnChildComplete } from '../../runtime/childResume.js';
+import { runHooks } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
+import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { childrenSettled, buildChildResumePrompt, shouldResumeOnChildComplete } from '@kinqs/brainrouter-core/dist/util/childResume.js';
 import { toolPairKey } from '../../runtime/toolPairing.js';
 import { InputQueue } from '../../runtime/inputQueue.js';
-import { reconcileOrphanWorktrees } from '../../orchestration/worktreeIsolation.js';
-import { reconcileStaleWorkers, listWorkers } from '../../state/workerStore.js';
-import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '../../state/checkpointStore.js';
+import { reconcileOrphanWorktrees } from '@kinqs/brainrouter-core/dist/worktree/worktreeIsolation.js';
+import { reconcileStaleWorkers, listWorkers } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
+import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '@kinqs/brainrouter-core/dist/storage/checkpointStore.js';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
-import { callMcpTool } from '../../runtime/mcpUtils.js';
-import { reconcileStaleRuns, listRuns } from '../../state/workflowRun.js';
-import { collectRunningTasks } from '../../runtime/backgroundTasks.js';
+import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { reconcileStaleRuns, listRuns } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
+import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';
 import { expandMentions } from '../../memory/mentions.js';
 import {
@@ -37,7 +37,7 @@ import {
   readGoal,
   tickGoalIteration,
   usageLimitGoal,
-} from '../../state/goalStore.js';
+} from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { setActiveReadline } from '../cliPrompt.js';
 import { ChatApp, type ChatController, type PushScrollback } from './ChatApp.js';
 import type { SlashCommandDef } from './SlashPalette.js';
@@ -1086,7 +1086,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             try {
               const endpoint = (agent as any).llmConfig?.endpoint;
               if (endpoint) {
-                const { refreshLmStudioCache } = await import('../../runtime/lmStudioApi.js');
+                const { refreshLmStudioCache } = await import('@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js');
                 const count = await refreshLmStudioCache(endpoint);
                 if (count > 0) {
                   refreshFooter();

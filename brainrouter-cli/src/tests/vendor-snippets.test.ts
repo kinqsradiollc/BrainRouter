@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { VENDORS, displayPath, getVendor, listVendors, renderSnippet } from '../runtime/vendorSnippets.js';
 import { runMcpInstall } from '../cli/commands/mcpInstall.js';
-import type { Config } from '../config/config.js';
+import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
 
 const VARS = { url: 'https://api.brainrouter.cloud/mcp', apiKey: 'br_live_TEST_KEY' };
 

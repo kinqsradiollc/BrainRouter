@@ -2,9 +2,9 @@ import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import type { Agent } from '../agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '../runtime/mcpPool.js';
-import type { Config } from '../config/config.js';
+import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
 import type { ReplContext } from './commands/_context.js';
 // Category dispatch — extracted slash-command handlers. Each module exports
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked

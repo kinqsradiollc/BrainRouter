@@ -13,7 +13,7 @@
  * Returns a discriminated result; the entry point prints errors and falls
  * through to a fresh session rather than aborting the launch.
  */
-import type { TranscriptSummary } from './sessionStore.js';
+import type { TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 export type ResumePick =
   | { ok: true; sessionKey: string }

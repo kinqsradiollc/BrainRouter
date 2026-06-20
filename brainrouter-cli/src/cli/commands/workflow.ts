@@ -11,20 +11,20 @@ import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
-import { LOCAL_TOOLS } from '../../agent/agent.js';
-import { callMcpTool } from '../../runtime/mcpUtils.js';
-import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
-import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns, summarizePhases, formatPhaseGlyphs } from '../../state/workflowRun.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns, summarizePhases, formatPhaseGlyphs } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { buildWorkflowRunKickoff, parseTemplateArgs, renderPhaseTimelineLines } from './workflowLaunch.js';
-import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
+import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
-import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
-import { hashDiff, reviewGate } from '../../orchestration/reviewModel.js';
-import { getLatestReview } from '../../state/reviewStore.js';
-import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
-import { recordPlanDecision, readPlanHistory, diffSnapshots, linkPlanDecision, type PlanDecision } from '../../state/planHistoryStore.js';
-import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
+import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrouter-core/dist/review/reviewSynthesis.js';
+import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
+import { formatPlan, readPlan, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { recordPlanDecision, readPlanHistory, diffSnapshots, linkPlanDecision, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
@@ -976,7 +976,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       await agent.ensureInitialized();
       const ws = agent.workspaceRoot;
       const sk = agent.sessionKey;
-      const showStatus = (g: import('../../state/goalStore.js').Goal | null) => {
+      const showStatus = (g: import('@kinqs/brainrouter-core/dist/goal/goalStore.js').Goal | null) => {
         if (!g) {
           console.log(chalk.yellow('\nNo active goal. Set one with: /goal <outcome statement>\n'));
           console.log(chalk.gray('Outcome-first format works best:'));
@@ -1079,7 +1079,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           return true;
         }
         try {
-          let g: import('../../state/goalStore.js').Goal | null;
+          let g: import('@kinqs/brainrouter-core/dist/goal/goalStore.js').Goal | null;
           if (field === 'text') {
             g = editGoal(ws, sk, { text: value });
           } else if (field === 'status') {
@@ -1145,7 +1145,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           cleanedText = arg.replace(budgetMatch[0], '').replace(/\s{2,}/g, ' ').trim();
         }
       }
-      let goal: import('../../state/goalStore.js').Goal;
+      let goal: import('@kinqs/brainrouter-core/dist/goal/goalStore.js').Goal;
       try {
         goal = setGoal(ws, cleanedText, sk, parsedBudget !== undefined ? { maxIterations: parsedBudget } : undefined);
       } catch (err: any) {

@@ -29,9 +29,9 @@ import {
   addClarifyingQuestion,
   answerClarifyingQuestion,
   openClarifyingQuestions,
-} from '../../state/requirementStore.js';
-import { seedPlanFromRequirement, formatPlan } from '../../state/taskStore.js';
-import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
+} from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { seedPlanFromRequirement, formatPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
 export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<boolean> {

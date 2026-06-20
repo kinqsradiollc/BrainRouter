@@ -21,8 +21,8 @@ import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
-import { createArtifact, updateArtifact, getArtifact } from '../artifact/artifactStore.js';
-import { isArtifactKind, isArtifactFormat, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
+import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
+import { isArtifactKind, isArtifactFormat, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -37,7 +37,7 @@ import {
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/orchestrator.js';
-import { emitAgentEvent } from '../memory/memoryEvents.js';
+import { emitAgentEvent, emitArtifactCapture } from '../memory/memoryEvents.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
 import { ownershipWriteViolation } from '../orchestration/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
@@ -72,6 +72,7 @@ import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
+import { resolveEffortForTurn } from './effortRouting.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
 // the second provider dispatch). Anthropic models can still be reached through
@@ -88,7 +89,7 @@ import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from 
 import { gitChurnSignal } from '../git/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
-import { ResultCache, makeResultHandoff, formatHandoffForModel } from '../util/resultHandoff.js';
+import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/resultHandoff.js';
 import { runExtractResult } from '../tool/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
@@ -138,6 +139,7 @@ import {
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
 import { compactToolOutput } from '../prompt/toolCompaction.js';
+import { appendVerbositySteering } from '../prompt/verbositySteering.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/nextAction.js';
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
@@ -146,6 +148,7 @@ import {
   dedupeToolCalls,
   parseArgumentsOrError,
   synthesizeOrphanResults,
+  sanitizeToolCallPairing,
   suggestSimilarToolName,
   looksLikeStalledPreamble,
   looksLikeDeferredToolPromise,
@@ -376,7 +379,13 @@ export interface RunTurnCallbacks {
 }
 
 export type MemoryEvent =
-  | { kind: 'briefing'; sources: string[]; recordCount: number }
+  | {
+      kind: 'briefing';
+      sources: string[];
+      recordCount: number;
+      /** The actual recalled records so the UI can show WHAT was injected, not just a count. */
+      records: Array<{ id: string; type?: string; priority?: number; content?: string; source?: string; score?: number }>;
+    }
   | {
       kind: 'capture';
       sessionKey: string;
@@ -860,6 +869,79 @@ export class Agent {
     return null;
   }
 
+  /**
+   * WF-COST-GATE — confirm a `run_workflow` launch. A workflow fans out MANY
+   * child agents and costs far more tokens than a plain `spawn_agent`/
+   * `spawn_agents`, so — unlike a spawn (governed by /delegation-policy, `auto`
+   * by default → silent) — launching a workflow ALWAYS asks, for the human
+   * parent AND for silent children/workers, independent of /mode, /yolo, and
+   * /delegation-policy. The escape hatch is `cli.confirmRunWorkflow=false`.
+   *
+   * Surfacing mirrors the run_command gate: a silent child routes the prompt to
+   * the human-facing parent via `confirmToolApproval`; with NO approver at all
+   * (deep worker / headless / CI) it PROCEEDS so non-interactive automation
+   * (e.g. the build loop) isn't blocked by an unanswerable prompt.
+   */
+  private async confirmRunWorkflowLaunch(args: Record<string, any>): Promise<boolean> {
+    if (getCliKnobs().confirmRunWorkflow === false) return true;
+    // Honor a persisted "Always allow" for workflows — the approval card writes
+    // `run_workflow(*)` into cli.permissions.allow, so the button actually
+    // sticks across calls instead of re-asking. (A deny rule is already enforced
+    // upstream by the unified cli.permissions gate before this point.)
+    if (evaluatePermissionRules(getCliKnobs().permissions, 'run_workflow', primaryArgText('run_workflow', args ?? null)) === 'allow') {
+      return true;
+    }
+    const name = typeof args?.template === 'string'
+      ? args.template
+      : typeof args?.name === 'string'
+        ? args.name
+        : '';
+    const label = name ? ` "${name}"` : '';
+    const reason = `running a workflow${label} fans out multiple agents and costs more tokens`;
+    if (this.silent) {
+      if (!this.confirmToolApproval) return true; // no human in the chain — can't ask, proceed
+      return await this.confirmToolApproval({ tool: 'run_workflow', reason, dangerous: false, arguments: args });
+    }
+    const detail = `Run workflow${label}? Workflows fan out multiple agents and cost more tokens.`;
+    if (this.interactionPort) {
+      return await this.interactionPort.confirm({ title: 'Run workflow?', detail, dangerous: false, tool: 'run_workflow' });
+    }
+    try {
+      return await this.prompter.askYesNo(`${detail} (y/N) `, false);
+    } catch (err) {
+      if (err instanceof NoTTYError) return true; // headless — no terminal to ask, proceed
+      throw err;
+    }
+  }
+
+  /**
+   * ARTIFACT-LINK — capture a model-authored artifact (`artifact_write`) into
+   * BrainRouter memory as a SESSION-SCOPED cognitive record and link the
+   * returned recordId back into the artifact's `linkedMemoryIds`. Closes the gap
+   * where only CLI/desktop lifecycle actions captured. Best-effort: a capture
+   * failure must never break the tool call.
+   */
+  private async captureArtifactToMemory(record: ArtifactRecord): Promise<void> {
+    try {
+      const memoryId = await emitArtifactCapture(
+        { mcpClient: this.mcpClient as any, sessionKey: this.sessionKey },
+        {
+          artifactId: record.id,
+          title: record.title,
+          summary: record.summary,
+          artifactKind: record.kind,
+          format: record.format,
+          status: record.status,
+          requirementId: record.requirementId,
+          taskId: record.taskId,
+        },
+      );
+      if (memoryId) linkArtifact(this.workspaceRoot, record.id, { memoryId });
+    } catch {
+      // advisory — never break artifact_write
+    }
+  }
+
   private isModelVisibleMcpTool(tool: any): boolean {
     const hiddenBrainrouterTools = new Set([
       'memory_capture_turn',
@@ -943,6 +1025,13 @@ export class Agent {
     // DESK-6 — fresh abort controller per turn (AFTER the reset), so a stale
     // pre-turn abort can never poison this turn's first LLM call.
     this.turnAbort = new AbortController();
+    // Persist the user's message to the transcript IMMEDIATELY — before recall,
+    // the next-action planner, or the main LLM call. Previously this happened
+    // only after those server round-trips, so a turn that errored mid-flight
+    // (e.g. the 2013 pairing reject) or an app kill lost what the user typed.
+    // The model-visible copy is still pushed into chatHistory at its ordered
+    // position below (after the goal anchor); only the durable record moves up.
+    this.recordTranscript(opts?.hiddenPrompt ? { role: 'user', content: prompt, name: 'goal' } : { role: 'user', content: prompt });
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -1208,11 +1297,11 @@ export class Agent {
 
     const userMsg = { role: 'user', content: prompt };
     this.chatHistory.push(userMsg);
-    // A goal kickoff / continuation prompt is machine-generated, not something
-    // the user typed — record it tagged so the UI hides it (the render layer
-    // skips `role:'user'` entries that carry a `name`), while the model still
-    // sees the clean message in chatHistory above.
-    this.recordTranscript(opts?.hiddenPrompt ? { ...userMsg, name: 'goal' } : userMsg);
+    // The durable transcript record for this user message was already written
+    // at the top of runTurn (so it survives a mid-turn failure); here we only
+    // push the model-visible copy into chatHistory, after the goal anchor. A
+    // goal kickoff / continuation prompt was recorded tagged `name:'goal'` so
+    // the render layer hides it while the model still sees the clean message.
     // MAR-4 — when children from the prior turn are still pending, hand the model the
     // exact ids to wait on so it resolves them directly instead of guessing from list_agents.
     const pendingChildHint = buildPendingChildStatusHint(carriedPendingChildIds);
@@ -1371,7 +1460,7 @@ export class Agent {
               command +
               `\n  Reason: ${info.reason}`;
             if (this.interactionPort) {
-              return await this.interactionPort.confirm({ title: 'Allow child-agent tool?', detail: q, dangerous: true, tool: info.tool });
+              return await this.interactionPort.confirm({ title: 'Allow child-agent tool?', detail: q, dangerous: info.dangerous ?? false, tool: info.tool });
             }
             try {
               return await this.prompter.askYesNo(q, false);
@@ -1432,13 +1521,21 @@ export class Agent {
 
       let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; finishReason?: string };
       const invokeLlm = async () => {
+        // Transport boundary guard: never send a malformed assistant.tool_calls ↔
+        // tool-result sequence (strict gateways reject it with "tool call result
+        // does not follow tool call (2013)"). Idempotent on a well-formed history;
+        // a non-mutating copy so the in-memory guard logic still reads the raw
+        // chatHistory. loadHistory already repairs the resumed prefix — this also
+        // covers any live malformation (compaction, interrupts, guard injects).
+        const requestMessages = sanitizeToolCallPairing(this.chatHistory);
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed. Resolve from
         // the ACTIVE SESSION (session override > workspace pref/config) so a
         // per-chat `/effort` sticks to that chat. A spawned child with a
         // per-run effort override (0.4.x-5) uses that instead.
-        const effort = this.effortOverride ?? resolveActiveMode(this.workspaceRoot, this.sessionKey).effort;
+        const selectedEffort = this.effortOverride ?? resolveActiveMode(this.workspaceRoot, this.sessionKey).effort;
+        const effort = resolveEffortForTurn(selectedEffort, this.chatHistory, getCliKnobs());
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
         // callback is supplied — silent mode / children / tests stay on
@@ -1451,7 +1548,7 @@ export class Agent {
             let started = false;
             const final = await callOpenAIStream(
               this.llmConfig,
-              this.chatHistory,
+              requestMessages,
               allTools,
               { effort, signal: this.turnAbort?.signal },
               {
@@ -1481,7 +1578,7 @@ export class Agent {
             callbacks.onStatusUpdate(`Streaming failed (${String(streamErr?.message ?? streamErr).slice(0, 120)}) — falling back to non-streaming.`);
           }
         }
-        return await callOpenAI(this.llmConfig, this.chatHistory, allTools, { effort, signal: this.turnAbort?.signal });
+        return await callOpenAI(this.llmConfig, requestMessages, allTools, { effort, signal: this.turnAbort?.signal });
       };
       // Transient connectivity failures (fetch failed / ECONNRESET / socket
       // hang up / timeouts) are retried with backoff before giving up — a
@@ -2385,11 +2482,22 @@ export class Agent {
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           if (isOrchestrationToolName(name)) {
-            resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
-            summary = getToolSummary(name, args, resultText);
-            trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
-            // MAR-3 — note when a child/sub-agent's findings reached the parent this turn.
-            if (isChildSynthesisTool(name) && resultHasChildOutput(resultText)) childOutputDeliveredThisTurn = true;
+            // WF-COST-GATE — a workflow launch always confirms (token cost);
+            // plain spawns stay governed by /delegation-policy (auto = silent).
+            if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
+              isError = true;
+              resultText =
+                'run_workflow declined — the workflow launch was not approved (workflows fan out ' +
+                'multiple agents and cost more tokens). Proceed with the regular tools (spawn_agents, ' +
+                'run_command, …) or ask the user to approve the workflow.';
+              summary = 'workflow launch declined';
+            } else {
+              resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
+              summary = getToolSummary(name, args, resultText);
+              trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+              // MAR-3 — note when a child/sub-agent's findings reached the parent this turn.
+              if (isChildSynthesisTool(name) && resultHasChildOutput(resultText)) childOutputDeliveredThisTurn = true;
+            }
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
@@ -2534,7 +2642,9 @@ export class Agent {
         if (compaction.omittedChars > 0) {
           this.memoryMetrics.compactedToolCharsAvoided += compaction.omittedChars;
         }
-        const llmVisibleResult = compaction.inlineText;
+        const llmVisibleResult = compaction.requiresResultHandoff
+          ? attachCompactedResultHandoff(this.resultCache, resultText, compaction.inlineText, { label: name }).content
+          : compaction.inlineText;
         const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
         let clampedContent = llmVisibleResult;
         if (llmVisibleResult.length > MAX_TOOL_RESULT_CHARS) {
@@ -2751,7 +2861,7 @@ export class Agent {
     // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
     // replaced with the compacted version on the way out of the turn.
     // Full raw outputs remain in the transcript layer.
-    const shrinkResult = shrinkOversizedToolResults(this.chatHistory);
+    const shrinkResult = shrinkOversizedToolResults(this.chatHistory, { resultCache: this.resultCache });
     if (shrinkResult.shrunkCount > 0) {
       this.memoryMetrics.compactedToolCharsAvoided += shrinkResult.charsSaved;
       traceEvent('turn_end.shrink', {
@@ -2949,7 +3059,21 @@ export class Agent {
         // workspace pref) so two chats in the same workspace can sit in
         // different modes — a `fast` chat auto-approves safe commands while a
         // `planning` chat still confirms.
-        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        const baseMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        // CHILD-EXEC-INHERIT — a silent child runs under its OWN childKey session
+        // (orchestration/tools.ts), which carries no `/mode` override, so
+        // resolveActiveMode falls back to the WORKSPACE default (often
+        // `planning`) even when the PARENT is in fast/YOLO. That made a fast/YOLO
+        // parent's workers stall on a parent-approval card for SAFE commands
+        // (e.g. `ls`) despite "all permissions on". Mirror DESK-5n (which threads
+        // `parentReviewPolicy` for the write/edit/patch gate): a silent child
+        // inherits the parent's executionMode so it auto-approves SAFE commands
+        // under fast/YOLO. The dangerous-command floor is UNCHANGED —
+        // resolveRunCommandApproval still returns 'deny-silent' for dangerous
+        // commands, which gates/denies below.
+        const activeMode = this.silent && this.parentExecutionMode
+          ? { ...baseMode, executionMode: this.parentExecutionMode }
+          : baseMode;
         // 0.3.9 — pass `goalActive` so the resolver can auto-approve
         // SAFE commands when a /goal is active. Without this, the very
         // first run_command of a goal-mode session blocks the auto-
@@ -3277,6 +3401,7 @@ export class Agent {
           if (typeof args.language === 'string' && args.language.trim()) patch.language = args.language.trim();
           const updated = updateArtifact(this.workspaceRoot, id, patch, { editedBy: 'agent', note: typeof args.note === 'string' ? args.note : undefined });
           if (!updated) throw new Error(`artifact_write: failed to update "${id}".`);
+          await this.captureArtifactToMemory(updated);
           return `Updated artifact ${updated.id} → v${updated.currentVersion} (${updated.kind}, ${updated.format}): ${updated.title}`;
         }
         const title = typeof args.title === 'string' ? args.title.trim() : '';
@@ -3289,6 +3414,7 @@ export class Agent {
           sessionKey: this.sessionKey,
           editedBy: 'agent',
         });
+        await this.captureArtifactToMemory(created);
         return `Created artifact ${created.id} (v1, ${created.kind}, ${created.format}): ${created.title}. Update it later with artifact_write({ id: "${created.id}", content }).`;
       }
       case 'workflow_progress': {
@@ -3791,7 +3917,12 @@ export class Agent {
         if (e.tool_calls) msg.tool_calls = e.tool_calls;
         return msg;
       });
-    this.chatHistory = [this.createSystemMessage(), ...replay];
+    // The transcript is replayed VERBATIM, so a prior turn that died after
+    // emitting an assistant `tool_calls` but before its `tool` results were
+    // persisted leaves an orphaned call. Sending that on the next turn fails
+    // every request with `400 ... tool call result does not follow tool call
+    // (2013)` — bricking the resumed session. Repair the pairing once on load.
+    this.chatHistory = [this.createSystemMessage(), ...sanitizeToolCallPairing(replay)];
     this.initialized = true;
     // DESK-5t — the resumed history is a DIFFERENT session; the prior
     // session's last prompt count no longer describes this context. Reset so
@@ -4070,7 +4201,10 @@ export class Agent {
     // final-budget wrap-up directive). `runTurn` re-injects it via
     // `formatGoalBlock` immediately before the user message is appended,
     // so even first-turn-after-`/resume` sees the goal.
-    return { role: 'system', content: parts.join('\n\n') };
+    return {
+      role: 'system',
+      content: appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel),
+    };
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {
@@ -4250,6 +4384,19 @@ export class Agent {
       kind: 'briefing',
       sources: briefing.sourcesQueried,
       recordCount: briefing.recalledRecordIds.length,
+      // Surface the actual records (id / type / priority / content preview) so the
+      // UI can show the user exactly WHAT memory was injected this turn — bounded
+      // so the event payload stays small even on a wide recall.
+      records: this.recalledRecords.slice(0, 30).map((r) => ({
+        id: r.recordId,
+        type: r.type,
+        priority: r.priority,
+        source: r.source,
+        score: r.score,
+        content: typeof r.content === 'string'
+          ? (r.content.length > 600 ? `${r.content.slice(0, 600)}…` : r.content)
+          : undefined,
+      })),
     });
   }
 
@@ -4350,7 +4497,9 @@ export class Agent {
       // notable to capture" outcome (e.g. a greeting) and should not look
       // like an error to the user. The previous heuristic conflated both
       // and surfaced a misleading warning after every trivial exchange.
-      const status: 'ok' | 'failed' | 'skipped' | undefined = parsed?.cognitiveExtractionStatus;
+      // 'deferred' = extraction was dispatched to the brain's background runner so
+      // capture could reply immediately; like 'ok'/'skipped' it is NOT a warning.
+      const status: 'ok' | 'failed' | 'skipped' | 'deferred' | undefined = parsed?.cognitiveExtractionStatus;
       const extractionWarning = status === 'failed'
         ? (typeof parsed?.cognitiveExtractionError === 'string'
             ? `extraction failed: ${parsed.cognitiveExtractionError.slice(0, 140)}`
@@ -4492,13 +4641,16 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
       } catch {
         return `searched pattern "${args.pattern}"`;
       }
-    case 'run_command':
-      if (result.includes('rejected by user')) {
-        return 'execution rejected by user';
-      }
-      const exitCodeMatch = result.match(/Exit Code: (\d+)/);
-      const code = exitCodeMatch ? exitCodeMatch[1] : '0';
-      return `exited with code ${code}`;
+    case 'run_command': {
+      // Surface the COMMAND itself — that's the meaningful, scannable part. The
+      // ✓/✕ status indicator + the output preview already convey the outcome, so
+      // we only append the exit code when it's non-zero (a failure worth seeing).
+      const cmd = typeof args.command === 'string' ? args.command.trim().split('\n')[0].slice(0, 160) : '';
+      if (result.includes('rejected by user')) return cmd ? `rejected: ${cmd}` : 'execution rejected by user';
+      const code = result.match(/Exit Code: (\d+)/)?.[1] ?? '0';
+      if (!cmd) return `exited with code ${code}`;
+      return code === '0' ? cmd : `${cmd} — exit ${code}`;
+    }
     case 'fetch_url':
       if (result.startsWith('Failed')) {
         return 'failed web fetch';

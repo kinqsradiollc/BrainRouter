@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LOCAL_TOOLS } from '../agent/agent.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import {
   askChoice,
   CancelledChoiceError,
@@ -12,7 +12,7 @@ import {
   renderPicker,
   setActiveReadline,
 } from '../cli/cliPrompt.js';
-import { ARTIFACT, createWorkflow, getWorkflowDir } from '../state/workflowArtifacts.js';
+import { ARTIFACT, createWorkflow, getWorkflowDir } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
 import { withTempWorkspace } from './_helpers.js';
 
 // --- askChoice / ask_user_choice -----------------------------------------

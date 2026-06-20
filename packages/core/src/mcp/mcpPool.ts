@@ -242,34 +242,37 @@ export class McpClientPool {
   private async refreshToolIndex(): Promise<void> {
     this.toolToServer.clear();
     this.prefixedToServer.clear();
-    for (const [serverId, wrapper] of this.clients) {
-      if (!wrapper.isConnected()) continue;
-      try {
-        const res = await wrapper.listTools();
-        const tools = (res as any).tools ?? [];
-        const status = this.statuses.get(serverId);
-        if (status) {
-          status.toolCount = tools.length;
-          status.identity = wrapper.getIdentity();
+    // Fetch every connected server's tools IN PARALLEL — a sequential
+    // `await listTools()` per server was pure additive latency on the startup
+    // critical path (N servers × one round-trip each, summed). Build the index
+    // from the results in deterministic Map order so collision resolution is
+    // byte-for-byte unchanged; only the network fetch fans out.
+    const connected = [...this.clients].filter(([, wrapper]) => wrapper.isConnected());
+    const settled = await Promise.allSettled(connected.map(([, wrapper]) => wrapper.listTools()));
+    for (let i = 0; i < connected.length; i++) {
+      const [serverId, wrapper] = connected[i];
+      const result = settled[i];
+      if (result.status !== 'fulfilled') continue; // listTools failed — retries next refresh
+      const tools = (result.value as any).tools ?? [];
+      const status = this.statuses.get(serverId);
+      if (status) {
+        status.toolCount = tools.length;
+        status.identity = wrapper.getIdentity();
+      }
+      for (const tool of tools) {
+        const rawName = tool.name;
+        const pid = this.getPrefixId(serverId);
+        const prefixed = `mcp_${pid}_${rawName}`;
+        this.prefixedToServer.set(prefixed, { serverId, tool: rawName });
+        const existing = this.toolToServer.get(rawName);
+        if (existing && existing !== serverId) {
+          // Two servers expose the same unprefixed tool name. Mark
+          // collision so the raw-name resolver knows to require the
+          // prefix.
+          this.toolToServer.set(rawName, '__COLLISION__');
+        } else if (!existing) {
+          this.toolToServer.set(rawName, serverId);
         }
-        for (const tool of tools) {
-          const rawName = tool.name;
-          const pid = this.getPrefixId(serverId);
-          const prefixed = `mcp_${pid}_${rawName}`;
-          this.prefixedToServer.set(prefixed, { serverId, tool: rawName });
-          const existing = this.toolToServer.get(rawName);
-          if (existing && existing !== serverId) {
-            // Two servers expose the same unprefixed tool name. Mark
-            // collision so the raw-name resolver knows to require the
-            // prefix.
-            this.toolToServer.set(rawName, '__COLLISION__');
-          } else if (!existing) {
-            this.toolToServer.set(rawName, serverId);
-          }
-        }
-      } catch {
-        // Server is connected but listTools failed — its tools won't
-        // appear this turn. Will retry on the next refresh.
       }
     }
   }
@@ -281,26 +284,27 @@ export class McpClientPool {
    */
   async listTools(): Promise<{ tools: any[] }> {
     const all: any[] = [];
-    for (const [serverId, wrapper] of this.clients) {
-      if (!wrapper.isConnected()) continue;
-      try {
-        const res = await wrapper.listTools();
-        const tools = (res as any).tools ?? [];
-        const status = this.statuses.get(serverId);
-        if (status) {
-          status.identity = wrapper.getIdentity();
-        }
-        const pid = this.getPrefixId(serverId);
-        for (const tool of tools) {
-          all.push({
-            ...tool,
-            name: `mcp_${pid}_${tool.name}`,
-            __serverId: serverId,
-            __rawName: tool.name,
-          });
-        }
-      } catch {
-        // listTools failed for this server — drop its tools this turn.
+    // Parallel fetch across servers (was sequential await = summed latency on
+    // the per-turn path); concatenate in deterministic Map order afterward.
+    const connected = [...this.clients].filter(([, wrapper]) => wrapper.isConnected());
+    const settled = await Promise.allSettled(connected.map(([, wrapper]) => wrapper.listTools()));
+    for (let i = 0; i < connected.length; i++) {
+      const [serverId, wrapper] = connected[i];
+      const result = settled[i];
+      if (result.status !== 'fulfilled') continue; // drop this server's tools this turn
+      const tools = (result.value as any).tools ?? [];
+      const status = this.statuses.get(serverId);
+      if (status) {
+        status.identity = wrapper.getIdentity();
+      }
+      const pid = this.getPrefixId(serverId);
+      for (const tool of tools) {
+        all.push({
+          ...tool,
+          name: `mcp_${pid}_${tool.name}`,
+          __serverId: serverId,
+          __rawName: tool.name,
+        });
       }
     }
     return { tools: all };

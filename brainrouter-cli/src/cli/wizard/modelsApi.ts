@@ -1,6 +1,6 @@
 import { runPicker, type PickerRow } from '../ink/runPicker.js';
 import type { Theme } from '../theme.js';
-import type { ProviderEntry } from './providers.js';
+import type { ProviderEntry } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import {
   inferModelReasoningCapabilities,

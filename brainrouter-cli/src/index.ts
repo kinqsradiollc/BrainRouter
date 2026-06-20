@@ -90,8 +90,8 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, type LLMConfig } from './config/config.js';
-import { redactText } from './state/sessionStore.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {
@@ -101,19 +101,19 @@ if (getCliKnobs().debugExit) {
     process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
   });
 }
-import { McpClientWrapper } from './runtime/mcpClient.js';
-import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
+import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
+import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
-import { VERSION } from './version.js';
+import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
-import type { ServerConfig } from './config/config.js';
-import { Agent } from './agent/agent.js';
+import type { ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
+import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
-import { resolveSessionLlmConfig } from './state/sessionRuntimeStore.js';
+import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 
 const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
 
@@ -271,7 +271,7 @@ program
     // transcript into this launch before the REPL starts. Errors print and
     // fall through to a fresh session (never abort the launch).
     if (options.continue || options.resume) {
-      const { listTranscripts, loadTranscript } = await import('./state/sessionStore.js');
+      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/dist/session/sessionStore.js');
       const { pickResumeSession } = await import('./state/resumePicker.js');
       const pick = pickResumeSession(listTranscripts(workspace.workspaceRoot), {
         continueLatest: !!options.continue,
@@ -357,7 +357,7 @@ program
       if (Number.isFinite(n) && n > 0) setCliKnobOverride({ maxToolLoops: Math.floor(n) });
     }
     if (options.disallowedTools) {
-      const { parseToolList } = await import('./runtime/exec/permissionRules.js');
+      const { parseToolList } = await import('@kinqs/brainrouter-core/dist/exec/permissionRules.js');
       const denied = parseToolList(String(options.disallowedTools));
       if (denied.length > 0) {
         const current = getCliKnobs().permissions;
@@ -772,7 +772,7 @@ program
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('./orchestration/orchestrator.js');
+    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/dist/orchestration/orchestrator.js');
     reconcileStale(workspace.workspaceRoot);
     const sessions = listSessions(workspace.workspaceRoot);
     if (options.json) {

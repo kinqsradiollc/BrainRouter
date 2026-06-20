@@ -37,13 +37,16 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   cb.onAnnotationEvent({ action: 'comment-added', annotationId: 'ann_1', targetKind: 'file', targetId: 'src/a.ts', status: 'open' });
   cb.onProvenanceEvent({ subjectKind: 'annotation', subjectId: 'ann_1', provenance: { sourceEventId: 'evt_1', actor: 'agent' } });
   cb.onApproval({ tool: 'run_command', action: 'shell', decision: 'ask', reason: 'planning mode' });
+  cb.onUsageUpdate({ promptTokens: 1200, completionTokens: 340, calls: 3, cachedTokens: 900 });
 
   assert.deepEqual(events.map((e) => e.kind), [
     'status', 'assistant-turn-start', 'assistant-delta', 'assistant-delta', 'assistant-turn-end',
     'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
     'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
-    'artifact-event', 'annotation-event', 'provenance', 'approval-decision',
+    'artifact-event', 'annotation-event', 'provenance', 'approval-decision', 'usage-live',
   ]);
+  // LIVE usage forwards the turn's running totals untouched (UI adds it to the base).
+  assert.deepEqual(events[19], { kind: 'usage-live', promptTokens: 1200, completionTokens: 340, calls: 3, cachedTokens: 900 });
   assert.deepEqual(events[6], { kind: 'tool-start', tool: 'read_file', args: { path: 'a.ts' }, callId: 'c1' });
   assert.deepEqual(events[7], { kind: 'tool-end', tool: 'read_file', ok: true, summary: '42 lines', preview: 'line1', callId: 'c1' });
   const plan = events[11] as Extract<AgentEvent, { kind: 'plan-update' }>;

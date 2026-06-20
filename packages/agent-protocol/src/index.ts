@@ -87,7 +87,7 @@ export type AgentEvent =
   | { kind: 'child-complete'; childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }
   | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>; explanation?: string }
   | { kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
-  | { kind: 'memory'; level: 'info' | 'warn'; text: string }
+  | { kind: 'memory'; level: 'info' | 'warn'; text: string; op?: string; sources?: string[]; records?: BriefingRecord[] }
   | { kind: 'requirement-event'; action: RecordLifecycleAction; requirementId: string; title?: string; status?: string; provenance?: ProvenanceRef }
   | { kind: 'artifact-event'; action: RecordLifecycleAction; artifactId: string; title?: string; status?: string; format?: string; path?: string; version?: number; provenance?: ProvenanceRef }
   | { kind: 'annotation-event'; action: RecordLifecycleAction; annotationId: string; targetKind: string; targetId?: string; status?: string; provenance?: ProvenanceRef }
@@ -97,7 +97,11 @@ export type AgentEvent =
   | { kind: 'interaction-request'; request: InteractionRequest }
   | { kind: 'turn-complete'; answer: string }
   | { kind: 'turn-error'; message: string }
-  | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number }
+  | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number }
+  // LIVE per-LLM-call usage for the CURRENT turn (fires after each call, not just
+  // at turn-end) so the UI's token counter ticks up live instead of snapshotting.
+  // cachedTokens = prompt tokens served from the provider cache (a cost saving).
+  | { kind: 'usage-live'; promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number }
   | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string; running?: boolean }
   // A PERSISTENT, turn-scoped notice the agent wants on the record (not a
   // transient status line) — e.g. the provider truncated the reply at its token
@@ -112,7 +116,7 @@ const EVENT_KINDS = new Set<string>([
   'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
   'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
-  'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'session-changed', 'query-result',
+  'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live', 'session-changed', 'query-result',
   'notice',
 ]);
 
@@ -277,7 +281,8 @@ export interface BridgedCallbacks {
   onReasoningDelta: (chunk: string) => void;
   onPlanUpdate: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>, explanation?: string) => void;
   onCompactionEvent: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
-  onMemoryEvent: (event: { kind?: string; level?: 'info' | 'warn'; text?: string; reason?: string }) => void;
+  onUsageUpdate: (usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }) => void;
+  onMemoryEvent: (event: { kind?: string; level?: 'info' | 'warn'; text?: string; reason?: string; sources?: string[]; recordCount?: number; records?: BriefingRecord[] }) => void;
   onRequirementEvent: (event: { action: RecordLifecycleAction; requirementId: string; title?: string; status?: string; provenance?: ProvenanceRef }) => void;
   onArtifactEvent: (event: { action: RecordLifecycleAction; artifactId: string; title?: string; status?: string; format?: string; path?: string; version?: number; provenance?: ProvenanceRef }) => void;
   onAnnotationEvent: (event: { action: RecordLifecycleAction; annotationId: string; targetKind: string; targetId?: string; status?: string; provenance?: ProvenanceRef }) => void;
@@ -292,10 +297,26 @@ export interface BridgedCallbacks {
 export type EmitEvent = (event: AgentEvent) => void;
 
 /** Build RunTurnCallbacks that translate every callback into protocol events. Pure. */
+/** One recalled memory surfaced in a pre-turn briefing — enough for the UI to
+ *  show the user WHAT was injected (id / type / priority / content preview). */
+export interface BriefingRecord {
+  id: string;
+  type?: string;
+  priority?: number;
+  content?: string;
+  /** Which briefing source surfaced this record (e.g. memory_recall). */
+  source?: string;
+  /** Relevance score when the source provides one. */
+  score?: number;
+}
+
 export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
   return {
     onStatusUpdate: (text) => emit({ kind: 'status', text }),
     onNotice: (notice) => emit({ kind: 'notice', level: notice.level, message: notice.message }),
+    // LIVE token usage: forward the agent's per-call usage so the UI ticks up
+    // during the turn (the session total still lands via tokens-updated at end).
+    onUsageUpdate: (usage) => emit({ kind: 'usage-live', promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, calls: usage.calls, cachedTokens: usage.cachedTokens }),
     onToolStart: (tool, args, callId) => emit({ kind: 'tool-start', tool, args: args ?? {}, callId }),
     onToolEnd: (tool, result, callId) =>
       emit({ kind: 'tool-end', tool, ok: result.success, summary: result.summary, preview: result.preview, callId }),
@@ -305,8 +326,26 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
     onReasoningDelta: (text) => emit({ kind: 'reasoning-delta', text }),
     onPlanUpdate: (items, explanation) => emit({ kind: 'plan-update', items, explanation }),
     onCompactionEvent: (event) => emit({ kind: 'compaction', ...event }),
-    onMemoryEvent: (event) =>
-      emit({ kind: 'memory', level: event.level ?? 'info', text: event.text ?? event.reason ?? String(event.kind ?? '') }),
+    onMemoryEvent: (event) => {
+      // A pre-turn briefing carries the actual recalled records — pass them
+      // through structured (op + sources + records) so the desktop can render a
+      // collapsible "what memory was injected" view, not a bare "briefing" label.
+      if (event.kind === 'briefing') {
+        const sources = event.sources ?? [];
+        const records = event.records ?? [];
+        const count = event.recordCount ?? records.length;
+        emit({
+          kind: 'memory',
+          level: 'info',
+          op: 'briefing',
+          sources,
+          records,
+          text: `Briefing · ${count} ${count === 1 ? 'memory' : 'memories'}${sources.length ? ` · ${sources.join(', ')}` : ''}`,
+        });
+        return;
+      }
+      emit({ kind: 'memory', level: event.level ?? 'info', text: event.text ?? event.reason ?? String(event.kind ?? '') });
+    },
     onRequirementEvent: (event) => emit({ kind: 'requirement-event', ...event }),
     onArtifactEvent: (event) => emit({ kind: 'artifact-event', ...event }),
     onAnnotationEvent: (event) => emit({ kind: 'annotation-event', ...event }),

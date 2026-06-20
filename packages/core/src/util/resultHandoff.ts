@@ -230,3 +230,29 @@ export class ResultCache {
     return { expired, evicted, bytesReclaimed, protectedKept, remaining: this.entries.size };
   }
 }
+
+export function formatHandoffReferenceForModel(
+  handoff: ResultHandoff,
+  opts?: { label?: string },
+): string {
+  const label = opts?.label ? `${opts.label} ` : '';
+  return (
+    `[${label}output compressed — resultRef=${handoff.resultRef} · ${handoff.bytes} bytes · ` +
+    `~${handoff.estimatedTokens} tokens. ` +
+    `Call extract_result({ resultRef: "${handoff.resultRef}", query }) to search the full output.]`
+  );
+}
+
+export function attachCompactedResultHandoff(
+  cache: ResultCache,
+  full: string,
+  compacted: string,
+  opts?: { label?: string; idGenerator?: () => string },
+): { content: string; handoff: ResultHandoff } {
+  const { handoff } = makeResultHandoff(full, { idGenerator: opts?.idGenerator });
+  cache.put(handoff.resultRef, full);
+  return {
+    content: `${compacted}\n\n${formatHandoffReferenceForModel(handoff, opts)}`,
+    handoff,
+  };
+}

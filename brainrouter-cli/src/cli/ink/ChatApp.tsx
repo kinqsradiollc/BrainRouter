@@ -7,14 +7,14 @@ import { SlashPalettePanel } from './SlashPalettePanel.js';
 import { FooterStatus } from './FooterStatus.js';
 import { ScrollbackRow } from './ScrollbackRow.js';
 export { ScrollbackRow } from './ScrollbackRow.js';
-import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
+import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
 import { appendHistory, historyPrev, historyNext, searchHistory, LIVE } from '../../runtime/inputHistory.js';
 import { flagSuggestions, applyFlagCompletion } from '../../runtime/slashFlags.js';
 // 0.3.9 — show the model's max prompt-context window in the footer next
 // to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
-import { formatContextWindow } from '../../runtime/contextWindow.js';
+import { formatContextWindow } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 import { TuiRouterProvider, useTuiRouter, type TuiRoute } from './TuiRouter.js';
 import { GridWorkspace } from './layouts/GridWorkspace.js';
 import { renderMarkdown } from './markdownRender.js';
@@ -23,7 +23,7 @@ import { WelcomeView } from './views/WelcomeView.js';
 import type { BannerInputs } from '../banner.js';
 import { resolveTheme } from '../theme.js';
 import { TuiHeader } from './components/TuiHeader.js';
-import { VERSION } from '../../version.js';
+import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.

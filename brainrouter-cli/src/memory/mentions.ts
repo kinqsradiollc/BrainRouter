@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isPathInside } from '../state/cliState.js';
+import { isPathInside } from '@kinqs/brainrouter-core/dist/storage/store.js';
 
 /**
  * Expand `@path/to/file` mentions in a user prompt by appending the referenced

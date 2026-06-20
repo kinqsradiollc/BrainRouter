@@ -7,31 +7,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import chalk from 'chalk';
-import { callMcpTool, childSessionKey } from '../../runtime/mcpUtils.js';
+import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { formatInboxPane } from '../../runtime/inboxView.js';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../orchestration/agentDefValidation.js';
-import { LOCAL_TOOLS } from '../../agent/agent.js';
-import { listRoles } from '../../orchestration/roles.js';
-import { listAll as listAgentDefs } from '../../orchestration/agentRegistry.js';
-import { formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '../../orchestration/orchestrator.js';
-import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
-import { activeRun, formatActivePhase } from '../../state/workflowRun.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { listRoles } from '@kinqs/brainrouter-core/dist/orchestration/roles.js';
+import { listAll as listAgentDefs } from '@kinqs/brainrouter-core/dist/orchestration/agentRegistry.js';
+import { formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDetach.js';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
-import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
-import { readTranscriptEntries, appendTranscriptEntry } from '../../state/sessionStore.js';
-import { readGoal, setGoal, pauseGoal } from '../../state/goalStore.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readTranscriptEntries, appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { readGoal, setGoal, pauseGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '../../orchestration/handoff.js';
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
-import { resolveAutoChainMode, isAutoChainMode } from '../../orchestration/autoChain.js';
-import { resolveDelegationPolicy, isDelegationPolicy } from '../../orchestration/delegationPolicy.js';
-import { listPacks, packAgentIds } from '../../orchestration/packs.js';
-import { readPackState, isPackEnabled, enablePack, disablePack } from '../../state/packStore.js';
-import { listWorkers, readWorkerMeta, readWorkerSummary, readWorkerTranscript, closeWorker, type WorkerStatus } from '../../state/workerStore.js';
-import { parseChildOutput } from '../../orchestration/outputContracts.js';
+import { resolveAutoChainMode, isAutoChainMode } from '@kinqs/brainrouter-core/dist/orchestration/autoChain.js';
+import { resolveDelegationPolicy, isDelegationPolicy } from '@kinqs/brainrouter-core/dist/orchestration/delegationPolicy.js';
+import { listPacks, packAgentIds } from '@kinqs/brainrouter-core/dist/pack/packs.js';
+import { readPackState, isPackEnabled, enablePack, disablePack } from '@kinqs/brainrouter-core/dist/pack/packStore.js';
+import { listWorkers, readWorkerMeta, readWorkerSummary, readWorkerTranscript, closeWorker, type WorkerStatus } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
+import { parseChildOutput } from '@kinqs/brainrouter-core/dist/orchestration/outputContracts.js';
 
 interface DmAddressResolution {
   to: string;
@@ -737,7 +737,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
           console.log(chalk.red(`\nNo child session matches "${target}". Try /agents to list, or pass a full id.\n`));
           return true;
         }
-        const { formatSnapshotForHuman } = await import('../../orchestration/parentContext.js');
+        const { formatSnapshotForHuman } = await import('@kinqs/brainrouter-core/dist/orchestration/parentContext.js');
         console.log(chalk.bold(`\nChild ${match.id} (${match.role}) — ${match.status}`));
         if (match.parentContext) {
           console.log(formatSnapshotForHuman(match.parentContext));
@@ -771,7 +771,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
             console.log(chalk.red(`\n  No recovery patch on disk for ${match.id}${patchPath ? " (GC'd or discarded)" : ''}.\n`));
             return true;
           }
-          const { applyPatchFile } = await import('../../orchestration/worktreeIsolation.js');
+          const { applyPatchFile } = await import('@kinqs/brainrouter-core/dist/worktree/worktreeIsolation.js');
           const res = applyPatchFile(applyCwd, patchPath!);
           if (!res.ok) {
             console.log(chalk.yellow(`\n  Patch does not apply cleanly: ${res.error}`));

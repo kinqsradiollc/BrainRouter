@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isSessionNotFoundError } from '../runtime/mcpClient.js';
+import { isSessionNotFoundError } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
 import { resolveFederationSessionKey } from '../runtime/federationRegistration.js';
 
 /**

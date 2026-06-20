@@ -13,7 +13,7 @@ import {
   maskApiKey,
   PROVIDER_CATALOG,
   validateApiKey,
-} from '../cli/wizard/providers.js';
+} from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { initPickerState, reducePicker } from '../cli/cliPrompt.js';
 import {
   findProviderByEndpoint,

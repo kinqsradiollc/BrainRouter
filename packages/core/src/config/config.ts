@@ -118,6 +118,18 @@ export interface CliKnobs {
   childResultSystemChars?: number;
   /** Cap on bytes any tool result can contribute to the model-visible context. Default 8000. */
   maxToolResultChars?: number;
+  /** Enable reversible statistical compression for large tool outputs. Default false. */
+  toolOutputCompressionEnabled?: boolean;
+  /** Minimum tool-output size eligible for reversible compression. Default 2000. */
+  toolOutputCompressionMinChars?: number;
+  /** Fraction of JSON-array entries retained by reversible compression. Default 0.2. */
+  toolOutputCompressionTargetKeep?: number;
+  /** Lower high effort for non-error tool-result continuation turns. Default off. */
+  effortRoutingMode?: 'adaptive' | 'off';
+  /** Effort selected for adaptive mechanical continuation turns. Default low. */
+  effortForToolResumeTurns?: 'low' | 'medium';
+  /** Tail prompt steering level for concise output. 0 disables it. */
+  verbositySteeringLevel?: 0 | 1 | 2 | 3 | 4;
 
   // ---- tool-call repair pipeline ----------------------------------------
   /** Sliding window for the storm-breaker. Default 6. */
@@ -157,6 +169,15 @@ export interface CliKnobs {
   llmMaxConcurrent?: number;
   /** Disable streaming (SSE). Default false. */
   disableStream?: boolean;
+  /**
+   * WF-COST-GATE — confirm before any agent runs a WORKFLOW (`run_workflow`).
+   * Workflows fan out many child agents and cost far more tokens than a plain
+   * spawn, so this gate is ALWAYS-ON by default (independent of /mode, /yolo,
+   * and /delegation-policy) for parents AND silent children/workers. Set to
+   * `false` to let autonomous / headless runs launch workflows without asking.
+   * Default true.
+   */
+  confirmRunWorkflow?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
@@ -653,6 +674,12 @@ export interface ResolvedCliKnobs {
   turnEndShrinkRatio: number;
   childResultSystemChars: number;
   maxToolResultChars: number;
+  toolOutputCompressionEnabled: boolean;
+  toolOutputCompressionMinChars: number;
+  toolOutputCompressionTargetKeep: number;
+  effortRoutingMode: 'adaptive' | 'off';
+  effortForToolResumeTurns: 'low' | 'medium';
+  verbositySteeringLevel: 0 | 1 | 2 | 3 | 4;
   stormWindow: number;
   stormThreshold: number;
   maxToolLoops: number;
@@ -666,6 +693,7 @@ export interface ResolvedCliKnobs {
   llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
+  confirmRunWorkflow: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh';
   fallbackModel: string | null;
   mcpTimeoutMs: number;
@@ -727,6 +755,20 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     turnEndShrinkRatio: c.turnEndShrinkRatio ?? 0.4,
     childResultSystemChars: c.childResultSystemChars ?? 12_000,
     maxToolResultChars: c.maxToolResultChars ?? 8_000,
+    toolOutputCompressionEnabled: c.toolOutputCompressionEnabled ?? false,
+    toolOutputCompressionMinChars: Number.isFinite(c.toolOutputCompressionMinChars) && c.toolOutputCompressionMinChars! > 0
+      ? Math.floor(c.toolOutputCompressionMinChars!)
+      : 2_000,
+    toolOutputCompressionTargetKeep: Number.isFinite(c.toolOutputCompressionTargetKeep)
+      && c.toolOutputCompressionTargetKeep! > 0
+      && c.toolOutputCompressionTargetKeep! <= 1
+      ? c.toolOutputCompressionTargetKeep!
+      : 0.2,
+    effortRoutingMode: c.effortRoutingMode === 'adaptive' ? 'adaptive' : 'off',
+    effortForToolResumeTurns: c.effortForToolResumeTurns === 'medium' ? 'medium' : 'low',
+    verbositySteeringLevel: c.verbositySteeringLevel === 1 || c.verbositySteeringLevel === 2 || c.verbositySteeringLevel === 3 || c.verbositySteeringLevel === 4
+      ? c.verbositySteeringLevel
+      : 0,
     stormWindow: c.stormWindow ?? 6,
     stormThreshold: c.stormThreshold ?? 4,
     maxToolLoops: c.maxToolLoops ?? 60,
@@ -740,6 +782,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     llmMaxReconnects: Math.max(1, Math.floor(c.llmMaxReconnects ?? 5)),
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
+    confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     fallbackModel: c.fallbackModel ?? null,
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,

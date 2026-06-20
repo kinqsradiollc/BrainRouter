@@ -138,6 +138,114 @@ export async function emitAgentEvent(ctx: EmitContext, event: AgentEvent): Promi
   return emitViaCapture(ctx, buildAgentEventMessages(event));
 }
 
+/**
+ * ARTIFACT-LINK (0.4.15) — capture an artifact into BrainRouter memory as a
+ * first-class, SESSION-SCOPED cognitive record via the structured
+ * `memory_capture_artifact` tool: provenance ids ride the persisted metadata
+ * bag, so the artifact is traceable + recallable (and confined to its origin
+ * session). Falls back to the generic (lossy) capture path on an older brain
+ * that lacks the tool. Returns the recordId, or null on any miss/error.
+ */
+export async function emitArtifactCapture(
+  ctx: EmitContext,
+  input: {
+    artifactId: string;
+    title: string;
+    summary?: string;
+    artifactKind?: string;
+    format?: string;
+    status?: string;
+    requirementId?: string;
+    taskId?: string;
+    workflowId?: string;
+  },
+): Promise<string | null> {
+  if (!ctx.mcpClient) return null;
+  try {
+    const toolNames = ctx.toolNames ?? (await safeListToolNames(ctx.mcpClient));
+    if (!hasMcpTool(toolNames, 'memory_capture_artifact')) {
+      return emitAgentEvent({ ...ctx, toolNames }, {
+        kind: 'agent_output',
+        summary: `Artifact ${input.artifactId}: ${input.title}${input.status ? ` [${input.status}]` : ''}`,
+        payload: { artifactId: input.artifactId, title: input.title, kind: input.artifactKind, status: input.status, requirementId: input.requirementId },
+      });
+    }
+    const res = await ctx.mcpClient.callTool('memory_capture_artifact', {
+      sessionKey: ctx.sessionKey,
+      title: input.title,
+      summary: input.summary,
+      artifactKind: input.artifactKind,
+      format: input.format,
+      status: input.status,
+      artifactId: input.artifactId,
+      requirementId: input.requirementId,
+      taskId: input.taskId,
+      workflowId: input.workflowId,
+    });
+    if (!res || (res as any).isError) return null;
+    return readRecordId(res);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ANNOTATION-LINK (0.4.15) — capture an annotation into BrainRouter memory as a
+ * first-class, SESSION-SCOPED cognitive record via `memory_capture_annotation`
+ * (provenance + anchor file:line in the metadata bag). Falls back to the generic
+ * capture path on an older brain. Returns the recordId, or null on miss/error.
+ */
+export async function emitAnnotationCapture(
+  ctx: EmitContext,
+  input: {
+    annotationId: string;
+    title: string;
+    body?: string;
+    targetKind?: string;
+    targetId?: string;
+    artifactId?: string;
+    requirementId?: string;
+    taskId?: string;
+    filePath?: string;
+    startLine?: number;
+    endLine?: number;
+    severity?: string;
+    status?: string;
+  },
+): Promise<string | null> {
+  if (!ctx.mcpClient) return null;
+  try {
+    const toolNames = ctx.toolNames ?? (await safeListToolNames(ctx.mcpClient));
+    if (!hasMcpTool(toolNames, 'memory_capture_annotation')) {
+      return emitAgentEvent({ ...ctx, toolNames }, {
+        kind: 'agent_output',
+        summary: `Annotation ${input.annotationId}: ${input.title}${input.status ? ` [${input.status}]` : ''}`,
+        payload: { annotationId: input.annotationId, title: input.title, targetKind: input.targetKind, targetId: input.targetId, status: input.status },
+      });
+    }
+    const res = await ctx.mcpClient.callTool('memory_capture_annotation', {
+      sessionKey: ctx.sessionKey,
+      title: input.title,
+      body: input.body,
+      annotationId: input.annotationId,
+      targetKind: input.targetKind,
+      targetId: input.targetId,
+      artifactId: input.artifactId,
+      requirementId: input.requirementId,
+      taskId: input.taskId,
+      filePath: input.filePath,
+      startLine: input.startLine,
+      endLine: input.endLine,
+      severity: input.severity,
+      status: input.status,
+    });
+    if (!res || (res as any).isError) return null;
+    return readRecordId(res);
+  } catch {
+    return null;
+  }
+}
+
 // ── Typed event constructors ──────────────────────────────────────────────
 
 export function delegationDecisionEvent(input: {
