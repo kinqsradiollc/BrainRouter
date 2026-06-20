@@ -10,8 +10,13 @@ export async function detectContradictions(params: {
 }) {
   const { newRecord, store, llmRunner } = params;
 
-  // 1. Search for potentially related memories
-  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, 5);
+  // 1. Search for potentially related memories. Each candidate costs ONE serial
+  // LLM call, so a high fan-out (×5 per record × N records per capture) was a
+  // major contributor to the background contradiction-check timeouts. Cap it
+  // (default 3, tunable) to bound the per-record LLM load.
+  const _parsedMaxCand = parseInt(process.env.BRAINROUTER_CONTRADICTION_MAX_CANDIDATES || "", 10);
+  const maxCandidates = isNaN(_parsedMaxCand) || _parsedMaxCand < 1 ? 3 : _parsedMaxCand;
+  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, maxCandidates);
   
   const evaluations: Array<{
     candidate: CognitiveFtsResult;

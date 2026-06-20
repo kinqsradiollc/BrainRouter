@@ -32,9 +32,11 @@ export async function mapWithConcurrency<T, R>(
 }
 
 /**
- * Worker-pool size for bulk embedding. The effective network concurrency is
- * still min(this, BRAINROUTER_LLM_MAX_CONCURRENT) since `embed()` takes a slot
- * from the shared LLM semaphore — raise that cap to actually embed faster.
+ * Worker-pool size for bulk embedding AND the cap of the dedicated embedding
+ * semaphore (0.4.15). `embed()` takes a slot from the EMBEDDING pool — separate
+ * from the generative `BRAINROUTER_LLM_MAX_CONCURRENT` — so embeddings are no
+ * longer throttled to the generative cap. Raise this to embed faster; lower it
+ * if the embedder shares a single GPU with the generative model.
  */
 export function readEmbedConcurrency(env: NodeJS.ProcessEnv = process.env): number {
   const def = 8;

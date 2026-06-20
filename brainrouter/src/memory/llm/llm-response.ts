@@ -5,7 +5,14 @@ export interface ResolveLLMTimeoutOptions {
   localMinimumMs?: number;
 }
 
-const LOCAL_LLM_MIN_TIMEOUT_MS = 10 * 60 * 1000;
+// Local backends (LM Studio / Ollama) can be slow, so the timeout floor is
+// generous. It is env-tunable (BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS) so an
+// operator whose background extraction queue is starved by a stuck 10-min call
+// holding an LLM semaphore slot can lower it; default unchanged at 10 min.
+const LOCAL_LLM_MIN_TIMEOUT_MS = (() => {
+  const v = parseInt(process.env.BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS || "", 10);
+  return Number.isFinite(v) && v > 0 ? v : 10 * 60 * 1000;
+})();
 
 function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;

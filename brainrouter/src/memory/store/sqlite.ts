@@ -12,9 +12,21 @@ import { SqliteGraphStore } from "./sqlite/graphStore.js";
 import { SqliteConnectionsStore } from "./sqlite/connectionsStore.js";
 import { SqliteUsersStore } from "./sqlite/usersStore.js";
 import { SqliteJobsStore } from "./sqlite/jobsStore.js";
+import {
+  SqliteCompressionStore,
+  type CompressionEntryInput,
+  type CompressionEntryMetadata,
+  type CompressionRetrieval,
+  type CompressionStats,
+  type SqliteCompressionStoreOptions,
+} from "./sqlite/compressStore.js";
 
 // Ensure Node version has node:sqlite (v22+)
 const DB_VERSION_ERROR = "Memory Engine requires Node.js v22+ with node:sqlite built-in.";
+
+export interface SqliteMemoryStoreOptions {
+  compressionStore?: SqliteCompressionStoreOptions;
+}
 
 export class SqliteMemoryStore implements IMemoryStore {
   private db: DatabaseSync;
@@ -24,6 +36,7 @@ export class SqliteMemoryStore implements IMemoryStore {
   private readonly connectionsStore: SqliteConnectionsStore;
   private readonly usersStore: SqliteUsersStore;
   private readonly jobsStore: SqliteJobsStore;
+  private readonly compressionStore: SqliteCompressionStore;
 
   // Sensory statements
   private stmtSensoryUpsertMeta!: StatementSync;
@@ -44,7 +57,7 @@ export class SqliteMemoryStore implements IMemoryStore {
   private vecLoaded = false;
   private vecDimensions = 0;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options?: SqliteMemoryStoreOptions) {
     try {
       this.db = new DatabaseSync(dbPath, { allowExtension: true });
     } catch (e) {
@@ -55,6 +68,7 @@ export class SqliteMemoryStore implements IMemoryStore {
     this.connectionsStore = new SqliteConnectionsStore(this.db);
     this.usersStore = new SqliteUsersStore(this.db);
     this.jobsStore = new SqliteJobsStore(this.db);
+    this.compressionStore = new SqliteCompressionStore(this.db, options?.compressionStore);
 
     this.db.exec("PRAGMA busy_timeout = 5000");
 
@@ -197,6 +211,8 @@ export class SqliteMemoryStore implements IMemoryStore {
   }
 
   private initSchema() {
+    this.compressionStore.initSchema();
+
     // ── Sensory Schema ──
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sensory_stream (
@@ -2490,6 +2506,22 @@ export class SqliteMemoryStore implements IMemoryStore {
 
   public getMemoryJobKindAggregates(options?: { now?: string }): MemoryJobKindAggregate[] {
     return this.jobsStore.getMemoryJobKindAggregates(options);
+  }
+
+  public storeCompressionEntry(input: CompressionEntryInput): CompressionEntryMetadata {
+    return this.compressionStore.store(input);
+  }
+
+  public retrieveCompressionEntry(userId: string, hash: string, query?: string): CompressionRetrieval | null {
+    return this.compressionStore.retrieve(userId, hash, query);
+  }
+
+  public getCompressionEntryMetadata(userId: string, hash: string): CompressionEntryMetadata | null {
+    return this.compressionStore.getCompressionEntryMetadata(userId, hash);
+  }
+
+  public getCompressionStats(userId: string): CompressionStats {
+    return this.compressionStore.getStats(userId);
   }
 
   public sweepActiveSessions(olderThanMs: number): number {
