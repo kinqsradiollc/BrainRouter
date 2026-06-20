@@ -30,6 +30,7 @@ import {
   DEFAULT_ISSUE_TYPES,
 } from '@kinqs/brainrouter-types';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { parseTrackQuery } from './query.js';
 
 interface TrackStore {
   project: TrackProject | null;
@@ -210,12 +211,15 @@ export interface WorkItemFilter {
   label?: string;
   /** Substring match over key + title (case-insensitive). */
   text?: string;
+  /** A JQL-style query (see query.ts). A malformed query matches nothing. */
+  query?: string;
 }
 
 /** List work items (newest first), optionally filtered. */
 export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}): WorkItem[] {
   const items = Object.values(readTrack(workspaceRoot).workItems);
   const t = filter.text?.toLowerCase();
+  const queryPred = filter.query ? parseTrackQuery(filter.query) : undefined;
   return items
     .filter((w) =>
       (filter.type === undefined || w.type === filter.type) &&
@@ -226,7 +230,8 @@ export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}
       (filter.epicId === undefined || w.epicId === filter.epicId) &&
       (filter.parentId === undefined || w.parentId === filter.parentId) &&
       (filter.label === undefined || w.labels.includes(filter.label)) &&
-      (t === undefined || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t)))
+      (t === undefined || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t)) &&
+      (queryPred === undefined || (queryPred.ok ? queryPred.pred!(w) : false)))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 

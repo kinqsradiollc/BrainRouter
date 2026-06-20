@@ -17,6 +17,7 @@ import {
   createWorkItem,
   transitionWorkItem,
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -33,8 +34,14 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
   if (!sub || sub === 'help') { printUsage(); return true; }
 
   if (sub === 'list' || sub === 'ls') {
-    const items = listWorkItems(ws, rest.length ? { text: rest.join(' ') } : {});
-    if (!items.length) { console.log(chalk.yellow('\nNo work items yet. Create one with: /track create <title>\n')); return true; }
+    const arg = rest.join(' ').trim();
+    const isQuery = /[=~<>]|(\s(and|or|in)\s)/i.test(arg);
+    if (isQuery) {
+      const p = parseTrackQuery(arg);
+      if (!p.ok) { console.log(chalk.red(`\nBad query: ${p.error}\n`)); return true; }
+    }
+    const items = listWorkItems(ws, arg ? (isQuery ? { query: arg } : { text: arg }) : {});
+    if (!items.length) { console.log(chalk.yellow(`\n${arg ? 'No matching work items.' : 'No work items yet. Create one with: /track create <title>'}\n`)); return true; }
     console.log(chalk.bold('\nWork items'));
     for (const w of items) console.log(`  ${chalk.cyan(w.key.padEnd(7))} ${typeMark(w.type)} ${statusTag(w)} ${w.title}`);
     console.log('');
@@ -121,7 +128,7 @@ function printItem(item: WorkItem): void {
 function printUsage(): void {
   console.log(chalk.bold('\n/track — project board for this workspace'));
   console.log(chalk.gray('  /track board                                 Columns + items by status'));
-  console.log(chalk.gray('  /track list [text]                           List (optionally filter by text)'));
+  console.log(chalk.gray('  /track list [text | query]                   List; a query like "priority >= high AND type = bug"'));
   console.log(chalk.gray('  /track create <title> [--type --status --priority]   Create a work item'));
   console.log(chalk.gray('  /track move <key> <status-id>                Transition a work item'));
   console.log(chalk.gray('  /track show <key>                            Show one work item\n'));

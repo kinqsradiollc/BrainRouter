@@ -7,8 +7,12 @@
  */
 import React, { useMemo, useState } from 'react';
 import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState } from '@kinqs/brainrouter-types';
+import { parseTrackQuery } from '../lib/track/query.js';
 import { Icon } from '../icons.js';
 import { TrackDetail } from './TrackDetail.js';
+
+/** True when the search text looks like a JQL query (has an operator/keyword). */
+const looksLikeQuery = (s: string): boolean => /[=~<>]|(\s(and|or|in)\s)/i.test(s);
 
 export const TYPE_ICON: Record<WorkItemType, string> = {
   epic: 'spark', story: 'review', task: 'check-circle', bug: 'warn', 'sub-task': 'tasks',
@@ -55,15 +59,23 @@ export function TrackView({ project, items, sprints, ops }: TrackViewProps): Rea
   const states = project?.workflowStates ?? [];
   const selected = selectedKey ? items.find((w) => w.key === selectedKey) ?? null : null;
 
+  // The search box is dual-purpose: a JQL query (e.g. `priority >= high AND
+  // status != done`) when it contains an operator, otherwise a plain substring.
+  const query = useMemo(() => {
+    const q = filter.text?.trim();
+    if (!q || !looksLikeQuery(q)) return null;
+    return parseTrackQuery(q);
+  }, [filter.text]);
+
   const filtered = useMemo(() => {
-    const t = filter.text?.toLowerCase();
+    const t = query ? undefined : filter.text?.toLowerCase();
     return items.filter((w) =>
       (!filter.type || w.type === filter.type) &&
       (!filter.statusCategory || w.statusCategory === filter.statusCategory) &&
       (!filter.priority || w.priority === filter.priority) &&
       (!filter.assignee || w.assignee === filter.assignee) &&
-      (!t || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t)));
-  }, [items, filter]);
+      (query ? (query.ok ? query.pred!(w) : false) : (!t || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t))));
+  }, [items, filter, query]);
 
   const submitNew = (stateId: string): void => {
     const title = draft.trim();
@@ -89,7 +101,12 @@ export function TrackView({ project, items, sprints, ops }: TrackViewProps): Rea
       </div>
 
       <div className="track-filter">
-        <span className="track-filter-search"><Icon name="search" size={12} /><input value={filter.text ?? ''} onChange={(e) => setFilter((f) => ({ ...f, text: e.target.value || undefined }))} placeholder="Filter by key or title…" /></span>
+        <span className={`track-filter-search${query ? (query.ok ? ' is-query' : ' is-bad') : ''}`} title="Type a JQL query like: priority >= high AND status != done">
+          <Icon name="search" size={12} />
+          <input value={filter.text ?? ''} onChange={(e) => setFilter((f) => ({ ...f, text: e.target.value || undefined }))} placeholder="Filter by text — or a query (priority >= high AND type = bug)" />
+          {query ? <span className="track-query-badge">{query.ok ? 'JQL' : '!'}</span> : null}
+        </span>
+        {query && !query.ok ? <span className="track-query-error" title={query.error}>{query.error}</span> : null}
         <FilterChip label="Type" value={filter.type} options={['epic', 'story', 'task', 'bug', 'sub-task']} onPick={(v) => setFilter((f) => ({ ...f, type: v as WorkItemType }))} />
         <FilterChip label="Status" value={filter.statusCategory} options={['todo', 'in-progress', 'done']} onPick={(v) => setFilter((f) => ({ ...f, statusCategory: v }))} />
         <FilterChip label="Priority" value={filter.priority} options={['highest', 'high', 'medium', 'low', 'lowest']} onPick={(v) => setFilter((f) => ({ ...f, priority: v as WorkItemPriority }))} />
