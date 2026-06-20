@@ -82,7 +82,7 @@ import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kin
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import { exportToGithub, importFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1556,6 +1556,16 @@ async function main() {
             'track-remove-member': (a) => {
                 removeMember(workspaceRoot, String(a.id ?? ''));
                 return listMembers(workspaceRoot);
+            },
+            // Pull repo collaborators into the roster (role-mapped). Token resolved
+            // server-side; never returned to the renderer.
+            'track-sync-members': async (a) => {
+                const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
+                if (!cfg.repo)
+                    return { error: 'No repo configured. Set cli.track.githubRepo in config.json or pass a repo.' };
+                if (!cfg.token)
+                    return { error: 'No token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.' };
+                return await importMembersFromGithub(workspaceRoot, { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun: a.dryRun === true });
             },
             // External sync — GitHub Issues. The token is resolved server-side from
             // config.json/env and NEVER returned to the renderer.

@@ -1,19 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks } from '../track/trackStore.js';
+import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, listMembers } from '../track/trackStore.js';
 import {
   workItemToIssue,
   issueToWorkItem,
   keyFromBody,
   exportToGithub,
   importFromGithub,
+  importMembersFromGithub,
+  mapCollaboratorRole,
   type GithubIssue,
+  type GithubCollaborator,
   type FetchLike,
 } from '../track/githubSync.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 /** A scriptable fetch mock: records calls, returns queued responses, fakes issue creation. */
-function mockGithub(initialIssues: GithubIssue[] = []) {
+function mockGithub(initialIssues: GithubIssue[] = [], collaborators: GithubCollaborator[] = []) {
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
   const issues = [...initialIssues];
   let nextNumber = Math.max(0, ...issues.map((i) => i.number)) + 1;
@@ -21,6 +24,7 @@ function mockGithub(initialIssues: GithubIssue[] = []) {
     const method = init?.method ?? 'GET';
     const body = init?.body ? JSON.parse(init.body) : undefined;
     calls.push({ method, url, body });
+    if (method === 'GET' && url.includes('/collaborators')) return resp(200, collaborators);
     if (method === 'GET') return resp(200, issues);
     if (method === 'POST') { const created: GithubIssue = { number: nextNumber++, title: body.title, body: body.body, labels: body.labels, state: 'open', html_url: `https://github.com/x/y/issues/${nextNumber - 1}` }; issues.push(created); return resp(201, created); }
     if (method === 'PATCH') return resp(200, { number: 1 });
@@ -122,5 +126,58 @@ test('github dry-run: builds a plan but performs NO writes', async () => {
     const imp = await importFromGithub(ws, OPTS(gh.fetchImpl, true));
     assert.equal(imp.imported!.length, 1);
     assert.equal(listWorkItems(ws).length, 1); // remote issue NOT created locally
+  });
+});
+
+test('github members: collaborator role mapping (admin/write/read → admin/member/viewer)', () => {
+  assert.equal(mapCollaboratorRole({ login: 'a', permissions: { admin: true } }), 'admin');
+  assert.equal(mapCollaboratorRole({ login: 'b', permissions: { push: true } }), 'member');
+  assert.equal(mapCollaboratorRole({ login: 'c', permissions: { maintain: true } }), 'member');
+  assert.equal(mapCollaboratorRole({ login: 'd', permissions: { triage: true } }), 'viewer');
+  assert.equal(mapCollaboratorRole({ login: 'e', permissions: { pull: true } }), 'viewer');
+  assert.equal(mapCollaboratorRole({ login: 'f', role_name: 'write' }), 'member');
+});
+
+test('github members: import pulls collaborators as members, keeps the local owner', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const gh = mockGithub([], [
+      { login: 'octo', name: 'Octo Cat', permissions: { admin: true } },
+      { login: 'dev1', permissions: { push: true } },
+      { login: 'you', permissions: { admin: true } }, // collides with the seed owner — must be skipped
+    ]);
+    const r = await importMembersFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.deepEqual(r.added.sort(), ['dev1', 'octo']); // 'you' skipped
+    const members = listMembers(ws);
+    assert.equal(members.find((m) => m.id === 'octo')!.role, 'admin');
+    assert.equal(members.find((m) => m.id === 'dev1')!.role, 'member');
+    // the seed owner is untouched and still the only owner
+    assert.equal(members.find((m) => m.id === 'you')!.role, 'owner');
+    assert.equal(members.filter((m) => m.role === 'owner').length, 1);
+  });
+});
+
+test('github members: dry-run reports who would be added but writes nothing', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const gh = mockGithub([], [{ login: 'octo', permissions: { admin: true } }]);
+    const r = await importMembersFromGithub(ws, OPTS(gh.fetchImpl, true));
+    assert.deepEqual(r.added, ['octo']);
+    assert.equal(listMembers(ws).length, 1); // only the seed owner — nothing written
+  });
+});
+
+test('github assignee: round-trips work-item assignee ↔ issue assignee', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const project = ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Assigned', assignee: 'octo' });
+    const issue = workItemToIssue(item);
+    assert.deepEqual(issue.assignees, ['octo']); // exported as a GitHub assignee
+    // import direction: issue.assignee → work-item assignee
+    const mapped = issueToWorkItem({ number: 7, title: 'X', assignee: { login: 'dev1' }, state: 'open' }, project);
+    assert.equal(mapped.input.assignee, 'dev1');
+    // falls back to the first of `assignees`
+    const mapped2 = issueToWorkItem({ number: 8, title: 'Y', assignees: [{ login: 'dev2' }], state: 'open' }, project);
+    assert.equal(mapped2.input.assignee, 'dev2');
   });
 });

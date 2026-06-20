@@ -565,6 +565,12 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-track-update-member-role': case 'q-track-remove-member':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, members: result as ProjectMember[] }));
         return;
+      case 'q-track-sync-members': {
+        const r = result as { members?: ProjectMember[]; added?: string[]; errors?: string[] } | null;
+        if (Array.isArray(r?.members)) setTrack((t) => ({ ...t, members: r!.members! }));
+        if (r) setToast(`Pulled ${r.added?.length ?? 0} member(s) from GitHub${r.errors?.length ? ` · ${r.errors.length} error(s)` : ''}.`);
+        return;
+      }
       case 'q-track-sync-config':
         if (result && typeof result === 'object') setTrack((t) => ({ ...t, sync: { ...t.sync, config: result as SyncConfig } }));
         return;
