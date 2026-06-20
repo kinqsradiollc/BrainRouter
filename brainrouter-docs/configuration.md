@@ -262,15 +262,15 @@ providers** + **Sub-agent models**, or the Desktop **Connectors** settings.
 
 ## Embedding provider
 
-The MCP server uses embeddings for the vector retriever. Defaults to none
-(vector search disabled until configured). Any OpenAI-compatible
-`/v1/embeddings` endpoint works.
+The MCP server uses embeddings for the vector retriever. The endpoint
+defaults to OpenAI's, but vector search stays inactive until you set an
+embedding key. Any OpenAI-compatible `/v1/embeddings` endpoint works.
 
 ```env
 BRAINROUTER_EMBEDDING_ENDPOINT=https://api.openai.com/v1/embeddings
 BRAINROUTER_EMBEDDING_API_KEY=sk-...       # falls back to BRAINROUTER_LLM_API_KEY
 BRAINROUTER_EMBEDDING_MODEL=text-embedding-3-small
-BRAINROUTER_EMBEDDING_DIMENSIONS=1536      # optional — for models that support truncation
+BRAINROUTER_EMBEDDING_DIMENSIONS=1536      # set to your model's width (3-small = 1536; server default 768)
 ```
 
 ### Custom embedding endpoints
@@ -285,9 +285,9 @@ BRAINROUTER_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 BRAINROUTER_EMBEDDING_DIMENSIONS=1024
 ```
 
-If the endpoint doesn't return a fixed dimension, omit
-`BRAINROUTER_EMBEDDING_DIMENSIONS` — the server will pick from the first
-response.
+`BRAINROUTER_EMBEDDING_DIMENSIONS` falls back to **768** when unset, so set
+it to match your model's output width — a mismatch corrupts vector recall,
+and changing it later rebuilds the vector table.
 
 ---
 
@@ -303,7 +303,7 @@ gate. Optional but recommended for noisy stores. The reranker only
 BRAINROUTER_RERANKER_ENDPOINT=https://api.cohere.com/v1/rerank
 BRAINROUTER_RERANKER_API_KEY=...
 BRAINROUTER_RERANKER_MODEL=rerank-english-v3.0
-BRAINROUTER_RERANKER_TOP_N=10              # default keeps the top 10
+BRAINROUTER_RERANKER_TOP_N=10              # explicit top-K (server default is 5)
 ```
 
 ### Local vLLM reranker
@@ -417,17 +417,21 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_LLM_MODEL` | `gpt-4o-mini` | Chat model. |
 | `BRAINROUTER_EXTRACTION_MODEL` (`brainrouter/.env`) | inherits | Cheaper/faster model for cognitive extraction. |
 | `BRAINROUTER_SYNTHESIS_MODEL` (`brainrouter/.env`) | inherits | Smarter model for scene/identity distillation. |
-| `BRAINROUTER_LLM_TIMEOUT_MS` | `120000` | Per-call chat timeout. Not propagated CLI → MCP. |
-| `BRAINROUTER_LLM_MAX_CONCURRENT` | `2` (MCP) / `4` (CLI) | Concurrent LLM calls per process. Not propagated CLI → MCP. |
+| `BRAINROUTER_LLM_TIMEOUT_MS` | `120000` (2 min) | Per-call LLM timeout for **cloud** endpoints. Local (`localhost`/`127.0.0.1`/`::1`) endpoints floor to `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS`. Not propagated CLI → MCP. |
+| `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS` | `600000` (10 min) | Timeout floor for **local** backends (LM Studio / Ollama), which generate slowly. Lower it if a stuck local call starves the extraction queue while holding an LLM slot. |
+| `BRAINROUTER_EXTRACTION_TIMEOUT_MS` | inherits `BRAINROUTER_LLM_TIMEOUT_MS` | Override the per-call timeout for cognitive-extraction calls specifically. |
+| `BRAINROUTER_LLM_MAX_CONCURRENT` | `2` | Global cap on in-flight LLM calls **from the MCP process**; `<1` = uncapped. 1 for single-GPU LM Studio, 16+ for cloud. (The CLI pool is a separate `cli.*` knob.) |
+| `BRAINROUTER_INLINE_EXTRACTION` | _(unset → deferred)_ | `on` blocks the `memory_capture_turn` reply on cognitive extraction (synchronous; debug only). Default backgrounds it so the MCP reply never waits on the LLM. |
 
 ### Embedding — `brainrouter/.env`
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `BRAINROUTER_EMBEDDING_ENDPOINT` | _(unset — disables vector search)_ | OpenAI-compatible `/v1/embeddings`. |
+| `BRAINROUTER_EMBEDDING_ENDPOINT` | `https://api.openai.com/v1/embeddings` | OpenAI-compatible `/v1/embeddings`. Vector search stays inactive until an embedding key is configured. |
 | `BRAINROUTER_EMBEDDING_API_KEY` | inherits `BRAINROUTER_LLM_API_KEY` | Embedding credential. |
-| `BRAINROUTER_EMBEDDING_MODEL` | _(provider default)_ | e.g. `text-embedding-3-small`, `BAAI/bge-large-en-v1.5`. |
-| `BRAINROUTER_EMBEDDING_DIMENSIONS` | auto-detect | Override for truncatable models. |
+| `BRAINROUTER_EMBEDDING_MODEL` | `text-embedding-3-small` | e.g. `text-embedding-3-small`, `BAAI/bge-large-en-v1.5`. |
+| `BRAINROUTER_EMBEDDING_DIMENSIONS` | `768` | Vector width. Code falls back to **768** when unset — set it to match your model (OpenAI `text-embedding-3-small` is natively 1536). Changing it rebuilds the vector table. |
+| `BRAINROUTER_EMBEDDING_TIMEOUT_MS` | `30000` | Per-call embedding timeout, clamp [1000, 120000] (0.4.15). Bounded — does NOT inherit the generative local floor, so a hung embedder can't stall recall. |
 
 ### Reranker — `brainrouter/.env`
 
@@ -435,12 +439,29 @@ CLI's LLM is the chat agent.
 | --- | --- | --- |
 | `BRAINROUTER_RERANKER_ENDPOINT` | _(unset — disables rerank)_ | Cohere or vLLM `/v1/rerank`. |
 | `BRAINROUTER_RERANKER_API_KEY` | _(unset)_ | Reranker credential. |
-| `BRAINROUTER_RERANKER_MODEL` | _(provider default)_ | e.g. `rerank-english-v3.0`. |
-| `BRAINROUTER_RERANKER_TOP_N` | `10` | Top-K to rerank. |
+| `BRAINROUTER_RERANKER_MODEL` | `rerank-english-v3.0` | e.g. `rerank-english-v3.0`, `BAAI/bge-reranker-v2-m3`. |
+| `BRAINROUTER_RERANKER_TOP_N` | `5` | Top-K returned by the reranker. |
+| `BRAINROUTER_RERANKER_TIMEOUT_MS` | `15000` | Per-call reranker timeout, clamp [1000, 120000] (0.4.15). Bounded — a cross-encoder is sub-second, so it must NOT inherit the generative local floor; on timeout recall falls back to RRF fast. |
+| `BRAINROUTER_RERANKER_BREAKER_THRESHOLD` | `3` | Consecutive reranker failures before the circuit opens (0.4.15). |
+| `BRAINROUTER_RERANKER_BREAKER_COOLDOWN_MS` | `30000` | While open, the reranker is skipped entirely (recall uses RRF, no network wait) for this long, then retried (0.4.15). Stops a down reranker from costing a timeout on every recall. |
 | `BRAINROUTER_RERANKER_MAX_DOC_CHARS` | `1500` | Per-doc chars sent to the cross-encoder (0.4.14). Covers a whole chunk instead of the old hardcoded 700; clamped [100, 8000]. Raise for larger-context rerankers, lower for strict 512-token ones. |
 | `BRAINROUTER_RECALL_RERANK_BLEND_ALPHA` | `1.0` | MEM-BLEND (0.4.14): weight of the cross-encoder relevance vs the pre-rerank score (RRF + half-life recency), by **reciprocal rank** (cross-encoder scores are bimodal, so a raw-score blend is a no-op). `1` = pure reranker; `0` = pure retriever order. Default **1.0** (trust the reranker — on reranker-favorable queries blending in the weaker lexical order hurts); MEM-ROUTE lowers it per query type so the retriever/recency wins for reflective/synthesis. Clamp [0,1]. |
 | `BRAINROUTER_RECALL_RERANK_CHAR_BUDGET` | `30000` | MEM-RERANK2 (0.4.14): total character budget sent to the cross-encoder (latency ∝ Σ doc-chars). Budgeting by chars rather than a fixed count adapts to doc length — long-doc corpora send ~20 candidates (cuts long-session latency ~1.5×: 22.7s→14.8s, recall fully held), short-doc corpora send the whole pool (deep gold still rescued). The tail keeps its pre-score order and is appended (no recall loss). Clamp [1500, 500000]. |
 | `BRAINROUTER_RECALL_QUERY_ROUTING` | `on` | MEM-ROUTE (0.4.14): query-type routing. Reflective/analytical queries ("most likely sentiment", "overall pattern", "how do they feel") are detected by a zero-cost heuristic and **skip the cross-encoder** — its surface-similarity scoring demotes their low-overlap gold, and the retriever+judge path measurably beats it there (os-rm `full` R-any@10 0.73→0.87). Factual/conversational queries keep the reranker. `off` to always rerank. |
+
+### Recall pipeline widths — `brainrouter/.env`
+
+How many candidates flow through each retrieval stage, plus the
+no-cross-encoder diversity selector.
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `BRAINROUTER_RECALL_FTS_LIMIT` | `15` | Stage-1 FTS5/BM25 keyword candidate pool. Clamp [1, 200]. |
+| `BRAINROUTER_RECALL_VEC_LIMIT` | `15` | Stage-1 vector candidate pool. Clamp [1, 200]. |
+| `BRAINROUTER_RECALL_RERANK_POOL` | `20` | Merged RRF pool fed to the reranker/judge. Clamp [1, 200]. |
+| `BRAINROUTER_RECALL_TOP_RESULTS` | `5` | Final result count when the reranker is off. Clamp [1, 200]. |
+| `BRAINROUTER_RECALL_DIVERSITY` | `on` | MMR diversity selection on the no-cross-encoder path. `off` ranks by score alone. |
+| `BRAINROUTER_RECALL_DIVERSITY_LAMBDA` | `0.7` | Diversity↔relevance tradeoff (0 = diversity-only, 1 = relevance-only). Clamp [0, 1]. |
 
 ### Relevance judge — `brainrouter/.env`
 
@@ -465,11 +486,16 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_LOCAL_ROOT` | _(unset)_ | Override the local-state root. |
 | `BRAINROUTER_IMPORT_CHUNK_CHARS` | `1500` | Chunk records longer than this on `memory_import` (0.4.14) so recall stages get focused units (child id `${parent}::c{i}`, parent in metadata). `0` disables. |
 | `BRAINROUTER_IMPORT_EMBED` | `1` (on) | Embed imported records immediately (0.4.14) for instant vector recall instead of waiting on the background sweep. `0` = backfill via the sweep (faster bulk import). |
-| `BRAINROUTER_EMBED_CONCURRENCY` | `8` | Worker-pool size for bulk embedding (import + startup sweep, 0.4.14). Effective concurrency = min(this, `BRAINROUTER_LLM_MAX_CONCURRENT`). |
+| `BRAINROUTER_EMBED_CONCURRENCY` | `8` | Cap of the **dedicated embedding pool** (0.4.15) — bulk embedding AND the recall query-embed. Independent of `BRAINROUTER_LLM_MAX_CONCURRENT` (pre-0.4.15 the embedder shared the generative semaphore, so a recall query-embed could stall behind a slow generation). Lower it if the embedder shares a single GPU with the generative model. |
 | `BRAINROUTER_GRAPH_ENABLED` | `true` | 2-hop graph extraction + BFS expansion. |
 | `BRAINROUTER_GRAPH_TIMEOUT_MS` | `120000` | Graph-extraction LLM timeout. |
 | `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | `60000` | Contradiction-check timeout. |
+| `BRAINROUTER_CONTRADICTION_MAX_CANDIDATES` | `3` | Records compared against each new memory for contradictions (one LLM call each). Capped 5→3 in 0.4.15 to bound per-record fan-out. Clamp ≥1. |
 | `BRAINROUTER_NEURAL_SPARK_ENABLED` | `true` | 2-hop spreading activation (firing/propagation, Hebbian LTP, LTD decay+prune). When `false`, recall ranks on the plain scored/reranked set. |
+| `BRAINROUTER_BLACKBOARD_ADMISSION` | `on` | Stage newly extracted records on a blackboard before committing to cognitive memory. `off` admits every record directly (skips staging). |
+| `BRAINROUTER_DEDUP_MODE` | `off` | Apply-time dedup guard for new records: `off` · `strict` (content-hash) · `fuzzy`. The LLM dedup still runs regardless; this is a deterministic second pass. |
+| `BRAINROUTER_PROVENANCE_FLOOR` | `0.3` | Min fraction of a record's tokens a source chunk must contain to be linked as provenance. Clamp [0, 1]. |
+| `BRAINROUTER_PROVENANCE_MAX_CHUNKS` | `3` | Max source chunks linked per record (best-first). Clamp ≥1. |
 | `BRAINROUTER_ACE_ARCHIVE_THRESHOLD` | `10` | Uncited surfaces before pruning. |
 | `BRAINROUTER_FOCUS_TRIGGER_N` | `10` | New records before scene distillation fires. |
 | `BRAINROUTER_IDENTITY_TRIGGER_N` | `50` | New records before identity distillation fires. |
@@ -490,6 +516,27 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_SKILL_HALF_LIFE_MINUTES` | `10` | Skill heat half-life. |
 | `BRAINROUTER_SKILL_PREWARM_THRESHOLD` | `0.3` | Threshold for context injection. |
 | `BRAINROUTER_SKILL_MIN_TURN_DECAY` | `0.05` | Minimum heat decay per turn. |
+
+### Background jobs, sweepers & scene tree — `brainrouter/.env`
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `BRAINROUTER_JOB_RUNNER` | `on` | In-process runner that drains out-of-band `memory_jobs` (graph/contradiction/focus/depth). `off` to disable. |
+| `BRAINROUTER_JOB_RUNNER_INTERVAL_MS` | `3000` (3s) | Drain tick. Keep it short — a large value delays every deferred job by that interval. |
+| `BRAINROUTER_JOB_MAINTENANCE` | `on` | Auto-enqueue maintenance depth agents (`blackboard_reconciler` per user, `vault_exporter` ~hourly). Requires the job runner. `off` to disable. |
+| `BRAINROUTER_BENCH_SCHEDULE` | `on` | Auto-schedule the retrieval benchmark (`benchmark_eval`) from maintenance (~daily). `off` keeps it on-demand only (expensive, ~5 min/run). |
+| `BRAINROUTER_TREE_AUTOBUILD` | `on` | Grow the durable scene-summary tree during the maintenance pass. `off` keeps it on-demand (`memory_tree_walk`). |
+| `BRAINROUTER_TREE_MIN_SCENE_RECORDS` | `3` | Min cognitive records in a scene before it earns a tree leaf. |
+| `BRAINROUTER_TREE_LEAF_PER_PASS` | `5` | Max leaves built per maintenance tick. |
+| `BRAINROUTER_TREE_SEAL_THRESHOLD` | `6` | Unsealed topic leaves that eagerly seal into a parent summary. |
+| `BRAINROUTER_TREE_IDLE_SEAL_FLOOR` | `2` | Seal a *settled* bucket (a pass added no new leaf) at this many unsealed leaves, even below the eager threshold. |
+| `BRAINROUTER_TREE_GLOBAL_ROLLUP` | `3` | Unsealed global roots that trigger a global rollup digest. |
+| `BRAINROUTER_DISABLE_SESSION_SWEEPER` | `false` | `true` disables the stale-federation-session sweeper. |
+| `BRAINROUTER_SESSION_SWEEP_INTERVAL_MS` | `60000` (1m) | Session sweeper tick (floor 10s; below it the sweep is disabled). |
+| `BRAINROUTER_SESSION_SWEEP_MAX_AGE_MS` | `300000` (5m) | Evict `active_sessions` rows whose last heartbeat is older than this. |
+| `BRAINROUTER_DISABLE_INBOX_SWEEPER` | `false` | `true` disables the cross-session inbox sweeper. |
+| `BRAINROUTER_INBOX_SWEEP_INTERVAL_MS` | `300000` (5m) | Inbox sweeper tick (floor 30s; below it the sweep is disabled). |
+| `BRAINROUTER_INBOX_SWEEP_MAX_AGE_MS` | `3600000` (1h) | Drop delivered `session_inbox` rows older than this. |
 
 ### CLI runtime knobs — `cli.*` in `config.json`
 
@@ -531,18 +578,26 @@ the load-bearing ones:
 | `BRAINROUTER_SANDBOX_READ_PATHS` | _(unset)_ | `:`-separated allowlist of read paths. |
 | `BRAINROUTER_SANDBOX_WRITE_PATHS` | _(unset)_ | `:`-separated allowlist of write paths. |
 
-### Server / auth — `brainrouter/.env`
+### Server / auth + HTTP transport — `brainrouter/.env`
+
+These apply to the **HTTP** MCP transport + dashboard (`npm run start:http`);
+the stdio transport ignores JWT/CORS/rate-limit.
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `BRAINROUTER_API_KEY` | seeded from `users.api_key` | HTTP MCP transport auth. |
-| `BRAINROUTER_JWT_SECRET` | random per-boot | Dashboard JWT signing key. |
-| `BRAINROUTER_JWT_EXPIRES_SECS` | `86400` (24h) | JWT lifetime. |
-| `BRAINROUTER_DEFAULT_ADMIN_USER_ID` | `admin` | Seeded admin user id. |
+| `BRAINROUTER_API_KEY` | _(unset)_ | Static API key for the **stdio** transport (also settable via `--apiKey`). HTTP clients authenticate with a `users.api_key` bearer token instead. |
+| `BRAINROUTER_JWT_SECRET` | random per-boot | Dashboard JWT signing key. **Set a fixed 32-byte hex in production** — a random per-boot secret resets all sessions on restart. |
+| `BRAINROUTER_JWT_EXPIRES_SECS` | `3600` (1h) | Access-token lifetime. |
+| `BRAINROUTER_REFRESH_EXPIRES_SECS` | `2592000` (30d) | Refresh-token lifetime. |
+| `BRAINROUTER_DEFAULT_ADMIN_USER_ID` | `admin` | Seeded admin user id (when the users table is empty). |
 | `BRAINROUTER_ADMIN_EMAIL` | `admin` | Seeded admin email. |
-| `BRAINROUTER_ADMIN_PASSWORD` | _(unset; required to seed)_ | Seeded admin password. |
-| `BRAINROUTER_USER_ID` | _(unset)_ | Override MCP user context. |
-| `BRAINROUTER_CORS_ORIGIN` | `http://localhost:3000` | Dashboard CORS allowlist. |
+| `BRAINROUTER_ADMIN_PASSWORD` | _(unset; required to seed)_ | Seeded admin password. If unset, password auth is not seeded. |
+| `BRAINROUTER_USER_ID` | `default` | Stdio fallback user id when no authenticated mapping exists. |
+| `BRAINROUTER_CORS_ORIGIN` | `http://localhost:3000` | Dashboard CORS allowlist (comma-separated; `*` matches all). |
+| `BRAINROUTER_RATE_LIMIT_MAX` | `600` | Max requests per window across `/api` `/v1` `/mcp`. `0` disables rate limiting. |
+| `BRAINROUTER_RATE_LIMIT_WINDOW_MS` | `60000` (1m) | Rate-limit window. |
+| `BRAINROUTER_MAX_BODY_SIZE` | `16mb` | Max JSON request body (`express.json` limit; e.g. `32mb`). |
+| `BRAINROUTER_ENV_FILE` | _(unset)_ | Explicit path to the server env file; overrides the loader's default search order. |
 
 ### Hook context (auto-injected)
 
@@ -747,8 +802,9 @@ step. Confirmation guards intent; sandboxing guards blast radius.
 
 Running BrainRouter against a single local LLM (LM Studio with one GPU,
 Ollama, single-replica vLLM) can fan out many concurrent calls per turn:
-chat reply, extractor, contradiction checks (one per neighbor up to 5),
-graph extraction (one per record), focus-shift detection, sweeper, plus
+chat reply, extractor, contradiction checks (one per neighbor up to
+`BRAINROUTER_CONTRADICTION_MAX_CANDIDATES`, default 3), graph extraction
+(one per record), focus-shift detection, sweeper, plus
 any spawned children. Consumer hardware running an 8GB model handles
 maybe 2–3 concurrent generations before OOMing or auto-unloading.
 
