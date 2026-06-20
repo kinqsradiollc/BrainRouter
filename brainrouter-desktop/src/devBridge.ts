@@ -290,6 +290,12 @@ export function installDevBridge(): void {
     ],
   };
   let devTrackN = 8;
+  const devSprints: Record<string, unknown>[] = [
+    { id: 'sp_1', workspaceRoot: wsCurrent, name: 'Sprint 1 — Track foundation', goal: 'Ship the board', state: 'active', capacity: 20, createdAt: '2026-06-18T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'sp_2', workspaceRoot: wsCurrent, name: 'Sprint 2 — Views', state: 'future', createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devSprintN = 3;
+  const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
   const devPlanDecisions: DevPlanDecision[] = [
     { id: 'pdec_seed', verdict: 'changes-requested', actor: 'user', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
     // auto-approved while running in auto mode (no approval prompt) — shows "approved · auto" in history
@@ -759,6 +765,47 @@ export function installDevBridge(): void {
       const it = devTrack.items.find((w) => w.key === a.idOrKey || w.id === a.idOrKey);
       if (it) { it.status = String(a.toStatus); it.statusCategory = trackCat(String(a.toStatus)); }
       return [...devTrack.items];
+    },
+    'track-update-item': (a) => {
+      const it = devFindItem(a.idOrKey);
+      const patch = (a.patch && typeof a.patch === 'object' ? a.patch : {}) as Record<string, unknown>;
+      if (it) {
+        for (const [k, v] of Object.entries(patch)) {
+          (it as Record<string, unknown>)[k] = v;
+          if (k === 'status') it.statusCategory = trackCat(String(v));
+          it.activity = [...(Array.isArray(it.activity) ? it.activity : []), { at: new Date().toISOString(), actor: 'user', field: k, to: v == null ? undefined : String(v) }];
+        }
+      }
+      return [...devTrack.items];
+    },
+    'track-comment': (a) => {
+      const it = devFindItem(a.idOrKey);
+      if (it) it.comments = [...(Array.isArray(it.comments) ? it.comments : []), { id: `cmt_${devTrackN++}`, author: 'anhdang', body: String(a.body ?? ''), createdAt: new Date().toISOString() }];
+      return [...devTrack.items];
+    },
+    'track-link': (a) => {
+      const it = devFindItem(a.idOrKey);
+      if (it) {
+        if (Array.isArray(a.codeLinks)) it.codeLinks = [...(Array.isArray(it.codeLinks) ? it.codeLinks : []), ...a.codeLinks];
+        if (Array.isArray(a.linkedMemoryIds)) it.linkedMemoryIds = [...new Set([...(Array.isArray(it.linkedMemoryIds) ? it.linkedMemoryIds : []), ...a.linkedMemoryIds])];
+        if (typeof a.blocks === 'string') it.links = [...(Array.isArray(it.links) ? it.links : []), { type: 'blocks', targetId: a.blocks }];
+      }
+      return [...devTrack.items];
+    },
+    'track-assign-sprint': (a) => {
+      const it = devFindItem(a.idOrKey);
+      if (it) it.sprintId = a.sprintId ? String(a.sprintId) : undefined;
+      return [...devTrack.items];
+    },
+    'track-sprints': () => [...devSprints],
+    'track-create-sprint': (a) => {
+      devSprints.push({ id: `sp_${devSprintN++}`, workspaceRoot: wsCurrent, name: String(a.name ?? 'Sprint'), goal: a.goal ? String(a.goal) : undefined, state: 'future', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      return [...devSprints];
+    },
+    'track-sprint-state': (a) => {
+      const sp = devSprints.find((s) => s.id === a.id);
+      if (sp) sp.state = String(a.state ?? 'future');
+      return [...devSprints];
     },
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],

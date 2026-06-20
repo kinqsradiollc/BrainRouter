@@ -10,7 +10,7 @@ import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType, Sprint, SprintState } from '@kinqs/brainrouter-types';
 import { TrackView } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
@@ -133,7 +133,7 @@ export function App(): React.ReactElement {
   const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
-  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[] }>({ project: null, items: [] });
+  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[] }>({ project: null, items: [], sprints: [] });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -240,10 +240,19 @@ export function App(): React.ReactElement {
     if (mode !== 'track') return;
     q('q-track-project', 'track-project');
     q('q-track-items', 'track-items');
+    q('q-track-sprints', 'track-sprints');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.workspaceRoot]);
-  const trackCreate = (input: { title: string; type: WorkItemType; status: string }): void => q('q-track-create', 'track-create', input);
-  const trackTransition = (idOrKey: string, toStatus: string): void => q('q-track-transition', 'track-transition', { idOrKey, toStatus });
+  const trackOps = {
+    create: (input: { title: string; type: WorkItemType; status: string }) => q('q-track-create', 'track-create', input),
+    transition: (idOrKey: string, toStatus: string) => q('q-track-transition', 'track-transition', { idOrKey, toStatus }),
+    update: (idOrKey: string, patch: Partial<WorkItem>) => q('q-track-update-item', 'track-update-item', { idOrKey, patch }),
+    comment: (idOrKey: string, body: string) => q('q-track-comment', 'track-comment', { idOrKey, body }),
+    link: (idOrKey: string, input: { codeLinks?: WorkItem['codeLinks']; linkedMemoryIds?: string[]; blocks?: string }) => q('q-track-link', 'track-link', { idOrKey, ...input }),
+    assignSprint: (idOrKey: string, sprintId: string | null) => q('q-track-assign-sprint', 'track-assign-sprint', { idOrKey, sprintId }),
+    createSprint: (name: string, goal?: string) => q('q-track-create-sprint', 'track-create-sprint', { name, goal }),
+    sprintState: (id: string, state: SprintState) => q('q-track-sprint-state', 'track-sprint-state', { id, state }),
+  };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
   // is destructured back so existing references (render JSX, useAgentEvents ctx)
@@ -1049,7 +1058,7 @@ export function App(): React.ReactElement {
 
       <div className="main">
         {mode === 'track' ? (
-          <TrackView project={track.project} items={track.items} onCreate={trackCreate} onTransition={trackTransition} />
+          <TrackView project={track.project} items={track.items} sprints={track.sprints} ops={trackOps} />
         ) : (<>
         <div className="workrow" ref={workrowRef}>
           <ChatThread
