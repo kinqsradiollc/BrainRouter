@@ -81,6 +81,8 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/br
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import { exportToGithub, importFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1469,6 +1471,109 @@ async function main() {
             },
             // REQUIREMENT-RECORDS — Requirement Records: per-workspace structured units
             // of intent (title, status, priority, acceptance criteria, clarifying Q&A,
+            // TRACK mode — the per-workspace project board. Thin wrappers over the
+            // shared trackStore (track.json), so the Track surface, the CLI, and the
+            // agent tools all read/write one project per workspace. Mutations return
+            // the refreshed item list so the renderer repaints in one round-trip.
+            'track-project': () => getProject(workspaceRoot) ?? ensureProject(workspaceRoot),
+            'track-items': () => listWorkItems(workspaceRoot),
+            'track-create': (a) => {
+                const input = {
+                    title: String(a.title ?? 'Untitled'),
+                    type: (typeof a.type === 'string' ? a.type : 'task'),
+                    status: typeof a.status === 'string' ? a.status : undefined,
+                    sessionKey: activeAgent.sessionKey,
+                    actor: 'user',
+                };
+                createWorkItem(workspaceRoot, input);
+                return listWorkItems(workspaceRoot);
+            },
+            'track-transition': (a) => {
+                transitionWorkItem(workspaceRoot, String(a.idOrKey ?? ''), String(a.toStatus ?? ''), 'user');
+                return listWorkItems(workspaceRoot);
+            },
+            // General field patch (assignee/priority/labels/sprint/epic/parent/title/desc).
+            'track-update-item': (a) => {
+                const patch = (a.patch && typeof a.patch === 'object' ? a.patch : {});
+                updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), patch, 'user');
+                return listWorkItems(workspaceRoot);
+            },
+            'track-comment': (a) => {
+                addComment(workspaceRoot, String(a.idOrKey ?? ''), 'user', String(a.body ?? ''));
+                return listWorkItems(workspaceRoot);
+            },
+            'track-link': (a) => {
+                linkWorkItem(workspaceRoot, String(a.idOrKey ?? ''), {
+                    codeLinks: Array.isArray(a.codeLinks) ? a.codeLinks : undefined,
+                    linkedMemoryIds: Array.isArray(a.linkedMemoryIds) ? a.linkedMemoryIds : undefined,
+                    links: typeof a.blocks === 'string' ? [{ type: 'blocks', targetId: a.blocks }] : undefined,
+                });
+                return listWorkItems(workspaceRoot);
+            },
+            'track-assign-sprint': (a) => {
+                updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), { sprintId: a.sprintId ? String(a.sprintId) : undefined }, 'user');
+                return listWorkItems(workspaceRoot);
+            },
+            'track-sprints': () => { ensureProject(workspaceRoot); return listSprints(workspaceRoot); },
+            'track-create-sprint': (a) => {
+                createSprint(workspaceRoot, { name: String(a.name ?? 'Sprint'), goal: a.goal ? String(a.goal) : undefined });
+                return listSprints(workspaceRoot);
+            },
+            'track-sprint-state': (a) => {
+                setSprintState(workspaceRoot, String(a.id ?? ''), String(a.state ?? 'future'));
+                return listSprints(workspaceRoot);
+            },
+            // Automation rules — trigger → action over the project board.
+            'track-automations': () => { ensureProject(workspaceRoot); return listAutomations(workspaceRoot); },
+            'track-create-automation': (a) => {
+                createAutomation(workspaceRoot, {
+                    name: String(a.name ?? 'Rule'),
+                    trigger: (typeof a.trigger === 'string' ? a.trigger : 'created'),
+                    condition: typeof a.condition === 'string' ? a.condition : undefined,
+                    actions: Array.isArray(a.actions) ? a.actions : [],
+                });
+                return listAutomations(workspaceRoot);
+            },
+            'track-update-automation': (a) => {
+                const patch = (a.patch && typeof a.patch === 'object' ? a.patch : {});
+                updateAutomation(workspaceRoot, String(a.id ?? ''), patch);
+                return listAutomations(workspaceRoot);
+            },
+            'track-delete-automation': (a) => {
+                deleteAutomation(workspaceRoot, String(a.id ?? ''));
+                return listAutomations(workspaceRoot);
+            },
+            // Members & roles — per-project permissions.
+            'track-members': () => { ensureProject(workspaceRoot); return listMembers(workspaceRoot); },
+            'track-add-member': (a) => {
+                addMember(workspaceRoot, { id: String(a.id ?? ''), name: typeof a.name === 'string' ? a.name : undefined, role: (typeof a.role === 'string' ? a.role : 'member') });
+                return listMembers(workspaceRoot);
+            },
+            'track-update-member-role': (a) => {
+                updateMemberRole(workspaceRoot, String(a.id ?? ''), (typeof a.role === 'string' ? a.role : 'member'));
+                return listMembers(workspaceRoot);
+            },
+            'track-remove-member': (a) => {
+                removeMember(workspaceRoot, String(a.id ?? ''));
+                return listMembers(workspaceRoot);
+            },
+            // External sync — GitHub Issues. The token is resolved server-side from
+            // config.json/env and NEVER returned to the renderer.
+            'track-sync-config': () => {
+                const c = resolveGithubConfig();
+                return { repo: c.repo ?? null, hasToken: !!c.token, tokenSource: c.tokenSource ?? null };
+            },
+            'track-sync': async (a) => {
+                const direction = a.direction === 'export' ? 'export' : 'import';
+                const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
+                const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
+                if (!cfg.repo)
+                    return { error: 'No repo configured. Set cli.track.githubRepo in config.json or pass a repo.' };
+                if (!cfg.token)
+                    return { error: 'No token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.' };
+                const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun };
+                return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
+            },
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.
             'requirement-list': () => listRequirements(workspaceRoot),

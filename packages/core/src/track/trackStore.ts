@@ -26,19 +26,34 @@ import {
   type Board,
   type BoardType,
   type BoardColumn,
+  type AutomationRule,
+  type AutomationTrigger,
+  type AutomationAction,
+  type ProjectMember,
+  type ProjectRole,
+  type ProjectCapability,
+  roleCan,
+  ROLE_RANK,
   DEFAULT_WORKFLOW_STATES,
   DEFAULT_ISSUE_TYPES,
 } from '@kinqs/brainrouter-types';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { parseTrackQuery, matchesTrackQuery } from './query.js';
+
+/** A recorded link from a work item to an external system's record. */
+export interface ExternalLink { number: number; url: string }
 
 interface TrackStore {
   project: TrackProject | null;
   workItems: Record<string, WorkItem>;
   sprints: Record<string, Sprint>;
   boards: Record<string, Board>;
+  automations: Record<string, AutomationRule>;
+  /** GitHub issue links, keyed by work-item id (external sync round-trip). */
+  githubLinks: Record<string, ExternalLink>;
 }
 
-const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {} };
+const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {}, githubLinks: {} };
 
 function trackFile(workspaceRoot: string): string {
   return getStateFile(workspaceRoot, 'track.json');
@@ -76,9 +91,19 @@ export interface EnsureProjectInput {
  * types + a default kanban board) on first use. Idempotent — one project per
  * workspace, keyed by `workspaceRoot`.
  */
+/** The local operator — the seed owner, and a trusted system actor (see SYSTEM_ACTORS). */
+export const LOCAL_MEMBER_ID = 'you';
+
 export function ensureProject(workspaceRoot: string, input: EnsureProjectInput = {}): TrackProject {
   const store = readTrack(workspaceRoot);
-  if (store.project) return store.project;
+  if (store.project) {
+    // Backfill members for projects created before A3 (permissions).
+    if (!Array.isArray(store.project.members) || store.project.members.length === 0) {
+      store.project.members = [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: store.project.createdAt }];
+      writeTrack(workspaceRoot, store);
+    }
+    return store.project;
+  }
   const ts = nowIso();
   const project: TrackProject = {
     id: shortId('proj'),
@@ -89,6 +114,7 @@ export function ensureProject(workspaceRoot: string, input: EnsureProjectInput =
     workflowStates: [...DEFAULT_WORKFLOW_STATES],
     issueTypes: [...DEFAULT_ISSUE_TYPES],
     components: [],
+    members: [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: ts }],
     createdAt: ts,
     updatedAt: ts,
   };
@@ -148,6 +174,7 @@ export interface CreateWorkItemInput {
  */
 export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput): WorkItem {
   ensureProject(workspaceRoot);
+  assertCan(workspaceRoot, input.actor ?? 'user', 'create-item');
   const store = readTrack(workspaceRoot);
   const project = store.project!;
   const status = input.status ?? project.workflowStates[0]?.id ?? 'todo';
@@ -191,7 +218,8 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
   };
   store.workItems[item.id] = item;
   writeTrack(workspaceRoot, store);
-  return item;
+  runAutomations(workspaceRoot, item.id, 'created');
+  return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
 export function getWorkItem(workspaceRoot: string, idOrKey: string): WorkItem | undefined {
@@ -210,12 +238,15 @@ export interface WorkItemFilter {
   label?: string;
   /** Substring match over key + title (case-insensitive). */
   text?: string;
+  /** A JQL-style query (see query.ts). A malformed query matches nothing. */
+  query?: string;
 }
 
 /** List work items (newest first), optionally filtered. */
 export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}): WorkItem[] {
   const items = Object.values(readTrack(workspaceRoot).workItems);
   const t = filter.text?.toLowerCase();
+  const queryPred = filter.query ? parseTrackQuery(filter.query) : undefined;
   return items
     .filter((w) =>
       (filter.type === undefined || w.type === filter.type) &&
@@ -226,7 +257,8 @@ export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}
       (filter.epicId === undefined || w.epicId === filter.epicId) &&
       (filter.parentId === undefined || w.parentId === filter.parentId) &&
       (filter.label === undefined || w.labels.includes(filter.label)) &&
-      (t === undefined || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t)))
+      (t === undefined || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t)) &&
+      (queryPred === undefined || (queryPred.ok ? queryPred.pred!(w) : false)))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
@@ -250,10 +282,12 @@ export function updateWorkItem(
   idOrKey: string,
   patch: UpdateWorkItemPatch,
   actor = 'user',
+  skipAutomation = false,
 ): WorkItem | undefined {
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
   if (!item) return undefined;
+  assertCan(workspaceRoot, actor, 'edit-item');
   const ts = nowIso();
   const scalarFields: Array<keyof UpdateWorkItemPatch> = [
     'title', 'description', 'status', 'priority', 'assignee', 'reporter', 'storyPoints', 'estimateSeconds', 'dueDate', 'parentId', 'epicId', 'sprintId', 'rank',
@@ -269,7 +303,9 @@ export function updateWorkItem(
   item.updatedAt = ts;
   store.workItems[item.id] = item;
   writeTrack(workspaceRoot, store);
-  return item;
+  if (skipAutomation) return item;
+  runAutomations(workspaceRoot, item.id, 'updated');
+  return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
 function fmt(v: unknown): string | undefined {
@@ -282,7 +318,10 @@ export function transitionWorkItem(workspaceRoot: string, idOrKey: string, toSta
   if (project && !project.workflowStates.some((s) => s.id === toStatus)) {
     throw new Error(`Unknown workflow state "${toStatus}". Valid: ${project.workflowStates.map((s) => s.id).join(', ')}`);
   }
-  return updateWorkItem(workspaceRoot, idOrKey, { status: toStatus }, actor);
+  const item = updateWorkItem(workspaceRoot, idOrKey, { status: toStatus }, actor, true); // skip the 'updated' trigger
+  if (!item) return undefined;
+  runAutomations(workspaceRoot, item.id, 'transitioned');
+  return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
 /** Add a comment; returns the updated item. */
@@ -290,6 +329,7 @@ export function addComment(workspaceRoot: string, idOrKey: string, author: strin
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
   if (!item) return undefined;
+  assertCan(workspaceRoot, author, 'edit-item');
   const ts = nowIso();
   const comment: WorkItemComment = { id: shortId('cmt'), author, body, createdAt: ts };
   item.comments.push(comment);
@@ -427,4 +467,223 @@ export function boardView(workspaceRoot: string, boardId: string): Array<{ colum
   const mapped = new Set(board.columns.flatMap((c) => c.stateIds));
   const unmapped = items.filter((w) => !mapped.has(w.status));
   return unmapped.length ? [...cols, { column: 'Unmapped', items: unmapped }] : cols;
+}
+
+// ── Automation rules ──────────────────────────────────────────────────────────
+
+export function listAutomations(workspaceRoot: string): AutomationRule[] {
+  return Object.values(readTrack(workspaceRoot).automations).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
+export interface CreateAutomationInput {
+  name: string;
+  trigger: AutomationTrigger;
+  condition?: string;
+  actions: AutomationAction[];
+  enabled?: boolean;
+}
+
+export function createAutomation(workspaceRoot: string, input: CreateAutomationInput): AutomationRule {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const ts = nowIso();
+  const rule: AutomationRule = {
+    id: shortId('auto'), name: input.name, enabled: input.enabled ?? true,
+    trigger: input.trigger, condition: input.condition, actions: input.actions, createdAt: ts, updatedAt: ts,
+  };
+  store.automations[rule.id] = rule;
+  writeTrack(workspaceRoot, store);
+  return rule;
+}
+
+export type AutomationPatch = Partial<Pick<AutomationRule, 'name' | 'enabled' | 'trigger' | 'condition' | 'actions'>>;
+
+export function updateAutomation(workspaceRoot: string, id: string, patch: AutomationPatch): AutomationRule | undefined {
+  const store = readTrack(workspaceRoot);
+  const rule = store.automations[id];
+  if (!rule) return undefined;
+  Object.assign(rule, patch);
+  rule.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return rule;
+}
+
+export function deleteAutomation(workspaceRoot: string, id: string): boolean {
+  const store = readTrack(workspaceRoot);
+  if (!store.automations[id]) return false;
+  delete store.automations[id];
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+/** Apply one action to an item in place; returns a short activity description, or null on no-op. */
+function applyAutomationAction(project: TrackProject, item: WorkItem, action: AutomationAction): string | null {
+  switch (action.type) {
+    case 'set-status':
+      if (!project.workflowStates.some((s) => s.id === action.value) || item.status === action.value) return null;
+      item.status = action.value; item.statusCategory = categoryOf(project, action.value);
+      return `status → ${action.value}`;
+    case 'set-priority':
+      if (item.priority === (action.value as WorkItem['priority'])) return null;
+      item.priority = action.value as WorkItem['priority'];
+      return `priority → ${action.value}`;
+    case 'set-assignee':
+      if (item.assignee === (action.value || undefined)) return null;
+      item.assignee = action.value || undefined;
+      return `assignee → ${action.value || 'none'}`;
+    case 'add-label':
+      if (item.labels.includes(action.value)) return null;
+      item.labels = [...item.labels, action.value];
+      return `+label ${action.value}`;
+    case 'comment':
+      item.comments = [...item.comments, { id: shortId('cmt'), author: 'automation', body: action.value, createdAt: nowIso() }];
+      return 'commented';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Run enabled rules for an item that just hit `trigger`. Actions are applied
+ * DIRECTLY (not through the public mutation fns), so a rule can never re-trigger
+ * automation — no loops. Persists once if anything changed.
+ */
+export function runAutomations(workspaceRoot: string, idOrKey: string, trigger: AutomationTrigger): void {
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  if (!project) return;
+  const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
+  if (!item) return;
+  let changed = false;
+  for (const rule of Object.values(store.automations)) {
+    if (!rule.enabled || rule.trigger !== trigger) continue;
+    if (rule.condition && rule.condition.trim() && !matchesTrackQuery(item, rule.condition)) continue;
+    for (const action of rule.actions) {
+      const desc = applyAutomationAction(project, item, action);
+      if (desc) { item.activity.push({ at: nowIso(), actor: `automation:${rule.name}`, field: 'automation', to: desc }); changed = true; }
+    }
+  }
+  if (changed) { item.updatedAt = nowIso(); writeTrack(workspaceRoot, store); }
+}
+
+// ── Members & permissions ─────────────────────────────────────────────────────
+
+/**
+ * Actors the local runtime trusts unconditionally: the human operator (`user`),
+ * the AI (`agent`), and internal writers (`auto`/`automation`/`system`). Only a
+ * *named project member* acting as themselves is role-checked — this keeps the
+ * single-user app fully functional while making roles real for any caller that
+ * passes a member id as the actor (federation, shared boards, scripted members).
+ */
+const SYSTEM_ACTORS = new Set(['user', 'agent', 'auto', 'automation', 'system']);
+
+/** Thrown when an actor lacks the capability for an operation. */
+export class PermissionError extends Error {
+  constructor(public actor: string, public capability: ProjectCapability) {
+    super(`"${actor}" is not permitted to ${capability.replace(/-/g, ' ')} on this project`);
+    this.name = 'PermissionError';
+  }
+}
+
+export function listMembers(workspaceRoot: string): ProjectMember[] {
+  const project = getProject(workspaceRoot);
+  return project?.members ? [...project.members].sort((a, b) => ROLE_RANK[b.role] - ROLE_RANK[a.role]) : [];
+}
+
+/** Resolve an actor's effective role, or `undefined` if they aren't a tracked member. */
+export function memberRole(workspaceRoot: string, actor: string): ProjectRole | undefined {
+  return getProject(workspaceRoot)?.members?.find((m) => m.id === actor)?.role;
+}
+
+/**
+ * May `actor` perform `capability`? System actors and non-members are trusted
+ * (local single-user default); tracked members are checked against their role.
+ */
+export function canActor(workspaceRoot: string, actor: string, capability: ProjectCapability): boolean {
+  if (SYSTEM_ACTORS.has(actor)) return true;
+  const role = memberRole(workspaceRoot, actor);
+  if (!role) return true; // not a tracked member → local trust
+  return roleCan(role, capability);
+}
+
+function assertCan(workspaceRoot: string, actor: string, capability: ProjectCapability): void {
+  if (!canActor(workspaceRoot, actor, capability)) throw new PermissionError(actor, capability);
+}
+
+export interface AddMemberInput {
+  id: string;
+  name?: string;
+  role?: ProjectRole;
+}
+
+/** Add a member (or update their role/name if already present). Requires `manage-members`. */
+export function addMember(workspaceRoot: string, input: AddMemberInput, actor = 'user'): ProjectMember {
+  ensureProject(workspaceRoot);
+  assertCan(workspaceRoot, actor, 'manage-members');
+  const store = readTrack(workspaceRoot);
+  const project = store.project!;
+  const id = input.id.trim();
+  if (!id) throw new Error('Member id is required.');
+  const role = input.role ?? 'member';
+  const existing = project.members.find((m) => m.id === id);
+  if (existing) {
+    if (existing.role === 'owner' && role !== 'owner' && project.members.filter((m) => m.role === 'owner').length === 1) {
+      throw new Error('Cannot demote the last owner.');
+    }
+    existing.role = role;
+    if (input.name !== undefined) existing.name = input.name;
+  } else {
+    project.members.push({ id, name: input.name, role, addedAt: nowIso() });
+  }
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return project.members.find((m) => m.id === id)!;
+}
+
+/** Change a member's role. Requires `manage-members`; refuses to remove the last owner. */
+export function updateMemberRole(workspaceRoot: string, id: string, role: ProjectRole, actor = 'user'): ProjectMember | undefined {
+  assertCan(workspaceRoot, actor, 'manage-members');
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  const member = project?.members.find((m) => m.id === id);
+  if (!project || !member) return undefined;
+  if (member.role === 'owner' && role !== 'owner' && project.members.filter((m) => m.role === 'owner').length === 1) {
+    throw new Error('Cannot demote the last owner.');
+  }
+  member.role = role;
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return member;
+}
+
+/** Remove a member. Requires `manage-members`; refuses to remove the last owner. */
+export function removeMember(workspaceRoot: string, id: string, actor = 'user'): boolean {
+  assertCan(workspaceRoot, actor, 'manage-members');
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  const member = project?.members.find((m) => m.id === id);
+  if (!project || !member) return false;
+  if (member.role === 'owner' && project.members.filter((m) => m.role === 'owner').length === 1) {
+    throw new Error('Cannot remove the last owner.');
+  }
+  project.members = project.members.filter((m) => m.id !== id);
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+// ── External sync links (GitHub issues) ───────────────────────────────────────
+
+/** The recorded external links, keyed by work-item id. Used by the GitHub sync. */
+export function getGithubLinks(workspaceRoot: string): Record<string, ExternalLink> {
+  return readTrack(workspaceRoot).githubLinks ?? {};
+}
+
+/** Record (or clear, with `null`) the GitHub issue a work item maps to. */
+export function setGithubLink(workspaceRoot: string, workItemId: string, link: ExternalLink | null): void {
+  const store = readTrack(workspaceRoot);
+  if (!store.githubLinks) store.githubLinks = {};
+  if (link) store.githubLinks[workItemId] = link;
+  else delete store.githubLinks[workItemId];
+  writeTrack(workspaceRoot, store);
 }

@@ -407,6 +407,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-fmenu button { text-align: left; background: transparent; border: 0; color: var(--text-dim); font-size: 12px; padding: 6px 9px; border-radius: 5px; cursor: pointer; text-transform: capitalize; }
 .track-fmenu button:hover, .track-fmenu button.active { background: var(--ov-06); color: var(--text); }
 .track-filter-clear { background: transparent; border: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.track-filter-search.is-query { border-color: var(--accent); }
+.track-filter-search.is-bad { border-color: var(--err); }
+.track-query-badge { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+.track-filter-search.is-bad .track-query-badge { color: var(--err); background: rgba(245,80,80,.14); }
+.track-query-error { color: var(--err); font-size: 11.5px; }
 
 /* ── Track — Backlog ────────────────────────────────────────────────────────── */
 .track-backlog { display: flex; gap: 16px; padding: 16px 20px; flex: 1; min-height: 0; overflow: hidden; }
@@ -468,6 +473,120 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-report-big { font-size: 30px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; margin-bottom: 8px; }
 .track-report-big span { font-size: 13px; font-weight: 500; color: var(--text-faint); margin-left: 6px; }
 
+/* ── Track — automation rules ───────────────────────────────────────────────── */
+.track-automation { flex: 1; overflow-y: auto; padding: 18px 20px; max-width: 860px; }
+.track-automation .track-section-head { margin-bottom: 6px; }
+.track-auto-new { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--accent); background: var(--ov-05); border: 1px solid var(--border); border-radius: 7px; padding: 4px 9px; }
+.track-auto-new:hover { background: var(--ov-08); }
+.track-auto-intro { font-size: 12.5px; color: var(--text-faint); line-height: 1.55; margin: 0 0 16px; }
+.track-auto-intro code { font-family: var(--mono); font-size: 11.5px; background: var(--ov-05); padding: 1px 5px; border-radius: 4px; color: var(--text-dim); }
+.track-auto-list { display: flex; flex-direction: column; gap: 8px; }
+.track-auto-row { display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; }
+.track-auto-row.off { opacity: .58; }
+.track-auto-toggle { flex: none; width: 34px; height: 20px; border-radius: 999px; background: var(--ov-08); border: 1px solid var(--border); position: relative; transition: background .15s; padding: 0; }
+.track-auto-toggle.on { background: color-mix(in srgb, var(--accent) 55%, transparent); border-color: transparent; }
+.track-auto-knob { position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: var(--text); transition: transform .15s; }
+.track-auto-toggle.on .track-auto-knob { transform: translateX(14px); background: #fff; }
+.track-auto-body { flex: 1; min-width: 0; }
+.track-auto-name { font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.track-auto-flow { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-dim); }
+.track-auto-trigger { background: var(--ov-05); border-radius: 5px; padding: 2px 7px; color: var(--text-dim); }
+.track-auto-cond { color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+.track-auto-act { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-radius: 5px; padding: 2px 7px; }
+.track-auto-del { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
+.track-auto-del:hover { color: var(--err); background: var(--ov-05); }
+.track-auto-form { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; padding: 15px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 13px; }
+.track-auto-fname { font-size: 14px; font-weight: 600; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; outline: 0; font-family: inherit; }
+.track-auto-fname:focus { border-color: var(--accent); }
+.track-auto-field { display: flex; flex-direction: column; gap: 6px; }
+.track-auto-field > label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); }
+.track-auto-opt { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-faint); opacity: .8; }
+.track-auto-field select, .track-auto-field > input { font-size: 12.5px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; outline: 0; font-family: inherit; }
+.track-auto-field select:focus, .track-auto-field > input:focus { border-color: var(--accent); }
+.track-auto-field > input.mono { font-family: var(--mono); font-size: 12px; }
+.track-auto-field > input.bad { border-color: var(--err); }
+.track-auto-cond-err { font-size: 11px; color: var(--err); }
+.track-auto-actions { display: flex; flex-direction: column; gap: 7px; }
+.track-auto-actrow { display: flex; align-items: center; gap: 7px; }
+.track-auto-actrow select, .track-auto-actrow input { font-size: 12.5px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; outline: 0; font-family: inherit; }
+.track-auto-actrow select:focus, .track-auto-actrow input:focus { border-color: var(--accent); }
+.track-auto-actrow select:first-child { flex: none; width: 130px; }
+.track-auto-actrow input, .track-auto-actrow select:nth-child(2) { flex: 1; }
+.track-auto-actdel { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
+.track-auto-actdel:hover { color: var(--err); background: var(--ov-05); }
+.track-auto-addact { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 4px 4px; }
+.track-auto-form-actions { display: flex; gap: 9px; }
+.track-auto-save { font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 8px; padding: 8px 16px; }
+.track-auto-save:disabled { opacity: .45; cursor: default; }
+.track-auto-cancel { font-size: 12.5px; font-weight: 500; color: var(--text-dim); background: var(--ov-05); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; }
+
+/* ── Track — members & roles ────────────────────────────────────────────────── */
+.track-members { flex: 1; overflow-y: auto; padding: 18px 20px; max-width: 760px; }
+.track-members .track-section-head { margin-bottom: 6px; }
+.track-member-form { display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 11px; padding: 11px; margin-bottom: 14px; }
+.track-member-form input, .track-member-form select { font-size: 12.5px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; outline: 0; font-family: inherit; }
+.track-member-form input:focus, .track-member-form select:focus { border-color: var(--accent); }
+.track-member-id { flex: none; width: 190px; font-family: var(--mono); font-size: 12px; }
+.track-member-name { flex: 1; }
+.track-member-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 22px; }
+.track-member-row { display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 9px 13px; }
+.track-member-avatar { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.track-member-id-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.track-member-disp { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.track-member-handle { font-size: 11px; color: var(--text-faint); }
+.track-member-role { font-size: 12px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; outline: 0; font-family: inherit; }
+.track-member-role:focus { border-color: var(--accent); }
+.track-member-role:disabled { opacity: .6; cursor: not-allowed; }
+.track-member-del { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
+.track-member-del:hover:not(:disabled) { color: var(--err); background: var(--ov-05); }
+.track-member-del:disabled { opacity: .3; cursor: not-allowed; }
+.track-perm-matrix { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.track-perm-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); margin-bottom: 12px; }
+.track-perm-matrix table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.track-perm-matrix th { text-align: center; font-weight: 600; color: var(--text-dim); padding: 5px 6px; border-bottom: 1px solid var(--border); }
+.track-perm-matrix th:first-child { text-align: left; }
+.track-perm-matrix td { text-align: center; padding: 6px; color: var(--text-faint); border-bottom: 1px solid var(--ov-04); }
+.track-perm-matrix td:first-child { text-align: left; color: var(--text-dim); }
+.track-perm-matrix td.yes { color: var(--ok); font-weight: 700; }
+.track-perm-matrix tr:last-child td { border-bottom: 0; }
+
+/* ── Track — external sync (GitHub) ─────────────────────────────────────────── */
+.track-sync { flex: 1; overflow-y: auto; padding: 18px 20px; max-width: 760px; }
+.track-sync-config { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 12px 14px; margin-bottom: 14px; }
+.track-sync-conn { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.track-sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.track-sync-dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.track-sync-repo { color: var(--text); font-weight: 600; }
+.track-sync-token { font-size: 11px; color: var(--text-faint); background: var(--ov-05); border-radius: 5px; padding: 2px 7px; }
+.track-sync-token.ok { color: var(--ok); }
+.track-sync-unset { color: var(--text-faint); }
+.track-sync-help { font-size: 12px; color: var(--text-faint); line-height: 1.6; margin: 10px 0 0; }
+.track-sync-help code, .track-sync-repo.mono { font-family: var(--mono); font-size: 11.5px; }
+.track-sync-help code { background: var(--ov-05); padding: 1px 5px; border-radius: 4px; color: var(--text-dim); }
+.track-sync-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.track-sync-act { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.track-sync-act-head { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 650; color: var(--text); }
+.track-sync-act-head .ic { color: var(--accent); }
+.track-sync-act-sub { font-size: 11.5px; color: var(--text-faint); margin: 3px 0 11px; }
+.track-sync-btns { display: flex; gap: 8px; }
+.track-sync-dry { font-size: 12px; font-weight: 500; color: var(--text-dim); background: var(--ov-05); border: 1px solid var(--border); border-radius: 8px; padding: 7px 13px; }
+.track-sync-dry:hover:not(:disabled) { background: var(--ov-08); }
+.track-sync-go { font-size: 12px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 8px; padding: 7px 15px; }
+.track-sync-dry:disabled, .track-sync-go:disabled { opacity: .45; cursor: default; }
+.track-sync-result { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; }
+.track-sync-result-head { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-dim); margin-bottom: 11px; }
+.track-sync-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border-radius: 5px; padding: 2px 7px; }
+.track-sync-badge.dry { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.track-sync-badge.live { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.track-sync-rows { display: flex; flex-direction: column; gap: 4px; }
+.track-sync-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 4px 0; }
+.track-sync-act-tag { flex: none; font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 2px 6px; width: 46px; text-align: center; }
+.track-sync-act-tag.create { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.track-sync-act-tag.update { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.track-sync-row .tl-key { color: var(--text-dim); flex: none; }
+.track-sync-row .tl-title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-sync-errors { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--err); display: flex; flex-direction: column; gap: 3px; }
+
 /* ── Track — work-item detail drawer ────────────────────────────────────────── */
 .track-detail-scrim { position: absolute; inset: 0; z-index: 60; background: rgba(0,0,0,0.42); display: flex; justify-content: flex-end; animation: scrimIn .14s ease-out; }
 @keyframes scrimIn { from { opacity: 0; } to { opacity: 1; } }
@@ -527,6 +646,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .del-n { color: var(--err); font-family: var(--mono); }
 
 .composer { padding: 8px 0 14px; }
+/* A4 — read-only Chat stance banner above the composer. */
+.chat-readonly { width: 100%; max-width: var(--content-w); margin: 0 auto 8px; display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-faint); background: var(--ov-04); border: 1px solid var(--border); border-radius: 9px; padding: 6px 11px; }
+.chat-readonly .ic { color: var(--accent); flex: none; }
+.chat-readonly-link { color: var(--accent); font: inherit; font-weight: 600; padding: 0 2px; }
+.chat-readonly-link:hover { text-decoration: underline; }
 .composer .box { position: relative; width: 100%; max-width: var(--content-w); margin: 0 auto; background: #161b22; border: 1px solid var(--ov-07); border-radius: 20px; padding: 0; transition: border-color .15s, box-shadow .15s; box-shadow: 0 10px 34px rgba(0,0,0,0.18); }
 .composer .box:focus-within { border-color: var(--ov-18); box-shadow: 0 0 0 2px var(--ov-05), 0 12px 38px rgba(0,0,0,0.22); }
 /* §5 — drag a file onto the composer to attach it */

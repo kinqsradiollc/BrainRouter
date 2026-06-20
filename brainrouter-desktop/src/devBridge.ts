@@ -277,7 +277,13 @@ export function installDevBridge(): void {
         { id: 'todo', name: 'To Do', category: 'todo' }, { id: 'in-progress', name: 'In Progress', category: 'in-progress' },
         { id: 'in-review', name: 'In Review', category: 'in-progress' }, { id: 'done', name: 'Done', category: 'done' },
       ],
-      issueTypes: [], components: ['cli', 'desktop', 'memory'], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
+      issueTypes: [], components: ['cli', 'desktop', 'memory'],
+      members: [
+        { id: 'you', name: 'You', role: 'owner', addedAt: '2026-06-21T00:00:00.000Z' },
+        { id: 'anhdang', name: 'Anh Dang', role: 'admin', addedAt: '2026-06-21T00:00:00.000Z' },
+        { id: 'reviewer', name: 'Reviewer', role: 'viewer', addedAt: '2026-06-21T00:00:00.000Z' },
+      ],
+      createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
     },
     items: [
       mkItem('BR-1', 'epic', 'Unified workspace — Chat · Track · Code', 'in-progress', 'high', 'anhdang', ['track']),
@@ -296,6 +302,11 @@ export function installDevBridge(): void {
   ];
   let devSprintN = 3;
   const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
+  const devAutomations: Record<string, unknown>[] = [
+    { id: 'auto_1', name: 'Bugs start high', enabled: true, trigger: 'created', condition: 'type = bug', actions: [{ type: 'set-priority', value: 'high' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'auto_2', name: 'Comment on done', enabled: false, trigger: 'transitioned', condition: 'status = done', actions: [{ type: 'comment', value: 'Auto-resolved by Track' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devAutoN = 3;
   const devPlanDecisions: DevPlanDecision[] = [
     { id: 'pdec_seed', verdict: 'changes-requested', actor: 'user', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
     // auto-approved while running in auto mode (no approval prompt) — shows "approved · auto" in history
@@ -806,6 +817,53 @@ export function installDevBridge(): void {
       const sp = devSprints.find((s) => s.id === a.id);
       if (sp) sp.state = String(a.state ?? 'future');
       return [...devSprints];
+    },
+    'track-automations': () => [...devAutomations],
+    'track-create-automation': (a) => {
+      devAutomations.push({ id: `auto_${devAutoN++}`, name: String(a.name ?? 'Rule'), enabled: true, trigger: String(a.trigger ?? 'created'), condition: a.condition ? String(a.condition) : undefined, actions: Array.isArray(a.actions) ? a.actions : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      return [...devAutomations];
+    },
+    'track-update-automation': (a) => {
+      const r = devAutomations.find((x) => x.id === a.id);
+      if (r && a.patch && typeof a.patch === 'object') Object.assign(r, a.patch);
+      return [...devAutomations];
+    },
+    'track-delete-automation': (a) => {
+      const i = devAutomations.findIndex((x) => x.id === a.id);
+      if (i >= 0) devAutomations.splice(i, 1);
+      return [...devAutomations];
+    },
+    'track-members': () => [...(devTrack.project.members as Record<string, unknown>[])],
+    'track-add-member': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const ex = members.find((m) => m.id === a.id);
+      if (ex) { ex.role = a.role ?? 'member'; if (a.name !== undefined) ex.name = a.name; }
+      else members.push({ id: String(a.id ?? ''), name: a.name, role: a.role ?? 'member', addedAt: new Date().toISOString() });
+      return [...members];
+    },
+    'track-update-member-role': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const m = members.find((x) => x.id === a.id);
+      if (m) m.role = a.role ?? m.role;
+      return [...members];
+    },
+    'track-remove-member': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const i = members.findIndex((x) => x.id === a.id);
+      if (i >= 0) members.splice(i, 1);
+      return [...members];
+    },
+    'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-sync': (a) => {
+      const dir = a.direction === 'export' ? 'export' : 'import';
+      const rows = (devTrack.items as Record<string, unknown>[]).slice(0, 5).map((w, i) => (
+        dir === 'export'
+          ? { key: w.key, title: w.title, action: i % 2 === 0 ? 'create' : 'update' }
+          : { issueNumber: 100 + i, title: w.title, action: i % 2 === 0 ? 'update' : 'create', key: w.key }
+      ));
+      return dir === 'export'
+        ? { direction: 'export', dryRun: a.dryRun !== false, exported: rows, errors: [] }
+        : { direction: 'import', dryRun: a.dryRun !== false, imported: rows, errors: [] };
     },
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],

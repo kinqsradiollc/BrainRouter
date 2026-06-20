@@ -6,9 +6,19 @@
  * (fed by host `track-*` queries) and mutates through the `ops` callbacks.
  */
 import React, { useMemo, useState } from 'react';
-import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
+import { roleCan } from '../lib/track/permissions.js';
+import { parseTrackQuery } from '../lib/track/query.js';
 import { Icon } from '../icons.js';
 import { TrackDetail } from './TrackDetail.js';
+
+/** True when the search text looks like a JQL query (has an operator/keyword). */
+const looksLikeQuery = (s: string): boolean => /[=~<>]|(\s(and|or|in)\s)/i.test(s);
+
+// External sync (GitHub) — view-side shapes mirroring core's githubSync results.
+export interface SyncConfig { repo: string | null; hasToken: boolean; tokenSource: string | null }
+export interface SyncRow { key?: string; issueNumber?: number; title: string; action: 'create' | 'update' }
+export interface SyncResult { direction: 'export' | 'import'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; errors: string[] }
 
 export const TYPE_ICON: Record<WorkItemType, string> = {
   epic: 'spark', story: 'review', task: 'check-circle', bug: 'warn', 'sub-task': 'tasks',
@@ -24,16 +34,26 @@ export interface TrackOps {
   assignSprint: (idOrKey: string, sprintId: string | null) => void;
   createSprint: (name: string, goal?: string) => void;
   sprintState: (id: string, state: SprintState) => void;
+  createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => void;
+  updateAutomation: (id: string, patch: Partial<AutomationRule>) => void;
+  deleteAutomation: (id: string) => void;
+  addMember: (input: { id: string; name?: string; role: ProjectRole }) => void;
+  updateMemberRole: (id: string, role: ProjectRole) => void;
+  removeMember: (id: string) => void;
+  sync: (direction: 'import' | 'export', dryRun: boolean) => void;
 }
 
 export interface TrackViewProps {
   project: TrackProject | null;
   items: WorkItem[];
   sprints: Sprint[];
+  automations: AutomationRule[];
+  members: ProjectMember[];
+  sync: { config: SyncConfig | null; result: SyncResult | null };
   ops: TrackOps;
 }
 
-type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports';
+type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
 interface Filter { type?: WorkItemType; statusCategory?: string; priority?: WorkItemPriority; assignee?: string; text?: string }
 
 const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
@@ -43,9 +63,12 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'sprint', label: 'Sprint', icon: 'bolt' },
   { id: 'roadmap', label: 'Roadmap', icon: 'chart' },
   { id: 'reports', label: 'Reports', icon: 'chart' },
+  { id: 'automation', label: 'Automation', icon: 'bolt' },
+  { id: 'members', label: 'Members', icon: 'shield' },
+  { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
 
-export function TrackView({ project, items, sprints, ops }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, automations, members, sync, ops }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -55,15 +78,23 @@ export function TrackView({ project, items, sprints, ops }: TrackViewProps): Rea
   const states = project?.workflowStates ?? [];
   const selected = selectedKey ? items.find((w) => w.key === selectedKey) ?? null : null;
 
+  // The search box is dual-purpose: a JQL query (e.g. `priority >= high AND
+  // status != done`) when it contains an operator, otherwise a plain substring.
+  const query = useMemo(() => {
+    const q = filter.text?.trim();
+    if (!q || !looksLikeQuery(q)) return null;
+    return parseTrackQuery(q);
+  }, [filter.text]);
+
   const filtered = useMemo(() => {
-    const t = filter.text?.toLowerCase();
+    const t = query ? undefined : filter.text?.toLowerCase();
     return items.filter((w) =>
       (!filter.type || w.type === filter.type) &&
       (!filter.statusCategory || w.statusCategory === filter.statusCategory) &&
       (!filter.priority || w.priority === filter.priority) &&
       (!filter.assignee || w.assignee === filter.assignee) &&
-      (!t || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t)));
-  }, [items, filter]);
+      (query ? (query.ok ? query.pred!(w) : false) : (!t || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t))));
+  }, [items, filter, query]);
 
   const submitNew = (stateId: string): void => {
     const title = draft.trim();
@@ -88,14 +119,21 @@ export function TrackView({ project, items, sprints, ops }: TrackViewProps): Rea
         ))}
       </div>
 
+      {tab !== 'automation' && tab !== 'members' && tab !== 'sync' ? (
       <div className="track-filter">
-        <span className="track-filter-search"><Icon name="search" size={12} /><input value={filter.text ?? ''} onChange={(e) => setFilter((f) => ({ ...f, text: e.target.value || undefined }))} placeholder="Filter by key or title…" /></span>
+        <span className={`track-filter-search${query ? (query.ok ? ' is-query' : ' is-bad') : ''}`} title="Type a JQL query like: priority >= high AND status != done">
+          <Icon name="search" size={12} />
+          <input value={filter.text ?? ''} onChange={(e) => setFilter((f) => ({ ...f, text: e.target.value || undefined }))} placeholder="Filter by text — or a query (priority >= high AND type = bug)" />
+          {query ? <span className="track-query-badge">{query.ok ? 'JQL' : '!'}</span> : null}
+        </span>
+        {query && !query.ok ? <span className="track-query-error" title={query.error}>{query.error}</span> : null}
         <FilterChip label="Type" value={filter.type} options={['epic', 'story', 'task', 'bug', 'sub-task']} onPick={(v) => setFilter((f) => ({ ...f, type: v as WorkItemType }))} />
         <FilterChip label="Status" value={filter.statusCategory} options={['todo', 'in-progress', 'done']} onPick={(v) => setFilter((f) => ({ ...f, statusCategory: v }))} />
         <FilterChip label="Priority" value={filter.priority} options={['highest', 'high', 'medium', 'low', 'lowest']} onPick={(v) => setFilter((f) => ({ ...f, priority: v as WorkItemPriority }))} />
         {assignees.length ? <FilterChip label="Assignee" value={filter.assignee} options={assignees} onPick={(v) => setFilter((f) => ({ ...f, assignee: v }))} /> : null}
         {Object.values(filter).some(Boolean) ? <button className="track-filter-clear" onClick={() => setFilter({})}>Clear</button> : null}
       </div>
+      ) : null}
 
       {tab === 'board' ? (
         <div className="track-board">
@@ -124,8 +162,14 @@ export function TrackView({ project, items, sprints, ops }: TrackViewProps): Rea
         <SprintView items={items} sprints={sprints} states={states} ops={ops} onOpen={(w) => setSelectedKey(w.key)} />
       ) : tab === 'roadmap' ? (
         <RoadmapView items={filtered} states={states} onOpen={(w) => setSelectedKey(w.key)} />
-      ) : (
+      ) : tab === 'reports' ? (
         <ReportsView items={items} states={states} sprints={sprints} />
+      ) : tab === 'automation' ? (
+        <AutomationView automations={automations} states={states} ops={ops} />
+      ) : tab === 'members' ? (
+        <MembersView members={members} ops={ops} />
+      ) : (
+        <SyncView sync={sync} ops={ops} />
       )}
 
       {selected ? <TrackDetail item={selected} project={project} allItems={items} sprints={sprints} ops={ops} onClose={() => setSelectedKey(null)} /> : null}
@@ -350,6 +394,285 @@ function ReportsView({ items, states, sprints }: { items: WorkItem[]; states: Tr
         {points ? <div className="track-report-row"><span className="trr-label">Story points</span><span className="trr-n">{donePoints} / {points}</span></div> : null}
         <div className="track-report-row"><span className="trr-label">Sprints</span><span className="trr-n">{sprints.filter((s) => s.state === 'active').length} active · {sprints.length} total</span></div>
       </div>
+    </div>
+  );
+}
+
+const TRIGGERS: Array<{ id: AutomationTrigger; label: string; hint: string }> = [
+  { id: 'created', label: 'When created', hint: 'a new work item is added' },
+  { id: 'transitioned', label: 'When moved', hint: 'an item changes status' },
+  { id: 'updated', label: 'When edited', hint: 'any field changes' },
+];
+const ACTION_TYPES: Array<{ id: AutomationActionType; label: string; placeholder: string }> = [
+  { id: 'set-status', label: 'Set status', placeholder: 'status id (e.g. in-progress)' },
+  { id: 'set-priority', label: 'Set priority', placeholder: 'highest · high · medium · low · lowest' },
+  { id: 'set-assignee', label: 'Assign to', placeholder: 'name' },
+  { id: 'add-label', label: 'Add label', placeholder: 'label' },
+  { id: 'comment', label: 'Comment', placeholder: 'comment text' },
+];
+const actionLabel = (a: AutomationAction): string => `${ACTION_TYPES.find((t) => t.id === a.type)?.label ?? a.type}: ${a.value}`;
+
+function AutomationView({ automations, states, ops }: { automations: AutomationRule[]; states: TrackProject['workflowStates']; ops: TrackOps }): React.ReactElement {
+  const [adding, setAdding] = useState(false);
+  return (
+    <div className="track-automation">
+      <div className="track-section-head">
+        Automation rules <span className="track-col-count">{automations.length}</span>
+        <button className="track-auto-new" onClick={() => setAdding((a) => !a)}><Icon name={adding ? 'close' : 'plus'} size={12} /> {adding ? 'Cancel' : 'New rule'}</button>
+      </div>
+      <p className="track-auto-intro">When something happens on this project, run an action automatically — no human in the loop. Conditions use the same query language as the filter bar (e.g. <code>type = bug</code>).</p>
+      {adding ? <AutomationForm states={states} onCreate={(input) => { ops.createAutomation(input); setAdding(false); }} onCancel={() => setAdding(false)} /> : null}
+      <div className="track-auto-list">
+        {automations.map((r) => (
+          <div key={r.id} className={`track-auto-row${r.enabled ? '' : ' off'}`}>
+            <button className={`track-auto-toggle${r.enabled ? ' on' : ''}`} title={r.enabled ? 'Enabled — click to pause' : 'Paused — click to enable'} onClick={() => ops.updateAutomation(r.id, { enabled: !r.enabled })}>
+              <span className="track-auto-knob" />
+            </button>
+            <div className="track-auto-body">
+              <div className="track-auto-name">{r.name}</div>
+              <div className="track-auto-flow">
+                <span className="track-auto-trigger">{TRIGGERS.find((t) => t.id === r.trigger)?.label ?? r.trigger}</span>
+                {r.condition ? <span className="track-auto-cond mono">if {r.condition}</span> : null}
+                <Icon name="chev-right" size={11} />
+                {r.actions.map((a, i) => <span key={i} className="track-auto-act">{actionLabel(a)}</span>)}
+              </div>
+            </div>
+            <button className="track-auto-del" title="Delete rule" onClick={() => ops.deleteAutomation(r.id)}><Icon name="trash" size={12} /></button>
+          </div>
+        ))}
+        {automations.length === 0 && !adding ? <div className="track-empty">No automation rules yet. Create one to run actions automatically.</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function AutomationForm({ states, onCreate, onCancel }: { states: TrackProject['workflowStates']; onCreate: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => void; onCancel: () => void }): React.ReactElement {
+  const [name, setName] = useState('');
+  const [trigger, setTrigger] = useState<AutomationTrigger>('created');
+  const [condition, setCondition] = useState('');
+  const [actions, setActions] = useState<AutomationAction[]>([{ type: 'set-priority', value: '' }]);
+  const condCheck = useMemo(() => (condition.trim() ? parseTrackQuery(condition.trim()) : null), [condition]);
+  const valid = name.trim() && actions.every((a) => a.value.trim()) && (!condCheck || condCheck.ok);
+
+  const setAction = (i: number, patch: Partial<AutomationAction>): void => setActions((as) => as.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  const submit = (): void => {
+    if (!valid) return;
+    onCreate({ name: name.trim(), trigger, condition: condition.trim() || undefined, actions: actions.map((a) => ({ ...a, value: a.value.trim() })) });
+  };
+
+  return (
+    <div className="track-auto-form">
+      <input className="track-auto-fname" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Rule name (e.g. Bugs start at high priority)" />
+      <div className="track-auto-field">
+        <label>When</label>
+        <select value={trigger} onChange={(e) => setTrigger(e.target.value as AutomationTrigger)}>
+          {TRIGGERS.map((t) => <option key={t.id} value={t.id}>{t.label} — {t.hint}</option>)}
+        </select>
+      </div>
+      <div className="track-auto-field">
+        <label>If <span className="track-auto-opt">(optional query)</span></label>
+        <input className={`mono${condCheck && !condCheck.ok ? ' bad' : ''}`} value={condition} onChange={(e) => setCondition(e.target.value)} placeholder="type = bug AND priority >= high" />
+        {condCheck && !condCheck.ok ? <span className="track-auto-cond-err">{condCheck.error}</span> : null}
+      </div>
+      <div className="track-auto-field">
+        <label>Then</label>
+        <div className="track-auto-actions">
+          {actions.map((a, i) => (
+            <div key={i} className="track-auto-actrow">
+              <select value={a.type} onChange={(e) => setAction(i, { type: e.target.value as AutomationActionType })}>
+                {ACTION_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+              {a.type === 'set-status' ? (
+                <select value={a.value} onChange={(e) => setAction(i, { value: e.target.value })}>
+                  <option value="">status…</option>
+                  {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              ) : a.type === 'set-priority' ? (
+                <select value={a.value} onChange={(e) => setAction(i, { value: e.target.value })}>
+                  <option value="">priority…</option>
+                  {(['highest', 'high', 'medium', 'low', 'lowest'] as const).map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              ) : (
+                <input value={a.value} onChange={(e) => setAction(i, { value: e.target.value })} placeholder={ACTION_TYPES.find((t) => t.id === a.type)?.placeholder} />
+              )}
+              {actions.length > 1 ? <button className="track-auto-actdel" title="Remove action" onClick={() => setActions((as) => as.filter((_, j) => j !== i))}><Icon name="close" size={11} /></button> : null}
+            </div>
+          ))}
+          <button className="track-auto-addact" onClick={() => setActions((as) => [...as, { type: 'add-label', value: '' }])}><Icon name="plus" size={11} /> Add action</button>
+        </div>
+      </div>
+      <div className="track-auto-form-actions">
+        <button className="track-auto-save" disabled={!valid} onClick={submit}>Create rule</button>
+        <button className="track-auto-cancel" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+const ROLES: Array<{ id: ProjectRole; label: string; blurb: string }> = [
+  { id: 'owner', label: 'Owner', blurb: 'Full control, incl. members & deletion' },
+  { id: 'admin', label: 'Admin', blurb: 'Manage members, automation, delete items' },
+  { id: 'member', label: 'Member', blurb: 'Create, edit & plan work' },
+  { id: 'viewer', label: 'Viewer', blurb: 'Read-only access to the board' },
+];
+const CAPS: Array<{ cap: ProjectCapability; label: string }> = [
+  { cap: 'view', label: 'View board' },
+  { cap: 'create-item', label: 'Create items' },
+  { cap: 'edit-item', label: 'Edit & comment' },
+  { cap: 'manage-sprints', label: 'Manage sprints' },
+  { cap: 'delete-item', label: 'Delete items' },
+  { cap: 'manage-automation', label: 'Automation' },
+  { cap: 'manage-members', label: 'Manage members' },
+];
+
+function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps }): React.ReactElement {
+  const [adding, setAdding] = useState(false);
+  const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<ProjectRole>('member');
+  const owners = members.filter((m) => m.role === 'owner').length;
+  const soleOwner = (m: ProjectMember): boolean => m.role === 'owner' && owners === 1;
+
+  const submit = (): void => {
+    const handle = id.trim();
+    if (!handle) return;
+    ops.addMember({ id: handle, name: name.trim() || undefined, role });
+    setId(''); setName(''); setRole('member'); setAdding(false);
+  };
+
+  return (
+    <div className="track-members">
+      <div className="track-section-head">
+        Members <span className="track-col-count">{members.length}</span>
+        <button className="track-auto-new" onClick={() => setAdding((a) => !a)}><Icon name={adding ? 'close' : 'plus'} size={12} /> {adding ? 'Cancel' : 'Add member'}</button>
+      </div>
+      <p className="track-auto-intro">Each member has a role that gates what they can do on this project. The board, the CLI, and the agent all enforce the same policy.</p>
+
+      {adding ? (
+        <div className="track-member-form">
+          <input className="track-member-id" autoFocus value={id} onChange={(e) => setId(e.target.value)} placeholder="handle (username / email)" />
+          <input className="track-member-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="display name (optional)" />
+          <select value={role} onChange={(e) => setRole(e.target.value as ProjectRole)}>
+            {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+          <button className="track-auto-save" disabled={!id.trim()} onClick={submit}>Add</button>
+        </div>
+      ) : null}
+
+      <div className="track-member-list">
+        {members.map((m) => (
+          <div key={m.id} className="track-member-row">
+            <span className="track-member-avatar">{(m.name ?? m.id).slice(0, 2).toUpperCase()}</span>
+            <div className="track-member-id-col">
+              <span className="track-member-disp">{m.name ?? m.id}</span>
+              <span className="track-member-handle mono">{m.id}</span>
+            </div>
+            <select className="track-member-role" value={m.role} disabled={soleOwner(m)} title={soleOwner(m) ? 'The sole owner role is locked' : 'Change role'}
+              onChange={(e) => ops.updateMemberRole(m.id, e.target.value as ProjectRole)}>
+              {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+            <button className="track-member-del" title={soleOwner(m) ? 'Cannot remove the last owner' : 'Remove member'} disabled={soleOwner(m)} onClick={() => ops.removeMember(m.id)}><Icon name="trash" size={12} /></button>
+          </div>
+        ))}
+      </div>
+
+      <div className="track-perm-matrix">
+        <div className="track-perm-title">What each role can do</div>
+        <table>
+          <thead><tr><th>Capability</th>{ROLES.map((r) => <th key={r.id}>{r.label}</th>)}</tr></thead>
+          <tbody>
+            {CAPS.map((c) => (
+              <tr key={c.cap}>
+                <td>{c.label}</td>
+                {ROLES.map((r) => <td key={r.id} className={roleCan(r.id, c.cap) ? 'yes' : 'no'}>{roleCan(r.id, c.cap) ? '✓' : '·'}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: SyncResult | null }; ops: TrackOps }): React.ReactElement {
+  const [busy, setBusy] = useState<'import' | 'export' | null>(null);
+  const cfg = sync.config;
+  const result = sync.result;
+  const configured = !!(cfg?.repo && cfg?.hasToken);
+
+  // Clear the busy spinner whenever a fresh result lands.
+  React.useEffect(() => { setBusy(null); }, [result]);
+
+  const run = (direction: 'import' | 'export', dryRun: boolean): void => {
+    if (!configured) return;
+    setBusy(direction);
+    ops.sync(direction, dryRun);
+  };
+  const rows = result ? (result.exported ?? result.imported ?? []) : [];
+
+  return (
+    <div className="track-sync">
+      <div className="track-section-head">External sync <span className="track-col-count">GitHub Issues</span></div>
+      <p className="track-auto-intro">Two-way sync between this project and a GitHub repository's issues. Work items export as issues (type/priority become labels, done → closed); issues import back as work items. Re-runs update in place — no duplicates.</p>
+
+      <div className="track-sync-config">
+        <div className="track-sync-conn">
+          <span className={`track-sync-dot${configured ? ' on' : ''}`} />
+          {cfg?.repo ? (
+            <>
+              <span className="track-sync-repo mono">{cfg.repo}</span>
+              <span className={`track-sync-token${cfg.hasToken ? ' ok' : ''}`}>{cfg.hasToken ? `token via ${cfg.tokenSource}` : 'no token'}</span>
+            </>
+          ) : <span className="track-sync-unset">No repository configured</span>}
+        </div>
+        {!configured ? (
+          <p className="track-sync-help">
+            Set <code className="mono">cli.track.githubRepo</code> (e.g. <code className="mono">owner/name</code>) and a token in
+            <code className="mono"> cli.track.githubToken</code> — or export <code className="mono">GITHUB_TOKEN</code> — then reopen this tab.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="track-sync-actions">
+        <div className="track-sync-act">
+          <div className="track-sync-act-head"><Icon name="arrow-up" size={13} /> Export → GitHub</div>
+          <div className="track-sync-act-sub">Push work items to issues</div>
+          <div className="track-sync-btns">
+            <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('export', true)}>Dry-run</button>
+            <button className="track-sync-go" disabled={!configured || !!busy} onClick={() => run('export', false)}>{busy === 'export' ? 'Exporting…' : 'Export'}</button>
+          </div>
+        </div>
+        <div className="track-sync-act">
+          <div className="track-sync-act-head"><Icon name="arrow-down" size={13} /> Import ← GitHub</div>
+          <div className="track-sync-act-sub">Pull issues into the board</div>
+          <div className="track-sync-btns">
+            <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('import', true)}>Dry-run</button>
+            <button className="track-sync-go" disabled={!configured || !!busy} onClick={() => run('import', false)}>{busy === 'import' ? 'Importing…' : 'Import'}</button>
+          </div>
+        </div>
+      </div>
+
+      {result ? (
+        <div className="track-sync-result">
+          <div className="track-sync-result-head">
+            {result.dryRun ? <span className="track-sync-badge dry">Dry-run</span> : <span className="track-sync-badge live">Applied</span>}
+            {result.direction === 'export' ? 'Export' : 'Import'} — {rows.filter((r) => r.action === 'create').length} new, {rows.filter((r) => r.action === 'update').length} updated
+          </div>
+          <div className="track-sync-rows">
+            {rows.map((r, i) => (
+              <div key={i} className="track-sync-row">
+                <span className={`track-sync-act-tag ${r.action}`}>{r.action === 'create' ? '+ new' : '~ upd'}</span>
+                <span className="mono tl-key">{r.key ?? (r.issueNumber ? `#${r.issueNumber}` : '—')}</span>
+                <span className="tl-title">{r.title}</span>
+              </div>
+            ))}
+            {rows.length === 0 ? <div className="track-col-empty">Nothing to sync.</div> : null}
+          </div>
+          {result.errors.length ? (
+            <div className="track-sync-errors">{result.errors.map((e, i) => <div key={i}>{e}</div>)}</div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

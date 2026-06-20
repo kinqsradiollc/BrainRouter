@@ -86,8 +86,9 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, type CreateWorkItemInput, type UpdateWorkItemPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import type { WorkItemType, SprintState, CodeLink } from '@kinqs/brainrouter-types';
+import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import { exportToGithub, importFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole } from '@kinqs/brainrouter-types';
 import { isRequirementStatus, isRequirementPriority, type RequirementRecord } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1439,6 +1440,55 @@ async function main(): Promise<void> {
       'track-sprint-state': (a) => {
         setSprintState(workspaceRoot, String(a.id ?? ''), String(a.state ?? 'future') as SprintState);
         return listSprints(workspaceRoot);
+      },
+      // Automation rules — trigger → action over the project board.
+      'track-automations': () => { ensureProject(workspaceRoot); return listAutomations(workspaceRoot); },
+      'track-create-automation': (a) => {
+        createAutomation(workspaceRoot, {
+          name: String(a.name ?? 'Rule'),
+          trigger: (typeof a.trigger === 'string' ? a.trigger : 'created') as AutomationTrigger,
+          condition: typeof a.condition === 'string' ? a.condition : undefined,
+          actions: Array.isArray(a.actions) ? (a.actions as AutomationAction[]) : [],
+        });
+        return listAutomations(workspaceRoot);
+      },
+      'track-update-automation': (a) => {
+        const patch = (a.patch && typeof a.patch === 'object' ? a.patch : {}) as AutomationPatch;
+        updateAutomation(workspaceRoot, String(a.id ?? ''), patch);
+        return listAutomations(workspaceRoot);
+      },
+      'track-delete-automation': (a) => {
+        deleteAutomation(workspaceRoot, String(a.id ?? ''));
+        return listAutomations(workspaceRoot);
+      },
+      // Members & roles — per-project permissions.
+      'track-members': () => { ensureProject(workspaceRoot); return listMembers(workspaceRoot); },
+      'track-add-member': (a) => {
+        addMember(workspaceRoot, { id: String(a.id ?? ''), name: typeof a.name === 'string' ? a.name : undefined, role: (typeof a.role === 'string' ? a.role : 'member') as ProjectRole });
+        return listMembers(workspaceRoot);
+      },
+      'track-update-member-role': (a) => {
+        updateMemberRole(workspaceRoot, String(a.id ?? ''), (typeof a.role === 'string' ? a.role : 'member') as ProjectRole);
+        return listMembers(workspaceRoot);
+      },
+      'track-remove-member': (a) => {
+        removeMember(workspaceRoot, String(a.id ?? ''));
+        return listMembers(workspaceRoot);
+      },
+      // External sync — GitHub Issues. The token is resolved server-side from
+      // config.json/env and NEVER returned to the renderer.
+      'track-sync-config': () => {
+        const c = resolveGithubConfig();
+        return { repo: c.repo ?? null, hasToken: !!c.token, tokenSource: c.tokenSource ?? null };
+      },
+      'track-sync': async (a) => {
+        const direction = a.direction === 'export' ? 'export' : 'import';
+        const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
+        const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
+        if (!cfg.repo) return { error: 'No repo configured. Set cli.track.githubRepo in config.json or pass a repo.' };
+        if (!cfg.token) return { error: 'No token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.' };
+        const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun };
+        return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
       },
       // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
       // so the desktop panel and the terminal CLI share the same requirements.json.

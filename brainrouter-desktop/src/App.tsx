@@ -10,8 +10,8 @@ import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType, Sprint, SprintState } from '@kinqs/brainrouter-types';
-import { TrackView } from './track/TrackView.js';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
+import { TrackView, type SyncConfig, type SyncResult } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
@@ -133,7 +133,7 @@ export function App(): React.ReactElement {
   const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
-  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[] }>({ project: null, items: [], sprints: [] });
+  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null } }>({ project: null, items: [], sprints: [], automations: [], members: [], sync: { config: null, result: null } });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -241,8 +241,20 @@ export function App(): React.ReactElement {
     q('q-track-project', 'track-project');
     q('q-track-items', 'track-items');
     q('q-track-sprints', 'track-sprints');
+    q('q-track-automations', 'track-automations');
+    q('q-track-members', 'track-members');
+    q('q-track-sync-config', 'track-sync-config');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.workspaceRoot]);
+
+  // A4 — Chat is a READ-ONLY conversational stance: the agent can read, search,
+  // and reason, but cannot write files or run shell. Entering Chat pins the
+  // active agent to 'read' access; Code/Track restore the default 'shell'. Re-
+  // asserted on every mode switch so a fresh/swapped agent inherits the stance.
+  useEffect(() => {
+    q('a-access', 'action:set-access', { mode: mode === 'chat' ? 'read' : 'shell' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, info.sessionKey]);
   const trackOps = {
     create: (input: { title: string; type: WorkItemType; status: string }) => q('q-track-create', 'track-create', input),
     transition: (idOrKey: string, toStatus: string) => q('q-track-transition', 'track-transition', { idOrKey, toStatus }),
@@ -252,6 +264,17 @@ export function App(): React.ReactElement {
     assignSprint: (idOrKey: string, sprintId: string | null) => q('q-track-assign-sprint', 'track-assign-sprint', { idOrKey, sprintId }),
     createSprint: (name: string, goal?: string) => q('q-track-create-sprint', 'track-create-sprint', { name, goal }),
     sprintState: (id: string, state: SprintState) => q('q-track-sprint-state', 'track-sprint-state', { id, state }),
+    createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => q('q-track-create-automation', 'track-create-automation', input),
+    updateAutomation: (id: string, patch: Partial<AutomationRule>) => q('q-track-update-automation', 'track-update-automation', { id, patch }),
+    deleteAutomation: (id: string) => q('q-track-delete-automation', 'track-delete-automation', { id }),
+    addMember: (input: { id: string; name?: string; role: ProjectRole }) => q('q-track-add-member', 'track-add-member', input),
+    updateMemberRole: (id: string, role: ProjectRole) => q('q-track-update-member-role', 'track-update-member-role', { id, role }),
+    removeMember: (id: string) => q('q-track-remove-member', 'track-remove-member', { id }),
+    sync: (direction: 'import' | 'export', dryRun: boolean) => {
+      q('q-track-sync', 'track-sync', { direction, dryRun });
+      // A real run can create/modify items — refresh the board shortly after.
+      if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
+    },
   };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
@@ -1058,7 +1081,7 @@ export function App(): React.ReactElement {
 
       <div className="main">
         {mode === 'track' ? (
-          <TrackView project={track.project} items={track.items} sprints={track.sprints} ops={trackOps} />
+          <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} sync={track.sync} ops={trackOps} />
         ) : (<>
         <div className="workrow" ref={workrowRef}>
           <ChatThread
@@ -1072,6 +1095,12 @@ export function App(): React.ReactElement {
             interaction={interaction} answerInteraction={answerInteraction} q={q} chatEnd={chatEnd} atBottom={atBottom}
             hasConversation={hasConversation} changedFiles={changedFiles} ensurePanel={ensurePanel}
             composer={
+              <>
+              {mode === 'chat' ? (
+                <div className="chat-readonly" title="Chat keeps the agent read-only — it can read, search and explain, but won't edit files or run commands. Switch to Code to make changes.">
+                  <Icon name="eye" size={12} /> Read-only — Chat explores &amp; explains; switch to <button className="chat-readonly-link" onClick={() => setMode('code')}>Code</button> to make changes
+                </div>
+              ) : null}
               <Composer
                 draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
                 slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
@@ -1084,6 +1113,7 @@ export function App(): React.ReactElement {
                 attachments={attachmentUploads}
                 canSubmit={readyAttachments(attachmentUploads).length > 0}
                 onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))} />
+              </>
             } />
 
           {/* Chat mode is a FOCUSED conversation — the code workbench (Environment

@@ -136,6 +136,8 @@ export interface TrackProject {
   issueTypes: IssueTypeConfig[];
   /** Component / area labels for grouping work. */
   components: string[];
+  /** Project members + their roles (see {@link ProjectMember}). Seeded with one owner. */
+  members: ProjectMember[];
   createdAt: string;
   updatedAt: string;
 }
@@ -286,6 +288,99 @@ export interface Board {
   filter?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Automation rules ──────────────────────────────────────────────────────────
+
+/** When an automation rule fires. */
+export type AutomationTrigger = "created" | "transitioned" | "updated";
+
+/** What an automation rule does when it fires. */
+export type AutomationActionType = "set-status" | "set-priority" | "set-assignee" | "add-label" | "comment";
+
+export interface AutomationAction {
+  type: AutomationActionType;
+  /** Status id · priority · assignee · label · comment body, per `type`. */
+  value: string;
+}
+
+/**
+ * A per-project automation rule: when a work item hits `trigger` and matches the
+ * optional JQL `condition`, run the `actions`. Actions are applied directly (they
+ * do not re-trigger automation) so rules can't loop.
+ */
+export interface AutomationRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  /** Optional JQL query the item must match (see track query). Empty = always. */
+  condition?: string;
+  actions: AutomationAction[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+const AUTOMATION_TRIGGERS: readonly AutomationTrigger[] = ["created", "transitioned", "updated"];
+const AUTOMATION_ACTION_TYPES: readonly AutomationActionType[] = ["set-status", "set-priority", "set-assignee", "add-label", "comment"];
+
+export function isAutomationTrigger(x: unknown): x is AutomationTrigger {
+  return typeof x === "string" && (AUTOMATION_TRIGGERS as readonly string[]).includes(x);
+}
+export function isAutomationActionType(x: unknown): x is AutomationActionType {
+  return typeof x === "string" && (AUTOMATION_ACTION_TYPES as readonly string[]).includes(x);
+}
+
+// ── Members & permissions ─────────────────────────────────────────────────────
+
+/** A member's role on a project, ordered least → most privileged. */
+export type ProjectRole = "viewer" | "member" | "admin" | "owner";
+
+/**
+ * A permission-checkable capability. The board read is `view`; everything else
+ * is a write/admin action. Roles map to a minimum rank (see {@link roleCan}).
+ */
+export type ProjectCapability =
+  | "view"
+  | "create-item"
+  | "edit-item"
+  | "delete-item"
+  | "manage-sprints"
+  | "manage-automation"
+  | "manage-members";
+
+/** One member of a project. `id` is a stable handle (username/email). */
+export interface ProjectMember {
+  /** Stable handle used as the activity-log actor and permission subject. */
+  id: string;
+  /** Display name (defaults to `id`). */
+  name?: string;
+  role: ProjectRole;
+  /** ISO-8601 timestamp the member was added. */
+  addedAt: string;
+}
+
+const PROJECT_ROLES: readonly ProjectRole[] = ["viewer", "member", "admin", "owner"];
+/** Privilege rank — higher beats lower. */
+export const ROLE_RANK: Record<ProjectRole, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
+/** The minimum role rank each capability requires. */
+const CAPABILITY_MIN_RANK: Record<ProjectCapability, number> = {
+  view: 0,            // viewer+
+  "create-item": 1,   // member+
+  "edit-item": 1,     // member+
+  "manage-sprints": 1,// member+
+  "delete-item": 2,   // admin+
+  "manage-automation": 2, // admin+
+  "manage-members": 2,    // admin+
+};
+
+export function isProjectRole(x: unknown): x is ProjectRole {
+  return typeof x === "string" && (PROJECT_ROLES as readonly string[]).includes(x);
+}
+
+/** Pure policy: may a member with `role` perform `capability`? Shared by store, CLI, and UI. */
+export function roleCan(role: ProjectRole, capability: ProjectCapability): boolean {
+  return ROLE_RANK[role] >= CAPABILITY_MIN_RANK[capability];
 }
 
 // ── Type guards for the durable records ───────────────────────────────────────

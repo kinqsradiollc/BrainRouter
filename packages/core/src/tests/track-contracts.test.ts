@@ -49,6 +49,7 @@ const project: TrackProject = {
   workflowStates: [...DEFAULT_WORKFLOW_STATES],
   issueTypes: [...DEFAULT_ISSUE_TYPES],
   components: ['cli', 'desktop'],
+  members: [{ id: 'you', name: 'You', role: 'owner', addedAt: '2026-06-21T00:00:00.000Z' }],
   createdAt: '2026-06-21T00:00:00.000Z',
   updatedAt: '2026-06-21T00:00:00.000Z',
 };
