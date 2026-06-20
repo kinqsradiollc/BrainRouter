@@ -26,7 +26,7 @@ import {
   removeMember,
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
-import { exportToGithub, importFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -103,7 +103,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
 
   if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
 
-  if (sub === 'members' || sub === 'member') { handleMembers(ws, rest); return true; }
+  if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
 
@@ -146,10 +146,26 @@ async function handleSync(ws: string, rest: string[]): Promise<void> {
   }
 }
 
-/** `/track members [list|add|role|rm]` — per-project members & roles. */
-function handleMembers(ws: string, rest: string[]): void {
+/** `/track members [list|add|role|rm|sync]` — per-project members & roles. */
+async function handleMembers(ws: string, rest: string[]): Promise<void> {
   ensureProject(ws);
   const op = (rest[0] ?? 'list').toLowerCase();
+
+  if (op === 'sync') {
+    const repoIdx = rest.indexOf('--repo');
+    const cfg = resolveGithubConfig(repoIdx >= 0 ? rest[repoIdx + 1] : undefined);
+    if (!cfg.repo) { console.log(chalk.red('\nNo repo. Pass --repo owner/name or set cli.track.githubRepo in config.json.\n')); return; }
+    if (!cfg.token) { console.log(chalk.red('\nNo token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.\n')); return; }
+    const dryRun = rest.includes('--dry-run') || rest.includes('-n');
+    console.log(chalk.gray(`\n${dryRun ? 'Dry-run: ' : ''}pulling collaborators from ${cfg.repo}…`));
+    try {
+      const r = await importMembersFromGithub(ws, { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun });
+      console.log(chalk.green(`${dryRun ? 'Would add' : 'Added'} ${r.added.length} member(s)`) + (r.added.length ? chalk.gray(`: ${r.added.join(', ')}`) : ''));
+      if (r.errors.length) { console.log(chalk.red(`${r.errors.length} error(s):`)); for (const e of r.errors.slice(0, 10)) console.log(chalk.red(`  ${e}`)); }
+      console.log('');
+    } catch (e) { console.log(chalk.red(`\nMember sync failed: ${(e as Error).message}\n`)); }
+    return;
+  }
 
   if (op === 'list' || op === 'ls') {
     const members = listMembers(ws);
@@ -196,7 +212,7 @@ function handleMembers(ws: string, rest: string[]): void {
     return;
   }
 
-  console.log(chalk.yellow(`\nUnknown members op "${op}". Try: list · add · role · rm\n`));
+  console.log(chalk.yellow(`\nUnknown members op "${op}". Try: list · add · role · rm · sync\n`));
 }
 
 function roleColor(role: ProjectRole): (s: string) => string {

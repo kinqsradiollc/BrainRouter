@@ -12,7 +12,7 @@
  * its work-item key, and the store keeps a `githubLinks` side-map (work-item id →
  * issue number/url) so re-runs UPDATE rather than duplicate.
  */
-import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, StatusCategory } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, StatusCategory, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
 import { isWorkItemType, isWorkItemPriority } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
@@ -22,12 +22,17 @@ import {
   updateWorkItem,
   getGithubLinks,
   setGithubLink,
+  listMembers,
+  addMember,
+  LOCAL_MEMBER_ID,
   type CreateWorkItemInput,
   type UpdateWorkItemPatch,
 } from './trackStore.js';
 import { getRawCliKnobs } from '../config/config.js';
 
 // ── GitHub shapes (the minimal subset we read/write) ──────────────────────────
+
+export interface GithubUser { login: string; name?: string | null }
 
 export interface GithubIssue {
   number: number;
@@ -36,6 +41,9 @@ export interface GithubIssue {
   state?: 'open' | 'closed';
   labels?: Array<string | { name?: string }>;
   html_url?: string;
+  /** The assigned user(s). `assignee` is the legacy single field. */
+  assignee?: GithubUser | null;
+  assignees?: GithubUser[];
   /** Present on PRs — used to filter them out of the issues list. */
   pull_request?: unknown;
 }
@@ -44,7 +52,19 @@ export interface GithubIssuePayload {
   title: string;
   body: string;
   labels: string[];
+  /** GitHub logins to assign (mapped from the work item's assignee). */
+  assignees: string[];
   state?: 'open' | 'closed';
+}
+
+/** A repo collaborator, as returned by `GET /repos/{repo}/collaborators`. */
+export interface GithubCollaborator {
+  login: string;
+  name?: string | null;
+  /** Coarse `role_name` (admin · maintain · write · triage · read), newer API. */
+  role_name?: string;
+  /** Per-capability booleans, older API. */
+  permissions?: { admin?: boolean; maintain?: boolean; push?: boolean; triage?: boolean; pull?: boolean };
 }
 
 /** A minimal structural subset of the global `fetch` so it can be mocked in tests. */
@@ -80,7 +100,14 @@ export function workItemToIssue(item: WorkItem, includeMarker = true): GithubIss
   ];
   const desc = item.description ? `${item.description}\n\n` : '';
   const body = includeMarker ? `${desc}${keyMarker(item.key)}` : desc.trimEnd();
-  return { title: item.title, body, labels, state: item.statusCategory === 'done' ? 'closed' : 'open' };
+  // The assignee is treated as a GitHub login (members are pulled from the repo).
+  const assignees = item.assignee ? [item.assignee] : [];
+  return { title: item.title, body, labels, assignees, state: item.statusCategory === 'done' ? 'closed' : 'open' };
+}
+
+/** The GitHub login assigned to an issue (legacy `assignee`, else the first of `assignees`). */
+function issueAssignee(issue: GithubIssue): string | undefined {
+  return issue.assignee?.login ?? issue.assignees?.[0]?.login ?? undefined;
 }
 
 /** Resolve a concrete project status id for a target category (first match). */
@@ -106,10 +133,11 @@ export function issueToWorkItem(issue: GithubIssue, project: TrackProject): Mapp
   const plainLabels = names.filter((n) => !n.startsWith('type:') && !n.startsWith('priority:'));
   const status = statusForCategory(project, issue.state === 'closed' ? 'done' : 'todo');
   const body = (issue.body ?? '').replace(MARKER_RE, '').trim();
+  const assignee = issueAssignee(issue);
   return {
     key: keyFromBody(issue.body),
-    input: { title: issue.title, type, priority, status, description: body || undefined, labels: plainLabels },
-    patch: { title: issue.title, priority, status, description: body || undefined, labels: plainLabels },
+    input: { title: issue.title, type, priority, status, description: body || undefined, labels: plainLabels, assignee },
+    patch: { title: issue.title, priority, status, description: body || undefined, labels: plainLabels, assignee },
   };
 }
 
@@ -184,7 +212,7 @@ export async function exportToGithub(workspaceRoot: string, opts: SyncOptions): 
         if (!res.ok) errors.push(`${item.key}: update failed (HTTP ${res.status})`);
       } else {
         const res = await opts.fetchImpl(`${apiRoot(opts)}/issues`, {
-          method: 'POST', headers: ghHeaders(opts.token), body: JSON.stringify({ title: payload.title, body: payload.body, labels: payload.labels }),
+          method: 'POST', headers: ghHeaders(opts.token), body: JSON.stringify({ title: payload.title, body: payload.body, labels: payload.labels, assignees: payload.assignees }),
         });
         if (!res.ok) { errors.push(`${item.key}: create failed (HTTP ${res.status})`); continue; }
         const created = (await res.json()) as GithubIssue;
@@ -246,4 +274,53 @@ export async function importFromGithub(workspaceRoot: string, opts: SyncOptions)
     }
   }
   return { direction: 'import', dryRun: opts.dryRun ?? false, imported: plan, errors };
+}
+
+// ── Members from GitHub collaborators ─────────────────────────────────────────
+
+/**
+ * Map a GitHub collaborator's repo permission to a Track role:
+ * admin → admin · maintain/write/push → member · everything else (triage/read)
+ * → viewer. The repo never confers `owner` — that stays with the local operator.
+ */
+export function mapCollaboratorRole(c: GithubCollaborator): ProjectRole {
+  const p = c.permissions ?? {};
+  const r = c.role_name?.toLowerCase();
+  if (p.admin || r === 'admin') return 'admin';
+  if (p.maintain || p.push || r === 'maintain' || r === 'write') return 'member';
+  return 'viewer';
+}
+
+export interface MemberSyncResult { members: ProjectMember[]; added: string[]; errors: string[] }
+
+/**
+ * Pull the repo's collaborators into the project's member roster (upserting by
+ * login, role mapped from their repo permission). The seed owner (`you`) is left
+ * untouched. With `dryRun`, fetches + reports who *would* be added, writing
+ * nothing.
+ */
+export async function importMembersFromGithub(workspaceRoot: string, opts: SyncOptions): Promise<MemberSyncResult> {
+  ensureProject(workspaceRoot);
+  let collabs: GithubCollaborator[] = [];
+  try {
+    const res = await opts.fetchImpl(`${apiRoot(opts)}/collaborators?per_page=100`, { headers: ghHeaders(opts.token) });
+    if (!res.ok) return { members: listMembers(workspaceRoot), added: [], errors: [`collaborators list failed (HTTP ${res.status})`] };
+    collabs = (await res.json()) as GithubCollaborator[];
+  } catch (e) {
+    return { members: listMembers(workspaceRoot), added: [], errors: [(e as Error).message] };
+  }
+
+  const added: string[] = [];
+  const errors: string[] = [];
+  for (const c of collabs) {
+    if (!c.login || c.login === LOCAL_MEMBER_ID) continue; // never overwrite the seed owner
+    added.push(c.login);
+    if (opts.dryRun) continue;
+    try {
+      addMember(workspaceRoot, { id: c.login, name: c.name ?? undefined, role: mapCollaboratorRole(c) });
+    } catch (e) {
+      errors.push(`${c.login}: ${(e as Error).message}`);
+    }
+  }
+  return { members: listMembers(workspaceRoot), added, errors };
 }

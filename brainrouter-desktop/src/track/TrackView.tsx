@@ -40,6 +40,7 @@ export interface TrackOps {
   addMember: (input: { id: string; name?: string; role: ProjectRole }) => void;
   updateMemberRole: (id: string, role: ProjectRole) => void;
   removeMember: (id: string) => void;
+  syncMembers: () => void;
   sync: (direction: 'import' | 'export', dryRun: boolean) => void;
 }
 
@@ -544,9 +545,10 @@ function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps
     <div className="track-members">
       <div className="track-section-head">
         Members <span className="track-col-count">{members.length}</span>
+        <button className="track-member-pull" title="Import this repo's collaborators as members (roles mapped from their GitHub permission)" onClick={() => ops.syncMembers()}><Icon name="refresh" size={12} /> Pull from GitHub</button>
         <button className="track-auto-new" onClick={() => setAdding((a) => !a)}><Icon name={adding ? 'close' : 'plus'} size={12} /> {adding ? 'Cancel' : 'Add member'}</button>
       </div>
-      <p className="track-auto-intro">Each member has a role that gates what they can do on this project. The board, the CLI, and the agent all enforce the same policy.</p>
+      <p className="track-auto-intro">Each member has a role that gates what they can do on this project. <b>Pull from GitHub</b> imports the repo's collaborators (admin → admin · write → member · read → viewer); the local owner is kept. The board, the CLI, and the agent all enforce the same policy.</p>
 
       {adding ? (
         <div className="track-member-form">

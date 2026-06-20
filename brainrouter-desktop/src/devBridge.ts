@@ -854,6 +854,20 @@ export function installDevBridge(): void {
       return [...members];
     },
     'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-sync-members': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const incoming = [
+        { id: 'octocat', name: 'The Octocat', role: 'admin' },
+        { id: 'kinqsradio', name: 'Kinqs Radio', role: 'admin' },
+      ];
+      const added: string[] = [];
+      for (const c of incoming) {
+        if (members.find((m) => m.id === c.id)) continue;
+        added.push(c.id);
+        if (a.dryRun !== true) members.push({ ...c, addedAt: new Date().toISOString() });
+      }
+      return { members: [...members], added, errors: [] };
+    },
     'track-sync': (a) => {
       const dir = a.direction === 'export' ? 'export' : 'import';
       const rows = (devTrack.items as Record<string, unknown>[]).slice(0, 5).map((w, i) => (
