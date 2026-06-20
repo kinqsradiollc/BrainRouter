@@ -29,6 +29,11 @@ import {
   type AutomationRule,
   type AutomationTrigger,
   type AutomationAction,
+  type ProjectMember,
+  type ProjectRole,
+  type ProjectCapability,
+  roleCan,
+  ROLE_RANK,
   DEFAULT_WORKFLOW_STATES,
   DEFAULT_ISSUE_TYPES,
 } from '@kinqs/brainrouter-types';
@@ -81,9 +86,19 @@ export interface EnsureProjectInput {
  * types + a default kanban board) on first use. Idempotent — one project per
  * workspace, keyed by `workspaceRoot`.
  */
+/** The local operator — the seed owner, and a trusted system actor (see SYSTEM_ACTORS). */
+export const LOCAL_MEMBER_ID = 'you';
+
 export function ensureProject(workspaceRoot: string, input: EnsureProjectInput = {}): TrackProject {
   const store = readTrack(workspaceRoot);
-  if (store.project) return store.project;
+  if (store.project) {
+    // Backfill members for projects created before A3 (permissions).
+    if (!Array.isArray(store.project.members) || store.project.members.length === 0) {
+      store.project.members = [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: store.project.createdAt }];
+      writeTrack(workspaceRoot, store);
+    }
+    return store.project;
+  }
   const ts = nowIso();
   const project: TrackProject = {
     id: shortId('proj'),
@@ -94,6 +109,7 @@ export function ensureProject(workspaceRoot: string, input: EnsureProjectInput =
     workflowStates: [...DEFAULT_WORKFLOW_STATES],
     issueTypes: [...DEFAULT_ISSUE_TYPES],
     components: [],
+    members: [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: ts }],
     createdAt: ts,
     updatedAt: ts,
   };
@@ -153,6 +169,7 @@ export interface CreateWorkItemInput {
  */
 export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput): WorkItem {
   ensureProject(workspaceRoot);
+  assertCan(workspaceRoot, input.actor ?? 'user', 'create-item');
   const store = readTrack(workspaceRoot);
   const project = store.project!;
   const status = input.status ?? project.workflowStates[0]?.id ?? 'todo';
@@ -265,6 +282,7 @@ export function updateWorkItem(
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
   if (!item) return undefined;
+  assertCan(workspaceRoot, actor, 'edit-item');
   const ts = nowIso();
   const scalarFields: Array<keyof UpdateWorkItemPatch> = [
     'title', 'description', 'status', 'priority', 'assignee', 'reporter', 'storyPoints', 'estimateSeconds', 'dueDate', 'parentId', 'epicId', 'sprintId', 'rank',
@@ -306,6 +324,7 @@ export function addComment(workspaceRoot: string, idOrKey: string, author: strin
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
   if (!item) return undefined;
+  assertCan(workspaceRoot, author, 'edit-item');
   const ts = nowIso();
   const comment: WorkItemComment = { id: shortId('cmt'), author, body, createdAt: ts };
   item.comments.push(comment);
@@ -540,4 +559,110 @@ export function runAutomations(workspaceRoot: string, idOrKey: string, trigger: 
     }
   }
   if (changed) { item.updatedAt = nowIso(); writeTrack(workspaceRoot, store); }
+}
+
+// ── Members & permissions ─────────────────────────────────────────────────────
+
+/**
+ * Actors the local runtime trusts unconditionally: the human operator (`user`),
+ * the AI (`agent`), and internal writers (`auto`/`automation`/`system`). Only a
+ * *named project member* acting as themselves is role-checked — this keeps the
+ * single-user app fully functional while making roles real for any caller that
+ * passes a member id as the actor (federation, shared boards, scripted members).
+ */
+const SYSTEM_ACTORS = new Set(['user', 'agent', 'auto', 'automation', 'system']);
+
+/** Thrown when an actor lacks the capability for an operation. */
+export class PermissionError extends Error {
+  constructor(public actor: string, public capability: ProjectCapability) {
+    super(`"${actor}" is not permitted to ${capability.replace(/-/g, ' ')} on this project`);
+    this.name = 'PermissionError';
+  }
+}
+
+export function listMembers(workspaceRoot: string): ProjectMember[] {
+  const project = getProject(workspaceRoot);
+  return project?.members ? [...project.members].sort((a, b) => ROLE_RANK[b.role] - ROLE_RANK[a.role]) : [];
+}
+
+/** Resolve an actor's effective role, or `undefined` if they aren't a tracked member. */
+export function memberRole(workspaceRoot: string, actor: string): ProjectRole | undefined {
+  return getProject(workspaceRoot)?.members?.find((m) => m.id === actor)?.role;
+}
+
+/**
+ * May `actor` perform `capability`? System actors and non-members are trusted
+ * (local single-user default); tracked members are checked against their role.
+ */
+export function canActor(workspaceRoot: string, actor: string, capability: ProjectCapability): boolean {
+  if (SYSTEM_ACTORS.has(actor)) return true;
+  const role = memberRole(workspaceRoot, actor);
+  if (!role) return true; // not a tracked member → local trust
+  return roleCan(role, capability);
+}
+
+function assertCan(workspaceRoot: string, actor: string, capability: ProjectCapability): void {
+  if (!canActor(workspaceRoot, actor, capability)) throw new PermissionError(actor, capability);
+}
+
+export interface AddMemberInput {
+  id: string;
+  name?: string;
+  role?: ProjectRole;
+}
+
+/** Add a member (or update their role/name if already present). Requires `manage-members`. */
+export function addMember(workspaceRoot: string, input: AddMemberInput, actor = 'user'): ProjectMember {
+  ensureProject(workspaceRoot);
+  assertCan(workspaceRoot, actor, 'manage-members');
+  const store = readTrack(workspaceRoot);
+  const project = store.project!;
+  const id = input.id.trim();
+  if (!id) throw new Error('Member id is required.');
+  const role = input.role ?? 'member';
+  const existing = project.members.find((m) => m.id === id);
+  if (existing) {
+    if (existing.role === 'owner' && role !== 'owner' && project.members.filter((m) => m.role === 'owner').length === 1) {
+      throw new Error('Cannot demote the last owner.');
+    }
+    existing.role = role;
+    if (input.name !== undefined) existing.name = input.name;
+  } else {
+    project.members.push({ id, name: input.name, role, addedAt: nowIso() });
+  }
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return project.members.find((m) => m.id === id)!;
+}
+
+/** Change a member's role. Requires `manage-members`; refuses to remove the last owner. */
+export function updateMemberRole(workspaceRoot: string, id: string, role: ProjectRole, actor = 'user'): ProjectMember | undefined {
+  assertCan(workspaceRoot, actor, 'manage-members');
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  const member = project?.members.find((m) => m.id === id);
+  if (!project || !member) return undefined;
+  if (member.role === 'owner' && role !== 'owner' && project.members.filter((m) => m.role === 'owner').length === 1) {
+    throw new Error('Cannot demote the last owner.');
+  }
+  member.role = role;
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return member;
+}
+
+/** Remove a member. Requires `manage-members`; refuses to remove the last owner. */
+export function removeMember(workspaceRoot: string, id: string, actor = 'user'): boolean {
+  assertCan(workspaceRoot, actor, 'manage-members');
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  const member = project?.members.find((m) => m.id === id);
+  if (!project || !member) return false;
+  if (member.role === 'owner' && project.members.filter((m) => m.role === 'owner').length === 1) {
+    throw new Error('Cannot remove the last owner.');
+  }
+  project.members = project.members.filter((m) => m.id !== id);
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return true;
 }

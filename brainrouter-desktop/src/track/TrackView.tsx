@@ -6,7 +6,8 @@
  * (fed by host `track-*` queries) and mutates through the `ops` callbacks.
  */
 import React, { useMemo, useState } from 'react';
-import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
+import { roleCan } from '../lib/track/permissions.js';
 import { parseTrackQuery } from '../lib/track/query.js';
 import { Icon } from '../icons.js';
 import { TrackDetail } from './TrackDetail.js';
@@ -31,6 +32,9 @@ export interface TrackOps {
   createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => void;
   updateAutomation: (id: string, patch: Partial<AutomationRule>) => void;
   deleteAutomation: (id: string) => void;
+  addMember: (input: { id: string; name?: string; role: ProjectRole }) => void;
+  updateMemberRole: (id: string, role: ProjectRole) => void;
+  removeMember: (id: string) => void;
 }
 
 export interface TrackViewProps {
@@ -38,10 +42,11 @@ export interface TrackViewProps {
   items: WorkItem[];
   sprints: Sprint[];
   automations: AutomationRule[];
+  members: ProjectMember[];
   ops: TrackOps;
 }
 
-type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation';
+type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation' | 'members';
 interface Filter { type?: WorkItemType; statusCategory?: string; priority?: WorkItemPriority; assignee?: string; text?: string }
 
 const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
@@ -52,9 +57,10 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'roadmap', label: 'Roadmap', icon: 'chart' },
   { id: 'reports', label: 'Reports', icon: 'chart' },
   { id: 'automation', label: 'Automation', icon: 'bolt' },
+  { id: 'members', label: 'Members', icon: 'shield' },
 ];
 
-export function TrackView({ project, items, sprints, automations, ops }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, automations, members, ops }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -105,7 +111,7 @@ export function TrackView({ project, items, sprints, automations, ops }: TrackVi
         ))}
       </div>
 
-      {tab !== 'automation' ? (
+      {tab !== 'automation' && tab !== 'members' ? (
       <div className="track-filter">
         <span className={`track-filter-search${query ? (query.ok ? ' is-query' : ' is-bad') : ''}`} title="Type a JQL query like: priority >= high AND status != done">
           <Icon name="search" size={12} />
@@ -150,8 +156,10 @@ export function TrackView({ project, items, sprints, automations, ops }: TrackVi
         <RoadmapView items={filtered} states={states} onOpen={(w) => setSelectedKey(w.key)} />
       ) : tab === 'reports' ? (
         <ReportsView items={items} states={states} sprints={sprints} />
-      ) : (
+      ) : tab === 'automation' ? (
         <AutomationView automations={automations} states={states} ops={ops} />
+      ) : (
+        <MembersView members={members} ops={ops} />
       )}
 
       {selected ? <TrackDetail item={selected} project={project} allItems={items} sprints={sprints} ops={ops} onClose={() => setSelectedKey(null)} /> : null}
@@ -486,6 +494,91 @@ function AutomationForm({ states, onCreate, onCancel }: { states: TrackProject['
       <div className="track-auto-form-actions">
         <button className="track-auto-save" disabled={!valid} onClick={submit}>Create rule</button>
         <button className="track-auto-cancel" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+const ROLES: Array<{ id: ProjectRole; label: string; blurb: string }> = [
+  { id: 'owner', label: 'Owner', blurb: 'Full control, incl. members & deletion' },
+  { id: 'admin', label: 'Admin', blurb: 'Manage members, automation, delete items' },
+  { id: 'member', label: 'Member', blurb: 'Create, edit & plan work' },
+  { id: 'viewer', label: 'Viewer', blurb: 'Read-only access to the board' },
+];
+const CAPS: Array<{ cap: ProjectCapability; label: string }> = [
+  { cap: 'view', label: 'View board' },
+  { cap: 'create-item', label: 'Create items' },
+  { cap: 'edit-item', label: 'Edit & comment' },
+  { cap: 'manage-sprints', label: 'Manage sprints' },
+  { cap: 'delete-item', label: 'Delete items' },
+  { cap: 'manage-automation', label: 'Automation' },
+  { cap: 'manage-members', label: 'Manage members' },
+];
+
+function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps }): React.ReactElement {
+  const [adding, setAdding] = useState(false);
+  const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<ProjectRole>('member');
+  const owners = members.filter((m) => m.role === 'owner').length;
+  const soleOwner = (m: ProjectMember): boolean => m.role === 'owner' && owners === 1;
+
+  const submit = (): void => {
+    const handle = id.trim();
+    if (!handle) return;
+    ops.addMember({ id: handle, name: name.trim() || undefined, role });
+    setId(''); setName(''); setRole('member'); setAdding(false);
+  };
+
+  return (
+    <div className="track-members">
+      <div className="track-section-head">
+        Members <span className="track-col-count">{members.length}</span>
+        <button className="track-auto-new" onClick={() => setAdding((a) => !a)}><Icon name={adding ? 'close' : 'plus'} size={12} /> {adding ? 'Cancel' : 'Add member'}</button>
+      </div>
+      <p className="track-auto-intro">Each member has a role that gates what they can do on this project. The board, the CLI, and the agent all enforce the same policy.</p>
+
+      {adding ? (
+        <div className="track-member-form">
+          <input className="track-member-id" autoFocus value={id} onChange={(e) => setId(e.target.value)} placeholder="handle (username / email)" />
+          <input className="track-member-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="display name (optional)" />
+          <select value={role} onChange={(e) => setRole(e.target.value as ProjectRole)}>
+            {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+          <button className="track-auto-save" disabled={!id.trim()} onClick={submit}>Add</button>
+        </div>
+      ) : null}
+
+      <div className="track-member-list">
+        {members.map((m) => (
+          <div key={m.id} className="track-member-row">
+            <span className="track-member-avatar">{(m.name ?? m.id).slice(0, 2).toUpperCase()}</span>
+            <div className="track-member-id-col">
+              <span className="track-member-disp">{m.name ?? m.id}</span>
+              <span className="track-member-handle mono">{m.id}</span>
+            </div>
+            <select className="track-member-role" value={m.role} disabled={soleOwner(m)} title={soleOwner(m) ? 'The sole owner role is locked' : 'Change role'}
+              onChange={(e) => ops.updateMemberRole(m.id, e.target.value as ProjectRole)}>
+              {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+            <button className="track-member-del" title={soleOwner(m) ? 'Cannot remove the last owner' : 'Remove member'} disabled={soleOwner(m)} onClick={() => ops.removeMember(m.id)}><Icon name="trash" size={12} /></button>
+          </div>
+        ))}
+      </div>
+
+      <div className="track-perm-matrix">
+        <div className="track-perm-title">What each role can do</div>
+        <table>
+          <thead><tr><th>Capability</th>{ROLES.map((r) => <th key={r.id}>{r.label}</th>)}</tr></thead>
+          <tbody>
+            {CAPS.map((c) => (
+              <tr key={c.cap}>
+                <td>{c.label}</td>
+                {ROLES.map((r) => <td key={r.id} className={roleCan(r.id, c.cap) ? 'yes' : 'no'}>{roleCan(r.id, c.cap) ? '✓' : '·'}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

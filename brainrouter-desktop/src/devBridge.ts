@@ -277,7 +277,13 @@ export function installDevBridge(): void {
         { id: 'todo', name: 'To Do', category: 'todo' }, { id: 'in-progress', name: 'In Progress', category: 'in-progress' },
         { id: 'in-review', name: 'In Review', category: 'in-progress' }, { id: 'done', name: 'Done', category: 'done' },
       ],
-      issueTypes: [], components: ['cli', 'desktop', 'memory'], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
+      issueTypes: [], components: ['cli', 'desktop', 'memory'],
+      members: [
+        { id: 'you', name: 'You', role: 'owner', addedAt: '2026-06-21T00:00:00.000Z' },
+        { id: 'anhdang', name: 'Anh Dang', role: 'admin', addedAt: '2026-06-21T00:00:00.000Z' },
+        { id: 'reviewer', name: 'Reviewer', role: 'viewer', addedAt: '2026-06-21T00:00:00.000Z' },
+      ],
+      createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
     },
     items: [
       mkItem('BR-1', 'epic', 'Unified workspace — Chat · Track · Code', 'in-progress', 'high', 'anhdang', ['track']),
@@ -826,6 +832,26 @@ export function installDevBridge(): void {
       const i = devAutomations.findIndex((x) => x.id === a.id);
       if (i >= 0) devAutomations.splice(i, 1);
       return [...devAutomations];
+    },
+    'track-members': () => [...(devTrack.project.members as Record<string, unknown>[])],
+    'track-add-member': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const ex = members.find((m) => m.id === a.id);
+      if (ex) { ex.role = a.role ?? 'member'; if (a.name !== undefined) ex.name = a.name; }
+      else members.push({ id: String(a.id ?? ''), name: a.name, role: a.role ?? 'member', addedAt: new Date().toISOString() });
+      return [...members];
+    },
+    'track-update-member-role': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const m = members.find((x) => x.id === a.id);
+      if (m) m.role = a.role ?? m.role;
+      return [...members];
+    },
+    'track-remove-member': (a) => {
+      const members = devTrack.project.members as Record<string, unknown>[];
+      const i = members.findIndex((x) => x.id === a.id);
+      if (i >= 0) members.splice(i, 1);
+      return [...members];
     },
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],

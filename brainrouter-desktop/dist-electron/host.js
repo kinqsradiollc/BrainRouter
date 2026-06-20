@@ -81,7 +81,7 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/br
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1541,6 +1541,20 @@ async function main() {
             'track-delete-automation': (a) => {
                 deleteAutomation(workspaceRoot, String(a.id ?? ''));
                 return listAutomations(workspaceRoot);
+            },
+            // Members & roles — per-project permissions.
+            'track-members': () => { ensureProject(workspaceRoot); return listMembers(workspaceRoot); },
+            'track-add-member': (a) => {
+                addMember(workspaceRoot, { id: String(a.id ?? ''), name: typeof a.name === 'string' ? a.name : undefined, role: (typeof a.role === 'string' ? a.role : 'member') });
+                return listMembers(workspaceRoot);
+            },
+            'track-update-member-role': (a) => {
+                updateMemberRole(workspaceRoot, String(a.id ?? ''), (typeof a.role === 'string' ? a.role : 'member'));
+                return listMembers(workspaceRoot);
+            },
+            'track-remove-member': (a) => {
+                removeMember(workspaceRoot, String(a.id ?? ''));
+                return listMembers(workspaceRoot);
             },
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.

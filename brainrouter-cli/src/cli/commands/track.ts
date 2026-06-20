@@ -8,7 +8,7 @@
  * the board stays provenance-linked, same as `/requirement`.
  */
 import chalk from 'chalk';
-import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType } from '@kinqs/brainrouter-types';
+import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
   getProject,
@@ -20,6 +20,10 @@ import {
   createAutomation,
   updateAutomation,
   deleteAutomation,
+  listMembers,
+  addMember,
+  updateMemberRole,
+  removeMember,
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
@@ -98,8 +102,67 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
 
   if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
 
+  if (sub === 'members' || sub === 'member') { handleMembers(ws, rest); return true; }
+
   console.log(chalk.yellow(`\nUnknown subcommand "${sub}". Try /track help\n`));
   return true;
+}
+
+/** `/track members [list|add|role|rm]` — per-project members & roles. */
+function handleMembers(ws: string, rest: string[]): void {
+  ensureProject(ws);
+  const op = (rest[0] ?? 'list').toLowerCase();
+
+  if (op === 'list' || op === 'ls') {
+    const members = listMembers(ws);
+    console.log(chalk.bold('\nMembers'));
+    for (const m of members) {
+      console.log(`  ${roleColor(m.role)(m.role.padEnd(6))} ${chalk.cyan((m.id).padEnd(14))} ${m.name ?? ''}`);
+    }
+    console.log('');
+    return;
+  }
+
+  if (op === 'add') {
+    const id = rest[1];
+    const role = rest[2];
+    if (!id) { console.log(chalk.red('\nUsage: /track members add <handle> [role: viewer|member|admin|owner] [--name "Full Name"]\n')); return; }
+    if (role && !isProjectRole(role)) { console.log(chalk.red(`\nUnknown role "${role}". Use: viewer · member · admin · owner\n`)); return; }
+    const nameIdx = rest.indexOf('--name');
+    const name = nameIdx >= 0 ? rest.slice(nameIdx + 1).join(' ').trim() || undefined : undefined;
+    try {
+      const m = addMember(ws, { id, name, role: (role as ProjectRole) ?? 'member' });
+      console.log(chalk.green(`\n✓ ${m.id} added as ${m.role}\n`));
+    } catch (e) { console.log(chalk.red(`\n${(e as Error).message}\n`)); }
+    return;
+  }
+
+  if (op === 'role') {
+    const id = rest[1];
+    const role = rest[2];
+    if (!id || !role) { console.log(chalk.red('\nUsage: /track members role <handle> <viewer|member|admin|owner>\n')); return; }
+    if (!isProjectRole(role)) { console.log(chalk.red(`\nUnknown role "${role}".\n`)); return; }
+    try {
+      const m = updateMemberRole(ws, id, role);
+      console.log(m ? chalk.green(`\n✓ ${m.id} → ${m.role}\n`) : chalk.yellow(`\nNo member ${id}.\n`));
+    } catch (e) { console.log(chalk.red(`\n${(e as Error).message}\n`)); }
+    return;
+  }
+
+  if (op === 'rm' || op === 'remove' || op === 'del') {
+    const id = rest[1];
+    if (!id) { console.log(chalk.red('\nUsage: /track members rm <handle>\n')); return; }
+    try {
+      console.log(removeMember(ws, id) ? chalk.green(`\n✓ Removed ${id}\n`) : chalk.yellow(`\nNo member ${id}.\n`));
+    } catch (e) { console.log(chalk.red(`\n${(e as Error).message}\n`)); }
+    return;
+  }
+
+  console.log(chalk.yellow(`\nUnknown members op "${op}". Try: list · add · role · rm\n`));
+}
+
+function roleColor(role: ProjectRole): (s: string) => string {
+  return role === 'owner' ? chalk.magenta : role === 'admin' ? chalk.cyan : role === 'member' ? chalk.green : chalk.gray;
 }
 
 /** `/track automations [list|add|rm|on|off]` — manage trigger→action rules. */
@@ -211,7 +274,8 @@ function printUsage(): void {
   console.log(chalk.gray('  /track create <title> [--type --status --priority]   Create a work item'));
   console.log(chalk.gray('  /track move <key> <status-id>                Transition a work item'));
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
-  console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)\n'));
+  console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
+  console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)\n'));
 }
 
 async function captureTrackNote(ctx: CommandContext, item: WorkItem, change: string): Promise<void> {

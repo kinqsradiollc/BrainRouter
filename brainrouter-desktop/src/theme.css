@@ -520,6 +520,36 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-auto-save:disabled { opacity: .45; cursor: default; }
 .track-auto-cancel { font-size: 12.5px; font-weight: 500; color: var(--text-dim); background: var(--ov-05); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; }
 
+/* ── Track — members & roles ────────────────────────────────────────────────── */
+.track-members { flex: 1; overflow-y: auto; padding: 18px 20px; max-width: 760px; }
+.track-members .track-section-head { margin-bottom: 6px; }
+.track-member-form { display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 11px; padding: 11px; margin-bottom: 14px; }
+.track-member-form input, .track-member-form select { font-size: 12.5px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; outline: 0; font-family: inherit; }
+.track-member-form input:focus, .track-member-form select:focus { border-color: var(--accent); }
+.track-member-id { flex: none; width: 190px; font-family: var(--mono); font-size: 12px; }
+.track-member-name { flex: 1; }
+.track-member-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 22px; }
+.track-member-row { display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 9px 13px; }
+.track-member-avatar { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.track-member-id-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.track-member-disp { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.track-member-handle { font-size: 11px; color: var(--text-faint); }
+.track-member-role { font-size: 12px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; outline: 0; font-family: inherit; }
+.track-member-role:focus { border-color: var(--accent); }
+.track-member-role:disabled { opacity: .6; cursor: not-allowed; }
+.track-member-del { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
+.track-member-del:hover:not(:disabled) { color: var(--err); background: var(--ov-05); }
+.track-member-del:disabled { opacity: .3; cursor: not-allowed; }
+.track-perm-matrix { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.track-perm-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); margin-bottom: 12px; }
+.track-perm-matrix table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.track-perm-matrix th { text-align: center; font-weight: 600; color: var(--text-dim); padding: 5px 6px; border-bottom: 1px solid var(--border); }
+.track-perm-matrix th:first-child { text-align: left; }
+.track-perm-matrix td { text-align: center; padding: 6px; color: var(--text-faint); border-bottom: 1px solid var(--ov-04); }
+.track-perm-matrix td:first-child { text-align: left; color: var(--text-dim); }
+.track-perm-matrix td.yes { color: var(--ok); font-weight: 700; }
+.track-perm-matrix tr:last-child td { border-bottom: 0; }
+
 /* ── Track — work-item detail drawer ────────────────────────────────────────── */
 .track-detail-scrim { position: absolute; inset: 0; z-index: 60; background: rgba(0,0,0,0.42); display: flex; justify-content: flex-end; animation: scrimIn .14s ease-out; }
 @keyframes scrimIn { from { opacity: 0; } to { opacity: 1; } }

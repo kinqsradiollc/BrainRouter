@@ -10,7 +10,7 @@ import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
 import { TrackView } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
@@ -133,7 +133,7 @@ export function App(): React.ReactElement {
   const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
-  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[] }>({ project: null, items: [], sprints: [], automations: [] });
+  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[] }>({ project: null, items: [], sprints: [], automations: [], members: [] });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -242,6 +242,7 @@ export function App(): React.ReactElement {
     q('q-track-items', 'track-items');
     q('q-track-sprints', 'track-sprints');
     q('q-track-automations', 'track-automations');
+    q('q-track-members', 'track-members');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.workspaceRoot]);
   const trackOps = {
@@ -256,6 +257,9 @@ export function App(): React.ReactElement {
     createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => q('q-track-create-automation', 'track-create-automation', input),
     updateAutomation: (id: string, patch: Partial<AutomationRule>) => q('q-track-update-automation', 'track-update-automation', { id, patch }),
     deleteAutomation: (id: string) => q('q-track-delete-automation', 'track-delete-automation', { id }),
+    addMember: (input: { id: string; name?: string; role: ProjectRole }) => q('q-track-add-member', 'track-add-member', input),
+    updateMemberRole: (id: string, role: ProjectRole) => q('q-track-update-member-role', 'track-update-member-role', { id, role }),
+    removeMember: (id: string) => q('q-track-remove-member', 'track-remove-member', { id }),
   };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
@@ -1062,7 +1066,7 @@ export function App(): React.ReactElement {
 
       <div className="main">
         {mode === 'track' ? (
-          <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} ops={trackOps} />
+          <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} ops={trackOps} />
         ) : (<>
         <div className="workrow" ref={workrowRef}>
           <ChatThread

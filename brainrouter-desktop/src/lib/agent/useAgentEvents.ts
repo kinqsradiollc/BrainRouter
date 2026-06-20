@@ -15,7 +15,7 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
-import type { TrackProject, WorkItem, Sprint, AutomationRule } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, Sprint, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
@@ -69,7 +69,7 @@ export interface AgentEventsCtx {
   // recall are counted here from their events). Reset on session-changed.
   setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
   // Track mode data (project + work items + sprints), fed by the host `track-*` queries.
-  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[] }>>;
+  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[] }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -559,6 +559,10 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-track-automations': case 'q-track-create-automation':
       case 'q-track-update-automation': case 'q-track-delete-automation':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, automations: result as AutomationRule[] }));
+        return;
+      case 'q-track-members': case 'q-track-add-member':
+      case 'q-track-update-member-role': case 'q-track-remove-member':
+        if (Array.isArray(result)) setTrack((t) => ({ ...t, members: result as ProjectMember[] }));
         return;
       case 'q-turn-changeset': {
         // End-of-turn changeset → append a card right after the final answer.
