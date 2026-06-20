@@ -288,6 +288,47 @@ export interface Board {
   updatedAt: string;
 }
 
+// ── Automation rules ──────────────────────────────────────────────────────────
+
+/** When an automation rule fires. */
+export type AutomationTrigger = "created" | "transitioned" | "updated";
+
+/** What an automation rule does when it fires. */
+export type AutomationActionType = "set-status" | "set-priority" | "set-assignee" | "add-label" | "comment";
+
+export interface AutomationAction {
+  type: AutomationActionType;
+  /** Status id · priority · assignee · label · comment body, per `type`. */
+  value: string;
+}
+
+/**
+ * A per-project automation rule: when a work item hits `trigger` and matches the
+ * optional JQL `condition`, run the `actions`. Actions are applied directly (they
+ * do not re-trigger automation) so rules can't loop.
+ */
+export interface AutomationRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  /** Optional JQL query the item must match (see track query). Empty = always. */
+  condition?: string;
+  actions: AutomationAction[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+const AUTOMATION_TRIGGERS: readonly AutomationTrigger[] = ["created", "transitioned", "updated"];
+const AUTOMATION_ACTION_TYPES: readonly AutomationActionType[] = ["set-status", "set-priority", "set-assignee", "add-label", "comment"];
+
+export function isAutomationTrigger(x: unknown): x is AutomationTrigger {
+  return typeof x === "string" && (AUTOMATION_TRIGGERS as readonly string[]).includes(x);
+}
+export function isAutomationActionType(x: unknown): x is AutomationActionType {
+  return typeof x === "string" && (AUTOMATION_ACTION_TYPES as readonly string[]).includes(x);
+}
+
 // ── Type guards for the durable records ───────────────────────────────────────
 
 function isStringArray(x: unknown): x is string[] {

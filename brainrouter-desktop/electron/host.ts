@@ -86,8 +86,8 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, type CreateWorkItemInput, type UpdateWorkItemPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import type { WorkItemType, SprintState, CodeLink } from '@kinqs/brainrouter-types';
+import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction } from '@kinqs/brainrouter-types';
 import { isRequirementStatus, isRequirementPriority, type RequirementRecord } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1439,6 +1439,26 @@ async function main(): Promise<void> {
       'track-sprint-state': (a) => {
         setSprintState(workspaceRoot, String(a.id ?? ''), String(a.state ?? 'future') as SprintState);
         return listSprints(workspaceRoot);
+      },
+      // Automation rules — trigger → action over the project board.
+      'track-automations': () => { ensureProject(workspaceRoot); return listAutomations(workspaceRoot); },
+      'track-create-automation': (a) => {
+        createAutomation(workspaceRoot, {
+          name: String(a.name ?? 'Rule'),
+          trigger: (typeof a.trigger === 'string' ? a.trigger : 'created') as AutomationTrigger,
+          condition: typeof a.condition === 'string' ? a.condition : undefined,
+          actions: Array.isArray(a.actions) ? (a.actions as AutomationAction[]) : [],
+        });
+        return listAutomations(workspaceRoot);
+      },
+      'track-update-automation': (a) => {
+        const patch = (a.patch && typeof a.patch === 'object' ? a.patch : {}) as AutomationPatch;
+        updateAutomation(workspaceRoot, String(a.id ?? ''), patch);
+        return listAutomations(workspaceRoot);
+      },
+      'track-delete-automation': (a) => {
+        deleteAutomation(workspaceRoot, String(a.id ?? ''));
+        return listAutomations(workspaceRoot);
       },
       // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
       // so the desktop panel and the terminal CLI share the same requirements.json.

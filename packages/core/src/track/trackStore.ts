@@ -26,20 +26,24 @@ import {
   type Board,
   type BoardType,
   type BoardColumn,
+  type AutomationRule,
+  type AutomationTrigger,
+  type AutomationAction,
   DEFAULT_WORKFLOW_STATES,
   DEFAULT_ISSUE_TYPES,
 } from '@kinqs/brainrouter-types';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
-import { parseTrackQuery } from './query.js';
+import { parseTrackQuery, matchesTrackQuery } from './query.js';
 
 interface TrackStore {
   project: TrackProject | null;
   workItems: Record<string, WorkItem>;
   sprints: Record<string, Sprint>;
   boards: Record<string, Board>;
+  automations: Record<string, AutomationRule>;
 }
 
-const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {} };
+const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {} };
 
 function trackFile(workspaceRoot: string): string {
   return getStateFile(workspaceRoot, 'track.json');
@@ -192,7 +196,8 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
   };
   store.workItems[item.id] = item;
   writeTrack(workspaceRoot, store);
-  return item;
+  runAutomations(workspaceRoot, item.id, 'created');
+  return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
 export function getWorkItem(workspaceRoot: string, idOrKey: string): WorkItem | undefined {
@@ -255,6 +260,7 @@ export function updateWorkItem(
   idOrKey: string,
   patch: UpdateWorkItemPatch,
   actor = 'user',
+  skipAutomation = false,
 ): WorkItem | undefined {
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
@@ -274,7 +280,9 @@ export function updateWorkItem(
   item.updatedAt = ts;
   store.workItems[item.id] = item;
   writeTrack(workspaceRoot, store);
-  return item;
+  if (skipAutomation) return item;
+  runAutomations(workspaceRoot, item.id, 'updated');
+  return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
 function fmt(v: unknown): string | undefined {
@@ -287,7 +295,10 @@ export function transitionWorkItem(workspaceRoot: string, idOrKey: string, toSta
   if (project && !project.workflowStates.some((s) => s.id === toStatus)) {
     throw new Error(`Unknown workflow state "${toStatus}". Valid: ${project.workflowStates.map((s) => s.id).join(', ')}`);
   }
-  return updateWorkItem(workspaceRoot, idOrKey, { status: toStatus }, actor);
+  const item = updateWorkItem(workspaceRoot, idOrKey, { status: toStatus }, actor, true); // skip the 'updated' trigger
+  if (!item) return undefined;
+  runAutomations(workspaceRoot, item.id, 'transitioned');
+  return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
 /** Add a comment; returns the updated item. */
@@ -432,4 +443,101 @@ export function boardView(workspaceRoot: string, boardId: string): Array<{ colum
   const mapped = new Set(board.columns.flatMap((c) => c.stateIds));
   const unmapped = items.filter((w) => !mapped.has(w.status));
   return unmapped.length ? [...cols, { column: 'Unmapped', items: unmapped }] : cols;
+}
+
+// ── Automation rules ──────────────────────────────────────────────────────────
+
+export function listAutomations(workspaceRoot: string): AutomationRule[] {
+  return Object.values(readTrack(workspaceRoot).automations).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
+export interface CreateAutomationInput {
+  name: string;
+  trigger: AutomationTrigger;
+  condition?: string;
+  actions: AutomationAction[];
+  enabled?: boolean;
+}
+
+export function createAutomation(workspaceRoot: string, input: CreateAutomationInput): AutomationRule {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const ts = nowIso();
+  const rule: AutomationRule = {
+    id: shortId('auto'), name: input.name, enabled: input.enabled ?? true,
+    trigger: input.trigger, condition: input.condition, actions: input.actions, createdAt: ts, updatedAt: ts,
+  };
+  store.automations[rule.id] = rule;
+  writeTrack(workspaceRoot, store);
+  return rule;
+}
+
+export type AutomationPatch = Partial<Pick<AutomationRule, 'name' | 'enabled' | 'trigger' | 'condition' | 'actions'>>;
+
+export function updateAutomation(workspaceRoot: string, id: string, patch: AutomationPatch): AutomationRule | undefined {
+  const store = readTrack(workspaceRoot);
+  const rule = store.automations[id];
+  if (!rule) return undefined;
+  Object.assign(rule, patch);
+  rule.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return rule;
+}
+
+export function deleteAutomation(workspaceRoot: string, id: string): boolean {
+  const store = readTrack(workspaceRoot);
+  if (!store.automations[id]) return false;
+  delete store.automations[id];
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+/** Apply one action to an item in place; returns a short activity description, or null on no-op. */
+function applyAutomationAction(project: TrackProject, item: WorkItem, action: AutomationAction): string | null {
+  switch (action.type) {
+    case 'set-status':
+      if (!project.workflowStates.some((s) => s.id === action.value) || item.status === action.value) return null;
+      item.status = action.value; item.statusCategory = categoryOf(project, action.value);
+      return `status → ${action.value}`;
+    case 'set-priority':
+      if (item.priority === (action.value as WorkItem['priority'])) return null;
+      item.priority = action.value as WorkItem['priority'];
+      return `priority → ${action.value}`;
+    case 'set-assignee':
+      if (item.assignee === (action.value || undefined)) return null;
+      item.assignee = action.value || undefined;
+      return `assignee → ${action.value || 'none'}`;
+    case 'add-label':
+      if (item.labels.includes(action.value)) return null;
+      item.labels = [...item.labels, action.value];
+      return `+label ${action.value}`;
+    case 'comment':
+      item.comments = [...item.comments, { id: shortId('cmt'), author: 'automation', body: action.value, createdAt: nowIso() }];
+      return 'commented';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Run enabled rules for an item that just hit `trigger`. Actions are applied
+ * DIRECTLY (not through the public mutation fns), so a rule can never re-trigger
+ * automation — no loops. Persists once if anything changed.
+ */
+export function runAutomations(workspaceRoot: string, idOrKey: string, trigger: AutomationTrigger): void {
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  if (!project) return;
+  const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
+  if (!item) return;
+  let changed = false;
+  for (const rule of Object.values(store.automations)) {
+    if (!rule.enabled || rule.trigger !== trigger) continue;
+    if (rule.condition && rule.condition.trim() && !matchesTrackQuery(item, rule.condition)) continue;
+    for (const action of rule.actions) {
+      const desc = applyAutomationAction(project, item, action);
+      if (desc) { item.activity.push({ at: nowIso(), actor: `automation:${rule.name}`, field: 'automation', to: desc }); changed = true; }
+    }
+  }
+  if (changed) { item.updatedAt = nowIso(); writeTrack(workspaceRoot, store); }
 }

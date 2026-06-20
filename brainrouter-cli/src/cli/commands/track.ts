@@ -8,7 +8,7 @@
  * the board stays provenance-linked, same as `/requirement`.
  */
 import chalk from 'chalk';
-import { type WorkItem, type WorkItemType, isWorkItemType, isWorkItemPriority } from '@kinqs/brainrouter-types';
+import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
   getProject,
@@ -16,6 +16,10 @@ import {
   getWorkItem,
   createWorkItem,
   transitionWorkItem,
+  listAutomations,
+  createAutomation,
+  updateAutomation,
+  deleteAutomation,
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
@@ -92,8 +96,83 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     return true;
   }
 
+  if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
+
   console.log(chalk.yellow(`\nUnknown subcommand "${sub}". Try /track help\n`));
   return true;
+}
+
+/** `/track automations [list|add|rm|on|off]` — manage trigger→action rules. */
+function handleAutomations(ws: string, rest: string[]): void {
+  ensureProject(ws);
+  const op = (rest[0] ?? 'list').toLowerCase();
+
+  if (op === 'list' || op === 'ls') {
+    const rules = listAutomations(ws);
+    if (!rules.length) { console.log(chalk.yellow('\nNo automation rules. Add one with: /track automations add <name> --when created --if "type = bug" --do set-priority:high\n')); return; }
+    console.log(chalk.bold('\nAutomation rules'));
+    for (const r of rules) {
+      const dot = r.enabled ? chalk.green('●') : chalk.gray('○');
+      const acts = r.actions.map((a) => `${a.type}:${a.value}`).join(', ');
+      console.log(`  ${dot} ${chalk.cyan(r.id.padEnd(12))} ${chalk.bold(r.name)}`);
+      console.log(chalk.gray(`      when ${r.trigger}${r.condition ? ` · if ${r.condition}` : ''} → ${acts}`));
+    }
+    console.log('');
+    return;
+  }
+
+  if (op === 'add' || op === 'new') {
+    const parsed = parseAutomation(rest.slice(1));
+    if (!parsed.name) { console.log(chalk.red('\nUsage: /track automations add <name> [--when created|transitioned|updated] [--if "<query>"] --do <action>:<value> [--do …]\n  actions: set-status · set-priority · set-assignee · add-label · comment\n')); return; }
+    if (!parsed.actions.length) { console.log(chalk.red('\nAdd at least one action: --do set-priority:high\n')); return; }
+    if (parsed.condition) {
+      const p = parseTrackQuery(parsed.condition);
+      if (!p.ok) { console.log(chalk.red(`\nBad condition query: ${p.error}\n`)); return; }
+    }
+    const rule = createAutomation(ws, { name: parsed.name, trigger: parsed.trigger, condition: parsed.condition, actions: parsed.actions });
+    console.log(chalk.green(`\n✓ Rule ${chalk.cyan(rule.id)} "${rule.name}" — when ${rule.trigger}${rule.condition ? ` if ${rule.condition}` : ''} → ${rule.actions.map((a) => `${a.type}:${a.value}`).join(', ')}\n`));
+    return;
+  }
+
+  if (op === 'rm' || op === 'delete' || op === 'del') {
+    const id = rest[1];
+    if (!id) { console.log(chalk.red('\nUsage: /track automations rm <id>\n')); return; }
+    console.log(deleteAutomation(ws, id) ? chalk.green(`\n✓ Deleted ${id}\n`) : chalk.yellow(`\nNo rule ${id}.\n`));
+    return;
+  }
+
+  if (op === 'on' || op === 'off' || op === 'enable' || op === 'disable') {
+    const id = rest[1];
+    if (!id) { console.log(chalk.red(`\nUsage: /track automations ${op} <id>\n`)); return; }
+    const enabled = op === 'on' || op === 'enable';
+    const r = updateAutomation(ws, id, { enabled });
+    console.log(r ? chalk.green(`\n✓ ${r.name} ${enabled ? 'enabled' : 'paused'}\n`) : chalk.yellow(`\nNo rule ${id}.\n`));
+    return;
+  }
+
+  console.log(chalk.yellow(`\nUnknown automations op "${op}". Try: list · add · rm · on · off\n`));
+}
+
+interface ParsedAutomation { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }
+function parseAutomation(tokens: string[]): ParsedAutomation {
+  const out: ParsedAutomation = { name: '', trigger: 'created', actions: [] };
+  const words: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '--when' && isAutomationTrigger(tokens[i + 1])) { out.trigger = tokens[++i] as AutomationTrigger; continue; }
+    if (t === '--if') { out.condition = tokens[++i]; continue; }
+    if (t === '--do') {
+      const spec = tokens[++i] ?? '';
+      const sep = spec.indexOf(':');
+      const type = sep >= 0 ? spec.slice(0, sep) : spec;
+      const value = sep >= 0 ? spec.slice(sep + 1) : '';
+      if (isAutomationActionType(type) && value) out.actions.push({ type: type as AutomationActionType, value });
+      continue;
+    }
+    words.push(t);
+  }
+  out.name = words.join(' ').trim();
+  return out;
 }
 
 function statusTag(w: WorkItem): string {
@@ -131,7 +210,8 @@ function printUsage(): void {
   console.log(chalk.gray('  /track list [text | query]                   List; a query like "priority >= high AND type = bug"'));
   console.log(chalk.gray('  /track create <title> [--type --status --priority]   Create a work item'));
   console.log(chalk.gray('  /track move <key> <status-id>                Transition a work item'));
-  console.log(chalk.gray('  /track show <key>                            Show one work item\n'));
+  console.log(chalk.gray('  /track show <key>                            Show one work item'));
+  console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)\n'));
 }
 
 async function captureTrackNote(ctx: CommandContext, item: WorkItem, change: string): Promise<void> {

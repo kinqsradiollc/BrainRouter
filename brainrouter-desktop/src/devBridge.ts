@@ -296,6 +296,11 @@ export function installDevBridge(): void {
   ];
   let devSprintN = 3;
   const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
+  const devAutomations: Record<string, unknown>[] = [
+    { id: 'auto_1', name: 'Bugs start high', enabled: true, trigger: 'created', condition: 'type = bug', actions: [{ type: 'set-priority', value: 'high' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'auto_2', name: 'Comment on done', enabled: false, trigger: 'transitioned', condition: 'status = done', actions: [{ type: 'comment', value: 'Auto-resolved by Track' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devAutoN = 3;
   const devPlanDecisions: DevPlanDecision[] = [
     { id: 'pdec_seed', verdict: 'changes-requested', actor: 'user', feedback: 'add a regression test for the reset path', planSnapshot: [{ step: 'Audit the session/context meter logic', status: 'in_progress' }], explanation: 'Session-scoped state fix', createdAt: '2026-06-17T22:00:00.000Z', linkedMemoryIds: [] },
     // auto-approved while running in auto mode (no approval prompt) — shows "approved · auto" in history
@@ -806,6 +811,21 @@ export function installDevBridge(): void {
       const sp = devSprints.find((s) => s.id === a.id);
       if (sp) sp.state = String(a.state ?? 'future');
       return [...devSprints];
+    },
+    'track-automations': () => [...devAutomations],
+    'track-create-automation': (a) => {
+      devAutomations.push({ id: `auto_${devAutoN++}`, name: String(a.name ?? 'Rule'), enabled: true, trigger: String(a.trigger ?? 'created'), condition: a.condition ? String(a.condition) : undefined, actions: Array.isArray(a.actions) ? a.actions : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      return [...devAutomations];
+    },
+    'track-update-automation': (a) => {
+      const r = devAutomations.find((x) => x.id === a.id);
+      if (r && a.patch && typeof a.patch === 'object') Object.assign(r, a.patch);
+      return [...devAutomations];
+    },
+    'track-delete-automation': (a) => {
+      const i = devAutomations.findIndex((x) => x.id === a.id);
+      if (i >= 0) devAutomations.splice(i, 1);
+      return [...devAutomations];
     },
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],
