@@ -40,15 +40,20 @@ import {
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import { parseTrackQuery, matchesTrackQuery } from './query.js';
 
+/** A recorded link from a work item to an external system's record. */
+export interface ExternalLink { number: number; url: string }
+
 interface TrackStore {
   project: TrackProject | null;
   workItems: Record<string, WorkItem>;
   sprints: Record<string, Sprint>;
   boards: Record<string, Board>;
   automations: Record<string, AutomationRule>;
+  /** GitHub issue links, keyed by work-item id (external sync round-trip). */
+  githubLinks: Record<string, ExternalLink>;
 }
 
-const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {} };
+const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {}, githubLinks: {} };
 
 function trackFile(workspaceRoot: string): string {
   return getStateFile(workspaceRoot, 'track.json');
@@ -665,4 +670,20 @@ export function removeMember(workspaceRoot: string, id: string, actor = 'user'):
   project.updatedAt = nowIso();
   writeTrack(workspaceRoot, store);
   return true;
+}
+
+// ── External sync links (GitHub issues) ───────────────────────────────────────
+
+/** The recorded external links, keyed by work-item id. Used by the GitHub sync. */
+export function getGithubLinks(workspaceRoot: string): Record<string, ExternalLink> {
+  return readTrack(workspaceRoot).githubLinks ?? {};
+}
+
+/** Record (or clear, with `null`) the GitHub issue a work item maps to. */
+export function setGithubLink(workspaceRoot: string, workItemId: string, link: ExternalLink | null): void {
+  const store = readTrack(workspaceRoot);
+  if (!store.githubLinks) store.githubLinks = {};
+  if (link) store.githubLinks[workItemId] = link;
+  else delete store.githubLinks[workItemId];
+  writeTrack(workspaceRoot, store);
 }

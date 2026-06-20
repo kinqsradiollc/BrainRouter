@@ -15,6 +15,11 @@ import { TrackDetail } from './TrackDetail.js';
 /** True when the search text looks like a JQL query (has an operator/keyword). */
 const looksLikeQuery = (s: string): boolean => /[=~<>]|(\s(and|or|in)\s)/i.test(s);
 
+// External sync (GitHub) — view-side shapes mirroring core's githubSync results.
+export interface SyncConfig { repo: string | null; hasToken: boolean; tokenSource: string | null }
+export interface SyncRow { key?: string; issueNumber?: number; title: string; action: 'create' | 'update' }
+export interface SyncResult { direction: 'export' | 'import'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; errors: string[] }
+
 export const TYPE_ICON: Record<WorkItemType, string> = {
   epic: 'spark', story: 'review', task: 'check-circle', bug: 'warn', 'sub-task': 'tasks',
 };
@@ -35,6 +40,7 @@ export interface TrackOps {
   addMember: (input: { id: string; name?: string; role: ProjectRole }) => void;
   updateMemberRole: (id: string, role: ProjectRole) => void;
   removeMember: (id: string) => void;
+  sync: (direction: 'import' | 'export', dryRun: boolean) => void;
 }
 
 export interface TrackViewProps {
@@ -43,10 +49,11 @@ export interface TrackViewProps {
   sprints: Sprint[];
   automations: AutomationRule[];
   members: ProjectMember[];
+  sync: { config: SyncConfig | null; result: SyncResult | null };
   ops: TrackOps;
 }
 
-type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation' | 'members';
+type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
 interface Filter { type?: WorkItemType; statusCategory?: string; priority?: WorkItemPriority; assignee?: string; text?: string }
 
 const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
@@ -58,9 +65,10 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'reports', label: 'Reports', icon: 'chart' },
   { id: 'automation', label: 'Automation', icon: 'bolt' },
   { id: 'members', label: 'Members', icon: 'shield' },
+  { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
 
-export function TrackView({ project, items, sprints, automations, members, ops }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, automations, members, sync, ops }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -111,7 +119,7 @@ export function TrackView({ project, items, sprints, automations, members, ops }
         ))}
       </div>
 
-      {tab !== 'automation' && tab !== 'members' ? (
+      {tab !== 'automation' && tab !== 'members' && tab !== 'sync' ? (
       <div className="track-filter">
         <span className={`track-filter-search${query ? (query.ok ? ' is-query' : ' is-bad') : ''}`} title="Type a JQL query like: priority >= high AND status != done">
           <Icon name="search" size={12} />
@@ -158,8 +166,10 @@ export function TrackView({ project, items, sprints, automations, members, ops }
         <ReportsView items={items} states={states} sprints={sprints} />
       ) : tab === 'automation' ? (
         <AutomationView automations={automations} states={states} ops={ops} />
-      ) : (
+      ) : tab === 'members' ? (
         <MembersView members={members} ops={ops} />
+      ) : (
+        <SyncView sync={sync} ops={ops} />
       )}
 
       {selected ? <TrackDetail item={selected} project={project} allItems={items} sprints={sprints} ops={ops} onClose={() => setSelectedKey(null)} /> : null}
@@ -580,6 +590,89 @@ function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: SyncResult | null }; ops: TrackOps }): React.ReactElement {
+  const [busy, setBusy] = useState<'import' | 'export' | null>(null);
+  const cfg = sync.config;
+  const result = sync.result;
+  const configured = !!(cfg?.repo && cfg?.hasToken);
+
+  // Clear the busy spinner whenever a fresh result lands.
+  React.useEffect(() => { setBusy(null); }, [result]);
+
+  const run = (direction: 'import' | 'export', dryRun: boolean): void => {
+    if (!configured) return;
+    setBusy(direction);
+    ops.sync(direction, dryRun);
+  };
+  const rows = result ? (result.exported ?? result.imported ?? []) : [];
+
+  return (
+    <div className="track-sync">
+      <div className="track-section-head">External sync <span className="track-col-count">GitHub Issues</span></div>
+      <p className="track-auto-intro">Two-way sync between this project and a GitHub repository's issues. Work items export as issues (type/priority become labels, done → closed); issues import back as work items. Re-runs update in place — no duplicates.</p>
+
+      <div className="track-sync-config">
+        <div className="track-sync-conn">
+          <span className={`track-sync-dot${configured ? ' on' : ''}`} />
+          {cfg?.repo ? (
+            <>
+              <span className="track-sync-repo mono">{cfg.repo}</span>
+              <span className={`track-sync-token${cfg.hasToken ? ' ok' : ''}`}>{cfg.hasToken ? `token via ${cfg.tokenSource}` : 'no token'}</span>
+            </>
+          ) : <span className="track-sync-unset">No repository configured</span>}
+        </div>
+        {!configured ? (
+          <p className="track-sync-help">
+            Set <code className="mono">cli.track.githubRepo</code> (e.g. <code className="mono">owner/name</code>) and a token in
+            <code className="mono"> cli.track.githubToken</code> — or export <code className="mono">GITHUB_TOKEN</code> — then reopen this tab.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="track-sync-actions">
+        <div className="track-sync-act">
+          <div className="track-sync-act-head"><Icon name="arrow-up" size={13} /> Export → GitHub</div>
+          <div className="track-sync-act-sub">Push work items to issues</div>
+          <div className="track-sync-btns">
+            <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('export', true)}>Dry-run</button>
+            <button className="track-sync-go" disabled={!configured || !!busy} onClick={() => run('export', false)}>{busy === 'export' ? 'Exporting…' : 'Export'}</button>
+          </div>
+        </div>
+        <div className="track-sync-act">
+          <div className="track-sync-act-head"><Icon name="arrow-down" size={13} /> Import ← GitHub</div>
+          <div className="track-sync-act-sub">Pull issues into the board</div>
+          <div className="track-sync-btns">
+            <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('import', true)}>Dry-run</button>
+            <button className="track-sync-go" disabled={!configured || !!busy} onClick={() => run('import', false)}>{busy === 'import' ? 'Importing…' : 'Import'}</button>
+          </div>
+        </div>
+      </div>
+
+      {result ? (
+        <div className="track-sync-result">
+          <div className="track-sync-result-head">
+            {result.dryRun ? <span className="track-sync-badge dry">Dry-run</span> : <span className="track-sync-badge live">Applied</span>}
+            {result.direction === 'export' ? 'Export' : 'Import'} — {rows.filter((r) => r.action === 'create').length} new, {rows.filter((r) => r.action === 'update').length} updated
+          </div>
+          <div className="track-sync-rows">
+            {rows.map((r, i) => (
+              <div key={i} className="track-sync-row">
+                <span className={`track-sync-act-tag ${r.action}`}>{r.action === 'create' ? '+ new' : '~ upd'}</span>
+                <span className="mono tl-key">{r.key ?? (r.issueNumber ? `#${r.issueNumber}` : '—')}</span>
+                <span className="tl-title">{r.title}</span>
+              </div>
+            ))}
+            {rows.length === 0 ? <div className="track-col-empty">Nothing to sync.</div> : null}
+          </div>
+          {result.errors.length ? (
+            <div className="track-sync-errors">{result.errors.map((e, i) => <div key={i}>{e}</div>)}</div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -853,6 +853,18 @@ export function installDevBridge(): void {
       if (i >= 0) members.splice(i, 1);
       return [...members];
     },
+    'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-sync': (a) => {
+      const dir = a.direction === 'export' ? 'export' : 'import';
+      const rows = (devTrack.items as Record<string, unknown>[]).slice(0, 5).map((w, i) => (
+        dir === 'export'
+          ? { key: w.key, title: w.title, action: i % 2 === 0 ? 'create' : 'update' }
+          : { issueNumber: 100 + i, title: w.title, action: i % 2 === 0 ? 'update' : 'create', key: w.key }
+      ));
+      return dir === 'export'
+        ? { direction: 'export', dryRun: a.dryRun !== false, exported: rows, errors: [] }
+        : { direction: 'import', dryRun: a.dryRun !== false, imported: rows, errors: [] };
+    },
     // §7 PLAN REVIEW — history + record-decision (mutates the in-memory log so the panel updates live).
     'plan-history': () => [...devPlanDecisions],
     'plan-record-decision': (a) => {

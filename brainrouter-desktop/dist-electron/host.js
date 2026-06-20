@@ -82,6 +82,7 @@ import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kin
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import { exportToGithub, importFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1555,6 +1556,23 @@ async function main() {
             'track-remove-member': (a) => {
                 removeMember(workspaceRoot, String(a.id ?? ''));
                 return listMembers(workspaceRoot);
+            },
+            // External sync — GitHub Issues. The token is resolved server-side from
+            // config.json/env and NEVER returned to the renderer.
+            'track-sync-config': () => {
+                const c = resolveGithubConfig();
+                return { repo: c.repo ?? null, hasToken: !!c.token, tokenSource: c.tokenSource ?? null };
+            },
+            'track-sync': async (a) => {
+                const direction = a.direction === 'export' ? 'export' : 'import';
+                const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
+                const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
+                if (!cfg.repo)
+                    return { error: 'No repo configured. Set cli.track.githubRepo in config.json or pass a repo.' };
+                if (!cfg.token)
+                    return { error: 'No token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.' };
+                const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun };
+                return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
             },
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.

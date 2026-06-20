@@ -550,6 +550,43 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-perm-matrix td.yes { color: var(--ok); font-weight: 700; }
 .track-perm-matrix tr:last-child td { border-bottom: 0; }
 
+/* ── Track — external sync (GitHub) ─────────────────────────────────────────── */
+.track-sync { flex: 1; overflow-y: auto; padding: 18px 20px; max-width: 760px; }
+.track-sync-config { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 12px 14px; margin-bottom: 14px; }
+.track-sync-conn { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.track-sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.track-sync-dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.track-sync-repo { color: var(--text); font-weight: 600; }
+.track-sync-token { font-size: 11px; color: var(--text-faint); background: var(--ov-05); border-radius: 5px; padding: 2px 7px; }
+.track-sync-token.ok { color: var(--ok); }
+.track-sync-unset { color: var(--text-faint); }
+.track-sync-help { font-size: 12px; color: var(--text-faint); line-height: 1.6; margin: 10px 0 0; }
+.track-sync-help code, .track-sync-repo.mono { font-family: var(--mono); font-size: 11.5px; }
+.track-sync-help code { background: var(--ov-05); padding: 1px 5px; border-radius: 4px; color: var(--text-dim); }
+.track-sync-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.track-sync-act { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.track-sync-act-head { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 650; color: var(--text); }
+.track-sync-act-head .ic { color: var(--accent); }
+.track-sync-act-sub { font-size: 11.5px; color: var(--text-faint); margin: 3px 0 11px; }
+.track-sync-btns { display: flex; gap: 8px; }
+.track-sync-dry { font-size: 12px; font-weight: 500; color: var(--text-dim); background: var(--ov-05); border: 1px solid var(--border); border-radius: 8px; padding: 7px 13px; }
+.track-sync-dry:hover:not(:disabled) { background: var(--ov-08); }
+.track-sync-go { font-size: 12px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 8px; padding: 7px 15px; }
+.track-sync-dry:disabled, .track-sync-go:disabled { opacity: .45; cursor: default; }
+.track-sync-result { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; }
+.track-sync-result-head { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-dim); margin-bottom: 11px; }
+.track-sync-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border-radius: 5px; padding: 2px 7px; }
+.track-sync-badge.dry { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.track-sync-badge.live { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.track-sync-rows { display: flex; flex-direction: column; gap: 4px; }
+.track-sync-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 4px 0; }
+.track-sync-act-tag { flex: none; font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 2px 6px; width: 46px; text-align: center; }
+.track-sync-act-tag.create { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.track-sync-act-tag.update { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.track-sync-row .tl-key { color: var(--text-dim); flex: none; }
+.track-sync-row .tl-title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-sync-errors { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--err); display: flex; flex-direction: column; gap: 3px; }
+
 /* ── Track — work-item detail drawer ────────────────────────────────────────── */
 .track-detail-scrim { position: absolute; inset: 0; z-index: 60; background: rgba(0,0,0,0.42); display: flex; justify-content: flex-end; animation: scrimIn .14s ease-out; }
 @keyframes scrimIn { from { opacity: 0; } to { opacity: 1; } }

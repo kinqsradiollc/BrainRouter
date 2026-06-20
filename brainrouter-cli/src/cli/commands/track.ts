@@ -26,6 +26,7 @@ import {
   removeMember,
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
+import { exportToGithub, importFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -104,8 +105,45 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
 
   if (sub === 'members' || sub === 'member') { handleMembers(ws, rest); return true; }
 
+  if (sub === 'sync') { await handleSync(ws, rest); return true; }
+
   console.log(chalk.yellow(`\nUnknown subcommand "${sub}". Try /track help\n`));
   return true;
+}
+
+/** `/track sync github <import|export> [--dry-run] [--repo owner/name]`. */
+async function handleSync(ws: string, rest: string[]): Promise<void> {
+  const provider = (rest[0] ?? '').toLowerCase();
+  const direction = (rest[1] ?? '').toLowerCase();
+  if (provider !== 'github' || (direction !== 'import' && direction !== 'export')) {
+    console.log(chalk.gray('\nUsage: /track sync github import|export [--dry-run] [--repo owner/name]'));
+    console.log(chalk.gray('  Token: cli.track.githubToken in config.json, or $GITHUB_TOKEN. Repo: --repo or cli.track.githubRepo.\n'));
+    return;
+  }
+  const dryRun = rest.includes('--dry-run') || rest.includes('-n');
+  const repoIdx = rest.indexOf('--repo');
+  const repoArg = repoIdx >= 0 ? rest[repoIdx + 1] : undefined;
+  const cfg = resolveGithubConfig(repoArg);
+  if (!cfg.repo) { console.log(chalk.red('\nNo repo. Pass --repo owner/name or set cli.track.githubRepo in config.json.\n')); return; }
+  if (!cfg.token) { console.log(chalk.red('\nNo token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.\n')); return; }
+
+  const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun };
+  console.log(chalk.gray(`\n${dryRun ? 'Dry-run: ' : ''}${direction} ${cfg.repo} (token via ${cfg.tokenSource})…`));
+  try {
+    const res = direction === 'export' ? await exportToGithub(ws, opts) : await importFromGithub(ws, opts);
+    const rows = res.exported ?? res.imported ?? [];
+    const creates = rows.filter((r) => r.action === 'create').length;
+    const updates = rows.filter((r) => r.action === 'update').length;
+    console.log(chalk.green(`${dryRun ? 'Would ' : ''}${direction === 'export' ? 'push' : 'pull'}: ${creates} new, ${updates} updated`) + chalk.gray(` (${rows.length} total)`));
+    for (const r of rows.slice(0, 20)) {
+      const label = 'key' in r ? (r.key ?? '—') : `#${(r as { issueNumber: number }).issueNumber}`;
+      console.log(`  ${r.action === 'create' ? chalk.green('+') : chalk.cyan('~')} ${chalk.cyan(String(label).padEnd(8))} ${r.title}`);
+    }
+    if (res.errors.length) { console.log(chalk.red(`\n${res.errors.length} error(s):`)); for (const e of res.errors.slice(0, 10)) console.log(chalk.red(`  ${e}`)); }
+    console.log('');
+  } catch (e) {
+    console.log(chalk.red(`\nSync failed: ${(e as Error).message}\n`));
+  }
 }
 
 /** `/track members [list|add|role|rm]` — per-project members & roles. */
@@ -275,7 +313,8 @@ function printUsage(): void {
   console.log(chalk.gray('  /track move <key> <status-id>                Transition a work item'));
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
   console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
-  console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)\n'));
+  console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
+  console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues\n'));
 }
 
 async function captureTrackNote(ctx: CommandContext, item: WorkItem, change: string): Promise<void> {

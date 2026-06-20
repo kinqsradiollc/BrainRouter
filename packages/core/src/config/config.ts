@@ -396,6 +396,13 @@ export interface CliKnobs {
    * config.json to turn it off entirely.
    */
   telemetry?: { enabled?: boolean };
+  /**
+   * TRACK external sync (0.4.15). GitHub Issues bridge config. `repo` is
+   * "owner/name"; `token` is a PAT with `repo`/`issues` scope (falls back to
+   * the standard `GITHUB_TOKEN` / `GH_TOKEN` env when omitted, like the gh
+   * CLI). Read on demand by the `/track sync` command + desktop Sync panel.
+   */
+  track?: { githubRepo?: string; githubToken?: string };
 }
 
 /**
