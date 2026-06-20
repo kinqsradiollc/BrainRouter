@@ -66,3 +66,28 @@ test("MEM-2′ is idempotent — re-capturing identical content reuses the doc +
     cleanup();
   }
 });
+
+test("MEM-NONBLOCK captureTurn returns immediately (deferred) and does NOT block on the LLM extraction", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "brainrouter-capture-nonblock-"));
+  const store = new SqliteMemoryStore(join(dir, "memory.db"));
+  store.init();
+  // A HANGING LLM: extraction (extractEveryNTurns=1 → fires this turn) will await
+  // it forever. If captureTurn still awaited extraction, this test would hang;
+  // because it backgrounds it, captureTurn resolves immediately with "deferred".
+  // The never-resolving promise has no active handle, so it can't keep the
+  // process alive or write to the (closed) db.
+  const hangingLlm = { run: () => new Promise<string>(() => { /* never resolves */ }) } as any;
+  const embStub = { isReady: () => false, embed: async () => [] } as any;
+  const pipe = new MemoryCapturePipeline(store, hangingLlm, embStub, 1);
+  try {
+    const result = await Promise.race([
+      pipe.captureTurn({ userId: "u1", sessionKey: "s1", messages: [{ role: "user", content: BIG, timestamp: TS }] }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("captureTurn blocked on the LLM extraction")), 3000).unref()),
+    ]);
+    assert.equal(result.sensoryRecordedCount, 1, "the sensory row was written synchronously");
+    assert.equal(result.cognitiveExtractionTriggered, true);
+    assert.equal(result.cognitiveExtractionStatus, "deferred", "extraction was backgrounded, not awaited");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

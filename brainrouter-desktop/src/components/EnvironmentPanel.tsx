@@ -10,7 +10,7 @@ import { Icon } from '../icons.js';
 import { fmtElapsed } from '../lib/format.js';
 import { summarizeChecks, ciStatusLabel } from '../lib/ci/ciFormat.js';
 import type { CiApi } from '../lib/ci/useCi.js';
-import type { FleetRow } from '../types.js';
+import type { FleetRow, PopId } from '../types.js';
 import type { PanelId } from '../panels/Panel.js';
 import type { SettingsSection } from '../lib/commands/commands.js';
 
@@ -23,6 +23,8 @@ export interface EnvironmentPanelProps {
   ensurePanel: (id: PanelId) => void;
   setTermDockOpen: Dispatch<SetStateAction<boolean>>;
   branches: { current: string | null; branches: string[]; loading?: boolean };
+  pop: PopId;
+  setPop: Dispatch<SetStateAction<PopId>>;
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
   commitSubjects: string[];
   ci: CiApi;
@@ -33,7 +35,7 @@ export interface EnvironmentPanelProps {
 }
 
 export function EnvironmentPanel(p: EnvironmentPanelProps): React.ReactElement | null {
-  const { envAnim, openSettings, gitInfo, ensurePanel, setTermDockOpen, branches, q, commitSubjects, ci, openCiPanel, lastTurnFails, backgroundTasks, openTask } = p;
+  const { envAnim, openSettings, gitInfo, ensurePanel, setTermDockOpen, branches, pop, setPop, q, commitSubjects, ci, openCiPanel, lastTurnFails, backgroundTasks, openTask } = p;
   if (!envAnim.mounted) return null;
   return (
     <aside className={`env-col${envAnim.closing ? ' closing' : ''}`}>
@@ -50,14 +52,38 @@ export function EnvironmentPanel(p: EnvironmentPanelProps): React.ReactElement |
             {gitInfo.insertions + gitInfo.deletions > 0 ? <b>+{gitInfo.insertions.toLocaleString()} -{gitInfo.deletions.toLocaleString()}</b> : null}
           </button>
         ) : null}
-        <button className="env-row" onClick={() => setTermDockOpen(true)}>
-          <Icon name="monitor" size={14} /><span>Local</span><Icon name="chev-down" size={10} />
-        </button>
+        {/* "Local" indicator removed — the app is local-only, so it carried no
+            information. The terminal is still reachable via the topbar toggle
+            (⌃`). */}
         {gitInfo?.branch ? (
           <>
-            <button className="env-row" onClick={() => q('q-branches', 'git-branches')}>
-              <Icon name="branch" size={14} /><span>{branches.current ?? gitInfo.branch}</span><Icon name="chev-down" size={10} />
-            </button>
+            <span className="pop-wrap env-branch-wrap">
+              {pop === 'branch-env' ? (
+                <div className="menu-pop down left">
+                  <div className="menu-head"><span>Switch branch</span></div>
+                  {branches.branches.slice(0, 14).map((b) => (
+                    <button key={b} className="menu-item" onClick={() => {
+                      setPop('');
+                      if (b === branches.current) return;
+                      // Run the checkout in the workspace terminal (same path the
+                      // Composer branch menu uses), then refresh branch + git state.
+                      q('a-term', 'action:term-exec', { cmd: `git checkout ${JSON.stringify(b).slice(1, -1)}` });
+                      setTimeout(() => { q('q-branches', 'git-branches'); q('q-git', 'git-info'); }, 600);
+                    }}>
+                      <span className="mi-check">{b === branches.current ? '✓' : ''}</span>{b}
+                    </button>
+                  ))}
+                  {branches.branches.length === 0 ? <div className="empty">No other branches.</div> : null}
+                </div>
+              ) : null}
+              <button className="env-row" onClick={() => {
+                if (pop === 'branch-env') { setPop(''); return; }
+                q('q-branches', 'git-branches'); // refresh the list before opening
+                setPop('branch-env');
+              }}>
+                <Icon name="branch" size={14} /><span>{branches.current ?? gitInfo.branch}</span><Icon name="chev-down" size={10} />
+              </button>
+            </span>
             <button className="env-row" onClick={() => ensurePanel('diff')}>
               <Icon name="commit" size={14} /><span>Commit or push</span>
             </button>

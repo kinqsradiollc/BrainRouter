@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from '../state/sessionStore.js';
+import type { TranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 /**
  * 0.4.x-3 — `/rewind` timeline model (pure, unit-tested).

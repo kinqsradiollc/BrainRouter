@@ -10,6 +10,7 @@ import { Icon } from '../icons.js';
 import remarkGfm from 'remark-gfm';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 import { WorkflowCard } from '../chat/WorkflowCard.js';
+import { ChangeSummary } from '../chat/ChangeSummary.js';
 import { HomeView } from './HomeView.js';
 import { WorkElapsed } from './WorkElapsed.js';
 import type { ChatRow, TaskViewState, WorkflowDetail, SessionRow } from '../types.js';
@@ -179,13 +180,7 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
           chatEnd.current?.scrollIntoView({ behavior: 'smooth' });
         }}>↓ Latest</button>
       ) : null}
-      {hasConversation && gitInfo?.branch && (gitInfo.insertions + gitInfo.deletions > 0) ? (
-        <div className="branchbar" onClick={() => ensurePanel('diff')}>
-          <Icon name="diff" size={12} />
-          <span><span className="add-n">+{gitInfo.insertions.toLocaleString()}</span> <span className="del-n">-{gitInfo.deletions.toLocaleString()}</span></span>
-          <span className="dim">{changedFiles.length} files changed — view diff</span>
-        </div>
-      ) : null}
+      {hasConversation ? <ChangeSummary gitInfo={gitInfo} changedFiles={changedFiles} ensurePanel={ensurePanel} q={q} /> : null}
       {composer}
     </main>
   );

@@ -293,7 +293,15 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
         : '';
       const doc = art.format === 'svg'
         ? `<!doctype html><meta charset="utf-8">${csp}<style>html,body{margin:0;height:100%;display:grid;place-items:center;background:transparent}svg{max-width:100%;max-height:100%}</style>${content}`
-        : (csp ? content.replace(/<head[^>]*>/i, (m) => m + csp) || (csp + content) : content);
+        // Inject the network-blocking CSP into <head> when present; otherwise
+        // PREPEND it (String.replace returns the unchanged string on no match, so
+        // the old `|| (csp + content)` fallback never fired — an interactive
+        // artifact with no <head> would then run scripts with NO CSP).
+        : (csp
+            ? (/<head[^>]*>/i.test(content)
+                ? content.replace(/<head[^>]*>/i, (m) => m + csp)
+                : csp + content)
+            : content);
       // sandbox: locked ('') by default; 'allow-scripts' only after explicit opt-in
       // (never allow-same-origin, so the frame can't reach the parent app).
       return <iframe className="art-html-frame" sandbox={interactive ? 'allow-scripts' : ''} srcDoc={doc} title={`Preview of ${art.title}`} />;

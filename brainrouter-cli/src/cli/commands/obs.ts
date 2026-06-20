@@ -4,19 +4,19 @@
  */
 
 import fs from 'node:fs';
-import { buildUsageBreakdown } from '../../runtime/usageBreakdown.js';
+import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import chalk from 'chalk';
-import { listSessions } from '../../orchestration/orchestrator.js';
+import { listSessions } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
 import { formatContextReport } from '../../runtime/contextReport.js';
 import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
 import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../runtime/offloadView.js';
-import { contextWindowFor } from '../../runtime/contextWindow.js';
-import { readPreferences } from '../../state/preferencesStore.js';
-import { readTranscriptEntries } from '../../state/sessionStore.js';
-import { getStateFile } from '../../state/cliState.js';
-import { getCliKnobs } from '../../config/config.js';
+import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readTranscriptEntries } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { getStateFile } from '@kinqs/brainrouter-core/dist/storage/store.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 
@@ -66,8 +66,10 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.bold(`\n📡 Tailing ${tracePath} — Ctrl+C to stop.\n`));
       // Stream the last 30 lines + new appends as JSONL until the user
       // interrupts with Ctrl+C. We use child_process tail because that's
-      // dramatically simpler than re-implementing inotify in Node.
-      const tail = exec(`tail -n 30 -f "${tracePath}"`);
+      // dramatically simpler than re-implementing inotify in Node. ARGV form
+      // (no shell) so a `cli.traceLog` path with shell metacharacters can't be
+      // interpreted as a command.
+      const tail = spawn('tail', ['-n', '30', '-f', tracePath], { stdio: ['ignore', 'pipe', 'pipe'] });
       const lineHandler = (chunk: Buffer | string) => {
         const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
         for (const raw of text.split('\n')) {
@@ -183,7 +185,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // provider either doesn't expose cache info (LM Studio /
       // Ollama / older endpoints) or this session hasn't yet seen a
       // turn — print "—" instead of misleading 0% / 0.
-      const { formatCacheStats } = await import('../../runtime/cacheStats.js');
+      const { formatCacheStats } = await import('@kinqs/brainrouter-core/dist/util/cacheStats.js');
       const turnCache = formatCacheStats({
         cachedTokens: agent.lastTurnUsage.cachedTokens,
         missedTokens: agent.lastTurnUsage.missedTokens,
@@ -301,7 +303,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // (system / memory-anchor) since the last check, diffed against a
       // CLI-state snapshot. Read-only; no change to the turn loop.
       if ((args[0] ?? '').toLowerCase() === 'prefix') {
-        const { diffPrefixComponents } = await import('../../runtime/contextRegions.js');
+        const { diffPrefixComponents } = await import('@kinqs/brainrouter-core/dist/context/contextRegions.js');
         const curr = agent.getPrefixComponents();
         const snapFile = getStateFile(agent.workspaceRoot, 'prefix-snapshot.json');
         let prev: ReturnType<typeof agent.getPrefixComponents> | null = null;
@@ -384,7 +386,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
     }
     case '/rollout':
     {
-      const { getSessionStateDir } = await import('../../state/cliState.js');
+      const { getSessionStateDir } = await import('@kinqs/brainrouter-core/dist/storage/store.js');
       const sessionDir = getSessionStateDir(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nSession bucket'));
       console.log(`  Session:   ${chalk.cyan(agent.sessionKey)}`);

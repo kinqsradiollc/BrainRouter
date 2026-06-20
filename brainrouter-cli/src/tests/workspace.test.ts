@@ -10,11 +10,11 @@ import {
   isPathInside,
   matchGlob,
   resolveWorkspacePath,
-} from '../agent/agent.js';
-import { grepSearch } from '../agent/workspaceFs.js';
-import { parsePatchEnvelope, assessPatchSafety } from '../agent/applyPatch.js';
-import { findWorkspaceRoot } from '../config/workspace.js';
-import { loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
+} from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { grepSearch } from '@kinqs/brainrouter-core/dist/agent/workspaceFs.js';
+import { parsePatchEnvelope, assessPatchSafety } from '@kinqs/brainrouter-core/dist/agent/applyPatch.js';
+import { findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
+import { loadWorkspaceInstructionSummary } from '@kinqs/brainrouter-core/dist/prompt/systemPrompt.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('resolveWorkspacePath rejects parent traversal outside workspace', () => {

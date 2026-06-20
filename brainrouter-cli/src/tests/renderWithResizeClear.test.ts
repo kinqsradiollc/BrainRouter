@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldHideCursor, shouldUseAltScreen } from '../cli/ink/renderWithResizeClear.js';
-import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/dist/config/config.js';
 
 function fakeTty(): NodeJS.WriteStream {
   // Just enough surface for `shouldUseAltScreen` / `shouldHideCursor` —

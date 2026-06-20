@@ -24,6 +24,7 @@
 
 import { compactToolOutput } from '../prompt/toolCompaction.js';
 import { getCliKnobs } from '../config/config.js';
+import { attachCompactedResultHandoff, ResultCache } from '../util/resultHandoff.js';
 
 /** Default cap. Overridable via BRAINROUTER_TURN_END_RESULT_CAP_TOKENS. */
 export const TURN_END_RESULT_CAP_TOKENS = 3000;
@@ -52,7 +53,8 @@ export interface TurnEndShrinkOptions {
   capTokens?: number;
   /** `compactToolOutput` is consulted for each oversized message. */
   /** Hook used in tests to bypass the real compactor for deterministic shape. */
-  compact?: (input: { toolName: string; output: string }) => { inlineText: string };
+  compact?: (input: { toolName: string; output: string }) => { inlineText: string; requiresResultHandoff?: boolean };
+  resultCache?: ResultCache;
 }
 
 /**
@@ -66,9 +68,12 @@ export function shrinkOversizedToolResults(
 ): TurnEndShrinkResult {
   const cap = options.capTokens ?? readCapTokensFromEnv();
   const charCap = cap * APPROX_CHARS_PER_TOKEN;
-  const compact = options.compact ?? ((input) => {
+  const compact: (input: { toolName: string; output: string }) => { inlineText: string; requiresResultHandoff?: boolean } = options.compact ?? ((input) => {
     const compacted = compactToolOutput({ toolName: input.toolName, output: input.output });
-    if (compacted) return { inlineText: compacted.inlineText };
+    if (compacted) return {
+      inlineText: compacted.inlineText,
+      requiresResultHandoff: compacted.requiresResultHandoff,
+    };
     return { inlineText: shortPreview(input.output, charCap) };
   });
 
@@ -82,7 +87,9 @@ export function shrinkOversizedToolResults(
     if (content.length <= charCap) continue;
     const before = content.length;
     const compacted = compact({ toolName: msg.name ?? 'unknown', output: content });
-    msg.content = compacted.inlineText;
+    msg.content = compacted.requiresResultHandoff && options.resultCache
+      ? attachCompactedResultHandoff(options.resultCache, content, compacted.inlineText, { label: msg.name }).content
+      : compacted.inlineText;
     msg._shrunk = true;
     shrunkCount += 1;
     charsSaved += Math.max(0, before - (typeof msg.content === 'string' ? msg.content.length : 0));

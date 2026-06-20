@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/loopRunner.js';
-import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial } from '../runtime/exec/sandbox.js';
-import { startSpan, traceEnabled } from '../runtime/tracing.js';
-import { isDangerousCommand, resolveRunCommandApproval } from '../runtime/exec/dangerousCommand.js';
+import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial } from '@kinqs/brainrouter-core/dist/exec/sandbox.js';
+import { startSpan, traceEnabled } from '@kinqs/brainrouter-core/dist/telemetry/tracing.js';
+import { isDangerousCommand, resolveRunCommandApproval } from '@kinqs/brainrouter-core/dist/exec/dangerousCommand.js';
 
 test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
   // Stub the global fetch with three scenarios that have historically crashed
   // the agent loop with `Cannot read properties of undefined (reading '0')`
   // when the upstream returned HTTP 200 + a non-standard body.
-  const { callOpenAI } = await import('../agent/agent.js');
+  const { callOpenAI } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
   const realFetch = global.fetch;
   const llmConfig = { provider: 'openai' as const, apiKey: 'test', model: 'gpt-oss-120b', endpoint: 'http://localhost:9999/v1' };
 
@@ -50,8 +50,8 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
 
 test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
   const { acquireLLMSlot, getLLMSemaphoreState, resetLLMSemaphoreForTests } =
-    await import('../runtime/llmSemaphore.js');
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
+    await import('@kinqs/brainrouter-core/dist/util/llmSemaphore.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
   // Force a known cap of 2 for this test.
   setCliKnobOverride({ llmMaxConcurrent: 2 });
   resetLLMSemaphoreForTests();
@@ -112,7 +112,7 @@ test('loopRunner: only one loop runs at a time and stop releases the slot', asyn
 });
 
 test('resolveSandboxConfig reflects cli.sandbox knobs', async () => {
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
   try {
     setCliKnobOverride({
       sandbox: 'on',
@@ -130,7 +130,7 @@ test('resolveSandboxConfig reflects cli.sandbox knobs', async () => {
 });
 
 test('CODEX-SANDBOX-FAILCLOSED resolveSandboxConfig honours cli.sandboxUnavailable', async () => {
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('../config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
   try {
     setCliKnobOverride({ sandbox: 'on', sandboxUnavailable: 'warn' });
     assert.equal(resolveSandboxConfig('/tmp/x').unavailableMode, 'warn');
@@ -169,7 +169,7 @@ test('CODEX-SANDBOX-FAILCLOSED detectSandboxDenial flags sandbox denials, not or
 });
 
 test('tracing.startSpan is a no-op when cli.traceLog is unset', async () => {
-  const { _resetCliKnobsCache } = await import('../config/config.js');
+  const { _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
   try {
     _resetCliKnobsCache();
     assert.equal(traceEnabled(), false);
@@ -183,7 +183,7 @@ test('tracing.startSpan is a no-op when cli.traceLog is unset', async () => {
 });
 
 test('compactor: renderCompactSystemMessage tags the summary clearly', async () => {
-  const { renderCompactSystemMessage } = await import('../prompt/compactor.js');
+  const { renderCompactSystemMessage } = await import('@kinqs/brainrouter-core/dist/prompt/compactor.js');
   const rendered = renderCompactSystemMessage('# Goals\n- Ship feature X');
   assert.match(rendered, /Compacted conversation summary/);
   assert.match(rendered, /Ship feature X/);

@@ -1,15 +1,15 @@
 import path from 'node:path';
-import type { Goal } from '../state/goalStore.js';
-import { formatBudget, readGoal } from '../state/goalStore.js';
-import { readPlan, type PlanState } from '../state/taskStore.js';
-import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '../state/workflowArtifacts.js';
-import { listSessions, type ChildSessionRecord } from '../orchestration/orchestrator.js';
-import type { RecalledRecord } from '../memory/briefing.js';
-import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy } from '../state/preferencesStore.js';
-import { getSessionMode, resolveActiveMode } from '../state/sessionModeStore.js';
-import { getCliKnobs } from '../config/config.js';
+import type { Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { formatBudget, readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readPlan, type PlanState } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { listSessions, type ChildSessionRecord } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import type { RecalledRecord } from '@kinqs/brainrouter-core/dist/memory/briefing.js';
+import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { getSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { BOX, type Theme } from './theme.js';
-import { formatContextWindow } from '../runtime/contextWindow.js';
+import { formatContextWindow } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 
 /**
  * `/where` — single-screen "where am I right now" answer.

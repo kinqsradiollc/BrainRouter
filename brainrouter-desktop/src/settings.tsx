@@ -249,6 +249,14 @@ export function SettingsDialog(props: {
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
   const tier = (prefs.tier as string | null | undefined) ?? 'follow model';
+  // §settings — cli.* knob helpers (per-knob writer), lifted to component scope
+  // so a knob-backed control can live in its natural category, not only under
+  // Advanced. Shared with the CLI; empty/clear reverts to the default.
+  const knobs = (snapshot?.cliKnobs ?? {}) as Record<string, unknown>;
+  const setKnob = (key: string, value: unknown): void => { props.onAction('a-knob', 'action:set-cli-knob', { key, value }); setTimeout(refreshSnapshot, 80); };
+  const kb = (key: string): boolean => Boolean(knobs[key]);
+  const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
+  const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
 
   const filteredCommands = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -300,12 +308,6 @@ export function SettingsDialog(props: {
           <Row title="Clear history" desc="Drops the in-memory history for this session. (/clear)">
             <button className="btn danger" onClick={() => props.onAction('a-clear', 'action:clear')}>Clear</button>
           </Row>
-          <div className="set-h2">Advanced CLI config</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>Every <code>cli</code> knob from <code>~/.config/brainrouter/config.json</code> — for settings without a dedicated control above.</div>
-          <CliConfigEditor
-            cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
-            onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
-          />
         </>
       );
       case 'models': {
@@ -442,7 +444,12 @@ export function SettingsDialog(props: {
           <Row title="Access mode (this session)" desc="read = look only · write = edit files · shell = run commands. (/permissions)">
             <Select value="—" options={['—', 'read', 'write', 'shell']} onChange={(v) => v !== '—' && props.onAction('a-access', 'action:set-access', { mode: v })} />
           </Row>
-          <Row title="Sandbox" desc={<>run_command isolation is <code>{snapshot?.sandbox ?? 'off'}</code> (cli.sandbox in config.json). Grants managed via /sandbox in the CLI.</>} />
+          <Row title="Sandbox" desc={<>Isolate <code>run_command</code> in a restricted sandbox (cli.sandbox). off = no isolation. Grants are managed via /sandbox in the CLI.</>}>
+            <Select value={ks('sandbox', 'off')} options={['off', 'on']} onChange={(v) => setKnob('sandbox', v)} />
+          </Row>
+          <Row title="External-dir writes" desc="Writing files outside the workspace root (cli.externalDirWrites).">
+            <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
+          </Row>
           <div className="set-h2">Permission rules (cli.permissions)</div>
           <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Shared with the CLI.</div>
           {(snapshot?.permissionRules?.deny ?? []).map((r) => (
@@ -471,6 +478,9 @@ export function SettingsDialog(props: {
           <div className="set-h">Memory</div>
           <Row title="Memory pipeline" desc="Run phase-1/phase-2 consolidation on session start. (/memories)">
             <Toggle on={pb('memoriesEnabled', true)} onChange={(v) => props.onPref('memoriesEnabled', v)} />
+          </Row>
+          <Row title="Recall mode" desc="When BrainRouter memory recall fires (cli.recallMode).">
+            <Select value={ks('recallMode', 'gated')} options={['always', 'gated', 'off']} onChange={(v) => setKnob('recallMode', v)} />
           </Row>
           <Row title="Persona anchor" desc="Pin the brain's distilled Core Identity into the cache-stable briefing prefix every turn. (/persona on|off)">
             <Toggle on={pb('personaAnchorEnabled', true)} onChange={(v) => props.onPref('personaAnchorEnabled', v)} />
@@ -542,13 +552,7 @@ export function SettingsDialog(props: {
       );
       case 'advanced': {
         // §settings-completeness — the load-bearing cli.* knobs, individually
-        // editable (per-knob writer), instead of only via config.json. Shared
-        // with the CLI; empty/clear reverts to the default.
-        const knobs = snapshot?.cliKnobs ?? {};
-        const setKnob = (key: string, value: unknown): void => { props.onAction('a-knob', 'action:set-cli-knob', { key, value }); setTimeout(refreshSnapshot, 80); };
-        const kb = (key: string): boolean => Boolean(knobs[key]);
-        const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
-        const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
+        // editable (per-knob writer). The knob helpers live at component scope.
         return (
           <>
             <div className="set-h">Advanced</div>
@@ -574,10 +578,7 @@ export function SettingsDialog(props: {
               <Toggle on={knobs.contextCompaction !== false} onChange={(v) => setKnob('contextCompaction', v)} />
             </Row>
 
-            <div className="set-h2">Memory &amp; agents</div>
-            <Row title="Recall mode" desc="When BrainRouter memory recall fires (cli.recallMode).">
-              <Select value={ks('recallMode', 'gated')} options={['always', 'gated', 'off']} onChange={(v) => setKnob('recallMode', v)} />
-            </Row>
+            <div className="set-h2">Agents</div>
             <Row title="Next-action planner" desc="Plan the next step before acting (cli.nextActionPlanner).">
               <Toggle on={ks('nextActionPlanner', 'on') !== 'off'} onChange={(v) => setKnob('nextActionPlanner', v ? 'on' : 'off')} />
             </Row>
@@ -591,24 +592,20 @@ export function SettingsDialog(props: {
               <Select value={ks('buildLoop', 'escalate')} options={['off', 'escalate', 'always']} onChange={(v) => setKnob('buildLoop', v)} />
             </Row>
 
-            <div className="set-h2">Safety</div>
-            <Row title="Sandbox" desc="Isolate run_command (cli.sandbox). off = no isolation.">
-              <Select value={ks('sandbox', 'off')} options={['off', 'on']} onChange={(v) => setKnob('sandbox', v)} />
-            </Row>
-            <Row title="External-dir writes" desc="Writing outside the workspace (cli.externalDirWrites).">
-              <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
-            </Row>
-
-            <div className="set-h2">Telemetry &amp; notifications</div>
-            <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
-              <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
-            </Row>
+            <div className="set-h2">Notifications</div>
             <Row title="Notify bell" desc="Ring the terminal bell on an idle background completion (cli.notifyBell).">
               <Toggle on={kb('notifyBell')} onChange={(v) => setKnob('notifyBell', v)} />
             </Row>
             <Row title="Update check" desc="Check for new BrainRouter versions on launch (cli.updateCheck).">
               <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
             </Row>
+
+            <div className="set-h2">Raw cli.* config</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>Every <code>cli</code> knob from <code>~/.config/brainrouter/config.json</code> — the catch-all for knobs without a dedicated control above.</div>
+            <CliConfigEditor
+              cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
+              onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
+            />
           </>
         );
       }
@@ -621,6 +618,9 @@ export function SettingsDialog(props: {
           <div className="set-h2">Per-actor breakdown (/usage)</div>
           <pre className="usage-pre">{props.usageLines.length ? props.usageLines.join('\n') : 'Run a turn first — the breakdown shows parent vs child spend, cache hit rate, and offload savings.'}</pre>
           <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />
+          <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
+            <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
+          </Row>
           <Row title="Deep diagnostics" desc="/doctor, /debug-config, /watch and /trace remain CLI-side (they tail local logs)." />
         </>
       );
@@ -631,8 +631,8 @@ export function SettingsDialog(props: {
             <input type="color" className="ctl color-ctl" value={props.accent || '#7aa2f7'} onChange={(e) => props.onAccent(e.target.value)} />
             {props.accent ? <button className="btn" onClick={() => props.onAccent('')}>Reset</button> : null}
           </Row>
-          <Row title="Desktop theme" desc="Claude Dark = warm charcoal (the desktop default). High-contrast = near-black.">
-            <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Claude Dark'} options={['Claude Dark', 'High-contrast dark']}
+          <Row title="Desktop theme" desc="Graphite Mono = near-black neutral with an indigo accent (the desktop default). High-contrast = pure near-black.">
+            <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Graphite Mono'} options={['Graphite Mono', 'High-contrast dark']}
               onChange={(v) => props.onTheme(v === 'High-contrast dark' ? 'hc' : 'dark')} />
           </Row>
           <Row title="Markdown theme (CLI)" desc="Syntax highlighting theme the terminal CLI uses for markdown output. (/theme)">

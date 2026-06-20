@@ -26,6 +26,25 @@ function insideWorkspace(workspaceRoot, relPath) {
     const ok = resolved === root || resolved.startsWith(root + path.sep);
     return { ok, resolved };
 }
+/**
+ * Symlink-hardened containment for the READ path. `insideWorkspace` blocks `..`
+ * traversal in the path string, but a symlink that LIVES inside the workspace
+ * can still redirect a read to an external file (e.g. a planted
+ * `repo/link -> /Users/you/.ssh/id_rsa`). Resolve symlinks and require the REAL
+ * path to be inside the workspace too — mirroring `writeWorkspaceEntry`'s guard.
+ * Returns true on a non-resolvable (missing) path so the caller's stat surfaces
+ * the natural ENOENT rather than a misleading escape error.
+ */
+function realPathInsideWorkspace(workspaceRoot, resolved) {
+    const root = path.resolve(workspaceRoot);
+    try {
+        const real = fs.realpathSync(resolved);
+        return real === root || real.startsWith(root + path.sep);
+    }
+    catch {
+        return true;
+    }
+}
 /** Bounded workspace file list for non-git projects or repos where git returns
  * no files. Avoids heavyweight dependency/index folders and never follows
  * symlinked directories. */
@@ -83,6 +102,8 @@ export function readWorkspaceEntry(workspaceRoot, relPath) {
     const { ok, resolved } = insideWorkspace(workspaceRoot, relPath);
     if (!ok)
         return { path: relPath, kind: 'file', content: '', error: 'path escapes the workspace' };
+    if (!realPathInsideWorkspace(workspaceRoot, resolved))
+        return { path: relPath, kind: 'file', content: '', error: 'path escapes the workspace (symlink)' };
     try {
         const st = fs.statSync(resolved);
         if (st.isDirectory()) {
@@ -117,6 +138,8 @@ export function statWorkspaceEntry(workspaceRoot, relPath) {
     const { ok, resolved } = insideWorkspace(workspaceRoot, relPath);
     if (!ok)
         return { path: relPath, exists: false, error: 'path escapes the workspace' };
+    if (!realPathInsideWorkspace(workspaceRoot, resolved))
+        return { path: relPath, exists: false, error: 'path escapes the workspace (symlink)' };
     try {
         const st = fs.statSync(resolved);
         return { path: relPath, exists: true, kind: st.isDirectory() ? 'directory' : 'file', mtimeMs: st.mtimeMs, size: st.size };

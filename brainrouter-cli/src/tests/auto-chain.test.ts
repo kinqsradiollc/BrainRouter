@@ -4,12 +4,12 @@ import {
   resolveAutoChainMode,
   autoChainRoles,
   isAutoChainMode,
-} from '../orchestration/autoChain.js';
+} from '@kinqs/brainrouter-core/dist/orchestration/autoChain.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration.js';
-import { readPreferences } from '../state/preferencesStore.js';
+import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
 
 test('isAutoChainMode validates the enum', () => {
   for (const m of ['off', 'review', 'verify', 'both']) assert.equal(isAutoChainMode(m), true);

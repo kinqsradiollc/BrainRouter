@@ -1,6 +1,6 @@
 import chalk, { type ChalkInstance } from 'chalk';
-import { readPreferences } from '../state/preferencesStore.js';
-import { getCliKnobs } from '../config/config.js';
+import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
 
 /**
  * Consolidated terminal theme tokens.

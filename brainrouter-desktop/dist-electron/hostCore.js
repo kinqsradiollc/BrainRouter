@@ -118,7 +118,7 @@ export function createHostCore(input) {
             turnEmit({ kind: 'turn-complete', answer });
             const u = rt.agent.sessionUsage;
             if (u)
-                turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns });
+                turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns, cachedTokens: u.cachedTokens });
         }
         catch (err) {
             turnEmit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });

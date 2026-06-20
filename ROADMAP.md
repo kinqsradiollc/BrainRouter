@@ -81,6 +81,47 @@ agent-behavior benchmark that gates it all. · **M** BrainRouter Desktop — nat
 
 ---
 
+## Next — The unified workspace: **Chat · Track · Code**
+
+One app, three modes over the *same* workspace + the *same* memory, so planning,
+coordination, and implementation never leave the building. A mode switcher (top
+of the window) flips the surface; the project, the memory, and the agent are
+shared across all three.
+
+- **Chat** — conversational/assistant mode: ask, explore, design, and draft
+  without the full coding-agent loop. Lightweight; promotes a thread into a Code
+  turn or a Track item when it's ready.
+- **Track** — a first-party, **Jira-class project-management surface**, fully
+  in-app so everything stays in one place. **Each workspace is a project** with its
+  own management. Target scope (everything an engineering team needs):
+  - **Work items** — issues / stories / bugs / tasks / sub-tasks, **epics**, and
+    custom types; configurable workflow states + transitions; priority, labels,
+    components, assignees, watchers, estimates, due dates, comments, attachments,
+    activity history.
+  - **Planning** — **backlog**, **sprints/iterations** (start/complete, capacity,
+    burndown), **boards** (kanban + scrum, swimlanes, WIP limits), and **roadmap**
+    (epics over time, dependencies).
+  - **Views & query** — board / list / table / timeline, saved filters, and a
+    JQL-style query language; reports (velocity, cumulative flow, cycle/lead time).
+  - **Automation & process** — rules/triggers, templates, required fields/gates,
+    SLAs; per-project configuration and permissions.
+  - **Code-aware (the differentiator)** — the agent **reads and writes the tracker
+    as a first-class tool**: items link to branches / commits / PRs / review
+    findings / artifacts; status moves with the work; the existing requirement →
+    plan → task → review → verify flow maps onto Track items; everything captures
+    into BrainRouter memory with full provenance. Each project's board is queryable
+    by the agent so it can pick up, update, and close work itself.
+- **Code** — today's agentic coding mode (the desktop + TUI), unchanged.
+
+Shared substrate: one memory pipeline, one workspace/session model, one provider
+config; Track items, Chat threads, and Code turns all reference the same
+provenance-tracked records. Build order TBD — **data model + per-workspace Track
+store first** (work-item / epic / sprint / board contracts in `packages/types` +
+a durable store), then the agent tool surface, then the Track UI + the mode
+switcher, then automation/reports.
+
+---
+
 ## 0.5.0 — Power-user surface
 
 - [ ] Fullscreen `/focus` TUI + plugin marketplace + trust/signature model.

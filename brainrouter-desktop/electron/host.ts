@@ -83,7 +83,7 @@ import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contrac
 // history; the desktop panel reads/records through these thin wrappers — no
 // parallel store. A best-effort memory note is captured + linked, mirroring the CLI.
 import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
-import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { isRequirementStatus, isRequirementPriority, type RequirementRecord } from '@kinqs/brainrouter-types';
@@ -324,6 +324,21 @@ function artifactFilterFromArgs(a: Record<string, unknown>): ArtifactFilter | un
   if (typeof a.sessionKey === 'string' && a.sessionKey) filter.sessionKey = a.sessionKey;
   if (typeof a.requirementId === 'string' && a.requirementId) filter.requirementId = a.requirementId;
   return Object.keys(filter).length ? filter : undefined;
+}
+
+/**
+ * ARTIFACT/ANNOTATION-LINK — default a list filter to the ACTIVE session, so the
+ * artifacts/annotations panels show only this chat's records (session-scoped,
+ * matching the brain's session-scoped recall). `args.all === true` opts back
+ * into the whole-workspace view.
+ */
+function withSessionScope<T extends { sessionKey?: string }>(
+  filter: T | undefined,
+  args: Record<string, unknown>,
+  sessionKey: string,
+): T | undefined {
+  if (args.all === true || !sessionKey) return filter;
+  return { ...((filter ?? {}) as T), sessionKey: filter?.sessionKey ?? sessionKey };
 }
 
 /**
@@ -638,25 +653,19 @@ async function main(): Promise<void> {
   const captureAnnotationNote = async (record: AnnotationRecord, change: string): Promise<void> => {
     let memoryId: string | undefined;
     try {
-      const where = record.anchor?.filePath
-        ? ` @ ${record.anchor.filePath}${record.anchor.startLine !== undefined ? `:${record.anchor.startLine}${record.anchor.endLine && record.anchor.endLine !== record.anchor.startLine ? `-${record.anchor.endLine}` : ''}` : ''}`
-        : '';
-      memoryId = (await emitAgentEvent(
+      memoryId = (await emitAnnotationCapture(
         { mcpClient, sessionKey: activeMemorySessionKey() },
         {
-          kind: 'agent_output',
-          summary: `Annotation ${record.id} on ${record.type}${record.targetId ? ` ${record.targetId}` : ''}${where} [${record.status}] (${change})`,
-          payload: {
-            annotationId: record.id,
-            targetKind: record.type,
-            targetId: record.targetId ?? null,
-            status: record.status,
-            severity: record.severity ?? null,
-            body: record.body,
-            suggestedText: record.suggestedText ?? null,
-            anchor: record.anchor ?? null,
-            change,
-          },
+          annotationId: record.id,
+          title: record.body.slice(0, 120),
+          body: record.body,
+          targetKind: record.type,
+          targetId: record.targetId,
+          filePath: record.anchor?.filePath,
+          startLine: record.anchor?.startLine,
+          endLine: record.anchor?.endLine,
+          severity: record.severity,
+          status: record.status,
         },
       )) ?? undefined;
       if (memoryId) linkAnnotation(workspaceRoot, record.id, { memoryId });
@@ -698,22 +707,17 @@ async function main(): Promise<void> {
   const captureArtifactNote = async (record: ArtifactRecord, change: string): Promise<void> => {
     let memoryId: string | undefined;
     try {
-      memoryId = (await emitAgentEvent(
+      memoryId = (await emitArtifactCapture(
         { mcpClient, sessionKey: activeMemorySessionKey() },
         {
-          kind: 'agent_output',
-          summary: `Artifact ${record.id}: ${record.title} [${record.status}] ${record.kind} (${change})`,
-          payload: {
-            artifactId: record.id,
-            title: record.title,
-            kind: record.kind,
-            status: record.status,
-            format: record.format,
-            path: record.path,
-            requirementId: record.requirementId,
-            taskId: record.taskId,
-            change,
-          },
+          artifactId: record.id,
+          title: record.title,
+          summary: record.summary,
+          artifactKind: record.kind,
+          format: record.format,
+          status: record.status,
+          requirementId: record.requirementId,
+          taskId: record.taskId,
         },
       )) ?? undefined;
       if (memoryId) linkArtifact(workspaceRoot, record.id, { memoryId });
@@ -1303,6 +1307,50 @@ async function main(): Promise<void> {
         if (!diff.trim()) diff = await git(['diff', '--no-index', '--', '/dev/null', file], workspaceRoot, { maxBuffer: 4_000_000 });
         return { path: file, kind: 'file', diff: diff.slice(0, 200_000) };
       },
+      // End-of-turn changeset — per-file numstat for the files the agent edited
+      // THIS turn (paths come from the renderer's turn tracking). Covers tracked
+      // (staged+unstaged) churn plus untracked new files (synth add-diff), so the
+      // transcript card can show "Edited N files +X −Y" with accurate per-file +/-.
+      'turn-changeset': async (args) => {
+        const paths = Array.isArray(args.paths)
+          ? (args.paths as unknown[]).filter((p): p is string => typeof p === 'string').slice(0, 200)
+          : [];
+        if (!paths.length) return { files: [], insertions: 0, deletions: 0 };
+        const stat = new Map<string, { added: number; removed: number }>();
+        const numstat = await git(['diff', 'HEAD', '--numstat', '--', ...paths], workspaceRoot, { maxBuffer: 4_000_000 }).catch(() => '');
+        for (const line of numstat.split('\n').filter(Boolean)) {
+          const parts = line.split('\t');
+          if (parts.length < 3) continue;
+          stat.set(parts.slice(2).join('\t'), {
+            added: parts[0] === '-' ? 0 : Number(parts[0]) || 0,
+            removed: parts[1] === '-' ? 0 : Number(parts[1]) || 0,
+          });
+        }
+        const statusByPath = new Map<string, string>();
+        const porcelain = await git(['status', '--porcelain', '--', ...paths], workspaceRoot).catch(() => '');
+        for (const line of porcelain.split('\n').filter(Boolean)) statusByPath.set(line.slice(3).trim(), line.slice(0, 2).trim() || 'M');
+        // Untracked new files have no HEAD numstat — count their lines via add-diff.
+        for (const p of paths) {
+          if (stat.has(p)) continue;
+          if (statusByPath.get(p) === '??' || !statusByPath.has(p)) {
+            const add = await git(['diff', '--no-index', '--numstat', '--', '/dev/null', p], workspaceRoot).catch(() => '');
+            const first = add.split('\n').filter(Boolean)[0];
+            if (first) {
+              const parts = first.split('\t');
+              stat.set(p, { added: Number(parts[0]) || 0, removed: Number(parts[1]) || 0 });
+              if (!statusByPath.has(p)) statusByPath.set(p, 'A');
+            }
+          }
+        }
+        const files = paths
+          .map((p) => ({ path: p, status: statusByPath.get(p) || 'M', added: stat.get(p)?.added ?? 0, removed: stat.get(p)?.removed ?? 0 }))
+          .filter((f) => f.added || f.removed || statusByPath.has(f.path));
+        return {
+          files,
+          insertions: files.reduce((s, f) => s + f.added, 0),
+          deletions: files.reduce((s, f) => s + f.removed, 0),
+        };
+      },
       // T13 — git worktrees (repo-level, so operate on the git root). The host
       // returns the raw porcelain; the renderer owns the (tested) parser.
       'git-worktrees': async () => {
@@ -1393,7 +1441,7 @@ async function main(): Promise<void> {
       // §6 — list, augmented with a transient `stale` flag for file-anchored
       // annotations whose quoted code has since changed (re-hash the current lines
       // and compare against the recorded fingerprint). Read failure → not stale.
-      'annotation-list': (a) => listAnnotations(workspaceRoot, annotationFilterFromArgs(a)).map((rec) => annotateStale(workspaceRoot, rec)),
+      'annotation-list': (a) => listAnnotations(workspaceRoot, withSessionScope(annotationFilterFromArgs(a), a, activeAgent.sessionKey)).map((rec) => annotateStale(workspaceRoot, rec)),
       'annotation-create': async (a) => {
         const type = a.type;
         if (!isAnnotationTargetKind(type)) return { error: `Unknown annotation target kind "${String(type)}".` };
@@ -1449,7 +1497,7 @@ async function main(): Promise<void> {
       // for the renderer to drop into the chat composer — the "export feedback
       // to the session" path. Pure render; the composer draft is set renderer-side.
       'annotation-export': async (a) => {
-        const records = listAnnotations(workspaceRoot, annotationFilterFromArgs(a));
+        const records = listAnnotations(workspaceRoot, withSessionScope(annotationFilterFromArgs(a), a, activeAgent.sessionKey));
         await captureAnnotationExportNote(records);
         return { markdown: annotationsToMarkdown(records) };
       },
@@ -1460,7 +1508,7 @@ async function main(): Promise<void> {
       // CLI's artifactStore (already unit-tested) so the desktop panel and the
       // terminal CLI share the same artifacts.json. Enum inputs are guard-validated
       // here so a bad kind/status/format is rejected, not silently written.
-      'artifact-list': (a) => listArtifacts(workspaceRoot, artifactFilterFromArgs(a)),
+      'artifact-list': (a) => listArtifacts(workspaceRoot, withSessionScope(artifactFilterFromArgs(a), a, activeAgent.sessionKey)),
       'artifact-create': async (a) => {
         if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };
         const title = String(a.title ?? '').trim();

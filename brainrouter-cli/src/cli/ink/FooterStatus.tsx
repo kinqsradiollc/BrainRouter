@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { effortIndicator } from './reasoningWindow.js';
-import { formatContextWindow } from '../../runtime/contextWindow.js';
+import { formatContextWindow } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 import type { FooterState } from './ChatApp.js';
 
 /**

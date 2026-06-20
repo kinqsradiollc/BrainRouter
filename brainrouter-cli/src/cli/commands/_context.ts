@@ -13,9 +13,9 @@
  */
 
 import type readline from 'node:readline';
-import type { Agent } from '../../agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '../../runtime/mcpPool.js';
-import type { Config } from '../../config/config.js';
+import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
 
 /**
  * Lifecycle / REPL-scoped state that command handlers can read or mutate.

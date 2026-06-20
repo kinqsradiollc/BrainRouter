@@ -4,18 +4,26 @@
  * so the chat components and the App shell agree on one definition.
  */
 /** Composer / header popover ids (which menu is open). */
-export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
+export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'branch-env' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
 
 export type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string };
 export type ToolItem = { id: number | string; tool: string; summary: string; preview?: string; ok: boolean; child?: string; file?: string };
 
+/** One recalled memory shown in a pre-turn briefing row. */
+export type BriefingRecord = { id: string; type?: string; priority?: number; content?: string; source?: string; score?: number };
+
+/** One file in an end-of-turn changeset card (Codex-style: path · status · +/-). */
+export type ChangesetFile = { path: string; status: string; added: number; removed: number };
+
 export type ChatRow =
   | { id: number | string; kind: 'user'; text: string; ts: number }
   | { id: number | string; kind: 'assistant'; text: string; ts: number }
-  | { id: number | string; kind: 'status'; text: string; ts: number }
+  | { id: number | string; kind: 'status'; text: string; ts: number; action?: 'plan' }
   | { id: number | string; kind: 'error'; text: string; detail?: string; ts: number }
   | { id: number | string; kind: 'cmd-out'; cmd: string; lines: string[]; ts: number }
   | { id: number | string; kind: 'loading'; ts: number }
+  | { id: number | string; kind: 'briefing'; sources: string[]; records: BriefingRecord[]; ts: number }
+  | { id: number | string; kind: 'changeset'; files: ChangesetFile[]; insertions: number; deletions: number; ts: number }
   | { id: number | string; kind: 'tool-group'; items: ToolItem[]; ts: number };
 
 export interface SessionRow {

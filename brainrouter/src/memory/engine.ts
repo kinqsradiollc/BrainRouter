@@ -638,7 +638,15 @@ export class MemoryEngine {
       userId: params.userId,
       sessionKey: params.sessionKey ?? "",
       sessionId: params.sessionId ?? "",
-      content: params.content,
+      // SECRET-REDACTION + LENGTH-CAP — structured-record captures (requirement
+      // / artifact / annotation) land here directly, bypassing the capture-
+      // pipeline redaction that memory_capture_turn applies. Cap the length
+      // first (bounds a single oversized capture's CPU/storage amplification),
+      // then redact secret patterns so no capture path can persist a
+      // Bearer/sk-/ghp_/PEM/API_KEY= secret into the cognitive graph (it would
+      // otherwise flow into recall + briefings + the LLM prompt). The 64 KB cap
+      // is ~16k words — far above any normal record, so behaviour-preserving.
+      content: redactSensitiveMemoryText((params.content ?? "").slice(0, 64_000)),
       type: params.type,
       priority: params.priority ?? 75,
       sceneName: params.activeSkill ? `${params.activeSkill} engineering` : "Software engineering memory",

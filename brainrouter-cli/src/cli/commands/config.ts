@@ -1,9 +1,9 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, saveConfig, setCliKnobOverride, type ServerConfig, type LLMConfig } from '../../config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
 import {
   listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
-} from '../../config/agentModels.js';
+} from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import {
   readPreferences,
   writePreferences,
@@ -12,10 +12,10 @@ import {
   type EffortLevel,
   type ExecutionMode,
   type ReviewPolicy,
-} from '../../state/preferencesStore.js';
-import { setSessionRuntime } from '../../state/sessionRuntimeStore.js';
+} from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
-import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '../wizard/providers.js';
+import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on
@@ -1155,10 +1155,24 @@ function buildRawConfigLines(ctx: CommandContext): string[] {
 
 function scrubSecrets(scrubbed: any): void {
   if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = maskApiKey(scrubbed.llm.apiKey);
+  // Named provider keys (multi-provider routing) — these were NOT masked before,
+  // so `/config show` leaked every saved provider's api key.
+  for (const p of Object.values(scrubbed.providers ?? {})) {
+    const prov = p as any;
+    if (prov?.apiKey) prov.apiKey = maskApiKey(prov.apiKey);
+  }
   for (const s of Object.values(scrubbed.servers ?? {})) {
     const srv = s as any;
     if (srv.apiKey) srv.apiKey = maskApiKey(srv.apiKey);
     if (srv.env?.BRAINROUTER_API_KEY) srv.env.BRAINROUTER_API_KEY = maskApiKey(srv.env.BRAINROUTER_API_KEY);
+    // Custom auth headers on an MCP server profile (Authorization / x-api-key / …).
+    if (srv.headers && typeof srv.headers === 'object') {
+      for (const k of Object.keys(srv.headers)) {
+        if (/authorization|api[-_]?key|token|secret|cookie/i.test(k) && typeof srv.headers[k] === 'string') {
+          srv.headers[k] = maskApiKey(srv.headers[k]);
+        }
+      }
+    }
   }
 }
 

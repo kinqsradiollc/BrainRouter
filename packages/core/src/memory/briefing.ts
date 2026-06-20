@@ -31,6 +31,10 @@ export interface RecalledRecord {
   content?: string;
   type?: string;
   priority?: number;
+  /** Which briefing source surfaced this record (e.g. memory_recall, memory_failed_attempts). */
+  source?: string;
+  /** Relevance score when the source provides one (recall). */
+  score?: number;
 }
 
 export interface BriefingResult {
@@ -182,7 +186,9 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
         return `- ${idTag}${typeTag} ${redactText(preview)}`;
       });
       sections.push(`### ${prettyLabel(r.source)}\n${cards.join('\n')}`);
-      recalledRecords.push(...r.records);
+      // Tag each record with the source it came from (unless the extractor
+      // already set one) so the UI briefing can show provenance per record.
+      recalledRecords.push(...r.records.map((rec) => ({ ...rec, source: rec.source ?? r.source })));
     } else {
       // No structured records to render. Treat the JSON dump as opaque and
       // only include it when it carries actual signal (skip the
@@ -356,12 +362,16 @@ function extractRecords(parsed: any): RecalledRecord[] {
       typeof r.record_id === 'string' ||
       typeof r.id === 'string'
     ))
-    .map((r: any) => ({
-      recordId: String(r.recordId ?? r.record_id ?? r.id),
-      content: typeof r.content === 'string' ? r.content : undefined,
-      type: typeof r.type === 'string' ? r.type : undefined,
-      priority: typeof r.priority === 'number' ? r.priority : undefined,
-    }));
+    .map((r: any) => {
+      const rawScore = r.score ?? r.relevanceScore ?? r.relevance_score;
+      return {
+        recordId: String(r.recordId ?? r.record_id ?? r.id),
+        content: typeof r.content === 'string' ? r.content : undefined,
+        type: typeof r.type === 'string' ? r.type : undefined,
+        priority: typeof r.priority === 'number' ? r.priority : undefined,
+        score: typeof rawScore === 'number' ? rawScore : undefined,
+      };
+    });
 }
 
 function prettyLabel(toolName: string): string {

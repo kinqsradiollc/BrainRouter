@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import type { Config } from '../../config/config.js';
+import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
 
 /**
  * Render the "Active Server" lines for `/status`. Pure (returns chalk-wrapped

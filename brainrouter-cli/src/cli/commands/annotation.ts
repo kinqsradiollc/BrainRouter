@@ -34,9 +34,9 @@ import {
   addComment,
   linkAnnotation,
   type AnnotationFilter,
-} from '../../state/annotationStore.js';
-import { annotationsToMarkdown } from '../../state/annotationExport.js';
-import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
+} from '@kinqs/brainrouter-core/dist/annotation/annotationStore.js';
+import { annotationsToMarkdown } from '@kinqs/brainrouter-core/dist/annotation/annotationExport.js';
+import { emitAgentEvent, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
 const TARGET_KINDS = 'plan|requirement|artifact|markdown|html|message|diff|file|review-finding';
@@ -65,7 +65,7 @@ export async function tryHandleAnnotationCommand(ctx: CommandContext): Promise<b
       console.log(chalk.red(`\n${filter.error}\n`));
       return true;
     }
-    const records = listAnnotations(agent.workspaceRoot, filter.value);
+    const records = listAnnotations(agent.workspaceRoot, { ...(filter.value ?? {}), sessionKey: filter.all ? undefined : agent.sessionKey });
     if (records.length === 0) {
       console.log(chalk.yellow('\nNo annotations match. Create one with: /annotation add <targetKind> <targetId> <body…>\n'));
       return true;
@@ -151,7 +151,7 @@ export async function tryHandleAnnotationCommand(ctx: CommandContext): Promise<b
       console.log(chalk.red(`\n${filter.error}\n`));
       return true;
     }
-    const records = listAnnotations(agent.workspaceRoot, filter.value);
+    const records = listAnnotations(agent.workspaceRoot, { ...(filter.value ?? {}), sessionKey: filter.all ? undefined : agent.sessionKey });
     const markdown = annotationsToMarkdown(records);
     console.log('\n' + markdown);
     // Capture the export itself as a memory note — the feedback returning to
@@ -288,16 +288,24 @@ function parseAddFlags(tokens: string[]): AddFlags {
 
 interface ListFlagsResult {
   value?: AnnotationFilter;
+  /** Show annotations from ALL sessions (default: the current session only). */
+  all?: boolean;
   error?: string;
 }
 
 /** Parse `--status`, `--target`, and `--file` filters for list/export. */
 function parseListFlags(tokens: string[]): ListFlagsResult {
   const filter: AnnotationFilter = {};
+  let all = false;
   let i = 0;
   while (i < tokens.length) {
     const flag = tokens[i];
     const value = tokens[i + 1];
+    if (flag === '--all') {
+      all = true;
+      i += 1;
+      continue;
+    }
     if (flag === '--status') {
       if (!value || value.startsWith('--')) return { error: '--status requires a value.' };
       if (!isAnnotationStatus(value)) return { error: `Invalid status "${value}". One of: ${STATUSES}.` };
@@ -320,7 +328,7 @@ function parseListFlags(tokens: string[]): ListFlagsResult {
     }
     return { error: `Unknown flag "${flag}".` };
   }
-  return { value: Object.keys(filter).length ? filter : undefined };
+  return { value: Object.keys(filter).length ? filter : undefined, all };
 }
 
 function parseLineRange(value: string): { start: number; end?: number } | null {
@@ -353,23 +361,19 @@ async function captureAnnotationNote(
   change: string,
 ): Promise<void> {
   try {
-    const where = record.anchor?.filePath ? ` @ ${anchorShort(record.anchor)}` : '';
-    const memoryId = await emitAgentEvent(
+    const memoryId = await emitAnnotationCapture(
       { mcpClient: ctx.mcpClient, sessionKey: ctx.agent.sessionKey },
       {
-        kind: 'agent_output',
-        summary: `Annotation ${record.id} on ${record.type}${record.targetId ? ` ${record.targetId}` : ''}${where} [${record.status}] (${change})`,
-        payload: {
-          annotationId: record.id,
-          targetKind: record.type,
-          targetId: record.targetId ?? null,
-          status: record.status,
-          severity: record.severity ?? null,
-          body: record.body,
-          suggestedText: record.suggestedText ?? null,
-          anchor: record.anchor ?? null,
-          change,
-        },
+        annotationId: record.id,
+        title: record.body.slice(0, 120),
+        body: record.body,
+        targetKind: record.type,
+        targetId: record.targetId,
+        filePath: record.anchor?.filePath,
+        startLine: record.anchor?.startLine,
+        endLine: record.anchor?.endLine,
+        severity: record.severity,
+        status: record.status,
       },
     );
     if (memoryId) {

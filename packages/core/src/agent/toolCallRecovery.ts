@@ -129,6 +129,96 @@ export function synthesizeOrphanResults<T extends ToolCallLike>(
   return synthetic;
 }
 
+/** A chat message as it lives in the agent's history / on the wire. */
+export interface ChatMessageLike {
+  role: string;
+  content?: unknown;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: ToolCallLike[];
+  [key: string]: unknown;
+}
+
+/**
+ * Enforce the strict `assistant.tool_calls` ↔ `tool` (result) pairing that
+ * OpenAI-compatible validators require — the zen/opencode gateway rejects a
+ * malformed sequence with `400 ... tool call result does not follow tool call
+ * (2013)`. Returns a well-formed COPY of `messages`:
+ *
+ *  - Every assistant message that carries `tool_calls` is immediately followed
+ *    by one `tool` result per call id. Missing results are filled with a
+ *    synthetic `ERROR:` placeholder (`synthesizeOrphanResults`); duplicate-id
+ *    calls within the one message are de-duped (`dedupeToolCalls`).
+ *  - A `tool` message that does NOT match a call on the immediately-preceding
+ *    assistant message is an ORPHAN result and is dropped — it would otherwise
+ *    be a "result does not follow call" on its own.
+ *  - A `tool_call` with no usable string `id` can never be paired, so it is
+ *    stripped from the assistant message; if that empties `tool_calls`, the
+ *    field is removed and the assistant becomes a plain message.
+ *
+ * This is the repair that was missing on session resume: `loadHistory` replays
+ * a transcript verbatim, so a prior turn that died after emitting `tool_calls`
+ * but before its results were persisted would brick EVERY subsequent turn.
+ *
+ * Pure + idempotent: a already-well-formed array passes through unchanged.
+ */
+export function sanitizeToolCallPairing<T extends ChatMessageLike>(
+  messages: T[] | undefined | null,
+): T[] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  const out: T[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i];
+    const rawCalls = Array.isArray(m?.tool_calls) ? m.tool_calls : null;
+    if (m?.role === 'assistant' && rawCalls && rawCalls.length > 0) {
+      // De-dupe, then keep only calls that have a usable string id.
+      const calls = dedupeToolCalls(rawCalls).filter(
+        (c) => typeof c?.id === 'string' && c.id !== '',
+      );
+      const callIds = new Set(calls.map((c) => c.id));
+      // Consume the run of `tool` messages that immediately follow, keeping the
+      // first result for each matching call id and dropping the rest (orphans
+      // / duplicates).
+      const matched: T[] = [];
+      const claimed = new Set<string>();
+      let j = i + 1;
+      while (j < messages.length && messages[j]?.role === 'tool') {
+        const r = messages[j];
+        const id = typeof r?.tool_call_id === 'string' ? r.tool_call_id : '';
+        if (id && callIds.has(id) && !claimed.has(id)) {
+          claimed.add(id);
+          matched.push(r);
+        }
+        j++;
+      }
+      if (calls.length === 0) {
+        // Every call was id-less → strip tool_calls; following results are orphans.
+        const { tool_calls: _dropped, ...rest } = m as ChatMessageLike;
+        out.push(rest as T);
+      } else {
+        out.push(calls.length === rawCalls.length ? m : ({ ...m, tool_calls: calls } as T));
+        out.push(...matched);
+        const have: ToolResultMessage[] = matched.map((r) => ({
+          role: 'tool',
+          tool_call_id: String((r as ChatMessageLike).tool_call_id ?? ''),
+          name: String((r as ChatMessageLike).name ?? 'unknown'),
+          content: '',
+        }));
+        out.push(...(synthesizeOrphanResults(calls, have) as unknown as T[]));
+      }
+      i = j;
+    } else if (m?.role === 'tool') {
+      // A tool result not preceded by an assistant-with-tool_calls → orphan.
+      i++;
+    } else {
+      out.push(m);
+      i++;
+    }
+  }
+  return out;
+}
+
 /**
  * Detect "stalled preamble" responses — short content that announces an
  * action ("I'll start by…", "Let me…", "Now I'll…") but isn't followed by

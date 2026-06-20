@@ -31,8 +31,8 @@ import {
   linkArtifact,
   listArtifactVersions,
   revertArtifact,
-} from '../../state/artifactStore.js';
-import { emitAgentEvent } from '../../orchestration/memoryEvents.js';
+} from '@kinqs/brainrouter-core/dist/artifact/artifactStore.js';
+import { emitArtifactCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
 export async function tryHandleArtifactCommand(ctx: CommandContext): Promise<boolean> {
@@ -78,6 +78,9 @@ export async function tryHandleArtifactCommand(ctx: CommandContext): Promise<boo
     const records = listArtifacts(agent.workspaceRoot, {
       kind: flags.kind,
       status: flags.status,
+      // SESSION-SCOPED — default to this chat's artifacts; `--all` shows the
+      // whole workspace. Matches the session-scoped recall the brain enforces.
+      sessionKey: flags.all ? undefined : agent.sessionKey,
     });
     if (records.length === 0) {
       console.log(chalk.yellow('\nNo artifacts yet. Create one with: /artifact create <kind> <title>\n'));
@@ -133,8 +136,9 @@ export async function tryHandleArtifactCommand(ctx: CommandContext): Promise<boo
     // preview file and hand it to the OS opener (browser/desktop). §AV-2.
     let content = a.content ?? '';
     if (!content && a.path) {
-      try { content = fs.readFileSync(path.join(agent.workspaceRoot, a.path), 'utf8'); }
-      catch { console.log(chalk.yellow(`\nCould not read ${a.path}.\n`)); return true; }
+      const backing = readArtifactBacking(agent.workspaceRoot, a.path);
+      if (backing === null) { console.log(chalk.yellow(`\nCould not read ${a.path} (missing or outside the workspace).\n`)); return true; }
+      content = backing;
     }
     const html = buildArtifactPreviewHtml(a.title, a.format, a.language, content);
     const dir = path.join(os.tmpdir(), 'brainrouter-artifacts');
@@ -155,8 +159,9 @@ export async function tryHandleArtifactCommand(ctx: CommandContext): Promise<boo
     if (flags.error) { console.log(chalk.red(`\n${flags.error}\n`)); return true; }
     let content = a.content ?? '';
     if (!content && a.path) {
-      try { content = fs.readFileSync(path.join(agent.workspaceRoot, a.path), 'utf8'); }
-      catch { console.log(chalk.yellow(`\nCould not read ${a.path}.\n`)); return true; }
+      const backing = readArtifactBacking(agent.workspaceRoot, a.path);
+      if (backing === null) { console.log(chalk.yellow(`\nCould not read ${a.path} (missing or outside the workspace).\n`)); return true; }
+      content = backing;
     }
     // Export format: explicit --format, else a sensible default per artifact format.
     const asHtml = flags.format === 'html' || (!flags.format && (a.format === 'html' || a.format === 'svg'));
@@ -272,6 +277,8 @@ interface ArtifactFlags {
   out?: string;
   summary?: string;
   requirement?: string;
+  /** Show artifacts from ALL sessions (default: the current session only). */
+  all?: boolean;
   rest: string[];
   error?: string;
 }
@@ -279,6 +286,20 @@ interface ArtifactFlags {
 /** Minimal flag parser: `--kind --status --format(md|html|text) --path --summary
  *  "<quoted>" --requirement`. Non-flag leading tokens collect into `rest` (the
  *  create title). `--summary` joins multiple tokens up to the next `--flag`. */
+/**
+ * Read an artifact's backing file, but ONLY if its stored `path` stays inside
+ * the workspace. `path` can be AGENT-authored (artifact_write), so a value like
+ * `../../etc/passwd` or an absolute path must not disclose files outside the
+ * project. Returns null on a containment violation OR a read error; '' is a
+ * legitimately-empty file.
+ */
+function readArtifactBacking(workspaceRoot: string, relPath: string): string | null {
+  const root = path.resolve(workspaceRoot);
+  const abs = path.resolve(root, relPath);
+  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+  try { return fs.readFileSync(abs, 'utf8'); } catch { return null; }
+}
+
 function parseFlags(tokens: string[]): ArtifactFlags {
   const out: ArtifactFlags = { rest: [] };
   let i = 0;
@@ -299,6 +320,9 @@ function parseFlags(tokens: string[]): ArtifactFlags {
       i += 1;
       while (i < tokens.length && !tokens[i].startsWith('--')) { parts.push(tokens[i]); i += 1; }
       out.summary = parts.join(' ');
+    } else if (t === '--all') {
+      out.all = true;
+      i += 1;
     } else {
       out.rest.push(t);
       i += 1;
@@ -350,21 +374,17 @@ function printUsage(): void {
 
 async function captureArtifactNote(ctx: CommandContext, record: ArtifactRecord, change: string): Promise<void> {
   try {
-    const memoryId = await emitAgentEvent(
+    const memoryId = await emitArtifactCapture(
       { mcpClient: ctx.mcpClient, sessionKey: ctx.agent.sessionKey },
       {
-        kind: 'agent_output',
-        summary: `Artifact ${record.id}: ${record.title} [${record.status}] ${record.kind} (${change})`,
-        payload: {
-          artifactId: record.id,
-          title: record.title,
-          kind: record.kind,
-          status: record.status,
-          format: record.format,
-          path: record.path,
-          requirementId: record.requirementId,
-          change,
-        },
+        artifactId: record.id,
+        title: record.title,
+        summary: record.summary,
+        artifactKind: record.kind,
+        format: record.format,
+        status: record.status,
+        requirementId: record.requirementId,
+        taskId: record.taskId,
       },
     );
     if (memoryId) linkArtifact(ctx.agent.workspaceRoot, record.id, { memoryId });

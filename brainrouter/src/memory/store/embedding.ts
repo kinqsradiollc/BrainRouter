@@ -1,7 +1,22 @@
 import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
-import { acquireLLMSlot } from "../llm/llm-semaphore.js";
-import { resolveLLMTimeoutMs } from "../llm/llm-response.js";
+import { acquireEmbeddingSlot } from "../llm/llm-semaphore.js";
+
+/**
+ * Per-call embedding timeout. Embedding is a fast vectorize call, not a
+ * token-generating completion — so it must NOT inherit the generative local
+ * floor (`BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS`, up to 10 min). A hung embedding
+ * on the RECALL path would block the whole `memory_recall` reply; bound it so
+ * recall degrades to FTS-only fast. Default 30s, clamp [1000, 120000].
+ * Env: BRAINROUTER_EMBEDDING_TIMEOUT_MS.
+ */
+export function embeddingTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 30_000;
+  const raw = env.BRAINROUTER_EMBEDDING_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1000 ? Math.min(n, 120_000) : def;
+}
 
 export class EmbeddingService {
   private readonly endpoint: string;
@@ -16,12 +31,8 @@ export class EmbeddingService {
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "text-embedding-3-small";
     this.dimensions = config.dimensions ?? 768;
-    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
-      endpoint: this.endpoint,
-      requestedMs: 60_000,
-      envVarNames: ["BRAINROUTER_EMBEDDING_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
-      localMinimumMs: 120_000,
-    }));
+    // Bounded, generative-floor-free timeout (see embeddingTimeoutMs).
+    this.timeoutMs = Math.max(1000, config.timeoutMs ?? embeddingTimeoutMs());
 
     // Graceful fallback: If no API key is provided, we disable the embedding service.
     this.ready = !!this.apiKey;
@@ -47,11 +58,13 @@ export class EmbeddingService {
       throw new Error("EmbeddingService is not ready (missing API key)");
     }
 
-    // Same backend as ModelLLMRunner — go through the shared semaphore so
-    // embedding requests count against the concurrency cap. Otherwise a burst
-    // of new cognitive records can fire N embeddings + N LLM calls in
-    // parallel and overwhelm LM Studio just like before.
-    const release = await acquireLLMSlot();
+    // DEDICATED embedding pool (BRAINROUTER_EMBED_CONCURRENCY), NOT the
+    // generative LLM semaphore. Embedding is usually a different backend (a
+    // local embedder) from the chat/extraction LLM (often cloud); coupling them
+    // at the generative cap=1 stalled the recall query-embed behind a slow
+    // background generation, blowing the MCP reply past the client timeout. The
+    // pool still bounds embedding bursts on its own backend.
+    const release = await acquireEmbeddingSlot();
     try {
       const res = await fetchWithExternalRetry(this.endpoint, {
         method: "POST",

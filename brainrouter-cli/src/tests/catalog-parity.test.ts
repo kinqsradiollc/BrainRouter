@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SLASH_COMMANDS, HELP_CATEGORIES } from '../cli/repl.js';
-import { validateCatalogParity } from '../runtime/catalogParity.js';
-import { listRoles } from '../orchestration/roles.js';
-import { loadRegistry } from '../orchestration/agentRegistry.js';
+import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
+import { listRoles } from '@kinqs/brainrouter-core/dist/orchestration/roles.js';
+import { loadRegistry } from '@kinqs/brainrouter-core/dist/orchestration/agentRegistry.js';
 
 // T16 GOLDEN — the catalog both heads serve must be internally consistent.
 test('catalog parity: SLASH_COMMANDS and /help are in lockstep, no duplicates', () => {

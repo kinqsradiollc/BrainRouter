@@ -50,11 +50,15 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
     userId: z.string().optional(),
     sessionKey: z.string(),
     sessionId: z.string().optional(),
+    // DoS bound — a single capture writes + redacts + chunks + inserts each
+    // message synchronously on the lone SQLite writer. Truncate (not reject) to
+    // keep legit turns working while capping a pathological one: ≤1000 messages,
+    // ≤200 KB each. Normal turns (<50 messages, <50 KB) are untouched.
     messages: z.array(z.object({
       role: z.enum(["user", "assistant", "tool"]),
-      content: z.string(),
+      content: z.string().transform((s) => s.slice(0, 200_000)),
       timestamp: z.number()
-    })),
+    })).transform((a) => a.slice(0, 1000)),
     activeSkill: z.string().optional(),
     skillHints: z.string().optional()
   }).parse(args);

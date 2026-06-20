@@ -13,12 +13,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
-import { callMcpTool } from '../../runtime/mcpUtils.js';
+import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { consolidateMemories } from '../../memory/consolidation.js';
 import { scanWorkspaceSources } from '../../memory/sourceManifest.js';
-import { readPreferences, writePreferences } from '../../state/preferencesStore.js';
-import { getCliKnobs } from '../../config/config.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
 import type { CommandContext } from './_context.js';
 import { printMcpCall, printMemoryCards } from './_helpers.js';
 

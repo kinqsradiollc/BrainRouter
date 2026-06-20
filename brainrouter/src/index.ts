@@ -159,6 +159,10 @@ if (USE_HTTP) {
   // OpenAI-compatible chat endpoint (memory-augmented):
   //   POST /v1/chat/completions  — standard OpenAI body, sessionKey via body.brainrouter.sessionKey or X-BrainRouter-Session header
   //   GET  /v1/models            — returns the configured upstream model
+  // DoS backstop — the same generous, env-tunable global limiter the /api surface
+  // uses (BRAINROUTER_RATE_LIMIT_MAX, default 600/min). Above normal agent +
+  // proxy traffic, so it only catches a runaway/abusive client.
+  app.use("/v1", apiRateLimit);
   app.use("/v1", chatCompletionsRouter);
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream).
@@ -248,6 +252,9 @@ if (USE_HTTP) {
     await session.transport.handleRequest(req, res, req.body);
   }
 
+  // DoS backstop on the MCP tool transport (env-tunable; default 600/min — well
+  // above a normal agent's tool-call cadence, so it only trips a runaway).
+  app.use('/mcp', apiRateLimit);
   app.post('/mcp', handleMcp);
   app.get('/mcp', handleMcp);
 

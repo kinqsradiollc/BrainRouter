@@ -21,3 +21,4 @@ export { AnnotationsPanel } from './AnnotationsPanel.js';
 export { ArtifactsPanel } from './ArtifactsPanel.js';
 export { SearchPanel, type SearchHit } from './SearchPanel.js';
 export { PlanPanel } from './PlanPanel.js';
+export { ContextPanel } from './ContextPanel.js';

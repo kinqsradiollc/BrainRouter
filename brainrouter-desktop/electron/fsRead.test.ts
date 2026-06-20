@@ -86,6 +86,19 @@ test('a path escaping the workspace is rejected', () => {
   assert.equal(r.error, 'path escapes the workspace');
 });
 
+test('a symlink that escapes the workspace is rejected (read path)', () => {
+  const ws = tmp();
+  const outside = tmp();
+  const secret = path.join(outside, 'secret.txt');
+  fs.writeFileSync(secret, 'TOP SECRET');
+  // A symlink that LIVES inside the workspace but points outside it: the path
+  // string is contained, so only the realpath check catches the escape.
+  fs.symlinkSync(secret, path.join(ws, 'link.txt'));
+  const r = readWorkspaceEntry(ws, 'link.txt');
+  assert.match(r.error ?? '', /escapes the workspace/);
+  assert.equal(r.content, '');
+});
+
 test('a missing file returns a friendly error, not a crash', () => {
   const r = readWorkspaceEntry(tmp(), 'nope.txt');
   assert.equal(r.kind, 'file');

@@ -76,6 +76,8 @@ import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from '../tools/m
 import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from '../tools/memory_reindex_source.js';
 import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from '../tools/memory_record_lesson.js';
 import { memoryCreateRequirementToolSchema, handleMemoryCreateRequirement } from '../tools/memory_create_requirement.js';
+import { memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact } from '../tools/memory_capture_artifact.js';
+import { memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation } from '../tools/memory_capture_annotation.js';
 import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from '../tools/memory_extract_skill.js';
 import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from '../tools/memory_graph_analytics.js';
 import { memoryReflectToolSchema, handleMemoryReflect } from '../tools/memory_reflect.js';
@@ -85,6 +87,9 @@ import { memoryVaultExportToolSchema, handleMemoryVaultExport } from '../tools/m
 import { memoryPruneSourcesToolSchema, handleMemoryPruneSources } from '../tools/memory_prune_sources.js';
 import { memoryAgentRunToolSchema, handleMemoryAgentRun } from '../tools/memory_agent_run.js';
 import { memoryJobRetryToolSchema, handleMemoryJobRetry } from '../tools/memory_job_retry.js';
+import { memoryCompressToolSchema, handleMemoryCompress } from '../tools/memory_compress.js';
+import { memoryRetrieveToolSchema, handleMemoryRetrieve } from '../tools/memory_retrieve.js';
+import { memoryStatsToolSchema, handleMemoryStats } from '../tools/memory_stats.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -255,6 +260,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryReindexSourceToolSchema,
       memoryRecordLessonToolSchema,
       memoryCreateRequirementToolSchema,
+      memoryCaptureArtifactToolSchema,
+      memoryCaptureAnnotationToolSchema,
       memoryExtractSkillToolSchema,
       memoryGraphAnalyticsToolSchema,
       memoryReflectToolSchema,
@@ -264,12 +271,29 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryPruneSourcesToolSchema,
       memoryAgentRunToolSchema,
       memoryJobRetryToolSchema,
+      memoryCompressToolSchema,
+      memoryRetrieveToolSchema,
+      memoryStatsToolSchema,
     ],
   }));
 
   // ── Tool dispatcher ────────────────────────────────────────────────────────
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
+      // AUTHZ (IDOR fix) — the HTTP /mcp transport authenticates per-user and
+      // builds this server with that user's id as `defaultUserId`. A
+      // client-supplied `userId` argument must never override it, or one
+      // authenticated user (anyone can self-signup) could read/write/delete
+      // ANOTHER user's memory (cross-tenant IDOR) — the memory tools scope
+      // their SQL to whatever userId is passed, with no ownership recheck, and
+      // the REST routes already pin this via scopedUserId. So whenever a tool
+      // call carries a `userId`, force it back to the authenticated id. (Only
+      // rewrite an EXISTING key, never inject one, so a tool whose schema
+      // doesn't accept userId is untouched.) Stdio is single-user → no-op.
+      const callArgs = request.params.arguments;
+      if (callArgs && typeof callArgs === 'object' && 'userId' in callArgs) {
+        (callArgs as Record<string, unknown>).userId = defaultUserId;
+      }
       switch (request.params.name) {
         case 'list_skills':   return await listSkills(registry, listSkillsSchema.parse(request.params.arguments));
         case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
@@ -350,6 +374,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId });
         case 'memory_create_requirement':
           return await handleMemoryCreateRequirement(request.params.arguments, { defaultUserId });
+        case 'memory_capture_artifact':
+          return await handleMemoryCaptureArtifact(request.params.arguments, { defaultUserId });
+        case 'memory_capture_annotation':
+          return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':
           return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
         case 'memory_graph_analytics':
@@ -368,6 +396,12 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
         case 'memory_job_retry':
           return await handleMemoryJobRetry(request.params.arguments, { defaultUserId });
+        case 'memory_compress':
+          return await handleMemoryCompress(request.params.arguments, { defaultUserId });
+        case 'memory_retrieve':
+          return await handleMemoryRetrieve(request.params.arguments, { defaultUserId });
+        case 'memory_stats':
+          return await handleMemoryStats(request.params.arguments, { defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

@@ -12,6 +12,11 @@ import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
 import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "./util/recall-refs.js";
 import { isExternalTimeoutError } from "./llm/llm-response.js";
 import {
+  applyRecallCompression,
+  readRecallCompressionConfig,
+  RECALL_COMPRESSION_NOTE,
+} from "./compression/recallCompression.js";
+import {
   effectivePriorityScore,
   churnAdjustedHalfLife,
   baseScoreFromRrf,
@@ -326,18 +331,42 @@ export interface RecallFilters {
   scope?: "project" | "workspace";
 }
 
+/** SESSION-SCOPED kinds — captured per chat session, never recalled cross-session. */
+const SESSION_SCOPED_KINDS = new Set(["artifact", "annotation"]);
+
+/** Read `metadata.kind` from a record's persisted `metadata_json` (best-effort). */
+function metadataKind(metadataJson?: string): string | undefined {
+  if (!metadataJson) return undefined;
+  try {
+    const m = JSON.parse(metadataJson) as { kind?: unknown };
+    return typeof m?.kind === "string" ? m.kind : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
   records: T[],
   filters?: RecallFilters,
   workspaceTagLookup?: Map<string, string | null>,
   projectTagLookup?: Map<string, string | null>,
+  sessionKey?: string,
 ): T[] {
-  if (!filters) return records;
-  const afterMs = filters.capturedAfter ? new Date(filters.capturedAfter).getTime() : undefined;
-  const beforeMs = filters.capturedBefore ? new Date(filters.capturedBefore).getTime() : undefined;
-  const types = filters.types && filters.types.length > 0 ? new Set(filters.types) : undefined;
-  const scenes = filters.scenes && filters.scenes.length > 0 ? new Set(filters.scenes) : undefined;
+  const afterMs = filters?.capturedAfter ? new Date(filters.capturedAfter).getTime() : undefined;
+  const beforeMs = filters?.capturedBefore ? new Date(filters.capturedBefore).getTime() : undefined;
+  const types = filters?.types && filters.types.length > 0 ? new Set(filters.types) : undefined;
+  const scenes = filters?.scenes && filters.scenes.length > 0 ? new Set(filters.scenes) : undefined;
   return records.filter((r) => {
+    // ARTIFACT-LINK / ANNOTATION-LINK — session-scoped records (artifacts +
+    // annotations captured into the cognitive graph) are PRIVATE to the chat
+    // session that produced them: they must not surface in another session's
+    // recall/briefing. This hard scoping rule runs BEFORE the optional filters
+    // (and even when `filters` is absent). All other records stay user-global.
+    const kind = metadataKind((r as { metadata_json?: string }).metadata_json);
+    if (kind !== undefined && SESSION_SCOPED_KINDS.has(kind)) {
+      if (!sessionKey || (r as { session_key?: string }).session_key !== sessionKey) return false;
+    }
+    if (!filters) return true;
     if (types && !types.has(r.type)) return false;
     if (scenes && (!r.scene_name || !scenes.has(r.scene_name))) return false;
     if (filters.skillTag && r.skill_tag !== filters.skillTag) return false;
@@ -456,9 +485,9 @@ export class MemoryRecallPipeline {
     // on the actually-relevant pool, not a filtered subset of an unfiltered
     // rank (which would bias scores toward records that happen to be in the
     // top-15 globally even if irrelevant to the filter).
-    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup, projectTagLookup);
-    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup, projectTagLookup);
-    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup, projectTagLookup);
+    const ftsResults = applyFilters(ftsResultsRaw, filters, workspaceTagLookup, projectTagLookup, sessionKey);
+    const vecResults = applyFilters(vecResultsRaw, filters, workspaceTagLookup, projectTagLookup, sessionKey);
+    const filePathResults = applyFilters(filePathResultsRaw, filters, workspaceTagLookup, projectTagLookup, sessionKey);
 
     if (ftsResults.length === 0 && vecResults.length === 0 && filePathResults.length === 0) {
       const emptyStrategy = this.embeddingService.isReady() ? "hybrid-empty" : "keyword-empty";
@@ -677,7 +706,10 @@ export class MemoryRecallPipeline {
     // queries; their low-overlap gold retrieves better without it (it gets
     // demoted), so they fall through to the MMR + recall-safe judge path below.
     const routeReflective = readQueryRoutingEnabled() && isReflectiveQuery(query);
-    if (this.rerankerService.isReady() && !params.disableReranker && !routeReflective) {
+    // isAvailable() (not isReady) so a tripped circuit breaker skips the
+    // cross-encoder entirely during its cooldown — recall uses RRF with no
+    // per-call network wait, instead of paying the reranker timeout every turn.
+    if (this.rerankerService.isAvailable() && !params.disableReranker && !routeReflective) {
       try {
         // MEM-RERANK2 (0.4.14) — only a char-budgeted head goes to the
         // cross-encoder (the recall-latency bottleneck, longmemeval 22-28s).
@@ -829,6 +861,28 @@ export class MemoryRecallPipeline {
       ? `<relevant-memories>\n  The following memories are relevant to this query. Reference only if helpful:\n\n  ${memoryLines.join("\n  ")}\n</relevant-memories>`
       : undefined;
 
+    const recalledCognitiveMemories: RecalledMemory[] = topResults.map(r => {
+      const refs = refsByRecord.get(r.record.record_id);
+      return {
+        content: r.record.content,
+        score: r.score,
+        type: r.record.type,
+        recordId: r.record.record_id,
+        skillTag: r.record.skill_tag,
+        // MEM-17 — expansion handles; omit empties so the shape stays lean.
+        ...(refs && refs.sourceChunkIds.length > 0 ? { sourceChunkIds: refs.sourceChunkIds } : {}),
+        ...(refs && refs.treeNodeId ? { treeNodeId: refs.treeNodeId } : {}),
+        // MEM-ACCURACY — flag records whose source code changed since capture.
+        ...(refs && refs.staleVsCode ? { staleVsCode: true } : {}),
+      };
+    });
+    const recallCompression = applyRecallCompression(recalledCognitiveMemories, {
+      userId,
+      query,
+      store: this.store as unknown as import("./compression/router.js").CompressionStore,
+      config: readRecallCompressionConfig(),
+    });
+
     // Build appendSystemContext with Contextual Focus Navigation + tools guide
     const topScenes = this.store.getTopContextualFocus(userId, 3);
     let appendSystemContext = "";
@@ -847,6 +901,10 @@ export class MemoryRecallPipeline {
   To explore code neighbours: memory_find_related(<chunkId> | file+line) for the nearest related code chunks across files.
   Max 3 memory tool calls per turn.
 </memory-tools-guide>`;
+
+    if (recallCompression.compressedCount > 0) {
+      appendSystemContext += `\n${RECALL_COMPRESSION_NOTE}`;
+    }
 
     // Graph context expansion (2-hop BFS from matched entities)
     const graphContext = expandRecallWithGraph({
@@ -876,22 +934,6 @@ export class MemoryRecallPipeline {
         console.error("[BrainRouter] Skill pre-warming skipped:", (e as Error).message);
       }
     }
-
-    const recalledCognitiveMemories: RecalledMemory[] = topResults.map(r => {
-      const refs = refsByRecord.get(r.record.record_id);
-      return {
-        content: r.record.content,
-        score: r.score,
-        type: r.record.type,
-        recordId: r.record.record_id,
-        skillTag: r.record.skill_tag,
-        // MEM-17 — expansion handles; omit empties so the shape stays lean.
-        ...(refs && refs.sourceChunkIds.length > 0 ? { sourceChunkIds: refs.sourceChunkIds } : {}),
-        ...(refs && refs.treeNodeId ? { treeNodeId: refs.treeNodeId } : {}),
-        // MEM-ACCURACY — flag records whose source code changed since capture.
-        ...(refs && refs.staleVsCode ? { staleVsCode: true } : {}),
-      };
-    });
 
     const baseStrategy = vecResults.length > 0
       ? (usedReranker ? "hybrid+rerank" : "hybrid")
@@ -936,7 +978,7 @@ export class MemoryRecallPipeline {
     return {
       prependContext,
       appendSystemContext,
-      recalledCognitiveMemories,
+      recalledCognitiveMemories: recallCompression.memories,
       recallStrategy,
       activeFocusName: topScenes[0]?.sceneName,
       recallExplanation,
