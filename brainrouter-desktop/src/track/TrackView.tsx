@@ -81,12 +81,12 @@ export function TrackView({ project, items, sprints, ops }: TrackViewProps): Rea
           <span className="track-name">{project?.name ?? 'Project'}</span>
           <span className="track-count">{items.length} item{items.length === 1 ? '' : 's'}</span>
         </div>
-        <div className="track-tabs">
-          {TABS.map((tb) => (
-            <button key={tb.id} className={`track-tab${tab === tb.id ? ' active' : ''}`} onClick={() => setTab(tb.id)}><Icon name={tb.icon} size={12} /> {tb.label}</button>
-          ))}
-        </div>
       </header>
+      <div className="track-tabbar">
+        {TABS.map((tb) => (
+          <button key={tb.id} className={`track-tab${tab === tb.id ? ' active' : ''}`} onClick={() => setTab(tb.id)}><Icon name={tb.icon} size={12} /> {tb.label}</button>
+        ))}
+      </div>
 
       <div className="track-filter">
         <span className="track-filter-search"><Icon name="search" size={12} /><input value={filter.text ?? ''} onChange={(e) => setFilter((f) => ({ ...f, text: e.target.value || undefined }))} placeholder="Filter by key or title…" /></span>

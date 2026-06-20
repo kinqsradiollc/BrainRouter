@@ -337,9 +337,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-key { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 6px; }
 .track-name { font-size: 15px; font-weight: 650; color: var(--text); }
 .track-count { font-size: 12px; color: var(--text-faint); }
-.track-tabs { display: flex; gap: 2px; padding: 3px; background: var(--ov-04); border-radius: 9px; }
-.track-tab { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; background: transparent; border: 0; border-radius: 7px; color: var(--text-faint); font-size: 12.5px; font-weight: 550; cursor: pointer; transition: background .14s, color .14s; }
-.track-tab.active { background: var(--raised); color: var(--text); }
+.track-tabbar { display: flex; gap: 3px; padding: 6px 16px; border-bottom: 1px solid var(--border); overflow-x: auto; flex: none; }
+.track-tab { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; background: transparent; border: 0; border-radius: 7px; color: var(--text-faint); font-size: 12.5px; font-weight: 550; cursor: pointer; transition: background .14s, color .14s; white-space: nowrap; flex: none; }
+.track-tab:hover { color: var(--text-dim); }
+.track-tab.active { background: var(--accent-soft); color: var(--text); }
+.track-tab.active svg { color: var(--accent); }
 
 .track-board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; overflow-y: hidden; padding: 16px 20px; flex: 1; min-height: 0; }
 .track-col { display: flex; flex-direction: column; width: 290px; flex: none; max-height: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
