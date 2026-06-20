@@ -81,15 +81,16 @@ agent-behavior benchmark that gates it all. · **M** BrainRouter Desktop — nat
 
 ---
 
-## Next — The unified workspace: **Chat · Track · Code**
+## Delivered in 0.4.15 — The unified workspace: **Chat · Track · Code**
 
 One app, three modes over the *same* workspace + the *same* memory, so planning,
 coordination, and implementation never leave the building. A mode switcher (top
-of the window) flips the surface; the project, the memory, and the agent are
-shared across all three.
+of the **left sidebar**) flips the surface; the project, the memory, and the agent
+are shared across all three. **Shipped in 0.4.15.**
 
 - **Chat** — conversational/assistant mode: ask, explore, design, and draft
-  without the full coding-agent loop. Lightweight; promotes a thread into a Code
+  without the full coding-agent loop. Lightweight and **read-only** (the agent is
+  pinned to look-only access — no writes or shell); promotes a thread into a Code
   turn or a Track item when it's ready.
 - **Track** — a first-party, **Jira-class project-management surface**, fully
   in-app so everything stays in one place. **Each workspace is a project** with its
@@ -115,10 +116,12 @@ shared across all three.
 
 Shared substrate: one memory pipeline, one workspace/session model, one provider
 config; Track items, Chat threads, and Code turns all reference the same
-provenance-tracked records. Build order TBD — **data model + per-workspace Track
-store first** (work-item / epic / sprint / board contracts in `packages/types` +
-a durable store), then the agent tool surface, then the Track UI + the mode
-switcher, then automation/reports.
+provenance-tracked records. **Delivered** across the full stack: data model +
+per-workspace store (`packages/types/track.ts` + `packages/core/src/track/`), the
+`track_query`/`track_update` agent tools, the `/track` CLI, and the desktop Track
+surface (nine views — Board · List · Backlog · Sprint · Roadmap · Reports ·
+Automation · Members · Sync) with a JQL-style query language, automation rules,
+per-project roles/permissions, and two-way GitHub Issues sync.
 
 ---
 
