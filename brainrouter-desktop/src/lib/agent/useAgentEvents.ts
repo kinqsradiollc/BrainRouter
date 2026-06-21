@@ -406,6 +406,13 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
               if (e.sessionKey !== want) window.brainrouter.send({ kind: 'resume-session', sessionKey: want });
             }
           }
+          // The effort / mode chip reads its value from the config snapshot,
+          // which is SESSION-aware on the host (resolveActiveMode). It's fetched
+          // at boot / Settings-open / mode-mutations but NOT on session switch,
+          // so the chip used to show the PREVIOUS session's effort while the
+          // agent (which resolves fresh per turn) sent this session's. Refetch
+          // it on every switch so the chip matches what actually gets sent.
+          q('q-snapshot', 'config-snapshot');
           // Stability fix — refresh tier by whether the WORKSPACE changed: a
           // project/workspace switch needs the FULL git/workspace refresh so
           // branches + git state reload (they were cleared on switch); a same-
