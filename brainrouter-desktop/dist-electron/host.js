@@ -83,6 +83,22 @@ import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kin
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+/**
+ * Strip secrets from the `cli` config before it's sent to the renderer (the
+ * snapshot's `cliKnobs` is shown verbatim in Settings → Advanced). The GitHub
+ * token lives in `cli.track.githubToken` but must never cross to the renderer —
+ * the desktop only ever learns whether one is *set*. Returns a shallow-cloned,
+ * redacted copy; the on-disk config is untouched.
+ */
+function scrubCliSecrets(cli) {
+    const c = (cli && typeof cli === 'object' ? { ...cli } : {});
+    if (c.track && typeof c.track === 'object') {
+        const track = { ...c.track };
+        delete track.githubToken;
+        c.track = track;
+    }
+    return c;
+}
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
@@ -1562,9 +1578,9 @@ async function main() {
             'track-sync-members': async (a) => {
                 const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
                 if (!cfg.repo)
-                    return { error: 'No repo configured. Set cli.track.githubRepo in config.json or pass a repo.' };
+                    return { error: 'No repository configured. Set one in Settings → Integrations → GitHub.' };
                 if (!cfg.token)
-                    return { error: 'No token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.' };
+                    return { error: 'No token. Add one in Settings → Integrations → GitHub.' };
                 return await importMembersFromGithub(workspaceRoot, { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun: a.dryRun === true });
             },
             // External sync — GitHub Issues. The token is resolved server-side from
@@ -1578,9 +1594,9 @@ async function main() {
                 const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
                 const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
                 if (!cfg.repo)
-                    return { error: 'No repo configured. Set cli.track.githubRepo in config.json or pass a repo.' };
+                    return { error: 'No repository configured. Set one in Settings → Integrations → GitHub.' };
                 if (!cfg.token)
-                    return { error: 'No token. Set cli.track.githubToken in config.json or export GITHUB_TOKEN.' };
+                    return { error: 'No token. Add one in Settings → Integrations → GitHub.' };
                 const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun };
                 return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
             },
@@ -2023,7 +2039,8 @@ async function main() {
                     workspacePrefs,
                     sessionMode: getSessionMode(workspaceRoot, activeAgent.sessionKey),
                     modeScope: 'session',
-                    cli: fresh.cli ?? {},
+                    cli: scrubCliSecrets(fresh.cli),
+                    integrations: { github: (() => { const g = resolveGithubConfig(); return { repo: g.repo ?? null, hasToken: !!g.token, tokenSource: g.tokenSource ?? null }; })() },
                     permissionRules: { allow: cli?.permissions?.allow ?? [], deny: cli?.permissions?.deny ?? [] },
                     hooks: readHooks(workspaceRoot),
                     servers: Object.entries(fresh.servers ?? {}).map(([id, cfg]) => {
@@ -2485,9 +2502,38 @@ async function main() {
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
                     throw new Error('CLI config must be a JSON object.');
                 const fresh = loadConfig();
-                fresh.cli = parsed;
+                const next = parsed;
+                // The renderer's view is scrubbed of secrets, so a whole-block save would
+                // wipe the GitHub token. Carry it forward when the incoming JSON omits it.
+                const prevToken = fresh.cli?.track?.githubToken;
+                const nextTrack = (next.track && typeof next.track === 'object' ? next.track : undefined);
+                if (prevToken && (!nextTrack || nextTrack.githubToken === undefined)) {
+                    next.track = { ...(nextTrack ?? {}), githubToken: prevToken };
+                }
+                fresh.cli = next;
                 saveConfig(fresh);
                 return { ok: true };
+            },
+            // Settings → Integrations: persist the Track GitHub config. The token is
+            // write-only (set when non-empty, kept otherwise) and never read back.
+            'action:set-track-github': (args) => {
+                const fresh = loadConfig();
+                const cli = (fresh.cli = fresh.cli ?? {});
+                const track = (cli.track = cli.track ?? {});
+                if (typeof args.repo === 'string') {
+                    const r = args.repo.trim();
+                    if (r)
+                        track.githubRepo = r;
+                    else
+                        delete track.githubRepo;
+                }
+                if (typeof args.token === 'string' && args.token.trim())
+                    track.githubToken = args.token.trim();
+                if (args.clearToken === true)
+                    delete track.githubToken;
+                saveConfig(fresh);
+                const cfg = resolveGithubConfig();
+                return { ok: true, repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null };
             },
             // §settings-completeness — set ONE cli.* knob (vs set-cli-json's whole-block
             // replace). `value: null` deletes the key (reverts to the default). Shared

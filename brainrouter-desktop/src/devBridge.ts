@@ -348,6 +348,7 @@ export function installDevBridge(): void {
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
   const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000 };
+  const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
@@ -975,6 +976,7 @@ export function installDevBridge(): void {
       ],
       workspaceRoot: '/Users/dev/BrainRouter', sandbox: 'off', prefs: effectivePrefs(),
       cliKnobs: { ...devCliKnobs },
+      integrations: { github: { ...devGithub } },
       workspacePrefs: { ...prefs },
       sessionMode: { ...(sessionModes[activeSession] ?? {}) },
       modeScope: 'session',
@@ -1019,6 +1021,12 @@ export function installDevBridge(): void {
     'action:compact': () => ({ summary: 'Early exploration compacted; kept the blend fix decision and the sweep numbers.', estimatedTokens: 412, durationMs: 1830, replacedMessages: 14 }),
     'action:set-pref': (a) => { prefs[String(a.key)] = a.value; return { ...prefs }; },
     'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
+    'action:set-track-github': (a) => {
+      if (typeof a.repo === 'string') devGithub.repo = a.repo.trim() || null;
+      if (typeof a.token === 'string' && a.token.trim()) { devGithub.hasToken = true; devGithub.tokenSource = 'config'; }
+      if (a.clearToken === true) { devGithub.hasToken = false; devGithub.tokenSource = null; }
+      return { ok: true, repo: devGithub.repo, hasToken: devGithub.hasToken, tokenSource: devGithub.tokenSource };
+    },
     'action:set-session-mode': (a) => {
       const next = { ...(sessionModes[activeSession] ?? {}) };
       for (const key of ['executionMode', 'reviewPolicy', 'effort']) {
