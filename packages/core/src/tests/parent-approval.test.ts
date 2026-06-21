@@ -11,11 +11,12 @@ import { setCliKnobOverride } from '../config/config.js';
 // not the sandbox. Under the 0.4.15 unattended default (sandboxEnforceWhenSilent)
 // a silent child force-sandboxes run_command and fails closed where no sandboxer
 // exists (e.g. Linux CI without bwrap/firejail) — which would refuse the shell
-// commands these tests rely on. Opt out once at module scope (the interactive
-// posture they were written against); set synchronously before any async test
-// runs so there is no race, and contained to this file by per-file process
-// isolation. See sandbox-enforce.test.ts for the enforcement behavior itself.
-setCliKnobOverride({ sandboxEnforceWhenSilent: false });
+// commands these tests rely on. The two tests that actually execute a shell
+// command opt out RIGHT BEFORE constructing the agent (synchronously, so no
+// concurrent test can interleave between the override and the constructor that
+// captures it). Setting it at module scope is not enough: a sibling file's
+// _resetCliKnobsCache() wipes the override before these tests run, since the
+// runner shares one process. See sandbox-enforce.test.ts for enforcement itself.
 
 function stubLlmTool(toolName: string, args: Record<string, unknown>): () => void {
   const originalFetch = globalThis.fetch;
@@ -106,6 +107,10 @@ test('CODEX-PARENT-APPROVAL silent child forwards shell approval and runs when p
     const restore = stubLlmTool('run_command', { command: 'printf approved > approved.txt' });
     const approvals: Array<{ command?: string; reason: string; dangerous?: boolean }> = [];
     try {
+      // Opt out of unattended sandbox enforcement synchronously, immediately
+      // before construction — the Agent captures the knob in its constructor,
+      // so no concurrent test can race the override away mid-turn.
+      setCliKnobOverride({ sandboxEnforceWhenSilent: false });
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace,
         launchCwd: workspace,
@@ -137,6 +142,8 @@ test('CHILD-EXEC-INHERIT silent child auto-runs a SAFE shell command under paren
     const restore = stubLlmTool('run_command', { command: 'printf ok > inherited.txt' });
     const approvals: Array<{ command?: string; reason: string }> = [];
     try {
+      // See note above: opt out synchronously right before construction.
+      setCliKnobOverride({ sandboxEnforceWhenSilent: false });
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace,
         launchCwd: workspace,

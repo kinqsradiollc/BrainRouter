@@ -774,6 +774,13 @@ export class Agent {
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   private policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
   private silent: boolean;
+  /**
+   * CODEX-SANDBOX-UNATTENDED — captured ONCE at construction so the
+   * silent-enforcement decision is stable for the whole session (knobs are
+   * load-time config; this also makes the policy immune to mid-turn knob-cache
+   * resets, which matters for the concurrent shared-process test runner).
+   */
+  private readonly sandboxEnforceWhenSilent: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
   /**
@@ -838,6 +845,7 @@ export class Agent {
     this.roleOverlay = options.roleOverlay;
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
+    this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
@@ -3229,7 +3237,7 @@ export class Agent {
           // turned it on, or this is a silent/unattended agent where the
           // sandbox is enforced regardless of the global knob.
           const sandboxActive =
-            getCliKnobs().sandbox === 'on' || (this.silent && getCliKnobs().sandboxEnforceWhenSilent);
+            getCliKnobs().sandbox === 'on' || (this.silent && this.sandboxEnforceWhenSilent);
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
@@ -3244,7 +3252,7 @@ export class Agent {
         const sandboxConfig = resolveSandboxConfig(
           this.workspaceRoot,
           { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
-          { silent: this.silent },
+          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
         );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         const enforcedTag = sandboxConfig.enforcedUnattended ? ' (enforced: unattended)' : '';

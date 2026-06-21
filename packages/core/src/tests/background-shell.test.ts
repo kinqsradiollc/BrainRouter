@@ -62,17 +62,18 @@ test('readBackgroundOutput: incremental offsets + complete flag', async () => {
 test('run_command background:true + task_output end-to-end through the executor', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     __resetBackgroundShells();
-    // Background runs are unsandboxed (v1), so they are refused while the
-    // sandbox is active — including the unattended-enforcement default. This
-    // test exercises the background capability itself, so opt out of
-    // enforcement the way an operator would (cli.sandboxEnforceWhenSilent:false).
-    _resetCliKnobsCache();
-    setCliKnobOverride({ sandboxEnforceWhenSilent: false });
     const { Agent } = await import('../agent/agent.js');
     // Silent agents need the parent fast-mode opt-in for safe shell commands.
     const { writePreferences } = await import('../session/preferencesStore.js');
     writePreferences(workspace, { executionMode: 'fast' });
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    // Background runs are unsandboxed (v1), so they are refused while the
+    // sandbox is active — including the unattended-enforcement default. This
+    // test exercises the background capability itself, so opt out of enforcement
+    // the way an operator would (cli.sandboxEnforceWhenSilent:false). Set it
+    // synchronously right before construction — the Agent captures the knob in
+    // its constructor, so a concurrent test cannot race the override away.
+    setCliKnobOverride({ sandboxEnforceWhenSilent: false });
     const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
       workspaceRoot: workspace, launchCwd: workspace, silent: true, accessMode: 'shell',
     });

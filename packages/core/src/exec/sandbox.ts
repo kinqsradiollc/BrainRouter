@@ -101,7 +101,7 @@ export function detectSandboxDenial(stderr: string): boolean {
 export function resolveSandboxConfig(
   workspaceRoot: string,
   persistedExtras?: { readPaths?: string[]; writePaths?: string[] },
-  opts?: { silent?: boolean },
+  opts?: { silent?: boolean; enforceWhenSilent?: boolean },
 ): SandboxConfig {
   const knobs = getCliKnobs();
   const cfgReads = knobs.sandboxReadPaths;
@@ -114,7 +114,11 @@ export function resolveSandboxConfig(
   // notice a risky shell call. Unless explicitly opted out, force the sandbox
   // on with the strictest posture (network denied, missing-sandboxer fails
   // closed) regardless of the looser interactive `cli.sandbox*` settings.
-  const enforcedUnattended = !!opts?.silent && knobs.sandboxEnforceWhenSilent;
+  // Callers may pass an already-resolved `enforceWhenSilent` (e.g. the agent
+  // captures it at construction) so the decision is stable across the turn;
+  // otherwise fall back to the live knob.
+  const enforceWhenSilent = opts?.enforceWhenSilent ?? knobs.sandboxEnforceWhenSilent;
+  const enforcedUnattended = !!opts?.silent && enforceWhenSilent;
   const enabled = knobs.sandbox === 'on' || enforcedUnattended;
   const allowNetwork = enforcedUnattended ? false : knobs.sandboxNetwork;
   const unavailableMode: SandboxUnavailableMode = enforcedUnattended ? 'deny' : knobs.sandboxUnavailable;
