@@ -120,9 +120,9 @@ test('plan/Track sync guard: one enabled turn creates and captures the cascade o
       nextActionPlanner: 'off',
       automation: {
         enabled: true,
-        requirements: { enabled: false, autoCreateThreshold: 0.7, lowActThreshold: 0.4 },
+        requirements: { enabled: false, autoCreateThreshold: 0.7, lowActThreshold: 0.4, autopilot: false },
         sync: { enabled: true },
-        sprints: { enabled: false, minItems: 3, respectCapacity: true },
+        sprints: { enabled: false, minItems: 3, respectCapacity: true, autopilot: false },
       },
     });
     globalThis.fetch = (async () => {

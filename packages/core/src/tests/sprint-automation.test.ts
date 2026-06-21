@@ -23,7 +23,7 @@ test('sprint automation: threshold creates one future sprint and assigns current
       createWorkItem(workspace, { title: `Ready ${index}`, sessionKey, requirementId: 'req_ready' }),
     );
 
-    const actions = reconcileSessionSprints(workspace, { sessionKey, minItems: 3, respectCapacity: true });
+    const actions = reconcileSessionSprints(workspace, { sessionKey, minItems: 3, respectCapacity: true, propose: false });
     const [sprint] = listSprints(workspace);
     assert.equal(sprint.state, 'future');
     assert.equal(actions.filter((action) => action.kind === 'sprint-created').length, 1);
@@ -41,7 +41,7 @@ test('sprint automation: an existing active sprint is extended instead of creati
     createWorkItem(workspace, { title: 'Ready B', sessionKey, requirementId: 'req_extend' });
     createWorkItem(workspace, { title: 'Ready C', sessionKey, requirementId: 'req_extend' });
 
-    reconcileSessionSprints(workspace, { sessionKey, minItems: 3, respectCapacity: true });
+    reconcileSessionSprints(workspace, { sessionKey, minItems: 3, respectCapacity: true, propose: false });
     assert.equal(listSprints(workspace).length, 1);
     assert.equal(listSprints(workspace)[0].state, 'active');
     assert.equal(listSprints(workspace)[0].id, active.id);
@@ -57,7 +57,7 @@ test('sprint automation: respects active capacity and does not pull another sess
     createWorkItem(workspace, { title: 'Current B', sessionKey, requirementId: 'req_capacity', storyPoints: 2 });
     const otherSession = createWorkItem(workspace, { title: 'Other session', sessionKey: 'session:other', requirementId: 'req_other', storyPoints: 1 });
 
-    const actions = reconcileSessionSprints(workspace, { sessionKey, minItems: 1, respectCapacity: true });
+    const actions = reconcileSessionSprints(workspace, { sessionKey, minItems: 1, respectCapacity: true, propose: false });
     assert.equal(actions.filter((action) => action.kind === 'work-item-assigned').length, 1);
     assert.equal(getWorkItem(workspace, otherSession.id)?.sprintId, undefined);
   });
@@ -72,11 +72,31 @@ test('sprint automation: an all-done active sprint is completed with persisted v
     transitionWorkItem(workspace, first.id, 'done');
     transitionWorkItem(workspace, second.id, 'done');
 
-    const actions = reconcileSessionSprints(workspace, { sessionKey: 'session:unrelated', minItems: 3, respectCapacity: true });
+    const actions = reconcileSessionSprints(workspace, { sessionKey: 'session:unrelated', minItems: 3, respectCapacity: true, propose: false });
     const completed = listSprints(workspace).find((candidate) => candidate.id === sprint.id)!;
     assert.equal(completed.state, 'completed');
     assert.equal(completed.velocity, 8);
     assert.deepEqual(actions, [{ kind: 'sprint-completed', sprintId: sprint.id, sprintName: 'Velocity sprint', velocity: 8 }]);
+  });
+});
+
+test('sprint automation: propose mode (default) SUGGESTS but never mutates the store', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:propose';
+    for (const i of [1, 2, 3]) createWorkItem(workspace, { title: `Ready ${i}`, sessionKey, requirementId: 'req_p' });
+    // default propose:true — suggest a sprint, create nothing.
+    const actions = reconcileSessionSprints(workspace, { sessionKey, minItems: 3, respectCapacity: true });
+    assert.deepEqual(actions, [{ kind: 'sprint-suggested', count: 3 }]);
+    assert.equal(listSprints(workspace).length, 0, 'propose mode must not create a sprint');
+
+    // an all-done active sprint suggests completion, does not complete it.
+    const sprint = createSprint(workspace, { name: 'S' });
+    setSprintState(workspace, sprint.id, 'active');
+    const w = createWorkItem(workspace, { title: 'X', sprintId: sprint.id });
+    transitionWorkItem(workspace, w.id, 'done');
+    const a2 = reconcileSessionSprints(workspace, { sessionKey: 'other', minItems: 3, respectCapacity: true });
+    assert.ok(a2.some((x) => x.kind === 'sprint-complete-suggested'));
+    assert.equal(listSprints(workspace).find((s) => s.id === sprint.id)?.state, 'active', 'must NOT auto-complete');
   });
 });
 
@@ -92,9 +112,9 @@ function automationOverride(sync: boolean, sprints: boolean) {
     nextActionPlanner: 'off' as const,
     automation: {
       enabled: true,
-      requirements: { enabled: false, autoCreateThreshold: 0.7, lowActThreshold: 0.4 },
+      requirements: { enabled: false, autoCreateThreshold: 0.7, lowActThreshold: 0.4, autopilot: false },
       sync: { enabled: sync },
-      sprints: { enabled: sprints, minItems: 3, respectCapacity: true },
+      sprints: { enabled: sprints, minItems: 3, respectCapacity: true, autopilot: sprints },
     },
   };
 }

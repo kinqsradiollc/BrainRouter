@@ -579,21 +579,34 @@ you have dogfooded for the workspace:
   "cli": {
     "automation": {
       "enabled": true,
-      "requirements": { "enabled": true, "autoCreateThreshold": 0.7, "lowActThreshold": 0.4 },
+      "requirements": { "enabled": true, "autoCreateThreshold": 0.7, "lowActThreshold": 0.4, "autopilot": false },
       "sync": { "enabled": true },
-      "sprints": { "enabled": false, "minItems": 3, "respectCapacity": true }
+      "sprints": { "enabled": false, "minItems": 3, "respectCapacity": true, "autopilot": false }
     }
   }
 }
 ```
 
-`requirements` captures high-confidence implementation requests as `auto`
-drafts. `sync` reconciles a ready requirement, its session plan, Track items,
-and code-link progress. A completed goal reconciles its anchored requirement
-when the global switch is enabled. `sprints` creates or extends a future sprint
-for current-session work; it never starts a sprint automatically and only
-completes an active sprint when every assigned item is done. Disable the global
-switch to stop every automatic stage immediately.
+Autonomy is **tiered** — the deeper a stage's blast radius, the more it defers
+to you:
+
+- `requirements` captures high-confidence implementation requests as `auto`
+  drafts. With `autopilot: false` (default) a draft is **proposed** — the agent
+  surfaces a one-click promote and the plan/Track cascade only fires once the
+  requirement is `ready` (run `/requirement promote <id>`, or click **Plan &
+  track** in the Requirements panel). With `autopilot: true`, a confident
+  detection that has concrete acceptance criteria is created `ready` directly, so
+  the cascade runs unattended.
+- `sync` reconciles a ready requirement, its session plan, Track items, and
+  code-link progress. A completed goal reconciles its anchored requirement when
+  the global switch is enabled.
+- `sprints` with `autopilot: false` (default) only **suggests** ("N ready items —
+  start a sprint?" / "this sprint is all done — complete it?") and never touches
+  the board — a human makes the irreversible call. With `autopilot: true` it
+  auto-creates a future sprint, assigns ready items, and completes a done one
+  (it still never auto-*starts* a sprint).
+
+Disable the global switch to stop every automatic stage immediately.
 
 ### Sandboxing — shell env
 

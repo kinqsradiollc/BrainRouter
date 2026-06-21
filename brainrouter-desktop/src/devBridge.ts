@@ -459,6 +459,13 @@ export function installDevBridge(): void {
       if (['draft', 'clarifying', 'ready'].includes(r.status)) r.status = 'in-progress';
       return { ok: true, items: r.acceptanceCriteria.map((c) => ({ step: c, status: 'pending', acceptance: c })) };
     },
+    'requirement-promote': (a) => {
+      const r = devRequirements.find((x) => x.id === a.id);
+      if (!r) return { error: `No requirement "${String(a.id)}".` };
+      if (r.acceptanceCriteria.length === 0) return { error: 'No acceptance criteria yet.' };
+      r.status = 'in-progress';
+      return { ok: true, created: r.acceptanceCriteria.length, requirements: [...devRequirements] };
+    },
     // ANNOTATION-RECORDS — mock the annotationStore + annotationExport wrappers
     // (mutate in-memory). Filtering ANDs status + targetKind, mirroring the host.
     'annotation-list': (a) => devAnnotations

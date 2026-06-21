@@ -4423,13 +4423,26 @@ export class Agent {
     }
     if (!detection.detected || !detection.input) return;
 
+    // Tiered autonomy. Default ("propose"): capture as `draft` and surface a
+    // one-click promote — the plan/Track cascade only runs once it's `ready`.
+    // Autopilot (opt-in): a confident detection with concrete criteria is
+    // created `ready` so the cascade runs unattended.
+    const autopilot = automation.requirements.autopilot
+      && detection.input.acceptanceCriteria.length >= 1
+      && detection.confidence >= automation.requirements.autoCreateThreshold;
     const record = createRequirement(this.workspaceRoot, {
       ...detection.input,
+      status: autopilot ? 'ready' : 'draft',
       sessionKey: this.sessionKey,
       origin: 'auto',
     });
-    callbacks.onStatusUpdate(`Captured requirement: ${record.title}`);
-    const provenance = { actor: 'agent', reason: 'auto-detect' };
+    if (autopilot) {
+      callbacks.onStatusUpdate(`Captured requirement ${record.id} (ready — planning + tracking it).`);
+    } else {
+      callbacks.onStatusUpdate(`Captured requirement ${record.id} as draft — promote with /requirement promote ${record.id} (or "Plan & track" in the Requirements panel) to plan + Track it.`);
+      callbacks.onNotice?.({ level: 'info', message: `Requirement draft "${record.title}" — promote it to plan + Track (/requirement promote ${record.id}).` });
+    }
+    const provenance = { actor: 'agent', reason: autopilot ? 'auto-detect:autopilot' : 'auto-detect:draft' };
     void emitAgentEvent(
       { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
       {
@@ -4482,7 +4495,12 @@ export class Agent {
     }
   }
 
-  /** Reconcile the current session's Track items into the conservative sprint lifecycle. */
+  /**
+   * Sprint lifecycle automation. Default ("propose"): only SUGGEST create /
+   * complete via a one-line notice — a human makes the irreversible org call.
+   * Autopilot (opt-in, cli.automation.sprints.autopilot): auto-create a future
+   * sprint + assign ready items + complete a done one (never auto-START).
+   */
   private autoSynchronizeSprints(callbacks: RunTurnCallbacks): void {
     if (this.silent || this.agentDepth > 0) return;
     const options = getCliKnobs().automation.sprints;
@@ -4490,11 +4508,21 @@ export class Agent {
       sessionKey: this.sessionKey,
       minItems: options.minItems,
       respectCapacity: options.respectCapacity,
+      propose: !options.autopilot,
     });
     if (actions.length === 0) return;
 
-    callbacks.onStatusUpdate(`Automation: reconciled ${actions.length} sprint action${actions.length === 1 ? '' : 's'}.`);
     for (const action of actions) {
+      // Propose-only suggestions mutate nothing — just nudge the human.
+      if (action.kind === 'sprint-suggested') {
+        callbacks.onNotice?.({ level: 'info', message: `${action.count} ready work item${action.count === 1 ? '' : 's'} aren't in a sprint — start one with /track sprint create.` });
+        continue;
+      }
+      if (action.kind === 'sprint-complete-suggested') {
+        callbacks.onNotice?.({ level: 'info', message: `Sprint "${action.sprintName}" is all done — complete it with /track sprint complete ${action.sprintId}.` });
+        continue;
+      }
+      callbacks.onStatusUpdate(`Automation: sprint ${action.kind}.`);
       const workItems = 'workItemId' in action
         ? [trackGetWorkItem(this.workspaceRoot, action.workItemId)].filter(Boolean)
         : action.kind === 'sprint-completed'
