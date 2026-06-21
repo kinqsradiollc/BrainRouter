@@ -36,12 +36,14 @@ function normalizePlanStep(step: string): string {
 }
 
 /**
- * Stable enough to survive a normal plan re-read while retaining the
- * requirement boundary. The store has no persisted plan-item id yet, so this
- * is the durable link used by the existing `taskIds` field.
+ * A CONTENT-derived link id (not positional), so it survives the model
+ * rewriting/reordering its plan via update_plan. Keyed on the normalized step
+ * text scoped to the requirement — re-running after an insert/reorder still
+ * matches the existing work item instead of double-creating one. (Index-based
+ * keys broke on any plan edit; the store has no persisted plan-item id yet.)
  */
-export function planItemId(requirementId: string, item: PlanItem, index: number): string {
-  return `plan:${requirementId}:${index}:${normalizePlanStep(item.step)}`;
+export function planItemId(requirementId: string, item: PlanItem): string {
+  return `plan:${requirementId}:${normalizePlanStep(item.step)}`;
 }
 
 /**
@@ -81,8 +83,8 @@ export function syncRequirementPlanTrack(
   }
 
   const workItems = listWorkItems(workspaceRoot);
-  for (const [index, item] of plan.items.entries()) {
-    const id = planItemId(requirement.id, item, index);
+  for (const item of plan.items) {
+    const id = planItemId(requirement.id, item);
     let workItem = workItems.find((candidate) =>
       candidate.requirementId === requirement.id && candidate.taskIds.includes(id),
     );

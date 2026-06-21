@@ -65,13 +65,20 @@ export function detectRequirementShapedPrompt(
   context: RequirementDetectionContext = {},
 ): RequirementDetection {
   const text = prompt.trim();
-  if (!text || QUESTION_OR_EXPLORATION.test(text) || text.endsWith('?')) {
+  // Only the FIRST sentence can carry the imperative — a trailing follow-up
+  // ("…, then explain what you changed") must not be swallowed into the object.
+  const firstSentence = text.split(/(?<=[.!?])\s+/)[0].trim();
+  if (!firstSentence || QUESTION_OR_EXPLORATION.test(firstSentence) || firstSentence.endsWith('?')) {
     return { detected: false, candidate: false, duplicate: false, confidence: 0 };
   }
-  const match = text.match(IMPERATIVE);
+  const match = firstSentence.match(IMPERATIVE);
   if (!match) return { detected: false, candidate: false, duplicate: false, confidence: 0 };
 
-  const object = match[2].replace(/[.?!]+$/, '').trim();
+  // Trim trailing conversational clauses ("caching, but first tell me your plan").
+  const object = match[2]
+    .split(/[,;]?\s+(?:but|then|and then|so that|so i|after that|before you|once you|and (?:tell|explain|let|show|walk))\b/i)[0]
+    .replace(/[.?!,;]+$/, '')
+    .trim();
   const objectWords = object.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   if (!object || GENERIC_OBJECTS.has(object.toLowerCase())) {
     return { detected: false, candidate: false, duplicate: false, confidence: 0 };

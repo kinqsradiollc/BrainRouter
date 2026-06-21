@@ -1238,7 +1238,10 @@ export class Agent {
 
     this.lastUserPrompt = prompt;
     this.lastTurnHitLoopLimit = false;
-    this.autoCaptureRequirement(prompt, callbacks);
+    // Automation is best-effort: a store/detector throw must NEVER escape the
+    // turn and break the user's reply (the brief's hard rule). Each automation
+    // seam is guarded the same way memory capture is.
+    try { this.autoCaptureRequirement(prompt, callbacks); } catch { /* best-effort */ }
     // Breadth-intent detection: when the user signals "do everything" / "in 1 go"
     // / "thoroughly" / "as much as possible", inject a fan-out hint so the
     // agent reaches for spawn_agents instead of a single sequential tool call.
@@ -2219,7 +2222,7 @@ export class Agent {
           && automation.sync.enabled
         ) {
           requirementPlanTrackSyncGuardFired += 1;
-          this.autoSynchronizeRequirementPlanTrack(callbacks);
+          try { this.autoSynchronizeRequirementPlanTrack(callbacks); } catch { /* best-effort — never break the reply */ }
         }
 
         if (
@@ -2229,7 +2232,7 @@ export class Agent {
           && automation.sprints.enabled
         ) {
           sprintAutomationGuardFired += 1;
-          this.autoSynchronizeSprints(callbacks);
+          try { this.autoSynchronizeSprints(callbacks); } catch { /* best-effort — never break the reply */ }
         }
 
         // CC-P9.2 — task-tracking nudge. This turn did substantial multi-step
@@ -2555,12 +2558,14 @@ export class Agent {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
             if (name === 'track_update') {
-              const automationCount = this.applyTrackCodeSignalAutomation(args, callbacks);
+              // Best-effort — a throw here must not fail the tool result.
+              let automationCount = 0;
+              try { automationCount = this.applyTrackCodeSignalAutomation(args, callbacks); } catch { /* best-effort */ }
               if (automationCount > 0) {
                 summary = `${summary} | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
               }
             }
-            if (name === 'goal_complete') this.autoReconcileGoalCompletion(callbacks);
+            if (name === 'goal_complete') { try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ } }
             // Plan-ticker: surface update_plan changes to the REPL so the user
             // sees the live ✓/⏳/☐ checklist instead of having to run /plan.
             if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {

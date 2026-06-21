@@ -29,6 +29,19 @@ test('requirement detector: ambiguous implementation intent remains a candidate 
   assert.match(result.clarify ?? '', /scope/i);
 });
 
+test('requirement detector: trailing conversational text is NOT swallowed into the object', () => {
+  // Compound prompt: imperative + a follow-up request. The object must stop at
+  // the requirement, not absorb "but first tell me your plan".
+  const a = detectRequirementShapedPrompt('implement caching, but first tell me your plan');
+  assert.ok(a.input && !/tell me|your plan/i.test(a.input.title), `title leaked tail: ${a.input?.title}`);
+  assert.ok(a.input && !/tell me|your plan/i.test(a.input.acceptanceCriteria[0]));
+
+  // A second sentence is dropped entirely.
+  const b = detectRequirementShapedPrompt('fix the bug. Then explain what you changed.');
+  assert.ok(b.input && !/explain|changed/i.test(b.input.title), `title leaked sentence: ${b.input?.title}`);
+  assert.match(b.input?.title ?? '', /fix the bug/i);
+});
+
 test('requirement detector: an equivalent open requirement suppresses duplicate creation', () => {
   const result = detectRequirementShapedPrompt('add a rate limiter to the gateway', {
     openRequirements: [{

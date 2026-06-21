@@ -27,13 +27,37 @@ test('plan/Track sync: a ready requirement seeds one plan and deduplicated work 
     assert.equal(items.length, 2);
     assert.equal(first.actions.filter((action) => action.kind === 'plan-seeded').length, 1);
     assert.equal(first.actions.filter((action) => action.kind === 'work-item-created').length, 2);
-    assert.ok(plan.items.every((item, index) =>
-      items.some((workItem) => workItem.taskIds.includes(planItemId(requirement.id, item, index))),
+    assert.ok(plan.items.every((item) =>
+      items.some((workItem) => workItem.taskIds.includes(planItemId(requirement.id, item))),
     ));
 
     const second = syncRequirementPlanTrack(workspace, sessionKey);
     assert.deepEqual(second.actions, []);
     assert.equal(listWorkItems(workspace).length, 2, 're-running must not duplicate Track items');
+  });
+});
+
+test('plan/Track sync: re-sync after the model REORDERS/INSERTS plan steps does not duplicate items', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:reorder';
+    createRequirement(workspace, {
+      title: 'Add gateway rate limiting',
+      status: 'ready',
+      sessionKey,
+      acceptanceCriteria: ['Reject requests above the limit.', 'Cover the limit with a test.'],
+    });
+    syncRequirementPlanTrack(workspace, sessionKey);
+    assert.equal(listWorkItems(workspace).length, 2);
+
+    // The model rewrites its plan: a NEW step is inserted at the front and the
+    // originals shift down. A positional (index) dedup key would re-create the
+    // two existing items; the content key must still match them.
+    const reordered = readPlan(workspace, sessionKey).items;
+    updatePlan(workspace, { plan: [{ step: 'Design the limiter.', status: 'pending' }, ...reordered] }, sessionKey);
+
+    const after = syncRequirementPlanTrack(workspace, sessionKey);
+    assert.equal(listWorkItems(workspace).length, 3, 'only the new step adds an item — no duplicates');
+    assert.equal(after.actions.filter((a) => a.kind === 'work-item-created').length, 1);
   });
 });
 
