@@ -777,6 +777,8 @@ export function installDevBridge(): void {
       return { files, insertions: files.reduce((s, f) => s + f.added, 0), deletions: files.reduce((s, f) => s + f.removed, 0) };
     },
     'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
+    'goal-state': () => ({ text: 'Implement a full-featured Notion clone with a block-based editor and hierarchical pages', status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() }),
+    'action:goal-edit': (a) => ({ ok: true, goal: { text: String(a.text ?? ''), status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() } }),
     // TRACK mode — the mock board persists create/transition so the preview is interactive.
     'track-project': () => devTrack.project,
     'track-items': () => [...devTrack.items],

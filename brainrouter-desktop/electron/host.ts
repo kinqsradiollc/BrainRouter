@@ -53,7 +53,7 @@ import { listChapters } from '@kinqs/brainrouter-core/dist/session/chapterMarks.
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
-import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
 import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
 import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
@@ -1988,6 +1988,21 @@ async function main(): Promise<void> {
       'plan-state': () => {
         const p = readPlan(workspaceRoot, activeAgent.sessionKey);
         return { items: p.items, explanation: p.explanation };
+      },
+      // GOAL-BANNER — the structured active goal for THIS session, so the chat
+      // can pin it with status + controls (vs the plain-text /goal command out).
+      'goal-state': () => readGoal(workspaceRoot, activeAgent.sessionKey) ?? null,
+      // Edit the active goal's text in place (no re-kickoff) for the banner's
+      // inline editor. Returns the updated goal so the banner refreshes.
+      'action:goal-edit': (args) => {
+        const text = typeof args.text === 'string' ? args.text.trim() : '';
+        if (!text) return { ok: false, error: 'Goal text cannot be empty.' };
+        try {
+          const g = editGoal(workspaceRoot, activeAgent.sessionKey, { text });
+          return g ? { ok: true, goal: g } : { ok: false, error: 'No active goal to edit.' };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
       },
       // §goal-autonomy — the desktop's goal loop driver. The renderer calls this
       // after each turn completes; it applies the SAME decision the CLI Ink loop
