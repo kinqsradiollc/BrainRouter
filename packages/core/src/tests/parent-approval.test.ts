@@ -189,7 +189,7 @@ test('CHILD-EXEC-INHERIT silent child STILL gates a DANGEROUS shell command unde
   });
 });
 
-test('WF-COST-GATE run_workflow ALWAYS confirms for a silent child even under parent YOLO', async () => {
+test('WF-NO-NEST a silent child cannot launch run_workflow (blocked outright, not confirmed)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const restore = stubLlmTool('run_workflow', { template: 'build', templateArgs: {} });
     const approvals: Array<{ tool: string; reason: string }> = [];
@@ -199,14 +199,18 @@ test('WF-COST-GATE run_workflow ALWAYS confirms for a silent child even under pa
         launchCwd: workspace,
         accessMode: 'shell',
         silent: true,
-        // Full YOLO — yet a WORKFLOW launch must still warn (token cost).
+        // Even full YOLO can't let a spawned/phase child spin up a NESTED
+        // workflow — there is no human to confirm to, and that recursion is the
+        // "lots of workflows" runaway. It must be refused before any prompt.
         parentExecutionMode: 'fast',
         parentReviewPolicy: 'proceed',
         confirmToolApproval: async (info) => { approvals.push(info as any); return false; },
       });
       await agent.runTurn('launch a workflow', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
-      assert.equal(approvals.length, 1, 'run_workflow must confirm even under YOLO');
-      assert.equal(approvals[0].tool, 'run_workflow');
+      assert.equal(approvals.length, 0, 'run_workflow is blocked for a silent child — never even prompts');
+      const toolMsgs = (agent as any).chatHistory.filter((m: any) => m.role === 'tool');
+      const blocked = toolMsgs.some((m: any) => typeof m.content === 'string' && /nested workflows are blocked/.test(m.content));
+      assert.ok(blocked, 'the run_workflow tool result must say nested workflows are blocked');
     } finally {
       restore();
     }
