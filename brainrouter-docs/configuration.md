@@ -569,6 +569,32 @@ the load-bearing ones:
 | `agentMcpToolBudget` | `40` | Cap on MCP tools shown to a child agent per turn (0 = no cap). |
 | `workspaceOverride` | _(auto)_ | Override the CLI workspace root. |
 
+### Requirement to Track automation
+
+Automation is disabled by default. Enable the global switch and only the stages
+you have dogfooded for the workspace:
+
+```json
+{
+  "cli": {
+    "automation": {
+      "enabled": true,
+      "requirements": { "enabled": true, "autoCreateThreshold": 0.7, "lowActThreshold": 0.4 },
+      "sync": { "enabled": true },
+      "sprints": { "enabled": false, "minItems": 3, "respectCapacity": true }
+    }
+  }
+}
+```
+
+`requirements` captures high-confidence implementation requests as `auto`
+drafts. `sync` reconciles a ready requirement, its session plan, Track items,
+and code-link progress. A completed goal reconciles its anchored requirement
+when the global switch is enabled. `sprints` creates or extends a future sprint
+for current-session work; it never starts a sprint automatically and only
+completes an active sprint when every assigned item is done. Disable the global
+switch to stop every automatic stage immediately.
+
 ### Sandboxing — shell env
 
 | Var | Default | Purpose |

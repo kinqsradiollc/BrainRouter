@@ -13,16 +13,17 @@ import { Button } from '../components/Button.js';
 import { Chip } from '../components/Badge.js';
 import {
   sortRequirements, linkCounts, priorityClass,
-  REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
+  requirementProvenance, REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
 } from '../lib/requirements/requirementsView.js';
 
-export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPriority, onAddCriterion, onSeedPlan }: {
+export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPriority, onAddCriterion, onSeedPlan, onDelete }: {
   requirements: RequirementRecord[];
   onCreate: (title: string) => void;
   onSetStatus: (id: string, status: RequirementStatus) => void;
   onSetPriority: (id: string, priority: RequirementPriority) => void;
   onAddCriterion: (id: string, text: string) => void;
   onSeedPlan: (id: string) => void;
+  onDelete: (id: string) => void;
 }): React.ReactElement {
   const [title, setTitle] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -58,6 +59,7 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
             <button key={r.id} className={`req-row${selected?.id === r.id ? ' active' : ''}`} onClick={() => setSelectedId(r.id)}>
               <span className={`req-prio sev sev-${priorityClass(r.priority)}`} title={`priority: ${r.priority}`}>{r.priority}</span>
               <span className={`req-status st-${r.status}`}>{r.status}</span>
+              {r.origin === 'auto' ? <Chip className="req-origin auto">auto</Chip> : null}
               <span className="req-title">{r.title}</span>
               <span className="req-id">{r.id}</span>
             </button>
@@ -71,6 +73,7 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
             onSetPriority={onSetPriority}
             onSubmitCriterion={submitCriterion}
             onSeedPlan={onSeedPlan}
+            onDelete={onDelete}
           /> : null}
         </>
       )}
@@ -80,7 +83,7 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
   );
 }
 
-function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPriority, onSubmitCriterion, onSeedPlan }: {
+function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPriority, onSubmitCriterion, onSeedPlan, onDelete }: {
   req: RequirementRecord;
   criterion: string;
   setCriterion: (v: string) => void;
@@ -88,8 +91,10 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
   onSetPriority: (id: string, priority: RequirementPriority) => void;
   onSubmitCriterion: () => void;
   onSeedPlan: (id: string) => void;
+  onDelete: (id: string) => void;
 }): React.ReactElement {
   const links = linkCounts(req);
+  const provenance = requirementProvenance(req);
   return (
     <div className="req-detail">
       <div className="req-detail-head">
@@ -115,6 +120,7 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
         <Button disabled={req.acceptanceCriteria.length === 0}
           title={req.acceptanceCriteria.length === 0 ? 'Add an acceptance criterion first' : 'Turn the acceptance criteria into this session\'s plan'}
           onClick={() => onSeedPlan(req.id)}>Seed plan</Button>
+        <Button variant="danger" title="Delete this requirement" onClick={() => onDelete(req.id)}>Delete</Button>
       </div>
 
       <div className="tasks-section"><span>Acceptance criteria</span></div>
@@ -148,6 +154,15 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
         <Chip>{links.tasks} task{links.tasks === 1 ? '' : 's'}</Chip>
         <Chip>{links.artifacts} artifact{links.artifacts === 1 ? '' : 's'}</Chip>
         <Chip>{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</Chip>
+      </div>
+
+      <div className="tasks-section"><span>Automation audit</span></div>
+      <div className="req-audit">
+        <Chip className={`req-origin ${provenance.origin}`}>{provenance.origin} origin</Chip>
+        <div className="req-audit-line">source event: <code>{provenance.sourceEventId ?? 'none'}</code></div>
+        {provenance.memoryIds.length ? <div className="req-memory-ids">
+          {provenance.memoryIds.map((id) => <Chip key={id} className="req-memory-id">{id}</Chip>)}
+        </div> : <div className="req-audit-line">no linked memory records</div>}
       </div>
     </div>
   );

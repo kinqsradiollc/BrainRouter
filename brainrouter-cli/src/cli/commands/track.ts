@@ -58,7 +58,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     const items = listWorkItems(ws, arg ? (isQuery ? { query: arg } : { text: arg }) : {});
     if (!items.length) { console.log(chalk.yellow(`\n${arg ? 'No matching work items.' : 'No work items yet. Create one with: /track create <title>'}\n`)); return true; }
     console.log(chalk.bold('\nWork items'));
-    for (const w of items) console.log(`  ${chalk.cyan(w.key.padEnd(7))} ${typeMark(w.type)} ${statusTag(w)} ${w.title}`);
+    for (const w of items) console.log(`  ${chalk.cyan(w.key.padEnd(7))} ${typeMark(w.type)} ${statusTag(w)}${autoTag(w)} ${w.title}`);
     console.log('');
     return true;
   }
@@ -70,7 +70,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     for (const s of project.workflowStates) {
       const col = items.filter((w) => w.status === s.id);
       console.log(`\n${chalk.cyan(s.name)} ${chalk.gray(`(${col.length})`)}`);
-      for (const w of col) console.log(`  ${chalk.gray(w.key.padEnd(7))} ${typeMark(w.type)} ${w.title}`);
+      for (const w of col) console.log(`  ${chalk.gray(w.key.padEnd(7))} ${typeMark(w.type)}${autoTag(w)} ${w.title}`);
     }
     console.log('');
     return true;
@@ -371,6 +371,12 @@ function parseAutomation(tokens: string[]): ParsedAutomation {
 function statusTag(w: WorkItem): string {
   const c = w.statusCategory === 'done' ? chalk.green : w.statusCategory === 'in-progress' ? chalk.cyan : chalk.gray;
   return c(`[${w.status}]`);
+}
+
+/** Auto-created work items record their actor in the immutable first activity. */
+export function autoTag(w: Pick<WorkItem, 'activity'>): string {
+  const actor = w.activity[0]?.actor;
+  return actor === 'agent' || actor === 'auto' ? ` ${chalk.cyan('[auto]')}` : '';
 }
 
 interface ParsedCreate { title: string; type?: WorkItemType; status?: string; priority?: import('@kinqs/brainrouter-types').WorkItemPriority }

@@ -120,7 +120,7 @@ export function installDevBridge(): void {
     id: string; title: string; description?: string; status: string; priority: string;
     acceptanceCriteria: string[]; clarifyingQuestions: Array<{ question: string; answer?: string }>;
     workspaceRoot: string; sessionKey?: string; taskIds: string[]; artifactIds: string[];
-    linkedMemoryIds: string[]; createdAt: string; updatedAt: string;
+    linkedMemoryIds: string[]; sourceEventId?: string; origin?: 'manual' | 'auto'; createdAt: string; updatedAt: string;
   };
   let reqSeq = 3;
   const nowIso = (offsetMs = 0) => new Date(Date.now() - offsetMs).toISOString();
@@ -131,7 +131,7 @@ export function installDevBridge(): void {
       acceptanceCriteria: ['MemBench recovers to ≥ 0.58 across all 6 splits', 'Reranker never hard-drops a top-retriever candidate'],
       clarifyingQuestions: [{ question: 'Which split regressed first?', answer: 'MemBench, then LoCoMo.' }, { question: 'Keep the LLM judge stage?' }],
       workspaceRoot: '/Users/dev/BrainRouter', sessionKey: 'dev:fix-recall-blend',
-      taskIds: ['task_1', 'task_2'], artifactIds: ['art_9'], linkedMemoryIds: ['mem_blend'],
+      taskIds: ['task_1', 'task_2'], artifactIds: ['art_9'], linkedMemoryIds: ['mem_blend'], origin: 'auto', sourceEventId: 'mem_auto_blend',
       createdAt: nowIso(3 * 86400_000), updatedAt: nowIso(3600_000),
     },
     {
@@ -446,6 +446,11 @@ export function installDevBridge(): void {
       if (typeof a.criterion === 'string' && a.criterion.trim()) r.acceptanceCriteria = [...r.acceptanceCriteria, a.criterion.trim()];
       r.updatedAt = new Date().toISOString();
       return r;
+    },
+    'requirement-delete': (a) => {
+      const index = devRequirements.findIndex((r) => r.id === a.id);
+      if (index >= 0) devRequirements.splice(index, 1);
+      return { ok: index >= 0 };
     },
     'requirement-seed-plan': (a) => {
       const r = devRequirements.find((x) => x.id === a.id);
