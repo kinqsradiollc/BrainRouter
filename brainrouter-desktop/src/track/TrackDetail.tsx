@@ -9,6 +9,7 @@ import type { TrackProject, WorkItem, WorkItemPriority, Sprint } from '@kinqs/br
 import { Icon } from '../icons.js';
 import { TYPE_ICON } from './TrackView.js';
 import type { TrackOps } from './TrackView.js';
+import { TrackDropdown } from './Dropdown.js';
 
 const PRIORITIES: WorkItemPriority[] = ['highest', 'high', 'medium', 'low', 'lowest'];
 
@@ -40,9 +41,9 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
         <header className="track-detail-head">
           <span className={`track-type track-type-${item.type}`}><Icon name={TYPE_ICON[item.type]} size={13} /></span>
           <span className="track-detail-key mono">{item.key}</span>
-          <select className="track-detail-status" value={item.status} onChange={(e) => ops.transition(item.key, e.target.value)}>
-            {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <div className="track-detail-status">
+            <TrackDropdown value={item.status} title="Status" options={states.map((s) => ({ value: s.id, label: s.name }))} onChange={(v) => ops.transition(item.key, v)} />
+          </div>
           <button className="icon-btn track-detail-close" title="Close" onClick={onClose}><Icon name="close" size={13} /></button>
         </header>
 
@@ -56,25 +57,19 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
           <div className="track-detail-fields">
             <Field label="Type"><span className="track-detail-pill">{item.type}</span></Field>
             <Field label="Priority">
-              <select value={item.priority} onChange={(e) => ops.update(item.key, { priority: e.target.value as WorkItemPriority })}>
-                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <TrackDropdown value={item.priority} options={PRIORITIES.map((p) => ({ value: p, label: p }))} onChange={(v) => ops.update(item.key, { priority: v as WorkItemPriority })} />
             </Field>
             <Field label="Assignee">
               <input defaultValue={item.assignee ?? ''} placeholder="unassigned" onBlur={(e) => { const v = e.target.value.trim(); if (v !== (item.assignee ?? '')) ops.update(item.key, { assignee: v || undefined }); }} />
             </Field>
             <Field label="Sprint">
-              <select value={item.sprintId ?? ''} onChange={(e) => ops.assignSprint(item.key, e.target.value || null)}>
-                <option value="">— none —</option>
-                {sprints.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <TrackDropdown value={item.sprintId ?? ''} onChange={(v) => ops.assignSprint(item.key, v || null)}
+                options={[{ value: '', label: '— none —' }, ...sprints.map((s) => ({ value: s.id, label: s.name }))]} />
             </Field>
             {item.type !== 'epic' ? (
               <Field label="Epic">
-                <select value={item.epicId ?? ''} onChange={(e) => ops.update(item.key, { epicId: e.target.value || undefined })}>
-                  <option value="">— none —</option>
-                  {epics.map((ep) => <option key={ep.id} value={ep.id}>{ep.key} {ep.title}</option>)}
-                </select>
+                <TrackDropdown value={item.epicId ?? ''} onChange={(v) => ops.update(item.key, { epicId: v || undefined })}
+                  options={[{ value: '', label: '— none —' }, ...epics.map((ep) => ({ value: ep.id, label: `${ep.key} ${ep.title}` }))]} />
               </Field>
             ) : null}
             <Field label="Points">
@@ -103,9 +98,8 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
               {item.codeLinks.length === 0 ? <span className="track-detail-muted">No code links.</span> : null}
             </div>
             <div className="track-detail-addlink">
-              <select value={linkKind} onChange={(e) => setLinkKind(e.target.value as typeof linkKind)}>
-                <option value="branch">branch</option><option value="commit">commit</option><option value="pull-request">PR</option><option value="file">file</option>
-              </select>
+              <TrackDropdown className="dd-linkkind" value={linkKind} onChange={(v) => setLinkKind(v as typeof linkKind)}
+                options={[{ value: 'branch', label: 'branch' }, { value: 'commit', label: 'commit' }, { value: 'pull-request', label: 'PR' }, { value: 'file', label: 'file' }]} />
               <input value={linkRef} onChange={(e) => setLinkRef(e.target.value)} placeholder="ref (branch / sha / url / path)" onKeyDown={(e) => { if (e.key === 'Enter' && linkRef.trim()) { ops.link(item.key, { codeLinks: [{ kind: linkKind, ref: linkRef.trim() }] }); setLinkRef(''); } }} />
               <button onClick={() => { if (linkRef.trim()) { ops.link(item.key, { codeLinks: [{ kind: linkKind, ref: linkRef.trim() }] }); setLinkRef(''); } }}>Link</button>
             </div>

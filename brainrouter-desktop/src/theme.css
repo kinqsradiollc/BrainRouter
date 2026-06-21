@@ -379,7 +379,10 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-col.drag-over .track-col-empty { color: var(--accent); border: 1px dashed var(--accent); border-radius: 8px; }
 .track-card-title { font-size: 13px; line-height: 1.4; color: var(--text); margin-top: 7px; }
 .track-card-foot { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
-.track-label { font-size: 10.5px; color: var(--text-dim); background: var(--ov-06); padding: 1px 7px; border-radius: 999px; }
+.track-head .track-rail-open { margin-right: 8px; flex: none; }
+.track-label { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-dim); background: var(--ov-06); padding: 1px 7px; border-radius: 999px; }
+.track-label button { border: 0; background: transparent; color: var(--text-faint); font-size: 12px; line-height: 1; padding: 0 0 0 1px; cursor: pointer; border-radius: 50%; }
+.track-label button:hover { color: var(--err); }
 .track-asn { margin-left: auto; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 
 .track-compose { background: var(--raised); border: 1px solid var(--accent); border-radius: 9px; padding: 9px; }
@@ -427,7 +430,16 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-backlog-item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; cursor: pointer; text-align: left; color: var(--text-dim); }
 .track-backlog-item:hover { border-color: var(--border-strong); color: var(--text); }
 .track-backlog-item .tl-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.track-sprint-select, .track-detail-status, .track-detail-fields select, .track-field-val select { background: var(--input); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 6px; cursor: pointer; }
+/* Dropdown layout per context (the control itself is .track-dd). */
+.track-detail-status { flex: 1; min-width: 0; }
+.track-detail-status .track-dd, .track-field-val .track-dd { width: 100%; }
+.track-auto-field .track-dd { width: 100%; }
+.track-auto-actrow .track-dd { flex: 1; min-width: 0; }
+.track-auto-actrow .dd-acttype { flex: none; width: 132px; }
+.track-member-row .track-dd, .track-member-form .track-dd { flex: none; }
+.track-dd.dd-role { width: 118px; }
+.track-dd.dd-linkkind { width: 112px; flex: none; }
+.track-dd.dd-sprintsel { width: 128px; flex: none; }
 .track-newsprint { display: flex; gap: 5px; margin-top: 10px; }
 .track-newsprint input { flex: 1; min-width: 0; background: var(--input); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; font-size: 12px; padding: 5px 8px; }
 .track-newsprint button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; }
@@ -498,8 +510,8 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-auto-trigger { background: var(--ov-05); border-radius: 5px; padding: 2px 7px; color: var(--text-dim); }
 .track-auto-cond { color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
 .track-auto-act { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-radius: 5px; padding: 2px 7px; }
-.track-auto-del { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
-.track-auto-del:hover { color: var(--err); background: var(--ov-05); }
+.track-auto-del { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; background: transparent; color: var(--text-faint); border-radius: 7px; cursor: pointer; transition: background .14s, color .14s; }
+.track-auto-del:hover { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
 .track-auto-form { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; padding: 15px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 13px; }
 .track-auto-fname { font-size: 14px; font-weight: 600; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; outline: 0; font-family: inherit; }
 .track-auto-fname:focus { border-color: var(--accent); }
@@ -517,9 +529,10 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-auto-actrow select:focus, .track-auto-actrow input:focus { border-color: var(--accent); }
 .track-auto-actrow select:first-child { flex: none; width: 130px; }
 .track-auto-actrow input, .track-auto-actrow select:nth-child(2) { flex: 1; }
-.track-auto-actdel { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
-.track-auto-actdel:hover { color: var(--err); background: var(--ov-05); }
-.track-auto-addact { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 4px 4px; }
+.track-auto-actdel { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; background: transparent; color: var(--text-faint); border-radius: 8px; cursor: pointer; transition: background .14s, color .14s; }
+.track-auto-actdel:hover { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+.track-auto-addact { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 6px 11px; border: 1px dashed var(--border-strong); background: transparent; border-radius: 8px; cursor: pointer; transition: background .14s, border-color .14s; }
+.track-auto-addact:hover { background: var(--ov-04); border-color: var(--accent); }
 .track-auto-form-actions { display: flex; gap: 9px; }
 .track-auto-save { font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 8px; padding: 8px 16px; }
 .track-auto-save:disabled { opacity: .45; cursor: default; }
@@ -543,11 +556,10 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-member-id-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .track-member-disp { font-size: 13.5px; font-weight: 600; color: var(--text); }
 .track-member-handle { font-size: 11px; color: var(--text-faint); }
-.track-member-role { font-size: 12px; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; outline: 0; font-family: inherit; }
 .track-member-role:focus { border-color: var(--accent); }
 .track-member-role:disabled { opacity: .6; cursor: not-allowed; }
-.track-member-del { flex: none; color: var(--text-faint); padding: 5px; border-radius: 6px; }
-.track-member-del:hover:not(:disabled) { color: var(--err); background: var(--ov-05); }
+.track-member-del { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; background: transparent; color: var(--text-faint); border-radius: 8px; cursor: pointer; transition: background .14s, color .14s; }
+.track-member-del:hover:not(:disabled) { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
 .track-member-del:disabled { opacity: .3; cursor: not-allowed; }
 .track-perm-matrix { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
 .track-perm-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); margin-bottom: 12px; }
@@ -616,6 +628,27 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track select:hover, .track-detail select:hover { border-color: var(--border-strong); }
 .track select:focus, .track-detail select:focus { outline: none; border-color: var(--accent); }
 .track select:disabled, .track-detail select:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ── Track — custom dropdown (TrackDropdown) ─────────────────────────────────────
+   Replaces native <select>: the trigger shares the select chrome; the menu is
+   portaled to <body> with the app's frosted-popover look, so it never clips and
+   shows full labels. */
+.track-dd { position: relative; display: inline-flex; min-width: 0; }
+.track-dd-trigger { display: inline-flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 10px; background: var(--input); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; transition: border-color .14s; box-sizing: border-box; }
+.track-dd-trigger:hover { border-color: var(--border-strong); }
+.track-dd-trigger:focus-visible { outline: none; border-color: var(--accent); }
+.track-dd-trigger:disabled { opacity: .55; cursor: not-allowed; }
+.track-dd.disabled { cursor: not-allowed; }
+.track-dd-trigger .ic { margin-left: auto; color: var(--text-faint); flex: none; }
+.track-dd-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-dd-ph { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-dd-menu { z-index: 300; background: rgba(24, 27, 34, 0.97); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px; box-shadow: 0 14px 40px rgba(0,0,0,0.5); overflow-y: auto; display: flex; flex-direction: column; gap: 1px; animation: ddIn .12s ease-out; }
+@keyframes ddIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+.track-dd-item { display: flex; align-items: center; gap: 7px; width: 100%; background: transparent; border: 0; border-radius: 6px; padding: 7px 9px; color: var(--text-dim); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; transition: background .14s, color .14s; }
+.track-dd-item:hover { background: var(--ov-07); color: var(--text); }
+.track-dd-item.active { color: var(--text); }
+.track-dd-check { width: 12px; color: var(--accent); font-weight: 700; flex: none; text-align: center; }
+.track-dd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Track — unified button language ─────────────────────────────────────────────
    One primary + one secondary look, applied across every action button so radii,
@@ -1061,6 +1094,9 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
 .home-mode .crumb { opacity: 0; }
 .home-mode .composer { flex: 1 1 0; min-height: 0; padding-top: 0; padding-bottom: 18px; }
 .home-mode .composer .box { max-width: 860px; min-height: 92px; border-radius: 20px; background: #21262d; }
+/* Keep the read-only banner the exact width of the composer in home mode too
+   (the composer widens to 860px there; the banner defaults to --content-w). */
+.home-mode .chat-readonly { max-width: 860px; }
 .home-mode .composer textarea { min-height: 46px; padding-top: 4px; padding-bottom: 8px; font-size: 15px; }
 .home-mode .composer-controls { max-width: none; margin-top: 3px; padding: 0; position: relative; z-index: 3; }
 /* DESK-5h — NO shell-open modifiers: typography and controls stay identical
