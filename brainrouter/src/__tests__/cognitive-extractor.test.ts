@@ -149,4 +149,74 @@ describe("cognitive extractor JSON escape repair", () => {
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("non-JSON output");
   });
+
+  it("fails extraction (re-queue) when the model returns a bare identifier list", async () => {
+    // The headline bug: the model echoes the input sensory IDs as a bare array
+    // (`["sensory_7d...", ...]`). It parses to a JSON array but yields zero scene
+    // objects. This MUST be a failure so the caller re-queues the rows rather
+    // than marking them extracted and dropping them forever.
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('["sensory_7dd3512e", "sensory_e9aa1234"]'),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.records).toHaveLength(0);
+    expect(result.errorMessage).toContain("no valid scene objects");
+  });
+
+  it("fails extraction (re-queue) when the JSON inside the array brackets is unparseable", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('[ {"scene_name": "x", "memories": [ }} garbage ]'),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toContain("Failed to JSON-parse");
+  });
+
+  it("fails extraction (re-queue) when array items are not scene objects", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('[["a","b"],["c"]]'),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.records).toHaveLength(0);
+  });
+
+  it("treats a genuine empty array as success with zero records (no re-queue)", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("hi there")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner("[]"),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.records).toHaveLength(0);
+  });
+
+  it("treats valid scenes with empty memories as success, not a parse failure", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("hi there")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('[{"scene_name":"Trivial chat","memories":[]}]'),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.records).toHaveLength(0);
+  });
 });

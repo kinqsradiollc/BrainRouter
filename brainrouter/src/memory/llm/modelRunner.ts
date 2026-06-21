@@ -13,9 +13,30 @@
  */
 
 import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
-import { fetchWithExternalRetry } from "../util/retry.js";
+import { fetchWithExternalRetry, ExternalApiError } from "../util/retry.js";
 import { acquireLLMSlot } from "./llm-semaphore.js";
-import { extractChatCompletionText, resolveLLMTimeoutMs } from "./llm-response.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
+import { cognitiveBreakerOpen, recordCognitiveSuccess, recordCognitiveFailure } from "./cognitive-breaker.js";
+
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+// Decide whether a failed primary call should retry on the fallback model.
+// True for provider/transport failures (timeouts, network blips, 5xx/429 left
+// after the built-in retries); false for client errors (4xx) or a missing API
+// key, which a different model won't fix.
+function shouldFallback(err: unknown): boolean {
+  if (isExternalTimeoutError(err)) return true;
+  if (err instanceof TypeError) return true; // low-level fetch/network failure
+  if (err instanceof ExternalApiError) {
+    return err.status === undefined ? true : [429, 500, 502, 503, 504].includes(err.status);
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(429|500|502|503|504)\b/.test(msg);
+}
 
 // Configurable LLM Runner — supports per-task model routing
 export class ModelLLMRunner implements LLMRunner {
@@ -32,8 +53,19 @@ export class ModelLLMRunner implements LLMRunner {
     if (!apiKey) {
       // Typed sentinel so upstream pipelines can short-circuit cleanly without dumping a stack trace.
       // Callers should check `error.code === "LLM_NOT_CONFIGURED"` and skip extraction silently.
+      // Thrown BEFORE the breaker so a config gap never counts as a provider failure.
       const err: any = new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Skipping LLM step.`);
       err.code = "LLM_NOT_CONFIGURED";
+      throw err;
+    }
+
+    // Fast-fail when the generative provider is currently failing, so a single
+    // turn's cognitive chain (extraction + contradiction + graph + focus +
+    // distill) doesn't each burn full retry+timeout against a dead endpoint.
+    // Records stay queued; the sweeper retries after the cooldown.
+    if (cognitiveBreakerOpen()) {
+      const err: any = new Error(`[BrainRouter:${taskId}] cognitive LLM circuit open (provider failing); skipping this call.`);
+      err.code = "COGNITIVE_BREAKER_OPEN";
       throw err;
     }
 
@@ -55,13 +87,78 @@ export class ModelLLMRunner implements LLMRunner {
         : ["BRAINROUTER_LLM_TIMEOUT_MS"],
     });
 
+    const fallbackModelName = process.env.BRAINROUTER_LLM_FALLBACK_MODEL?.trim() || undefined;
+
+    try {
+      let result: string;
+      try {
+        result = await this.runOnce({ endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId });
+      } catch (err) {
+        // On a provider/transport failure, retry ONCE against a stable fallback
+        // model before giving up. No-op (rethrow) when no fallback is configured,
+        // it equals the primary, or the error is a client error — so behaviour is
+        // byte-identical to before whenever BRAINROUTER_LLM_FALLBACK_MODEL is unset.
+        if (!fallbackModelName || fallbackModelName === model || !shouldFallback(err)) {
+          throw err;
+        }
+        const fbEndpoint = process.env.BRAINROUTER_LLM_FALLBACK_ENDPOINT?.trim() || endpoint;
+        const fbApiKey = process.env.BRAINROUTER_LLM_FALLBACK_API_KEY?.trim() || apiKey;
+        console.warn(
+          `[BrainRouter:${taskId}] primary model "${model}" failed (${err instanceof Error ? err.message : String(err)}); `
+          + `retrying once on fallback model "${fallbackModelName}".`,
+        );
+        result = await this.runOnce({
+          endpoint: fbEndpoint,
+          apiKey: fbApiKey,
+          model: fallbackModelName,
+          messages,
+          effectiveTimeoutMs,
+          taskId,
+        });
+      }
+      recordCognitiveSuccess();
+      return result;
+    } catch (err) {
+      // Both the primary and the fallback (if any) failed — count it toward the
+      // breaker so a sustained outage opens the circuit.
+      recordCognitiveFailure();
+      throw err;
+    }
+  }
+
+  // One attempt against one model/endpoint. Owns the semaphore slot and the
+  // LM-Studio unload retry so the fallback path can re-run it cleanly without
+  // leaking a slot or losing the unload handling.
+  private async runOnce(args: {
+    endpoint: string;
+    apiKey: string;
+    model: string;
+    messages: { role: string; content: string }[];
+    effectiveTimeoutMs: number;
+    taskId: string;
+  }): Promise<string> {
+    const { endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId } = args;
+
+    const body: Record<string, unknown> = { model, messages };
+    const maxTokens = parsePositiveInt(process.env.BRAINROUTER_LLM_MAX_TOKENS);
+    if (maxTokens) {
+      body.max_tokens = maxTokens;
+    }
+    // Opt-in JSON mode, extraction only. OFF by default: some OpenAI-compatible
+    // proxies (incl. the free nemotron endpoint) 400 on an unknown
+    // `response_format`, and json_object forces a top-level object while
+    // extraction expects an array. Enable only against a backend known to honour it.
+    if (process.env.BRAINROUTER_LLM_JSON_MODE === "on" && taskId === "cognitive-extraction") {
+      body.response_format = { type: "json_object" };
+    }
+
     const doFetch = () => fetchWithExternalRetry(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ model, messages }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(effectiveTimeoutMs),
     }, {
       label: `[BrainRouter:${taskId}] LLM API`,
