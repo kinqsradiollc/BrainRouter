@@ -173,3 +173,35 @@ test('executePhasePlan: fires onPhaseStart/onPhaseComplete hooks per phase in or
   assert.deepEqual(starts, ['one:0/2', 'two:1/2']);
   assert.deepEqual(completes, ['one:completed', 'two:completed']);
 });
+
+// MAS-READMANIFEST (B2/C3) — files a phase's children read are forwarded to the
+// next phase's prompts so it reads deltas, not the whole tree cold.
+import { renderReadManifest } from '../orchestration/phaseOrchestrator.js';
+
+test('renderReadManifest: empty → empty; populated → an attributed block', () => {
+  assert.equal(renderReadManifest(new Map()), '');
+  const out = renderReadManifest(new Map([['src/x.ts', new Set(['plan(architect)'])]]));
+  assert.match(out, /Files already mapped by prior phases/);
+  assert.match(out, /src\/x\.ts — read by plan\(architect\)/);
+});
+
+test('executePhasePlan forwards a read-manifest into the next phase prompt', async () => {
+  const plan = normalizePhasePlan({
+    phases: [
+      { id: 'plan', title: 'Plan', agents: [{ role: 'architect', prompt: 'design it' }] },
+      { id: 'impl', title: 'Impl', agents: [{ role: 'worker', prompt: 'build it', access: 'write' }], dependsOn: ['plan'] },
+    ],
+  }).plan!;
+  const { runner, calls } = recordingRunner({
+    plan: () => [{ id: 'plan-0', role: 'architect', status: 'completed', finalOutput: 'plan', filesRead: ['src/a.ts', 'src/b.ts'] }],
+  });
+  await executePhasePlan(plan, runner);
+
+  const planPrompt = calls.find((c) => c.phase === 'plan')!.agents[0].prompt;
+  assert.doesNotMatch(planPrompt, /Files already mapped/, 'first phase has no prior reads');
+
+  const implPrompt = calls.find((c) => c.phase === 'impl')!.agents[0].prompt;
+  assert.match(implPrompt, /Files already mapped by prior phases/);
+  assert.match(implPrompt, /src\/a\.ts — read by plan\(architect\)/);
+  assert.match(implPrompt, /src\/b\.ts/);
+});

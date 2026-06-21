@@ -137,6 +137,8 @@ export function defaultPhaseRunner(
             status: String(a.status ?? 'completed'),
             finalOutput: typeof a.finalOutput === 'string' ? a.finalOutput : undefined,
             error: typeof a.error === 'string' ? a.error : undefined,
+            // MAS-READMANIFEST — forward the child's read files to the phase engine.
+            filesRead: Array.isArray(a.filesRead) ? a.filesRead.filter((f): f is string => typeof f === 'string') : undefined,
           });
         }
       } catch {

@@ -39,6 +39,27 @@ export interface PhaseChildResult {
   finalOutput?: string;
   error?: string;
   label?: string;
+  /** MAS-READMANIFEST (B2) — files this child actually read, so a downstream
+   *  phase can read DELTAS instead of re-mapping the whole tree cold. */
+  filesRead?: string[];
+}
+
+/**
+ * MAS-READMANIFEST (B2/C3) — render the "files already mapped by prior phases"
+ * block, so downstream agents (steered by PRIOR_WORK_PREAMBLE) read only what
+ * they must change, not what a sibling already mapped. Each line attributes the
+ * file to the phase/role that read it (C3 read-ownership). Pure.
+ */
+export function renderReadManifest(mapped: Map<string, Set<string>>, max = 60): string {
+  if (mapped.size === 0) return '';
+  const lines = [...mapped.entries()]
+    .slice(0, max)
+    .map(([file, by]) => `- ${file} — read by ${[...by].join(', ')}`);
+  const more = mapped.size > max ? `\n…and ${mapped.size - max} more.` : '';
+  return [
+    '\n\n## Files already mapped by prior phases (read these only if you must change/verify them — do NOT re-read to re-derive)',
+    ...lines,
+  ].join('\n') + more;
 }
 
 /**
@@ -131,6 +152,9 @@ export async function executePhasePlan(
   // WF-RESUME — pre-seed completed phases' outputs so downstream {{input}} resolves.
   if (resume) for (const [id, out] of resume.priorOutputs) outputs.set(id, out);
   const executions: PhaseExecution[] = [];
+  // MAS-READMANIFEST — file path → set of "phaseId(role)" that read it, accrued
+  // across phases and injected into each subsequent phase's prompts.
+  const filesMapped = new Map<string, Set<string>>();
 
   for (let i = 0; i < order.length; i++) {
     const phase = order[i];
@@ -154,10 +178,12 @@ export async function executePhasePlan(
       .filter((o): o is string => Boolean(o))
       .join(PHASE_OUTPUT_SEP);
 
-    // Expand the phase into concrete agents, then inject {{input}} into each prompt.
+    // Expand the phase into concrete agents, then inject {{input}} + the
+    // accrued read-manifest into each prompt so they read deltas, not the tree.
+    const manifest = renderReadManifest(filesMapped);
     const agents: PhaseAgentSpec[] = expandPhaseAgents(phase).map((a) => ({
       ...a,
-      prompt: renderPrompt(a.prompt, { input }),
+      prompt: renderPrompt(a.prompt, { input }) + manifest,
     }));
 
     let children: PhaseChildResult[];
@@ -189,6 +215,13 @@ export async function executePhasePlan(
       output,
     };
     executions.push(execution);
+    // MAS-READMANIFEST — accrue the files this phase's children read, attributed
+    // to "phaseId(role)", for the next phase's manifest (C3 read-ownership).
+    for (const c of children) {
+      for (const f of c.filesRead ?? []) {
+        (filesMapped.get(f) ?? filesMapped.set(f, new Set()).get(f)!).add(`${phase.id}(${c.role})`);
+      }
+    }
     hooks.onPhaseComplete?.(execution);
   }
 

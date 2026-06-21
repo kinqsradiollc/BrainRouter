@@ -734,6 +734,12 @@ export class Agent {
   // file it hasn't seen (Claude Code's read-before-edit contract). Reset by
   // loadHistory / fork / bootstrapSession (see clearSessionState).
   private filesReadThisSession = new Set<string>();
+  /** MAS-READMANIFEST (B2) — the files this agent has read this session, so the
+   *  phase orchestrator can forward a "already mapped" manifest to later phases
+   *  (a child reads deltas, not the whole tree cold). */
+  public get filesRead(): string[] {
+    return [...this.filesReadThisSession];
+  }
   // CC-P9.2 — once-per-session task-tracking reminder latch.
   private taskTrackingNudged = false;
   // CC-P6.5 — per-turn verification gate: did the workspace get mutated, and
