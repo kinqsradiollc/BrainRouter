@@ -153,7 +153,7 @@ import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PL
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
-import { isSequenceGuardExempt } from './repeatGuard.js';
+import { isSequenceGuardExempt, buildSequenceSignature } from './repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -2339,20 +2339,25 @@ export class Agent {
       const normalizedNames = toolCalls.map((tc: any) =>
         normalizeToolName(tc.function.name, candidates),
       );
-      const sequenceSignature = JSON.stringify(normalizedNames);
+      // ARGUMENT-AWARE signature: a batch only counts as a "repeat" when the
+      // model re-issued the SAME tools with the SAME args in the SAME order — a
+      // genuine no-progress loop. A read_file → edit_file → run_command sweep
+      // over DIFFERENT files yields a different signature each iteration, so
+      // methodical multi-file work (read/edit/apply/test) never trips this guard.
+      // The per-call identical-(name,args) guard below still catches re-issuing
+      // the exact same call, and the mutation-exempt set is a further escape hatch.
+      const sequenceSignature = buildSequenceSignature(
+        toolCalls.map((tc: any, idx: number) => ({ name: normalizedNames[idx], args: tc.function?.arguments })),
+      );
       const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
       recentToolSequences.push(sequenceSignature);
       if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
-      // A sequence made entirely of mutation tools (write/edit/apply_patch) is
-      // productive repetition (different files each call), not a stalled loop —
-      // skip the name-only sequence guard for it. The identical-args guard below
-      // still catches re-writing the SAME file with the SAME content.
       if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT && !isSequenceGuardExempt(normalizedNames, sequenceGuardExempt)) {
         const sequenceLabel = normalizedNames.join(' → ');
         const resultText = [
-          `Repeat-loop guard tripped: the same tool sequence (${sequenceLabel}) has repeated ${previousSequenceRepeats + 1} times in this turn.`,
-          'The arguments changed, but the action pattern is stalled.',
-          'Stop calling the same tool pattern. Use the evidence already gathered, switch strategy, spawn a bounded child, or report what remains unknown.',
+          `Repeat-loop guard tripped: the identical tool batch (${sequenceLabel}) — same tools AND same arguments — has repeated ${previousSequenceRepeats + 1} times this turn.`,
+          'Re-running the same calls returns the same results.',
+          'Use the evidence already gathered, change the arguments or strategy, spawn a bounded child, or report what remains unknown.',
         ].join(' ');
         const processed = toolCalls.map((tc: any, idx: number) => ({
           toolMsg: {
