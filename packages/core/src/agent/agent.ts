@@ -1220,11 +1220,11 @@ export class Agent {
     await this.injectRecallContext(prompt, mcpTools, callbacks);
 
     // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
-    if (!this.silent) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+    if (this.hookAdvisoryActive()) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
     // CC-P4.2 — user-prompt-submit gate: a hook returning {"decision":"deny"}
     // (or a non-zero exit) blocks the turn before any LLM call; the reason is
-    // returned to the user verbatim.
-    if (!this.silent) {
+    // returned to the user verbatim. BLOCKING — runs for unattended agents too.
+    if (this.hookEnforceActive()) {
       const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
       for (const r of submitResults) {
         const d = parseHookDecision(r.stdout);
@@ -2436,10 +2436,11 @@ export class Agent {
         // legitimate revisits separated by other tool calls.
         if (recentToolSignatures.length > 12) recentToolSignatures.shift();
 
-        // Lifecycle: pre-tool hook. Non-zero exit blocks the tool call.
+        // Lifecycle: pre-tool hook. Non-zero exit (or {decision:deny}) blocks the
+        // call — BLOCKING, so it runs for unattended agents too (enforcement).
         let blockedByHook: string | undefined;
         const hookifyWarnings: string[] = [];
-        if (!this.silent) {
+        if (this.hookEnforceActive()) {
           const preResults = runHooks(this.workspaceRoot, 'pre-tool', { tool: name, payload: args });
           const denial = preResults.find((r) => r.exitCode !== 0);
           if (denial) {
@@ -2691,7 +2692,7 @@ export class Agent {
           local: isLocal,
           session_key: this.sessionKey,
         }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
-        if (!this.silent) {
+        if (this.hookAdvisoryActive()) {
           runHooks(this.workspaceRoot, 'post-tool', {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
@@ -2885,7 +2886,7 @@ export class Agent {
     this.lastAnswer = finalAnswer;
 
     await this.captureTurn(prompt, finalAnswer, callbacks);
-    if (!this.silent) {
+    if (this.hookAdvisoryActive()) {
       runHooks(this.workspaceRoot, 'post-turn', {
         payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
       });
@@ -3813,7 +3814,7 @@ export class Agent {
   public async compactHistory(): Promise<{ summary: string; estimatedTokens: number; durationMs: number; replacedMessages: number } | null> {
     if (this.chatHistory.length < 4) return null;
     // CC-P4.2 — advisory pre-compact hook (notify/log; cannot block).
-    if (!this.silent) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
+    if (this.hookAdvisoryActive()) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
     const before = this.chatHistory.length;
     const userMessages = this.chatHistory.filter((m) => m.role === 'user');
     const lastUserMessage = userMessages.length > 0 ? String(userMessages[userMessages.length - 1].content ?? '') : undefined;
@@ -4405,6 +4406,22 @@ export class Agent {
   }
 
   /** Create one draft requirement from a high-confidence user implementation request. */
+  /**
+   * BLOCKING hook events (pre-tool, user-prompt-submit) run for silent /
+   * unattended agents too when `cli.hooks.enforceWhenSilent` (default on), so a
+   * deny hook enforces policy on deep workers, headless, and cloud runs — not
+   * just the interactive session. Cheap when no hooks are defined (no exec).
+   */
+  private hookEnforceActive(): boolean {
+    const h = getCliKnobs().hooks;
+    return h.enabled && (!this.silent || h.enforceWhenSilent);
+  }
+
+  /** ADVISORY hook events (pre/post-turn, post-tool, pre-compact) stay interactive-only. */
+  private hookAdvisoryActive(): boolean {
+    return getCliKnobs().hooks.enabled && !this.silent;
+  }
+
   private autoCaptureRequirement(prompt: string, callbacks: RunTurnCallbacks): void {
     const automation = getCliKnobs().automation;
     if (this.silent || !automation.enabled || !automation.requirements.enabled) return;
