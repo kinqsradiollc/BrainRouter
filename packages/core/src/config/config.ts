@@ -77,12 +77,27 @@ export interface AutomationKnobs {
     enabled?: boolean;
     autoCreateThreshold?: number;
     lowActThreshold?: number;
+    /**
+     * Tiered autonomy. Default false ("propose"): an auto-detected requirement
+     * is captured as `draft` and the agent surfaces a one-click promote — the
+     * plan/Track cascade only fires once the requirement is `ready`. When true
+     * ("autopilot"): a confident detection with concrete acceptance criteria is
+     * created `ready` directly, so the full cascade runs unattended.
+     */
+    autopilot?: boolean;
   };
   sync?: { enabled?: boolean };
   sprints?: {
     enabled?: boolean;
     minItems?: number;
     respectCapacity?: boolean;
+    /**
+     * Default false ("propose"): sprint automation only SUGGESTS (create /
+     * complete) — a human makes the irreversible org commitment. When true
+     * ("autopilot"): it auto-creates a future sprint, assigns ready items, and
+     * auto-completes a done sprint (it still never auto-STARTS a sprint).
+     */
+    autopilot?: boolean;
   };
 }
 
@@ -92,12 +107,14 @@ export interface ResolvedAutomationKnobs {
     enabled: boolean;
     autoCreateThreshold: number;
     lowActThreshold: number;
+    autopilot: boolean;
   };
   sync: { enabled: boolean };
   sprints: {
     enabled: boolean;
     minItems: number;
     respectCapacity: boolean;
+    autopilot: boolean;
   };
 }
 
@@ -801,6 +818,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
         enabled: requirementsAutomation.enabled ?? false,
         autoCreateThreshold,
         lowActThreshold,
+        autopilot: requirementsAutomation.autopilot ?? false,
       },
       sync: { enabled: automation.sync?.enabled ?? false },
       sprints: {
@@ -809,6 +827,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
           ? sprintAutomation.minItems!
           : 3,
         respectCapacity: sprintAutomation.respectCapacity ?? true,
+        autopilot: sprintAutomation.autopilot ?? false,
       },
     },
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',

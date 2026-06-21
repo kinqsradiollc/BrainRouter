@@ -38,9 +38,9 @@ function automationOverride(enabled: boolean) {
     nextActionPlanner: 'off' as const,
     automation: {
       enabled,
-      requirements: { enabled: false, autoCreateThreshold: 0.7, lowActThreshold: 0.4 },
+      requirements: { enabled: false, autoCreateThreshold: 0.7, lowActThreshold: 0.4, autopilot: false },
       sync: { enabled },
-      sprints: { enabled: false, minItems: 3, respectCapacity: true },
+      sprints: { enabled: false, minItems: 3, respectCapacity: true, autopilot: false },
     },
   };
 }

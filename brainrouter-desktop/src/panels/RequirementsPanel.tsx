@@ -16,13 +16,14 @@ import {
   requirementProvenance, REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
 } from '../lib/requirements/requirementsView.js';
 
-export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPriority, onAddCriterion, onSeedPlan, onDelete }: {
+export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPriority, onAddCriterion, onSeedPlan, onPromote, onDelete }: {
   requirements: RequirementRecord[];
   onCreate: (title: string) => void;
   onSetStatus: (id: string, status: RequirementStatus) => void;
   onSetPriority: (id: string, priority: RequirementPriority) => void;
   onAddCriterion: (id: string, text: string) => void;
   onSeedPlan: (id: string) => void;
+  onPromote: (id: string) => void;
   onDelete: (id: string) => void;
 }): React.ReactElement {
   const [title, setTitle] = useState('');
@@ -73,6 +74,7 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
             onSetPriority={onSetPriority}
             onSubmitCriterion={submitCriterion}
             onSeedPlan={onSeedPlan}
+            onPromote={onPromote}
             onDelete={onDelete}
           /> : null}
         </>
@@ -83,7 +85,7 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
   );
 }
 
-function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPriority, onSubmitCriterion, onSeedPlan, onDelete }: {
+function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPriority, onSubmitCriterion, onSeedPlan, onPromote, onDelete }: {
   req: RequirementRecord;
   criterion: string;
   setCriterion: (v: string) => void;
@@ -91,8 +93,12 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
   onSetPriority: (id: string, priority: RequirementPriority) => void;
   onSubmitCriterion: () => void;
   onSeedPlan: (id: string) => void;
+  onPromote: (id: string) => void;
   onDelete: (id: string) => void;
 }): React.ReactElement {
+  // The one-click gate for an auto-captured (or any pre-work) draft: mark ready
+  // + plan + Track it in one go.
+  const canPromote = req.acceptanceCriteria.length > 0 && (req.status === 'draft' || req.status === 'clarifying' || req.status === 'ready');
   const links = linkCounts(req);
   const provenance = requirementProvenance(req);
   return (
@@ -117,6 +123,10 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
             {REQUIREMENT_PRIORITY_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
+        {canPromote ? (
+          <Button variant="primary" title="Mark ready, seed the plan, and create the Track items in one step"
+            onClick={() => onPromote(req.id)}>Plan &amp; track</Button>
+        ) : null}
         <Button disabled={req.acceptanceCriteria.length === 0}
           title={req.acceptanceCriteria.length === 0 ? 'Add an acceptance criterion first' : 'Turn the acceptance criteria into this session\'s plan'}
           onClick={() => onSeedPlan(req.id)}>Seed plan</Button>

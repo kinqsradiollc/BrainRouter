@@ -32,6 +32,7 @@ import {
   openClarifyingQuestions,
 } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { seedPlanFromRequirement, formatPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -249,6 +250,35 @@ export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<
     console.log(chalk.green(`\n✓ Seeded ${plan.items.length} plan item(s) from requirement ${chalk.cyan(r.id)} [${statusColor(updated.status)}]`));
     console.log(formatPlan(plan));
     await captureRequirementNote(ctx, updated, 'plan seeded');
+    return true;
+  }
+
+  if (sub === 'promote' || sub === 'ready') {
+    // The one-click gate: mark a draft requirement `ready` and run the
+    // Requirement → Plan → Track cascade immediately (no waiting for a turn).
+    const id = rest[0];
+    if (!id) { console.log(chalk.red('\nUsage: /requirement promote <id>   (mark ready + plan + Track it)\n')); return true; }
+    const r = getRequirement(agent.workspaceRoot, id);
+    if (!r) { console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`)); return true; }
+    if (r.acceptanceCriteria.length === 0) {
+      console.log(chalk.yellow(`\nRequirement "${id}" has no acceptance criteria yet — add some first: /requirement update ${id} --criteria "<text>"\n`));
+      return true;
+    }
+    updateRequirement(agent.workspaceRoot, id, { status: 'ready' });
+    const { actions } = syncRequirementPlanTrack(agent.workspaceRoot, agent.sessionKey);
+    const created = actions.filter((a) => a.kind === 'work-item-created');
+    const seeded = actions.some((a) => a.kind === 'plan-seeded');
+    const updated = getRequirement(agent.workspaceRoot, id) ?? r;
+    console.log(chalk.green(`\n✓ Promoted ${chalk.cyan(r.id)} [${statusColor(updated.status)}] — ${seeded ? 'plan seeded · ' : ''}${created.length} Track item(s) created`));
+    for (const a of created) {
+      const wi = a as Extract<typeof a, { workItemKey: string }>;
+      console.log(`  ${chalk.green('+')} ${chalk.cyan(wi.workItemKey)} ${wi.title}`);
+    }
+    if (created.length === 0 && !seeded) {
+      console.log(chalk.gray('  (No items created — promote from the session that captured it, or run /requirement seed-plan ' + id + ')'));
+    }
+    console.log('');
+    await captureRequirementNote(ctx, updated, 'promoted to plan + Track');
     return true;
   }
 
@@ -484,5 +514,6 @@ function printUsage(): void {
   console.log(chalk.gray('  /requirement update <id> --priority <p>     Change priority (low|medium|high)'));
   console.log(chalk.gray('  /requirement update <id> --criteria "<c>"   Append an acceptance criterion'));
   console.log(chalk.gray('  /requirement seed-plan <id>                 Seed this session\'s plan from the acceptance criteria'));
+  console.log(chalk.gray('  /requirement promote <id>                   Mark ready + plan + Track it in one step (the auto-draft gate)'));
   console.log();
 }

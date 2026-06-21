@@ -81,6 +81,7 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/br
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 /**
@@ -1657,6 +1658,21 @@ async function main() {
                 }
                 await captureRequirementNote(getRequirement(workspaceRoot, id) ?? req, 'plan seeded');
                 return { ok: true, items: plan.items };
+            },
+            // The one-click gate: mark a (draft) requirement ready + run the
+            // Requirement → Plan → Track cascade immediately so a board appears now.
+            'requirement-promote': async (a) => {
+                const id = String(a.id ?? '');
+                const req = getRequirement(workspaceRoot, id);
+                if (!req)
+                    return { error: `No requirement "${id}".` };
+                if (req.acceptanceCriteria.length === 0)
+                    return { error: 'This requirement has no acceptance criteria yet — add some first.' };
+                updateRequirement(workspaceRoot, id, { status: 'ready' });
+                const { actions } = syncRequirementPlanTrack(workspaceRoot, activeAgent.sessionKey);
+                const created = actions.filter((x) => x.kind === 'work-item-created').length;
+                await captureRequirementNote(getRequirement(workspaceRoot, id) ?? req, 'promoted to plan + Track');
+                return { ok: true, created, requirements: listRequirements(workspaceRoot) };
             },
             // ANNOTATION-RECORDS (0.4.15) — durable feedback records anchored to a
             // plan / requirement / artifact / doc / message / diff / file / review
