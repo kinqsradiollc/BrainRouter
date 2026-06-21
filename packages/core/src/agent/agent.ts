@@ -2547,9 +2547,22 @@ export class Agent {
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           if (isOrchestrationToolName(name)) {
-            // WF-COST-GATE — a workflow launch always confirms (token cost);
-            // plain spawns stay governed by /delegation-policy (auto = silent).
-            if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
+            // WF-NO-NEST — a silent/child agent (itself a spawned worker, incl.
+            // a workflow PHASE agent) must never launch its own workflow. That
+            // recursion is what produced the "lots of workflows" runaway: a
+            // build worker called run_workflow → a nested install/verify
+            // workflow → token blow-up, with no human to approve it. Phase work
+            // is done DIRECTLY (or via plain spawn_agents, depth-capped); only a
+            // top-level, user-facing agent may launch a workflow.
+            if (name === 'run_workflow' && this.silent) {
+              isError = true;
+              resultText =
+                'run_workflow is not available to a spawned/child agent — nested workflows are blocked ' +
+                '(they recurse and run unattended). Do this work directly with the regular tools ' +
+                '(read_file, write_file, edit_file, run_command), or use spawn_agents for genuinely ' +
+                'independent sub-tasks.';
+              summary = 'nested run_workflow blocked';
+            } else if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
               isError = true;
               resultText =
                 'run_workflow declined — the workflow launch was not approved (workflows fan out ' +
