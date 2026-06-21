@@ -2249,6 +2249,12 @@ async function main(): Promise<void> {
               // the returned startTurn; the goal-continuation query keeps it going).
               const g = setGoal(workspaceRoot, rest, sk, { force: true });
               goalStrikes.delete(sk);
+              // Seed a visible starter plan so the Plan panel populates the
+              // instant the goal is set (instead of waiting on the model to call
+              // update_plan). The kickoff prompt tells the agent to replace it.
+              try {
+                updatePlan(workspaceRoot, { plan: [{ step: g.text.slice(0, 200), status: 'in_progress' }], explanation: 'Goal kickoff — the agent will break this down via update_plan.' }, sk);
+              } catch { /* plan seed is best-effort */ }
               return { lines: [`Goal set: ${g.text}`, `status: ${g.status} — working on it…`], startTurn: buildGoalKickoffPrompt(g, 'start') };
             }
             const g = readGoal(workspaceRoot, sk);

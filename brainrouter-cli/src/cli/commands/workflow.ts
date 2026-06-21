@@ -1193,19 +1193,22 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       try {
         const existingPlan = readPlan(ws, sk);
         const orphans = existingPlan.items.filter((i) => i.status !== 'completed');
+        // Drop stale orphan items AND seed a visible starter item for the new
+        // goal in one write, so `/plan` shows the goal immediately (the agent
+        // replaces it via update_plan) rather than going momentarily empty.
+        updatePlan(
+          ws,
+          { plan: [{ step: goal.text.slice(0, 200), status: 'in_progress' }], explanation: `Goal kickoff — the agent will break this down via update_plan.` },
+          sk,
+        );
         if (orphans.length > 0) {
-          updatePlan(
-            ws,
-            { plan: [], explanation: `auto-cleared on new /goal: ${goal.text.slice(0, 80)}` },
-            sk,
-          );
           console.log(chalk.yellow(`⚠️  Cleared ${orphans.length} stale plan item${orphans.length === 1 ? '' : 's'} from prior work:`));
           for (const it of orphans.slice(0, 5)) {
             const mark = it.status === 'in_progress' ? '⏳' : '☐';
             console.log(chalk.gray(`     ${mark} ${it.step.slice(0, 100)}`));
           }
           if (orphans.length > 5) console.log(chalk.gray(`     …and ${orphans.length - 5} more.`));
-          console.log(chalk.gray(`   The agent can rebuild a new plan for this goal via update_plan.`));
+          console.log(chalk.gray(`   Seeded a fresh plan for this goal — the agent will refine it via update_plan.`));
         }
       } catch {
         // Plan reconciliation is best-effort — never fatal to the /goal flow.
