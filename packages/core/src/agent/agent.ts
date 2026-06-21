@@ -24,6 +24,7 @@ import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskSt
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
 import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
 import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
+import { reconcileSessionSprints } from '../track/sprintAutomation.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -1397,6 +1398,8 @@ export class Agent {
     // not a prompt. It gets one turn-end pass after the model's plan guard.
     let requirementPlanTrackSyncGuardFired = 0;
     const REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX = 1;
+    let sprintAutomationGuardFired = 0;
+    const SPRINT_AUTOMATION_GUARD_MAX = 1;
     // MAR-3 — child-synthesis guard. `childOutputDeliveredThisTurn` flips true once a
     // child/sub-agent's findings reach the parent this turn; the guard fires once if
     // the model then ends with a deferral instead of synthesizing them.
@@ -2219,6 +2222,16 @@ export class Agent {
           this.autoSynchronizeRequirementPlanTrack(callbacks);
         }
 
+        if (
+          sprintAutomationGuardFired < SPRINT_AUTOMATION_GUARD_MAX
+          && this.lastTurnToolCalls > 0
+          && automation.enabled
+          && automation.sprints.enabled
+        ) {
+          sprintAutomationGuardFired += 1;
+          this.autoSynchronizeSprints(callbacks);
+        }
+
         // CC-P9.2 — task-tracking nudge. This turn did substantial multi-step
         // tool work but no plan is being kept. Inject one per-session reminder
         // to use update_plan (distinct from plan-sync, which needs an existing
@@ -2547,6 +2560,7 @@ export class Agent {
                 summary = `${summary} | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
               }
             }
+            if (name === 'goal_complete') this.autoReconcileGoalCompletion(callbacks);
             // Plan-ticker: surface update_plan changes to the REPL so the user
             // sees the live ✓/⏳/☐ checklist instead of having to run /plan.
             if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
@@ -4461,6 +4475,89 @@ export class Agent {
         }
       }).catch(() => {});
     }
+  }
+
+  /** Reconcile the current session's Track items into the conservative sprint lifecycle. */
+  private autoSynchronizeSprints(callbacks: RunTurnCallbacks): void {
+    if (this.silent || this.agentDepth > 0) return;
+    const options = getCliKnobs().automation.sprints;
+    const actions = reconcileSessionSprints(this.workspaceRoot, {
+      sessionKey: this.sessionKey,
+      minItems: options.minItems,
+      respectCapacity: options.respectCapacity,
+    });
+    if (actions.length === 0) return;
+
+    callbacks.onStatusUpdate(`Automation: reconciled ${actions.length} sprint action${actions.length === 1 ? '' : 's'}.`);
+    for (const action of actions) {
+      const workItems = 'workItemId' in action
+        ? [trackGetWorkItem(this.workspaceRoot, action.workItemId)].filter(Boolean)
+        : action.kind === 'sprint-completed'
+          ? trackListWorkItems(this.workspaceRoot, { sprintId: action.sprintId })
+          : [];
+      const requirementIds = new Set<string>();
+      for (const item of workItems) if (item?.requirementId) requirementIds.add(item.requirementId);
+      const firstRequirement = [...requirementIds]
+        .map((id) => getRequirement(this.workspaceRoot, id))
+        .find(Boolean);
+      const provenance = {
+        sourceEventId: firstRequirement?.sourceEventId,
+        linkedMemoryIds: firstRequirement?.linkedMemoryIds,
+        actor: 'agent',
+        reason: 'sprint-automation',
+      };
+      const actionLabel = action.kind === 'work-item-assigned'
+        ? action.workItemKey
+        : action.sprintName;
+      void emitAgentEvent(
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        {
+          kind: 'agent_output',
+          summary: `Sprint automation ${action.kind}: ${actionLabel}`,
+          payload: { ...action, provenance },
+        },
+      ).then((memoryId) => {
+        if (!memoryId) return;
+        for (const item of workItems) {
+          if (item) trackLinkWorkItem(this.workspaceRoot, item.id, { linkedMemoryIds: [memoryId] });
+        }
+        for (const requirementId of requirementIds) {
+          linkRequirement(this.workspaceRoot, requirementId, { memoryId });
+        }
+      }).catch(() => {});
+    }
+  }
+
+  /** Mark the requirement anchored to a successfully completed goal as fulfilled. */
+  private autoReconcileGoalCompletion(callbacks: RunTurnCallbacks): void {
+    if (this.silent || this.agentDepth > 0) return;
+    const automation = getCliKnobs().automation;
+    if (!automation.enabled) return;
+    if (readGoal(this.workspaceRoot, this.sessionKey)?.status !== 'complete') return;
+    const requirementId = readPlan(this.workspaceRoot, this.sessionKey).requirementId;
+    if (!requirementId) return;
+    const requirement = getRequirement(this.workspaceRoot, requirementId);
+    if (!requirement || requirement.status === 'done') return;
+
+    const completed = updateRequirement(this.workspaceRoot, requirement.id, { status: 'done' });
+    if (!completed) return;
+    callbacks.onStatusUpdate(`Automation: marked requirement ${completed.id} done from the completed goal.`);
+    const provenance = {
+      sourceEventId: completed.sourceEventId,
+      linkedMemoryIds: completed.linkedMemoryIds,
+      actor: 'agent',
+      reason: 'goal-complete-reconcile',
+    };
+    void emitAgentEvent(
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Requirement completed from goal: ${completed.title}`,
+        payload: { requirementId: completed.id, status: completed.status, provenance },
+      },
+    ).then((memoryId) => {
+      if (memoryId) linkRequirement(this.workspaceRoot, completed.id, { memoryId });
+    }).catch(() => {});
   }
 
   /** Apply opt-in code-link transitions after a successful Track tool mutation. */
