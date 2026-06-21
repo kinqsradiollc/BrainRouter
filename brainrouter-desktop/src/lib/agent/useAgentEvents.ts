@@ -996,6 +996,8 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'a-mode': q('q-snapshot', 'config-snapshot'); setToast('Mode saved for this session.'); return;
       case 'a-pref': q('q-snapshot', 'config-snapshot'); setToast('Saved — shared with the CLI.'); return;
       case 'a-hook': q('q-snapshot', 'config-snapshot'); setToast('Hook updated.'); return;
+      case 'a-ext': q('q-snapshot', 'config-snapshot'); setToast('Extension updated — reloaded.'); return;
+      case 'a-trust': q('q-snapshot', 'config-snapshot'); setToast(result && typeof result === 'object' && (result as { trusted?: boolean }).trusted ? 'Workspace trusted — extensions loaded.' : 'Workspace trust revoked.'); return;
       case 'a-access': setToast('Access mode set for this session.'); return;
       case 'a-reconnect': q('q-snapshot', 'config-snapshot'); setToast('Reconnect requested.'); return;
       case 'a-rule': q('q-snapshot', 'config-snapshot'); setToast(result && typeof result === 'object' && (result as { ok?: boolean }).ok ? 'Permission rule saved — shared with the CLI.' : 'Could not save the rule.'); return;

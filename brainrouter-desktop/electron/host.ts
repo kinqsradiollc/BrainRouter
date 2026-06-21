@@ -61,6 +61,11 @@ import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.
 import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
+import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
+import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
+import { extensionContributionSummary } from '@kinqs/brainrouter-core/dist/extension/registry.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -495,6 +500,9 @@ async function main(): Promise<void> {
     sessionKey: string,
     e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest },
   ): void => send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: e });
+  // EXTENSIONS — activate code-level extensions before the first turn (workspace
+  // tier gated on project trust). Best-effort; never blocks the host boot.
+  await loadExtensions(workspaceRoot).catch(() => undefined);
   const agent = new Agent(mcpClient, llm, {
     workspaceRoot,
     launchCwd: workspaceRoot,
@@ -1959,6 +1967,16 @@ async function main(): Promise<void> {
           // §settings-completeness — the raw cli.* block so the Advanced section can
           // show current knob values (no key here; values are config, not secrets).
           cliKnobs: (cli ?? {}) as Record<string, unknown>,
+          // EXTENSIONS — discovered extensions + workspace trust, for the
+          // Settings → Extensions section (toggle/trust refresh this snapshot).
+          extensions: {
+            trusted: isWorkspaceTrusted(workspaceRoot),
+            items: listExtensions(workspaceRoot).map((e) => ({
+              name: e.name, version: e.version, source: e.source, description: e.description,
+              contributes: e.contributes, enabled: isExtensionEnabled(e.name),
+              blocked: e.source === 'workspace' && !isWorkspaceTrusted(workspaceRoot),
+            })),
+          },
         };
       },
       'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined }),
@@ -1995,6 +2013,25 @@ async function main(): Promise<void> {
       // Structured per-session plan for the renderer's Plan panel + the context
       // surfaces. Read fresh from THIS session's durable plan so switching chats
       // shows the right plan (a new chat → empty) instead of the last live one.
+      // EXTENSIONS — discovered extensions + their state for the Settings panel.
+      'extensions': () => {
+        const trusted = isWorkspaceTrusted(workspaceRoot);
+        const contrib = extensionContributionSummary();
+        return {
+          workspaceRoot,
+          trusted,
+          contributions: contrib,
+          items: listExtensions(workspaceRoot).map((e) => ({
+            name: e.name,
+            version: e.version,
+            source: e.source,
+            description: e.description,
+            contributes: e.contributes,
+            enabled: isExtensionEnabled(e.name),
+            blocked: e.source === 'workspace' && !trusted,
+          })),
+        };
+      },
       'plan-state': () => {
         const p = readPlan(workspaceRoot, activeAgent.sessionKey);
         return { items: p.items, explanation: p.explanation };
@@ -2405,6 +2442,22 @@ async function main(): Promise<void> {
       // §settings-completeness — set ONE cli.* knob (vs set-cli-json's whole-block
       // replace). `value: null` deletes the key (reverts to the default). Shared
       // with the CLI's config.json.
+      // EXTENSIONS — enable/disable an extension (re-load to apply).
+      'action:ext-set-enabled': async (args) => {
+        const name = typeof args.name === 'string' ? args.name : '';
+        if (!name) return { ok: false, error: 'No extension name.' };
+        setExtensionEnabled(name, args.enabled === true);
+        await loadExtensions(workspaceRoot).catch(() => undefined);
+        return { ok: true, name };
+      },
+      // EXTENSIONS — trust / untrust this workspace, then (re)load so workspace
+      // extensions activate or deactivate immediately.
+      'action:trust-workspace': async (args) => {
+        if (args.trusted === true) trustWorkspace(workspaceRoot);
+        else untrustWorkspace(workspaceRoot);
+        await loadExtensions(workspaceRoot).catch(() => undefined);
+        return { ok: true, trusted: isWorkspaceTrusted(workspaceRoot) };
+      },
       'action:set-cli-knob': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
         if (!key) return { ok: false, error: 'No knob key.' };

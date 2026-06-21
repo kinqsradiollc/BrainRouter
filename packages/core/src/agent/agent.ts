@@ -90,6 +90,7 @@ import { applyFederationIdentity } from '../util/federationIdentity.js';
 import { acquireLLMSlot } from '../util/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
+import { extensionHookHandlers } from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
@@ -1235,11 +1236,16 @@ export class Agent {
     await this.injectRecallContext(prompt, mcpTools, callbacks);
 
     // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
-    if (this.hookAdvisoryActive()) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+    if (this.hookAdvisoryActive()) {
+      runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+      void this.runExtensionHooks('pre-turn');
+    }
     // CC-P4.2 — user-prompt-submit gate: a hook returning {"decision":"deny"}
     // (or a non-zero exit) blocks the turn before any LLM call; the reason is
     // returned to the user verbatim. BLOCKING — runs for unattended agents too.
     if (this.hookEnforceActive()) {
+      const extDeny = await this.runExtensionHooks('user-prompt-submit', { args: { prompt } });
+      if (extDeny) return `Prompt blocked by user-prompt-submit hook: ${extDeny}`;
       const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
       for (const r of submitResults) {
         const d = parseHookDecision(r.stdout);
@@ -2464,6 +2470,10 @@ export class Agent {
         let blockedByHook: string | undefined;
         const hookifyWarnings: string[] = [];
         if (this.hookEnforceActive()) {
+          // Typed extension pre-tool handlers (in-process) deny identically to a
+          // non-zero shell-hook exit; they may inspect the structured args.
+          const extDeny = await this.runExtensionHooks('pre-tool', { tool: name, args });
+          if (extDeny && !blockedByHook) blockedByHook = extDeny;
           const preResults = runHooks(this.workspaceRoot, 'pre-tool', { tool: name, payload: args });
           const denial = preResults.find((r) => r.exitCode !== 0);
           if (denial) {
@@ -2733,6 +2743,7 @@ export class Agent {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
           });
+          void this.runExtensionHooks('post-tool', { tool: name, args });
         }
 
         // Tool-result clamp: huge MCP payloads (memory_recall, spawn_agent
@@ -4464,6 +4475,27 @@ export class Agent {
   /** ADVISORY hook events (pre/post-turn, post-tool, pre-compact) stay interactive-only. */
   private hookAdvisoryActive(): boolean {
     return getCliKnobs().hooks.enabled && !this.silent;
+  }
+
+  /**
+   * EXTENSION-HOOKS — run the typed in-process handlers an extension registered
+   * for `event` (the code analogue of shell hooks). For deny events (pre-tool /
+   * user-prompt-submit) it returns the deny reason if any handler refuses; for
+   * advisory events the result is ignored. A throwing handler never blocks.
+   */
+  private async runExtensionHooks(
+    event: import('../hooks/hooksStore.js').HookEvent,
+    ctx: { tool?: string; args?: Record<string, unknown> } = {},
+  ): Promise<string | null> {
+    const handlers = extensionHookHandlers(event);
+    for (const h of handlers) {
+      if (h.match && ctx.tool && !ctx.tool.includes(h.match)) continue;
+      try {
+        const r = await h.handle({ event, tool: ctx.tool, args: ctx.args, workspaceRoot: this.workspaceRoot });
+        if (r === 'deny') return `Blocked by an extension ${event} hook`;
+      } catch { /* a throwing handler is ignored, never blocks the call */ }
+    }
+    return null;
   }
 
   private autoCaptureRequirement(prompt: string, callbacks: RunTurnCallbacks): void {
