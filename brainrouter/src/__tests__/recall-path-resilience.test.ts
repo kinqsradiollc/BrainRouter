@@ -25,59 +25,92 @@ import {
   resetSemaphoreForTests,
 } from "../memory/llm/llm-semaphore.js";
 
-// ── Bounded, generative-floor-free timeouts ─────────────────────────────────
-// The bug: reranker + embedding (localhost endpoints) inherited the generative
-// local floor (up to 10 min via resolveLLMTimeoutMs), so recall stalled past the
-// client's MCP timeout. These helpers are bounded and never see that floor.
+// ── No timeout by default; bounds are opt-in ────────────────────────────────
+// Patience mode: reranker + embedding WAIT for the server with no client-side
+// deadline (0). Only a genuine failure falls over to RRF/FTS. A positive
+// *_TIMEOUT_MS re-imposes a backstop bound, floored to 1000ms (no upper clamp).
 
-describe("rerankerTimeoutMs (fast fail, no generative local floor)", () => {
-  it("defaults to 25000 (SPEC 01: CPU cross-encoder under load)", () => {
-    expect(rerankerTimeoutMs({})).toBe(25_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "" })).toBe(25_000);
+describe("rerankerTimeoutMs (no timeout by default; opt-in bound)", () => {
+  it("defaults to 0 — wait for the server", () => {
+    expect(rerankerTimeoutMs({})).toBe(0);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "" })).toBe(0);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "0" })).toBe(0);
   });
-  it("parses + clamps to [1000, 120000]; sub-floor / junk → default", () => {
+  it("a positive value opts into a bound (floored to 1000, no upper clamp); junk/neg → 0", () => {
     expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "5000" })).toBe(5_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "999999" })).toBe(120_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "500" })).toBe(25_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "junk" })).toBe(25_000);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "999999" })).toBe(999_999);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "500" })).toBe(1_000);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "-5" })).toBe(0);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "junk" })).toBe(0);
   });
 });
 
-describe("rerankerAcquireWaitMs (bounded slot wait before shedding to RRF)", () => {
-  it("defaults to 15000", () => {
-    expect(rerankerAcquireWaitMs({})).toBe(15_000);
-    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "" })).toBe(15_000);
+describe("rerankerAcquireWaitMs (wait for the slot by default; opt-in shedding)", () => {
+  it("defaults to 0 — queue for the slot indefinitely (no drops)", () => {
+    expect(rerankerAcquireWaitMs({})).toBe(0);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "" })).toBe(0);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "0" })).toBe(0);
   });
-  it("parses + clamps to [1000, 120000]; sub-floor / junk → default", () => {
+  it("a positive value opts into shedding (floored to 1000); junk → 0", () => {
     expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "5000" })).toBe(5_000);
-    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "999999" })).toBe(120_000);
-    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "500" })).toBe(15_000);
-    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "junk" })).toBe(15_000);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "500" })).toBe(1_000);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "junk" })).toBe(0);
   });
 });
 
-describe("embeddingTimeoutMs (fast fail, no generative local floor)", () => {
-  it("defaults to 30000", () => {
-    expect(embeddingTimeoutMs({})).toBe(30_000);
-    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "" })).toBe(30_000);
+describe("embeddingTimeoutMs (no timeout by default; opt-in bound)", () => {
+  it("defaults to 0 — wait for the server", () => {
+    expect(embeddingTimeoutMs({})).toBe(0);
+    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "" })).toBe(0);
+    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "0" })).toBe(0);
   });
-  it("parses + clamps to [1000, 120000]; sub-floor / junk → default", () => {
+  it("a positive value opts into a bound (floored to 1000); junk → 0", () => {
     expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "8000" })).toBe(8_000);
-    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "999999" })).toBe(120_000);
-    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "junk" })).toBe(30_000);
+    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "500" })).toBe(1_000);
+    expect(embeddingTimeoutMs({ BRAINROUTER_EMBEDDING_TIMEOUT_MS: "junk" })).toBe(0);
   });
 });
 
 describe("reranker breaker knob parsing", () => {
-  it("threshold defaults to 3, parses ≥1, junk → default", () => {
-    expect(rerankerBreakerThreshold({})).toBe(3);
+  it("threshold defaults to 0 (breaker disabled), parses ≥1, 0/junk → 0", () => {
+    expect(rerankerBreakerThreshold({})).toBe(0);
     expect(rerankerBreakerThreshold({ BRAINROUTER_RERANKER_BREAKER_THRESHOLD: "5" })).toBe(5);
-    expect(rerankerBreakerThreshold({ BRAINROUTER_RERANKER_BREAKER_THRESHOLD: "0" })).toBe(3);
+    expect(rerankerBreakerThreshold({ BRAINROUTER_RERANKER_BREAKER_THRESHOLD: "0" })).toBe(0);
+    expect(rerankerBreakerThreshold({ BRAINROUTER_RERANKER_BREAKER_THRESHOLD: "junk" })).toBe(0);
   });
   it("cooldown defaults to 30000, parses ≥1000, junk → default", () => {
     expect(rerankerBreakerCooldownMs({})).toBe(30_000);
     expect(rerankerBreakerCooldownMs({ BRAINROUTER_RERANKER_BREAKER_COOLDOWN_MS: "60000" })).toBe(60_000);
     expect(rerankerBreakerCooldownMs({ BRAINROUTER_RERANKER_BREAKER_COOLDOWN_MS: "10" })).toBe(30_000);
+  });
+});
+
+// The breaker is OFF by default — a reranker failure surfaces per-call (RRF for
+// that recall) without skipping the server for subsequent recalls.
+describe("RerankerService breaker disabled by default", () => {
+  const mockedFetch = vi.mocked(fetchWithExternalRetry);
+  const origEnv = { ...process.env };
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    delete process.env.BRAINROUTER_RERANKER_BREAKER_THRESHOLD; // default: disabled
+    delete process.env.BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS;
+    resetSemaphoreForTests();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...origEnv };
+    resetSemaphoreForTests();
+  });
+
+  it("stays available after many consecutive failures and keeps hitting the server", async () => {
+    mockedFetch.mockRejectedValue(new Error("HTTP 500"));
+    const svc = new RerankerService({ endpoint: "http://localhost:8000/v1/rerank", apiKey: "k", model: "m", topN: 5 } as any);
+    for (let i = 0; i < 5; i++) {
+      await expect(svc.rerank({ query: "q", documents: ["a"] })).rejects.toThrow();
+    }
+    expect(svc.isAvailable()).toBe(true); // breaker never opened
+    expect(mockedFetch).toHaveBeenCalledTimes(5); // every call reached the server
   });
 });
 
@@ -200,8 +233,14 @@ describe("generative vs embedding semaphore pools are independent", () => {
     e2();
   });
 
-  it("the reranker pool defaults to cap=1 and serializes concurrent rerank calls", async () => {
+  it("the reranker pool defaults to cap=8 (concurrent recalls allowed)", async () => {
     delete process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT; // default
+    resetSemaphoreForTests();
+    expect(getRerankerSemaphoreState().cap).toBe(8);
+  });
+
+  it("serializes concurrent rerank calls when capped to 1", async () => {
+    process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT = "1";
     resetSemaphoreForTests();
     expect(getRerankerSemaphoreState().cap).toBe(1);
 
@@ -254,7 +293,7 @@ describe("acquireRerankerSlotOrNull (bounded slot wait, load-shedding)", () => {
 
   it("returns null after the wait when the slot stays busy, with no waiter leak", async () => {
     vi.useFakeTimers();
-    delete process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT;
+    process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT = "1"; // pin cap=1 so one holder saturates
     resetSemaphoreForTests();
     const hold = await acquireRerankerSlot(); // occupy the only slot
     let result: unknown = "pending";
@@ -280,8 +319,8 @@ describe("RerankerService load-shedding (busy slot → RRF, breaker untouched)",
   beforeEach(() => {
     mockedFetch.mockReset();
     vi.useFakeTimers();
-    delete process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT; // cap 1
-    process.env.BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS = "1000";
+    process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT = "1"; // pin cap=1 so one holder saturates
+    process.env.BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS = "1000"; // opt into shedding
     resetSemaphoreForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });

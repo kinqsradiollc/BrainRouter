@@ -16,6 +16,7 @@ import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry, ExternalApiError } from "../util/retry.js";
 import { acquireLLMSlot } from "./llm-semaphore.js";
 import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
+import { requestTimeoutSignal } from "../util/request-timeout.js";
 import { cognitiveBreakerOpen, recordCognitiveSuccess, recordCognitiveFailure } from "./cognitive-breaker.js";
 
 function parsePositiveInt(value: string | undefined): number | undefined {
@@ -159,7 +160,7 @@ export class ModelLLMRunner implements LLMRunner {
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(effectiveTimeoutMs),
+      signal: requestTimeoutSignal(effectiveTimeoutMs),
     }, {
       label: `[BrainRouter:${taskId}] LLM API`,
     });

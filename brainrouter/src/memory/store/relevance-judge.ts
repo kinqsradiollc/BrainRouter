@@ -2,6 +2,7 @@ import type { RelevanceJudgeServiceConfig, RelevanceVerdict } from "@kinqs/brain
 import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireLLMSlot } from "../llm/llm-semaphore.js";
 import { extractChatCompletionText, resolveLLMTimeoutMs } from "../llm/llm-response.js";
+import { normalizeRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
 
 export interface JudgeCandidate {
   /** Stable id used for logging — typically the memory's record_id. */
@@ -57,11 +58,12 @@ export class RelevanceJudgeService {
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "gpt-4o-mini";
     this.maxCandidates = Math.max(1, config.maxCandidates ?? 10);
-    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
+    // 0 = no timeout: wait for the judge LLM (see request-timeout.ts). A bound is
+    // opt-in via BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS / BRAINROUTER_LLM_TIMEOUT_MS.
+    this.timeoutMs = normalizeRequestTimeoutMs(config.timeoutMs ?? resolveLLMTimeoutMs({
       endpoint: this.endpoint,
-      requestedMs: 15_000,
+      requestedMs: 0,
       envVarNames: ["BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
-      localMinimumMs: 120_000,
     }));
 
     this.ready = this.enabled && !!this.apiKey;
@@ -142,7 +144,7 @@ export class RelevanceJudgeService {
         ],
         temperature: 0,
       }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: requestTimeoutSignal(this.timeoutMs),
     }, {
       label: "Relevance Judge API",
     });
