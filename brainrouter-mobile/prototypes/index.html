@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BrainRouter Mobile — Prototype Gallery</title>
+<style>
+  :root{
+    --bg:hsl(240 6% 5%); --surface:hsl(240 5% 9%); --raised:hsl(240 5% 13%);
+    --border:hsl(240 5% 15%); --border2:hsl(240 5% 21%);
+    --text:hsl(0 0% 96%); --dim:hsl(240 5% 72%); --faint:hsl(240 4% 50%);
+    --accent:hsl(245 80% 66%); --accent-soft:hsla(245 80% 66% / .14);
+    --brand:hsl(16 65% 58%); --ok:hsl(142 60% 45%);
+    --r-md:14px; --font:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);padding:40px 20px 80px}
+  .wrap{max-width:1000px;margin:0 auto}
+  header{margin-bottom:8px}
+  h1{font-size:26px;margin:0 0 6px;font-weight:700}
+  h1 .b{color:var(--brand)}
+  .lede{color:var(--dim);font-size:14px;line-height:1.6;max-width:760px;margin:0 0 6px}
+  .note{color:var(--faint);font-size:12.5px;line-height:1.6;max-width:760px;margin:8px 0 0;
+    border-left:2px solid var(--border2);padding-left:12px}
+  .note a{color:var(--accent);text-decoration:none}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);
+    margin:36px 0 14px;border-bottom:1px solid var(--border);padding-bottom:8px}
+  h2 .c{color:var(--accent);margin-left:8px;letter-spacing:0;text-transform:none;font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  a.card{display:block;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+    padding:14px 15px;text-decoration:none;color:var(--text);transition:.15s;position:relative}
+  a.card:hover{border-color:var(--accent);background:var(--raised);transform:translateY(-2px)}
+  .id{font-family:ui-monospace,monospace;font-size:11px;font-weight:700;color:var(--accent);letter-spacing:.5px}
+  .card.star .id{color:var(--brand)}
+  .ti{font-size:14px;font-weight:600;margin:5px 0 4px;line-height:1.35}
+  .ds{font-size:12px;color:var(--dim);line-height:1.45}
+  .mtag{position:absolute;top:12px;right:12px;font-size:9px;font-weight:700;letter-spacing:.5px;
+    color:var(--faint);border:1px solid var(--border2);border-radius:5px;padding:1px 5px}
+  .mtag.mvp{color:var(--ok);border-color:var(--ok)}
+  .star-badge{display:inline-block;font-size:9px;font-weight:700;color:var(--brand);border:1px solid var(--brand);
+    border-radius:5px;padding:1px 5px;margin-left:6px;vertical-align:1px}
+  footer{margin-top:48px;color:var(--faint);font-size:12px;line-height:1.7}
+  .docs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .docs a{font-size:12px;color:var(--accent);text-decoration:none;background:var(--surface);
+    border:1px solid var(--border);border-radius:8px;padding:6px 11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Brain<span class="b">Router</span> Mobile — Prototype Gallery</h1>
+    <p class="lede">Clickable, standalone HTML prototypes of the React Native (Expo) port of the BrainRouter desktop app.
+      <b>User flows</b> are multi-screen click-throughs (tap the highlighted control to advance); <b>user stories</b>
+      show a feature's key screen + state. Every screen maps to real desktop functionality — nothing here is invented.</p>
+    <p class="note">Scope: <b>MVP-first, parity over time</b>. The mobile app is a <b>thin client to a remote host</b> running the
+      agent runtime — see <a href="../docs/technical-doc.md">technical-doc.md</a> and <a href="../docs/investigation-summary.md">investigation-summary.md</a>.</p>
+    <div class="docs">
+      <a href="../docs/ui-spec.md">UI Spec</a><a href="../docs/user-stories.md">User Stories</a>
+      <a href="../docs/user-flows.md">User Flows</a><a href="../docs/ux-enhancements.md">UX Enhancements</a>
+      <a href="../docs/technical-doc.md">Technical Doc</a><a href="../docs/workflows.md">Workflows</a>
+      <a href="../docs/roadmap.md">Roadmap</a><a href="../CHANGELOG.md">Changelog</a>
+    </div>
+  </header>
+
+  <h2>User Flows <span class="c">multi-screen click-throughs</span></h2>
+  <div class="grid">
+    <a class="card star" href="flow-UF-03.html"><div class="mtag mvp">MVP</div><span class="id">UF-03</span><span class="star-badge">★ START HERE</span><div class="ti">Core loop — send → work → approve</div><div class="ds">The heart of the app: send a turn, watch it stream, approve a tool, see the changeset.</div></a>
+    <a class="card" href="flow-UF-01.html"><div class="mtag mvp">MVP</div><span class="id">UF-01</span><div class="ti">First-run pairing → projects</div><div class="ds">Connect to a host with URL/token or QR, then land on your projects.</div></a>
+    <a class="card" href="flow-UF-02.html"><div class="mtag mvp">MVP</div><span class="id">UF-02</span><div class="ti">Resume a session & manage it</div><div class="ds">Open a session; long-press for pin/rename/fork/archive/export.</div></a>
+    <a class="card" href="flow-UF-04.html"><div class="mtag mvp">MVP</div><span class="id">UF-04</span><div class="ti">Plan review & approval</div><div class="ds">Read the agent's plan; approve or request changes.</div></a>
+    <a class="card" href="flow-UF-05.html"><div class="mtag mvp">MVP</div><span class="id">UF-05</span><div class="ti">Answer the agent's question</div><div class="ds">Single/multi-select interaction request sheet.</div></a>
+    <a class="card" href="flow-UF-06.html"><div class="mtag mvp">MVP</div><span class="id">UF-06</span><div class="ti">Review changes → commit/push (gate)</div><div class="ds">Read diffs, commit, hit the review gate, choose a path.</div></a>
+    <a class="card" href="flow-UF-07.html"><div class="mtag mvp">MVP</div><span class="id">UF-07</span><div class="ti">Run review → triage a finding</div><div class="ds">Run code review; apply/fix/dismiss a finding.</div></a>
+    <a class="card" href="flow-UF-08.html"><div class="mtag mvp">MVP</div><span class="id">UF-08</span><div class="ti">Monitor dashboard → stop a task</div><div class="ds">Cross-workspace tasks; stop a runaway agent.</div></a>
+    <a class="card" href="flow-UF-09.html"><div class="mtag mvp">MVP</div><span class="id">UF-09</span><div class="ti">Inspect a task / workflow transcript</div><div class="ds">Read a sub-agent transcript or workflow phases.</div></a>
+    <a class="card" href="flow-UF-10.html"><div class="mtag mvp">MVP</div><span class="id">UF-10</span><div class="ti">Switch workspace (with trust)</div><div class="ds">Pick a project; trust prompt; re-scope the tabs.</div></a>
+    <a class="card" href="flow-UF-11.html"><div class="mtag mvp">MVP</div><span class="id">UF-11</span><div class="ti">Configure model & provider</div><div class="ds">Add a provider, pick a model with capability badges.</div></a>
+    <a class="card" href="flow-UF-12.html"><div class="mtag mvp">MVP</div><span class="id">UF-12</span><div class="ti">Push notification → approve</div><div class="ds">Backgrounded → push → deep-link to the approval sheet.</div></a>
+    <a class="card" href="flow-UF-13.html"><div class="mtag mvp">MVP</div><span class="id">UF-13</span><div class="ti">New chat with a goal</div><div class="ds">Start a chat, set a /goal, pin the goal banner.</div></a>
+    <a class="card" href="flow-UF-14.html"><div class="mtag">v1</div><span class="id">UF-14</span><div class="ti">Search a session</div><div class="ds">Search the transcript; jump to a hit.</div></a>
+  </div>
+
+  <h2>User Stories — MVP <span class="c">US-01 … US-29</span></h2>
+  <div class="grid">
+    <a class="card" href="flow-US-01.html"><div class="mtag mvp">MVP</div><span class="id">US-01</span><div class="ti">Pair with a host</div><div class="ds">Connect the app to a running BrainRouter host.</div></a>
+    <a class="card" href="flow-US-02.html"><div class="mtag mvp">MVP</div><span class="id">US-02</span><div class="ti">Stay connected</div><div class="ds">Connection status + auto-reconnect with replay.</div></a>
+    <a class="card" href="flow-US-03.html"><div class="mtag mvp">MVP</div><span class="id">US-03</span><div class="ti">Browse projects & sessions</div><div class="ds">Projects with expandable session lists.</div></a>
+    <a class="card" href="flow-US-04.html"><div class="mtag mvp">MVP</div><span class="id">US-04</span><div class="ti">Start a new chat</div><div class="ds">New session in the active workspace.</div></a>
+    <a class="card" href="flow-US-05.html"><div class="mtag mvp">MVP</div><span class="id">US-05</span><div class="ti">Resume a session</div><div class="ds">Open a session with full history.</div></a>
+    <a class="card" href="flow-US-06.html"><div class="mtag mvp">MVP</div><span class="id">US-06</span><div class="ti">Manage a session</div><div class="ds">Pin/rename/fork/archive/delete/export sheet.</div></a>
+    <a class="card" href="flow-US-07.html"><div class="mtag mvp">MVP</div><span class="id">US-07</span><div class="ti">Switch workspace</div><div class="ds">Header switcher across projects.</div></a>
+    <a class="card" href="flow-US-08.html"><div class="mtag mvp">MVP</div><span class="id">US-08</span><div class="ti">Send a turn</div><div class="ds">Composer sends a message to the agent.</div></a>
+    <a class="card" href="flow-US-09.html"><div class="mtag mvp">MVP</div><span class="id">US-09</span><div class="ti">Watch live work</div><div class="ds">Streaming text, reasoning, and tool cards.</div></a>
+    <a class="card" href="flow-US-10.html"><div class="mtag mvp">MVP</div><span class="id">US-10</span><div class="ti">Interrupt the agent</div><div class="ds">Stop a turn mid-flight.</div></a>
+    <a class="card" href="flow-US-11.html"><div class="mtag mvp">MVP</div><span class="id">US-11</span><div class="ti">Review & approve the plan</div><div class="ds">Plan checklist; approve or request changes.</div></a>
+    <a class="card" href="flow-US-12.html"><div class="mtag mvp">MVP</div><span class="id">US-12</span><div class="ti">Approve or deny a tool</div><div class="ds">Tool approval sheet with command preview.</div></a>
+    <a class="card" href="flow-US-13.html"><div class="mtag mvp">MVP</div><span class="id">US-13</span><div class="ti">Answer the agent's question</div><div class="ds">Multiple-choice interaction sheet.</div></a>
+    <a class="card" href="flow-US-14.html"><div class="mtag mvp">MVP</div><span class="id">US-14</span><div class="ti">Tune mode, model & effort</div><div class="ds">Composer picker sheets.</div></a>
+    <a class="card" href="flow-US-15.html"><div class="mtag mvp">MVP</div><span class="id">US-15</span><div class="ti">Run a slash command</div><div class="ds">In-composer slash command picker.</div></a>
+    <a class="card" href="flow-US-16.html"><div class="mtag mvp">MVP</div><span class="id">US-16</span><div class="ti">Attach context</div><div class="ds">Attach an image/doc with status chips.</div></a>
+    <a class="card" href="flow-US-17.html"><div class="mtag mvp">MVP</div><span class="id">US-17</span><div class="ti">Set and track a goal</div><div class="ds">Pinned goal banner with edit/pause.</div></a>
+    <a class="card" href="flow-US-18.html"><div class="mtag mvp">MVP</div><span class="id">US-18</span><div class="ti">Review changes & read diffs</div><div class="ds">Changed-files list → unified diff.</div></a>
+    <a class="card" href="flow-US-19.html"><div class="mtag mvp">MVP</div><span class="id">US-19</span><div class="ti">Commit & push</div><div class="ds">Commit message + push from the phone.</div></a>
+    <a class="card" href="flow-US-20.html"><div class="mtag mvp">MVP</div><span class="id">US-20</span><div class="ti">Run review & triage findings</div><div class="ds">Findings grouped by file with actions.</div></a>
+    <a class="card" href="flow-US-21.html"><div class="mtag mvp">MVP</div><span class="id">US-21</span><div class="ti">Review-gate protection</div><div class="ds">Commit blocked until review is clean.</div></a>
+    <a class="card" href="flow-US-22.html"><div class="mtag mvp">MVP</div><span class="id">US-22</span><div class="ti">Monitor background tasks</div><div class="ds">Cross-workspace dashboard with tabs.</div></a>
+    <a class="card" href="flow-US-23.html"><div class="mtag mvp">MVP</div><span class="id">US-23</span><div class="ti">Inspect a transcript</div><div class="ds">Task/workflow transcript detail.</div></a>
+    <a class="card" href="flow-US-24.html"><div class="mtag mvp">MVP</div><span class="id">US-24</span><div class="ti">Stop a runaway task</div><div class="ds">Interrupt a background task.</div></a>
+    <a class="card" href="flow-US-25.html"><div class="mtag mvp">MVP</div><span class="id">US-25</span><div class="ti">Be notified when needed</div><div class="ds">Push for approvals / turn-complete.</div></a>
+    <a class="card" href="flow-US-26.html"><div class="mtag mvp">MVP</div><span class="id">US-26</span><div class="ti">Track token & context usage</div><div class="ds">Context ring → usage breakdown sheet.</div></a>
+    <a class="card" href="flow-US-27.html"><div class="mtag mvp">MVP</div><span class="id">US-27</span><div class="ti">Choose model & provider</div><div class="ds">Provider + model settings.</div></a>
+    <a class="card" href="flow-US-28.html"><div class="mtag mvp">MVP</div><span class="id">US-28</span><div class="ti">Customize appearance</div><div class="ds">Theme, accent, font, text size.</div></a>
+    <a class="card" href="flow-US-29.html"><div class="mtag mvp">MVP</div><span class="id">US-29</span><div class="ti">Trust a workspace</div><div class="ds">Trust prompt before opening a folder.</div></a>
+  </div>
+
+  <h2>User Stories — v1 <span class="c">US-30 … US-33</span></h2>
+  <div class="grid">
+    <a class="card" href="flow-US-30.html"><div class="mtag">v1</div><span class="id">US-30</span><div class="ti">Search a session</div><div class="ds">Transcript search with ranked hits.</div></a>
+    <a class="card" href="flow-US-31.html"><div class="mtag">v1</div><span class="id">US-31</span><div class="ti">Browse & read files</div><div class="ds">Read-only file tree + viewer.</div></a>
+    <a class="card" href="flow-US-32.html"><div class="mtag">v1</div><span class="id">US-32</span><div class="ti">Check CI / PR status</div><div class="ds">PR checks + Actions runs.</div></a>
+    <a class="card" href="flow-US-33.html"><div class="mtag">v1</div><span class="id">US-33</span><div class="ti">Manage requirements</div><div class="ds">Requirement records list + detail.</div></a>
+  </div>
+
+  <footer>
+    47 prototypes · 14 flows + 33 stories · one shared design system (tokens mirror <code>brainrouter-desktop/src/theme.css</code>).<br/>
+    Future-milestone surfaces (Annotations, Artifacts, Schedules, Worktrees, Track board, in-app Editor, Terminal) are sequenced in the roadmap and intentionally not yet prototyped.
+  </footer>
+</div>
+</body>
+</html>
