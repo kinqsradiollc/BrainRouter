@@ -867,6 +867,7 @@ export function installDevBridge(): void {
       return [...members];
     },
     'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-scan-commits': () => ({ scanned: 12, linked: [{ sha: 'abc1234', key: 'BR-3', workItemKey: 'BR-3' }], transitioned: [{ key: 'BR-3', from: 'todo', to: 'in-progress' }], items: [...devTrack.items] }),
     'track-sync-members': (a) => {
       const members = devTrack.project.members as Record<string, unknown>[];
       const incoming = [

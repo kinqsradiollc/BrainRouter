@@ -43,6 +43,7 @@ export interface TrackOps {
   removeMember: (id: string) => void;
   syncMembers: () => void;
   sync: (direction: 'import' | 'export', dryRun: boolean) => void;
+  scanCommits: () => void;
 }
 
 export interface TrackViewProps {
@@ -613,8 +614,11 @@ function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: Sy
 
   return (
     <div className="track-sync">
-      <div className="track-section-head">External sync <span className="track-col-count">GitHub Issues</span></div>
-      <p className="track-auto-intro">Two-way sync between this project and a GitHub repository's issues. Work items export as issues (type/priority become labels, done → closed); issues import back as work items. Re-runs update in place — no duplicates.</p>
+      <div className="track-section-head">
+        External sync <span className="track-col-count">GitHub Issues</span>
+        <button className="track-member-pull" title="Scan recent commit messages for BR-123 references — link each commit to its work item and advance todo → in-progress" onClick={() => ops.scanCommits()}><Icon name="commit" size={12} /> Scan commits</button>
+      </div>
+      <p className="track-auto-intro">Two-way sync between this project and a GitHub repository's issues. Work items export as issues (type/priority become labels, done → closed); issues import back as work items. Re-runs update in place — no duplicates. <b>Scan commits</b> links commits to items by their <code className="mono">BR-123</code> reference, so the board advances even when the agent forgets to link.</p>
 
       <div className="track-sync-config">
         <div className="track-sync-conn">

@@ -608,6 +608,21 @@ to you:
 
 Disable the global switch to stop every automatic stage immediately.
 
+### Commit scanner — code → Track without a tool call
+
+```json
+{ "cli": { "track": { "commitScanner": { "enabled": false, "scanDepth": 50 } } } }
+```
+
+`/track commits [--depth N] [--since <when>]` parses `<KEY>-<n>` references (e.g.
+`BR-123`) out of recent commit messages and **links each commit to its work
+item** (deduped by sha) while **advancing `todo` → `in-progress`** — the same
+code-signal transition the agent gets from `track_update link`, but driven by the
+git history so the board stays in sync even when the agent forgets to link.
+Done items still get the commit linked (provenance) but are never moved back. In
+the desktop, **Track → Sync → Scan commits** does the same. Idempotent — re-runs
+are a no-op.
+
 ### Sandboxing — shell env
 
 | Var | Default | Purpose |

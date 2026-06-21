@@ -84,6 +84,7 @@ import { listRequirements, getRequirement, createRequirement, updateRequirement,
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
 /**
  * Strip secrets from the `cli` config before it's sent to the renderer (the
  * snapshot's `cliKnobs` is shown verbatim in Settings → Advanced). The GitHub
@@ -1589,6 +1590,12 @@ async function main() {
             'track-sync-config': () => {
                 const c = resolveGithubConfig();
                 return { repo: c.repo ?? null, hasToken: !!c.token, tokenSource: c.tokenSource ?? null };
+            },
+            // BR-123 commit scanner — link commits to items + advance todo→in-progress.
+            'track-scan-commits': () => {
+                ensureProject(workspaceRoot);
+                const r = scanGitCommitsForTrack(workspaceRoot, {});
+                return { ...r, items: listWorkItems(workspaceRoot) };
             },
             'track-sync': async (a) => {
                 const direction = a.direction === 'export' ? 'export' : 'import';
