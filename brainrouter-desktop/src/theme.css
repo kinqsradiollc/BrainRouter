@@ -531,7 +531,7 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-auto-actrow input, .track-auto-actrow select:nth-child(2) { flex: 1; }
 .track-auto-actdel { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; background: transparent; color: var(--text-faint); border-radius: 8px; cursor: pointer; transition: background .14s, color .14s; }
 .track-auto-actdel:hover { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
-.track-auto-addact { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 6px 11px; border: 1px dashed var(--border-strong); background: transparent; border-radius: 8px; cursor: pointer; transition: background .14s, border-color .14s; }
+.track-auto-addact { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; font-size: 12px; font-weight: 600; color: var(--accent); padding: 0 13px; border: 1px dashed var(--border-strong); background: transparent; border-radius: 8px; cursor: pointer; transition: background .14s, border-color .14s; }
 .track-auto-addact:hover { background: var(--ov-04); border-color: var(--accent); }
 .track-auto-form-actions { display: flex; gap: 9px; }
 .track-auto-save { font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 8px; padding: 8px 16px; }
