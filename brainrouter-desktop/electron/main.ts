@@ -29,6 +29,7 @@ import {
 } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from './recents.js';
+import { initAutoUpdate } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -359,6 +360,17 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) {
       openWorkspaceWindow(readRecents()[0] || process.cwd());
     }
+  });
+
+  // DESK-6 — auto-update scaffold. No-op unless this is a PACKAGED build with
+  // BRAINROUTER_UPDATE_CHANNEL set AND electron-updater installed (see updater.ts).
+  // Forwards update lifecycle events to every window on the 'update-event' channel.
+  void initAutoUpdate({
+    emit: (event) => {
+      for (const wp of wins.values()) {
+        if (!wp.win.isDestroyed()) wp.win.webContents.send('update-event', event);
+      }
+    },
   });
 });
 

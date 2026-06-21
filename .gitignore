@@ -25,6 +25,9 @@ out/
 .open-next/
 .wrangler/
 
+# Electron installer output (electron-builder)
+brainrouter-desktop/release/
+
 # Synthesized at publish time from brainrouter-changelog/ via
 # brainrouter-cli/package.json#sync-changelog. Source of truth is the
 # top-level brainrouter-changelog/ folder.

@@ -23,6 +23,7 @@ next prompt — so your agent stops re-learning the same things every session.
 - **MCP server (`brainrouter-mcp`)** — drop-in memory + skills + federation tools for any MCP-speaking client. [API reference](BRAINROUTER.md#mcp-api-reference).
 - **Terminal CLI (`brainrouter`)** — memory-native coding agent: slash commands, hookify guardrails, multi-agent orchestration (packs + worker threads), **deterministic multi-phase workflows** (`run_workflow` with `compare`/`review-wide`/`research` templates — durable, resumable, with a live run viewer), Codex-grade execution safety (fail-closed sandbox, command-segment approval, atomic patches, worktree isolation), cross-vendor federation, and a `/goal` autonomy loop.
 - **Dashboard (`brainrouter-dashboard`)** — Next.js web UI for browsing captured memories, focus scenes, contradictions, recall traces, working memory, timelines, persona, skills, brain-agent health, and a hosted chat. Its own dark **"Memory Instrument"** design language with a modern app shell (grouped sidebar + **⌘K command palette**), token-refresh auth (sessions persist across tabs), and an optional **static presentation mode** (`NEXT_PUBLIC_BRAINROUTER_STATIC_PRESENTATION=true`) that ships it as a backend-free product preview.
+- **Desktop app (`brainrouter-desktop`)** — native **macOS / Windows / Linux** shell (Electron + React) over the same agent runtime the CLI uses, packaged as `.exe` / `.dmg` / `.deb` installers. Alpha. See [build instructions](brainrouter-desktop/README.md).
 
 ## Install
 
@@ -115,6 +116,22 @@ cd brainrouter-dashboard && npm install && npm run dev
 ```
 
 Open <http://localhost:3000>. Exposes `/chat` plus inspectors for memories, scenes, contradictions, recall traces, working memory, persona, hooks, and the admin console.
+
+## Desktop app (alpha)
+
+A native **Windows / macOS / Linux** desktop shell (Electron + React) over the same
+agent runtime the CLI uses. Build native installers with electron-builder:
+
+```bash
+cd brainrouter-desktop
+npm run dist:win      # Windows → NSIS setup .exe + portable .exe
+npm run dist:linux    # Linux   → .deb + AppImage + .rpm   (on Linux/WSL)
+npm run dist:mac      # macOS   → .dmg + .zip              (on macOS)
+```
+
+Artifacts land in `brainrouter-desktop/release/`. Builds are unsigned alpha (the
+OS shows an "unverified publisher" warning). Full details, per-OS notes, signing,
+and auto-update activation: **[brainrouter-desktop/README.md](brainrouter-desktop/README.md)**.
 
 ## Docs
 

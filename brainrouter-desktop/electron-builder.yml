@@ -1,0 +1,101 @@
+# electron-builder configuration — BrainRouter Desktop (alpha)
+#
+# Packages the ALREADY-BUILT app (dist-electron/ + dist/) into native installers.
+# It does NOT compile anything itself — run `npm run package:prepare` (or the
+# dist:* scripts, which chain it) first so dist-electron/ and dist/ are fresh.
+#
+#   npm run dist        # installers for the current OS
+#   npm run dist:win    # Windows  → NSIS setup .exe + portable .exe
+#   npm run dist:linux  # Linux    → .deb + AppImage + .rpm   (run on Linux/WSL)
+#   npm run dist:mac    # macOS    → .dmg + .zip               (run on macOS)
+#   npm run dist:dir    # unpacked app (fast smoke test, no installer)
+#
+# Artifacts land in brainrouter-desktop/release/ (gitignored).
+
+appId: ai.brainrouter.desktop
+productName: BrainRouter
+copyright: Copyright © 2026 BrainRouter contributors
+
+directories:
+  # Installers go here. NOT the default `dist/` — that's the Vite renderer bundle.
+  output: release
+  # Icons / installer assets. The repo gitignores `build/`, so use a tracked dir.
+  # electron-builder auto-detects build-resources/icon.png (>=512px) and generates
+  # the per-platform .ico (Windows) and .icns (macOS) from it.
+  buildResources: build-resources
+
+# Self-contained Electron shell. The only native module (sqlite-vec / node:sqlite)
+# lives in the externally-spawned MCP server, never inside Electron — so there is
+# nothing to native-rebuild at pack time.
+npmRebuild: false
+
+# What goes into the asar. The renderer is vite-bundled into dist/; the Node-side
+# main + agent host load from dist-electron/. Production dependencies (incl. the
+# pure-JS workspace packages @kinqs/brainrouter-core and -agent-protocol) are
+# collected automatically by electron-builder and copied into the asar.
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+
+asar: true
+# No native .node modules and no runtime resource files read from disk (host/main
+# only read the user's workspace + userData), so nothing needs asarUnpack. If a
+# future host dependency reads files by path or ships a .node, add it here.
+# asarUnpack:
+#   - node_modules/<pkg>/**
+
+# Update feed for electron-updater. electron-builder writes latest*.yml into the
+# output dir during every build; it only UPLOADS when invoked with `--publish`.
+# Releases stay user-driven for now (see Phase 3 in the desktop README).
+publish:
+  provider: github
+  owner: kinqsradiollc
+  repo: BrainRouter
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip          # required for electron-updater on macOS
+      arch: [arm64, x64]
+  # Ready for later notarization; harmless while unsigned.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+linux:
+  category: Development
+  synopsis: Native desktop shell for the BrainRouter coding agent
+  description: >-
+    BrainRouter Desktop — a native shell (Electron + React) over the shared
+    BrainRouter agent runtime, the same engine the CLI uses.
+  # Debian/RPM require a maintainer in "Name <email>" form. Placeholder — confirm
+  # before a public release.
+  maintainer: BrainRouter contributors <noreply@brainrouter.dev>
+  target:
+    - target: deb
+      arch: [x64]
+    - target: AppImage
+      arch: [x64]
+    - target: rpm
+      arch: [x64]
+
+deb:
+  priority: optional
