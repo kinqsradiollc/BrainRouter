@@ -13,6 +13,8 @@ import { VIEW_MENU } from '../constants.js';
 import type { PanelId } from '../panels/index.js';
 
 export interface TopbarRightProps {
+  /** Workspace mode — the panel toggles only apply to the Code workbench. */
+  mode: 'chat' | 'track' | 'code';
   homeMode: boolean;
   envRoom: boolean;
   envOpen: boolean;
@@ -35,13 +37,17 @@ export interface TopbarRightProps {
 
 export function TopbarRight(p: TopbarRightProps): React.ReactElement {
   const {
-    homeMode, envRoom, envOpen, setEnvOpen, q, termDockOpen, setTermDockOpen,
+    mode, homeMode, envRoom, envOpen, setEnvOpen, q, termDockOpen, setTermDockOpen,
     sidePanelOpen, setSidePanelOpen, sideFullScreen, setSideFullScreen,
     sideTabs, activeSideTab, ensurePanel, openBottomDock, pop, setPop, openSettings,
   } = p;
+  // The Environment / terminal / side-panel toggles only make sense in the Code
+  // workbench. Chat and Track have no such panels, so the cluster there is just
+  // export + settings (keeping the controls relevant to the current surface).
+  const isCode = mode === 'code';
   return (
     <span className="topbar-right">
-      {!homeMode && envRoom ? (
+      {isCode && !homeMode && envRoom ? (
         <button type="button" className={`app-switcher${envOpen ? ' active' : ''}`} title="Environment" onClick={() => {
           if (!envOpen) { q('q-gitlog', 'git-log'); q('q-git', 'git-info'); q('q-branches', 'git-branches'); }
           setEnvOpen((o) => !o);
@@ -50,7 +56,7 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
           <Icon name="chev-down" size={11} />
         </button>
       ) : null}
-      {sidePanelOpen ? (
+      {isCode && sidePanelOpen ? (
         <>
           <span className="pop-wrap">
             {pop === 'splus' ? (
@@ -77,8 +83,8 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
           </button>
         </>
       ) : null}
-      <button type="button" className={`top-toggle${termDockOpen ? ' active' : ''}`} title="Toggle bottom panel (⌃`)" onClick={() => setTermDockOpen((o) => !o)}><Icon name="layout-bottom" size={16} /></button>
-      <button type="button" className={`top-toggle${sidePanelOpen ? ' active' : ''}`} title="Toggle side panel (⌥⌘B)" onClick={() => setSidePanelOpen((o) => !o)}><Icon name="sidebar-right" size={16} /></button>
+      {isCode ? <button type="button" className={`top-toggle${termDockOpen ? ' active' : ''}`} title="Toggle bottom panel (⌃`)" onClick={() => setTermDockOpen((o) => !o)}><Icon name="layout-bottom" size={16} /></button> : null}
+      {isCode ? <button type="button" className={`top-toggle${sidePanelOpen ? ' active' : ''}`} title="Toggle side panel (⌥⌘B)" onClick={() => setSidePanelOpen((o) => !o)}><Icon name="sidebar-right" size={16} /></button> : null}
       <button type="button" className="top-toggle" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}><Icon name="export" size={15} /></button>
       <button type="button" className="top-toggle" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={15} /></button>
     </span>
