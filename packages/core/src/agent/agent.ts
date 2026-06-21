@@ -28,6 +28,7 @@ import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
   listWorkItems as trackListWorkItems,
+  findWorkItemsByCodeLink as trackFindWorkItemsByCodeLink,
   getWorkItem as trackGetWorkItem,
   createWorkItem as trackCreateWorkItem,
   transitionWorkItem as trackTransitionWorkItem,
@@ -42,7 +43,7 @@ import {
 } from '../track/trackStore.js';
 import { parseTrackQuery } from '../track/query.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
-import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
+import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -2540,6 +2541,12 @@ export class Agent {
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
+            if (name === 'track_update') {
+              const automationCount = this.applyTrackCodeSignalAutomation(args, callbacks);
+              if (automationCount > 0) {
+                summary = `${summary} | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
+              }
+            }
             // Plan-ticker: surface update_plan changes to the REPL so the user
             // sees the live ✓/⏳/☐ checklist instead of having to run /plan.
             if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
@@ -4454,6 +4461,102 @@ export class Agent {
         }
       }).catch(() => {});
     }
+  }
+
+  /** Apply opt-in code-link transitions after a successful Track tool mutation. */
+  private applyTrackCodeSignalAutomation(args: Record<string, any>, callbacks: RunTurnCallbacks): number {
+    if (this.silent || this.agentDepth > 0) return 0;
+    const automation = getCliKnobs().automation;
+    if (!automation.enabled || !automation.sync.enabled) return 0;
+
+    const action = String(args.action ?? '');
+    if (action === 'transition') {
+      const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
+      if (item?.statusCategory === 'done' && String(args.toStatus ?? '') === item.status) {
+        this.autoLinkDoneTrackItem(item, callbacks);
+      }
+      return 0;
+    }
+    if (action !== 'link' || !Array.isArray(args.codeLinks)) return 0;
+
+    const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
+    const inProgress = project.workflowStates.find((state) => state.id === 'in-progress')
+      ?? project.workflowStates.find((state) => state.category === 'in-progress');
+    const review = project.workflowStates.find((state) => state.id === 'in-review') ?? inProgress;
+    if (!inProgress || !review) return 0;
+
+    let advanced = 0;
+    for (const codeLink of args.codeLinks) {
+      if (!codeLink || !isCodeLinkKind(codeLink.kind) || typeof codeLink.ref !== 'string' || !codeLink.ref.trim()) continue;
+      const target = codeLink.kind === 'pull-request' ? review : inProgress;
+      for (const item of trackFindWorkItemsByCodeLink(this.workspaceRoot, { kind: codeLink.kind, ref: codeLink.ref })) {
+        if (item.statusCategory === 'done' || item.status === target.id) continue;
+        if (codeLink.kind !== 'pull-request' && item.statusCategory !== 'todo') continue;
+        const moved = trackTransitionWorkItem(this.workspaceRoot, item.id, target.id, 'agent');
+        if (!moved) continue;
+        advanced += 1;
+        this.captureTrackAutomationEvent({
+          action: 'code-link-progress',
+          item: moved,
+          requirementId: moved.requirementId,
+          codeLink: { kind: codeLink.kind, ref: codeLink.ref },
+          fromStatus: item.status,
+          toStatus: moved.status,
+        });
+      }
+    }
+    if (advanced > 0) callbacks.onStatusUpdate(`Automation: advanced ${advanced} Track item${advanced === 1 ? '' : 's'} from linked code evidence.`);
+    return advanced;
+  }
+
+  /** Back-link a completed Track item once, retaining the requirement lifecycle for Phase 5. */
+  private autoLinkDoneTrackItem(item: ReturnType<typeof trackGetWorkItem>, callbacks: RunTurnCallbacks): void {
+    if (!item?.requirementId) return;
+    const requirement = getRequirement(this.workspaceRoot, item.requirementId);
+    if (!requirement || requirement.taskIds.includes(item.id)) return;
+    linkRequirement(this.workspaceRoot, requirement.id, { taskId: item.id });
+    callbacks.onStatusUpdate(`Automation: linked completed ${item.key} to requirement ${requirement.id}.`);
+    this.captureTrackAutomationEvent({ action: 'requirement-fulfilled', item, requirementId: requirement.id });
+  }
+
+  private captureTrackAutomationEvent(input: {
+    action: 'code-link-progress' | 'requirement-fulfilled';
+    item: NonNullable<ReturnType<typeof trackGetWorkItem>>;
+    requirementId?: string;
+    codeLink?: { kind: string; ref: string };
+    fromStatus?: string;
+    toStatus?: string;
+  }): void {
+    const requirement = input.requirementId
+      ? getRequirement(this.workspaceRoot, input.requirementId)
+      : undefined;
+    const provenance = {
+      sourceEventId: requirement?.sourceEventId,
+      linkedMemoryIds: requirement?.linkedMemoryIds,
+      actor: 'agent',
+      reason: input.action,
+    };
+    void emitAgentEvent(
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Track automation ${input.action}: ${input.item.key}`,
+        payload: {
+          action: input.action,
+          workItemId: input.item.id,
+          workItemKey: input.item.key,
+          requirementId: input.requirementId,
+          codeLink: input.codeLink,
+          fromStatus: input.fromStatus,
+          toStatus: input.toStatus,
+          provenance,
+        },
+      },
+    ).then((memoryId) => {
+      if (!memoryId) return;
+      trackLinkWorkItem(this.workspaceRoot, input.item.id, { linkedMemoryIds: [memoryId] });
+      if (input.requirementId) linkRequirement(this.workspaceRoot, input.requirementId, { memoryId });
+    }).catch(() => {});
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {

@@ -262,6 +262,18 @@ export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+/** Return every work item carrying this exact persisted code-link reference. */
+export function findWorkItemsByCodeLink(
+  workspaceRoot: string,
+  link: Pick<CodeLink, 'kind' | 'ref'>,
+): WorkItem[] {
+  const ref = link.ref?.trim();
+  if (!ref) return [];
+  return listWorkItems(workspaceRoot).filter((item) =>
+    item.codeLinks.some((candidate) => candidate.kind === link.kind && candidate.ref.trim() === ref),
+  );
+}
+
 /** Fields a caller may patch. Status changes recompute the category. */
 export type UpdateWorkItemPatch = Partial<
   Pick<
