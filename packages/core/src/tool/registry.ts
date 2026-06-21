@@ -1,4 +1,5 @@
 import type { AccessMode, ActionKind } from '../exec/execPolicy.js';
+import { extensionToolEntries } from '../extension/registry.js';
 
 /**
  * CODEX-TOOL-REGISTRY (0.4.7) — one declarative contract per access-gated tool.
@@ -95,18 +96,29 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
 const TIER_RANK: Record<AccessMode, number> = { read: 0, write: 1, shell: 2 };
 
 /**
- * The model-visible tool set for an access mode, GENERATED from the registry:
- * every tool whose `accessTier` is at or below `mode`. This is the single
- * definition `Agent.allowedToolsForAccess()` delegates to.
+ * The static native registry PLUS any tools contributed by loaded extensions.
+ * Extension tools register at an access tier + action kind here, so they flow
+ * through the same exposure, parallel-safety, and approval/sandbox path as
+ * native tools — an extension registers a tool AT a tier, it cannot bypass it.
+ */
+export function effectiveToolRegistry(): LocalToolEntry[] {
+  const ext = extensionToolEntries();
+  return ext.length === 0 ? LOCAL_TOOL_REGISTRY : [...LOCAL_TOOL_REGISTRY, ...ext];
+}
+
+/**
+ * The model-visible tool set for an access mode, GENERATED from the (effective)
+ * registry: every tool whose `accessTier` is at or below `mode`. This is the
+ * single definition `Agent.allowedToolsForAccess()` delegates to.
  */
 export function registryAllowedTools(mode: AccessMode): Set<string> {
   const ceiling = TIER_RANK[mode];
-  return new Set(LOCAL_TOOL_REGISTRY.filter((t) => TIER_RANK[t.accessTier] <= ceiling).map((t) => t.name));
+  return new Set(effectiveToolRegistry().filter((t) => TIER_RANK[t.accessTier] <= ceiling).map((t) => t.name));
 }
 
-/** The parallel-safe local tools, generated from the registry. */
+/** The parallel-safe local tools, generated from the (effective) registry. */
 export function registryParallelSafeLocal(): Set<string> {
-  return new Set(LOCAL_TOOL_REGISTRY.filter((t) => t.parallelSafe).map((t) => t.name));
+  return new Set(effectiveToolRegistry().filter((t) => t.parallelSafe).map((t) => t.name));
 }
 
 /**
@@ -130,7 +142,7 @@ export function hideWorkerToolsFor(depth: number, tier?: string): boolean {
   return depth > 0 || tier === 'worker';
 }
 
-/** Lookup an entry by tool name. */
+/** Lookup an entry by tool name (native or extension-contributed). */
 export function registryEntry(name: string): LocalToolEntry | undefined {
-  return LOCAL_TOOL_REGISTRY.find((t) => t.name === name);
+  return effectiveToolRegistry().find((t) => t.name === name);
 }

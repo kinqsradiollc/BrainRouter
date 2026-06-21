@@ -61,6 +61,7 @@ import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.
 import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -495,6 +496,9 @@ async function main(): Promise<void> {
     sessionKey: string,
     e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest },
   ): void => send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: e });
+  // EXTENSIONS — activate code-level extensions before the first turn (workspace
+  // tier gated on project trust). Best-effort; never blocks the host boot.
+  await loadExtensions(workspaceRoot).catch(() => undefined);
   const agent = new Agent(mcpClient, llm, {
     workspaceRoot,
     launchCwd: workspaceRoot,

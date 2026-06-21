@@ -14,6 +14,7 @@
 
 import { loadApiKeyPrefixesConfig, loadProvidersConfig } from '../config/configLoader.js';
 import { BUILTIN_PROVIDERS, PROVIDER_REGISTRY } from './providers/index.js';
+import { extensionProviders } from '../extension/registry.js';
 
 export interface ProviderEntry {
   /** Stable id used in config.json + tests. */
@@ -46,18 +47,39 @@ function buildProviderCatalog(): ProviderEntry[] {
     if (!p.pickerVisible || !p.label || !p.hint || !p.envKey) continue;
     out.push({ id: p.id, label: p.label, hint: p.hint, endpoint: p.endpoint, envKey: p.envKey, local: p.local, models: [], defaultApiKey: p.defaultApiKey });
   }
-  // 2. User-added providers from ~/.config/brainrouter/providers.json. A built-in
+  // 2. Code-defined providers contributed by loaded extensions. A built-in id
+  //    still wins (skip), so the core modules stay authoritative.
+  const seen = new Set(out.map((p) => p.id));
+  for (const p of extensionProviders()) {
+    if (!p.pickerVisible || !p.label || !p.hint || !p.envKey) continue;
+    if (PROVIDER_REGISTRY.has(p.id) || seen.has(p.id)) continue;
+    out.push({ id: p.id, label: p.label, hint: p.hint, endpoint: p.endpoint, envKey: p.envKey, local: p.local, models: [], defaultApiKey: p.defaultApiKey });
+    seen.add(p.id);
+  }
+  // 3. User-added providers from ~/.config/brainrouter/providers.json. A built-in
   //    id wins (skip), so the code modules stay authoritative.
   const cfg = loadProvidersConfig();
   for (const [id, entry] of Object.entries(cfg.providers)) {
-    if (entry.pickerVisible !== true || PROVIDER_REGISTRY.has(id)) continue;
+    if (entry.pickerVisible !== true || PROVIDER_REGISTRY.has(id) || seen.has(id)) continue;
     if (!entry.label || !entry.hint || !entry.endpoint || !entry.envKey) continue;
     out.push({ id, label: entry.label, hint: entry.hint, endpoint: entry.endpoint, envKey: entry.envKey, local: entry.local === true, models: entry.models ?? [], defaultModel: entry.defaultModel });
+    seen.add(id);
   }
   return out;
 }
 
 export const PROVIDER_CATALOG: ProviderEntry[] = buildProviderCatalog();
+
+/**
+ * Rebuild PROVIDER_CATALOG in place after extensions load (the const binding is
+ * stable; consumers read the same array, refreshed). Called by the extension
+ * loader once `registerProvider` contributions are in.
+ */
+export function refreshProviderCatalog(): void {
+  const next = buildProviderCatalog();
+  PROVIDER_CATALOG.length = 0;
+  PROVIDER_CATALOG.push(...next);
+}
 
 /** Look up a provider entry by stable id (undefined when not in the catalog). */
 export function findProvider(id: string): ProviderEntry | undefined {
