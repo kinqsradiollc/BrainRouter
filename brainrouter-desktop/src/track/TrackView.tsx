@@ -9,6 +9,7 @@ import React, { useMemo, useState } from 'react';
 import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
 import { roleCan } from '../lib/track/permissions.js';
 import { parseTrackQuery } from '../lib/track/query.js';
+import { TrackDropdown } from './Dropdown.js';
 import { Icon } from '../icons.js';
 import { TrackDetail } from './TrackDetail.js';
 
@@ -52,6 +53,9 @@ export interface TrackViewProps {
   members: ProjectMember[];
   sync: { config: SyncConfig | null; result: SyncResult | null };
   ops: TrackOps;
+  /** When the left sidebar is collapsed, show a reopen button in the header. */
+  railOpen?: boolean;
+  onOpenRail?: () => void;
 }
 
 type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
@@ -69,7 +73,7 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
 
-export function TrackView({ project, items, sprints, automations, members, sync, ops }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, automations, members, sync, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -111,6 +115,7 @@ export function TrackView({ project, items, sprints, automations, members, sync,
   return (
     <div className="track">
       <header className="track-head">
+        {!railOpen && onOpenRail ? <button className="icon-btn track-rail-open" title="Open sidebar" onClick={onOpenRail}><Icon name="layout" size={15} /></button> : null}
         <div className="track-title">
           <span className="track-key">{project?.key ?? '—'}</span>
           <span className="track-name">{project?.name ?? 'Project'}</span>
@@ -263,10 +268,8 @@ function BacklogView({ items, sprints, ops, onOpen }: { items: WorkItem[]; sprin
               <span className="mono tl-key">{w.key}</span><span className="tl-title">{w.title}</span>
               <span className={`track-pri pri-${w.priority}`} />
             </button>
-            <select className="track-sprint-select" value="" onChange={(e) => { if (e.target.value) ops.assignSprint(w.key, e.target.value); }}>
-              <option value="">→ sprint…</option>
-              {sprints.filter((s) => s.state !== 'completed').map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <TrackDropdown className="dd-sprintsel" value="" placeholder="→ sprint…" onChange={(v) => { if (v) ops.assignSprint(w.key, v); }}
+              options={sprints.filter((s) => s.state !== 'completed').map((s) => ({ value: s.id, label: s.name }))} />
           </div>
         ))}
         {backlog.length === 0 ? <div className="track-empty">Backlog is empty.</div> : null}
@@ -471,9 +474,8 @@ function AutomationForm({ states, onCreate, onCancel }: { states: TrackProject['
       <input className="track-auto-fname" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Rule name (e.g. Bugs start at high priority)" />
       <div className="track-auto-field">
         <label>When</label>
-        <select value={trigger} onChange={(e) => setTrigger(e.target.value as AutomationTrigger)}>
-          {TRIGGERS.map((t) => <option key={t.id} value={t.id}>{t.label} — {t.hint}</option>)}
-        </select>
+        <TrackDropdown value={trigger} onChange={(v) => setTrigger(v as AutomationTrigger)}
+          options={TRIGGERS.map((t) => ({ value: t.id, label: `${t.label} — ${t.hint}` }))} />
       </div>
       <div className="track-auto-field">
         <label>If <span className="track-auto-opt">(optional query)</span></label>
@@ -485,19 +487,14 @@ function AutomationForm({ states, onCreate, onCancel }: { states: TrackProject['
         <div className="track-auto-actions">
           {actions.map((a, i) => (
             <div key={i} className="track-auto-actrow">
-              <select value={a.type} onChange={(e) => setAction(i, { type: e.target.value as AutomationActionType })}>
-                {ACTION_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
+              <TrackDropdown className="dd-acttype" value={a.type} onChange={(v) => setAction(i, { type: v as AutomationActionType })}
+                options={ACTION_TYPES.map((t) => ({ value: t.id, label: t.label }))} />
               {a.type === 'set-status' ? (
-                <select value={a.value} onChange={(e) => setAction(i, { value: e.target.value })}>
-                  <option value="">status…</option>
-                  {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+                <TrackDropdown value={a.value} placeholder="status…" onChange={(v) => setAction(i, { value: v })}
+                  options={states.map((s) => ({ value: s.id, label: s.name }))} />
               ) : a.type === 'set-priority' ? (
-                <select value={a.value} onChange={(e) => setAction(i, { value: e.target.value })}>
-                  <option value="">priority…</option>
-                  {(['highest', 'high', 'medium', 'low', 'lowest'] as const).map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <TrackDropdown value={a.value} placeholder="priority…" onChange={(v) => setAction(i, { value: v })}
+                  options={(['highest', 'high', 'medium', 'low', 'lowest'] as const).map((p) => ({ value: p, label: p }))} />
               ) : (
                 <input value={a.value} onChange={(e) => setAction(i, { value: e.target.value })} placeholder={ACTION_TYPES.find((t) => t.id === a.type)?.placeholder} />
               )}
@@ -559,9 +556,8 @@ function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps
         <div className="track-member-form">
           <input className="track-member-id" autoFocus value={id} onChange={(e) => setId(e.target.value)} placeholder="handle (username / email)" />
           <input className="track-member-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="display name (optional)" />
-          <select value={role} onChange={(e) => setRole(e.target.value as ProjectRole)}>
-            {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-          </select>
+          <TrackDropdown className="dd-role" value={role} onChange={(v) => setRole(v as ProjectRole)}
+            options={ROLES.map((r) => ({ value: r.id, label: r.label }))} />
           <button className="track-auto-save" disabled={!id.trim()} onClick={submit}>Add</button>
         </div>
       ) : null}
@@ -574,11 +570,9 @@ function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps
               <span className="track-member-disp">{m.name ?? m.id}</span>
               <span className="track-member-handle mono">{m.id}</span>
             </div>
-            <select className="track-member-role" value={m.role} disabled={soleOwner(m)} title={soleOwner(m) ? 'The sole owner role is locked' : 'Change role'}
-              onChange={(e) => ops.updateMemberRole(m.id, e.target.value as ProjectRole)}>
-              {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-            <button className="track-member-del" title={soleOwner(m) ? 'Cannot remove the last owner' : 'Remove member'} disabled={soleOwner(m)} onClick={() => ops.removeMember(m.id)}><Icon name="trash" size={12} /></button>
+            <TrackDropdown className="dd-role" value={m.role} disabled={soleOwner(m)} title={soleOwner(m) ? 'The sole owner role is locked' : 'Change role'}
+              onChange={(v) => ops.updateMemberRole(m.id, v as ProjectRole)} options={ROLES.map((r) => ({ value: r.id, label: r.label }))} />
+            <button className="track-member-del" title={soleOwner(m) ? 'Cannot remove the last owner' : 'Remove member'} disabled={soleOwner(m)} onClick={() => ops.removeMember(m.id)}><Icon name="trash" size={13} /></button>
           </div>
         ))}
       </div>

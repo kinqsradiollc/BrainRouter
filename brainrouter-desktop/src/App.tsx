@@ -1084,7 +1084,7 @@ export function App(): React.ReactElement {
 
       <div className="main">
         {mode === 'track' ? (
-          <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} sync={track.sync} ops={trackOps} />
+          <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} sync={track.sync} ops={trackOps} railOpen={railOpen} onOpenRail={() => setRailOpen(true)} />
         ) : (<>
         <div className="workrow" ref={workrowRef}>
           <ChatThread
