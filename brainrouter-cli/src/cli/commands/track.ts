@@ -33,6 +33,7 @@ import {
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -114,6 +115,8 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
   if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
+
+  if (sub === 'commits' || sub === 'scan') { handleCommits(ws, rest); return true; }
 
   console.log(chalk.yellow(`\nUnknown subcommand "${sub}". Try /track help\n`));
   return true;
@@ -295,6 +298,21 @@ function roleColor(role: ProjectRole): (s: string) => string {
   return role === 'owner' ? chalk.magenta : role === 'admin' ? chalk.cyan : role === 'member' ? chalk.green : chalk.gray;
 }
 
+/** `/track commits [--depth N] [--since <when>]` — link commits to items by BR-123 ref. */
+function handleCommits(ws: string, rest: string[]): void {
+  ensureProject(ws);
+  const depthIdx = rest.indexOf('--depth');
+  const sinceIdx = rest.indexOf('--since');
+  const maxCount = depthIdx >= 0 ? Number(rest[depthIdx + 1]) : undefined;
+  const since = sinceIdx >= 0 ? rest[sinceIdx + 1] : undefined;
+  const result = scanGitCommitsForTrack(ws, { maxCount: Number.isFinite(maxCount) ? maxCount : undefined, since });
+  if (result.scanned === 0) { console.log(chalk.yellow('\nNo commits found (is this a git repo?).\n')); return; }
+  console.log(chalk.green(`\n✓ Scanned ${result.scanned} commit(s) — ${result.linked.length} link(s), ${result.transitioned.length} transition(s)`));
+  for (const l of result.linked.slice(0, 20)) console.log(`  ${chalk.cyan(l.workItemKey.padEnd(8))} ← ${chalk.gray(l.sha.slice(0, 8))}`);
+  for (const t of result.transitioned.slice(0, 20)) console.log(`  ${chalk.cyan(t.key.padEnd(8))} ${chalk.gray(t.from)} → ${chalk.green(t.to)}`);
+  console.log('');
+}
+
 /** `/track automations [list|add|rm|on|off]` — manage trigger→action rules. */
 function handleAutomations(ws: string, rest: string[]): void {
   ensureProject(ws);
@@ -413,7 +431,8 @@ function printUsage(): void {
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
   console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
   console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
-  console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues\n'));
+  console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues'));
+  console.log(chalk.gray('  /track commits [--depth N] [--since <when>]   Link commits to items by BR-123 ref + advance todo→in-progress\n'));
 }
 
 async function captureTrackNote(ctx: CommandContext, item: WorkItem, change: string): Promise<void> {

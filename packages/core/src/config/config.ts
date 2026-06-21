@@ -451,7 +451,17 @@ export interface CliKnobs {
    * the standard `GITHUB_TOKEN` / `GH_TOKEN` env when omitted, like the gh
    * CLI). Read on demand by the `/track sync` command + desktop Sync panel.
    */
-  track?: { githubRepo?: string; githubToken?: string };
+  track?: {
+    githubRepo?: string;
+    githubToken?: string;
+    /**
+     * BR-123 commit scanner (0.4.16). `enabled` (default false): on `/track sync
+     * --commits`, parse `<KEY>-<n>` from recent commit messages and link each
+     * commit to its work item + advance todo → in-progress. `scanDepth` caps the
+     * history walked (default 50).
+     */
+    commitScanner?: { enabled?: boolean; scanDepth?: number };
+  };
   /**
    * Lifecycle shell hooks (0.4.16). `enabled` (default true) is the master
    * switch. `enforceWhenSilent` (default true) runs the BLOCKING hook events

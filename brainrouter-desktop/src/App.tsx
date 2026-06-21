@@ -278,6 +278,7 @@ export function App(): React.ReactElement {
       // A real run can create/modify items — refresh the board shortly after.
       if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
     },
+    scanCommits: () => q('q-track-scan', 'track-scan-commits'),
   };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol

@@ -577,6 +577,12 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-track-sync':
         if (result && typeof result === 'object' && !(result as { error?: string }).error) setTrack((t) => ({ ...t, sync: { ...t.sync, result: result as SyncResult } }));
         return;
+      case 'q-track-scan': {
+        const r = result as { scanned?: number; linked?: unknown[]; transitioned?: unknown[]; items?: WorkItem[] } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({ ...t, items: r!.items! }));
+        if (r) setToast(`Scanned ${r.scanned ?? 0} commit(s) — ${r.linked?.length ?? 0} linked, ${r.transitioned?.length ?? 0} advanced.`);
+        return;
+      }
       case 'q-turn-changeset': {
         // End-of-turn changeset → append a card right after the final answer.
         const r = result as { files?: ChangesetFile[]; insertions?: number; deletions?: number } | null;
