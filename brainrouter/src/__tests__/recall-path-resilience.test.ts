@@ -9,6 +9,7 @@ import { fetchWithExternalRetry } from "../memory/util/retry.js";
 import {
   RerankerService,
   rerankerTimeoutMs,
+  rerankerAcquireWaitMs,
   rerankerBreakerThreshold,
   rerankerBreakerCooldownMs,
 } from "../memory/store/reranker.js";
@@ -17,6 +18,7 @@ import {
   acquireLLMSlot,
   acquireEmbeddingSlot,
   acquireRerankerSlot,
+  acquireRerankerSlotOrNull,
   getSemaphoreState,
   getEmbeddingSemaphoreState,
   getRerankerSemaphoreState,
@@ -29,15 +31,28 @@ import {
 // client's MCP timeout. These helpers are bounded and never see that floor.
 
 describe("rerankerTimeoutMs (fast fail, no generative local floor)", () => {
-  it("defaults to 15000", () => {
-    expect(rerankerTimeoutMs({})).toBe(15_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "" })).toBe(15_000);
+  it("defaults to 25000 (SPEC 01: CPU cross-encoder under load)", () => {
+    expect(rerankerTimeoutMs({})).toBe(25_000);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "" })).toBe(25_000);
   });
   it("parses + clamps to [1000, 120000]; sub-floor / junk → default", () => {
     expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "5000" })).toBe(5_000);
     expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "999999" })).toBe(120_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "500" })).toBe(15_000);
-    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "junk" })).toBe(15_000);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "500" })).toBe(25_000);
+    expect(rerankerTimeoutMs({ BRAINROUTER_RERANKER_TIMEOUT_MS: "junk" })).toBe(25_000);
+  });
+});
+
+describe("rerankerAcquireWaitMs (bounded slot wait before shedding to RRF)", () => {
+  it("defaults to 15000", () => {
+    expect(rerankerAcquireWaitMs({})).toBe(15_000);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "" })).toBe(15_000);
+  });
+  it("parses + clamps to [1000, 120000]; sub-floor / junk → default", () => {
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "5000" })).toBe(5_000);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "999999" })).toBe(120_000);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "500" })).toBe(15_000);
+    expect(rerankerAcquireWaitMs({ BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS: "junk" })).toBe(15_000);
   });
 });
 
@@ -212,5 +227,80 @@ describe("generative vs embedding semaphore pools are independent", () => {
     expect(getSemaphoreState().inFlight).toBe(1);
     expect(getRerankerSemaphoreState().inFlight).toBe(1);
     g1(); r1();
+  });
+});
+
+// ── Bounded slot acquire (SPEC 01 load-shedding) ────────────────────────────
+// Under multi-agent parallel load the cap-1 reranker slot is contended. Rather
+// than queue unboundedly (stalling the recall reply), a recall that can't get a
+// slot within the wait sheds to RRF. This must NOT trip the breaker.
+describe("acquireRerankerSlotOrNull (bounded slot wait, load-shedding)", () => {
+  const origEnv = { ...process.env };
+  afterEach(() => {
+    vi.useRealTimers();
+    process.env = { ...origEnv };
+    resetSemaphoreForTests();
+  });
+
+  it("grants immediately when a slot is free", async () => {
+    delete process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT; // cap 1 default
+    resetSemaphoreForTests();
+    const rel = await acquireRerankerSlotOrNull(1000);
+    expect(typeof rel).toBe("function");
+    expect(getRerankerSemaphoreState().inFlight).toBe(1);
+    rel!();
+    expect(getRerankerSemaphoreState().inFlight).toBe(0);
+  });
+
+  it("returns null after the wait when the slot stays busy, with no waiter leak", async () => {
+    vi.useFakeTimers();
+    delete process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT;
+    resetSemaphoreForTests();
+    const hold = await acquireRerankerSlot(); // occupy the only slot
+    let result: unknown = "pending";
+    const p = acquireRerankerSlotOrNull(1000).then((r) => { result = r; return r; });
+    expect(getRerankerSemaphoreState().queued).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+    expect(result).toBeNull();
+    expect(getRerankerSemaphoreState().queued).toBe(0); // waiter dropped on timeout
+    // Releasing the holder must NOT hand the slot to the timed-out waiter.
+    hold();
+    expect(getRerankerSemaphoreState().inFlight).toBe(0);
+    expect(getRerankerSemaphoreState().queued).toBe(0);
+  });
+});
+
+describe("RerankerService load-shedding (busy slot → RRF, breaker untouched)", () => {
+  const mockedFetch = vi.mocked(fetchWithExternalRetry);
+  const origEnv = { ...process.env };
+  const makeService = () =>
+    new RerankerService({ endpoint: "http://localhost:8000/v1/rerank", apiKey: "k", model: "m", topN: 5 } as any);
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.useFakeTimers();
+    delete process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT; // cap 1
+    process.env.BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS = "1000";
+    resetSemaphoreForTests();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    process.env = { ...origEnv };
+    resetSemaphoreForTests();
+  });
+
+  it("sheds to RRF (no fetch, breaker stays closed) when the slot is busy", async () => {
+    const hold = await acquireRerankerSlot(); // occupy the only slot
+    const svc = makeService();
+    const p = svc.rerank({ query: "q", documents: ["a"] });
+    const assertion = expect(p).rejects.toThrow(/using RRF/i);
+    await vi.advanceTimersByTimeAsync(1000); // acquire-wait elapses → null → shed
+    await assertion;
+    expect(mockedFetch).not.toHaveBeenCalled();
+    expect(svc.isAvailable()).toBe(true); // load-shedding must NOT open the breaker
+    hold();
   });
 });

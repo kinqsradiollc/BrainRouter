@@ -68,6 +68,41 @@ class Semaphore {
     return this.makeRelease();
   }
 
+  /**
+   * Like acquire(), but gives up after `timeoutMs` and resolves `null` instead
+   * of queuing indefinitely. Lets a caller load-shed (e.g. recall → RRF) when a
+   * single-slot backend is saturated, rather than stalling behind the queue.
+   */
+  async acquireOrNull(timeoutMs: number): Promise<(() => void) | null> {
+    if (!Number.isFinite(this.cap)) {
+      // Cap disabled — passthrough.
+      return () => {};
+    }
+    if (this.inFlight < this.cap) {
+      this.inFlight++;
+      return this.makeRelease();
+    }
+    return new Promise<(() => void) | null>((resolve) => {
+      let settled = false;
+      const grant = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.inFlight++;
+        resolve(this.makeRelease());
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // Drop our waiter so a later release doesn't hand us a phantom slot.
+        const i = this.waiters.indexOf(grant);
+        if (i >= 0) this.waiters.splice(i, 1);
+        resolve(null);
+      }, timeoutMs);
+      this.waiters.push(grant);
+    });
+  }
+
   private makeRelease(): () => void {
     let released = false;
     return () => {
@@ -121,6 +156,16 @@ export async function acquireEmbeddingSlot(): Promise<() => void> {
  */
 export async function acquireRerankerSlot(): Promise<() => void> {
   return rerankerSemaphore.acquire();
+}
+
+/**
+ * Acquire one RERANKER slot, but give up after `timeoutMs` (resolving `null`)
+ * instead of queuing indefinitely. Under multi-agent parallel load the cap-1
+ * reranker slot is contended; a recall that can't get it quickly should shed to
+ * RRF rather than stall the `memory_recall` reply. `null` = "slot busy, skip".
+ */
+export async function acquireRerankerSlotOrNull(timeoutMs: number): Promise<(() => void) | null> {
+  return rerankerSemaphore.acquireOrNull(timeoutMs);
 }
 
 /** Exposed for tests / diagnostics. */
