@@ -59,6 +59,7 @@ import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKi
 import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
+import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -149,6 +150,11 @@ async function fetchEndpointModels(endpoint, apiKey) {
             ids.push(id);
             registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
         }
+        // LM Studio's thin OpenAI-compat /v1/models omits reasoning vocab; its
+        // native /api/v1/models advertises it. Populate the cache (self-guards for
+        // non-LM-Studio endpoints) so binary on/off models are detected and never
+        // sent a graded `low`/`high` they would reject. Best-effort; never blocks.
+        await refreshLmStudioCache(chat).catch(() => 0);
         return [...new Set(ids)].sort();
     }
     catch {
