@@ -11,8 +11,8 @@
 import type { PanelId } from '../../panels/index.js';
 
 export type SettingsSection =
-  | 'general' | 'models' | 'permissions' | 'memory' | 'hooks' | 'connectors'
-  | 'integrations' | 'advanced' | 'observability' | 'appearance' | 'commands';
+  | 'general' | 'models' | 'permissions' | 'memory' | 'hooks' | 'workflow-automation'
+  | 'connectors' | 'integrations' | 'advanced' | 'observability' | 'appearance' | 'commands';
 
 export interface CmdCtx {
   send(command: unknown): void;
