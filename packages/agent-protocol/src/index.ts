@@ -107,6 +107,9 @@ export type AgentEvent =
   // transient status line) — e.g. the provider truncated the reply at its token
   // cap. Rendered as a durable status row, mirroring the CLI.
   | { kind: 'notice'; level: 'info' | 'warn'; message: string }
+  // The workspace filesystem changed (debounced host fs.watch) — the renderer
+  // re-runs its file/changes/git queries so the Files panel stays live.
+  | { kind: 'files-changed' }
   | { kind: 'query-result'; id: string; ok: boolean; result?: unknown; error?: string };
 
 export type AgentEventMessage = EventEnvelope & { event: AgentEvent };
