@@ -13,6 +13,7 @@ import { WorkflowCard } from '../chat/WorkflowCard.js';
 import { ChangeSummary } from '../chat/ChangeSummary.js';
 import { HomeView } from './HomeView.js';
 import { WorkElapsed } from './WorkElapsed.js';
+import { GoalBanner, type GoalRecord } from './GoalBanner.js';
 import type { ChatRow, TaskViewState, WorkflowDetail, SessionRow } from '../types.js';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { ConfigSnapshot } from '../settings.js';
@@ -47,6 +48,11 @@ export interface ChatThreadProps {
   sessions: SessionRow[];
   resumeSession: (key: string) => void;
   forkParent: { key: string; title?: string } | null;
+  goal: GoalRecord | null;
+  onGoalResume: () => void;
+  onGoalPause: () => void;
+  onGoalClear: () => void;
+  onGoalEdit: (text: string) => void;
   transcriptEls: React.ReactElement[];
   liveText: string;
   running: boolean;
@@ -101,6 +107,11 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
         atBottomRef.current = pinned;
         setAtBottom(pinned);
       }}>
+        {/* GOAL-BANNER — pinned at the top of the chat for the active /goal,
+            sticky so it stays visible while scrolling. Hidden in the home view. */}
+        {p.goal && !p.homeMode ? (
+          <GoalBanner goal={p.goal} onResume={p.onGoalResume} onPause={p.onGoalPause} onClear={p.onGoalClear} onEdit={p.onGoalEdit} />
+        ) : null}
         {workflowView ? (
           /* DESK-6w — the /workflows-style card for a workflow run. */
           <WorkflowCard wf={workflowView} onBack={() => setWorkflowView(null)} />

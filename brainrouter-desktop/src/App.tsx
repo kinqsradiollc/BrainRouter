@@ -57,6 +57,7 @@ import { GIT_VISIBLE_POLL_MS, gitPollRefreshDue, gitRefreshDue } from './lib/git
 import { TopbarRight } from './components/TopbarRight.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ChatThread } from './components/ChatThread.js';
+import type { GoalRecord } from './components/GoalBanner.js';
 import { ViewsRail } from './components/ViewsRail.js';
 import { EnvironmentPanel } from './components/EnvironmentPanel.js';
 import { TerminalDock } from './components/TerminalDock.js';
@@ -135,6 +136,7 @@ export function App(): React.ReactElement {
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null } }>({ project: null, items: [], sprints: [], automations: [], members: [], sync: { config: null, result: null } });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
+  const [goalState, setGoalState] = useState<GoalRecord | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
 
@@ -609,7 +611,7 @@ export function App(): React.ReactElement {
 
   useAgentEvents({
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -1097,6 +1099,11 @@ export function App(): React.ReactElement {
             renderRow={renderRow} homeStats={homeStats} statsTab={statsTab} setStatsTab={setStatsTab}
             statsRange={statsRange} setStatsRange={setStatsRange} snapshot={snapshot} sessions={sessions}
             resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
+            goal={goalState}
+            onGoalResume={() => runBridge('goal', 'resume')}
+            onGoalPause={() => runBridge('goal', 'pause')}
+            onGoalClear={() => runBridge('goal', 'clear')}
+            onGoalEdit={(text) => { q('a-goal-edit', 'action:goal-edit', { text }); }}
             running={running} turnStart={turnStart} reasoningTail={reasoningTail} statusLine={statusLine}
             interaction={interaction} answerInteraction={answerInteraction} q={q} chatEnd={chatEnd} atBottom={atBottom}
             hasConversation={hasConversation} changedFiles={changedFiles} ensurePanel={ensurePanel}

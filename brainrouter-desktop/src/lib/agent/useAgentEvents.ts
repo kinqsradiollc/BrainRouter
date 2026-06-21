@@ -61,6 +61,7 @@ export interface AgentEventsCtx {
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
+  setGoalState: React.Dispatch<React.SetStateAction<import('../../components/GoalBanner.js').GoalRecord | null>>;
   setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>>;
   // LIVE per-call usage for the in-flight turn (cleared at turn-start/end) so the
@@ -180,7 +181,7 @@ export function getStableRowId(sessionKey: string, r: { id?: string | number; ki
 export function useAgentEvents(ctx: AgentEventsCtx): void {
   const {
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -423,6 +424,9 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // agent (which resolves fresh per turn) sent this session's. Refetch
           // it on every switch so the chip matches what actually gets sent.
           q('q-snapshot', 'config-snapshot');
+          // GOAL-BANNER — pull THIS session's active goal so the pinned banner
+          // reflects the chat we just landed on (each session has its own goal).
+          q('q-goal', 'goal-state');
           // Stability fix — refresh tier by whether the WORKSPACE changed: a
           // project/workspace switch needs the FULL git/workspace refresh so
           // branches + git state reload (they were cleared on switch); a same-
@@ -927,6 +931,19 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           goalContPendingRef.current = null; // a fresh kickoff cancels any stale pending continuation
           window.brainrouter.send({ kind: 'start-turn', prompt: r.startTurn, hidden: true });
         }
+        // A /goal command (set/resume/pause/clear) just changed the goal — refresh
+        // the pinned banner so its text/status/controls reflect the new state.
+        if (pendingCmdRef.current.startsWith('/goal')) q('q-goal', 'goal-state');
+        return;
+      }
+      case 'q-goal':
+        // GOAL-BANNER — the structured active goal for the pinned banner (null = none).
+        setGoalState((result ?? null) as import('../../components/GoalBanner.js').GoalRecord | null);
+        return;
+      case 'a-goal-edit': {
+        const r = result as { ok?: boolean; goal?: unknown; error?: string } | null;
+        if (r && r.ok && r.goal) setGoalState(r.goal as import('../../components/GoalBanner.js').GoalRecord);
+        else if (r && r.error) setToast(r.error);
         return;
       }
       case 'q-goalcont': {
